@@ -32,3 +32,9 @@ OR
 host/ contains the desktop server which connects to the ESP32s over wifi and perform image analysis and control.
 
 currently just a buch of broken prototype code.
+
+    sudp apt install python3-pip
+    python3 -m pip install virtualenv
+    python3 -m virtualenv venv
+    source venv/bin/activate
+    pip3 install -r requirements.txt
