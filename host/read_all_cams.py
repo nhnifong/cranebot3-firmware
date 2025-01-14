@@ -6,13 +6,15 @@ import glob
 # Define ChArUco board parameters
 SQUARE_LENGTH = 0.02  # Length of one square in meters
 MARKER_LENGTH = 0.015 # Length of ArUco marker in meters
-ROWS = 5           # Number of rows of squares
-COLS = 7           # Number of columns of squares
+ROWS = 3           # Number of rows of squares
+COLS = 3           # Number of columns of squares
 
 # Create ChArUco board
 dictionary = aruco.getPredefinedDictionary(aruco.DICT_6X6_250)
-board = aruco.CharucoBoard((3, 3), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
+board = aruco.CharucoBoard((ROWS, COLS), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
 detector = aruco.CharucoDetector(board)
+
+gim = board.generateImage((500, 500))
 
 # Camera calibration parameters (replace with your calibrated values!)
 camera_matrix = np.array([[600, 0, 320], [0, 600, 240], [0, 0, 1]], dtype=np.float32) # Example values
@@ -31,23 +33,27 @@ for image_file in image_files:
     # corners, ids, rejectedImgPoints = detector.detectMarkers(frame)
     charuco_corners, charuco_ids, marker_corners, marker_ids = detector.detectBoard(frame)
 
-    if charuco_ids is not None and len(ids) > 0:
-        if retval > 20: # Ensure we have enough corners to estimate pose
-            # Estimate the pose of the ChArUco board
-            rvec, tvec = aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, charuco_board, camera_matrix, dist_coeffs)
+    print(charuco_corners)
+    print(charuco_ids)
+    print(marker_corners)
+    print(marker_ids)
 
-            # Draw the detected markers and axis
-            aruco.drawDetectedMarkers(frame, corners, ids)
-            aruco.drawAxis(frame, camera_matrix, dist_coeffs, rvec, tvec, 0.1) # Axis length 0.1 meters
+    # Draw the detected markers and axis
+    if len(marker_corners) > 0: 
+        aruco.drawDetectedMarkers(frame, marker_corners, marker_ids)
+    # aruco.drawAxis(frame, camera_matrix, dist_coeffs, rvec, tvec, 0.1) # Axis length 0.1 meters
 
-            print(f"Pose for {image_file}:")
-            print("Rotation Vector (rvec):\n", rvec)
-            print("Translation Vector (tvec):\n", tvec)
+    if charuco_corners is not None and len(charuco_corners) > 0:
+        aruco.drawDetectedCornersCharuco(frame, charuco_corners, charuco_ids, (255, 0, 0));
 
-        else:
-            print(f"Not enough ChArUco corners detected in {image_file} to estimate pose.")
-    else:
-        print(f"No ArUco markers detected in {image_file}")
+        #estimate charuco board pose
+        retval, rvec, tvec = aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, board, camera_matrix, dist_coeffs, None, None)
+        print(f"Pose for {image_file}:")
+        print("Rotation Vector (rvec):\n", rvec)
+        print("Translation Vector (tvec):\n", tvec)
+
+        if retval:
+            cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, rvec, tvec, length=0.05, thickness=3)
 
     cv2.imshow(image_file, frame)
 
