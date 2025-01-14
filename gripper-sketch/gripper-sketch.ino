@@ -2,6 +2,8 @@
 #include <WiFi.h>
 #include "DFRobot_AXP313A.h"
 #include "ESP32_New_ISR_Servo.h"
+#include "DFRobot_BNO055.h"
+#include "Wire.h"
 
 // WARNING!!! PSRAM IC required for UXGA resolution and high JPEG quality
 // Must select the following settings from tools menu before burning
@@ -65,7 +67,23 @@ ISR_servo_t ISR_servo[NUM_SERVOS] =
   { -1, 13 }, // winch green  D11
 };
 
+typedef DFRobot_BNO055_IIC    BNO;
+BNO   bno(&Wire, 0x28);    // input TwoWire interface and IIC address for IMU
+
 void startCameraServer();
+
+// show last sensor operate status
+void printLastOperateStatus(BNO::eStatus_t eStatus)
+{
+  switch(eStatus) {
+  case BNO::eStatusOK:    Serial.println("everything ok"); break;
+  case BNO::eStatusErr:   Serial.println("unknow error"); break;
+  case BNO::eStatusErrDeviceNotDetect:    Serial.println("device not detected"); break;
+  case BNO::eStatusErrDeviceReadyTimeOut: Serial.println("device ready time out"); break;
+  case BNO::eStatusErrDeviceStatus:       Serial.println("device internal status error"); break;
+  default: Serial.println("unknown status"); break;
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -193,18 +211,43 @@ void setup() {
 			Serial.println(ISR_servo[index].servoIndex);
 		}
 	}
+
+  Serial.println("Setup IMU...");
+  bno.reset();
+  while(bno.begin() != BNO::eStatusOK) {
+    Serial.println("IMU init failed");
+    printLastOperateStatus(bno.lastOperateStatus);
+    delay(2000);
+  }
+  Serial.println("IMU init  success");
 }
 
 void loop() {
   // Everything for the camera is done in another task by the web server during the delays
 
+  // set new servo positions
   // ESP32_ISR_Servos.setPosition(ISR_servo[0].servoIndex, 0);
   // ESP32_ISR_Servos.setPosition(ISR_servo[1].servoIndex, 0);
-	delay(1000);
-  // ESP32_ISR_Servos.setPosition(ISR_servo[0].servoIndex, 180);
-  // ESP32_ISR_Servos.setPosition(ISR_servo[1].servoIndex, 180);
-	delay(1000);
+  ESP32_ISR_Servos.setPosition(ISR_servo[0].servoIndex, 18);
+  ESP32_ISR_Servos.setPosition(ISR_servo[1].servoIndex, 18);
 
+  // read finger pressure
   sensorValue = analogRead(PRESSURE_PIN);
 	Serial.println(sensorValue);
+
+  // read position
+  BNO::sEulAnalog_t   sEul;
+  sEul = bno.getEul();
+  Serial.print("pitch:");
+  Serial.print(sEul.pitch, 3);
+  Serial.print(" ");
+  Serial.print("roll:");
+  Serial.print(sEul.roll, 3);
+  Serial.print(" ");
+  Serial.print("yaw:");
+  Serial.print(sEul.head, 3);
+  Serial.println(" ");
+
+
+	delay(1000);
 }
