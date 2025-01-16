@@ -40,26 +40,22 @@ def translate_control_points(control_points, knots, degree, offset):
     num_control_points = len(control_points)
     num_eval_points = num_control_points*10 # Higher than control points for better accuracy
 
-    eval_points = np.linspace(0, 1, num_eval_points)
+    eval_points = np.linspace(0, 1-offset, num_eval_points)
     eval_matrix = BSpline.design_matrix(eval_points, knots, degree)
     
-    shifted_eval_points = eval_points - offset
+    shifted_eval_points = eval_points + offset
     shifted_eval_matrix = BSpline.design_matrix(shifted_eval_points, knots, degree)
 
-    new_control_points = np.linalg.lstsq(eval_matrix, shifted_eval_matrix @ control_points, rcond=None)[0] # Use least squares because eval_matrix is not square
+    xx = shifted_eval_matrix @ control_points
+    print(xx.shape)
+    print(eval_matrix.shape)
+    new_control_points = np.linalg.lstsq(eval_matrix.todense(), xx, rcond=None)[0] # Use least squares because eval_matrix is not square
 
     return new_control_points
 
-offset = 0.5
+offset = 0.2
 new_control_points = translate_control_points(control_points, clamped_knots, spline_degree, offset)
 spl_translated = BSpline(clamped_knots, new_control_points, spline_degree)
 
-import matplotlib.pyplot as plt
-x = np.linspace(0, 1, 100)
-x_translated = np.linspace(offset, 1 + offset, 100)
-
-plt.plot(x, spl(x), label="Original Spline")
-plt.plot(x_translated, spl(x), label="Original Spline shifted")
-plt.plot(x, spl_translated(x), label="Translated Spline")
-plt.legend()
-plt.show()
+print(np.array([spl(i) for i in np.linspace(0,1,10)]))
+print(np.array([spl_translated(i) for i in np.linspace(0,1,10)]))
