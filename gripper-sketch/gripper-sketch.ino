@@ -48,24 +48,16 @@ const char* password = "gwc549+9e7e4";
 #define MIN_MICROS      500  //544
 #define MAX_MICROS      2500
 
-#define NUM_SERVOS    2
+#define WINCH_PIN       12
+#define GRIP_PIN        13
+
+int winch = -1;
+int grip = -1;
 
 // Pressure resistor
 #define PRESSURE_PIN 11 //A5
 
 int sensorValue = 0;  // variable to store the value coming from the voltage divider.
-
-typedef struct
-{
-	int     servoIndex;
-	uint8_t servoPin;
-} ISR_servo_t;
-
-ISR_servo_t ISR_servo[NUM_SERVOS] =
-{
-	{ -1, 12 }, // gripper blue D12
-  { -1, 13 }, // winch green  D11
-};
 
 typedef DFRobot_BNO055_IIC    BNO;
 BNO   bno(&Wire, 0x28);    // input TwoWire interface and IIC address for IMU
@@ -143,8 +135,8 @@ void setup() {
   }
 
 #if defined(CAMERA_MODEL_ESP_EYE)
-  pinMode(13, INPUT_PULLUP);
-  pinMode(14, INPUT_PULLUP);
+  // pinMode(13, INPUT_PULLUP);
+  // pinMode(14, INPUT_PULLUP);
 #endif
 
   // camera init
@@ -194,32 +186,21 @@ void setup() {
 
   Serial.println("Setup servos...");
 	ESP32_ISR_Servos.useTimer(USE_ESP32_TIMER_NO);
-  for (int index = 0; index < NUM_SERVOS; index++)
-	{
-		ISR_servo[index].servoIndex = ESP32_ISR_Servos.setupServo(ISR_servo[index].servoPin, MIN_MICROS, MAX_MICROS);
 
-		if (ISR_servo[index].servoIndex != -1)
-		{
-			Serial.print(F("Setup OK Servo index = "));
-			Serial.print(ISR_servo[index].servoIndex);
-			Serial.print(F(" pin = "));
-			Serial.println(ISR_servo[index].servoPin);
-		}
-		else
-		{
-			Serial.print(F("Setup Failed Servo index = "));
-			Serial.println(ISR_servo[index].servoIndex);
-		}
-	}
+  // Serial.println("Setup IMU...");
+  // bno.reset();
+  // while(bno.begin() != BNO::eStatusOK) {
+  //   Serial.println("IMU init failed");
+  //   printLastOperateStatus(bno.lastOperateStatus);
+  //   delay(2000);
+  // }
+  // Serial.println("IMU init  success");
 
-  Serial.println("Setup IMU...");
-  bno.reset();
-  while(bno.begin() != BNO::eStatusOK) {
-    Serial.println("IMU init failed");
-    printLastOperateStatus(bno.lastOperateStatus);
-    delay(2000);
-  }
-  Serial.println("IMU init  success");
+  winch = ESP32_ISR_Servos.setupServo(WINCH_PIN, MIN_MICROS, MAX_MICROS);
+  grip = ESP32_ISR_Servos.setupServo(GRIP_PIN, MIN_MICROS, MAX_MICROS);
+
+  ESP32_ISR_Servos.setPosition(winch, 90);
+  ESP32_ISR_Servos.setPosition(grip, 0);
 }
 
 void loop() {
@@ -228,25 +209,27 @@ void loop() {
   // set new servo positions
   // ESP32_ISR_Servos.setPosition(ISR_servo[0].servoIndex, 0);
   // ESP32_ISR_Servos.setPosition(ISR_servo[1].servoIndex, 0);
-  ESP32_ISR_Servos.setPosition(ISR_servo[0].servoIndex, 18);
-  ESP32_ISR_Servos.setPosition(ISR_servo[1].servoIndex, 18);
+  // ESP32_ISR_Servos.setPosition(ISR_servo[0].servoIndex, 90);
 
   // read finger pressure
   sensorValue = analogRead(PRESSURE_PIN);
 	Serial.println(sensorValue);
 
+  ESP32_ISR_Servos.setPosition(winch, 90);
+  ESP32_ISR_Servos.setPosition(grip, 0);
+
   // read position
-  BNO::sEulAnalog_t   sEul;
-  sEul = bno.getEul();
-  Serial.print("pitch:");
-  Serial.print(sEul.pitch, 3);
-  Serial.print(" ");
-  Serial.print("roll:");
-  Serial.print(sEul.roll, 3);
-  Serial.print(" ");
-  Serial.print("yaw:");
-  Serial.print(sEul.head, 3);
-  Serial.println(" ");
+  // BNO::sEulAnalog_t   sEul;
+  // sEul = bno.getEul();
+  // Serial.print("pitch:");
+  // Serial.print(sEul.pitch, 3);
+  // Serial.print(" ");
+  // Serial.print("roll:");
+  // Serial.print(sEul.roll, 3);
+  // Serial.print(" ");
+  // Serial.print("yaw:");
+  // Serial.print(sEul.head, 3);
+  // Serial.println(" ");
 
 
 	delay(1000);
