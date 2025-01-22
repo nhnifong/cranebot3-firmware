@@ -3,18 +3,7 @@ import cv2.aruco as aruco
 import numpy as np
 import glob
 
-# Define ChArUco board parameters
-SQUARE_LENGTH = 0.02  # Length of one square in meters
-MARKER_LENGTH = 0.015 # Length of ArUco marker in meters
-ROWS = 3           # Number of rows of squares
-COLS = 3           # Number of columns of squares
-
-# Create ChArUco board
-dictionary = aruco.getPredefinedDictionary(aruco.DICT_6X6_250)
-board = aruco.CharucoBoard((ROWS, COLS), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
-detector = aruco.CharucoDetector(board)
-
-gim = board.generateImage((500, 500))
+from cv_common import cranebot_boards, cranebot_detectors
 
 # Camera calibration parameters (replace with your calibrated values!)
 camera_matrix = np.array([[600, 0, 320], [0, 600, 240], [0, 0, 1]], dtype=np.float32) # Example values
@@ -31,7 +20,7 @@ for image_file in image_files:
 
     # Detect ArUco markers
     # corners, ids, rejectedImgPoints = detector.detectMarkers(frame)
-    charuco_corners, charuco_ids, marker_corners, marker_ids = detector.detectBoard(frame)
+    charuco_corners, charuco_ids, marker_corners, marker_ids = cranebot_detectors[0].detectBoard(frame)
 
     print(charuco_corners)
     print(charuco_ids)
@@ -47,7 +36,7 @@ for image_file in image_files:
         aruco.drawDetectedCornersCharuco(frame, charuco_corners, charuco_ids, (255, 0, 0));
 
         #estimate charuco board pose
-        retval, rvec, tvec = aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, board, camera_matrix, dist_coeffs, None, None)
+        retval, rvec, tvec = aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, cranebot_boards[0], camera_matrix, dist_coeffs, None, None)
         print(f"Pose for {image_file}:")
         print("Rotation Vector (rvec):\n", rvec)
         print("Translation Vector (tvec):\n", tvec)
