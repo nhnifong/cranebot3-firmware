@@ -13,6 +13,8 @@
 // Partition Scheme "16M Flash (3MB APP/9.9MB FATFS)"
 // PSRAM "OPI PSRAM"
 
+#define FIREBEETLE2_LED 21
+
 #define USE_ESP32_TIMER_NO          3
 
 // ===================
@@ -78,6 +80,8 @@ void printLastOperateStatus(BNO::eStatus_t eStatus)
 }
 
 void setup() {
+  pinMode(FIREBEETLE2_LED, OUTPUT);
+
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   Serial.println();
@@ -232,5 +236,8 @@ void loop() {
   // Serial.println(" ");
 
 
-	delay(1000);
+  digitalWrite(FIREBEETLE2_LED, HIGH);
+	delay(500);
+  digitalWrite(FIREBEETLE2_LED, LOW);
+	delay(500);
 }
