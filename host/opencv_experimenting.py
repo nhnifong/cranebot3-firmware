@@ -23,20 +23,18 @@ camera_matrix = np.array(
 dist_coeffs = np.array(
 [[ 3.40916628e-01, -2.38650897e+00, -8.85125582e-04, 3.34240054e-03, 4.69525036e+00]])
 
-
 # Load images
-image_files = glob.glob("images/*.jpg")  # Assumes images are in an "images" folder
+image_files = glob.glob("images/messy3.jpg")  # Assumes images are in an "images" folder
 all_corners = []
 all_ids = []
 
-# for image_file in image_files:
-for ii in range(3):
-    # frame = cv2.imread(image_file)
+for image_file in image_files:
+    frame = cv2.imread(image_file)
 
-    capture_url = "http://192.168.1.146/capture?_cb={}"
-    req = urllib.request.urlopen(capture_url.format(time()*1000))
-    arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
-    frame = cv2.imdecode(arr, -1)
+    # capture_url = "http://192.168.1.146/capture?_cb={}"
+    # req = urllib.request.urlopen(capture_url.format(time()*1000))
+    # arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
+    # frame = cv2.imdecode(arr, -1)
     # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # Detect ArUco markers
