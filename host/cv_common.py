@@ -28,11 +28,16 @@ ROWS = 3           # Number of rows of squares
 COLS = 3           # Number of columns of squares
 N_MARKERS = 4      # Number of markers per board
 
+# Minimum and maximum size that an aruco marker could be as a fraction of the image width
+parameters = aruco.DetectorParameters()
+parameters.minMarkerPerimeterRate = 0.01
+parameters.maxMarkerPerimeterRate = 4.0
+
 dictionary = aruco.getPredefinedDictionary(aruco.DICT_6X6_250)
 
 for i,name in enumerate(names):
 	board = aruco.CharucoBoard((ROWS, COLS), SQUARE_LENGTH, MARKER_LENGTH, dictionary, np.arange(i*N_MARKERS, (i+1)*N_MARKERS))
-	detector = aruco.CharucoDetector(board)
+	detector = aruco.CharucoDetector(board, detectorParams=parameters)
 	cranebot_boards[name] = board
 	cranebot_detectors[name] = detector
 
