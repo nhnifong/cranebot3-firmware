@@ -83,7 +83,7 @@ def relative_pose(rvec1, tvec1, rvec2, tvec2):
         print(f"Error in relative_pose: {e}")
         return None
 
-def find_anchor_positions(n_anc = 3, n_to_capture = 10, timeout = 40)
+def find_anchor_positions(n_anc = 3, n_to_capture = 10, timeout = 40):
     # initialize detections to a list of empty lists, one for each anchor
     detections = []
     for i in range(n_anc):
@@ -197,6 +197,9 @@ def calibrate_all():
     # find network addresses and identify boards that are part of the same robot
     # find the distortion coefficients of every camera
     # locate the anchors relative to the origin
-    find_anchor_positions()
+    anchor_positions = find_anchor_positions()
     # zero axes
-    # save the definition of this robot to a file.
+    return {
+        'anchor_ips': anchor_ips,
+        'anchor_positions': anchor_positions,
+    }

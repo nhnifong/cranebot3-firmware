@@ -1,2 +1,3 @@
 host/env
-*/__pychache__
+__pychache__
+host/__pychache__
