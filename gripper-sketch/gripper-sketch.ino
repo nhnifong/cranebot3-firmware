@@ -191,14 +191,14 @@ void setup() {
   Serial.println("Setup servos...");
 	ESP32_ISR_Servos.useTimer(USE_ESP32_TIMER_NO);
 
-  // Serial.println("Setup IMU...");
-  // bno.reset();
-  // while(bno.begin() != BNO::eStatusOK) {
-  //   Serial.println("IMU init failed");
-  //   printLastOperateStatus(bno.lastOperateStatus);
-  //   delay(2000);
-  // }
-  // Serial.println("IMU init  success");
+  Serial.println("Setup IMU...");
+  bno.reset();
+  while(bno.begin() != BNO::eStatusOK) {
+    Serial.println("IMU init failed");
+    printLastOperateStatus(bno.lastOperateStatus);
+    delay(500);
+  }
+  Serial.println("IMU init  success");
 
   winch = ESP32_ISR_Servos.setupServo(WINCH_PIN, MIN_MICROS, MAX_MICROS);
   grip = ESP32_ISR_Servos.setupServo(GRIP_PIN, MIN_MICROS, MAX_MICROS);
@@ -223,17 +223,17 @@ void loop() {
   ESP32_ISR_Servos.setPosition(grip, 0);
 
   // read position
-  // BNO::sEulAnalog_t   sEul;
-  // sEul = bno.getEul();
-  // Serial.print("pitch:");
-  // Serial.print(sEul.pitch, 3);
-  // Serial.print(" ");
-  // Serial.print("roll:");
-  // Serial.print(sEul.roll, 3);
-  // Serial.print(" ");
-  // Serial.print("yaw:");
-  // Serial.print(sEul.head, 3);
-  // Serial.println(" ");
+  BNO::sEulAnalog_t   sEul;
+  sEul = bno.getEul();
+  Serial.print("pitch:");
+  Serial.print(sEul.pitch, 3);
+  Serial.print(" ");
+  Serial.print("roll:");
+  Serial.print(sEul.roll, 3);
+  Serial.print(" ");
+  Serial.print("yaw:");
+  Serial.print(sEul.head, 3);
+  Serial.println(" ");
 
 
   digitalWrite(FIREBEETLE2_LED, HIGH);

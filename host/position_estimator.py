@@ -3,6 +3,7 @@ import scipy.optimize as optimize
 from scipy.interpolate import BSpline
 from scipy.special import softmax
 from time import time
+from observer import Observer
 
 # rather than assuming the position of the gripper is the last position obtained from a charuco board,
 # instead we fit a model defining it's positoin in time to a bunch of measurments from given instants.
@@ -13,31 +14,8 @@ from time import time
 # there are two kinds of links between nodes.
 # 1. directional calculation, where one variable can be computed from the other.
 # 2. equality, where the two variables are supposed to represent the same thing, and the error between them should be part of the cost function.
-
-class CircularBuffer:
-    """
-    continuously appending to numpy arrays is not very good.
-    copying slices of python lists into numpy arrays every step is also not good.
-    but we are always adding new measurements and advancing a fixed time window.
-    therefore we always have a roughly constant number of measurements from each sensor type that lie within that window
-    not exactly constant though because of stutter and missed charuco observations
-    but a circular pre-allocated array is still viable.
-    the error calculation does not care how many measurements there are or what order they are in. the are all tagged with their own timestamps.
-    we could do the bookeeping to maintain only measurements within the intended time domain, but it might be simpler, even faster to not do it.
-    put any new measurement you get into the circular array, and feed them all to the error function. we can either filter the old values in error_meas
-    or just allow them to be used, knowing that they can't get that old anyways with finite storage and new values being constantly collected.
-    For now I will opt to not filter them.
-    """
-    def __init__(self, shape):
-        self.arr = np.zeros(shape)
-        self.idx = 0
-
-    def insert(self, row):
-        self.arr[self.idx] = row
-        self.idx = (self.idx + 1) % self.arr.shape[0]
-
 class CDPR_position_estimator:
-    def __init__(self, anchor_points, gravity=9.81):
+    def __init__(self, observer, anchor_points, gravity=9.81):
         """
         Initializes the CDPR (Cable Driven Parallel Robot)
         All units are SI. these vales are assumed to be obtained from the auto calibration step
@@ -45,13 +23,10 @@ class CDPR_position_estimator:
         The base interval of the splines is always (0,1)
 
         Args:
+            observer: instance of Observer where measurements are stored/collected
             anchor_points: A numpy array of shape (n_cables, 3) representing the 3D coordinates of the cable anchor points.
-            gantry_mass: The mass of the gantry. I'm calling the little connection point the gantry
-            gantry_inertia: The inertia tensor of the gantry (3x3 matrix).
-            gripper_mass: The mass of the gantry. I'm calling the little connection point the gantry
-            griper_inertia: The inertia tensor of the gantry (3x3 matrix).
-            gravity: Acceleration due to gravity.
         """
+        self.observer = observer
         self.anchor_points = np.array(anchor_points)
         self.n_cables = self.anchor_points.shape[0]
         # self.platform_mass = platform_mass
@@ -90,28 +65,6 @@ class CDPR_position_estimator:
         now = time()
         self.horizon_s = 10
         self.time_domain = np.array([now - self.horizon_s, now + self.horizon_s])
-
-        """
-        all measurements
-            n_measurements can be different for every array
-            
-            gantry_position: shape (n_measurements, 4) TXYZ
-            gripper_position: shape (n_measurements, 4) TXYZ
-            imu_accel: shape (n_measurements, 4) each row TXYZ
-            winch_line_record: shape (n_measurements, 2) TL
-            winch_line_plan: shape (n_measurements, 2) TL
-            anchor_line_record: shape (n_cables, n_measurements, 2) TL
-            anchor_line_plan: shape (n_cables, n_measurements, 2) TL
-        """
-        self.meas = {
-            'gantry_position':    CircularBuffer((self.horizon_s * 10, 4)),
-            'gripper_position':   CircularBuffer((self.horizon_s * 10, 4)),
-            'imu_accel':          CircularBuffer((self.horizon_s * 20, 4)),
-            'winch_line_record':  CircularBuffer((self.horizon_s * 10, 2)),
-            'winch_line_plan':  CircularBuffer((self.horizon_s * 10, 2)),
-            'anchor_line_record': [CircularBuffer((self.horizon_s * 10, 2)) for i in range(self.n_cables)],
-            'anchor_line_plan':   [CircularBuffer((self.horizon_s * 10, 2)) for i in range(self.n_cables)],
-        }
 
     def filter_measurements(self):
         """
@@ -232,21 +185,21 @@ class CDPR_position_estimator:
 
         errors = np.array([
             # error between gantry position model and observation
-            self.error_meas(self.gantry_pos_spline, self.meas['gantry_position'].arr),
+            self.error_meas(self.gantry_pos_spline, self.observer.gantry_position.arr),
             # error between gripper position model and observation
-            self.error_meas(self.gripper_pos_spline,  self.meas['gripper_position'].arr),
+            self.error_meas(self.gripper_pos_spline,  self.observer.gripper_position.arr),
             # error between gripper acceleration model and observation
-            self.error_meas(gantry_accel_func,  self.meas['imu_accel'].arr),
+            self.error_meas(gantry_accel_func,  self.observer.imu_accel.arr),
             # error between gripper acceleration model and acceleration from calculated forces.
             self.error_meas(gantry_accel_func, self.calc_gripper_accel_from_forces(steps=100), normalize_time=False),
             # error between model and recorded winch line lengths
-            self.error_meas(winch_line_func, self.meas['winch_line_record'].arr),
+            self.error_meas(winch_line_func, self.observer.winch_line_record.arr),
             # error between model and planned winch line lengths
-            self.error_meas(winch_line_func, self.meas['winch_line_plan'].arr),
+            self.error_meas(winch_line_func, self.observer.winch_line_plan.arr),
             # error between model and recorded anchor line lengths for every anchor
-            sum([self.error_meas(anchor_line_funcs[i], self.meas['anchor_line_record'][i].arr) for i in range(self.n_cables)]) / self.n_cables,
+            sum([self.error_meas(anchor_line_funcs[i], self.observer.anchor_line_record[i].arr) for i in range(self.n_cables)]) / self.n_cables,
             # error between model and planned anchor line lengths for every anchor
-            sum([self.error_meas(anchor_line_funcs[i], self.meas['anchor_line_plan'][i].arr) for i in range(self.n_cables)]) / self.n_cables,
+            sum([self.error_meas(anchor_line_funcs[i], self.observer.anchor_line_plan[i].arr) for i in range(self.n_cables)]) / self.n_cables,
         ])
 
         return sum(errors * self.weights)
@@ -330,13 +283,3 @@ class CDPR_position_estimator:
         # else:
         self.move_spline_domain_robust(self.gripper_pos_spline, domain_offset)
         self.move_spline_domain_robust(self.gantry_pos_spline, domain_offset)
-
-anchors = np.array([
-    [10,0,8],
-    [10,12,8],
-    [0,6,8],
-])
-bb = CDPR_position_estimator(anchors)
-for i in range(20):
-    print(bb.estimate())
-    bb.move_to_present()
