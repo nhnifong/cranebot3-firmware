@@ -79,6 +79,28 @@ void printLastOperateStatus(BNO::eStatus_t eStatus)
   }
 }
 
+// Function to perform quaternion multiplication
+BNO::sQuaAnalog_t quatMultiply(BNO::sQuaAnalog_t q1, BNO::sQuaAnalog_t q2) {
+  BNO::sQuaAnalog_t result;
+  result.w = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z;
+  result.x = q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y;
+  result.y = q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x;
+  result.z = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w;
+  return result;
+}
+
+// Function to rotate a vector by a quaternion
+BNO::sAxisAnalog_t rotateVector(BNO::sAxisAnalog_t v, BNO::sQuaAnalog_t q) {
+  BNO::sQuaAnalog_t v_quat = {0, v.x, v.y, v.z}; // Convert vector to quaternion
+  BNO::sQuaAnalog_t q_conj = {q.w, -q.x, -q.y, -q.z}; // Quaternion conjugate
+  BNO::sQuaAnalog_t rotated_quat = quatMultiply(quatMultiply(q, v_quat), q_conj);
+  BNO::sAxisAnalog_t result;
+  result.x = rotated_quat.x;
+  result.y = rotated_quat.y;
+  result.z = rotated_quat.z;
+  return result;
+}
+
 void setup() {
   pinMode(FIREBEETLE2_LED, OUTPUT);
 
@@ -185,19 +207,23 @@ void loop() {
   // Set grip to fully open
   ESP32_ISR_Servos.setPosition(grip, 0);
 
-  // read IMU
-  BNO::sEulAnalog_t   sEul;
-  sEul = bno.getEul();
-  Serial.print("pitch:");
-  Serial.print(sEul.pitch, 3);
-  Serial.print(" ");
-  Serial.print("roll:");
-  Serial.print(sEul.roll, 3);
-  Serial.print(" ");
-  Serial.print("yaw:");
-  Serial.print(sEul.head, 3);
-  Serial.println(" ");
+  // Get linear acceleration. this should already have gravity subtracted from it.
+  BNO::sAxisData_t accelRaw = bno.getAxisRaw(DFRobot_BNO055::eAxisAcc);
+  BNO::sQuaAnalog_t quat = bno.getQua();
 
+  // Rotate linear acceleration to global frame
+  BNO::sAxisAnalog_t linearAccelGlobal = rotateVector(linearAccelDevice, quat);
+
+  // Print acceleration in global frame
+  Serial.print("X accel global:");
+  Serial.print(linearAccelGlobal.x, 3);
+  Serial.print(" ");
+  Serial.print("Y accel global:");
+  Serial.print(linearAccelGlobal.y, 3);
+  Serial.print(" ");
+  Serial.print("Z accel global:");
+  Serial.print(linearAccelGlobal.z, 3);
+  Serial.println(" ");
 
   digitalWrite(FIREBEETLE2_LED, HIGH);
 	delay(500);
