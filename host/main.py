@@ -1,5 +1,7 @@
 import numpy as np
 import sys
+import asyncio
+from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 from position_estimator import CDPR_position_estimator
 from calibration import calibrate_all
 
@@ -83,8 +85,41 @@ light.look_at(Vec3(1,-1,1))
 
 def on_button_click():
     print("Foo button clicked!")
-    cube.color = color.random_color()
+    gripper.color = color.random_color()
 
 foo_button = Button(text='Foo', color=color.azure, position=(-.7, 0), scale=(.3, .1), on_click=on_button_click)
 EditorCamera()
+
+def notify_connected_bots_change(available_bots=[]):
+    gripper.color = color.random_color()
+
+anchor_service_name = 'cranebot-service'
+# listener for updating the list of available robot component servers
+class CranebotListener(ServiceListener):
+    def __init__(self):
+        super().__init__()
+        self.available_bots = []
+
+    def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+        print(f"Service {name} updated")
+
+    def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+        print(f"Service {name} removed")
+
+    def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
+        info = zc.get_service_info(type_, name)
+        print(f"Service {name} added, service info: {info}")
+        if name.split(".")[1] == cranebot_service_name:
+            self.available_bots.append((name, info))
+            ursina.application.invoke(notify_connected_bots_change, self.available_bots)
+
+async def service_discovery_task():
+    zeroconf = Zeroconf()
+    listener = CranebotListener()
+    browser = ServiceBrowser(zeroconf, "_http._tcp.local.", listener)
+    while True:
+        await asyncio.sleep(1)
+    zeroconf.close()
+
 app.run()
+asyncio.ensure_future(service_discovery_task())

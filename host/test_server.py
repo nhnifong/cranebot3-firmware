@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     if args.mdns:
         # Start UPnP advertisement in a separate thread
-        mdns_thread = threading.Thread(target=register_mdns_service, args=("cranebot-server-anchor", "_http._tcp.local.", PORT), daemon=True)
+        mdns_thread = threading.Thread(target=register_mdns_service, args=("123.cranebot-service", "_http._tcp.local.", PORT), daemon=True)
         mdns_thread.start()
 
     with socketserver.TCPServer(("", PORT), StreamingHandler) as httpd:
