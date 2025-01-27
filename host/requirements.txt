@@ -1,5 +1,8 @@
-numpy
-opencv-python
-opencv-contrib-python
-scipy
-ursina
+numpy==2.2.1
+opencv-contrib-python==4.11.0.86
+opencv-python==4.11.0.86
+requests==2.32.3
+scipy==1.15.1
+ursina==7.0.0
+zeroconf==0.141.0
+asynchio

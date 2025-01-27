@@ -38,3 +38,8 @@ currently just a buch of broken prototype code.
     python3 -m virtualenv venv
     source venv/bin/activate
     pip3 install -r requirements.txt
+
+main.py is a graphical control panel made with ursina (a python game engine)
+in it's current form, it requires a blender installation in order to load assets
+
+    sudo apt-get install blender

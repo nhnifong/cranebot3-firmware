@@ -195,10 +195,15 @@ def calibate_camera():
 
 def calibrate_all():
     # find network addresses and identify boards that are part of the same robot
+
     # find the distortion coefficients of every camera
+
     # locate the anchors relative to the origin
     anchor_positions = find_anchor_positions()
-    # zero axes
+
+    # zero axes?
+
+    # return calibration data that could be saved to a file.
     return {
         'anchor_ips': anchor_ips,
         'anchor_positions': anchor_positions,
