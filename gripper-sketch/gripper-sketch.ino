@@ -85,6 +85,17 @@ void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   Serial.println();
+
+  Serial.println("Setup IMU...");
+  bno.reset();
+  while(bno.begin() != BNO::eStatusOK) {
+    Serial.println("IMU init failed");
+    printLastOperateStatus(bno.lastOperateStatus);
+    delay(500);
+  }
+  Serial.println("IMU init  success");
+
+  // Set up camera power
   while(axp.begin() != 0){
     Serial.println("init error");
     delay(1000);
@@ -105,7 +116,10 @@ void setup() {
   config.pin_pclk = PCLK_GPIO_NUM;
   config.pin_vsync = VSYNC_GPIO_NUM;
   config.pin_href = HREF_GPIO_NUM;
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
+  // Setting this to -1 means "use an already initialzied i2c driver" which is why we init the IMU first.
+  // see https://github.com/espressif/esp32-camera/pull/413
+  // This is the only way to get the camera and IMU to play nice on the same I2C bus
+  config.pin_sscb_sda = -1; // SIOD_GPIO_NUM;
   config.pin_sscb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
@@ -115,33 +129,8 @@ void setup() {
   //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 12;
-  config.fb_count = 1;
-
-  // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
-  //                      for larger pre-allocated frame buffer.
-  if(config.pixel_format == PIXFORMAT_JPEG){
-    if(psramFound()){
-      config.jpeg_quality = 10;
-      config.fb_count = 2;
-      config.grab_mode = CAMERA_GRAB_LATEST;
-    } else {
-      // Limit the frame size when PSRAM is not available
-      config.frame_size = FRAMESIZE_SVGA;
-      config.fb_location = CAMERA_FB_IN_DRAM;
-    }
-  } else {
-    // Best option for face detection/recognition
-    config.frame_size = FRAMESIZE_240X240;
-#if CONFIG_IDF_TARGET_ESP32S3
-    config.fb_count = 2;
-#endif
-  }
-
-#if defined(CAMERA_MODEL_ESP_EYE)
-  // pinMode(13, INPUT_PULLUP);
-  // pinMode(14, INPUT_PULLUP);
-#endif
+  config.jpeg_quality = 10; // A lower number is a higher quality. range 0-63
+  config.fb_count = 2; // framebuffer can be 2 on the ESP32-S3.
 
   // camera init
   esp_err_t err = esp_camera_init(&config);
@@ -157,23 +146,11 @@ void setup() {
     s->set_brightness(s, 1); // up the brightness just a bit
     s->set_saturation(s, -2); // lower the saturation
   }
-  // drop down frame size for higher initial frame rate
-  if(config.pixel_format == PIXFORMAT_JPEG){
-    s->set_framesize(s, FRAMESIZE_QVGA);
-  }
-
-#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
-  s->set_vflip(s, 1);
-  s->set_hmirror(s, 1);
-#endif
-
-#if defined(CAMERA_MODEL_ESP32S3_EYE)
-  s->set_vflip(s, 1);
-#endif
 
   WiFi.begin(ssid, password);
   WiFi.setSleep(false);
 
+  Serial.print("Establishing WiFi Connection");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -182,24 +159,12 @@ void setup() {
   Serial.println("WiFi connected");
 
   startCameraServer();
-
   Serial.print("Camera Ready! Use 'http://");
   Serial.print(WiFi.localIP());
   Serial.println("' to connect");
 
-
   Serial.println("Setup servos...");
 	ESP32_ISR_Servos.useTimer(USE_ESP32_TIMER_NO);
-
-  Serial.println("Setup IMU...");
-  bno.reset();
-  while(bno.begin() != BNO::eStatusOK) {
-    Serial.println("IMU init failed");
-    printLastOperateStatus(bno.lastOperateStatus);
-    delay(500);
-  }
-  Serial.println("IMU init  success");
-
   winch = ESP32_ISR_Servos.setupServo(WINCH_PIN, MIN_MICROS, MAX_MICROS);
   grip = ESP32_ISR_Servos.setupServo(GRIP_PIN, MIN_MICROS, MAX_MICROS);
 
@@ -210,19 +175,17 @@ void setup() {
 void loop() {
   // Everything for the camera is done in another task by the web server during the delays
 
-  // set new servo positions
-  // ESP32_ISR_Servos.setPosition(ISR_servo[0].servoIndex, 0);
-  // ESP32_ISR_Servos.setPosition(ISR_servo[1].servoIndex, 0);
-  // ESP32_ISR_Servos.setPosition(ISR_servo[0].servoIndex, 90);
-
   // read finger pressure
   sensorValue = analogRead(PRESSURE_PIN);
+	Serial.print("Finger pressure: ");
 	Serial.println(sensorValue);
 
+  // Set winch to middle position (not moving)
   ESP32_ISR_Servos.setPosition(winch, 90);
+  // Set grip to fully open
   ESP32_ISR_Servos.setPosition(grip, 0);
 
-  // read position
+  // read IMU
   BNO::sEulAnalog_t   sEul;
   sEul = bno.getEul();
   Serial.print("pitch:");
