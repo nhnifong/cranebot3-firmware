@@ -194,8 +194,6 @@ def calibate_camera():
     return True
 
 def calibrate_all():
-    # find network addresses and identify boards that are part of the same robot
-
     # find the distortion coefficients of every camera
 
     # locate the anchors relative to the origin

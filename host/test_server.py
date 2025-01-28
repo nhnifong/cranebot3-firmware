@@ -90,6 +90,8 @@ def register_mdns_service(name, service_type, port, properties={}):
         name + "." + service_type,
         port=port,
         properties=properties,
+        addresses=['127.0.0.1'],
+        server=f'test-server-{uuid.uuid4()}',
     )
 
     zc.register_service(info)
@@ -104,14 +106,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HTTP test server for streaming images and acceleration data.")
     parser.add_argument("-p", "--port", type=int, default=8000, help="Port number to listen on.")
     parser.add_argument("-a", "--accel", type=bool, default=False, help="Include a chunk of acceleration data for every image frame")
-    parser.add_argument("-m", "--mdns", type=bool, default=False, help="Advertise the service with MDNS (Bonjour)")
+    parser.add_argument("-m", "--mdns", type=bool, default=True, help="Advertise the service with MDNS (Bonjour)")
     args = parser.parse_args()
 
     PORT = args.port
     include_accel_data = args.accel
 
     if args.mdns:
-        # Start UPnP advertisement in a separate thread
+        # Start mdns advertisement in a separate thread
         mdns_thread = threading.Thread(target=register_mdns_service, args=("123.cranebot-service", "_http._tcp.local.", PORT), daemon=True)
         mdns_thread.start()
 
