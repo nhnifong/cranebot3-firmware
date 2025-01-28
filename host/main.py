@@ -1,6 +1,10 @@
 import numpy as np
 import sys
 import asyncio
+import argparse
+import logging
+import threading
+import time
 from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 from position_estimator import CDPR_position_estimator
 from calibration import calibrate_all
@@ -15,6 +19,7 @@ from ursina import (
     Vec3,
     Text,
     Mesh,
+    invoke,
 )
 from ursina.shaders import (
     lit_with_shadows_shader,
@@ -82,44 +87,61 @@ draw_line(gantry.position, gripper.position)
 light = DirectionalLight(shadows=True)
 light.look_at(Vec3(1,-1,1))
 
+args = None
 
 def on_button_click():
-    print("Foo button clicked!")
-    gripper.color = color.random_color()
+    pass
+    # gripper.color = color.random_color()
 
 foo_button = Button(text='Foo', color=color.azure, position=(-.7, 0), scale=(.3, .1), on_click=on_button_click)
 EditorCamera()
 
-def notify_connected_bots_change(available_bots=[]):
-    gripper.color = color.random_color()
+def notify_connected_bots_change(available_bots={}):
+    offs = 0
+    for server,info in available_bots.items():
+        text_entity = Text(server, world_scale=16, position=(-0.1, -0.4 + offs))
+        offs -= 0.03
 
-anchor_service_name = 'cranebot-service'
+cranebot_service_name = 'cranebot-service'
 # listener for updating the list of available robot component servers
+# keep track of unique components with the server attribute of the 
 class CranebotListener(ServiceListener):
     def __init__(self):
         super().__init__()
-        self.available_bots = []
+        self.available_bots = {}
 
     def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
         print(f"Service {name} updated")
+        info = zc.get_service_info(type_, name)
+        if name.split(".")[1] == cranebot_service_name:
+            if info.server is not None and info.server != '':
+                self.available_bots[info.server] = info
+                invoke(notify_connected_bots_change, self.available_bots)
 
     def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
         print(f"Service {name} removed")
+        info = zc.get_service_info(type_, name)
+        del self.available_bots[info.server]
 
     def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
         info = zc.get_service_info(type_, name)
         print(f"Service {name} added, service info: {info}")
         if name.split(".")[1] == cranebot_service_name:
-            self.available_bots.append((name, info))
-            ursina.application.invoke(notify_connected_bots_change, self.available_bots)
+            if info.server is not None and info.server != '':
+                self.available_bots[info.server] = info
+                invoke(notify_connected_bots_change, self.available_bots)
 
-async def service_discovery_task():
+run_discovery_task = True
+def service_discovery_task():
     zeroconf = Zeroconf()
     listener = CranebotListener()
     browser = ServiceBrowser(zeroconf, "_http._tcp.local.", listener)
-    while True:
-        await asyncio.sleep(1)
+    print('Started service discovery task')
+    while run_discovery_task:
+        time.sleep(0.1)
     zeroconf.close()
 
+discovery_thread = threading.Thread(target=service_discovery_task, daemon=True)
+discovery_thread.start()
+
 app.run()
-asyncio.ensure_future(service_discovery_task())

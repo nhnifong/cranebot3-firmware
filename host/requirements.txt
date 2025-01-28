@@ -5,4 +5,4 @@ requests==2.32.3
 scipy==1.15.1
 ursina==7.0.0
 zeroconf==0.141.0
-asynchio
+asyncio
