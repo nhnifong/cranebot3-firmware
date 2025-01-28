@@ -26,7 +26,7 @@ class StreamingHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/stream':
             self.send_response(200)
-            self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=--myboundary')
+            self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=--123456789000000000000987654321')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
 
@@ -55,14 +55,14 @@ class StreamingHandler(http.server.BaseHTTPRequestHandler):
                     accel_json = json.dumps(acceleration).encode('utf-8')
 
                     # Send image data
-                    self.wfile.write(b"--myboundary\r\n")
+                    self.wfile.write(b"--123456789000000000000987654321\r\n")
                     self.wfile.write(f"Content-Type: image/jpeg\r\nContent-Length: {len(image_data)}\r\nX-Timestamp-Sec: {int(time.time())}\r\nX-Timestamp-Usec: {int(time.time()*1000000)%1000000}\r\n\r\n".encode('utf-8'))
                     self.wfile.write(image_data)
                     self.wfile.write(b"\r\n")
 
                     if include_accel_data:
                         # Send acceleration data
-                        self.wfile.write(b"--myboundary\r\n")
+                        self.wfile.write(b"--123456789000000000000987654321\r\n")
                         self.wfile.write(f"Content-Type: application/json\r\nContent-Length: {len(accel_json)}\r\nX-Timestamp-Sec: {int(time.time())}\r\nX-Timestamp-Usec: {int(time.time()*1000000)%1000000}\r\n\r\n".encode('utf-8'))
                         self.wfile.write(accel_json)
                         self.wfile.write(b"\r\n")
