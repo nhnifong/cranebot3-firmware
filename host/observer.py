@@ -38,9 +38,7 @@ class Observer:
         gripper_position: shape (n_measurements, 4) TXYZ
         imu_accel: shape (n_measurements, 4) each row TXYZ
         winch_line_record: shape (n_measurements, 2) TL
-        winch_line_plan: shape (n_measurements, 2) TL
-        anchor_line_record: shape (n_cables, n_measurements, 2) TL
-        anchor_line_plan: shape (n_cables, n_measurements, 2) TL
+        anchor_line_record: shape (n_measurements, n_cables+1) TLLL one L for each line
         """
         self.n_cables = n_cables
 
@@ -49,5 +47,5 @@ class Observer:
         self.imu_accel = CircularBuffer((horizon_s * 20, 4))
         self.winch_line_record = CircularBuffer((horizon_s * 10, 2))
         self.winch_line_plan = CircularBuffer((horizon_s * 10, 2))
-        self.anchor_line_record = [CircularBuffer((horizon_s * 10, 2)) for i in range(self.n_cables)]
-        self.anchor_line_plan = [CircularBuffer((horizon_s * 10, 2)) for i in range(self.n_cables)]
+        self.anchor_line_record = CircularBuffer((horizon_s * 10, n_cables+1))
+        self.anchor_line_plan = CircularBuffer((horizon_s * 10, n_cables+1))

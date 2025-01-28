@@ -128,7 +128,9 @@ class CranebotListener(ServiceListener):
         print(f"Service {name} added, service info: {info}")
         if name.split(".")[1] == cranebot_service_name:
             if info.server is not None and info.server != '':
-                self.available_bots[info.server] = info
+                address = socket.inet_ntoa(info.addresses[0])
+                hostport = f"http://{address}:{info.port}"
+                self.available_bots[info.server] = hostport
                 invoke(notify_connected_bots_change, self.available_bots)
 
 run_discovery_task = True
