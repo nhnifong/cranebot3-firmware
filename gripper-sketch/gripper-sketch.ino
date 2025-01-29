@@ -208,22 +208,22 @@ void loop() {
   ESP32_ISR_Servos.setPosition(grip, 0);
 
   // Get linear acceleration. this should already have gravity subtracted from it.
-  BNO::sAxisData_t accelRaw = bno.getAxisRaw(DFRobot_BNO055::eAxisAcc);
-  BNO::sQuaAnalog_t quat = bno.getQua();
+  // BNO::sAxisData_t accelRaw = bno.getAxisRaw(DFRobot_BNO055::eAxisAcc);
+  // BNO::sQuaAnalog_t quat = bno.getQua();
 
   // Rotate linear acceleration to global frame
-  BNO::sAxisAnalog_t linearAccelGlobal = rotateVector(linearAccelDevice, quat);
+  // BNO::sAxisAnalog_t linearAccelGlobal = rotateVector(linearAccelDevice, quat);
 
   // Print acceleration in global frame
-  Serial.print("X accel global:");
-  Serial.print(linearAccelGlobal.x, 3);
-  Serial.print(" ");
-  Serial.print("Y accel global:");
-  Serial.print(linearAccelGlobal.y, 3);
-  Serial.print(" ");
-  Serial.print("Z accel global:");
-  Serial.print(linearAccelGlobal.z, 3);
-  Serial.println(" ");
+  // Serial.print("X accel global:");
+  // Serial.print(linearAccelGlobal.x, 3);
+  // Serial.print(" ");
+  // Serial.print("Y accel global:");
+  // Serial.print(linearAccelGlobal.y, 3);
+  // Serial.print(" ");
+  // Serial.print("Z accel global:");
+  // Serial.print(linearAccelGlobal.z, 3);
+  // Serial.println(" ");
 
   digitalWrite(FIREBEETLE2_LED, HIGH);
 	delay(500);
