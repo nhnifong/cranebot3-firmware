@@ -51,5 +51,3 @@ static esp_err_t stream_handler(httpd_req_t *req) {
 
     // ... (Existing code for LED and return)
 }
-
-
