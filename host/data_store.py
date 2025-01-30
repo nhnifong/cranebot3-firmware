@@ -55,7 +55,6 @@ class DataStore:
         imu_accel: shape (n_measurements, 4) each row TXYZ
         winch_line_record: shape (n_measurements, 2) TL
         anchor_line_record: shape (n_measurements, n_cables+1) TLLL one L for each line
-        gripper_position: shape (n_measurements, 4) TXYZ
         """
         self.n_cables = n_cables
 
@@ -64,4 +63,3 @@ class DataStore:
         self.imu_accel = CircularBuffer((horizon_s * 20, 4))
         self.winch_line_record = CircularBuffer((horizon_s * 10, 2))
         self.anchor_line_record = CircularBuffer((horizon_s * 10, n_cables+1))
-        self.gripper_position_desired = CircularBuffer((horizon_s * 10, 4))
