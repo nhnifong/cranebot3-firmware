@@ -91,7 +91,7 @@ def register_mdns_service(name, service_type, port, properties={}):
         port=port,
         properties=properties,
         addresses=['127.0.0.1'],
-        server=f'test-server-{uuid.uuid4()[-6:]}',
+        server=f'test-server-{str(uuid.uuid4())[-6:]}',
     )
 
     zc.register_service(info)
