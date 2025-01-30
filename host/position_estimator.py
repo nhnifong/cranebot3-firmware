@@ -4,13 +4,13 @@ from scipy.interpolate import BSpline
 from scipy.special import softmax
 import scipy.integrate as integrate
 from time import time
-from observer import Observer
+from data_store import DataStore
 
 # X, Y are horizontal
 # positive Z points at the ceiling.
 
 # rather than assuming the position of the gripper is the last position obtained from a charuco board,
-# instead we fit a model defining it's positoin in time to a bunch of measurments from given instants.
+# instead we fit a model defining it's position in time to a bunch of measurments from given instants.
 # charuco measurements provide direct positional estimates to fit the curve to, but we also use the IMU's
 # acceleration and pose data, and past (recorded) and future (planned) spool line lengths.
 
@@ -19,7 +19,7 @@ from observer import Observer
 # 1. directional calculation, where one variable can be computed from the other.
 # 2. equality, where the two variables are supposed to represent the same thing, and the error between them should be part of the cost function.
 class CDPR_position_estimator:
-    def __init__(self, observer, anchor_points, gravity=9.81):
+    def __init__(self, datastore, anchor_points, gravity=9.81):
         """
         Initializes the CDPR (Cable Driven Parallel Robot)
         All units are SI. these vales are assumed to be obtained from the auto calibration step
@@ -27,10 +27,11 @@ class CDPR_position_estimator:
         The base interval of the splines is always (0,1)
 
         Args:
-            observer: instance of Observer where measurements are stored/collected
+            datastore: instance of DataStore where measurements are stored/collected
             anchor_points: A numpy array of shape (n_cables, 3) representing the 3D coordinates of the cable anchor points.
         """
-        self.observer = observer
+        self.datastore = datastore
+        self.snapshot = {}
         self.anchor_points = np.array(anchor_points)
         self.n_cables = self.anchor_points.shape[0]
         self.gripper_mass = 0.4 # kg
@@ -87,7 +88,7 @@ class CDPR_position_estimator:
         ]))
 
         now = time()
-        self.horizon_s = 10
+        self.horizon_s = self.datastore.horizon_s
         self.time_domain = np.array([now - self.horizon_s, now + self.horizon_s])
 
     def filter_measurements(self):
@@ -230,18 +231,18 @@ class CDPR_position_estimator:
 
         errors = np.array([
             # error between gantry position model and observation
-            self.error_meas(self.gantry_pos_spline, self.observer.gantry_position.arr),
+            self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
-            self.error_meas(self.gripper_pos_spline,  self.observer.gripper_position.arr),
+            self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper acceleration model and observation
-            self.error_meas(gantry_accel_func,  self.observer.imu_accel.arr),
+            self.error_meas(gantry_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
             self.error_meas(gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
             # error between model and recorded winch line lengths
-            self.error_meas(winch_line_func, self.observer.winch_line_record.arr),
+            self.error_meas(winch_line_func, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
             # TODO have one measurement array for each because records will come in at different instants for each line
-            self.error_meas(anchor_line_func, self.observer.anchor_line_record.arr),
+            self.error_meas(anchor_line_func, self.snapshot['anchor_line_record']),
             # error between model and planned winch line lengths
             self.error_meas(winch_line_func, winch_line_plan, normalize_time=False),
             # error between model and planned anchor line lengths
@@ -250,7 +251,7 @@ class CDPR_position_estimator:
             integrate.quad(self.mechanical_energy(gripper_pos_spline, self.gripper_mass), 0, self.horizon_s),
             integrate.quad(self.mechanical_energy(gantry_pos_spline, self.gantry_mass), 0, self.horizon_s),
             # error between position model and desired future locations
-            self.error_meas(self.gripper_pos_spline, self.observer.gripper_position_desired.arr),
+            # self.error_meas(self.gripper_pos_spline, self.observer.gripper_position_desired.arr),
             
             # penalty for pulling the motors against eachother by raising the gantry too high
             # penalty for letting the gripper touch the floor
@@ -260,6 +261,22 @@ class CDPR_position_estimator:
         ])
 
         return sum(errors * self.weights)
+
+    def snapshot_datastore(self):
+        """
+        Make a snapshot of the arrays in the datastore.
+
+        If this ends up being a performance problem, we could add some bookeeping to the circular arrays to just copy the dirty parts.
+        Note that the calls to deepCopy will grab the semaphore for each array during its copy, blocking any thread in the observer process that
+        may have a measurement to write to it.
+        """
+        self.snapshot = {
+            'gantry_position': self.datastore.gantry_position.deepCopy(),
+            'gripper_position': self.datastore.gripper_position.deepCopy(),
+            'imu_accel': self.datastore.imu_accel.deepCopy(),
+            'winch_line_record': self.datastore.winch_line_record.deepCopy(),
+            'anchor_line_record': self.datastore.anchor_line_record.deepCopy(),
+        }
 
     def estimate(self):
         """
@@ -277,6 +294,7 @@ class CDPR_position_estimator:
         there appears to be a choice as to whether to combine this cost function with that one and minimize it in one step. not sure what to do there.
         preception and action aren't so different are they. Jeff Hinton would like that.
         """
+        self.move_to_present()
         model_size = (self.n_cables + 1 + 6) * self.n_ctrl_pts
 
         # Initial guess for control points. Always pick up where we left off
@@ -286,12 +304,14 @@ class CDPR_position_estimator:
             self.motor_spline.c.copy().reshape(-1),
         ])
 
+        self.snapshot_datastore()
         start = time()
         result = optimize.minimize(
             self.cost_function,
             parameter_initial_guess,
             method='SLSQP', # Suitable for constrained optimization
-            bounds=self.bounds
+            bounds=self.bounds,
+            options={'maxiter':1000}
         )
         print(f"minimization step took {time() - start} seconds")
 
@@ -299,8 +319,9 @@ class CDPR_position_estimator:
         self.set_splines_from_params(result.x)
 
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
-        normalized_time = self.model_time(time())
-        return self.gripper_pos_spline(normalized_time)
+        # normalized_time = self.model_time(time())
+        # return self.gripper_pos_spline(normalized_time)
+        # or evaluate the motor spline at the present time and jog the motors to that position.
 
     def move_spline_domain_fast(self, spline, offset):
         """
@@ -342,7 +363,13 @@ class CDPR_position_estimator:
         # if the knots are near 0
         #   move_spline_domain_fast(self.gripper_pos_spline, domain_offset)
         #   move_spline_domain_fast(self.gantry_pos_spline, domain_offset)
+        #   move_spline_domain_fast(self.motor_spline, domain_offset)
         # else:
         self.move_spline_domain_robust(self.gripper_pos_spline, domain_offset)
         self.move_spline_domain_robust(self.gantry_pos_spline, domain_offset)
         self.move_spline_domain_robust(self.motor_spline, domain_offset)
+
+def start_estimator(shared_datastore):
+    pe = CDPR_position_estimator(shared_datastore, anchors)
+    while True:
+        pe.estimate()
