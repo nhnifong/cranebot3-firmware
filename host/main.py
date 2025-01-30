@@ -8,6 +8,12 @@ from position_estimator import start_estimator
 from ursina_app import start_ui
 
 if __name__ == "__main__":
+    # try:
+    #   params = np.load("calibratrion_data.npz")
+    # except IOError:
+    #   params = calibrate_all();
+    #   np.savez('calibration_data', params**)
+
     # a collection of shared arrays for storing measurements
     datastore = DataStore(horizon_s=10, n_cables=3)
 
@@ -38,7 +44,21 @@ if __name__ == "__main__":
         observer_process.terminate()
         minimizer_process.terminate()
         ui_process.terminate()
-        
+
         observer_process.join()
         minimizer_process.join()
         ui_process.join()
+
+# Other tasks not yet accounted for:
+#   triggering the calibration process from the UI
+#   Selecting the highest priority target based on images collected from all cameras
+#   remembering information about previous targets
+#   locating the bins and selecting the best bin for each payload.
+#   incorporating grip estimating into the minimizer
+
+# other interprocess communication that is not yet accounted for:
+#   In the minimizer process evaluate the position splines over a linear space and send the result to the UI process for visualization
+#   The observer process should send information to the UI about bot component connections statuses. And battery info about the gripper
+#   The UI should read and visualize the measurements in the datastore.
+#   The UI should be able to send manual goto commands as desired positions to the minimizer.
+#   The task planner should send desired positions to the minimizer

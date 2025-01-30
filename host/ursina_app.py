@@ -22,12 +22,6 @@ from ursina.shaders import (
     unlit_shader,
 )
 
-# try:
-#   params = np.load("calibratrion_data.npz")
-# except IOError:
-#   params = calibrate_all();
-#   np.savez('calibration_data', params**)
-
 class ControlPanelUI:
     def __init__(self):
         self.app = Ursina()
