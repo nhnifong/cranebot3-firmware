@@ -1,0 +1,79 @@
+hand estimator
+As with the position estimator, for any two elements which are theoretically supposed to be equal, the error between them is minimized
+otherwise, the element is derived from other elements. if there is more than one way to derive it. it will be derived both ways, and the error between the two versions added to the cost function. total mechanichal energy is always minimized
+
+elements
+	gripper position (from position estimator)
+	gripper rotation (from position estimator)
+	changes in gripper rotation estimated from optical flow
+	gearfinger angle spline
+	gearfinger angle measured by encoder
+	expected finger pressure from (payload position is grabbable) and finger angle
+	measured finger pressure
+	expected IR range from object position splines and floor position
+	measured IR range
+	optically estimated range to payload
+	payload COG position spline
+	optically estimated payload COG
+	desired future payload position
+
+	currently holding payload (value between 0 and 1, where 1 means we are definitely holding a payload)
+	payload position is grabbable (value between 0 and 1)
+	
+	closing speed between payload and gripper (calculated from position splines)
+	desired closing speed between payload and gripper
+		insert measurements of 0 at times when we want to be holding the object
+		insert positive values when we expect the object to be moving away from the gripper (dropping object on purpose)
+		insert negative values when we are trying to move closer to the object
+		don't insert measurements for scenarios when we don't care what this closing speed is.
+	Closing speed expected based on current finger pressure (expect 0 when finger pressure is high, otherwise no expectation)
+
+	total mechanical energy
+
+How you would use this
+	If you have no payload in your hand, you want to move towards one.
+		when holding payload is below a threshold like 0.3, you insert future desired closing speeds towards the payload that are negative 
+	if you're over a payload and you're not holding it, you want to grab it.
+		when (payload position is grabbable)>0.6, insert future closing speeds of 0, aka stop moving
+		when closing speed is near zero and the payload is in a grabbale position, (holding payload) values of 1 in the future.
+			as the minimizer tries to close the error between the derived holding payload value, and the desired measurements that are inserted at future times, it will have to move the control points of the finger pressure spline in the direction of more finger pressure, which is how to get a higher calculated (holding payload) value, and since it is also minimizing the error between that and (expected finger pressure from (payload position is grabbable)) and finger angle) and (payload position is grabbable) shouldn't be changing, it'll have to move the control points of the finger angle spline in the direction of closing them, and the servo angle is derived directly from that spline. And if some toddler comes and kicks the payload away from the robot, (optically estimted payload cog) will move, and (payload position is grabbable) will drop near zero, and "you want to grab it" goes to zero too and you're back in the first state where the closing speeds you're inserting in the future are nagative.
+	if you're holding it, you want to move towards it's bin.
+	if you have one and you're over it's bin, you want to drop it.
+		at this point, some higher level system is responsible for changing the payload to a new target
+
+What I've describe above is kind of a state machine, but it's not explicitly represented in imperative code. Instead it's a network of relationships beteen values. the cost function being minimized is always the same, and the way that future desired states are added to or removed from the measurement arrays based on current states causes the optimizer to travel around in a loop between the states in parameter space.
+
+Rather than writing an if statement that changes a state variable, we have future desired states that are derived from current states.
+(payload position is grabbable) is a value derived from the position of the gripper, the angle of the finger, and the cog of the payload which are splines that extend into the future, so our model has some idea of whether the payload position will be grabble at arbitrary future times.
+(desired payload position is grabble) is an expected future state that we treat like a measurement. it is an array of future times and values of (desired payload position is grabble) that we set to 1. the presense, quantity, and times at which these expectations are generated is derived from indicators of the current state.
+Basically, we take the value of (payload position is grabbable) at the present, and if it's ~0, then based on some constant rough velocity and the distance to the payload, we calculate a rough ETA, and starting at that amount of time from now, we insert (desired payload position is grabble) = 1 at regular time intervals from that point forwards. or at least for some arbitrary gripper hover duration, because we might want this to be a don't-care after the object is picked up.
+
+the dropping process is similar.
+we insert future values of (currently holding payload)=0 for a small duration of time starting when the gripper position is over the right bin.
+it would be nice to be able to *express* this state machine in python with what looks like regular if statements, but have it still work by the minimizer following gradients around parameter space. Consider doing this by writing a function that returns the very next desired state based on the current one, and filling in the desired future states by marching it forwards. Sounds kind of like what n-gram models or LLMs do actually. something someting embedding. Maybe those are appropriate for a more complicated plan, but if this bot's states were tokens it would just be [move-to-payload, grab, carry-to-bin, drop] in an infinite loop
+
+Though the desired states in the future are treated exactly like measurements of the past, there are plausibe scenarios in which we would want to rescind all future derired states and replace them with something else. for example, when we suffer a setback, like dropping an object, or maybe when a dog comes along and steals the tennis ball we were about to pick up. if we had placed the desires in the observation manager with the other measurments, (circular numpy arrays, possible as shared memory), we would have to find them and delete them. So perhaps they should be calculated on the fly
+
+naturally, we don't expect to drop things, but if we drop something, it will initially manifest as a sudden increase in the positional error of the payload spline and various measurements that can be compared to it. Additionally measured finger pressure will drop compared to the pressure expected from the finger angle and payload cog estimate. But the minimizer will bring the payload cog estimate into agreement with these new measurements. The inherent confirmation bias of this design will even cause the desired closing speed to the payload (0) and current desired state of holding to cause the minimizer to be sluggish in "realizing" that the payload cog is moving towards the floor. The dropping finger pressure should manifest as a much lower derived value of (currently holding payload). This value dropping is what should cause the desired future gripper location over the bin to vanish, and be replaced by a desire to move back over the payload.
+
+
+Generalizing this method
+	create splines representing positions and rotations of all moving objects
+	Collect all timed measurments from sensors
+	collect any desired states, such as particular objects being in particular places at future times, or objects having zero velocities.
+		treat them exactly like measurements, except their timestamps are in the future
+	derive a value from the splines or their integrals/derivatives that corresponds to each type of timed measurement.
+	derive a value for the position of every motor in the system.
+	use any known linkages between the moving objects to derive values from one spline that should be equal to a value derived from others
+		For example, if there is a known pivot mate between two moving parts, then the location of that pivot can be derived from the position and rotation splines of each part. The error between these two positions would become part of the cost function.
+		the angular offset between the two parts probably also corresponds to a series of timed encoder measurements as well.
+		if one object hangs from another by a string, then the pendulum formula can be used to calulate the forces on the objects and the resulting expected acceleration compared to the 2nd derivative of their position
+	for any two items that should be the same, calculate the average error between the two items (must be independent of the number of measuremnts)
+	add a weight for that error, and add it to the cost function.\
+	add the total kinetic energy and potential energy of the system to the cost function
+	minimize the error. the model parameters are the control points of any splines you created.
+	advance the time window forwards.
+	For all items in the model that correspond to motor positions, jog the motor to the position the model calculates for the current time.
+
+
+Maybe instead of explicitly writing the cost function, all elements should be put into a map keyed by what they represent, and any elements sharing keys represent things between which the error should be minimized.
