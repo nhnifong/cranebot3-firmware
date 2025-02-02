@@ -4,18 +4,46 @@
 #define FIREBEETLE2_LED 21
 #define RXPIN 44
 #define TXPIN 43
+#define STID 0
+#define ANGLE_RESOLUTION 65535
+#define SPOOL_DIAMETER_MM 23.0f
+#define DATA_LEN 1000
+#define PE_TERM 1.5f
+#define DEFAULT_MICROSTEPS 16
+#define RUN_DELAY_MS 30
 
-byte const stepperId = 0;
+// A speed of 1 is this many revs/sec
+const float speed1_revs = 30000.0/(DEFAULT_MICROSTEPS * 200)/60;
+const float meters_per_rev = SPOOL_DIAMETER_MM * PI * 0.001;
+
 MKS_SERVO42 stepper;
 
 
-double zeropos=0;
-double angle=0;
+float zeroAngle=0;
+float currentAngle=0;
+// Dir 0 is when line is being unspooled from the top. (top moves away from the wall)
+// In the unspooling direction, the angle reported by getMotorShaftAngle is decreasing.
+byte dir = 0;
+uint8_t speed = 0;
+// Meters of line that were spooled out when zeroAngle was set.
+float lineAtStart = 2;
 
-float frequency1 = 1.1;
-float amplitude1 = 1;
-float frequency2 = 0.312;
-float amplitude2 = 2.0;
+// Array of desired line lengths
+// col 0: time in seconds
+// col 1: length in meters
+float desiredLine[DATA_LEN][2];
+// The earliest index of this array that is known to be in the future as of the last time we checked.
+// Starts at 1 because we do a look back.
+uint16_t lastIdx = 1;
+
+// array to store actual line lengths for analysis
+float lenRecord[DATA_LEN][2];
+uint16_t recordIdx = 0;
+
+float frequency1 = 0.041;
+float amplitude1 = 0.3;
+float frequency2 = 0.121;
+float amplitude2 = 0.04;
 float phaseShift1 = PI/7; //Example phase shift
 float phaseShift2 = PI/3; //Example phase shift
 
@@ -34,71 +62,104 @@ float waves(float time, float freq1, float amp1, float freq2, float amp2, float 
   return wave1 + wave2;
 }
 
+void slowStop() {
+  while (speed > 0) {
+    speed--;
+    stepper.runMotorConstantSpeed(STID, dir, speed);
+  }
+  stepper.stopMotor(STID);
+  Serial.println("stopped motor");
+  while(true) {
+    delay(10);
+  }
+}
+
+float now() {
+  return float(esp_timer_get_time())*1000000.0;
+}
+
+float currentLineLen() {
+  lenRecord[recordIdx][0] = float(millis())*1000.0;
+  float len = -1 * meters_per_rev * (float(stepper.getMotorShaftAngle(STID)) - zeroAngle) / ANGLE_RESOLUTION + lineAtStart;
+  lenRecord[recordIdx][1] = len;
+  return len;
+}
+
+uint8_t sign(float u) {
+  return u>0;
+}
+
 void setup() {
   pinMode(FIREBEETLE2_LED, OUTPUT);
 
   Serial.begin(115200);
   Serial.setDebugOutput(true);
+  delay(1000);
   Serial.println();
-  Serial.println("alive");
+  Serial.println("alive\n\n\n");
 
   Serial1.begin(38400, SERIAL_8N1, RXPIN, TXPIN);
   delay(100);
   stepper.initialize(&Serial1);
 
-  stepper.ping(stepperId);
+  stepper.ping(STID);
   delay(400);
 
-  zeropos = double(stepper.getMotorShaftAngle(stepperId));
-  Serial.printf("zeropos = %f\n", zeropos);
+  zeroAngle = float(stepper.getMotorShaftAngle(STID));
+  Serial.printf("zeroAngle = %f\n", zeroAngle);
   delay(1);
+
+  // populate a list with desired line lengths as if we had received it from the control center process
+  float tt = float(millis())*0.001 + 0.1;
+  for (int i=0; i<DATA_LEN; i++) {
+    desiredLine[i][0] = tt;
+    desiredLine[i][1] = waves(tt, frequency1, amplitude1, frequency2, amplitude2, phaseShift1, phaseShift2) + 3;
+    tt += float(RUN_DELAY_MS) / 1000;
+  }
 }
 
 void loop() {
 
   
 
-  float t = millis()/1000.0;
-  double desired_angle = waves(t, frequency1, amplitude1, frequency2, amplitude2, phaseShift1, phaseShift2) * 100000;
-  angle = double(stepper.getMotorShaftAngle(stepperId)) - zeropos;
-  double angle_error = angle - desired_angle;
-  // if the angle error is positive, you want direction 0, if it's negative, you want direction 1
-  byte dir = 0;
-  if (angle_error < 0) {
-    dir = 1;
+  float t = millis()*0.001;
+  // Find the earliest entry in desiredLine that is still in the future.
+  while (desiredLine[lastIdx][0] <= t) {
+    lastIdx++;
   }
-  uint8_t speed = min(abs(angle_error)/1000, 100.0);
-  Serial.printf("des = %f, angle = %f, err = %f, speed = %u\n", desired_angle, angle, angle_error, speed);
-  stepper.runMotorConstantSpeed(stepperId, dir, speed);
-  delay(20);
+  if (lastIdx >= DATA_LEN) {
+    slowStop();
+  }
+  float targetLen = desiredLine[lastIdx][1];
+  float currentLen = currentLineLen();
+  float position_err = targetLen - currentLen;
+  // What would the speed be between the two datapoints tha straddle the present?
+  // Positive values mean line is lengthening
+  float targetSpeed = ((desiredLine[lastIdx][1] - desiredLine[lastIdx-1][1]) 
+    / (desiredLine[lastIdx][0] - desiredLine[lastIdx-1][0])); // in meters per second
+  float currentSpeed = speed * speed1_revs * meters_per_rev * (dir==0 ? 1 : -1);
+  float speed_err = targetSpeed - currentSpeed;
+  // If our positional error was zero, we could go exactly that speed.
+  // if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
+  // (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
+  // ideally we want to catch up in one step, but we have max acceleration constraints.
+  float aimSpeed = targetSpeed + position_err * PE_TERM;
+  // Serial.printf("aimSpeed = %f, currentSpeed = %f m/s, targetSpeed = %f m/s, p-term = %f m/s\n", aimSpeed, currentSpeed, targetSpeed, position_err * PE_TERM);
 
+  // light on when acceleration too high
+  if (abs(position_err) > 0.3) {
+    digitalWrite(FIREBEETLE2_LED, HIGH);
+  } else {
+    digitalWrite(FIREBEETLE2_LED, LOW);
+  }
 
-  // angle = stepper.getMotorShaftAngle(stepperId);
-  // angle_error = angle - desired_angle;
-  // Serial.println(angle_error);
-  
-  // stepper.stopMotor(stepperId);
-  // delay(100000);
-
-  // if (flag && t > 8000) {
-  //   Serial.printf("move back %ul\n", t);
-  //   // printpos();
-  //   // stepper.setTargetPosition(stepperId, 0, 20, 4*3200);
-  //   stepper.runMotorConstantSpeed(stepperId, 0, 18);
-  //   flag = false;
-  // }
-
-  // // this seems to return tenths of a revolution as well.
-  // if (millis() - start < 16000) {
-  //   printpos();
-  //   delay(50);
-  // } else {
-  //   printpos();
-  //   stepper.stopMotor(stepperId);
-  //   delay(100000);
-  // }
-
-  // if (count==10){
-  //   delay(100000);
-  // }
+  // mStep = 16
+  // Vrpm = (speed × 30000)/(mStep × 200) for a 1.8°motor
+  // Speed can only go to 127 because we can only use the 7 lsb to represent it.
+  // if you need to go faster, set the microsteps lower.
+  speed = min(abs(aimSpeed / meters_per_rev / speed1_revs), 127.0f);
+  dir = aimSpeed > 0 ? 0 : 1;
+  Serial.printf("position_err = %f, speed = %u\n", position_err, speed);
+  stepper.runMotorConstantSpeed(STID, dir, speed);
+  delay(RUN_DELAY_MS);
 }
