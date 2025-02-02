@@ -49,11 +49,6 @@ class CDPR_position_estimator:
         control_points_gantry = np.array([gant_p for i in range(self.n_ctrl_pts)])
         grip_p = gant_p + np.array([0,0,-2])
         control_points_gripper = np.array([grip_p for i in range(self.n_ctrl_pts)])
-        # a single control point for the motor line plan
-        lines = [np.linalg.norm(a, gant_p) for a in self.anchor_points]
-        lines.append(np.linalg.norm(gant_p, grip_p))
-        # four copies of it become the control points for the plan spline, meaning our initial motor plan is to hold still at this spot
-        control_points_lines = np.array([lines for i in range(self.n_ctrl_pts)])
 
         self.knots = self.clamped_knot_vector(self.n_ctrl_pts)
 
@@ -62,14 +57,7 @@ class CDPR_position_estimator:
         self.gripper_pos_spline = BSpline(self.knots, control_points_gripper, self.spline_degree, True)
         self.gantry_pos_spline = BSpline(self.knots, control_points_gantry, self.spline_degree, True)
 
-        # this spline represent the motor plan as a path through a space with self.n_cables+1 dimensions
-        # only positive values. one cable length per anchor, and one for the winch
-        # even though the time domain of this spline is the whole -10 to +10 like the others, only the future part
-        # is considered in cost functions
-        self.motor_spline = BSpline(self.knots, control_points_lines, self.spline_degree, True)
-
         lpos = 16 # maximum meters from origin than a position spline control point can be
-        mpos = 10 # maximum meters from origin that a motor spline control point can be 
         self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 6
         self.bounds.extend([(0, mpos)] * self.n_ctrl_pts * (self.n_cables + 1))
 
@@ -80,8 +68,6 @@ class CDPR_position_estimator:
             1, # calculated forces
             1, # winch line record
             1, # anchor line record
-            1, # winch line plan
-            1, # anchor line plan
             1, # total energy of gripper
             1, # total energy of gantry
             1, # desired gripper location
@@ -171,8 +157,7 @@ class CDPR_position_estimator:
     def set_splines_from_params(self, params):
         grip_pos_model_size = self.n_ctrl_pts * 3
         gant_pos_model_size = self.n_ctrl_pts * 3
-        motors_model_size = self.n_ctrl_pts * (self.n_cables + 1)
-        if len(params) != (grip_pos_model_size + gant_pos_model_size + motors_model_size):
+        if len(params) != (grip_pos_model_size + gant_pos_model_size):
             raise ValueError("position model_parameters incorrect size")
         # Model parameters are the control points for the position curves.
         # directly update the control points of the bsplines
@@ -180,8 +165,6 @@ class CDPR_position_estimator:
         self.gripper_pos_spline.c = params[start : grip_pos_model_size].reshape((self.n_ctrl_pts, 3))
         start += grip_pos_model_size
         self.gantry_pos_spline.c = params[start : start + gant_pos_model_size].reshape((self.n_ctrl_pts, 3))
-        start += gant_pos_model_size
-        self.motor_spline.c = params[start : start + motors_model_size].reshape((self.n_ctrl_pts, self.n_cables + 1))
 
     def model_time(self, t):
         """
@@ -224,10 +207,6 @@ class CDPR_position_estimator:
         winch_line_func = self.winch_line_len(self.gantry_pos_spline, self.gripper_pos_spline)
         anchor_line_func = self.anchor_line_length(self.gantry_pos_spline)
         steps = 100
-        # create discrite approximations of the motor line plan functions in the same format as measurements
-        # TODO rather than using now (0) as the starting point of where we eval the plan, maybe use a point slightly in the past.
-        winch_line_plan = np.array([[t, self.motor_spline(t)[-1]] for t in np.linspace(0, self.time_domain[1], steps)])
-        anchor_line_plan = np.array([[t, self.motor_spline(t)[:-1]] for t in np.linspace(0, self.time_domain[1], steps)])
 
         errors = np.array([
             # error between gantry position model and observation
@@ -243,10 +222,6 @@ class CDPR_position_estimator:
             # error between model and recorded anchor line lengths
             # TODO have one measurement array for each because records will come in at different instants for each line
             self.error_meas(anchor_line_func, self.snapshot['anchor_line_record']),
-            # error between model and planned winch line lengths
-            self.error_meas(winch_line_func, winch_line_plan, normalize_time=False),
-            # error between model and planned anchor line lengths
-            self.error_meas(anchor_line_func, anchor_line_plan, normalize_time=False),
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
             integrate.quad(self.mechanical_energy(gripper_pos_spline, self.gripper_mass), 0, self.horizon_s),
             integrate.quad(self.mechanical_energy(gantry_pos_spline, self.gantry_mass), 0, self.horizon_s),
@@ -281,27 +256,15 @@ class CDPR_position_estimator:
     def estimate(self):
         """
         Find curves that tell us the positions of the gripper and gantry over a fixed time window
-        given a particular set of observations, and planned motor movments.
         by minimizing self.cost_function
-
-        later this can be used to find a particular set of planned motor movements that result in the gripper having a
-        specific position, and zero velocity, at a specific time, while minimizing motor effort.
-        that later cost function would be the sum of
-            positional error to the goal point at the future time
-            velocity magnitude at the future time
-            motor effort
-
-        there appears to be a choice as to whether to combine this cost function with that one and minimize it in one step. not sure what to do there.
-        preception and action aren't so different are they. Jeff Hinton would like that.
         """
         self.move_to_present()
-        model_size = (self.n_cables + 1 + 6) * self.n_ctrl_pts
+        model_size = 6 * self.n_ctrl_pts
 
         # Initial guess for control points. Always pick up where we left off
         parameter_initial_guess = np.concatenate([
             self.gripper_pos_spline.c.copy().reshape(-1),
             self.gantry_pos_spline.c.copy().reshape(-1),
-            self.motor_spline.c.copy().reshape(-1),
         ])
 
         self.snapshot_datastore()
@@ -321,7 +284,6 @@ class CDPR_position_estimator:
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
         # normalized_time = self.model_time(time())
         # return self.gripper_pos_spline(normalized_time)
-        # or evaluate the motor spline at the present time and jog the motors to that position.
 
     def move_spline_domain_fast(self, spline, offset):
         """
@@ -363,11 +325,9 @@ class CDPR_position_estimator:
         # if the knots are near 0
         #   move_spline_domain_fast(self.gripper_pos_spline, domain_offset)
         #   move_spline_domain_fast(self.gantry_pos_spline, domain_offset)
-        #   move_spline_domain_fast(self.motor_spline, domain_offset)
         # else:
         self.move_spline_domain_robust(self.gripper_pos_spline, domain_offset)
         self.move_spline_domain_robust(self.gantry_pos_spline, domain_offset)
-        self.move_spline_domain_robust(self.motor_spline, domain_offset)
 
 def start_estimator(shared_datastore):
     pe = CDPR_position_estimator(shared_datastore, anchors)
