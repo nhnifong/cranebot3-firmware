@@ -2,6 +2,8 @@
 #include <WiFi.h>
 #include "esp_camera.h"
 #include "DFRobot_AXP313A.h"
+#include "line_record_type.h"
+#include "esp32-hal-log.h"
 
 // ===================
 // Camera Pins
@@ -34,6 +36,8 @@
 #define DEFAULT_MICROSTEPS 16
 #define RUN_DELAY_MS 30
 
+#define ARDUHAL_LOG_LEVEL ARDUHAL_LOG_LEVEL_VERBOSE
+
 // Power manager for camera
 DFRobot_AXP313A axp;
 
@@ -43,7 +47,7 @@ DFRobot_AXP313A axp;
 const char* ssid = "ATTEdnN5S2";
 const char* password = "gwc549+9e7e4";
 
-void startCameraServer();
+void startCameraServer(QueueHandle_t q);
 
 // A speed of 1 is this many revs/sec
 const float speed1_revs = 30000.0/(DEFAULT_MICROSTEPS * 200)/60;
@@ -69,9 +73,9 @@ float desiredLine[DATA_LEN][2];
 // Starts at 1 because we do a look back.
 uint16_t lastIdx = 1;
 
-// array to store actual line lengths for analysis
-float lenRecord[DATA_LEN][2];
-uint16_t recordIdx = 0;
+// queue to store actual line lengths for sending back over http
+QueueHandle_t queue;
+int queueSize = 40;
 
 float frequency1 = 0.041;
 float amplitude1 = 0.3;
@@ -112,10 +116,13 @@ float now() {
 }
 
 float currentLineLen() {
-  lenRecord[recordIdx][0] = now();
-  float len = -1 * meters_per_rev * (float(stepper.getMotorShaftAngle(STID)) - zeroAngle) / ANGLE_RESOLUTION + lineAtStart;
-  lenRecord[recordIdx][1] = len;
-  return len;
+  line_record_t lenRecord = {
+    now(),
+    -1 * meters_per_rev * (float(stepper.getMotorShaftAngle(STID)) - zeroAngle) / ANGLE_RESOLUTION + lineAtStart,
+  };
+  // here 0 means no delay, so I think this means if the queue is full, discard the value.
+  xQueueSend(queue, &lenRecord, 0);
+  return lenRecord.len;
 }
 
 uint8_t sign(float u) {
@@ -130,6 +137,11 @@ void setup() {
   delay(400);
   Serial.println();
   Serial.println("alive\n\n\n");
+
+  queue = xQueueCreate( queueSize, sizeof( line_record_t ) );
+  if(queue == NULL){
+    Serial.println("Error creating the queue");
+  }
 
   // Set up camera power
   while(axp.begin() != 0){
@@ -159,6 +171,7 @@ void setup() {
   config.xclk_freq_hz = 20000000;
   config.frame_size = FRAMESIZE_UXGA;
   config.pixel_format = PIXFORMAT_JPEG; // for streaming
+  // config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 10; // A lower number is a higher quality. range 0-63
@@ -187,7 +200,8 @@ void setup() {
   Serial.println("");
   Serial.println("WiFi connected");
 
-  startCameraServer();
+  startCameraServer(queue);
+
   Serial.print("Camera Ready! Use 'http://");
   Serial.print(WiFi.localIP());
   Serial.println("' to connect");
@@ -208,7 +222,7 @@ void setup() {
   float tt = now() + 0.1;
   for (int i=0; i<DATA_LEN; i++) {
     desiredLine[i][0] = tt;
-    desiredLine[i][1] = waves(tt, frequency1, amplitude1, frequency2, amplitude2, phaseShift1, phaseShift2) + 3;
+    desiredLine[i][1] = waves(tt, frequency1, amplitude1, frequency2, amplitude2, phaseShift1, phaseShift2) + 2;
     tt += float(RUN_DELAY_MS) / 1000;
   }
 
@@ -218,44 +232,44 @@ void setup() {
 void loop() {
   // Everything for the camera is done in another task by the web server during the delays
 
-  // float t = now();
-  // // Find the earliest entry in desiredLine that is still in the future.
-  // while (desiredLine[lastIdx][0] <= t) {
-  //   lastIdx++;
-  // }
-  // if (lastIdx >= DATA_LEN) {
-  //   slowStop();
-  // }
-  // float targetLen = desiredLine[lastIdx][1];
-  // float currentLen = currentLineLen();
-  // float position_err = targetLen - currentLen;
-  // // What would the speed be between the two datapoints tha straddle the present?
-  // // Positive values mean line is lengthening
-  // float targetSpeed = ((desiredLine[lastIdx][1] - desiredLine[lastIdx-1][1]) 
-  //   / (desiredLine[lastIdx][0] - desiredLine[lastIdx-1][0])); // in meters per second
-  // float currentSpeed = speed * speed1_revs * meters_per_rev * (dir==0 ? 1 : -1);
-  // float speed_err = targetSpeed - currentSpeed;
-  // // If our positional error was zero, we could go exactly that speed.
-  // // if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
-  // // (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
-  // // ideally we want to catch up in one step, but we have max acceleration constraints.
-  // float aimSpeed = targetSpeed + position_err * PE_TERM;
-  // // Serial.printf("aimSpeed = %f, currentSpeed = %f m/s, targetSpeed = %f m/s, p-term = %f m/s\n", aimSpeed, currentSpeed, targetSpeed, position_err * PE_TERM);
+  float t = now();
+  // Find the earliest entry in desiredLine that is still in the future.
+  while (desiredLine[lastIdx][0] <= t) {
+    lastIdx++;
+  }
+  if (lastIdx >= DATA_LEN) {
+    slowStop();
+  }
+  float targetLen = desiredLine[lastIdx][1];
+  float currentLen = currentLineLen();
+  float position_err = targetLen - currentLen;
+  // What would the speed be between the two datapoints tha straddle the present?
+  // Positive values mean line is lengthening
+  float targetSpeed = ((desiredLine[lastIdx][1] - desiredLine[lastIdx-1][1]) 
+    / (desiredLine[lastIdx][0] - desiredLine[lastIdx-1][0])); // in meters per second
+  float currentSpeed = speed * speed1_revs * meters_per_rev * (dir==0 ? 1 : -1);
+  float speed_err = targetSpeed - currentSpeed;
+  // If our positional error was zero, we could go exactly that speed.
+  // if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
+  // (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
+  // ideally we want to catch up in one step, but we have max acceleration constraints.
+  float aimSpeed = targetSpeed + position_err * PE_TERM;
+  // Serial.printf("aimSpeed = %f, currentSpeed = %f m/s, targetSpeed = %f m/s, p-term = %f m/s\n", aimSpeed, currentSpeed, targetSpeed, position_err * PE_TERM);
 
-  // // light on when acceleration too high
-  // if (abs(position_err) > 0.3) {
-  //   digitalWrite(FIREBEETLE2_LED, HIGH);
-  // } else {
-  //   digitalWrite(FIREBEETLE2_LED, LOW);
-  // }
+  // light on when acceleration too high
+  if (abs(position_err) > 0.3) {
+    digitalWrite(FIREBEETLE2_LED, HIGH);
+  } else {
+    digitalWrite(FIREBEETLE2_LED, LOW);
+  }
 
-  // // mStep = 16
-  // // Vrpm = (speed × 30000)/(mStep × 200) for a 1.8°motor
-  // // Speed can only go to 127 because we can only use the 7 lsb to represent it.
-  // // if you need to go faster, set the microsteps lower.
-  // speed = min(abs(aimSpeed / meters_per_rev / speed1_revs), 127.0f);
-  // dir = aimSpeed > 0 ? 0 : 1;
+  // mStep = 16
+  // Vrpm = (speed × 30000)/(mStep × 200) for a 1.8°motor
+  // Speed can only go to 127 because we can only use the 7 lsb to represent it.
+  // if you need to go faster, set the microsteps lower.
+  speed = min(abs(aimSpeed / meters_per_rev / speed1_revs), 127.0f);
+  dir = aimSpeed > 0 ? 0 : 1;
   // Serial.printf("position_err = %f, speed = %u\n", position_err, speed);
-  // stepper.runMotorConstantSpeed(STID, dir, speed);
+  stepper.runMotorConstantSpeed(STID, dir, speed);
   delay(RUN_DELAY_MS);
 }

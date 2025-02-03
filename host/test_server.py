@@ -19,7 +19,7 @@ import uuid
 import zeroconf
 import threading
 
-include_accel_data = False
+include_accel_data = True
 keep_advertising_mdns = True
 
 class StreamingHandler(http.server.BaseHTTPRequestHandler):

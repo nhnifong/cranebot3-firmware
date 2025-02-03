@@ -25,39 +25,51 @@ camera_matrix = np.array(
 dist_coeffs = np.array(
 [[ 3.40916628e-01, -2.38650897e+00, -8.85125582e-04, 3.34240054e-03, 4.69525036e+00]])
 
-def handle_image(headers, buf):
-    """
-    handle a single image from the stream
-    """
-    # Decode image
-    timestamp = float(headers['X-Timestamp-Sec']) + float(headers['X-Timestamp-Usec'])*0.000001
-    frame = cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), -1)
-    # Detect ArUco markers
-    charuco_corners, charuco_ids, marker_corners, marker_ids = cranebot_detectors["origin"].detectBoard(frame)
-    if charuco_corners is not None and len(charuco_corners) > 0:
-        #estimate charuco board pose
-        retval, rvec, tvec = aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, cranebot_boards["origin"], camera_matrix, dist_coeffs, None, None)
-        print(f"Found board: {marker_ids}")
-        print(f"Timestamp: {timestamp}")
-        print(f"Rotation Vector: {rvec}")
-        print(f"Translation Vector: {tvec}")
-        sys.stdout.flush()
+class PartHandler:
+    def __init__(self):
+        pass
 
-        # using the board id, figure out which object it is
-        # rotate and translate to where that object's origin would be
-        # store the time and that position in the appropriate measurement array in observer.
-        
-        # datastore.some_part.insert(np.concatenate([[timestamp], [part_position]]))
+    def handle_image(self, headers, buf):
+        """
+        handle a single image from the stream
+        """
+        # Decode image
+        timestamp = float(headers['X-Timestamp'])
+        if buf[:2] != b'\xff\xd8': # start of image marker
+            # discard broken frames. they have no header, and a premature end of image marker.
+            # I have no idea what causes these but the browser can display them.
+            # they must be some kind of intermediate frame, but I have no information of what the encoding is.
+            # the bad news is that when the lights are on, almost all frames are of this type.
+            print("broken frame")
+            return
 
-def handle_json(headers, buf):
-    """
-    handle a single json blob from the stream
-    """
-    timestamp = float(headers['X-Timestamp-Sec']) + float(headers['X-Timestamp-Usec'])*0.000001
-    accel = json.loads(buf.decode())
-    print(json)
-    sys.stdout.flush()
-    # datastore.imu_accel.insert(np.array([timestamp, accel['x'], accel['y'], accel['z']]))
+        print("valid jpeg")
+        frame = cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if frame is not None:
+            print("Detect ArUco markers")
+            charuco_corners, charuco_ids, marker_corners, marker_ids = cranebot_detectors["origin"].detectBoard(frame)
+            if charuco_corners is not None and len(charuco_corners) > 0:
+                #estimate charuco board pose
+                retval, rvec, tvec = aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, cranebot_boards["origin"], camera_matrix, dist_coeffs, None, None)
+                print(f"Found board: {marker_ids}")
+                print(f"Timestamp: {timestamp}")
+                print(f"Rotation Vector: {rvec}")
+                print(f"Translation Vector: {tvec}")
+                sys.stdout.flush()
+
+                # using the board id, figure out which object it is
+                # rotate and translate to where that object's origin would be
+                # store the time and that position in the appropriate measurement array in observer.
+                
+                # datastore.some_part.insert(np.concatenate([[timestamp], [part_position]]))
+
+    def handle_json(self, headers, buf):
+        """
+        handle a single json blob from the stream
+        """
+        dec = buf.decode()
+        accel = json.loads(dec)
+        # datastore.imu_accel.insert(np.array([timestamp, accel['x'], accel['y'], accel['z']]))
 
 def parse_mixed_replace_stream(url):
     """
@@ -70,18 +82,20 @@ def parse_mixed_replace_stream(url):
 
     Prints the content type of each part in the stream.
     """
+    ph = PartHandler()
     with requests.get(url, stream=True) as response:
         response.raise_for_status()
-
+        print(response.headers)
         content_type = response.headers.get('Content-Type', '')
         if "multipart/x-mixed-replace" not in content_type:
             print("Error: Not a multipart/x-mixed-replace stream.")
             sys.stdout.flush()
             return
         boundary = content_type[content_type.find('boundary=')+9:]
-        boundary_with_newlines = f"\r\n{boundary}\r\n"
+        boundary_with_newlines = f"\r\n--{boundary}\r\n"
+        print(repr(boundary_with_newlines))
 
-        for part in response.iter_lines(chunk_size=2**10, decode_unicode=False, delimiter=boundary_with_newlines.encode()):
+        for part in response.iter_lines(chunk_size=2**20, decode_unicode=False, delimiter=boundary_with_newlines.encode()):
             headers = {}
             lines = part.split(b'\r\n')
             for line in lines:
@@ -93,15 +107,15 @@ def parse_mixed_replace_stream(url):
                     break
             if len(headers) == 0:
                 continue
-            print(headers)
             sys.stdout.flush()
             if headers['Content-Type'] == 'image/jpeg':
-                handle_image(headers, lines[-1])
+                ph.handle_image(headers, lines[-1])
             elif headers['Content-Type'] == 'application/json':
-                handle_json(headers, lines[-1])
+                ph.handle_json(headers, lines[-1])
             else:
                 print(f"Got an unexpected content type {headers['Content-Type']}")
                 sys.stdout.flush()
+        print("consumed stream")
 
 cranebot_service_name = 'cranebot-service'
 # listener for updating the list of available robot component servers
