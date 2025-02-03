@@ -58,6 +58,10 @@ static esp_err_t stream_handler(httpd_req_t *req) {
         _jpg_buf = fb->buf;
       }
     }
+    // This should be proof that every frame has a proper jpeg encoding, so why do they appear corrupted on the receiving end?
+    // Why does the content length send down in the part header appear correct, but the content has no header and a premature end of image tag?
+    // Find the end of image tag here, and put it in the part header just for debugging info
+    // check the content size at the client.
     if (_jpg_buf[6] != 'J') {
       res = ESP_FAIL;
     }
