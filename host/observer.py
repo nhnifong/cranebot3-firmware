@@ -161,9 +161,10 @@ class CranebotListener(ServiceListener):
 
 
 
-def start_observation(shared_array):
+def start_observation(shared_array, to_ui_q):
     # set the global 
     datastore = shared_array
+    to_ui_q = to_ui_q
 
     # start discovery
     run_discovery_task = True

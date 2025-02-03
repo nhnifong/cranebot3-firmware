@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.interpolate import BSpline
 import sys
 # import threading
 import time
@@ -72,9 +73,28 @@ class ControlPanelUI:
             text_entity = Text(server, world_scale=16, position=(-0.1, -0.4 + offs))
             offs -= 0.03
 
+    def receive_updates(self, min_to_ui_q):
+        while True:
+            updates = min_to_ui_q.get()
+            if 'knots' in updates:
+                self.knots = updates['knots']
+            if 'spline_degree' in updates:
+                self.spline_degree = updates['spline_degree']
+            if 'minimization_step_seconds' in updates:
+                pass  #updates['minimization_step_seconds']
+            if 'gripper_path' in updates:
+                self.gripper_pos_spline = BSpline(self.knots, updates['gripper_path'], self.spline_degree, True)
+            if 'gantry_path' in updates:
+                self.gantry_pos_spline = BSpline(self.knots, updates['gantry_path'], self.spline_degree, True)
+
+
     def start(self):
         self.app.run()
 
-def start_ui():
+def start_ui(min_to_ui_q):
     cpui = ControlPanelUI()
+
+    estimator_update_thread = threading.Thread(target=self.receive_updates, args=(min_to_ui_q, ), daemon=True)
+    estimator_update_thread.start()
+
     cpui.start();
