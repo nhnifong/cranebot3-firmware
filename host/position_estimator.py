@@ -66,7 +66,6 @@ class CDPR_position_estimator:
 
         lpos = 16 # maximum meters from origin than a position spline control point can be
         self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 6
-        self.bounds.extend([(0, mpos)] * self.n_ctrl_pts * (self.n_cables + 1))
 
         self.weights = softmax(np.array([
             1, # gantry position from charuco
@@ -377,7 +376,7 @@ class CDPR_position_estimator:
         while t < self.time_domain[1]:
             if holding:
                 # you want to be over the bin for the thing you're holding
-                destination = self.gripper_over_bin_location
+                destination = self.gripper_over_bin_location()
             else:
                 # you want to be over the next target item
                 destination = self.item_priority_list(item_todo)
@@ -392,11 +391,25 @@ class CDPR_position_estimator:
                 desired_positions.append(np.concatenate([[t], destination]))
             # assume we will drop/pick up the item at this time.
             # we cannot know whether we will succeed, but have to assume we will for planning
-            holding = !holding
-
+            holding = not holding
         return np.array(desired_positions)
 
+    def holding_something_now(self):
+        return True
+
+    def item_priority_list(self, idx):
+        pl = np.array([ [-1.5,0, 2.2],
+                        [ 0.9,0, 1.0],
+                        [ 0.2,0,-1.2]])
+        return pl[idx]
+
+    def gripper_over_bin_location(self):
+        return np.array([0,0.2,1])
+
 def start_estimator(shared_datastore, min_to_ui_q):
+    anchors = np.array([[-2,2, 3],
+                        [ 2,2, 3],
+                        [ 0,2,-2]])
     pe = CDPR_position_estimator(shared_datastore, min_to_ui_q, anchors)
     while True:
         pe.estimate()

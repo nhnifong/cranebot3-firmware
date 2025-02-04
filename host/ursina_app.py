@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.interpolate import BSpline
 import sys
-# import threading
+import threading
 import time
 from position_estimator import CDPR_position_estimator
 from calibration import calibrate_all
@@ -94,7 +94,7 @@ class ControlPanelUI:
 def start_ui(min_to_ui_q):
     cpui = ControlPanelUI()
 
-    estimator_update_thread = threading.Thread(target=self.receive_updates, args=(min_to_ui_q, ), daemon=True)
+    estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(min_to_ui_q, ), daemon=True)
     estimator_update_thread.start()
 
     cpui.start();

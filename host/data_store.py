@@ -20,13 +20,13 @@ class CircularBuffer:
     """
     def __init__(self, shape):
         self.shape = shape
-        self.arr = RawArray('f', np.prod(shape))
+        self.arr = RawArray('f', int(np.prod(shape)))
         self.idx = 0
         self.sem = Semaphore(1)
 
     def asNpa(self):
         """Return as numpy array with original shape"""
-        return np.frombuffer(arr.get_obj(), dtype=float).reshape(self.shape)
+        return np.array(self.arr, dtype=float).reshape(self.shape)
 
     def deepCopy(self):
         with self.sem:
@@ -56,6 +56,7 @@ class DataStore:
         winch_line_record: shape (n_measurements, 2) TL
         anchor_line_record: shape (n_measurements, n_cables+1) TLLL one L for each line
         """
+        self.horizon_s = horizon_s
         self.n_cables = n_cables
 
         self.gantry_position = CircularBuffer((horizon_s * 10, 4))

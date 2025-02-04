@@ -8,7 +8,7 @@
 
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
 static const char *_STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
-static const char *_STREAM_IMAGE_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Timestamp: %f\r\nbuf6: %d\r\n\r\n";
+static const char *_STREAM_IMAGE_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Timestamp: %f\r\n\r\n";
 static const char *_STREAM_JSON_PART = "Content-Type: application/json\r\nContent-Length: %u\r\n\r\n";
 
 httpd_handle_t stream_httpd = NULL;
@@ -58,32 +58,16 @@ static esp_err_t stream_handler(httpd_req_t *req) {
         _jpg_buf = fb->buf;
       }
     }
-    // This should be proof that every frame has a proper jpeg encoding, so why do they appear corrupted on the receiving end?
-    // Why does the content length send down in the part header appear correct, but the content has no header and a premature end of image tag?
-    // Find the end of image tag here, and put it in the part header just for debugging info
-    // check the content size at the client.
-    if (_jpg_buf[6] != 'J') {
-      res = ESP_FAIL;
-    }
     if (res == ESP_OK) {
       res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
     }
     if (res == ESP_OK) {
-      size_t hlen = snprintf((char *)part_buf, 128, _STREAM_IMAGE_PART, _jpg_buf_len, float(_timestamp.tv_sec)+_timestamp.tv_usec*0.000001, (_jpg_buf[6] == 'J'));
+      size_t hlen = snprintf((char *)part_buf, 128, _STREAM_IMAGE_PART, _jpg_buf_len, float(_timestamp.tv_sec)+_timestamp.tv_usec*0.000001);
       res = httpd_resp_send_chunk(req, (const char *)part_buf, hlen);
     }
-
-    // if (res == ESP_OK) {
-    //   res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
-    // }
-
-    size_t bytes_sent = 0;
-    while (bytes_sent < _jpg_buf_len && res == ESP_OK) {
-        size_t chunk_size = std::min((size_t)4096, _jpg_buf_len - bytes_sent); // Send in smaller chunks
-        res = httpd_resp_send_chunk(req, (const char *)(_jpg_buf + bytes_sent), chunk_size);
-        bytes_sent += chunk_size;
+    if (res == ESP_OK) {
+      res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
     }
-
     if (fb) {
       esp_camera_fb_return(fb);
       fb = NULL;
