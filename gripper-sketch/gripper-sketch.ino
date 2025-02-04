@@ -4,6 +4,7 @@
 #include "ESP32_New_ISR_Servo.h"
 #include "DFRobot_BNO055.h"
 #include "Wire.h"
+#include "other_record_types.h"
 
 // WARNING!!! PSRAM IC required for UXGA resolution and high JPEG quality
 // Must select the following settings from tools menu before burning
@@ -46,6 +47,10 @@ DFRobot_AXP313A axp;
 const char* ssid = "ATTEdnN5S2";
 const char* password = "gwc549+9e7e4";
 
+// queue to store actual line lengths for sending back over http
+QueueHandle_t queue;
+int queueSize = 40;
+
 // Servo constants
 #define MIN_MICROS      500  //544
 #define MAX_MICROS      2500
@@ -64,7 +69,7 @@ int sensorValue = 0;  // variable to store the value coming from the voltage div
 typedef DFRobot_BNO055_IIC    BNO;
 BNO   bno(&Wire, 0x28);    // input TwoWire interface and IIC address for IMU
 
-void startCameraServer();
+void startCameraServer(QueueHandle_t q);
 
 // show last sensor operate status
 void printLastOperateStatus(BNO::eStatus_t eStatus)
@@ -107,6 +112,11 @@ void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   Serial.println();
+
+  queue = xQueueCreate( queueSize, sizeof( line_record_t ) );
+  if(queue == NULL){
+    Serial.println("Error creating the queue");
+  }
 
   Serial.println("Setup IMU...");
   bno.reset();
@@ -180,7 +190,7 @@ void setup() {
   Serial.println("");
   Serial.println("WiFi connected");
 
-  startCameraServer();
+  startCameraServer(queue);
   Serial.print("Camera Ready! Use 'http://");
   Serial.print(WiFi.localIP());
   Serial.println("' to connect");
