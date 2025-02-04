@@ -5,25 +5,14 @@ import threading
 import time
 import socket
 from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
-from cv_common import cranebot_boards, cranebot_detectors
+from cv_common import locate_board
 import cv2
-import cv2.aruco as aruco
 import numpy as np
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 
 # global that will point to a DataStore passed to this process.
 datastore = None
-
-# Intrinsic Matrix: 
-camera_matrix = np.array(
-[[1.55802968e+03, 0.00000000e+00, 8.58167917e+02],
- [0.00000000e+00, 1.56026885e+03, 6.28095370e+02],
- [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]])
- 
-# Distortion Coefficients: 
-dist_coeffs = np.array(
-[[ 3.40916628e-01, -2.38650897e+00, -8.85125582e-04, 3.34240054e-03, 4.69525036e+00]])
 
 class PartHandler:
     def __init__(self):
@@ -43,19 +32,14 @@ class PartHandler:
             print("broken frame")
             return
 
-        print("valid jpeg")
         frame = cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_COLOR)
         if frame is not None:
-            print("Detect ArUco markers")
-            charuco_corners, charuco_ids, marker_corners, marker_ids = cranebot_detectors["origin"].detectBoard(frame)
-            if charuco_corners is not None and len(charuco_corners) > 0:
-                #estimate charuco board pose
-                retval, rvec, tvec = aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, cranebot_boards["origin"], camera_matrix, dist_coeffs, None, None)
-                print(f"Found board: {marker_ids}")
-                print(f"Timestamp: {timestamp}")
-                print(f"Rotation Vector: {rvec}")
-                print(f"Translation Vector: {tvec}")
-                sys.stdout.flush()
+            retval, rvec, tvec = locate_board(frame, 'origin')
+            print(f"Found board: {retval}")
+            print(f"Timestamp: {timestamp}")
+            print(f"Rotation Vector: {rvec}")
+            print(f"Translation Vector: {tvec}")
+            sys.stdout.flush()
 
                 # using the board id, figure out which object it is
                 # rotate and translate to where that object's origin would be
@@ -107,11 +91,16 @@ def parse_mixed_replace_stream(url):
                     break
             if len(headers) == 0:
                 continue
-            sys.stdout.flush()
+            # the data begins after the first double newline
+            data_start = part.find(b'\r\n\r\n')+4
+            if headers['Content-Length'] == '0' or data_start == 3:
+                print('skipping part with zero data size')
+                continue
+
             if headers['Content-Type'] == 'image/jpeg':
-                ph.handle_image(headers, lines[-1])
+                ph.handle_image(headers, part[data_start:])
             elif headers['Content-Type'] == 'application/json':
-                ph.handle_json(headers, lines[-1])
+                ph.handle_json(headers, part[data_start:])
             else:
                 print(f"Got an unexpected content type {headers['Content-Type']}")
                 sys.stdout.flush()

@@ -1,7 +1,7 @@
 #include "esp_http_server.h"
 #include "esp_camera.h"
 #include "esp32-hal-log.h"
-#include "line_record_type.h"
+#include "other_record_types.h"
 #include <ArduinoJson.h> 
 
 #define PART_BOUNDARY "123456789000000000000987654321"
