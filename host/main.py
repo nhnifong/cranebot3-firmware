@@ -20,18 +20,18 @@ if __name__ == "__main__":
     # a queue for sending updates from the minimizer to the UI
     # items are dictionaries with 1 or more updates to named values.
     # for example {'gripper_pos_spline_eval': [[t,x,y,z], [t,x,y,z], ...]}
-    min_to_ui_q = multiprocessing.Queue()
+    to_ui_q = multiprocessing.Queue()
 
     # Create and start the observer process
-    observer_process = multiprocessing.Process(target=start_observation, args=(shared_array,))
+    observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q))
     observer_process.daemon = True
 
     # error minimization process
-    minimizer_process = multiprocessing.Process(target=start_estimator, args=(shared_array, min_to_ui_q))
+    minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q))
     minimizer_process.daemon = True
 
     # add ui process if not in headless mode
-    ui_process = multiprocessing.Process(target=start_ui, args=(min_to_ui_q, ))
+    ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, ))
     ui_process.daemon = True
 
     # todo use logging module in these processes.
