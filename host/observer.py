@@ -5,7 +5,7 @@ import threading
 import time
 import socket
 from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
-from cv_common import locate_board
+from cv_common import locate_markers
 import cv2
 import numpy as np
 
@@ -34,11 +34,11 @@ class PartHandler:
 
         frame = cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_COLOR)
         if frame is not None:
-            retval, rvec, tvec = locate_board(frame, 'origin')
-            print(f"Found board: {retval}")
-            print(f"Timestamp: {timestamp}")
-            print(f"Rotation Vector: {rvec}")
-            print(f"Translation Vector: {tvec}")
+            for detection in locate_markers(frame):
+                print(f"Found board: {detection.name}")
+                print(f"Timestamp: {timestamp}")
+                print(f"Rotation Vector: {detection.rvec}")
+                print(f"Translation Vector: {detection.tvec}")
             sys.stdout.flush()
 
                 # using the board id, figure out which object it is

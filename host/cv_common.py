@@ -1,6 +1,7 @@
 import cv2
 import cv2.aruco as aruco
 import numpy as np
+import os
 
 # Intrinsic Matrix: 
 camera_matrix = np.array(
@@ -12,48 +13,84 @@ camera_matrix = np.array(
 dist_coeffs = np.array(
 [[ 3.40916628e-01, -2.38650897e+00, -8.85125582e-04, 3.34240054e-03, 4.69525036e+00]])
 
-names = [
-	'origin',
-	'gripper_front',
-	'gripper_back',
-	'gantry_side_A',
-	'gantry_side_B',
-	'gantry_side_C',
-	'anchor0',
-	'anchor1',
-	'anchor2',
-	'anchor3',
-	'bin_laundry',
-	'bin_trash',
-	'bin_toys',
-	'bin_other',
-]
-cranebot_boards = {}
-cranebot_detectors = {}
+# the ids are the index in the list
+marker_names = {
+    'origin',
+    'gripper_front',
+    'gripper_back',
+    'gantry_side_A',
+    'gantry_side_B',
+    'gantry_side_C',
+    'anchor0',
+    'anchor1',
+    'anchor2',
+    'anchor3',
+    'bin_laundry',
+    'bin_trash',
+    'bin_toys',
+    'bin_other',
+}
 
-# Define ChArUco board parameters
-SQUARE_LENGTH = 0.02  # Length of one square in meters
-MARKER_LENGTH = 0.015 # Length of ArUco marker in meters
-ROWS = 3           # Number of rows of squares
-COLS = 3           # Number of columns of squares
-N_MARKERS = 4      # Number of markers per board
+marker_size = 0.09 # Length of ArUco marker in meters
 
+aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
+aruco_parameters = aruco.DetectorParameters()
 # Minimum and maximum size that an aruco marker could be as a fraction of the image width
-parameters = aruco.DetectorParameters()
-parameters.minMarkerPerimeterRate = 0.01
-parameters.maxMarkerPerimeterRate = 4.0
+aruco_parameters.minMarkerPerimeterRate = 0.01
+aruco_parameters.maxMarkerPerimeterRate = 4.0
+detector = aruco.ArucoDetector(aruco_dict, aruco_parameters)
 
-dictionary = aruco.getPredefinedDictionary(aruco.DICT_6X6_250)
+class Detection:
+    def __init__(self, name, r, t):
+        self.name = name
+        self.rotation = r
+        self.translation = t
 
-for i,name in enumerate(names):
-	board = aruco.CharucoBoard((ROWS, COLS), SQUARE_LENGTH, MARKER_LENGTH, dictionary, np.arange(i*N_MARKERS, (i+1)*N_MARKERS))
-	detector = aruco.CharucoDetector(board, detectorParams=parameters)
-	cranebot_boards[name] = board
-	cranebot_detectors[name] = detector
+def locate_markers(im):
+    corners, ids, rejectedImgPoints = detector.detectMarkers(frame)
+    if ids is not None:
+        #estimate pose of every marker in the image
+        marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
+                                  [marker_size / 2, marker_size / 2, 0],
+                                  [marker_size / 2, -marker_size / 2, 0],
+                                  [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
+        rvecs = []
+        tvecs = []
+        results = []
 
-def locate_board(im, name):
-    charuco_corners, charuco_ids, marker_corners, marker_ids = cranebot_detectors[name].detectBoard(im)
-    if (charuco_corners is not None and len(charuco_corners) > 0) and (marker_corners is not None and len(marker_corners) > 0):
-    	return aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, cranebot_boards[name], camera_matrix, dist_coeffs, None, None)
-    else:
-    	return False, None, None
+        for i,c in zip(ids, corners):
+            _, r, t = cv2.solvePnP(marker_points, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
+            try:
+                name = marker_names[i]
+                results.append(Detection(name, np.array(r), np.array(t)))
+            except IndexError:
+                # saw something that's not part of my robot
+                print(f'Unknown marker spotted with id {i}')
+        return results
+
+def generateMarkerImages():
+    border_px = 40
+    marker_side_px = 500
+    cm = (marker_size/marker_side_px)*(marker_side_px+border_px*2)*100
+    print('boards should be printed with a side length of %0.2f cm' % cm)
+    for i, name in enumerate(marker_names):
+        marker_image = cv2.aruco.generateImageMarker(aruco_dict, i, marker_side_px)
+
+        # white frame with black corner squares
+        total_size = marker_side_px + 2 * border_px
+        framed_image = np.ones((total_size, total_size), dtype=np.uint8) * 255
+
+        # Place the marker image in the center
+        framed_image[border_px:border_px + marker_side_px, border_px:border_px + marker_side_px] = marker_image
+
+        # Draw black squares in the corners
+
+        framed_image[:border_px, :border_px] = 0
+        framed_image[-border_px:, -border_px:] = 0
+        framed_image[:border_px, -border_px:] = 0
+        framed_image[-border_px:, :border_px] = 0
+
+        cv2.imwrite(os.path.join('boards',name+'.png'), framed_image)
+
+if __name__ == '__main__':
+    generateMarkerImages()
