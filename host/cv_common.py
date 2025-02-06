@@ -18,16 +18,8 @@ marker_names = {
     'origin',
     'gripper_front',
     'gripper_back',
-    'gantry_side_A',
-    'gantry_side_B',
-    'gantry_side_C',
-    'anchor0',
-    'anchor1',
-    'anchor2',
-    'anchor3',
-    'bin_laundry',
-    'bin_trash',
-    'bin_toys',
+    'gantry_front',
+    'gantry_back',
     'bin_other',
 }
 

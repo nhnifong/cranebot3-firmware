@@ -5,7 +5,7 @@ import time
 from data_store import DataStore
 from observer import start_observation
 from position_estimator import start_estimator
-from ursina_app import start_ui
+# from ursina_app import start_ui
 
 if __name__ == "__main__":
     # try:
@@ -15,30 +15,31 @@ if __name__ == "__main__":
     #   np.savez('calibration_data', params**)
 
     # a collection of shared arrays for storing measurements
-    datastore = DataStore(horizon_s=10, n_cables=3)
+    datastore = DataStore(horizon_s=10, n_cables=4)
 
     # a queue for sending updates from the minimizer to the UI
     # items are dictionaries with 1 or more updates to named values.
     # for example {'gripper_pos_spline_eval': [[t,x,y,z], [t,x,y,z], ...]}
     to_ui_q = multiprocessing.Queue()
+    to_pe_q = multiprocessing.Queue()
 
     # Create and start the observer process
-    observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q))
+    observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q, to_pe_q))
     observer_process.daemon = True
 
     # error minimization process
-    minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q))
+    minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q, to_pe_q))
     minimizer_process.daemon = True
 
     # add ui process if not in headless mode
-    ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, ))
-    ui_process.daemon = True
+    # ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, ))
+    # ui_process.daemon = True
 
     # todo use logging module in these processes.
 
     observer_process.start()
     minimizer_process.start()
-    ui_process.start()
+    # ui_process.start()
 
     try:
         # Keep the main process alive
@@ -48,11 +49,11 @@ if __name__ == "__main__":
         print("Exiting...")
         observer_process.terminate()
         minimizer_process.terminate()
-        ui_process.terminate()
+        # ui_process.terminate()
 
         observer_process.join()
         minimizer_process.join()
-        ui_process.join()
+        # ui_process.join()
 
 # Other tasks not yet accounted for:
 #   triggering the calibration process from the UI

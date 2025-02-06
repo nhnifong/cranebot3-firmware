@@ -2,8 +2,8 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 from time import time
+from cv_common import locate_markers
 
-from cv_common import cranebot_boards, cranebot_detectors, locate_board
 
 def average_pose(poses):
     """
@@ -47,64 +47,53 @@ def average_pose(poses):
 
     return average_rotation_vector, average_translation_vector.flatten()
 
-def relative_pose(rvec1, tvec1, rvec2, tvec2):
+def invert_pose(pose):
     """
-    Computes the pose of the second Charuco board relative to the first.
+    Invert the frame of reference.
+    If rvec and tvec represent the rotation and translation of a board relative to a camera
+    return the the rotation and translation of the camera relative to the board.
+    """
+    rvec, tvec = pose
+    R_cam_to_marker, _ = cv2.Rodrigues(rvec)  # Rotation matrix
+    R_marker_to_cam = R_cam_to_marker.T  # Transpose for inverse rotation
+    tvec_marker_to_cam = -np.dot(R_marker_to_cam, tvec)
+    rvec_marker_to_cam, _ = cv2.Rodrigues(R_marker_to_cam)  # Back to rotation vector
+    return rvec, tvec
+
+    # positive Z points out of the face of the marker
+    return rvec_marker_to_cam, tvec_marker_to_cam
+
+def compose_poses(poses):
+    """Composes a chain of relative poses into a single global pose.
+    equivalent to the problem of locating an object in a 3d scene that has a chain of parent objects.
 
     Args:
-        rvec1: Rotation vector of the first board.
-        tvec1: Translation vector of the first board.
-        rvec2: Rotation vector of the second board.
-        tvec2: Translation vector of the second board.
+        poses: A list of tuples, where each tuple contains (rvec, tvec)
+               representing the pose transformation from the previous frame
+               to the current frame.
 
     Returns:
-        A tuple containing:
-            - rvec_rel: Rotation vector of the second board relative to the first.
-            - tvec_rel: Translation vector of the second board relative to the first.
-        Returns None if there is an error.
+        A tuple (rvec_global, tvec_global) representing the final pose
+        in the reference frame of the 0th pose (often the global reference frame.)
+        Returns None if the input is invalid.
     """
-    try:
-        # Convert rotation vectors to rotation matrices
-        R1, _ = cv2.Rodrigues(rvec1)
-        R2, _ = cv2.Rodrigues(rvec2)
-
-        # Calculate the relative rotation
-        R_rel = np.dot(R2, R1.T)
-
-        # Calculate the relative translation
-        tvec_rel = tvec2.reshape(3, 1) - np.dot(R_rel, tvec1.reshape(3, 1))
-
-        # Convert the relative rotation matrix back to a rotation vector
-        rvec_rel, _ = cv2.Rodrigues(R_rel)
-
-        return rvec_rel, tvec_rel.flatten() #flatten for consistency with input
-
-    except Exception as e:
-        print(f"Error in relative_pose: {e}")
+    if not poses:
         return None
 
-def find_anchor_positions(n_anc = 3, n_to_capture = 10, timeout = 40):
-    # initialize detections to a list of empty lists, one for each anchor
-    detections = []
-    for i in range(n_anc):
-        detections.append([])
-    # capture 10 images of the origin board from each anchor camera.
-    start_time = time()
-    while any([len(a)<n_to_capture for a in detections]):
-        for anchor_index, dlist in enumerate(detections):
-            if len(dlist) < n_to_capture:
-                retval, rvec, tvec = locate_board(image, 'origin')
-                if retval:
-                    detections.append((rvec, tvec))
-            if time() > start_time + timeout:
-                raise TimeoutError("timed out trying to capture enough images of the origin board. Captured %r" % list(len(a) for a in detections))
+    rvec_global = poses[0][0].copy()
+    tvec_global = poses[0][1].copy()
 
-    # average the positions for each camera.
-    camera_pose = map(average_pose, detections)
+    R_global, _ = cv2.Rodrigues(rvec_global) #Initial Rotation Matrix
 
-    # invert the frame of reference. (find the pose of the anchor camera in the reference frame of the origin board)
+    for rvec_relative, tvec_relative in poses[1:]:
+        R_relative, _ = cv2.Rodrigues(rvec_relative)
+        # Accumulate rotation
+        R_global = np.dot(R_global, R_relative)
+        # Accumulate translation
+        tvec_global = np.dot(R_global, tvec_relative) + tvec_global
 
-    # return the positions
+    rvec_global, _ = cv2.Rodrigues(R_global)  # Convert back to rotation vector
+    return rvec_global, tvec_global
 
     
 def calibate_camera():
@@ -197,7 +186,7 @@ def calibrate_all():
     # find the distortion coefficients of every camera
 
     # locate the anchors relative to the origin
-    anchor_positions = find_anchor_positions()
+    anchor_poses = find_anchor_poses()
 
     # zero axes?
 
