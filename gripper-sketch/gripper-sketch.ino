@@ -65,6 +65,7 @@ int grip = -1;
 #define PRESSURE_PIN 11 //A5
 
 int sensorValue = 0;  // variable to store the value coming from the voltage divider.
+int time_to_open = esp_timer_get_time(); // when to open the hand
 
 typedef DFRobot_BNO055_IIC    BNO;
 BNO   bno(&Wire, 0x28);    // input TwoWire interface and IIC address for IMU
@@ -202,6 +203,8 @@ void setup() {
 
   ESP32_ISR_Servos.setPosition(winch, 90);
   ESP32_ISR_Servos.setPosition(grip, 0);
+
+  digitalWrite(FIREBEETLE2_LED, HIGH);
 }
 
 void loop() {
@@ -213,9 +216,24 @@ void loop() {
 	Serial.println(sensorValue);
 
   // Set winch to middle position (not moving)
-  ESP32_ISR_Servos.setPosition(winch, 90);
-  // Set grip to fully open
-  ESP32_ISR_Servos.setPosition(grip, 0);
+  if (sensorValue > 1000 && sensorValue < 2000) {
+    ESP32_ISR_Servos.setPosition(winch, 120);
+  } else if (sensorValue > 2000) {
+    ESP32_ISR_Servos.setPosition(winch, 60);
+  } else {
+    ESP32_ISR_Servos.setPosition(winch, 90);
+  }
+
+  // if (esp_timer_get_time() > time_to_open) {
+  //   // Set grip to fully open
+  //   ESP32_ISR_Servos.setPosition(grip, 0);
+  //   if (sensorValue > 1000) {
+  //     time_to_open = esp_timer_get_time() + 5000000; // close for 5 seconds
+  //   }
+  // } else {
+  //   // Set grip to fully closed
+  //   ESP32_ISR_Servos.setPosition(grip, 180);
+  // }
 
   // Get linear acceleration. this should already have gravity subtracted from it.
   // BNO::sAxisData_t accelRaw = bno.getAxisRaw(DFRobot_BNO055::eAxisAcc);
@@ -235,8 +253,10 @@ void loop() {
   // Serial.print(linearAccelGlobal.z, 3);
   // Serial.println(" ");
 
-  digitalWrite(FIREBEETLE2_LED, HIGH);
-	delay(500);
-  digitalWrite(FIREBEETLE2_LED, LOW);
-	delay(500);
+  // digitalWrite(FIREBEETLE2_LED, HIGH);
+	// delay(500);
+  // digitalWrite(FIREBEETLE2_LED, LOW);
+	// delay(500);
+
+  delay(30);
 }
