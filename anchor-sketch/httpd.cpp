@@ -23,6 +23,8 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   char *part_buf[128];
   char json_buf[1024];
 
+  httpd_ws_frame_t ws_pkt;
+
   static int64_t last_frame = 0;
   if (!last_frame) {
     last_frame = esp_timer_get_time();
