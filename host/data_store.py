@@ -50,8 +50,8 @@ class DataStore:
         all measurements
         n_measurements can be different for every array
         
-        gantry_position: shape (n_measurements, 4) TXYZ
-        gripper_position: shape (n_measurements, 4) TXYZ
+        gantry_position: shape (n_measurements, 4) T XYZ ROT
+        gripper_position: shape (n_measurements, 4) T XYZ ROT
         imu_accel: shape (n_measurements, 4) each row TXYZ
         winch_line_record: shape (n_measurements, 2) TL
         anchor_line_record: shape (n_measurements, n_cables+1) TLLL one L for each line
@@ -59,8 +59,8 @@ class DataStore:
         self.horizon_s = horizon_s
         self.n_cables = n_cables
 
-        self.gantry_position = CircularBuffer((horizon_s * 10, 4))
-        self.gripper_position = CircularBuffer((horizon_s * 10, 4))
+        self.gantry_pose = CircularBuffer((horizon_s * 10, 7))
+        self.gripper_pose = CircularBuffer((horizon_s * 10, 7))
         self.imu_accel = CircularBuffer((horizon_s * 20, 4))
         self.winch_line_record = CircularBuffer((horizon_s * 10, 2))
         self.anchor_line_record = CircularBuffer((horizon_s * 10, n_cables+1))

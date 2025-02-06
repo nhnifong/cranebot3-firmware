@@ -5,6 +5,7 @@ from scipy.special import softmax
 import scipy.integrate as integrate
 from time import time
 from data_store import DataStore
+from calibration import compose_poses
 
 # X, Y are horizontal
 # positive Z points at the ceiling.
@@ -19,7 +20,7 @@ from data_store import DataStore
 # 1. directional calculation, where one variable can be computed from the other.
 # 2. equality, where the two variables are supposed to represent the same thing, and the error between them should be part of the cost function.
 class CDPR_position_estimator:
-    def __init__(self, datastore, min_to_ui_q, anchor_points, gravity=9.81):
+    def __init__(self, datastore, min_to_ui_q, to_pe_q, gravity=9.81):
         """
         Initializes the CDPR (Cable Driven Parallel Robot)
         All units are SI. these vales are assumed to be obtained from the auto calibration step
@@ -32,9 +33,11 @@ class CDPR_position_estimator:
         """
         self.datastore = datastore
         self.min_to_ui_q = min_to_ui_q
+        self.to_pe_q = to_pe_q # todo, start thread to read this
         self.snapshot = {}
-        self.anchor_points = np.array(anchor_points)
-        self.n_cables = self.anchor_points.shape[0]
+        self.n_cables = self.datastore.n_cables
+        self.anchor_points = None
+        self.loadAnchorPoses()        
         self.gripper_mass = 0.4 # kg
         self.gantry_mass = 0.06 # kg
         self.rough_gripper_speed = 0.5 # m/s
@@ -52,6 +55,14 @@ class CDPR_position_estimator:
         grip_p = gant_p + np.array([0,0,-2])
         control_points_gripper = np.array([grip_p for i in range(self.n_ctrl_pts)])
 
+        # additional 1d control points for the gripper rotation spline.
+        # rather than modelling the gripper rotation as a changing rodrigues vector with a 3D spline,
+        # assume it is always pointed along the winch line, and that it's spinning.
+        # model only it's angular displacement about the winch line.
+        # we have no control over gripper rotation in this axis, but we can see it from the aruco markers,
+        # and it might be nice to know what it is when timing finger movement.
+        ctrlp_rotation = np.zeros(self.n_ctrl_pts)
+
         self.knots = self.clamped_knot_vector(self.n_ctrl_pts)
         self.min_to_ui_q.put({
             'knots': self.knots,
@@ -62,14 +73,16 @@ class CDPR_position_estimator:
         # So it is critical that we only create this once and then update the control points in the cost function.
         self.gripper_pos_spline = BSpline(self.knots, control_points_gripper, self.spline_degree, True)
         self.gantry_pos_spline = BSpline(self.knots, control_points_gantry, self.spline_degree, True)
+        self.gripper_rot_spline = BSpline(self.knots, ctrlp_rotation, self.spline_degree, True) # 1 dimensional. represents angle only
         self.gantry_accel_func = self.gripper_pos_spline.derivative(2)
 
         lpos = 16 # maximum meters from origin than a position spline control point can be
-        self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 6
+        self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 7
 
         self.weights = softmax(np.array([
             1, # gantry position from charuco
             1, # gripper position from charuco
+            1, # gripper local z rotation from charuco
             1, # gripper inertial measurements
             1, # calculated forces
             1, # winch line record
@@ -88,10 +101,27 @@ class CDPR_position_estimator:
         bot_loop_freq = 30 # hz
         self.future_times = np.linspace(0.5, 1, self.horizon_s * bot_loop_freq)
 
-    def filter_measurements(self):
+    def loadAnchorPoses(self):
+        pts = []
+        for i in range(self.n_cables):
+            try:
+                # read calibration data from file
+                saved_info = np.load('anchor_pose_%i' % i)
+                anchor_pose = tuple(saved_info['pose'])
+                pts.append(compose_poses([anchor_pose, model_constants.anchor_grommet])[0])
+            except FileNotFoundError:
+                pts.append(np.array([0,5,0]))
+        self.anchor_points = np.array(pts)
+
+    def gripper_rotation(self, time):
         """
-        return views of measurement arrays that contain only items within self.time_domain
+        return rodrigues vector of gripper rotation
+        # TODO this is wrong
         """
+        # axis of rotation is assumed to be aligned with the winch line.
+        rotational_axis = self.gantry_pos_spline(time) - self.gripper_pos_spline(time)
+        # the magnitude of the rodrigues vector represents the angle of rotation in radians.
+        return rotational_axis / np.linalg.norm(rotational_axis) * self.gripper_rot_spline(time)
 
     def anchor_line_length(self, time):
         """
@@ -117,11 +147,11 @@ class CDPR_position_estimator:
         Return the winch line length at a point in time
         time shoud be in the base interval of the model splines
         """
-        return np.linalg.norm(self.gantry_pos_spline(time) - self.gripper_pos_spline(time))
+        return np.linalg.norm(self.gantry_pos_spline(time) - self.gantry_pos_spline(time))
 
     def calc_gripper_accel_from_forces(self, steps):
         """
-        Calculate the acceleration on the gripper based on the forces we would expect it to experience due to
+        Calculate the expected acceleration on the gripper's IMU based on the forces it should experience due to
         it being a pendulum hanging from a moving object
 
         two forces act on it
@@ -131,15 +161,14 @@ class CDPR_position_estimator:
         Args:
             steps: number of discrete points at which to measure forces.
         """
-        gantry_accel_func = self.gripper_pos_spline.derivative(2)
         results = []
-
         for time in np.linspace(0,1,steps): # only look in the future
             gant_pos = self.gantry_pos_spline(time)
+            # the center of gravity is the location that matters for this calculation
             grip_pos = self.gripper_pos_spline(time)
 
             # normalized direction vector from gantry pointing towards gripper
-            direction = np.linalg.norm(grip_pos-gant_pos)
+            direction = np.linalg.norm(grip_pos - gant_pos)
             # component of gravity pointing in that direction * -1
             tension_acc = np.dot(self.gravity, direction) * -1
             # mass cancelled out of this equation.
@@ -169,16 +198,18 @@ class CDPR_position_estimator:
         ])
 
     def set_splines_from_params(self, params):
-        grip_pos_model_size = self.n_ctrl_pts * 3
-        gant_pos_model_size = self.n_ctrl_pts * 3
-        if len(params) != (grip_pos_model_size + gant_pos_model_size):
-            raise ValueError("position model_parameters incorrect size")
+        spline3d_model_size = self.n_ctrl_pts * 3
+        spline1d_model_size = self.n_ctrl_pts
+        if len(params) != (spline3d_model_size * 2 + spline1d_model_size): # we have 3 splines
+            raise ValueError("position model_parameters incorrect size.")
         # Model parameters are the control points for the position curves.
         # directly update the control points of the bsplines
         start = 0
-        self.gripper_pos_spline.c = params[start : grip_pos_model_size].reshape((self.n_ctrl_pts, 3))
-        start += grip_pos_model_size
-        self.gantry_pos_spline.c = params[start : start + gant_pos_model_size].reshape((self.n_ctrl_pts, 3))
+        self.gripper_pos_spline.c = params[start : spline3d_model_size].reshape((self.n_ctrl_pts, 3))
+        start += spline3d_model_size
+        self.gantry_pos_spline.c = params[start : start + spline3d_model_size].reshape((self.n_ctrl_pts, 3))
+        start += spline3d_model_size
+        self.gripper_rot_spline.c = params[start : start + spline1d_model_size].reshape((self.n_ctrl_pts,))
         self.gantry_accel_func = self.gripper_pos_spline.derivative(2)
 
     def model_time(self, t):
@@ -232,6 +263,8 @@ class CDPR_position_estimator:
             self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
             self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
+            # error between gripper rotation model and observation
+            self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
             # error between gripper acceleration model and observation
             self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
@@ -242,8 +275,8 @@ class CDPR_position_estimator:
             # TODO have one measurement array for each because records will come in at different instants for each line
             self.error_meas(self.anchor_line_length, self.snapshot['anchor_line_record']),
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            integrate.quad(self.mechanical_energy(self.gripper_pos_spline, self.gripper_mass), 0, self.horizon_s),
-            integrate.quad(self.mechanical_energy(self.gantry_pos_spline, self.gantry_mass), 0, self.horizon_s),
+            integrate.quad(self.mechanical_energy(self.gripper_pos_spline, self.gripper_mass), 0, self.horizon_s)[0],
+            integrate.quad(self.mechanical_energy(self.gantry_pos_spline, self.gantry_mass), 0, self.horizon_s)[0],
             # error between position model and desired future locations
             self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions()),
             
@@ -264,9 +297,13 @@ class CDPR_position_estimator:
         Note that the calls to deepCopy will grab the semaphore for each array during its copy, blocking any thread in the observer process that
         may have a measurement to write to it.
         """
+        gantry_pose = self.datastore.gantry_pose.deepCopy()
+        gripper_pose = self.datastore.gripper_pose.deepCopy()
         self.snapshot = {
-            'gantry_position': self.datastore.gantry_position.deepCopy(),
-            'gripper_position': self.datastore.gripper_position.deepCopy(),
+            'gantry_position': gantry_pose[:,:4],
+            'gantry_rotation': gantry_pose[:,[0,4,5,6]],
+            'gripper_position': gripper_pose[:,:4],
+            'gripper_rotation': gripper_pose[:,[0,4,5,6]],
             'imu_accel': self.datastore.imu_accel.deepCopy(),
             'winch_line_record': self.datastore.winch_line_record.deepCopy(),
             'anchor_line_record': self.datastore.anchor_line_record.deepCopy(),
@@ -284,6 +321,7 @@ class CDPR_position_estimator:
         parameter_initial_guess = np.concatenate([
             self.gripper_pos_spline.c.copy().reshape(-1),
             self.gantry_pos_spline.c.copy().reshape(-1),
+            self.gripper_rot_spline.c.copy().reshape(-1),
         ])
 
         self.snapshot_datastore()
@@ -306,8 +344,13 @@ class CDPR_position_estimator:
         # current_gripper_pos = self.gripper_pos_spline(normalized_time)
 
         # evaluate line lengths in the future and put them in a queue for immediate transmission to the robot
-        future_anchor_lines = np.concatenate([[self.unix_time(t)], [self.anchor_line_length(t) for t in self.future_times]])
-        future_winch_line = np.concatenate([[self.unix_time(t)], [self.winch_line_len(t) for t in self.future_times]])
+        future_anchor_lines = np.array([
+            np.concatenate([[self.unix_time(t)], self.anchor_line_length(t)])
+            for t in self.future_times])
+
+        future_winch_line = np.array([
+            np.concatenate([[self.unix_time(t)], [self.winch_line_len(t)]])
+            for t in self.future_times])
 
         # send control points of position splines to UI for visualization
         update_for_ui = {
@@ -357,9 +400,11 @@ class CDPR_position_estimator:
         # if the knots are near 0
         #   move_spline_domain_fast(self.gripper_pos_spline, domain_offset)
         #   move_spline_domain_fast(self.gantry_pos_spline, domain_offset)
+        #   move_spline_domain_fast(self.gripper_rot_spline, domain_offset)
         # else:
         self.move_spline_domain_robust(self.gripper_pos_spline, domain_offset)
         self.move_spline_domain_robust(self.gantry_pos_spline, domain_offset)
+        self.move_spline_domain_robust(self.gripper_rot_spline, domain_offset)
 
     def desired_gripper_positions(self):
         """
@@ -406,10 +451,7 @@ class CDPR_position_estimator:
     def gripper_over_bin_location(self):
         return np.array([0,0.2,1])
 
-def start_estimator(shared_datastore, min_to_ui_q):
-    anchors = np.array([[-2,2, 3],
-                        [ 2,2, 3],
-                        [ 0,2,-2]])
-    pe = CDPR_position_estimator(shared_datastore, min_to_ui_q, anchors)
+def start_estimator(shared_datastore, min_to_ui_q, to_pe_q):
+    pe = CDPR_position_estimator(shared_datastore, min_to_ui_q, to_pe_q)
     while True:
         pe.estimate()
