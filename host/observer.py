@@ -1,8 +1,17 @@
+from __future__ import annotations
+
 import sys
 import threading
 import time
 import socket
-from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
+import asyncio
+from zeroconf import IPVersion, ServiceStateChange, Zeroconf
+from zeroconf.asyncio import (
+    AsyncServiceBrowser,
+    AsyncServiceInfo,
+    AsyncZeroconf,
+    AsyncZeroconfServiceTypes,
+)
 from raspi_anchor_client import RaspiAnchorClient
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
@@ -21,13 +30,14 @@ calibration_mode = True
 
 cranebot_anchor_service_name = 'cranebot-anchor-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
-# Manager of multiple threads running clients connected to each robot component
-class CranebotListener(ServiceListener):
-    def __init__(self):
-        super().__init__()
 
-        # all keyed by server name
-        self.bot_threads = {}
+# Manager of multiple tasks running clients connected to each robot component
+class AsyncDiscovery:
+    def __init__(self) -> None:
+        self.aiobrowser: AsyncServiceBrowser | None = None
+        self.aiozc: AsyncZeroconf | None = None
+
+        # keyed by server name
         self.bot_clients = {}
 
         # read a mapping of server names to anchor numbers from a file
@@ -41,13 +51,15 @@ class CranebotListener(ServiceListener):
                 for line in f:
                     s = line.split(':')
                     self.anchor_num_map[s[0]] = int(s[1])
+            if len(self.anchor_num_map) == 0:
+                return
             self.next_available_anchor_num = max(self.anchor_num_map.values())+1
         except FileNotFoundError:
             pass
 
     def save_anchor_num_map(self):
         with open('anchor_mapping.txt', 'w') as f:
-            for k,v in self.anchor_num_map:
+            for k,v in self.anchor_num_map.items():
                 f.write(f'{k}:{v}\n')
 
     def listen_position_updates(url):
@@ -58,58 +70,55 @@ class CranebotListener(ServiceListener):
             if 'future_winch_line' in updates:
                 pass
 
-    def start_client(self, info, type):
-        address = socket.inet_ntoa(info.addresses[0])
-        # self.bot_threads[info.server].terminate()
+    def async_on_service_state_change(self, 
+        zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
+    ) -> None:
+        if 'cranebot' in name:
+            print(f"Service {name} of type {service_type} state changed: {state_change}")
+            if state_change is ServiceStateChange.Added:
+                task = asyncio.create_task(self.add_service(zeroconf, service_type, name))
 
-        # the number of anchors is decided ahead of time (in main.py)
-        # but they are assigned numbers as we find them on the network
-        # and the chosen numbers are persisted on disk
-        if info.server in self.anchor_num_map:
-            anchor_num = self.anchor_num_map[info.server]
-        else:
-            anchor_num = self.next_available_anchor_num
-            self.anchor_num_map[info.server] = anchor_num
-            self.save_anchor_num_map()
-        if type == 'anchor':
-            ac = RaspiAnchorClient(address, anchor_num, datastore, to_ui_q, to_pe_q)
-        elif type == 'gripper':
-            return
-        else:
-            print(f"wtf is a {type}")
-            return
-        self.bot_clients[info.server] = ac
-        asyncio.create_task(ac.connect_all)
-        # self.bot_threads[info.server] = threading.Thread(
-        #     target=ac.connect, args=(address,), daemon=True)
-        # self.bot_threads[info.server].start()
+    async def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+        info = AsyncServiceInfo(service_type, name)
+        await info.async_request(zc, 3000)
+        if info:
+            if info.server is None or info.server == '':
+                return;
+            print(f"Service {name} added, service info: {info}, type: {service_type}")
+            address = socket.inet_ntoa(info.addresses[0])
 
-    def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        print(f"Service {name} updated")
-        sys.stdout.flush()
-        info = zc.get_service_info(type_, name)
-        print(info)
-        # if name.split(".")[1] == cranebot_service_name:
-        #     if info.server is not None and info.server != '':
-        #         self.start_client(info)
+            if name.split(".")[1] == cranebot_anchor_service_name:
+                # the number of anchors is decided ahead of time (in main.py)
+                # but they are assigned numbers as we find them on the network
+                # and the chosen numbers are persisted on disk
+                if info.server in self.anchor_num_map:
+                    anchor_num = self.anchor_num_map[info.server]
+                else:
+                    anchor_num = self.next_available_anchor_num
+                    self.anchor_num_map[info.server] = anchor_num
+                    self.save_anchor_num_map()
+                ac = RaspiAnchorClient(address, anchor_num, datastore, to_ui_q, to_pe_q)
+                self.bot_clients[info.server] = ac
+                await ac.connect_all()
 
-    def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        print(f"Service {name} removed")
-        sys.stdout.flush()
-        info = zc.get_service_info(type_, name)
-        # the thread probably already stopped when the pipe broke, but just in case
-        self.bot_threads[info.server].terminate()
-        del self.bot_threads[info.server]
+    async def async_run(self) -> None:
+        self.aiozc = AsyncZeroconf(ip_version=IPVersion.All)
 
-    def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
-        info = zc.get_service_info(type_, name)
-        print(f"Service {name} added, service info: {info}")
-        sys.stdout.flush()
-        if name.split(".")[1] == cranebot_anchor_service_name:
-            if info.server is not None and info.server != '':
-                self.start_client(info, type='anchor')
+        services = list(
+            await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
+        )
+        self.aiobrowser = AsyncServiceBrowser(
+            self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
+        )
+        while True:
+            await asyncio.sleep(1)
 
-
+    async def async_close(self) -> None:
+        assert self.aiozc is not None
+        assert self.aiobrowser is not None
+        await self.aiobrowser.async_cancel()
+        await self.aiozc.async_close()
+        await asyncio.gather([client.close_all() for name,client in self.bot_clients.items()])
 
 def start_observation(shared_array, to_ui_q, to_pe_q, to_ob_q):
     # set the global 
@@ -119,24 +128,32 @@ def start_observation(shared_array, to_ui_q, to_pe_q, to_ob_q):
     to_ob_q = to_ob_q # queue where other processes send to us
 
     # start discovery
-    run_discovery_task = True
-    def service_discovery_task():
-        print('Started service discovery task')
-        zeroconf = Zeroconf()
-        print('initialized Zeroconf')
-        listener = CranebotListener()
-        browser = ServiceBrowser(zeroconf, "_http._tcp.local.", listener)
-        sys.stdout.flush()
-        while run_discovery_task:
-            time.sleep(0.1)
-        zeroconf.close()
+    # run_discovery_task = True
+    # def service_discovery_task():
+    #     print('Started service discovery task')
+    #     zeroconf = Zeroconf()
+    #     print('initialized Zeroconf')
+    #     listener = CranebotListener()
+    #     browser = ServiceBrowser(zeroconf, "_http._tcp.local.", listener)
+    #     sys.stdout.flush()
+    #     while run_discovery_task:
+    #         time.sleep(0.1)
+    #     zeroconf.close()
 
     # run discovery in main thread
-    service_discovery_task()
+    # service_discovery_task()
 
     # run discovery in it's own thread
     # discovery_thread = threading.Thread(target=service_discovery_task, daemon=True)
     # discovery_thread.start()
+
+    async def main():
+        runner = AsyncDiscovery()
+        try:
+            await runner.async_run()
+        except KeyboardInterrupt:
+            await runner.async_close()
+    asyncio.run(main())
 
 if __name__ == "__main__":
     from multiprocessing import Queue

@@ -21,6 +21,9 @@ async def handler(websocket):
             response = {"status": "OK"}
             await websocket.send(json.dumps(response)) #Encode JSON
 
+            if control_signal['foo'] == 123:
+                raise RuntimeError: # uhh I guess this would close the connection
+
         except websockets.exceptions.ConnectionClosedOK:
             break
 

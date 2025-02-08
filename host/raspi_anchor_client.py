@@ -130,6 +130,8 @@ class RaspiAnchorClient:
     async def _receive_loop(self): #Private method for the receive loop
         while self.connected: #Loop until disconnected
             try:
+                await self._send_anchor_commands_async({"foo": 123})
+                await asyncio.sleep(1)
                 message = await self.websocket.recv()
                 data = json.loads(message)
                 print(f"Received: {data}")
@@ -183,8 +185,8 @@ class RaspiAnchorClient:
         Connect to both the video stream and the websocket of this anchor
         """
         # theres a different port for the video and the websocket
-        stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
-        self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, args=(stream_url, )))
+        # stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
+        # self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, args=(stream_url, )))
         # self.connect_video_stream(stream_url)
         # video_thread = threading.Thread(target=ac.connect_video_stream, args=(stream_url,), daemon=True)
         # video_thread.start()
