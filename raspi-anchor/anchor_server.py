@@ -4,7 +4,9 @@ import json
 import threading
 import zeroconf
 import uuid
-import ifaddr
+import socket
+import argparse
+import time
 
 async def handler(websocket):
     while True:
@@ -34,14 +36,12 @@ def get_wifi_ip():
         is not found or has no IP address.
     """
     try:
-        adapters = ifaddr.get_adapters()
-        for adapter in adapters:
-            if "wlan0" in adapter.name or "wlp1s0" in adapter.name:
-                for ip in adapter.ips:
-                    if ip.is_ipv4:
-                        return ip.ip
-        return None  # No Wi-Fi interface found or no IP address assigned
-    except Exception as e:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
         print(f"Error getting IP address: {e}")
         return None
 
@@ -78,7 +78,7 @@ if __name__ == "__main__":
         # Start mdns advertisement in a separate thread
         # there is supposed to be some way to make zeroconf play nice with asyncio but I couldn't make it work
         mdns_thread = threading.Thread(target=register_mdns_service,
-            args=("123.cranebot-service", "_http._tcp.local.", PORT), daemon=True)
+            args=("123.cranebot-anchor-service", "_http._tcp.local.", PORT), daemon=True)
         mdns_thread.start()
     
     asyncio.run(main(PORT))
