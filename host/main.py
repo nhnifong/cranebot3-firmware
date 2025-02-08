@@ -1,13 +1,18 @@
 import multiprocessing
 import numpy as np
 import time
+import argparse
 
 from data_store import DataStore
 from observer import start_observation
 from position_estimator import start_estimator
-# from ursina_app import start_ui
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Crane Robot Controller")
+
+    parser.add_argument("-h", "--headless", type=bool, help="When true, do not start the UI", default=False)
+    args = parser.parse_args()
+
     # try:
     #   params = np.load("calibratrion_data.npz")
     # except IOError:
@@ -32,14 +37,17 @@ if __name__ == "__main__":
     minimizer_process.daemon = True
 
     # add ui process if not in headless mode
-    # ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, ))
-    # ui_process.daemon = True
+    if not args.headless:
+        from ursina_app import start_ui
+        ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, ))
+        ui_process.daemon = True
 
     # todo use logging module in these processes.
 
     observer_process.start()
     minimizer_process.start()
-    # ui_process.start()
+    if not args.headless:
+        ui_process.start()
 
     try:
         # Keep the main process alive
@@ -49,11 +57,13 @@ if __name__ == "__main__":
         print("Exiting...")
         observer_process.terminate()
         minimizer_process.terminate()
-        # ui_process.terminate()
+        if not args.headless:
+            ui_process.terminate()
 
         observer_process.join()
         minimizer_process.join()
-        # ui_process.join()
+        if not args.headless:
+            ui_process.join()
 
 # Other tasks not yet accounted for:
 #   triggering the calibration process from the UI
