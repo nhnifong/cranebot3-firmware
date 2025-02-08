@@ -351,6 +351,11 @@ class CDPR_position_estimator:
         future_winch_line = np.array([
             np.concatenate([[self.unix_time(t)], [self.winch_line_len(t)]])
             for t in self.future_times])
+        update_for_observer = {
+            'future_anchor_lines': future_anchor_lines,
+            'future_winch_line': future_winch_line,
+        }
+        self.to_ob_q.put(update_for_observer)
 
         # send control points of position splines to UI for visualization
         update_for_ui = {

@@ -13,34 +13,22 @@ datastore = None
 to_ui_q = None
 # queue for sending info to position estimator
 to_pe_q = None
+# queue for receiving info meant for this process
+to_ob_q = None
 # global calibration mode
 calibration_mode = True
 
-def connect_raspi_anchor(url, anchor_num):
-    ac = RaspiAnchorClient(anchor_num, datastore, to_ui_q, to_pe_q)
 
-
-    # todo theres a different address for the video and the websocket
-    # no need to advertise both right?
-
-    raspberry_pi_ip = "192.168.1.151"  # Replace with your Pi's IP
-    port_number = 8888  # Replace with your port
-    stream_url = f"tcp://{raspberry_pi_ip}:{port_number}"  # Construct the URL
-    ac.connect_video_stream(stream_url)
-    video_thread = threading.Thread(target=ac.connect_video_stream, args=(stream_url,), daemon=True)
-    video_thread.start()
-
-    # a websocket connection for the control
-    ac.connect_websocket()
-
-
-cranebot_service_name = 'cranebot-service'
-# listener for updating the list of available robot component servers
+cranebot_anchor_service_name = 'cranebot-anchor-service'
+cranebot_gripper_service_name = 'cranebot-gripper-service'
+# Manager of multiple threads running clients connected to each robot component
 class CranebotListener(ServiceListener):
     def __init__(self):
         super().__init__()
-        self.available_bots = {}
+
+        # all keyed by server name
         self.bot_threads = {}
+        self.bot_clients = {}
 
         # read a mapping of server names to anchor numbers from a file
         self.next_available_anchor_num = 0;
@@ -62,10 +50,16 @@ class CranebotListener(ServiceListener):
             for k,v in self.anchor_num_map:
                 f.write(f'{k}:{v}\n')
 
-    def start_stream(self, info):
+    def listen_position_updates(url):
+        while True:     
+            updates = to_ob_q.get()
+            if 'future_anchor_lines' in updates:
+                updates['future_anchor_lines']
+            if 'future_winch_line' in updates:
+                pass
+
+    def start_client(self, info, type):
         address = socket.inet_ntoa(info.addresses[0])
-        hostport = f"{address}:{info.port}"
-        self.available_bots[info.server] = hostport
         # self.bot_threads[info.server].terminate()
 
         # the number of anchors is decided ahead of time (in main.py)
@@ -77,18 +71,27 @@ class CranebotListener(ServiceListener):
             anchor_num = self.next_available_anchor_num
             self.anchor_num_map[info.server] = anchor_num
             self.save_anchor_num_map()
-
-        self.bot_threads[info.server] = threading.Thread(
-            target=connect_raspi_anchor, args=(f"http://{hostport}/stream", anchor_num), daemon=True)
-        self.bot_threads[info.server].start()
+        if type == 'anchor':
+            ac = RaspiAnchorClient(address, anchor_num, datastore, to_ui_q, to_pe_q)
+        elif type == 'gripper':
+            return
+        else:
+            print(f"wtf is a {type}")
+            return
+        self.bot_clients[info.server] = ac
+        asyncio.create_task(ac.connect_all)
+        # self.bot_threads[info.server] = threading.Thread(
+        #     target=ac.connect, args=(address,), daemon=True)
+        # self.bot_threads[info.server].start()
 
     def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
         print(f"Service {name} updated")
         sys.stdout.flush()
         info = zc.get_service_info(type_, name)
-        if name.split(".")[1] == cranebot_service_name:
-            if info.server is not None and info.server != '':
-                self.start_stream(info)
+        print(info)
+        # if name.split(".")[1] == cranebot_service_name:
+        #     if info.server is not None and info.server != '':
+        #         self.start_client(info)
 
     def remove_service(self, zc: Zeroconf, type_: str, name: str) -> None:
         print(f"Service {name} removed")
@@ -97,23 +100,23 @@ class CranebotListener(ServiceListener):
         # the thread probably already stopped when the pipe broke, but just in case
         self.bot_threads[info.server].terminate()
         del self.bot_threads[info.server]
-        del self.available_bots[info.server]
 
     def add_service(self, zc: Zeroconf, type_: str, name: str) -> None:
         info = zc.get_service_info(type_, name)
         print(f"Service {name} added, service info: {info}")
         sys.stdout.flush()
-        if name.split(".")[1] == cranebot_service_name:
+        if name.split(".")[1] == cranebot_anchor_service_name:
             if info.server is not None and info.server != '':
-                self.start_stream(info)
+                self.start_client(info, type='anchor')
 
 
 
-def start_observation(shared_array, to_ui_q, to_pe_q):
+def start_observation(shared_array, to_ui_q, to_pe_q, to_ob_q):
     # set the global 
     datastore = shared_array
-    to_ui_q = to_ui_q
-    to_pe_q = to_pe_q
+    to_ui_q = to_ui_q # for sending to the UI
+    to_pe_q = to_pe_q # for sending to the position estimator
+    to_ob_q = to_ob_q # queue where other processes send to us
 
     # start discovery
     run_discovery_task = True
@@ -135,4 +138,11 @@ def start_observation(shared_array, to_ui_q, to_pe_q):
     # discovery_thread = threading.Thread(target=service_discovery_task, daemon=True)
     # discovery_thread.start()
 
-# start_observation(None, None)
+if __name__ == "__main__":
+    from multiprocessing import Queue
+    from data_store import DataStore
+    datastore = DataStore(horizon_s=10, n_cables=4)
+    to_ui_q = Queue()
+    to_pe_q = Queue()
+    to_ob_q = Queue()
+    start_observation(datastore, to_ui_q, to_pe_q, to_ob_q)

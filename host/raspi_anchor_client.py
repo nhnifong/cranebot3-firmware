@@ -11,15 +11,23 @@ import model_constants
 
 # maximum number of origin detections to keep
 max_origin_detections = 40
+video_port = 8888
+websocket_port = 8765
+
 
 # this client is designed for the raspberri pi based anchor
 class RaspiAnchorClient:
-    def __init__(self, anchor_num, datastore, to_ui_q, to_pe_q):
+    def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q):
+        self.address = address
         self.origin_detections = []
         self.anchor_num = anchor_num # which anchor are we connected to
         self.datastore = datastore
         self.to_ui_q = to_ui_q
         self.to_pe_q = to_pe_q
+        self.websocket = None
+        self.connected = False  # status of connection to websocket
+        self.receive_task = None  # Task for receiving messages from websocket
+        self.video_task = None  # Task for streaming video
         try:
             # read calibration data from file
             saved_info = np.load('anchor_pose_%i' % self.anchor_num)
@@ -90,6 +98,7 @@ class RaspiAnchorClient:
     def connect_video_stream(self, url):
         """
         Streams video from the raspberry pi video module 3
+        blocking
         """
         cap = cv2.VideoCapture(stream_url)
         if not cap.isOpened():
@@ -105,16 +114,81 @@ class RaspiAnchorClient:
         print("Stream ended from %s" % stream_url)
         cap.release()
 
-    def connect_websocket(self, url):
+    async def connect_websocket(self, ws_uri):
+        try:
+            self.websocket = await websockets.connect(ws_uri)
+            self.connected = True
+            print(f"Connected to anchor {self.anchor_num} at {ws_uri}.")
+            self.receive_task = asyncio.create_task(self._receive_loop()) #Start receiving messages
+            return True
+        except Exception as e:
+            print(f"Connection error: {e}")
+            self.websocket = None
+            self.connected = False
+            return False
 
+    async def _receive_loop(self): #Private method for the receive loop
+        while self.connected: #Loop until disconnected
+            try:
+                message = await self.websocket.recv()
+                data = json.loads(message)
+                print(f"Received: {data}")
+            except websockets.exceptions.ConnectionClosedOK:
+                print("Connection closed by server.")
+                self.connected = False
+                break
+            except Exception as e:
+                print(f"Receive error: {e}")
+                self.connected = False
+                break
 
-# async def send_control(control_signal):
-#     uri = "ws://<raspberry_pi_ip>:8765"  # Replace with Pi's IP
-#     async with websockets.connect(uri) as websocket:
-#         await websocket.send(json.dumps(control_signal))  # Send message
-#         response = await websocket.recv()  # Receive response
-#         print(f"Response: {response}")
+    def send_anchor_commands(self, something):
+        """Sends commands to the server (non-blocking)."""
+        if not self.connected:
+            raise ConnectionError("Not connected to server.")
+        asyncio.create_task(self._send_array_async(something))  # Send in a separate task
 
-# # Example usage:
-# asyncio.run(send_control({"motor1": 255, "motor2": 128}))
-# asyncio.run(send_control({"led_on": True}))
+    async def _send_anchor_commands_async(self, something):
+        try:
+            await self.websocket.send(json.dumps(something))
+        except Exception as e:
+            print(f"Error sending anchor commands: {e}")
+            self.connected = False #If there is an error, the connection is probably down
+
+    def close_websocket(self):
+        if self.connected:
+            asyncio.create_task(self._close_websocket_async())
+
+    async def close_all(self):
+        if self.receive_task:
+            self.receive_task.cancel()  # Stop receiving messages
+            try:
+                await self.receive_task #Wait for the task to finish cancelling
+            except asyncio.CancelledError:
+                pass #Expected
+        if self.websocket:
+            await self.websocket.close()
+            self.websocket = None
+        self.connected = False
+        if self.video_task:
+            self.video_task.cancel()  # Stop receiving messages
+            try:
+                await self.video_task
+            except asyncio.CancelledError:
+                pass #Expected
+        print(f"Connection to anchor {self.anchor_num} at {ws_uri} closed.")
+
+    async def connect_all(self):
+        """
+        Connect to both the video stream and the websocket of this anchor
+        """
+        # theres a different port for the video and the websocket
+        stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
+        self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, args=(stream_url, )))
+        # self.connect_video_stream(stream_url)
+        # video_thread = threading.Thread(target=ac.connect_video_stream, args=(stream_url,), daemon=True)
+        # video_thread.start()
+
+        # a websocket connection for the control
+        ws_uri = f"ws://{self.address}:{websocket_port}"
+        asyncio.create_task(self.connect_websocket(ws_uri))
