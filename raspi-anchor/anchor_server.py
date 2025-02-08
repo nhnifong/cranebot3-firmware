@@ -7,29 +7,38 @@ import uuid
 import socket
 import argparse
 import time
+from getmac import get_mac_address
+import subprocess
 
 async def handler(websocket):
     while True:
         try:
-            message = await websocket.recv()  # Receive message
-            control_signal = json.loads(message) #Decode JSON
+            message = await websocket.recv()
+            update = json.loads(message)
+
+            if 'length_plan' in update:
+                plan = update['length_plan']
 
             # Process control_signal (e.g., control motors, read sensors)
-            print(f"Received: {control_signal}")
+            print(f"Received: {update}")
 
             # Send a response back (optional)
             response = {"status": "OK"}
             await websocket.send(json.dumps(response)) #Encode JSON
 
-            if control_signal['foo'] == 123:
-                raise RuntimeError: # uhh I guess this would close the connection
-
         except websockets.exceptions.ConnectionClosedOK:
             break
 
+async def serve_video():
+    while True:
+        # keep restarting this forever.
+        result = subprocess.run(['./start_stream.sh'], shell=True, capture_output=False, text=True)
+
 async def main(port):
+    video_task = asyncio.create_task(asyncio.to_thread(serve_video))
     async with websockets.serve(handler, "0.0.0.0", port): #Listen on all interfaces, port 8765
         await asyncio.Future()  # run forever
+    video_task.cancel()
 
 def get_wifi_ip():
     """Gets the Raspberry Pi's IP address on the Wi-Fi interface.
@@ -52,13 +61,14 @@ def register_mdns_service(name, service_type, port, properties={}):
     """Registers an mDNS service on the network."""
 
     zc = zeroconf.Zeroconf()
+    unique = ''.join(get_mac_address().split(':'))
     info = zeroconf.ServiceInfo(
         service_type,
         name + "." + service_type,
         port=port,
         properties=properties,
         addresses=[get_wifi_ip()],
-        server=f'raspi-anchor-{str(uuid.uuid4())[-6:]}',
+        server=f'raspi-anchor-{unique}',
     )
 
     zc.register_service(info)

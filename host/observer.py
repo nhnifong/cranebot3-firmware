@@ -127,26 +127,6 @@ def start_observation(shared_array, to_ui_q, to_pe_q, to_ob_q):
     to_pe_q = to_pe_q # for sending to the position estimator
     to_ob_q = to_ob_q # queue where other processes send to us
 
-    # start discovery
-    # run_discovery_task = True
-    # def service_discovery_task():
-    #     print('Started service discovery task')
-    #     zeroconf = Zeroconf()
-    #     print('initialized Zeroconf')
-    #     listener = CranebotListener()
-    #     browser = ServiceBrowser(zeroconf, "_http._tcp.local.", listener)
-    #     sys.stdout.flush()
-    #     while run_discovery_task:
-    #         time.sleep(0.1)
-    #     zeroconf.close()
-
-    # run discovery in main thread
-    # service_discovery_task()
-
-    # run discovery in it's own thread
-    # discovery_thread = threading.Thread(target=service_discovery_task, daemon=True)
-    # discovery_thread.start()
-
     async def main():
         runner = AsyncDiscovery()
         try:
