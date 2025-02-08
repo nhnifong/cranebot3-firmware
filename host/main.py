@@ -27,13 +27,14 @@ if __name__ == "__main__":
     # for example {'gripper_pos_spline_eval': [[t,x,y,z], [t,x,y,z], ...]}
     to_ui_q = multiprocessing.Queue()
     to_pe_q = multiprocessing.Queue()
+    to_ob_q = multiprocessing.Queue()
 
     # Create and start the observer process
-    observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q, to_pe_q))
+    observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q, to_pe_q, to_ob_q))
     observer_process.daemon = True
 
     # error minimization process
-    minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q, to_pe_q))
+    minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q, to_pe_q, to_ob_q))
     minimizer_process.daemon = True
 
     # add ui process if not in headless mode
