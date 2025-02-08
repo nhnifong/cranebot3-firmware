@@ -1,14 +1,19 @@
 # control the MKS_SERVO42C stepper with the serial port (UART)
-# i had to run sudo raspi-config and enable the Serial hardware
-# need to find out out to do that non interactively
+# the bluetooth has to be disabled on the raspi zero 2w
+# requires the following lines to be written to /boot/firmware/config.txt (and reboot)
+# enable_uart=1
+# dtoverlay=disable-bt
 
 import serial
 from time import sleep
 
-ser = serial.Serial ("/dev/ttyS0", 38400)    #Open port with baud rate
+ser = serial.Serial ("/dev/ttyAMA0", 38400)    #Open port with baud rate
 
 # ping motor
-ser.write(b"\0xe0\0x3a\0x1a")
+ping = b"\xe0\x3a\x1a"
+print(ping)
+ser.write(ping)
+ser.flush()
 # expect e0 01 e1 meaning it is enabled
 b = ser.read(3)
 print(repr(b))
