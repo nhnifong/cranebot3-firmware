@@ -1,5 +1,9 @@
 import asyncio
 import websockets
+from websockets.exceptions import (
+    ConnectionClosedOK,
+    ConnectionClosedError,
+)
 import json
 import threading
 import zeroconf
@@ -22,7 +26,7 @@ class RaspiAnchorServer:
         """
         while ws:
             measurements = self.spooler.popMeasurements()
-            await websocket.send(json.dumps({'line_record': measurements}))
+            await ws.send(json.dumps({'line_record': measurements}))
             await asyncio.sleep(0.5)
 
     async def handler(self,websocket):
@@ -42,7 +46,7 @@ class RaspiAnchorServer:
                 response = {"status": "OK"}
                 await websocket.send(json.dumps(response)) #Encode JSON
 
-            except websockets.exceptions.ConnectionClosedOK:
+            except (ConnectionClosedOK, ConnectionClosedError):
                 break
 
     async def serve_video(self):
@@ -51,7 +55,7 @@ class RaspiAnchorServer:
             result = subprocess.run(['./start_stream.sh'], shell=True, capture_output=False, text=True)
 
     async def main(self, port):
-        video_task = asyncio.create_task(asyncio.to_thread(serve_video))
+        video_task = asyncio.create_task(asyncio.to_thread(self.serve_video))
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
         async with websockets.serve(self.handler, "0.0.0.0", port): #Listen on all interfaces, port 8765
             await asyncio.Future()  # run forever

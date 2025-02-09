@@ -6,6 +6,7 @@ import time
 DEFAULT_MICROSTEPS = 16
 # A speed of 1 is this many revs/sec
 SPEED1_REVS = 30000.0/(DEFAULT_MICROSTEPS * 200)/60;
+SPOOL_DIAMETER_MM = 24
 METER_PER_REV = SPOOL_DIAMETER_MM * pi * 0.001;
 DATA_LEN = 1000
 PE_TERM = 1.5
@@ -17,7 +18,7 @@ def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 class SpoolController:
-    def __init(self):
+    def __init__(self):
         self.motor = MKSSERVO42C()
         # Meters of line that were spooled out when zeroAngle was set.
         self.lineAtStart = 1.9
@@ -81,7 +82,7 @@ class SpoolController:
 
             # Find the earliest entry in desiredLine that is still in the future.
             while self.desiredLine[self.lastIndex][0] <= t:
-                self.lastIndex++
+                self.lastIndex += 1
 
             if self.lastIndex >= DATA_LEN:
                 if self.speed != 0:

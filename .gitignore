@@ -1,4 +1,4 @@
 host/env
 __pychache__
-host/__pycache__
+*/__pycache__
 host/anchor_mapping.txt
