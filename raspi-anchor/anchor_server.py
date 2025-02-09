@@ -26,7 +26,8 @@ class RaspiAnchorServer:
         """
         while ws:
             measurements = self.spooler.popMeasurements()
-            await ws.send(json.dumps({'line_record': measurements}))
+            if len(measurements) > 0:
+                await ws.send(json.dumps({'line_record': measurements}))
             await asyncio.sleep(0.5)
 
     async def handler(self,websocket):
@@ -58,7 +59,7 @@ class RaspiAnchorServer:
         video_task = asyncio.create_task(asyncio.to_thread(self.serve_video))
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
         async with websockets.serve(self.handler, "0.0.0.0", port): #Listen on all interfaces, port 8765
-            await asyncio.Future()  # run forever
+            await asyncio.gather[video_task, spool_task] # I guess that means run until they both crash lol
         video_task.cancel()
 
 def get_wifi_ip():
