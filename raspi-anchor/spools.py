@@ -4,6 +4,7 @@ import asyncio
 import time
 
 DEFAULT_MICROSTEPS = 16
+ANGLE_RESOLUTION = 65535
 # A speed of 1 is this many revs/sec
 SPEED1_REVS = 30000.0/(DEFAULT_MICROSTEPS * 200)/60;
 SPOOL_DIAMETER_MM = 24
@@ -20,6 +21,7 @@ def constrain(value, minimum, maximum):
 class SpoolController:
     def __init__(self):
         self.motor = MKSSERVO42C()
+        self.speed = 0
         # Meters of line that were spooled out when zeroAngle was set.
         self.lineAtStart = 1.9
         self.zeroAngle = 0
@@ -54,30 +56,30 @@ class SpoolController:
         """
         return the curren time and current unspooled line in meters
         """
-        l = METER_PER_REV * (float(self.motor.getShaftAngle()) - self.zeroAngle) / ANGLE_RESOLUTION + self.lineAtStart
+        success, angle = self.motor.getShaftAngle()
+        l = METER_PER_REV * (float(angle) - self.zeroAngle) / ANGLE_RESOLUTION + self.lineAtStart
         # accumulate these so you can send them to the websocket
         row = (time.time(), l)
         self.record.append(row)
         return row
 
-    async def slowStop(self):
+    def slowStop(self):
         direction = self.speed / self.speed
         while abs(self.speed) > 0:
             self.speed -= direction
             self.motor.runConstantSpeed(self.speed)
-            await asyncio.sleep(0.05)
+            time.sleep(0.05)
         self.motor.stop()
 
-    async def trackingLoop(self):
+    def trackingLoop(self):
         """
         Constantly try to match the position and speed given in an array
         """
         while True:
             t, currentLen = self.currentLineLength()
-            
             if len(self.desiredLine) == 0:
                 if self.speed != 0:
-                    await self.slowStop()
+                    self.slowStop()
                 continue
 
             # Find the earliest entry in desiredLine that is still in the future.
@@ -86,7 +88,7 @@ class SpoolController:
 
             if self.lastIndex >= DATA_LEN:
                 if self.speed != 0:
-                    await self.slowStop()
+                    self.slowStop()
                 continue
 
             targetLen = self.desiredLine[self.lastIndex][1]
@@ -95,8 +97,8 @@ class SpoolController:
             # What would the speed be between the two datapoints tha straddle the present?
             # Positive values mean line is lengthening
             # result is in meters of line per second
-            targetSpeed = ((self.desiredLine[self.lastIdx][1] - self.desiredLine[self.lastIdx-1][1]) 
-                / (self.desiredLine[self.lastIdx][0] - self.desiredLine[self.lastIdx-1][0]))    
+            targetSpeed = ((self.desiredLine[self.lastIdx][1] - self.desiredLine[self.lastIdx-1][1])
+                / (self.desiredLine[self.lastIdx][0] - self.desiredLine[self.lastIdx-1][0]))
             currentSpeed = self.motor_speed * SPEED1_REVS * METER_PER_REV
             speed_err = targetSpeed - currentSpeed
             # If our positional error was zero, we could go exactly that speed.
@@ -115,5 +117,5 @@ class SpoolController:
             self.speed = constrain(aimSpeed / meters_per_rev / speed1_revs, -127, 127)
             self.motor.runConstantSpeed(self.speed)
 
-            await asyncio.sleep(LOOP_DELAY_S)
+            time.sleep(LOOP_DELAY_S)
 

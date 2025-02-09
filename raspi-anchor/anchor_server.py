@@ -31,7 +31,7 @@ class RaspiAnchorServer:
             await asyncio.sleep(0.5)
 
     async def handler(self,websocket):
-        print('Websoocket connected')
+        print('Websocket connected')
         asyncio.create_task(self.stream_measurements(websocket))
         while True:
             try:
@@ -50,17 +50,17 @@ class RaspiAnchorServer:
             except (ConnectionClosedOK, ConnectionClosedError):
                 break
 
-    async def serve_video(self):
+    def serve_video(self):
+        print("started video task")
         while True:
             # keep restarting this forever.
             result = subprocess.run(['./start_stream.sh'], shell=True, capture_output=False, text=True)
 
     async def main(self, port):
-        video_task = asyncio.create_task(asyncio.to_thread(self.serve_video))
-        spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
-        async with websockets.serve(self.handler, "0.0.0.0", port): #Listen on all interfaces, port 8765
-            await asyncio.gather[video_task, spool_task] # I guess that means run until they both crash lol
-        video_task.cancel()
+        video_task = asyncio.to_thread(self.serve_video)
+        spool_task = asyncio.to_thread(self.spooler.trackingLoop)
+        async with websockets.serve(self.handler, "0.0.0.0", port):
+            await asyncio.gather(video_task, spool_task)
 
 def get_wifi_ip():
     """Gets the Raspberry Pi's IP address on the Wi-Fi interface.
