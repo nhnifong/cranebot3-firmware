@@ -7,6 +7,7 @@ from time import time
 from data_store import DataStore
 from calibration import compose_poses
 from functools import partial
+import threading
 
 # X, Y are horizontal
 # positive Z points at the ceiling.
@@ -21,7 +22,7 @@ from functools import partial
 # 1. directional calculation, where one variable can be computed from the other.
 # 2. equality, where the two variables are supposed to represent the same thing, and the error between them should be part of the cost function.
 class CDPR_position_estimator:
-    def __init__(self, datastore, min_to_ui_q, to_pe_q, gravity=9.81):
+    def __init__(self, datastore, min_to_ui_q, to_pe_q, to_ob_q, gravity=9.81):
         """
         Initializes the CDPR (Cable Driven Parallel Robot)
         All units are SI. these vales are assumed to be obtained from the auto calibration step
@@ -35,6 +36,7 @@ class CDPR_position_estimator:
         self.datastore = datastore
         self.min_to_ui_q = min_to_ui_q
         self.to_pe_q = to_pe_q # todo, start thread to read this
+        self.to_ob_q = to_ob_q
         self.snapshot = {}
         self.n_cables = self.datastore.n_cables
         self.anchor_points = None
@@ -305,7 +307,7 @@ class CDPR_position_estimator:
             'gripper_rotation': gripper_pose[:,[0,4,5,6]],
             'imu_accel': self.datastore.imu_accel.deepCopy(),
             'winch_line_record': self.datastore.winch_line_record.deepCopy(),
-            'anchor_line_record': self.datastore.anchor_line_record.deepCopy(),
+            'anchor_line_record': [a.deepCopy() for a in self.datastore.anchor_line_record]
         }
 
     def estimate(self):
@@ -345,7 +347,7 @@ class CDPR_position_estimator:
         # evaluate line lengths in the future and put them in a queue for immediate transmission to the robot
         future_anchor_lines = [[
             (self.unix_time(t), self.anchor_line_length(anchor, t))
-            for t in self.future_times] for anchor in self.n_cables]
+            for t in self.future_times] for anchor in range(self.n_cables)]
 
         future_winch_line = np.array([
             np.concatenate([[self.unix_time(t)], [self.winch_line_len(t)]])
@@ -455,7 +457,19 @@ class CDPR_position_estimator:
     def gripper_over_bin_location(self):
         return np.array([0,0.2,1])
 
-def start_estimator(shared_datastore, min_to_ui_q, to_pe_q):
-    pe = CDPR_position_estimator(shared_datastore, min_to_ui_q, to_pe_q)
+    def read_input_queue(self):
+        while True:
+            update = self.to_pe_q.get()
+            if 'anchor_pose' in update:
+                apose = update['anchor_pose']
+                anchor_num = apose[0]
+                print(f'updating the position of anchor {anchor_num} to {apose[1][1]}')
+                self.anchor_points[anchor_num] = np.array(apose[1][1])
+
+
+def start_estimator(shared_datastore, min_to_ui_q, to_pe_q, to_ob_q):
+    pe = CDPR_position_estimator(shared_datastore, min_to_ui_q, to_pe_q, to_ob_q)
+    reader = threading.Thread(target=pe.read_input_queue)
+    reader.start()
     while True:
         pe.estimate()

@@ -10,7 +10,7 @@ from position_estimator import start_estimator
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Crane Robot Controller")
 
-    parser.add_argument("-h", "--headless", type=bool, help="When true, do not start the UI", default=False)
+    parser.add_argument("--headless", type=bool, help="When true, do not start the UI", default=False)
     args = parser.parse_args()
 
     # try:
@@ -40,7 +40,7 @@ if __name__ == "__main__":
     # add ui process if not in headless mode
     if not args.headless:
         from ursina_app import start_ui
-        ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, ))
+        ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, to_ob_q))
         ui_process.daemon = True
 
     # todo use logging module in these processes.
