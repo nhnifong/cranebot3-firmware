@@ -39,16 +39,14 @@ class Detection:
         self.translation = t
 
 def locate_markers(im):
-    corners, ids, rejectedImgPoints = detector.detectMarkers(frame)
+    corners, ids, rejectedImgPoints = detector.detectMarkers(im)
+    results = []
     if ids is not None:
         #estimate pose of every marker in the image
         marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
                                   [marker_size / 2, marker_size / 2, 0],
                                   [marker_size / 2, -marker_size / 2, 0],
                                   [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
-        rvecs = []
-        tvecs = []
-        results = []
 
         for i,c in zip(ids, corners):
             _, r, t = cv2.solvePnP(marker_points, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
@@ -58,7 +56,7 @@ def locate_markers(im):
             except IndexError:
                 # saw something that's not part of my robot
                 print(f'Unknown marker spotted with id {i}')
-        return results
+    return results
 
 def generateMarkerImages():
     border_px = 40

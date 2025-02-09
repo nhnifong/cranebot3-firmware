@@ -36,6 +36,7 @@ class AsyncDiscovery:
     def __init__(self) -> None:
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
+        self.send_position_updates = True
 
         # keyed by server name
         self.bot_clients = {}
@@ -63,7 +64,7 @@ class AsyncDiscovery:
                 f.write(f'{k}:{v}\n')
 
     def listen_position_updates(self):
-        while True:     
+        while self.send_position_updates:     
             updates = to_ob_q.get()
             if 'future_anchor_lines' in updates:
                 # this should have one column for each anchor
@@ -115,14 +116,18 @@ class AsyncDiscovery:
         )
 
         while True:
-            await asyncio.sleep(1)
+            try:
+                await asyncio.sleep(1)
+            except asyncio.exceptions.CancelledError:
+                await self.async_close()
 
     async def async_close(self) -> None:
         assert self.aiozc is not None
         assert self.aiobrowser is not None
         await self.aiobrowser.async_cancel()
         await self.aiozc.async_close()
-        await asyncio.gather([client.close_all() for name,client in self.bot_clients.items()])
+        await asyncio.gather(*[client.close_all() for name,client in self.bot_clients.items()])
+        self.send_position_updates = False
         await self.position_update_task
 
 def start_observation(shared_array, to_ui_q, to_pe_q, to_ob_q):
