@@ -100,7 +100,7 @@ class CDPR_position_estimator:
         # precalcualate a regular array of times from 0 till horizon_s for evaluating motor positions
         # in the time domain of the model splines. the domain is 0-1, and we want only the right half, representing the future.
         bot_loop_freq = 30 # hz
-        self.future_times = np.linspace(0.5, 1, self.horizon_s * bot_loop_freq)
+        self.future_times = np.linspace(0.5, 1, self.horizon_s * 4)
 
     def loadAnchorPoses(self):
         pts = []

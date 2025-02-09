@@ -28,6 +28,7 @@ class RaspiAnchorClient:
         self.connected = False  # status of connection to websocket
         self.receive_task = None  # Task for receiving messages from websocket
         self.video_task = None  # Task for streaming video
+        self.calibration_mode = True
         try:
             # read calibration data from file
             saved_info = np.load('anchor_pose_%i' % self.anchor_num)
@@ -59,9 +60,7 @@ class RaspiAnchorClient:
         """
         # We don't have a timestamp in the stream, so we have to assume the local time minus some for latency
         timestamp = time.time() - 0.2
-        # within this scope, interpret the symbol calibration_mode as referring to the global calibration_mode
-        global calibration_mode
-        if calibration_mode:
+        if self.calibration_mode:
             for detection in locate_markers(frame):
                 print(f"Found board: {detection.name}")
                 print(f"Timestamp: {timestamp}")
@@ -191,7 +190,7 @@ class RaspiAnchorClient:
         """
         # theres a different port for the video and the websocket
         stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
-        self.video_task = asyncio.to_thread(self.connect_video_stream, stream_url=stream_url)
+        self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, stream_url=stream_url))
 
         # a websocket connection for the control
         ws_uri = f"ws://{self.address}:{websocket_port}"
