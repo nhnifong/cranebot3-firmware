@@ -4,7 +4,6 @@ import sys
 import threading
 import time
 from position_estimator import CDPR_position_estimator
-from calibration import calibrate_all
 
 from ursina import (
     Ursina,
@@ -24,8 +23,9 @@ from ursina.shaders import (
 )
 
 class ControlPanelUI:
-    def __init__(self):
+    def __init__(self, to_ob_q):
         self.app = Ursina()
+        self.to_ob_q = to_ob_q
 
         # add the charuco board that represents the room origin
         # when a charuco board is located, it's origin is it's top left corner.
@@ -41,9 +41,11 @@ class ControlPanelUI:
         anchor_color = (0.9, 0.9, 0.9, 1.0)
         def add_anchor(pos, rot=(0,  0,0)):
             return Entity(model='anchor', color=anchor_color, scale=0.001, position=pos, rotation=(0,  0,0), shader=lit_with_shadows_shader)
-        anchor1 = add_anchor((-2,2, 3))
-        anchor2 = add_anchor(( 2,2, 3))
-        anchor3 = add_anchor(( 0,2,-2), rot=(0,180,0))
+        self.anchors = []
+        self.anchors.append(add_anchor((-2,2, 3)))
+        self.anchors.append(add_anchor(( 2,2, 3)))
+        self.anchors.append(add_anchor(( -1,2,-2), rot=(0,180,0)))
+        self.anchors.append(add_anchor(( -2,2,-2), rot=(0,180,0)))
 
         gantry = Entity(model='gantry', color=(0.4, 0.4, 0.0, 1.0), scale=0.001, position=(0,1,1), rotation=(0,0,0), shader=lit_with_shadows_shader)
 
@@ -51,20 +53,37 @@ class ControlPanelUI:
 
         def draw_line(point_a, point_b):
             line = Entity(model=Mesh(vertices=[point_a, point_b], mode='line', thickness=2), color=color.light_gray)
-        draw_line(anchor1.position, gantry.position)
-        draw_line(anchor2.position, gantry.position)
-        draw_line(anchor3.position, gantry.position)
+        for a in self.anchors:
+            draw_line(a.position, gantry.position)
 
         draw_line(gantry.position, self.gripper.position)
 
         light = DirectionalLight(shadows=True)
         light.look_at(Vec3(1,-1,1))
 
-        foo_button = Button(text='Foo', color=color.azure, position=(-.7, 0), scale=(.3, .1), on_click=self.on_button_click)
+        self.calibration_button = Button(
+            text='Calibrate Anchor Locations',
+            color=color.azure,
+            position=(-.7, 0), scale=(.1, .033),
+            on_click=self.on_calibration_button_click)
+        # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
+        # maybe you shouldn't read those files in the clients
+        self.calibration_mode = 'pose'
+
         EditorCamera()
 
-    def on_button_click(self):
-        self.gripper.color = color.random_color()
+    def on_calibration_button_click(self):
+        if self.calibration_mode is "pose":
+            self.calibration_mode = "run"
+            self.calibration_button.text = "enter calibration mode"
+            self.calibration_buttoncolor=color.green,
+
+        elif self.calibration_mode is "run":
+            self.calibration_mode = "pose"
+            self.calibration_button.text = "Calibrate Anchor Locations"
+            self.calibration_buttoncolor=color.azure,
+
+        self.to_ob_q.put({'set_calibration_mode': self.calibration_mode})
 
 
     def notify_connected_bots_change(self, available_bots={}):
@@ -86,13 +105,18 @@ class ControlPanelUI:
                 self.gripper_pos_spline = BSpline(self.knots, updates['gripper_path'], self.spline_degree, True)
             if 'gantry_path' in updates:
                 self.gantry_pos_spline = BSpline(self.knots, updates['gantry_path'], self.spline_degree, True)
+            if 'anchor_pose' in updates:
+                apose = updates['anchor_pose']
+                anchor_num = apose[0]
+                zup = apose[1][1] # position with +z pointing up
+                self.anchors[anchor_num].position = (zup[0], zup[2], zup[1])
 
 
     def start(self):
         self.app.run()
 
-def start_ui(min_to_ui_q):
-    cpui = ControlPanelUI()
+def start_ui(min_to_ui_q, to_ob_q):
+    cpui = ControlPanelUI(to_ob_q)
 
     estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(min_to_ui_q, ), daemon=True)
     estimator_update_thread.start()

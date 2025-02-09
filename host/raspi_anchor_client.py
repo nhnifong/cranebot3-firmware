@@ -33,6 +33,8 @@ class RaspiAnchorClient:
             # read calibration data from file
             saved_info = np.load('anchor_pose_%i' % self.anchor_num)
             self.anchor_pose = tuple(saved_info['pose'])
+            self.to_ui_q.put({'anchor_pose': (self.anchor_num, pose)})
+            self.to_pe_q.put({'anchor_pose': (self.anchor_num, pose)})
         except FileNotFoundError:
             self.anchor_pose = (np.array([0,0,0]), np.array([0,0,0]))
 
@@ -46,12 +48,7 @@ class RaspiAnchorClient:
         ]
 
     def calibrate_pose(self):
-        # recalculate the pose of the connected anchor from recent origin detections
-        anchor_cam_pose = [invert_pose(*average_pose(det)) for det in self.origin_detections]
-        self.anchor_pose = compose_poses([anchor_cam_pose, invert_pose(model_constants.gripper_camera)])
-        np.savez('anchor_pose_%i' % self.anchor_num, pose = pose)
-        self.to_ui_q.put({'anchor_pose': (self.anchor_num, pose)})
-        self.to_pe_q.put({'anchor_pose': (self.anchor_num, pose)})
+        np.savez('anchor_pose_%i' % self.anchor_num, pose = self.anchor_pose)
 
 
     def handle_image(self, frame):
@@ -72,6 +69,13 @@ class RaspiAnchorClient:
                     origin_detections.append(detection)
                     if len(origin_detections) > max_origin_detections:
                         origin_detections.pop(0)
+
+                    # recalculate the pose of the connected anchor from recent origin detections
+                    anchor_cam_pose = [invert_pose(*average_pose(det)) for det in self.origin_detections]
+                    self.anchor_pose = compose_poses([anchor_cam_pose, invert_pose(model_constants.gripper_camera)])
+                    # show real time updates of this process on the UI
+                    self.to_ui_q.put({'anchor_pose': (self.anchor_num, pose)})
+                    self.to_pe_q.put({'anchor_pose': (self.anchor_num, pose)})
         else:
             for detection in locate_markers(frame):
                 # rotate and translate to where that object's origin would be

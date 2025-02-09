@@ -64,6 +64,9 @@ class AsyncDiscovery:
                 f.write(f'{k}:{v}\n')
 
     def listen_position_updates(self):
+        """
+        Receive any updates on our process input queue
+        """
         while self.send_position_updates:     
             updates = to_ob_q.get()
             if 'future_anchor_lines' in updates:
@@ -72,6 +75,28 @@ class AsyncDiscovery:
                     client.send_anchor_commands({'length_plan' : updates['future_anchor_lines'][client.anchor_num]})
             if 'future_winch_line' in updates:
                 pass
+            if 'set_calibration_mode' in updates:
+                self.set_calibration_mode(updates['set_calibration_mode'])
+
+    def set_calibration_mode(self, mode):
+        """
+        Sets the calibration mode of connected bots
+        "run" - not in a calibration mode
+        "cam" - calibrate distortion parameters of cameras
+        "pose" - observe the origin board
+        """
+        if mode is "run":
+            if self.mode is "pose":
+                # call calibrate_pose on all anchors when exiting pose calibration mode
+                for name, client in self.bot_clients.items():
+                    client.calibrate_pose()
+                    client.calibration_mode = False
+            self.mode = mode
+        elif mode is "cam":
+            pass
+        elif mode is "pose":
+            for name, client in self.bot_clients.items():
+                client.calibration_mode = True
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
