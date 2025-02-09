@@ -6,6 +6,7 @@ import scipy.integrate as integrate
 from time import time
 from data_store import DataStore
 from calibration import compose_poses
+from functools import partial
 
 # X, Y are horizontal
 # positive Z points at the ceiling.
@@ -123,14 +124,14 @@ class CDPR_position_estimator:
         # the magnitude of the rodrigues vector represents the angle of rotation in radians.
         return rotational_axis / np.linalg.norm(rotational_axis) * self.gripper_rot_spline(time)
 
-    def anchor_line_length(self, time):
+    def anchor_line_length(self, anchor_index, time):
         """
-        Return the lengths of all anchor lines at a given time based on the the gantry position spline
+        Return the length of an anchor line at a given time based on the the gantry position spline
         Not applicable to the gripper winch line
 
         time shoud be in the base interval of the model splines
 
-        returns a vector with one term for each anchor line
+        returns a scalar for the line length
 
         Args:
             anchor_index: which line to estimate
@@ -138,9 +139,7 @@ class CDPR_position_estimator:
         """
 
         # evaluate the gantry position spline at a given instant and measure distance to anchor
-        return np.array([
-            np.linalg.norm(self.anchor_points[anchor_index] - self.gantry_pos_spline(time)) 
-            for anchor_index in range(self.n_cables)])
+        return np.linalg.norm(self.anchor_points[anchor_index] - self.gantry_pos_spline(time))
 
     def winch_line_len(self, time):
         """
@@ -272,8 +271,8 @@ class CDPR_position_estimator:
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
-            # TODO have one measurement array for each because records will come in at different instants for each line
-            self.error_meas(self.anchor_line_length, self.snapshot['anchor_line_record']),
+            sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
+                for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
             integrate.quad(self.mechanical_energy(self.gripper_pos_spline, self.gripper_mass), 0, self.horizon_s)[0],
             integrate.quad(self.mechanical_energy(self.gantry_pos_spline, self.gantry_mass), 0, self.horizon_s)[0],
@@ -344,9 +343,9 @@ class CDPR_position_estimator:
         # current_gripper_pos = self.gripper_pos_spline(normalized_time)
 
         # evaluate line lengths in the future and put them in a queue for immediate transmission to the robot
-        future_anchor_lines = np.array([
-            np.concatenate([[self.unix_time(t)], self.anchor_line_length(t)])
-            for t in self.future_times])
+        future_anchor_lines = [[
+            (self.unix_time(t), self.anchor_line_length(anchor, t))
+            for t in self.future_times] for anchor in self.n_cables]
 
         future_winch_line = np.array([
             np.concatenate([[self.unix_time(t)], [self.winch_line_len(t)]])
