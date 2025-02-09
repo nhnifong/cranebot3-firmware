@@ -9,36 +9,53 @@ import argparse
 import time
 from getmac import get_mac_address
 import subprocess
+from spools import SpoolController
 
-async def handler(websocket):
-    while True:
-        try:
-            message = await websocket.recv()
-            update = json.loads(message)
+class RaspiAnchorServer:
+    def __init__(self):
+        self.spooler = SpoolController()
 
-            if 'length_plan' in update:
-                plan = update['length_plan']
+    async def stream_measurements(self, ws):
+        """
+        stream line length measurements to the provided websocket connection
+        as long as it exists
+        """
+        while ws:
+            measurements = self.spooler.popMeasurements()
+            await websocket.send(json.dumps({'line_record': measurements}))
+            await asyncio.sleep(0.5)
 
-            # Process control_signal (e.g., control motors, read sensors)
-            print(f"Received: {update}")
+    async def handler(self,websocket):
+        print('Websoocket connected')
+        asyncio.create_task(self.stream_measurements(websocket))
+        while True:
+            try:
+                message = await websocket.recv()
+                update = json.loads(message)
+                print(f"Received: {update}")
 
-            # Send a response back (optional)
-            response = {"status": "OK"}
-            await websocket.send(json.dumps(response)) #Encode JSON
+                if 'length_plan' in update:
+                    spooler.setPlan(update['length_plan'])
+                if 'reference_length' in update:
+                    spooler.setReferenceLength(float(update['reference_length']))
 
-        except websockets.exceptions.ConnectionClosedOK:
-            break
+                response = {"status": "OK"}
+                await websocket.send(json.dumps(response)) #Encode JSON
 
-async def serve_video():
-    while True:
-        # keep restarting this forever.
-        result = subprocess.run(['./start_stream.sh'], shell=True, capture_output=False, text=True)
+            except websockets.exceptions.ConnectionClosedOK:
+                break
 
-async def main(port):
-    video_task = asyncio.create_task(asyncio.to_thread(serve_video))
-    async with websockets.serve(handler, "0.0.0.0", port): #Listen on all interfaces, port 8765
-        await asyncio.Future()  # run forever
-    video_task.cancel()
+    async def serve_video(self):
+        while True:
+            # keep restarting this forever.
+            result = subprocess.run(['./start_stream.sh'], shell=True, capture_output=False, text=True)
+
+    async def main(self, port):
+        video_task = asyncio.create_task(asyncio.to_thread(serve_video))
+        spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
+        async with websockets.serve(self.handler, "0.0.0.0", port): #Listen on all interfaces, port 8765
+            await asyncio.Future()  # run forever
+        video_task.cancel()
 
 def get_wifi_ip():
     """Gets the Raspberry Pi's IP address on the Wi-Fi interface.
@@ -93,5 +110,5 @@ if __name__ == "__main__":
         mdns_thread = threading.Thread(target=register_mdns_service,
             args=("123.cranebot-anchor-service", "_http._tcp.local.", PORT), daemon=True)
         mdns_thread.start()
-    
-    asyncio.run(main(PORT))
+    ras = RaspiAnchorServer()
+    asyncio.run(ras.main(PORT))

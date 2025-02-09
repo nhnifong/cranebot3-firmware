@@ -87,13 +87,14 @@ class RaspiAnchorClient:
                         # gripper_front is relative to anchor camera
                         # gripper is relative to gripper_front
                         # gripper_grommet is relative to gripper
-                        gripper_global_pose = np.array(compose_poses([
+                        pose = np.array(compose_poses([
                             self.anchor_pose, # obtained from calibration
                             model_constants.anchor_camera, # constant
                             (detection.rotation, detection.translation), # the pose obtained just now
                             offset, # constant
                         ]))
-                        dest.insert(np.concatenate([[timestamp], gripper_global_pose.reshape(6)]))
+                        dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
+                        print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
 
     def connect_video_stream(self, url):
         """
