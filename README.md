@@ -1,6 +1,5 @@
 # cranebot3-firmware
-Arduino code for a DFrobot firebeetle 2 based household robotic gripper
-
+Control ode for a crane mounted household robotic gripper
 
 gripper-sketch/ contains arduino ide project for flashing the gripper firmware.
 
@@ -42,3 +41,16 @@ main.py is a graphical control panel made with ursina (a python game engine)
 in it's current form, it requires a blender installation in order to load assets
 
     sudo apt-get install blender
+
+raspi-anchor contains a server that is meant to run on the raspberry pi zero 2w inside the anchors
+that are mounted to the walls.
+
+add the following lines lines to to /boot/firmware/config.txt and reboot)
+
+    enable_uart=1
+    dtoverlay=disable-bt
+
+It has it's own `requirements.txt` file.
+after installing the requirements in a python3 virtual env on the raspi, run with
+
+    python3 anchor_server.py
