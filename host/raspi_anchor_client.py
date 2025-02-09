@@ -96,7 +96,7 @@ class RaspiAnchorClient:
                         dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
                         print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
 
-    def connect_video_stream(self, url):
+    def connect_video_stream(self, stream_url):
         """
         Streams video from the raspberry pi video module 3
         blocking
@@ -190,7 +190,7 @@ class RaspiAnchorClient:
         """
         # theres a different port for the video and the websocket
         stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
-        self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, args=(stream_url, )))
+        self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, url=stream_url))
 
         # a websocket connection for the control
         ws_uri = f"ws://{self.address}:{websocket_port}"
