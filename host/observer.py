@@ -62,11 +62,13 @@ class AsyncDiscovery:
             for k,v in self.anchor_num_map.items():
                 f.write(f'{k}:{v}\n')
 
-    def listen_position_updates(url):
+    def listen_position_updates(self):
         while True:     
             updates = to_ob_q.get()
             if 'future_anchor_lines' in updates:
-                updates['future_anchor_lines']
+                # this should have one column for each anchor
+                for name, client in self.bot_clients:
+                    client.send_anchor_commands({'length_plan' : updates['future_anchor_lines'][client.anchor_num]})
             if 'future_winch_line' in updates:
                 pass
 
@@ -102,6 +104,7 @@ class AsyncDiscovery:
                 await ac.connect_all()
 
     async def async_run(self) -> None:
+        self.position_update_task = asyncio.to_thread(self.listen_position_updates)
         self.aiozc = AsyncZeroconf(ip_version=IPVersion.All)
 
         services = list(
@@ -110,6 +113,7 @@ class AsyncDiscovery:
         self.aiobrowser = AsyncServiceBrowser(
             self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
         )
+
         while True:
             await asyncio.sleep(1)
 
@@ -119,6 +123,7 @@ class AsyncDiscovery:
         await self.aiobrowser.async_cancel()
         await self.aiozc.async_close()
         await asyncio.gather([client.close_all() for name,client in self.bot_clients.items()])
+        await self.position_update_task
 
 def start_observation(shared_array, to_ui_q, to_pe_q, to_ob_q):
     # set the global 

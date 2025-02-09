@@ -38,6 +38,13 @@ class CircularBuffer:
             self.asNpa()[self.idx] = row
             self.idx = (self.idx + 1) % self.shape[0]
 
+    def insertList(self, row_list):
+        with self.sem:
+            arr = self.asNpa()
+            for row in row_list:
+                arr[self.idx] = row
+                self.idx = (self.idx + 1) % self.shape[0]
+
 class DataStore:
     """
     This class is meant to store continuously collected measurable variables of the robot and store them in circular buffers.
@@ -63,4 +70,4 @@ class DataStore:
         self.gripper_pose = CircularBuffer((horizon_s * 10, 7))
         self.imu_accel = CircularBuffer((horizon_s * 20, 4))
         self.winch_line_record = CircularBuffer((horizon_s * 10, 2))
-        self.anchor_line_record = CircularBuffer((horizon_s * 10, n_cables+1))
+        self.anchor_line_record = [CircularBuffer((horizon_s * 10, 2)) for n in range(n_cables)]

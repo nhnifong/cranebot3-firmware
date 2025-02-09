@@ -135,7 +135,8 @@ class RaspiAnchorClient:
                 await asyncio.sleep(1)
                 message = await self.websocket.recv()
                 data = json.loads(message)
-                print(f"Received: {data}")
+                if 'line_record' in data:
+                    self.datastore.anchor_line_record[self.anchor_num].insertList(data['line_record'])
             except websockets.exceptions.ConnectionClosedOK:
                 print("Connection closed by server.")
                 self.connected = False
@@ -147,15 +148,15 @@ class RaspiAnchorClient:
                 await self.close_all()
                 break
 
-    def send_anchor_commands(self, something):
+    def send_anchor_commands(self, update):
         """Sends commands to the server (non-blocking)."""
         if not self.connected:
             raise ConnectionError("Not connected to server.")
-        asyncio.create_task(self._send_array_async(something))  # Send in a separate task
+        asyncio.create_task(self._send_array_async(update))  # Send in a separate task
 
-    async def _send_anchor_commands_async(self, something):
+    async def _send_anchor_commands_async(self, update):
         try:
-            await self.websocket.send(json.dumps(something))
+            await self.websocket.send(json.dumps(update))
         except Exception as e:
             print(f"Error sending anchor commands: {e}")
             self.connected = False #If there is an error, the connection is probably down
@@ -190,7 +191,7 @@ class RaspiAnchorClient:
         """
         # theres a different port for the video and the websocket
         stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
-        self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, url=stream_url))
+        self.video_task = asyncio.to_thread(self.connect_video_stream, stream_url=stream_url)
 
         # a websocket connection for the control
         ws_uri = f"ws://{self.address}:{websocket_port}"
