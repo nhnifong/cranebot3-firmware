@@ -12,12 +12,42 @@ import socket
 import argparse
 import time
 from getmac import get_mac_address
-import subprocess
+import multiprocessing
 from spools import SpoolController
+from detect_aruco import locate_markers, Detection
+from picamera2 import Picamera2
+
+def local_aruco_detection(outq, control_queue):
+    """
+    Open the camera and detect aruco markers
+    put any detections on the provided queue
+    """
+    picam2 = Picamera2()
+    # full res is 4608x2592
+    # this is half res. seems it can still detect a 10cm aruco from about 2 meters at a rate of 30fps
+    capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
+    picam2.configure(capture_config)
+    picam2.start()
+    while True:
+        try:
+            if control_queue.get_nowait() == "STOP":
+                break # exit loop, ending process
+        except multiprocessing.QueueEmpty:
+            pass # expected
+
+        t = time.time()
+        im = picam2.capture_array()
+        detections = locate_markers(im)
+        if len(detections) > 0:
+            print(f'detected {list([d.name for d in detections])}')
+            for det in detections:
+                det.time = t # add the time of capture to the detection
+                outq.put(det)
 
 class RaspiAnchorServer:
     def __init__(self):
         self.spooler = SpoolController()
+        self.ws = None # active websocket connection if there is one
 
     async def stream_measurements(self, ws):
         """
@@ -33,6 +63,7 @@ class RaspiAnchorServer:
 
     async def handler(self,websocket):
         print('Websocket connected')
+        self.ws = websocket
         asyncio.create_task(self.stream_measurements(websocket))
         while True:
             try:
@@ -51,25 +82,50 @@ class RaspiAnchorServer:
             except (ConnectionClosedOK, ConnectionClosedError):
                 break
 
-    def serve_video(self):
-        print("started video task")
-        while True:
-            # keep restarting this forever.
-            result = subprocess.run(['./start_stream.sh'], shell=True, capture_output=False, text=True)
+    async def listen_detector(self, detection_queue):
+        while self.run_detection_listen_loop:
+            # pull up to 20 things off the queue. This is to keep ws messages smaller
+            dets = []
+            for i in range(20):
+                try:
+                    dets.append(detection_queue.get_nowait()):
+                except multiprocessing.QueueEmpty:
+                    break
+            if len(dets) > 0 and self.ws:
+                await ws.send(json.dumps({'detections': dets}))
+
 
     async def main(self, port):
-        video_task = asyncio.to_thread(self.serve_video)
+        # process for detecting fudicial markers
+        print("starting video task")
+        control_queue = multiprocessing.Queue()
+        detection_queue = multiprocessing.Queue()
+        aruco_process = multiprocessing.Process(target=local_aruco_detection, args=(self.detection_queue, ))
+        aruco_process.daemon = True
+        aruco_process.start()
+
+        # thread for listening to aruco detector process
+        self.run_detection_listen_loop = True
+        listen_detector_task = asyncio.create_task(self.listen_detector(detection_queue))
+
+        # thread for controlling stepper motor
         spool_task = asyncio.to_thread(self.spooler.trackingLoop)
-        async with websockets.serve(self.handler, "0.0.0.0", port):
-            await asyncio.gather(video_task, spool_task)
+
+        try:
+            # todo catch that exception that happens when the client on the other end crashes and doesnt send the close frame and ignore it.
+            async with websockets.serve(self.handler, "0.0.0.0", port):
+                # cause the server to serve forever, because these tasks don't finish
+                await asyncio.gather(listen_detector_task, spool_task)
+
+        except KeyboardInterrupt:
+            self.spooler.fastStop()
+            control_queue.put("STOP")
+            aruco_process.join()
+            self.run_detection_listen_loop = False
+            await asyncio.gather(listen_detector_task, spool_task)
 
 def get_wifi_ip():
-    """Gets the Raspberry Pi's IP address on the Wi-Fi interface.
-
-    Returns:
-        The IP address as a string, or None if the Wi-Fi interface
-        is not found or has no IP address.
-    """
+    """Gets the Raspberry Pi's IP address on the Wi-Fi interface."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -112,7 +168,6 @@ if __name__ == "__main__":
 
     if args.mdns:
         # Start mdns advertisement in a separate thread
-        # there is supposed to be some way to make zeroconf play nice with asyncio but I couldn't make it work
         mdns_thread = threading.Thread(target=register_mdns_service,
             args=("123.cranebot-anchor-service", "_http._tcp.local.", PORT), daemon=True)
         mdns_thread.start()
