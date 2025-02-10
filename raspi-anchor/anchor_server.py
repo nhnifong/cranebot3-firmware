@@ -26,6 +26,7 @@ class RaspiAnchorServer:
         """
         while ws:
             measurements = self.spooler.popMeasurements()
+            print(f"sending {len(measurements)} line length data")
             if len(measurements) > 0:
                 await ws.send(json.dumps({'line_record': measurements}))
             await asyncio.sleep(0.5)
