@@ -32,6 +32,7 @@ class SpoolController:
         # plan of desired line lengths
         self.desiredLine = []
         self.lastIndex = 0
+        self.runSpoolLoop = True
 
     def setReferenceLength(self, length):
         """
@@ -71,11 +72,15 @@ class SpoolController:
             time.sleep(0.05)
         self.motor.stop()
 
+    def fastStop(self):
+        self.runSpoolLoop = False
+        self.motor.stop()
+
     def trackingLoop(self):
         """
         Constantly try to match the position and speed given in an array
         """
-        while True:
+        while self.runSpoolLoop:
             t, currentLen = self.currentLineLength()
             if len(self.desiredLine) == 0:
                 if self.speed != 0:

@@ -2,15 +2,6 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 import time
-from picamera2 import Picamera2
-
-# Use the still configuration, which gives the full 4k resolution
-picam2 = Picamera2()
-#capture_config = picam2.create_still_configuration()
-# full res is 4608x2592
-capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
-picam2.configure(capture_config)
-picam2.start()
 
 # Intrinsic Matrix: 
 mtx = np.array(
@@ -32,6 +23,12 @@ marker_names = [
     'bin_other',
 ]
 
+class Detection:
+    def __init__(self, name, r, t):
+        self.name = name
+        self.rotation = r
+        self.translation = t
+
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
 parameters = aruco.DetectorParameters()
 parameters.minMarkerPerimeterRate = 0.04
@@ -39,7 +36,7 @@ parameters.maxMarkerPerimeterRate = 4.0
 detector = aruco.ArucoDetector(aruco_dict, parameters)
 marker_size = 0.09 # Length of ArUco marker in meters
 
-def locate_markers(im):
+def locate_markers(im, t):
     corners, ids, rejectedImgPoints = detector.detectMarkers(im)
     results = []
     if ids is not None:
@@ -53,12 +50,23 @@ def locate_markers(im):
             _, r, t = cv2.solvePnP(marker_points, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             try:
                 name = marker_names[i[0]]
-                results.append((name, np.array(r), np.array(t)))
+                results.append(Detection(name, np.array(r), np.array(t)))
             except IndexError:
                 # saw something that's not part of my robot
                 print(f'Unknown marker spotted with id {i}')
     return results
 
-while True:
-    im = picam2.capture_array()
-    print(locate_markers(im))
+if __name__ == "__main__":
+
+    from picamera2 import Picamera2
+    # Use the still configuration, which gives the full 4k resolution
+    picam2 = Picamera2()
+    #capture_config = picam2.create_still_configuration()
+    # full res is 4608x2592
+    capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
+    picam2.configure(capture_config)
+    picam2.start()
+
+    while True:
+        im = picam2.capture_array()
+        print(locate_markers(im))
