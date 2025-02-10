@@ -22,7 +22,7 @@ parameters.minMarkerPerimeterRate = 0.04
 parameters.maxMarkerPerimeterRate = 4.0
 
 # Load images
-image_files = glob.glob("images/foo_pxl_shrink.jpg")  # Assumes images are in an "images" folder
+image_files = glob.glob("images/test.jpg")  # Assumes images are in an "images" folder
 all_corners = []
 all_ids = []
 
