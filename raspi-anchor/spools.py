@@ -14,6 +14,8 @@ PE_TERM = 1.5
 # maximum acceleration in meters of line per second squared
 MAX_ACCEL = 8.0
 LOOP_DELAY_S = 0.03
+# record line length every 10th iteration
+REC_MOD = 10
 
 def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
@@ -33,6 +35,7 @@ class SpoolController:
         self.desiredLine = []
         self.lastIndex = 0
         self.runSpoolLoop = True
+        self.rec_loop_counter = 0
 
     def setReferenceLength(self, length):
         """
@@ -61,7 +64,10 @@ class SpoolController:
         l = METER_PER_REV * (float(angle) - self.zeroAngle) / ANGLE_RESOLUTION + self.lineAtStart
         # accumulate these so you can send them to the websocket
         row = (time.time(), l)
-        self.record.append(row)
+        if self.rec_loop_counter == REC_MOD:
+            self.record.append(row)
+            self.rec_loop_counter = 0
+        self.rec_loop_counter += 1
         return row
 
     def slowStop(self):

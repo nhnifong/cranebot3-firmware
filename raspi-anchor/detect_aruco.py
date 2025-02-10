@@ -23,12 +23,6 @@ marker_names = [
     'bin_other',
 ]
 
-class Detection:
-    def __init__(self, name, r, t):
-        self.name = name
-        self.rotation = r
-        self.translation = t
-
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
 parameters = aruco.DetectorParameters()
 parameters.minMarkerPerimeterRate = 0.04
@@ -36,7 +30,7 @@ parameters.maxMarkerPerimeterRate = 4.0
 detector = aruco.ArucoDetector(aruco_dict, parameters)
 marker_size = 0.09 # Length of ArUco marker in meters
 
-def locate_markers(im, t):
+def locate_markers(im):
     corners, ids, rejectedImgPoints = detector.detectMarkers(im)
     results = []
     if ids is not None:
@@ -50,7 +44,11 @@ def locate_markers(im, t):
             _, r, t = cv2.solvePnP(marker_points, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             try:
                 name = marker_names[i[0]]
-                results.append(Detection(name, np.array(r), np.array(t)))
+                # this is meant to be json serializable
+                results.append({
+                    'n': name,
+                    'r': r.tolist(),
+                    't': t.tolist()})
             except IndexError:
                 # saw something that's not part of my robot
                 print(f'Unknown marker spotted with id {i}')

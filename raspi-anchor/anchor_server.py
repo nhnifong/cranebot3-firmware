@@ -14,7 +14,7 @@ import time
 from getmac import get_mac_address
 import multiprocessing
 from spools import SpoolController
-from detect_aruco import locate_markers, Detection
+from detect_aruco import locate_markers
 from picamera2 import Picamera2
 
 def local_aruco_detection(outq, control_queue):
@@ -29,20 +29,19 @@ def local_aruco_detection(outq, control_queue):
     picam2.configure(capture_config)
     picam2.start()
     while True:
-        try:
+        if not control_queue.empty():
             if control_queue.get_nowait() == "STOP":
                 break # exit loop, ending process
-        except multiprocessing.QueueEmpty:
-            pass # expected
 
-        t = time.time()
+        sec = time.time()
         im = picam2.capture_array()
         detections = locate_markers(im)
         if len(detections) > 0:
-            print(f'detected {list([d.name for d in detections])}')
+            #print(f'detected {list([d["n"] for d in detections])}')
             for det in detections:
-                det.time = t # add the time of capture to the detection
+                det['s'] = sec # add the time of capture to the detection
                 outq.put(det)
+        #await asyncio.sleep(0.5)
 
 class RaspiAnchorServer:
     def __init__(self):
@@ -55,11 +54,16 @@ class RaspiAnchorServer:
         as long as it exists
         """
         while ws:
-            measurements = self.spooler.popMeasurements()
-            print(f"sending {len(measurements)} line length data")
-            if len(measurements) > 0:
-                await ws.send(json.dumps({'line_record': measurements}))
-            await asyncio.sleep(0.5)
+            try:
+                meas = self.spooler.popMeasurements()
+                if len(meas) > 0:
+                    if len(meas) > 50:
+                        meas = meas[:50]
+                    print(f"sending {len(meas)} line length data")
+                    await ws.send(json.dumps({'line_record': meas}))
+                await asyncio.sleep(0.5)
+            except (ConnectionClosedOK, ConnectionClosedError):
+                break
 
     async def handler(self,websocket):
         print('Websocket connected')
@@ -87,12 +91,14 @@ class RaspiAnchorServer:
             # pull up to 20 things off the queue. This is to keep ws messages smaller
             dets = []
             for i in range(20):
-                try:
-                    dets.append(detection_queue.get_nowait()):
-                except multiprocessing.QueueEmpty:
+                if detection_queue.empty():
                     break
+                dets.append(detection_queue.get_nowait())
             if len(dets) > 0 and self.ws:
-                await ws.send(json.dumps({'detections': dets}))
+                print(f"sending {len(dets)} detections")
+                await self.ws.send(json.dumps({'detections': dets}))
+            else:
+                await asyncio.sleep(0.1)
 
 
     async def main(self, port):
@@ -100,9 +106,10 @@ class RaspiAnchorServer:
         print("starting video task")
         control_queue = multiprocessing.Queue()
         detection_queue = multiprocessing.Queue()
-        aruco_process = multiprocessing.Process(target=local_aruco_detection, args=(self.detection_queue, ))
+        aruco_process = multiprocessing.Process(target=local_aruco_detection, args=(detection_queue, control_queue))
         aruco_process.daemon = True
         aruco_process.start()
+        #ttask = asyncio.create_task(local_aruco_detection(detection_queue, control_queue))
 
         # thread for listening to aruco detector process
         self.run_detection_listen_loop = True
