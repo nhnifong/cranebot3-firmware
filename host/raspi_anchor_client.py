@@ -14,6 +14,8 @@ max_origin_detections = 40
 video_port = 8888
 websocket_port = 8765
 
+def pose_from_det(det):
+    return (np.array(det['r']), np.array(det['t']))
 
 # this client is designed for the raspberri pi based anchor
 class RaspiAnchorClient:
@@ -38,7 +40,7 @@ class RaspiAnchorClient:
         except FileNotFoundError:
             self.anchor_pose = (np.array([0,0,0]), np.array([0,0,0]))
 
-        # to help with a loop that does the same thing four times in handle_image
+        # to help with a loop that does the same thing four times in handle_detections
         # name, offset, datastore
         self.arucos = [
             ('gripper_front', model_constants.gripper_aruco_front_inv, datastore.gripper_pose),
@@ -50,41 +52,38 @@ class RaspiAnchorClient:
     def calibrate_pose(self):
         np.savez('anchor_pose_%i' % self.anchor_num, pose = self.anchor_pose)
 
-
-    def handle_image(self, frame):
+    def handle_detections(self, detections):
         """
-        handle a single image from the stream
+        handle a list of aruco detections from the server
         """
-        # We don't have a timestamp in the stream, so we have to assume the local time minus some for latency
-        timestamp = time.time() - 0.2
         if self.calibration_mode:
-            cv2.imshow(frame)
-            for detection in locate_markers(frame):
-                print(f"Found board: {detection.name}")
-                print(f"Timestamp: {timestamp}")
-                print(f"Rotation Vector: {detection.rvec}")
-                print(f"Translation Vector: {detection.tvec}")
+            for detection in detections:
+                # print(f"Name: {detection['n']}")
+                # print(f"Timestamp: {detection['s']}")
+                # print(f"Rotation Vector: {detection['r']}")
+                # print(f"Translation Vector: {detection['t']}")
                 # sys.stdout.flush()
 
-                if detection.name == "origin":
-                    origin_detections.append(detection)
-                    if len(origin_detections) > max_origin_detections:
-                        origin_detections.pop(0)
+                if detection['n'] == "origin":
+                    origin_poses.append(pose_from_det(detection))
+                    if len(origin_poses) > max_origin_detections:
+                        origin_poses.pop(0)
 
                     # recalculate the pose of the connected anchor from recent origin detections
-                    anchor_cam_pose = [invert_pose(*average_pose(det)) for det in self.origin_detections]
+                    anchor_cam_pose = [invert_pose(*average_pose(det)) for det in self.origin_poses]
                     self.anchor_pose = compose_poses([anchor_cam_pose, invert_pose(model_constants.gripper_camera)])
+                    print(f'anchor {self.anchor_num} pose {pose}')
                     # show real time updates of this process on the UI
                     self.to_ui_q.put({'anchor_pose': (self.anchor_num, pose)})
                     self.to_pe_q.put({'anchor_pose': (self.anchor_num, pose)})
         else:
-            for detection in locate_markers(frame):
+            for detection in detections:
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
 
                 for name, offset, dest  in self.arucos:
-                    if detection.name == name:
+                    if detection['n'] == name:
                         # you have the pose of gripper_front relative to a particular anchor camera
                         # Anchor is relative to the origin
                         # anchor camera is relative to anchor
@@ -94,30 +93,11 @@ class RaspiAnchorClient:
                         pose = np.array(compose_poses([
                             self.anchor_pose, # obtained from calibration
                             model_constants.anchor_camera, # constant
-                            (detection.rotation, detection.translation), # the pose obtained just now
+                            pose_from_det(detection), # the pose obtained just now
                             offset, # constant
                         ]))
-                        dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
+                        dest.insert(np.concatenate([[det['s']], pose.reshape(6)]))
                         print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
-
-    def connect_video_stream(self, stream_url):
-        """
-        Streams video from the raspberry pi video module 3
-        blocking
-        """
-        cap = cv2.VideoCapture(stream_url)
-        if not cap.isOpened():
-            print(f"Error opening video stream: {stream_url}")
-            return
-        print("Connected to %s" % stream_url)
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                return
-            if frame is not None:
-                self.handle_image(frame)
-        print("Stream ended from %s" % stream_url)
-        cap.release()
 
     async def connect_websocket(self, ws_uri):
         try:
@@ -135,11 +115,12 @@ class RaspiAnchorClient:
     async def _receive_loop(self): #Private method for the receive loop
         while self.connected: #Loop until disconnected
             try:
-                await asyncio.sleep(1)
                 message = await self.websocket.recv()
                 data = json.loads(message)
                 if 'line_record' in data and not self.calibration_mode:
                     self.datastore.anchor_line_record[self.anchor_num].insertList(data['line_record'])
+                if 'detections' in data:
+                    self.handle_detections(data['detections'])
             except websockets.exceptions.ConnectionClosedOK:
                 print("Connection closed by server.")
                 self.connected = False
@@ -180,12 +161,12 @@ class RaspiAnchorClient:
             await self.websocket.close()
             self.websocket = None
         self.connected = False
-        if self.video_task:
-            self.video_task.cancel()  # Stop receiving messages
-            try:
-                await self.video_task
-            except asyncio.CancelledError:
-                pass #Expected
+        # if self.video_task:
+        #     self.video_task.cancel()  # Stop receiving messages
+        #     try:
+        #         await self.video_task
+        #     except asyncio.CancelledError:
+        #         pass #Expected
         print(f"Connection to anchor {self.anchor_num} closed.")
 
     async def connect_all(self):
@@ -193,8 +174,8 @@ class RaspiAnchorClient:
         Connect to both the video stream and the websocket of this anchor
         """
         # theres a different port for the video and the websocket
-        stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
-        self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, stream_url=stream_url))
+        # stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
+        # self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, stream_url=stream_url))
 
         # a websocket connection for the control
         ws_uri = f"ws://{self.address}:{websocket_port}"
