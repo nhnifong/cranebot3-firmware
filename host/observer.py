@@ -147,7 +147,7 @@ class AsyncDiscovery:
         while True:
             try:
                 await asyncio.sleep(1)
-            except asyncio.exceptions.CancelledError:
+            except (KeyboardInterrupt, asyncio.exceptions.CancelledError):
                 await self.async_close()
 
     async def async_close(self) -> None:
