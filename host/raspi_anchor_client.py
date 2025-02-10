@@ -58,6 +58,7 @@ class RaspiAnchorClient:
         # We don't have a timestamp in the stream, so we have to assume the local time minus some for latency
         timestamp = time.time() - 0.2
         if self.calibration_mode:
+            cv2.imshow(frame)
             for detection in locate_markers(frame):
                 print(f"Found board: {detection.name}")
                 print(f"Timestamp: {timestamp}")
@@ -134,11 +135,10 @@ class RaspiAnchorClient:
     async def _receive_loop(self): #Private method for the receive loop
         while self.connected: #Loop until disconnected
             try:
-                await self._send_anchor_commands_async({"foo": 123})
                 await asyncio.sleep(1)
                 message = await self.websocket.recv()
                 data = json.loads(message)
-                if 'line_record' in data:
+                if 'line_record' in data and not self.calibration_mode:
                     self.datastore.anchor_line_record[self.anchor_num].insertList(data['line_record'])
             except websockets.exceptions.ConnectionClosedOK:
                 print("Connection closed by server.")

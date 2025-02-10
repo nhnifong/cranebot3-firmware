@@ -73,12 +73,12 @@ class ControlPanelUI:
         EditorCamera()
 
     def on_calibration_button_click(self):
-        if self.calibration_mode is "pose":
+        if self.calibration_mode == "pose":
             self.calibration_mode = "run"
             self.calibration_button.text = "enter calibration mode"
             self.calibration_buttoncolor=color.green,
 
-        elif self.calibration_mode is "run":
+        elif self.calibration_mode == "run":
             self.calibration_mode = "pose"
             self.calibration_button.text = "Calibrate Anchor Locations"
             self.calibration_buttoncolor=color.azure,
