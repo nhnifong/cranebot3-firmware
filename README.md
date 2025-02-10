@@ -32,7 +32,8 @@ host/ contains the desktop server which connects to the ESP32s over wifi and per
 
 currently just a buch of broken prototype code.
 
-    sudp apt install python3-pip python3-virtualenv
+    cd host
+    sudo apt install python3-pip python3-virtualenv
     python3 -m virtualenv venv
     source venv/bin/activate
     pip3 install -r requirements.txt

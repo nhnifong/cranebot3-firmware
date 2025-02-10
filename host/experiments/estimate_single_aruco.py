@@ -16,13 +16,13 @@ dist_coeffs = np.array(
 [[ 3.40916628e-01, -2.38650897e+00, -8.85125582e-04, 3.34240054e-03, 4.69525036e+00]])
 
 
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
+aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
 parameters = cv2.aruco.DetectorParameters()
-parameters.minMarkerPerimeterRate = 0.01
+parameters.minMarkerPerimeterRate = 0.04
 parameters.maxMarkerPerimeterRate = 4.0
 
 # Load images
-image_files = glob.glob("images/messy3.jpg")  # Assumes images are in an "images" folder
+image_files = glob.glob("images/foo_pxl_shrink.jpg")  # Assumes images are in an "images" folder
 all_corners = []
 all_ids = []
 

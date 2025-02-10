@@ -335,7 +335,7 @@ class CDPR_position_estimator:
             options={'maxiter':1000}
         )
         time_taken = time() - start
-        print(f"minimization step took {time_taken} seconds")
+        # print(f"minimization step took {time_taken} seconds")
 
         # set splines from optimal model params
         self.set_splines_from_params(result.x)

@@ -29,7 +29,7 @@ aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
 aruco_parameters = aruco.DetectorParameters()
 # Minimum and maximum size that an aruco marker could be as a fraction of the image width
 aruco_parameters.minMarkerPerimeterRate = 0.01
-aruco_parameters.maxMarkerPerimeterRate = 4.0
+aruco_parameters.maxMarkerPerimeterRate = 8.0
 detector = aruco.ArucoDetector(aruco_dict, aruco_parameters)
 
 class Detection:

@@ -33,10 +33,14 @@ cranebot_gripper_service_name = 'cranebot-gripper-service'
 
 # Manager of multiple tasks running clients connected to each robot component
 class AsyncDiscovery:
-    def __init__(self) -> None:
+    def __init__(self, datastore, to_ui_q, to_pe_q) -> None:
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
         self.send_position_updates = True
+
+        self.datastore = datastore
+        self.to_ui_q = to_ui_q
+        self.to_pe_q = to_pe_q
 
         # keyed by server name
         self.bot_clients = {}
@@ -85,16 +89,16 @@ class AsyncDiscovery:
         "cam" - calibrate distortion parameters of cameras
         "pose" - observe the origin board
         """
-        if mode is "run":
-            if self.mode is "pose":
+        if mode == "run":
+            if self.mode == "pose":
                 # call calibrate_pose on all anchors when exiting pose calibration mode
                 for name, client in self.bot_clients.items():
                     client.calibrate_pose()
                     client.calibration_mode = False
             self.mode = mode
-        elif mode is "cam":
+        elif mode == "cam":
             pass
-        elif mode is "pose":
+        elif mode == "pose":
             for name, client in self.bot_clients.items():
                 client.calibration_mode = True
 
@@ -125,7 +129,7 @@ class AsyncDiscovery:
                     anchor_num = self.next_available_anchor_num
                     self.anchor_num_map[info.server] = anchor_num
                     self.save_anchor_num_map()
-                ac = RaspiAnchorClient(address, anchor_num, datastore, to_ui_q, to_pe_q)
+                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q)
                 self.bot_clients[info.server] = ac
                 await ac.connect_all()
 
@@ -155,15 +159,9 @@ class AsyncDiscovery:
         self.send_position_updates = False
         await self.position_update_task
 
-def start_observation(shared_array, to_ui_q, to_pe_q, to_ob_q):
-    # set the global 
-    datastore = shared_array
-    to_ui_q = to_ui_q # for sending to the UI
-    to_pe_q = to_pe_q # for sending to the position estimator
-    to_ob_q = to_ob_q # queue where other processes send to us
-
+def start_observation(datastore, to_ui_q, to_pe_q, to_ob_q):
     async def main():
-        runner = AsyncDiscovery()
+        runner = AsyncDiscovery(datastore, to_ui_q, to_pe_q)
         try:
             await runner.async_run()
         except KeyboardInterrupt:
