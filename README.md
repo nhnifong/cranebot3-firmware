@@ -1,4 +1,5 @@
-### cranebot3-firmware
+# cranebot3-firmware
+
 Control code for a crane mounted household robotic crane consisting of a gripper than hangs from multiple lines
 attached to spools in AI-camera equipped anchor points on the walls of a room.
 
