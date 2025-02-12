@@ -61,7 +61,8 @@ def draw_masks(masks: Dict[int, (np.ndarray, np.ndarray)]):
 def create_contours(thresh):
     # findContours expects a white object on a black background
     contours, hierarchy = cv.findContours(thresh, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-    return contours
+    # return only contours with more than 2 points.
+    return list(filter(lambda x: x.shape[0] > 2, contours))
 
 
 def get_args():
