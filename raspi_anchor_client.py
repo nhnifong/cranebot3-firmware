@@ -3,10 +3,9 @@ import asyncio
 import websockets
 import time
 import json
-from cv_common import locate_markers
+from cv_common import locate_markers, compose_poses, invert_pose, average_pose
 import cv2
 import numpy as np
-from calibration import compose_poses, invert_pose, average_pose
 import model_constants
 
 # maximum number of origin detections to keep
@@ -21,7 +20,7 @@ def pose_from_det(det):
 class RaspiAnchorClient:
     def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q):
         self.address = address
-        self.origin_detections = []
+        self.origin_poses = []
         self.anchor_num = anchor_num # which anchor are we connected to
         self.datastore = datastore
         self.to_ui_q = to_ui_q
@@ -65,9 +64,9 @@ class RaspiAnchorClient:
                 # sys.stdout.flush()
 
                 if detection['n'] == "origin":
-                    origin_poses.append(pose_from_det(detection))
-                    if len(origin_poses) > max_origin_detections:
-                        origin_poses.pop(0)
+                    self.origin_poses.append(pose_from_det(detection))
+                    if len(self.origin_poses) > max_origin_detections:
+                        self.origin_poses.pop(0)
 
                     # recalculate the pose of the connected anchor from recent origin detections
                     anchor_cam_pose = [invert_pose(*average_pose(det)) for det in self.origin_poses]
