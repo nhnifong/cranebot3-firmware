@@ -1,5 +1,5 @@
 import numpy as np
-from calibration import invert_pose
+from cv_common import invert_pose
 
 # data obtained manually from onshape
 # poses are specified as tuples of (rvec, tvec)
