@@ -71,16 +71,20 @@ class AsyncDiscovery:
         """
         Receive any updates on our process input queue
         """
-        while self.send_position_updates:     
+        while self.send_position_updates:
             updates = to_ob_q.get()
+            tasks = []
             if 'future_anchor_lines' in updates:
                 # this should have one column for each anchor
                 for name, client in self.bot_clients:
-                    client.send_anchor_commands({'length_plan' : updates['future_anchor_lines'][client.anchor_num]})
+                    tasks.append(asyncio.create_task(client.send_anchor_commands({
+                        'length_plan' : updates['future_anchor_lines'][client.anchor_num]
+                    })))
             if 'future_winch_line' in updates:
                 pass
             if 'set_calibration_mode' in updates:
                 self.set_calibration_mode(updates['set_calibration_mode'])
+            asyncio.gather(*tasks)
 
     def set_calibration_mode(self, mode):
         """
@@ -109,6 +113,9 @@ class AsyncDiscovery:
             print(f"Service {name} of type {service_type} state changed: {state_change}")
             if state_change is ServiceStateChange.Added:
                 task = asyncio.create_task(self.add_service(zeroconf, service_type, name))
+            elif state_change is ServiceStateChange.Updated:
+                # it will already have been disconnectd and be in an exponential backoff retry loop trying to talk to the old address
+                pass
 
     async def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
         info = AsyncServiceInfo(service_type, name)

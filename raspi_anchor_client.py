@@ -1,5 +1,7 @@
 
 import asyncio
+import os
+import signal
 import websockets
 import time
 import json
@@ -99,84 +101,64 @@ class RaspiAnchorClient:
                         dest.insert(np.concatenate([[det['s']], pose.reshape(6)]))
                         print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
 
-    async def connect_websocket(self, ws_uri):
-        try:
-            self.websocket = await websockets.connect(ws_uri)
+    async def connect_websocket(self):
+        # main client loop
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
+
+        ws_uri = f"ws://{self.address}:{websocket_port}"
+        # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
+        async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
+            # try:
             self.connected = True
             print(f"Connected to anchor {self.anchor_num} at {ws_uri}.")
-            self.receive_task = asyncio.create_task(self._receive_loop()) #Start receiving messages
-            return True
-        except Exception as e:
-            print(f"Connection error: {e}")
-            self.websocket = None
-            self.connected = False
-            return False
+            await self.receive_loop(websocket)
+            # except websockets.exceptions.ConnectionClosed:
+            #     print(f"Connection closed")
+            #     self.connected = False
+            #     continue
 
-    async def _receive_loop(self): #Private method for the receive loop
-        while self.connected: #Loop until disconnected
+    async def receive_loop(self, websocket):
+        # loop of a single websocket connection.
+        # save a reference to this for send_anchor_commands_async
+        self.websocket = websocket
+        # Loop until disconnected
+        while self.connected:
             try:
-                message = await self.websocket.recv()
+                message = await websocket.recv()
+                print(f'received message of length {len(message)}')
                 data = json.loads(message)
                 if 'line_record' in data and not self.calibration_mode:
                     self.datastore.anchor_line_record[self.anchor_num].insertList(data['line_record'])
                 if 'detections' in data:
                     self.handle_detections(data['detections'])
-            except websockets.exceptions.ConnectionClosedOK:
-                print("Connection closed by server.")
-                self.connected = False
-                await self.close_all()
-                break
             except Exception as e:
-                print(f"Receive error: {e}")
+                # don't catch websockets.exceptions.ConnectionClosedOK because we want it to trip the infinite generator in websockets.connect
+                # so it will stop retrying.
+                print(f"Connection to anchor {self.anchor_num} closed.")
                 self.connected = False
-                await self.close_all()
+                self.websocket = None
+                raise e
                 break
 
-    def send_anchor_commands(self, update):
-        """Sends commands to the server (non-blocking)."""
-        if not self.connected:
-            raise ConnectionError("Not connected to server.")
-        asyncio.create_task(self._send_array_async(update))  # Send in a separate task
-
-    async def _send_anchor_commands_async(self, update):
-        try:
-            await self.websocket.send(json.dumps(update))
-        except Exception as e:
-            print(f"Error sending anchor commands: {e}")
-            self.connected = False #If there is an error, the connection is probably down
-            await self.close_all()
-
-    def close_websocket(self):
+    async def send_anchor_commands_async(self, update):
         if self.connected:
-            asyncio.create_task(self._close_websocket_async())
+            await self.websocket.send(json.dumps(update))
+        # just discard the update if not connected.
 
-    async def close_all(self):
-        if self.receive_task:
-            self.receive_task.cancel()  # Stop receiving messages
-            try:
-                await self.receive_task #Wait for the task to finish cancelling
-            except asyncio.CancelledError:
-                pass #Expected
-        if self.websocket:
-            await self.websocket.close()
-            self.websocket = None
-        self.connected = False
-        # if self.video_task:
-        #     self.video_task.cancel()  # Stop receiving messages
-        #     try:
-        #         await self.video_task
-        #     except asyncio.CancelledError:
-        #         pass #Expected
-        print(f"Connection to anchor {self.anchor_num} closed.")
+    def shutdown(self):
+        # this might get called twice
+        if self.connected:
+            self.connected = False
+            if self.websocket:
+                asyncio.create_task(self.websocket.close())
 
-    async def connect_all(self):
-        """
-        Connect to both the video stream and the websocket of this anchor
-        """
-        # theres a different port for the video and the websocket
-        # stream_url = f"tcp://{self.address}:{video_port}"  # Construct the URL
-        # self.video_task = asyncio.create_task(asyncio.to_thread(self.connect_video_stream, stream_url=stream_url))
-
-        # a websocket connection for the control
-        ws_uri = f"ws://{self.address}:{websocket_port}"
-        asyncio.create_task(self.connect_websocket(ws_uri))
+if __name__ == "__main__":
+    from multiprocessing import Queue
+    from data_store import DataStore
+    datastore = DataStore(horizon_s=10, n_cables=4)
+    to_ui_q = Queue()
+    to_pe_q = Queue()
+    to_ob_q = Queue()
+    ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, to_pe_q)
+    asyncio.run(ac.connect_websocket())
