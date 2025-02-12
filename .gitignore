@@ -1,5 +1,5 @@
-host/env
-raspi-anchor/spenv
-__pychache__
+venv
+*/venv
+__pycache__
 */__pycache__
-host/anchor_mapping.txt
+anchor_mapping.txt

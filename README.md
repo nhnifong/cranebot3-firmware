@@ -3,20 +3,15 @@
 Control code for a crane mounted household robotic crane consisting of a gripper than hangs from multiple lines
 attached to spools in AI-camera equipped anchor points on the walls of a room.
 
-## Top level directories
-
- - host - the main control panel meant to be run on a desktop
- - gripper - a server meant to be run on the raspberry pi zero in the gripper
- - anchor - a server meant to be run on the raspberry pi zero in the anchor
- - common - libraries and modules used throughout the project such as aruco detection
-
 ## Desktop setup
 
     sudo apt install python3-pip python3-virtualenv
     python3 -m virtualenv venv
     source venv/bin/activate
     pip3 install -r requirements_desktop.txt
-    
+
+Start control panel with UI
+
     python3 host/main.py
 
 
@@ -42,6 +37,7 @@ Since we require the picamera2 module and it can't be installed with pip, you ha
     source venv/bin/activate
     pip3 install -r requirements_raspi.txt
 
+Start server
 
     python3 anchor/anchor_server.py
 
