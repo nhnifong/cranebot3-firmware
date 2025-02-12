@@ -14,7 +14,7 @@ import time
 from getmac import get_mac_address
 import multiprocessing
 from spools import SpoolController
-from detect_aruco import locate_markers
+from cv_common import locate_markers
 from picamera2 import Picamera2
 
 def local_aruco_detection(outq, control_queue):
