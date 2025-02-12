@@ -72,7 +72,7 @@ class RaspiAnchorClient:
                     # recalculate the pose of the connected anchor from recent origin detections
                     anchor_cam_pose = invert_pose(average_pose(self.origin_poses))
                     self.anchor_pose = compose_poses([anchor_cam_pose, invert_pose(model_constants.gripper_camera)])
-                    print(f'anchor {self.anchor_num} pose {self.anchor_pose}')
+                    print(f'anchor {self.anchor_num} pose {pose_from_det(detection)}')
                     # show real time updates of this process on the UI
                     self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
                     self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
