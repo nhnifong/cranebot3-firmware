@@ -2,14 +2,15 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 from time import time
+from picamera2 import Picamera2
 
     
 def calibate_camera():
     #Input the number of board images to use for calibration (recommended: ~20)
     n_boards = 20
     #Input the number of squares on the board (width and height)
-    board_w = 10
-    board_h = 7
+    board_w = 9
+    board_h = 6
     # side length of one square in meters
     board_dim = 0.02246
     #Initializing variables
@@ -39,19 +40,34 @@ def calibate_camera():
     while images_obtained < n_boards and time() < (start_time + timeout):
         #Capture image
         image = im = picam2.capture_array()
+        # image = cv2.imread('images/chess.png')
 
         #Convert to grayscale
-        grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        # grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+
+        # Color-segmentation to get binary mask
+        lwr = np.array([0, 0, 143])
+        upr = np.array([179, 61, 252])
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        msk = cv2.inRange(hsv, lwr, upr)
+
+        # Extract chess-board
+        krn = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 30))
+        dlt = cv2.dilate(msk, krn, iterations=5)
+        res = 255 - cv2.bitwise_and(dlt, msk)
 
         #Find chessboard corners
-        found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h),cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
+        found, corners = cv2.findChessboardCorners(res, (board_w,board_h), cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
+
+        if not found:
+            break
 
         if found == True:
             #Add the "true" checkerboard corners
             opts.append(objp)
 
             #Improve the accuracy of the checkerboard corners found in the image and save them to the ipts variable.
-            cv2.cornerSubPix(grey_image, corners, (20, 20), (-1, -1), criteria)
+            cv2.cornerSubPix(res, corners, (20, 20), (-1, -1), criteria)
             ipts.append(corners)
             images_obtained += 1 
             print("images obtained {}/{}".format(images_obtained, n_boards))
@@ -86,3 +102,6 @@ def calibate_camera():
 
     print("Total reprojection error: ", tot_error/len(opts))
     return True
+
+if __name__ == "__main__":
+    calibate_camera()
