@@ -3,15 +3,19 @@ import cv2.aruco as aruco
 import numpy as np
 import time
 
-# Intrinsic Matrix: 
-mtx = np.array(
-[[1.55802968e+03, 0.00000000e+00, 8.58167917e+02],
- [0.00000000e+00, 1.56026885e+03, 6.28095370e+02],
- [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]])
-
-# Distortion Coefficients: 
-distortion = np.array(
-[[ 3.40916628e-01, -2.38650897e+00, -8.85125582e-04, 3.34240054e-03, 4.69525036e+00]])
+try:
+    calib = np.load('calibration_data.npz')
+    mtx = calib['intrinsic_matrix']
+    distortion = calib['distCoeff']
+except:
+    # Intrinsic Matrix:
+    mtx = np.array(
+    [[1.37167317e+03 0.00000000e+00 5.50300368e+02]
+     [0.00000000e+00 1.37632021e+03 3.16524984e+02]
+     [0.00000000e+00 0.00000000e+00 1.00000000e+00]])
+    # Distortion Coefficients: 
+    distortion = np.array(
+    [[ 0.01959627  0.56390969 -0.00256158 -0.00496641 -0.93400812]])
 
 # the ids are the index in the list
 marker_names = [
