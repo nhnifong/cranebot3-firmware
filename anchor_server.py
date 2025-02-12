@@ -19,19 +19,22 @@ from getmac import get_mac_address
 import multiprocessing
 from spools import SpoolController
 from cv_common import locate_markers
-from picamera2 import Picamera2
 
 def local_aruco_detection(outq, control_queue):
     """
     Open the camera and detect aruco markers. put any detections on the provided queue
     TODO this seems to chew up pretty much all the resources we have.
-    consider cropping the iamge to the area we beleive there to be a marker.
+    consider cropping the image to the area we beleive there to be a marker.
     """
+    from picamera2 import Picamera2
     print("PiCamera detection process started")
     picam2 = Picamera2()
+    # pprint(picam2.sensor_modes) # investigate modes with cropped FOV
     # full res is 4608x2592
     # this is half res. seems it can still detect a 10cm aruco from about 2 meters at a rate of 30fps
     capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
+    # allow Picamera2 to choose an efficient size close to what we requested
+    picam2.align_configuration(capture_config)
     picam2.configure(capture_config)
     picam2.start()
     while True:
@@ -43,11 +46,9 @@ def local_aruco_detection(outq, control_queue):
         im = picam2.capture_array()
         detections = locate_markers(im)
         if len(detections) > 0:
-            #print(f'detected {list([d["n"] for d in detections])}')
             for det in detections:
                 det['s'] = sec # add the time of capture to the detection
                 outq.put(det)
-        #await asyncio.sleep(0.5)
     print("PiCamera detection process ended")
 
 def dummyProcess(outq, control_queue):
@@ -127,7 +128,7 @@ class RaspiAnchorServer:
         loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
 
         self.run_client = True
-        mdns_task = asyncio.create_task(self.register_mdns_service("123.cranebot-anchor-service", "_http._tcp.local.", port))
+        asyncio.create_task(self.register_mdns_service("123.cranebot-anchor-service", "_http._tcp.local.", port))
 
         # process for detecting fudicial markers
         print("starting video task")
@@ -155,8 +156,8 @@ class RaspiAnchorServer:
         control_queue.put("STOP")
         aruco_process.join()
 
-        self.run_client = False
-        await mdns_task
+        await self.zc.async_unregister_all_services()
+        print("Service unregistered")
 
 
     def shutdown(self):
@@ -182,7 +183,7 @@ class RaspiAnchorServer:
     async def register_mdns_service(self, name, service_type, port, properties={}):
         """Registers an mDNS service on the network."""
 
-        zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.All)
+        self.zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.All)
         unique = ''.join(get_mac_address().split(':'))
         info = zeroconf.ServiceInfo(
             service_type,
@@ -193,12 +194,8 @@ class RaspiAnchorServer:
             server=f'raspi-anchor-{unique}',
         )
 
-        await zc.async_register_service(info)
+        await self.zc.async_register_service(info)
         print(f"Registered service: {name} ({service_type}) on port {port}")
-        while self.run_client:
-            await asyncio.sleep(1)
-        await zc.async_unregister_service(info)
-        print("Service unregistered")
 
 if __name__ == "__main__":
     ras = RaspiAnchorServer()
