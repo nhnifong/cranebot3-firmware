@@ -32,7 +32,7 @@ add the following lines lines to to /boot/firmware/config.txt and reboot)
 
 Since we require the picamera2 module and it can't be installed with pip, you have to create a virtualenv that can use site packages 
 
-    sudo apt install python3-picamera2 --no-install-recommends
+    sudo apt install python3-picamera2 imx500-all --no-install-recommends
     python3 -m venv --system-site-packages venv
     source venv/bin/activate
     pip3 install -r requirements_raspi.txt
