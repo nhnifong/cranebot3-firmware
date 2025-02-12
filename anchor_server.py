@@ -1,4 +1,6 @@
 import asyncio
+import os
+import signal
 import websockets
 from websockets.exceptions import (
     ConnectionClosedOK,
@@ -7,9 +9,11 @@ from websockets.exceptions import (
 import json
 import threading
 import zeroconf
+from zeroconf.asyncio import (
+    AsyncZeroconf,
+)
 import uuid
 import socket
-import argparse
 import time
 from getmac import get_mac_address
 import multiprocessing
@@ -19,9 +23,11 @@ from picamera2 import Picamera2
 
 def local_aruco_detection(outq, control_queue):
     """
-    Open the camera and detect aruco markers
-    put any detections on the provided queue
+    Open the camera and detect aruco markers. put any detections on the provided queue
+    TODO this seems to chew up pretty much all the resources we have.
+    consider cropping the iamge to the area we beleive there to be a marker.
     """
+    print("PiCamera detection process started")
     picam2 = Picamera2()
     # full res is 4608x2592
     # this is half res. seems it can still detect a 10cm aruco from about 2 meters at a rate of 30fps
@@ -42,11 +48,22 @@ def local_aruco_detection(outq, control_queue):
                 det['s'] = sec # add the time of capture to the detection
                 outq.put(det)
         #await asyncio.sleep(0.5)
+    print("PiCamera detection process ended")
+
+def dummyProcess(outq, control_queue):
+    print("dummy process started")
+    while True:
+        if not control_queue.empty():
+            if control_queue.get_nowait() == "STOP":
+                break # exit loop, ending process
+    print("dummy process ended")
+
 
 class RaspiAnchorServer:
     def __init__(self):
         self.spooler = SpoolController()
         self.ws = None # active websocket connection if there is one
+        self.run_client = True
 
     async def stream_measurements(self, ws):
         """
@@ -83,11 +100,15 @@ class RaspiAnchorServer:
                 response = {"status": "OK"}
                 await websocket.send(json.dumps(response)) #Encode JSON
 
-            except (ConnectionClosedOK, ConnectionClosedError):
+            except ConnectionClosedOK:
+                print("Client disconnected")
+                break
+            except ConnectionClosedError as e:
+                print(f"Client disconnected with {e}")
                 break
 
     async def listen_detector(self, detection_queue):
-        while self.run_detection_listen_loop:
+        while self.run_client:
             # pull up to 20 things off the queue. This is to keep ws messages smaller
             dets = []
             for i in range(20):
@@ -101,7 +122,13 @@ class RaspiAnchorServer:
                 await asyncio.sleep(0.1)
 
 
-    async def main(self, port):
+    async def main(self, port=8765):
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
+
+        self.run_client = True
+        mdns_task = asyncio.create_task(self.register_mdns_service("123.cranebot-anchor-service", "_http._tcp.local.", port))
+
         # process for detecting fudicial markers
         print("starting video task")
         control_queue = multiprocessing.Queue()
@@ -109,74 +136,70 @@ class RaspiAnchorServer:
         aruco_process = multiprocessing.Process(target=local_aruco_detection, args=(detection_queue, control_queue))
         aruco_process.daemon = True
         aruco_process.start()
-        #ttask = asyncio.create_task(local_aruco_detection(detection_queue, control_queue))
 
         # thread for listening to aruco detector process
-        self.run_detection_listen_loop = True
         listen_detector_task = asyncio.create_task(self.listen_detector(detection_queue))
 
         # thread for controlling stepper motor
-        spool_task = asyncio.to_thread(self.spooler.trackingLoop)
+        spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
 
-        try:
-            # todo catch that exception that happens when the client on the other end crashes and doesnt send the close frame and ignore it.
-            async with websockets.serve(self.handler, "0.0.0.0", port):
-                # cause the server to serve forever, because these tasks don't finish
-                await asyncio.gather(listen_detector_task, spool_task)
-
-        except KeyboardInterrupt:
-            self.spooler.fastStop()
-            control_queue.put("STOP")
-            aruco_process.join()
-            self.run_detection_listen_loop = False
+        # todo catch that exception that happens when the client on the other end crashes and doesnt send the close frame and ignore it.
+        async with websockets.serve(self.handler, "0.0.0.0", port):
+            print("Websocket server started")
+            # cause the server to serve only as long as these other tasks are running
             await asyncio.gather(listen_detector_task, spool_task)
+            # if those tasks finish, exiting this context will cause the server's close() method to be called.
+            print("Closing websocket server")
 
-def get_wifi_ip():
-    """Gets the Raspberry Pi's IP address on the Wi-Fi interface."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        print(f"Error getting IP address: {e}")
-        return None
+        # once that context has exited, stop and join the aruco process
+        control_queue.put("STOP")
+        aruco_process.join()
 
-def register_mdns_service(name, service_type, port, properties={}):
-    """Registers an mDNS service on the network."""
+        self.run_client = False
+        await mdns_task
 
-    zc = zeroconf.Zeroconf()
-    unique = ''.join(get_mac_address().split(':'))
-    info = zeroconf.ServiceInfo(
-        service_type,
-        name + "." + service_type,
-        port=port,
-        properties=properties,
-        addresses=[get_wifi_ip()],
-        server=f'raspi-anchor-{unique}',
-    )
 
-    zc.register_service(info)
-    print(f"Registered service: {name} ({service_type}) on port {port}")
-    while True:
-        time.sleep(1)
-    zc.unregister_service(info)
-    print("Service unregistered")
+    def shutdown(self):
+        # this might get called twice
+        if self.run_client:
+            print('\nStopping detection listener task')
+            self.run_client = False
+            print('Stopping Motor')
+            self.spooler.fastStop()
+
+    def get_wifi_ip(self):
+        """Gets the Raspberry Pi's IP address on the Wi-Fi interface."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            print(f"Error getting IP address: {e}")
+            return None
+
+    async def register_mdns_service(self, name, service_type, port, properties={}):
+        """Registers an mDNS service on the network."""
+
+        zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.All)
+        unique = ''.join(get_mac_address().split(':'))
+        info = zeroconf.ServiceInfo(
+            service_type,
+            name + "." + service_type,
+            port=port,
+            properties=properties,
+            addresses=[self.get_wifi_ip()],
+            server=f'raspi-anchor-{unique}',
+        )
+
+        await zc.async_register_service(info)
+        print(f"Registered service: {name} ({service_type}) on port {port}")
+        while self.run_client:
+            await asyncio.sleep(1)
+        await zc.async_unregister_service(info)
+        print("Service unregistered")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="HTTP test server for streaming images and acceleration data.")
-    
-    parser.add_argument("-p", "--port", type=int, default=8765, help="Port number to listen on.")
-    parser.add_argument("-m", "--mdns", type=bool, default=True, help="Advertise the service with MDNS")
-
-    args = parser.parse_args()
-    PORT = args.port
-
-    if args.mdns:
-        # Start mdns advertisement in a separate thread
-        mdns_thread = threading.Thread(target=register_mdns_service,
-            args=("123.cranebot-anchor-service", "_http._tcp.local.", PORT), daemon=True)
-        mdns_thread.start()
     ras = RaspiAnchorServer()
-    asyncio.run(ras.main(PORT))
+    asyncio.run(ras.main())

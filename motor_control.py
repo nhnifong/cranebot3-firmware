@@ -4,16 +4,25 @@
 # enable_uart=1
 # dtoverlay=disable-bt
 
-import serial # note this is pyserial not the module named serial in pip
+# import serial # note this is pyserial not the module named serial in pip
 from time import sleep
 
 PING = b'\x3a'
 STOP = b'\xf7'
 READ_ANGLE = b'\x36'
 
+class MockSerial:
+    def __init__(self):
+        pass
+    def read(self, l):
+        return b'x01'*l
+    def write(self, l):
+        pass
+
 class MKSSERVO42C:
     def __init__(self):
-        self.port = serial.Serial ("/dev/ttyAMA0", 38400)
+        # self.port = serial.Serial ("/dev/ttyAMA0", 38400)
+        self.port = MockSerial()
 
     def ping(self):
         """
@@ -45,7 +54,7 @@ class MKSSERVO42C:
             first_bit = 0 # (line shortening, top of spool moves away from the wall)
 
         # the next 7 bits are speed
-        combined = (min(speed, 127) + first_bit).to_bytes()
+        combined = (min(speed, 127) + first_bit).to_bytes(1, byteorder='big')
 
         message = b'\xe0\xf6' + combined
         message += self._calculateChecksum(message)
@@ -78,7 +87,7 @@ class MKSSERVO42C:
         """
         the last (least signifigant) byte in the sum of all the bytes in the message
         """
-        return (sum(message) & 255).to_bytes()
+        return (sum(message) & 255).to_bytes(1, byteorder='big')
 
 if __name__ == "__main__":
     motor = MKSSERVO42C()
