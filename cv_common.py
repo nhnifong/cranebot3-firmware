@@ -1,3 +1,4 @@
+import os
 import cv2
 import cv2.aruco as aruco
 import numpy as np
@@ -45,17 +46,24 @@ def locate_markers(im):
                                   [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
 
         for i,c in zip(ids, corners):
-            _, r, t = cv2.solvePnP(marker_points, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             try:
                 name = marker_names[i[0]]
-                # this is meant to be json serializable
-                results.append({
-                    'n': name,
-                    'r': r.tolist(),
-                    't': t.tolist()})
-            except IndexError:
+            except KeyError:
                 # saw something that's not part of my robot
                 print(f'Unknown marker spotted with id {i}')
+                continue
+
+            # expect origin board to be twice as big
+            mp = marker_points
+            if name == 'origin':
+                mp = marker_points*2
+            
+            _, r, t = cv2.solvePnP(mp, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
+            # this is meant to be json serializable
+            results.append({
+                'n': name,
+                'r': r.tolist(),
+                't': t.tolist()})
     return results
 
 def average_pose(poses):
