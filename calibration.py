@@ -1,7 +1,7 @@
 import cv2
 import cv2.aruco as aruco
 import numpy as np
-from time import time
+from time import time, sleep
 from picamera2 import Picamera2
 
     
@@ -29,9 +29,10 @@ def calibate_camera():
 
     # for use on raspi. if on some other platform, change to some other method
     picam2 = Picamera2()
-    capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
+    capture_config = picam2.create_preview_configuration(main={"size": (2304//2, 1296//2), "format": "RGB888"})
     picam2.configure(capture_config)
     picam2.start()
+    print("started pi camera")
 
     #Loop through the images.  Find checkerboard corners and save the data to ipts.
     images_obtained = 0
@@ -40,38 +41,27 @@ def calibate_camera():
     while images_obtained < n_boards and time() < (start_time + timeout):
         #Capture image
         image = im = picam2.capture_array()
+        print("analyzing image")
         # image = cv2.imread('images/chess.png')
 
         #Convert to grayscale
-        # grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-
-        # Color-segmentation to get binary mask
-        lwr = np.array([0, 0, 143])
-        upr = np.array([179, 61, 252])
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        msk = cv2.inRange(hsv, lwr, upr)
-
-        # Extract chess-board
-        krn = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 30))
-        dlt = cv2.dilate(msk, krn, iterations=5)
-        res = 255 - cv2.bitwise_and(dlt, msk)
+        grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
         #Find chessboard corners
-        found, corners = cv2.findChessboardCorners(res, (board_w,board_h), cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
-
-        if not found:
-            break
+        found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
 
         if found == True:
             #Add the "true" checkerboard corners
             opts.append(objp)
 
             #Improve the accuracy of the checkerboard corners found in the image and save them to the ipts variable.
-            cv2.cornerSubPix(res, corners, (20, 20), (-1, -1), criteria)
+            cv2.cornerSubPix(grey_image, corners, (20, 20), (-1, -1), criteria)
             ipts.append(corners)
             images_obtained += 1 
             print("images obtained {}/{}".format(images_obtained, n_boards))
-    
+
+            sleep(1)
+
     if images_obtained < n_boards:
         print("Timed out before obtaining enough images of the calibration board")
         return False
