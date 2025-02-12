@@ -106,7 +106,7 @@ def average_pose(poses):
     # Convert the averaged rotation matrix back to a rotation vector
     average_rotation_vector, _ = cv2.Rodrigues(average_rotation_matrix)
 
-    return average_rotation_vector, average_translation_vector.flatten()
+    return average_rotation_vector.reshape((3,)), average_translation_vector.flatten()
 
 def invert_pose(pose):
     """
@@ -119,10 +119,9 @@ def invert_pose(pose):
     R_marker_to_cam = R_cam_to_marker.T  # Transpose for inverse rotation
     tvec_marker_to_cam = -np.dot(R_marker_to_cam, tvec)
     rvec_marker_to_cam, _ = cv2.Rodrigues(R_marker_to_cam)  # Back to rotation vector
-    return rvec, tvec
 
     # positive Z points out of the face of the marker
-    return rvec_marker_to_cam, tvec_marker_to_cam
+    return rvec_marker_to_cam.reshape((3,)), tvec_marker_to_cam
 
 def compose_poses(poses):
     """Composes a chain of relative poses into a single global pose.
@@ -148,13 +147,13 @@ def compose_poses(poses):
 
     for rvec_relative, tvec_relative in poses[1:]:
         R_relative, _ = cv2.Rodrigues(rvec_relative)
-        # Accumulate rotation
-        R_global = np.dot(R_global, R_relative)
         # Accumulate translation
         tvec_global = np.dot(R_global, tvec_relative) + tvec_global
+        # Accumulate rotation
+        R_global = np.dot(R_global, R_relative)
 
     rvec_global, _ = cv2.Rodrigues(R_global)  # Convert back to rotation vector
-    return rvec_global, tvec_global
+    return rvec_global.reshape((3,)), tvec_global
 
 def generateMarkerImages():
     border_px = 40
