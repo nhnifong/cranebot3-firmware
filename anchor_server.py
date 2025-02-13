@@ -24,7 +24,7 @@ def local_aruco_detection(outq, control_queue):
     """
     Open the camera and detect aruco markers. put any detections on the provided queue
     TODO this seems to chew up pretty much all the resources we have.
-    consider cropping the image to the area we beleive there to be a marker.
+    consider cropping the image to the area we beleive there to be a marker in.
     """
     from picamera2 import Picamera2
     print("PiCamera detection process started")

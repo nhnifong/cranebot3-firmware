@@ -16,15 +16,48 @@ from ursina import (
     Text,
     Mesh,
     invoke,
+    application,
+    window,
 )
 from ursina.shaders import (
     lit_with_shadows_shader,
     unlit_shader,
 )
 
+# ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
+def swap_yz(vec):
+    return (vec[0], vec[2], vec[1])
+
+class SplineMovingEntity(Entity):
+    """
+    An entity that moves it's position along a spline function
+    """
+    def __init__(self, model, color, scale, position, rotation, shader, spline_func, **kwargs):
+        super().__init__(
+            model=model,
+            color=color,
+            scale=scale,
+            position=position,
+            rotation=rotation,
+            shader=shader,
+            **kwargs
+        )
+        self.spline_func = spline_func
+        self.time_domain = (333,444)
+
+    def setParams(self, func, domain):
+        self.spline_func = func
+        self.time_domain = domain
+
+    def update(self):
+        if self.spline_func is not None:
+            t = (time.time() - self.time_domain[0]) / (self.time_domain[1] - self.time_domain[0])
+            self.position = swap_yz(self.spline_func(t))
+
 class ControlPanelUI:
-    def __init__(self, to_ob_q):
+    def __init__(self, to_pe_q, to_ob_q):
         self.app = Ursina()
+        self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
 
         # add the charuco board that represents the room origin
@@ -47,16 +80,30 @@ class ControlPanelUI:
         self.anchors.append(add_anchor(( -1,2,-2), rot=(0,180,0)))
         self.anchors.append(add_anchor(( -2,2,-2), rot=(0,180,0)))
 
-        gantry = Entity(model='gantry', color=(0.4, 0.4, 0.0, 1.0), scale=0.001, position=(0,1,1), rotation=(0,0,0), shader=lit_with_shadows_shader)
+        self.gantry = SplineMovingEntity(
+            model='gantry',
+            color=(0.4, 0.4, 0.0, 1.0),
+            scale=0.001,
+            position=(0,1,1),
+            rotation=(0,0,0),
+            shader=lit_with_shadows_shader,
+            spline_func=None)
 
-        self.gripper = Entity(model='gripper_closed', color=(0.3, 0.3, 0.9, 1.0), scale=0.001, position=(0,0.3,1), rotation=(-90,0,0), shader=lit_with_shadows_shader)
+        self.gripper = SplineMovingEntity(
+            model='gripper_closed',
+            color=(0.3, 0.3, 0.9, 1.0),
+            scale=0.001,
+            position=(0,0.3,1),
+            rotation=(-90,0,0),
+            shader=lit_with_shadows_shader,
+            spline_func=None)
 
         def draw_line(point_a, point_b):
             line = Entity(model=Mesh(vertices=[point_a, point_b], mode='line', thickness=2), color=color.light_gray)
         for a in self.anchors:
-            draw_line(a.position, gantry.position)
+            draw_line(a.position, self.gantry.position)
 
-        draw_line(gantry.position, self.gripper.position)
+        draw_line(self.gantry.position, self.gripper.position)
 
         light = DirectionalLight(shadows=True)
         light.look_at(Vec3(1,-1,1))
@@ -71,6 +118,18 @@ class ControlPanelUI:
         self.calibration_mode = 'pose'
 
         EditorCamera()
+
+    # renders a function that returns 3D points in a domain from 0 to 1
+    # the y and z coordinates are swapped
+    def render_curve(self, curve_function, name):
+        model = Mesh(
+                vertices=[Vec3(swap_yz(curve_function(time))) for time in np.linspace(0,1,32)],
+                mode='line',
+                thickness=2)
+        if self.curves.has_key(name):
+            self.curves[name].model = model
+        else:
+            self.curves[name] = Entity(model=model, color=color.lime)
 
     def on_calibration_button_click(self):
         if self.calibration_mode == "pose":
@@ -95,30 +154,63 @@ class ControlPanelUI:
     def receive_updates(self, min_to_ui_q):
         while True:
             updates = min_to_ui_q.get()
+            if 'STOP' in updates:
+                application.quit()
+
             if 'knots' in updates:
                 self.knots = updates['knots']
+
             if 'spline_degree' in updates:
                 self.spline_degree = updates['spline_degree']
+
             if 'minimization_step_seconds' in updates:
                 pass  #updates['minimization_step_seconds']
+
+            if 'time_domain':
+                # the time domain in unix seconds over which the gripper and gantry splines are defined.
+                self.time_domain = updates['time_domain']
+
             if 'gripper_path' in updates:
-                self.gripper_pos_spline = BSpline(self.knots, updates['gripper_path'], self.spline_degree, True)
+                gripper_pos_spline = BSpline(self.knots, updates['gripper_path'], self.spline_degree, True)
+                self.render_curve(gripper_pos_spline, 'gripper_spline')
+                self.gripper.setParams(gripper_pos_spline, time_domain)
+
             if 'gantry_path' in updates:
-                self.gantry_pos_spline = BSpline(self.knots, updates['gantry_path'], self.spline_degree, True)
+                gantry_pos_spline = BSpline(self.knots, updates['gantry_path'], self.spline_degree, True)
+                self.render_curve(gantry_pos_spline, 'gantry_spline')
+                self.gantry.setParams(gantry_pos_spline, time_domain)
+
             if 'anchor_pose' in updates:
                 apose = updates['anchor_pose']
                 anchor_num = apose[0]
-                zup = apose[1][1] # position with +z pointing up
-                self.anchors[anchor_num].position = (zup[0], zup[2], zup[1])
-
+                self.anchors[anchor_num].position = swap_yz(apose[1][1])
 
     def start(self):
         self.app.run()
 
-def start_ui(min_to_ui_q, to_ob_q):
-    cpui = ControlPanelUI(to_ob_q)
+# def update():
+#     print('ursina called update')
 
-    estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(min_to_ui_q, ), daemon=True)
+def start_ui(to_ui_q, to_pe_q, to_ob_q):
+    """
+    Entry point to be used when starting this from main.py with multiprocessing
+    """
+    cpui = ControlPanelUI(to_pe_q, to_ob_q)
+
+    # use simple threading here. ursina has it's own loop that conflicts with asyncio
+    estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
     estimator_update_thread.start()
 
+    def stop_other_processes():
+        to_pe_q.put({'STOP':None})
+        to_ob_q.put({'STOP':None})
+    window.on_close = stop_other_processes
+
     cpui.start();
+
+if __name__ == "__main__":
+    from multiprocessing import Queue
+    to_ui_q = Queue()
+    to_pe_q = Queue()
+    to_ob_q = Queue()
+    start_ui(to_ui_q, to_pe_q, to_ob_q)

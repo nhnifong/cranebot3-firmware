@@ -73,7 +73,7 @@ class RaspiAnchorClient:
 
                     # recalculate the pose of the connected anchor from recent origin detections
                     anchor_cam_pose = invert_pose(average_pose(self.origin_poses))
-                    self.anchor_pose = compose_poses([anchor_cam_pose, invert_pose(model_constants.gripper_camera)])
+                    self.anchor_pose = compose_poses([anchor_cam_pose, model_constants.anchor_cam_inv])
                     print(f'anchor {self.anchor_num} pose {pose_from_det(detection)}')
                     # show real time updates of this process on the UI
                     self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
@@ -103,20 +103,21 @@ class RaspiAnchorClient:
 
     async def connect_websocket(self):
         # main client loop
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
-
         ws_uri = f"ws://{self.address}:{websocket_port}"
-        # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
-        async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
-            # try:
-            self.connected = True
-            print(f"Connected to anchor {self.anchor_num} at {ws_uri}.")
-            await self.receive_loop(websocket)
-            # except websockets.exceptions.ConnectionClosed:
-            #     print(f"Connection closed")
-            #     self.connected = False
-            #     continue
+        try:
+            # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
+            async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
+                # try:
+                self.connected = True
+                print(f"Connected to anchor {self.anchor_num} at {ws_uri}.")
+                await self.receive_loop(websocket)
+                # except websockets.exceptions.ConnectionClosed:
+                #     print(f"Connection closed")
+                #     self.connected = False
+                #     continue
+        except asyncio.exceptions.CancelledError:
+            print("Cancelling connection")
+            return
 
     async def receive_loop(self, websocket):
         # loop of a single websocket connection.
@@ -146,12 +147,19 @@ class RaspiAnchorClient:
             await self.websocket.send(json.dumps(update))
         # just discard the update if not connected.
 
+    async def startup(self):
+        self.ct = asyncio.create_task(self.connect_websocket())
+        await self.ct
+
     def shutdown(self):
         # this might get called twice
+        print("\nWait for client shutdown")
         if self.connected:
             self.connected = False
             if self.websocket:
                 asyncio.create_task(self.websocket.close())
+        else:
+            self.ct.cancel()
 
 if __name__ == "__main__":
     from multiprocessing import Queue
@@ -160,5 +168,9 @@ if __name__ == "__main__":
     to_ui_q = Queue()
     to_pe_q = Queue()
     to_ob_q = Queue()
-    ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, to_pe_q)
-    asyncio.run(ac.connect_websocket())
+    async def main():
+        ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, to_pe_q)
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(getattr(signal, 'SIGINT'), ac.shutdown)
+        await ac.startup()
+    asyncio.run(main())
