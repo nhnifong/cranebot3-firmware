@@ -40,11 +40,10 @@ if __name__ == "__main__":
     # add ui process if not in headless mode
     if not args.headless:
         from ursina_app import start_ui
-        ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, to_ob_q))
+        ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, to_pe_q, to_ob_q))
         ui_process.daemon = True
 
     # todo use logging module in these processes.
-
     observer_process.start()
     minimizer_process.start()
     if not args.headless:
@@ -56,10 +55,10 @@ if __name__ == "__main__":
             time.sleep(1)
     except KeyboardInterrupt:
         print("Exiting...")
-        observer_process.terminate()
-        minimizer_process.terminate()
+        to_ob_q.put({'STOP':None})
+        to_pe_q.put({'STOP':None})
         if not args.headless:
-            ui_process.terminate()
+            to_ui_q.put({'STOP':None})
 
         observer_process.join()
         minimizer_process.join()

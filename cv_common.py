@@ -3,6 +3,7 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 import time
+from functools import lru_cache
 
 try:
     calib = np.load('calibration_data.npz')
@@ -154,18 +155,6 @@ def compose_poses(poses):
 
     rvec_global, _ = cv2.Rodrigues(R_global)  # Convert back to rotation vector
     return rvec_global.reshape((3,)), tvec_global
-
-def contour_combine(contours):
-    """
-    Combine the labelled contours of AI segmented images from multiple viewpoints into 3D shapes
-    for each camera we have it's location, fov, and aspect ratio, which we can use to make a frustum the frame of reference of the room
-    for each camera we have a list of class labels, and for each label, a list of contours representing the outline of the 
-    region of the image that got classified with that lable.
-    Create a polygon for each contour that projects it from the narrow to the wide end of the frustum. (a loft in onshape terminology)
-    union all the polygons of each class from all cameras with shapely.ops.unary_union
-    further filter these objects to throw out those that contain too little area.
-    """
-    pass
 
 def generateMarkerImages():
     border_px = 40

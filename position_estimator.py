@@ -5,7 +5,7 @@ from scipy.special import softmax
 import scipy.integrate as integrate
 from time import time
 from data_store import DataStore
-from calibration import compose_poses
+from cv_common import compose_poses
 from functools import partial
 import threading
 
@@ -22,7 +22,7 @@ import threading
 # 1. directional calculation, where one variable can be computed from the other.
 # 2. equality, where the two variables are supposed to represent the same thing, and the error between them should be part of the cost function.
 class CDPR_position_estimator:
-    def __init__(self, datastore, min_to_ui_q, to_pe_q, to_ob_q, gravity=9.81):
+    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q, gravity=9.81):
         """
         Initializes the CDPR (Cable Driven Parallel Robot)
         All units are SI. these vales are assumed to be obtained from the auto calibration step
@@ -33,8 +33,9 @@ class CDPR_position_estimator:
             datastore: instance of DataStore where measurements are stored/collected
             anchor_points: A numpy array of shape (n_cables, 3) representing the 3D coordinates of the cable anchor points.
         """
+        self.run = True # run main loop
         self.datastore = datastore
-        self.min_to_ui_q = min_to_ui_q
+        self.to_ui_q = to_ui_q
         self.to_pe_q = to_pe_q # todo, start thread to read this
         self.to_ob_q = to_ob_q
         self.snapshot = {}
@@ -67,7 +68,7 @@ class CDPR_position_estimator:
         ctrlp_rotation = np.zeros(self.n_ctrl_pts)
 
         self.knots = self.clamped_knot_vector(self.n_ctrl_pts)
-        self.min_to_ui_q.put({
+        self.to_ui_q.put({
             'knots': self.knots,
             'spline_degree': self.spline_degree,
         })
@@ -97,7 +98,7 @@ class CDPR_position_estimator:
 
         now = time()
         self.horizon_s = self.datastore.horizon_s
-        self.time_domain = np.array([now - self.horizon_s, now + self.horizon_s])
+        self.time_domain = (now - self.horizon_s, now + self.horizon_s)
 
         # precalcualate a regular array of times from 0 till horizon_s for evaluating motor positions
         # in the time domain of the model splines. the domain is 0-1, and we want only the right half, representing the future.
@@ -360,11 +361,12 @@ class CDPR_position_estimator:
 
         # send control points of position splines to UI for visualization
         update_for_ui = {
+            'time_domain': self.time_domain,
             'gripper_path': self.gripper_pos_spline.c,
             'gantry_path': self.gantry_pos_spline.c,
             'minimization_step_seconds': time_taken,
         }
-        self.min_to_ui_q.put(update_for_ui)
+        self.to_ui_q.put(update_for_ui)
 
     def move_spline_domain_fast(self, spline, offset):
         """
@@ -400,7 +402,7 @@ class CDPR_position_estimator:
         """
         old = self.time_domain[0] + self.horizon_s
         now = time()
-        self.time_domain = np.array([now - self.horizon_s, now + self.horizon_s])
+        self.time_domain = (now - self.horizon_s, now + self.horizon_s)
         domain_offset = (now - old) / (self.horizon_s * 2)
 
         # if the knots are near 0
@@ -465,11 +467,38 @@ class CDPR_position_estimator:
                 anchor_num = apose[0]
                 print(f'updating the position of anchor {anchor_num} to {apose[1][1]}')
                 self.anchor_points[anchor_num] = np.array(apose[1][1])
+            if 'STOP' in updates:
+                self.run = False
+                break
+
+    async def main(self):
+        asyncio.create_task(asyncio.to_thread(self.read_input_queue))
+        while self.run:
+            pe.estimate()
+
+def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
+    """
+    Entry point to be used when starting this from main.py with multiprocessing
+    """
+    pe = CDPR_position_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q)
+    asyncio.run(pe.main())
 
 
-def start_estimator(shared_datastore, min_to_ui_q, to_pe_q, to_ob_q):
-    pe = CDPR_position_estimator(shared_datastore, min_to_ui_q, to_pe_q, to_ob_q)
-    reader = threading.Thread(target=pe.read_input_queue)
-    reader.start()
-    while True:
-        pe.estimate()
+if __name__ == "__main__":
+    from multiprocessing import Queue
+    from data_store import DataStore
+    datastore = DataStore(horizon_s=10, n_cables=4)
+    to_ui_q = Queue()
+    to_pe_q = Queue()
+    to_ob_q = Queue()
+
+    # when running as a standalone process (debug only, linux only), register signal handler
+    def stop():
+        print("\nWait for clean shutdown")
+        to_pe_q.put({'STOP':None})
+    async def main():
+        pe = CDPR_position_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q)
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
+        await pe.main()
+    asyncio.run(main())
