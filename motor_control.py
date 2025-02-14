@@ -4,7 +4,7 @@
 # enable_uart=1
 # dtoverlay=disable-bt
 
-# import serial # note this is pyserial not the module named serial in pip
+import serial # note this is pyserial not the module named serial in pip
 from time import sleep
 
 PING = b'\x3a'
@@ -21,8 +21,8 @@ class MockSerial:
 
 class MKSSERVO42C:
     def __init__(self):
-        # self.port = serial.Serial ("/dev/ttyAMA0", 38400)
-        self.port = MockSerial()
+        self.port = serial.Serial ("/dev/ttyAMA0", 38400)
+        # self.port = MockSerial()
 
     def ping(self):
         """
