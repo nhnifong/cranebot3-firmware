@@ -94,9 +94,9 @@ class RaspiAnchorServer:
                 print(f"Received: {update}")
 
                 if 'length_plan' in update:
-                    spooler.setPlan(update['length_plan'])
+                    self.spooler.setPlan(update['length_plan'])
                 if 'reference_length' in update:
-                    spooler.setReferenceLength(float(update['reference_length']))
+                    self.spooler.setReferenceLength(float(update['reference_length']))
 
                 response = {"status": "OK"}
                 await websocket.send(json.dumps(response)) #Encode JSON
