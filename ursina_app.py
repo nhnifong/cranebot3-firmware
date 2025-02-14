@@ -203,6 +203,7 @@ def start_ui(to_ui_q, to_pe_q, to_ob_q):
     estimator_update_thread.start()
 
     def stop_other_processes():
+        to_ui_q.put({'STOP':None}) # stop our own listening thread too
         to_pe_q.put({'STOP':None})
         to_ob_q.put({'STOP':None})
     window.on_close = stop_other_processes
