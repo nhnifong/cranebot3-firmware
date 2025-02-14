@@ -166,7 +166,7 @@ class ControlPanelUI:
             if 'minimization_step_seconds' in updates:
                 pass  #updates['minimization_step_seconds']
 
-            if 'time_domain':
+            if 'time_domain' in updates:
                 # the time domain in unix seconds over which the gripper and gantry splines are defined.
                 self.time_domain = updates['time_domain']
 
