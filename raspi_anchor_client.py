@@ -142,7 +142,7 @@ class RaspiAnchorClient:
                 raise e
                 break
 
-    async def send_anchor_commands_async(self, update):
+    async def send_anchor_commands(self, update):
         if self.connected:
             await self.websocket.send(json.dumps(update))
         # just discard the update if not connected.

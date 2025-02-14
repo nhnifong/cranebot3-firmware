@@ -80,6 +80,8 @@ class ControlPanelUI:
         self.anchors.append(add_anchor(( -1,2,-2), rot=(0,180,0)))
         self.anchors.append(add_anchor(( -2,2,-2), rot=(0,180,0)))
 
+        self.spline_curves = {}
+
         self.gantry = SplineMovingEntity(
             model='gantry',
             color=(0.4, 0.4, 0.0, 1.0),
@@ -126,10 +128,10 @@ class ControlPanelUI:
                 vertices=[Vec3(swap_yz(curve_function(time))) for time in np.linspace(0,1,32)],
                 mode='line',
                 thickness=2)
-        if self.curves.has_key(name):
-            self.curves[name].model = model
+        if name in self.spline_curves:
+            self.spline_curves[name].model = model
         else:
-            self.curves[name] = Entity(model=model, color=color.lime)
+            self.spline_curves[name] = Entity(model=model, color=color.lime)
 
     def on_calibration_button_click(self):
         if self.calibration_mode == "pose":
@@ -173,12 +175,12 @@ class ControlPanelUI:
             if 'gripper_path' in updates:
                 gripper_pos_spline = BSpline(self.knots, updates['gripper_path'], self.spline_degree, True)
                 self.render_curve(gripper_pos_spline, 'gripper_spline')
-                self.gripper.setParams(gripper_pos_spline, time_domain)
+                self.gripper.setParams(gripper_pos_spline, self.time_domain)
 
             if 'gantry_path' in updates:
                 gantry_pos_spline = BSpline(self.knots, updates['gantry_path'], self.spline_degree, True)
                 self.render_curve(gantry_pos_spline, 'gantry_spline')
-                self.gantry.setParams(gantry_pos_spline, time_domain)
+                self.gantry.setParams(gantry_pos_spline, self.time_domain)
 
             if 'anchor_pose' in updates:
                 apose = updates['anchor_pose']
@@ -203,6 +205,7 @@ def start_ui(to_ui_q, to_pe_q, to_ob_q):
     estimator_update_thread.start()
 
     def stop_other_processes():
+        print("UI window closed. stopping other processes")
         to_ui_q.put({'STOP':None}) # stop our own listening thread too
         to_pe_q.put({'STOP':None})
         to_ob_q.put({'STOP':None})

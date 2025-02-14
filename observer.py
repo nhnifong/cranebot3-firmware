@@ -57,7 +57,7 @@ class AsyncObserver:
             for k,v in self.anchor_num_map.items():
                 f.write(f'{k}:{v}\n')
 
-    def listen_position_updates(self):
+    def listen_position_updates(self, loop):
         """
         Receive any updates on our process input queue
         """
@@ -66,18 +66,18 @@ class AsyncObserver:
             if 'STOP' in updates:
                 print('stopping listen_position_updates thread due to STOP message in queue')
                 break
-            if 'future_anchor_lines' in updates:
+            if 'future_anchor_lines' in updates and self.set_calibration_mode == 'run':
                 # this should have one column for each anchor
-                for name, client in self.bot_clients:
-                    tasks.append(asyncio.create_task(client.send_anchor_commands({
+                for client in self.bot_clients.values():
+                    # this thread doesn't actually have a running event loop.
+                    # so run this back in the main thread.
+                    asyncio.run_coroutine_threadsafe(client.send_anchor_commands({
                         'length_plan' : updates['future_anchor_lines'][client.anchor_num]
-                    })))
-            if 'future_winch_line' in updates:
+                    }), loop)
+            if 'future_winch_line' in updates and self.set_calibration_mode == 'run':
                 pass
             if 'set_calibration_mode' in updates:
                 self.set_calibration_mode(updates['set_calibration_mode'])
-            if len(tasks) > 0:
-                asyncio.gather(*tasks)
 
     def set_calibration_mode(self, mode):
         """
@@ -146,13 +146,15 @@ class AsyncObserver:
             self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
         )
 
-        # await somethign that can be cancelled by shutdown()
-        # self.ct = asyncio.create_task(self.keep_alive())
-        # await self.ct
-
         print("start position listener")
-        self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates))
-        await self.position_update_task
+        self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
+
+
+        # await something that will end when the program closes that to keep zeroconf alive and discovering services.
+        try:
+            await self.position_update_task
+        except asyncio.exceptions.CancelledError:
+            pass
         await self.async_close()
 
     async def async_close(self) -> None:
@@ -163,8 +165,8 @@ class AsyncObserver:
             await self.aiozc.async_close()
         for client in self.bot_clients.values():
             client.shutdown()
-        if self.position_update_task:
-            await self.position_update_task
+        # if self.position_update_task:
+        #     await self.position_update_task
 
 def start_observation(datastore, to_ui_q, to_pe_q, to_ob_q):
     """
