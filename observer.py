@@ -16,24 +16,12 @@ from raspi_anchor_client import RaspiAnchorClient
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 
-# global that will point to a DataStore passed to this process.
-datastore = None
-# queue for sending info to user interface
-to_ui_q = None
-# queue for sending info to position estimator
-to_pe_q = None
-# queue for receiving info meant for this process
-to_ob_q = None
-# global calibration mode
-calibration_mode = True
-
-
 cranebot_anchor_service_name = 'cranebot-anchor-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
 
 # Manager of multiple tasks running clients connected to each robot component
-class AsyncDiscovery:
-    def __init__(self, datastore, to_ui_q, to_pe_q) -> None:
+class AsyncObserver:
+    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q) -> None:
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
         self.send_position_updates = True
@@ -41,6 +29,7 @@ class AsyncDiscovery:
         self.datastore = datastore
         self.to_ui_q = to_ui_q
         self.to_pe_q = to_pe_q
+        self.to_ob_q = to_ob_q
 
         # keyed by server name
         self.bot_clients = {}

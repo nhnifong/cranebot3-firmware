@@ -7,7 +7,7 @@ from time import time
 from data_store import DataStore
 from cv_common import compose_poses
 from functools import partial
-import threading
+import asyncio
 
 # X, Y are horizontal
 # positive Z points at the ceiling.
