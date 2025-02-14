@@ -25,7 +25,7 @@ in it's current form, it requires a blender installation in order to load assets
 ## Raspberry Pi setup
 
 for either the gripper or anchor server
-add the following lines lines to to /boot/firmware/config.txt and reboot)
+add the following lines lines to to `/boot/firmware/config.txt` and reboot)
 
     enable_uart=1
     dtoverlay=disable-bt
