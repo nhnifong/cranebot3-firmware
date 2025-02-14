@@ -184,6 +184,7 @@ class ControlPanelUI:
                 apose = updates['anchor_pose']
                 anchor_num = apose[0]
                 self.anchors[anchor_num].position = swap_yz(apose[1][1])
+                self.anchors[anchor_num].position = apose[1][0]
 
     def start(self):
         self.app.run()
