@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import signal
 import sys
 import threading
 import time
@@ -16,13 +15,25 @@ from zeroconf.asyncio import (
 from raspi_anchor_client import RaspiAnchorClient
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
+
+# global that will point to a DataStore passed to this process.
+datastore = None
+# queue for sending info to user interface
+to_ui_q = None
+# queue for sending info to position estimator
+to_pe_q = None
+# queue for receiving info meant for this process
+to_ob_q = None
+# global calibration mode
+calibration_mode = True
+
+
 cranebot_anchor_service_name = 'cranebot-anchor-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
 
 # Manager of multiple tasks running clients connected to each robot component
-class AsyncObserver:
-    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q) -> None:
-        self.position_update_task = None
+class AsyncDiscovery:
+    def __init__(self, datastore, to_ui_q, to_pe_q) -> None:
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
         self.send_position_updates = True
@@ -30,7 +41,6 @@ class AsyncObserver:
         self.datastore = datastore
         self.to_ui_q = to_ui_q
         self.to_pe_q = to_pe_q
-        self.to_ob_q = to_ob_q
 
         # keyed by server name
         self.bot_clients = {}
@@ -62,10 +72,8 @@ class AsyncObserver:
         Receive any updates on our process input queue
         """
         while self.send_position_updates:
-            updates = self.to_ob_q.get()
-            if 'STOP' in updates:
-                print('stopping listen_position_updates thread due to STOP message in queue')
-                break
+            updates = to_ob_q.get()
+            tasks = []
             if 'future_anchor_lines' in updates:
                 # this should have one column for each anchor
                 for name, client in self.bot_clients:
@@ -76,8 +84,7 @@ class AsyncObserver:
                 pass
             if 'set_calibration_mode' in updates:
                 self.set_calibration_mode(updates['set_calibration_mode'])
-            if len(tasks) > 0:
-                asyncio.gather(*tasks)
+            asyncio.gather(*tasks)
 
     def set_calibration_mode(self, mode):
         """
@@ -137,34 +144,27 @@ class AsyncObserver:
         # main process loop
         self.aiozc = AsyncZeroconf(ip_version=IPVersion.All)
 
-        print("get services list")
         services = list(
             await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
         )
-        print("start service browser")
         self.aiobrowser = AsyncServiceBrowser(
             self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
         )
 
-        # await somethign that can be cancelled by shutdown()
-        # self.ct = asyncio.create_task(self.keep_alive())
-        # await self.ct
-
-        print("start position listener")
-        self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates))
-        await self.position_update_task
-        await self.async_close()
+        while True:
+            try:
+                await asyncio.sleep(1)
+            except (KeyboardInterrupt, asyncio.exceptions.CancelledError):
+                await self.async_close()
 
     async def async_close(self) -> None:
+        assert self.aiozc is not None
+        assert self.aiobrowser is not None
+        await self.aiobrowser.async_cancel()
+        await self.aiozc.async_close()
+        await asyncio.gather(*[client.close_all() for name,client in self.bot_clients.items()])
         self.send_position_updates = False
-        if self.aiobrowser is not None:
-            await self.aiobrowser.async_cancel()
-        if self.aiozc is not None:
-            await self.aiozc.async_close()
-        for client in self.bot_clients.values():
-            client.shutdown()
-        if self.position_update_task:
-            await self.position_update_task
+        await self.position_update_task
 
 def start_observation(datastore, to_ui_q, to_pe_q, to_ob_q):
     """
@@ -180,14 +180,4 @@ if __name__ == "__main__":
     to_ui_q = Queue()
     to_pe_q = Queue()
     to_ob_q = Queue()
-
-    # when running as a standalone process (debug only, linux only), register signal handler
-    def stop():
-        print("\nwait for clean observer shutdown")
-        to_ob_q.put({'STOP':None})
-    async def main():
-        runner = AsyncObserver(datastore, to_ui_q, to_pe_q, to_ob_q)
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
-        await runner.main()
-    asyncio.run(main())
+    start_observation(datastore, to_ui_q, to_pe_q, to_ob_q)

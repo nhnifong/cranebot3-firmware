@@ -91,6 +91,10 @@ class MKSSERVO42C:
 
 if __name__ == "__main__":
     motor = MKSSERVO42C()
-    motor.runConstantSpeed(10)
-    sleep(1)
+    for i in range(25):
+        motor.runConstantSpeed(i)
+        sleep(0.1)
+    for i in range(25):
+        motor.runConstantSpeed(-i)
+        sleep(0.1)
     motor.stop()
