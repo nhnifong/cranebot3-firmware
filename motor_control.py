@@ -54,7 +54,7 @@ class MKSSERVO42C:
             first_bit = 0 # (line shortening, top of spool moves away from the wall)
 
         # the next 7 bits are speed
-        combined = (min(speed, 127) + first_bit).to_bytes(1, byteorder='big')
+        combined = (min(abs(speed), 127) + first_bit).to_bytes(1, byteorder='big')
 
         message = b'\xe0\xf6' + combined
         message += self._calculateChecksum(message)
@@ -91,6 +91,7 @@ class MKSSERVO42C:
 
 if __name__ == "__main__":
     motor = MKSSERVO42C()
+    assert(motor.ping())
     for i in range(25):
         motor.runConstantSpeed(i)
         sleep(0.1)
