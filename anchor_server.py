@@ -136,6 +136,9 @@ class RaspiAnchorServer:
         print("starting video task")
         control_queue = multiprocessing.Queue()
         detection_queue = multiprocessing.Queue()
+        control_queue.cancel_join_thread()
+        detection_queue.cancel_join_thread()
+
         aruco_process = multiprocessing.Process(target=local_aruco_detection, args=(detection_queue, control_queue))
         aruco_process.daemon = True
         aruco_process.start()
