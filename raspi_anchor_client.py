@@ -10,8 +10,8 @@ import cv2
 import numpy as np
 import model_constants
 
-# maximum number of origin detections to keep
-max_origin_detections = 40
+# number of origin detections to average
+max_origin_detections = 5
 video_port = 8888
 websocket_port = 8765
 
@@ -74,9 +74,9 @@ class RaspiAnchorClient:
                     # recalculate the pose of the connected anchor from recent origin detections
                     anchor_cam_pose = invert_pose(average_pose(self.origin_poses))
                     self.anchor_pose = compose_poses([anchor_cam_pose, model_constants.anchor_cam_inv])
-                    print(f'anchor {self.anchor_num} pose {pose_from_det(detection)}')
+                    # print(f'anchor {self.anchor_num} pose {pose_from_det(detection)}')
                     # show real time updates of this process on the UI
-                    self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
+                    self.to_ui_q.put({'anchor_pose': (self.anchor_num, anchor_cam_pose)})
                     self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
         else:
             for detection in detections:
@@ -104,6 +104,7 @@ class RaspiAnchorClient:
     async def connect_websocket(self):
         # main client loop
         ws_uri = f"ws://{self.address}:{websocket_port}"
+        print(f"Connecting to anchor {self.anchor_num} at {ws_uri}...")
         try:
             # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
             async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
@@ -127,7 +128,7 @@ class RaspiAnchorClient:
         while self.connected:
             try:
                 message = await websocket.recv()
-                print(f'received message of length {len(message)}')
+                # print(f'received message of length {len(message)}')
                 data = json.loads(message)
                 if 'line_record' in data and not self.calibration_mode:
                     self.datastore.anchor_line_record[self.anchor_num].insertList(data['line_record'])
@@ -168,6 +169,10 @@ if __name__ == "__main__":
     to_ui_q = Queue()
     to_pe_q = Queue()
     to_ob_q = Queue()
+    to_ui_q.cancel_join_thread()
+    to_pe_q.cancel_join_thread()
+    to_ob_q.cancel_join_thread()
+
     async def main():
         ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, to_pe_q)
         loop = asyncio.get_running_loop()

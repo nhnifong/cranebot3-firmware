@@ -137,14 +137,18 @@ class AsyncObserver:
         # main process loop
         self.aiozc = AsyncZeroconf(ip_version=IPVersion.All)
 
-        print("get services list")
-        services = list(
-            await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
-        )
-        print("start service browser")
-        self.aiobrowser = AsyncServiceBrowser(
-            self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
-        )
+        try:
+            print("get services list")
+            services = list(
+                await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
+            )
+            print("start service browser")
+            self.aiobrowser = AsyncServiceBrowser(
+                self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
+            )
+        except asyncio.exceptions.CancelledError:
+            await self.aiozc.async_close()
+            return
 
         print("start position listener")
         self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
@@ -182,6 +186,9 @@ if __name__ == "__main__":
     to_ui_q = Queue()
     to_pe_q = Queue()
     to_ob_q = Queue()
+    to_ui_q.cancel_join_thread()
+    to_pe_q.cancel_join_thread()
+    to_ob_q.cancel_join_thread()
 
     # when running as a standalone process (debug only, linux only), register signal handler
     def stop():

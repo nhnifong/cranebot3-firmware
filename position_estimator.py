@@ -8,6 +8,8 @@ from data_store import DataStore
 from cv_common import compose_poses
 from functools import partial
 import asyncio
+import signal
+import sys
 
 # X, Y are horizontal
 # positive Z points at the ceiling.
@@ -460,16 +462,21 @@ class CDPR_position_estimator:
         return np.array([0,0.2,1])
 
     def read_input_queue(self):
-        while True:
-            update = self.to_pe_q.get()
-            if 'anchor_pose' in update:
-                apose = update['anchor_pose']
-                anchor_num = apose[0]
-                print(f'updating the position of anchor {anchor_num} to {apose[1][1]}')
-                self.anchor_points[anchor_num] = np.array(apose[1][1])
-            if 'STOP' in updates:
+        while self.run:
+            try:
+                update = self.to_pe_q.get()
+                if 'anchor_pose' in update:
+                    apose = update['anchor_pose']
+                    anchor_num = apose[0]
+                    print(f'updating the position of anchor {anchor_num} to {apose[1][1]}')
+                    self.anchor_points[anchor_num] = np.array(apose[1][1])
+                if 'STOP' in update:
+                    print("stop running")
+                    self.run = False
+                    break
+            except Exception as e:
                 self.run = False
-                break
+                raise e
 
     async def main(self):
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
@@ -492,12 +499,18 @@ if __name__ == "__main__":
     to_pe_q = Queue()
     to_ob_q = Queue()
 
+    # without this the program has a chance of blocking on exit
+    # https://docs.python.org/3/library/multiprocessing.html#multiprocessing.Queue.cancel_join_thread
+    to_ui_q.cancel_join_thread()
+    to_pe_q.cancel_join_thread()
+    to_ob_q.cancel_join_thread()
+
     # when running as a standalone process (debug only, linux only), register signal handler
     def stop():
         print("\nWait for clean shutdown")
         to_pe_q.put({'STOP':None})
     async def main():
-        pe = CDPR_position_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q)
+        pe = CDPR_position_estimator(datastore, to_ui_q, to_pe_q, to_ob_q)
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
         await pe.main()

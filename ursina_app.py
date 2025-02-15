@@ -4,6 +4,11 @@ import sys
 import threading
 import time
 from position_estimator import CDPR_position_estimator
+from scipy.spatial.transform import Rotation
+from functools import partial
+from cv_common import invert_pose, compose_poses
+from math import pi
+import atexit
 
 from ursina import (
     Ursina,
@@ -119,6 +124,24 @@ class ControlPanelUI:
         # maybe you shouldn't read those files in the clients
         self.calibration_mode = 'pose'
 
+        self.rot = [0,0,0]
+        self.anchor_cam_inv = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
+        self.xbut = Button(
+            text='x',
+            color=color.azure,
+            position=(-.7, 0.1), scale=(.1, .033),
+            on_click=partial(self.xxx, i=0))
+        self.xbut = Button(
+            text='y',
+            color=color.azure,
+            position=(-.7, 0.2), scale=(.1, .033),
+            on_click=partial(self.xxx, i=1))
+        self.xbut = Button(
+            text='z',
+            color=color.azure,
+            position=(-.7, 0.3), scale=(.1, .033),
+            on_click=partial(self.xxx, i=2))
+
         EditorCamera()
 
     # renders a function that returns 3D points in a domain from 0 to 1
@@ -132,6 +155,20 @@ class ControlPanelUI:
             self.spline_curves[name].model = model
         else:
             self.spline_curves[name] = Entity(model=model, color=color.lime)
+
+    def xxx(self, i):
+        self.rot[i] += 0.5
+        if self.rot[i] >= 2.0:
+            self.rot[i] = 0
+        self.anchor_cam_inv = invert_pose(compose_poses([
+            (np.array([0.045625, -0.034915, 0.004762], dtype=float), np.array([0,0,0], dtype=float)),
+            (np.array([0,0,0], dtype=float), np.array([self.rot[0]*pi,0,0], dtype=float)),
+            (np.array([0,0,0], dtype=float), np.array([0,self.rot[0]*pi,0], dtype=float)),
+            (np.array([0,0,0], dtype=float), np.array([0,0,self.rot[0]*pi], dtype=float)),
+        ]))
+        print(self.rot)
+        print(f'anchor cam inv = {self.anchor_cam_inv}')
+
 
     def on_calibration_button_click(self):
         if self.calibration_mode == "pose":
@@ -186,13 +223,18 @@ class ControlPanelUI:
                 apose = updates['anchor_pose']
                 anchor_num = apose[0]
                 self.anchors[anchor_num].position = swap_yz(apose[1][1])
-                self.anchors[anchor_num].position = apose[1][0]
+                ps = compose_poses([apose[1], self.anchor_cam_inv])
+                print(f'ps = {ps}')
+                self.anchors[anchor_num].quaternion = tuple(Rotation.from_rotvec(np.array(swap_yz(
+                    ps[0]
+                ))).as_quat())
 
     def start(self):
         self.app.run()
 
-# def update():
-#     print('ursina called update')
+
+def update():
+    print('ursina called update')
 
 def start_ui(to_ui_q, to_pe_q, to_ob_q):
     """
@@ -209,7 +251,9 @@ def start_ui(to_ui_q, to_pe_q, to_ob_q):
         to_ui_q.put({'STOP':None}) # stop our own listening thread too
         to_pe_q.put({'STOP':None})
         to_ob_q.put({'STOP':None})
-    window.on_close = stop_other_processes
+
+    # ursina has no way to tell us when the window is closed. but this python module can do it.
+    atexit.register(stop_other_processes)
 
     cpui.start();
 
