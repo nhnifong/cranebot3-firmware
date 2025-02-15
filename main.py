@@ -29,6 +29,13 @@ if __name__ == "__main__":
     to_pe_q = multiprocessing.Queue()
     to_ob_q = multiprocessing.Queue()
 
+    # we don't want to block joining the thread that flushes data to these queues.
+    # it has a tendency to never finish and I dont know why.
+    to_ui_q.cancel_join_thread()
+    to_pe_q.cancel_join_thread()
+    to_ob_q.cancel_join_thread()
+
+
     # Create and start the observer process
     observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q, to_pe_q, to_ob_q))
     observer_process.daemon = True
@@ -38,21 +45,25 @@ if __name__ == "__main__":
     minimizer_process.daemon = True
 
     # add ui process if not in headless mode
-    if not args.headless:
-        from ursina_app import start_ui
-        ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, to_pe_q, to_ob_q))
-        ui_process.daemon = True
+    # if not args.headless:
+    #     from ursina_app import start_ui
+    #     ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, to_pe_q, to_ob_q))
+    #     ui_process.daemon = True
 
     # todo use logging module in these processes.
     observer_process.start()
     minimizer_process.start()
-    if not args.headless:
-        ui_process.start()
+
 
     try:
-        # Keep the main process alive
-        while True:
-            time.sleep(1)
+        if not args.headless:
+            # allow Ursina to be the main process. it doesn't work as a subprocess.
+            from ursina_app import start_ui
+            start_ui(to_ui_q, to_pe_q, to_ob_q)
+        else:
+            # Keep the main process alive
+            while True:
+                time.sleep(1)
     except KeyboardInterrupt:
         print("Exiting...")
         to_ob_q.put({'STOP':None})
@@ -61,7 +72,7 @@ if __name__ == "__main__":
             to_ui_q.put({'STOP':None})
 
         observer_process.join()
-        minimizer_process.join()
+        # minimizer_process.join()
         if not args.headless:
             ui_process.join()
 

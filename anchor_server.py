@@ -81,12 +81,13 @@ class RaspiAnchorServer:
                     await ws.send(json.dumps({'line_record': meas}))
                 await asyncio.sleep(0.5)
             except (ConnectionClosedOK, ConnectionClosedError):
+                print("stopped streaming measurements")
                 break
 
     async def handler(self,websocket):
         print('Websocket connected')
         self.ws = websocket
-        asyncio.create_task(self.stream_measurements(websocket))
+        stream = asyncio.create_task(self.stream_measurements(websocket))
         while True:
             try:
                 message = await websocket.recv()
@@ -107,6 +108,7 @@ class RaspiAnchorServer:
             except ConnectionClosedError as e:
                 print(f"Client disconnected with {e}")
                 break
+        stream.cancel()
 
     async def listen_detector(self, detection_queue):
         while self.run_client:

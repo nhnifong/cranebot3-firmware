@@ -1,8 +1,12 @@
 import numpy as np
-from cv_common import invert_pose
+from cv_common import invert_pose, compose_poses
+from scipy.spatial.transform import Rotation as R
+from math import pi
 
 # data obtained manually from onshape
 # poses are specified as tuples of (rvec, tvec)
+# distances are in meters
+# rotation vectors are Rodrigues
 
 # rotation and translation vectors of the 'gripper_front' aruco marker in the gripper reference frame.
 gripper_aruco_front = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
@@ -23,7 +27,11 @@ gripper_grommet = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float
 gripper_cog = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
 
 # rotation and translation of the anchor camera in the reference frame of the anchor
-anchor_camera = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
+anchor_camera = compose_poses([
+	(np.array([0.045625, -0.034915, 0.004762], dtype=float), np.array([0,0,0], dtype=float)),
+	(np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float)),
+	(np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float)),
+])
 
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
