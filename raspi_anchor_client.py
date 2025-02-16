@@ -11,7 +11,7 @@ import numpy as np
 import model_constants
 
 # number of origin detections to average
-max_origin_detections = 5
+max_origin_detections = 1
 video_port = 8888
 websocket_port = 8765
 
@@ -69,7 +69,6 @@ class RaspiAnchorClient:
                     self.origin_poses.append(pose_from_det(detection))
                     if len(self.origin_poses) > max_origin_detections:
                         self.origin_poses.pop(0)
-                    print()
 
                     # recalculate the pose of the connected anchor from recent origin detections
                     anchor_cam_pose = invert_pose(average_pose(self.origin_poses))

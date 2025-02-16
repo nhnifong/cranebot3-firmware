@@ -33,6 +33,7 @@ def local_aruco_detection(outq, control_queue):
     # full res is 4608x2592
     # this is half res. seems it can still detect a 10cm aruco from about 2 meters at a rate of 30fps
     capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
+    capture_config["transform"] = libcamera.Transform(hflip=1, vflip=1)
     # allow Picamera2 to choose an efficient size close to what we requested
     picam2.align_configuration(capture_config)
     picam2.configure(capture_config)
@@ -120,7 +121,12 @@ class RaspiAnchorServer:
                 dets.append(detection_queue.get_nowait())
             if len(dets) > 0 and self.ws:
                 print(f"sending {len(dets)} detections")
-                await self.ws.send(json.dumps({'detections': dets}))
+                try:
+                    await self.ws.send(json.dumps({'detections': dets}))
+                except (ConnectionClosedOK, ConnectionClosedError):
+                    # no problem, client left. just throw these out
+                    await asyncio.sleep(2.0)
+                    continue
             else:
                 await asyncio.sleep(0.1)
 

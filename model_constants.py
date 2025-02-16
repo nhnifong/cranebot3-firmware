@@ -4,7 +4,7 @@ from scipy.spatial.transform import Rotation as R
 from math import pi
 
 # data obtained manually from onshape
-# poses are specified as tuples of (rvec, tvec)
+# poses are specified as tuples of (rvec, tvec) # ROTATION IS FIRST
 # distances are in meters
 # rotation vectors are Rodrigues
 

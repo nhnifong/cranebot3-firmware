@@ -157,14 +157,14 @@ class ControlPanelUI:
             self.spline_curves[name] = Entity(model=model, color=color.lime)
 
     def xxx(self, i):
-        self.rot[i] += 0.5
+        self.rot[i] += 0.5/3
         if self.rot[i] >= 2.0:
             self.rot[i] = 0
         self.anchor_cam_inv = invert_pose(compose_poses([
-            (np.array([0.045625, -0.034915, 0.004762], dtype=float), np.array([0,0,0], dtype=float)),
-            (np.array([0,0,0], dtype=float), np.array([self.rot[0]*pi,0,0], dtype=float)),
-            (np.array([0,0,0], dtype=float), np.array([0,self.rot[0]*pi,0], dtype=float)),
-            (np.array([0,0,0], dtype=float), np.array([0,0,self.rot[0]*pi], dtype=float)),
+            (np.array([0,0,0], dtype=float), np.array([0.045625, -0.034915, 0.004762], dtype=float)),
+            (np.array([self.rot[0]*pi,0,0], dtype=float), np.array([0,0,0], dtype=float)),
+            (np.array([0,self.rot[1]*pi,0], dtype=float), np.array([0,0,0], dtype=float)),
+            (np.array([0,0,self.rot[2]*pi], dtype=float), np.array([0,0,0], dtype=float)),
         ]))
         print(self.rot)
         print(f'anchor cam inv = {self.anchor_cam_inv}')
@@ -224,16 +224,15 @@ class ControlPanelUI:
                 anchor_num = apose[0]
                 self.anchors[anchor_num].position = swap_yz(apose[1][1])
                 ps = compose_poses([apose[1], self.anchor_cam_inv])
-                print(f'ps = {ps}')
-                self.anchors[anchor_num].quaternion = tuple(Rotation.from_rotvec(np.array(swap_yz(
-                    ps[0]
-                ))).as_quat())
+                ps[0][0] *= -1 # flip x axis.
+                self.anchors[anchor_num].quaternion = tuple(Rotation.from_rotvec(np.array(swap_yz(ps[0]))).as_quat())
 
     def start(self):
         self.app.run()
 
 
 def update():
+    # seems like this only happens when this file is __main__
     print('ursina called update')
 
 def start_ui(to_ui_q, to_pe_q, to_ob_q):
