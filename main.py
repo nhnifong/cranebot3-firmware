@@ -21,6 +21,7 @@ if __name__ == "__main__":
 
     # a collection of shared arrays for storing measurements
     datastore = DataStore(horizon_s=10, n_cables=4)
+    datastore.gripper_pose.insert(np.array([time.time(),1,1,1,1,1,1]))
 
     # a queue for sending updates from the minimizer to the UI
     # items are dictionaries with 1 or more updates to named values.

@@ -152,6 +152,8 @@ def compose_poses(poses):
     R_global, _ = cv2.Rodrigues(rvec_global) #Initial Rotation Matrix
 
     for rvec_relative, tvec_relative in poses[1:]:
+        rvec_relative = rvec_relative.reshape((3,))
+        tvec_relative = tvec_relative.reshape((3,))
         R_relative, _ = cv2.Rodrigues(rvec_relative)
         # Accumulate translation
         tvec_global = np.dot(R_global, tvec_relative) + tvec_global
@@ -159,6 +161,7 @@ def compose_poses(poses):
         R_global = np.dot(R_global, R_relative)
 
     rvec_global, _ = cv2.Rodrigues(R_global)  # Convert back to rotation vector
+
     return rvec_global.reshape((3,)), tvec_global
 
 def generateMarkerImages():

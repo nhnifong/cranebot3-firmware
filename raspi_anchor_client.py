@@ -31,13 +31,14 @@ class RaspiAnchorClient:
         self.connected = False  # status of connection to websocket
         self.receive_task = None  # Task for receiving messages from websocket
         self.video_task = None  # Task for streaming video
-        self.calibration_mode = True
+        self.calibration_mode = False
         try:
             # read calibration data from file
-            saved_info = np.load('anchor_pose_%i' % self.anchor_num)
+            saved_info = np.load('anchor_pose_%i.npz' % self.anchor_num)
             self.anchor_pose = tuple(saved_info['pose'])
-            self.to_ui_q.put({'anchor_pose': (self.anchor_num, pose)})
-            self.to_pe_q.put({'anchor_pose': (self.anchor_num, pose)})
+            print(f"Read pose of anchor {self.anchor_num} from file: {self.anchor_pose}")
+            self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
+            self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
         except FileNotFoundError:
             self.anchor_pose = (np.array([0,0,0]), np.array([0,0,0]))
 
@@ -99,8 +100,8 @@ class RaspiAnchorClient:
                             pose_from_det(detection), # the pose obtained just now
                             offset, # constant
                         ]))
-                        dest.insert(np.concatenate([[det['s']], pose.reshape(6)]))
-                        print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
+                        dest.insert(np.concatenate([[detection['s']], pose.reshape(6)]))
+                        print(f'Inserted pose in datastore name={name} t={detection['s']}, pose={pose}')
 
     async def connect_websocket(self):
         # main client loop
@@ -146,7 +147,8 @@ class RaspiAnchorClient:
 
     async def send_anchor_commands(self, update):
         if self.connected:
-            await self.websocket.send(json.dumps(update))
+            print(f'would send {update}')
+            # await self.websocket.send(json.dumps(update))
         # just discard the update if not connected.
 
     async def startup(self):

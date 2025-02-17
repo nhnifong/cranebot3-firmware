@@ -118,9 +118,11 @@ class ControlPanelUI:
             spline_func=None)
 
         def draw_line(point_a, point_b):
-            line = Entity(model=Mesh(vertices=[point_a, point_b], mode='line', thickness=2), color=color.light_gray)
+            return Entity(model=Mesh(vertices=[point_a, point_b], mode='line', thickness=2), color=color.light_gray)
+
+        self.lines = []
         for a in self.anchors:
-            draw_line(a.position, self.gantry.position)
+            self.lines.append(draw_line(a.position, self.gantry.position))
 
         draw_line(self.gantry.position, self.gripper.position)
 
@@ -128,33 +130,13 @@ class ControlPanelUI:
         light.look_at(Vec3(1,-1,1))
 
         self.calibration_button = Button(
-            text='Calibrate Anchor Locations',
+            text="Enter calibration mode",
             color=color.azure,
-            position=(-.7, 0), scale=(.1, .033),
+            position=(-0.7, -0.45), scale=(.35, .033),
             on_click=self.on_calibration_button_click)
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
         # maybe you shouldn't read those files in the clients
-        self.calibration_mode = 'pose'
-
-        self.rot = [0,0,0]
-        self.yflip = (np.array([0,1,0], dtype=float)*pi, np.array([0,0,0], dtype=float))
-        self.anchor_cam_inv = (np.array([1,0,0], dtype=float)*(125.0/180*pi), np.array([0,0,0], dtype=float))
-        # self.anchor_cam_inv = (np.array([0,0.887,-0.462], dtype=float)*pi, np.array([0,0,0], dtype=float))
-        self.xbut = Button(
-            text='x',
-            color=color.azure,
-            position=(-.7, 0.1), scale=(.1, .033),
-            on_click=partial(self.xxx, i=0))
-        self.xbut = Button(
-            text='y',
-            color=color.azure,
-            position=(-.7, 0.2), scale=(.1, .033),
-            on_click=partial(self.xxx, i=1))
-        self.xbut = Button(
-            text='z',
-            color=color.azure,
-            position=(-.7, 0.3), scale=(.1, .033),
-            on_click=partial(self.xxx, i=2))
+        self.calibration_mode = 'run'
 
         EditorCamera()
 
@@ -170,29 +152,16 @@ class ControlPanelUI:
         else:
             self.spline_curves[name] = Entity(model=model, color=color.lime)
 
-    def xxx(self, i):
-        self.rot[i] += 0.5/3
-        if self.rot[i] >= 2.0:
-            self.rot[i] = 0
-        self.anchor_cam_inv = invert_pose(compose_poses([
-            (np.array([0,0,0], dtype=float), np.array([0.045625, -0.034915, 0.004762], dtype=float)),
-            (np.array([self.rot[0]*pi,0,0], dtype=float), np.array([0,0,0], dtype=float)),
-            (np.array([0,self.rot[1]*pi,0], dtype=float), np.array([0,0,0], dtype=float)),
-            (np.array([0,0,self.rot[2]*pi], dtype=float), np.array([0,0,0], dtype=float)),
-        ]))
-        print(f'anchor cam inv = {self.anchor_cam_inv}')
-
-
     def on_calibration_button_click(self):
         if self.calibration_mode == "pose":
             self.calibration_mode = "run"
-            self.calibration_button.text = "enter calibration mode"
-            self.calibration_buttoncolor=color.green,
+            self.calibration_button.text = "Enter calibration mode"
+            # self.calibration_button.color=color.green,
 
         elif self.calibration_mode == "run":
             self.calibration_mode = "pose"
-            self.calibration_button.text = "Calibrate Anchor Locations"
-            self.calibration_buttoncolor=color.azure,
+            self.calibration_button.text = "Freeze Anchor Locations"
+            # self.calibration_button.color=color.azure,
 
         self.to_ob_q.put({'set_calibration_mode': self.calibration_mode})
 
@@ -216,7 +185,8 @@ class ControlPanelUI:
                 self.spline_degree = updates['spline_degree']
 
             if 'minimization_step_seconds' in updates:
-                pass  #updates['minimization_step_seconds']
+                # print(f"minimization_step_seconds = {updates['minimization_step_seconds']}")
+                pass
 
             if 'time_domain' in updates:
                 # the time domain in unix seconds over which the gripper and gantry splines are defined.
@@ -237,10 +207,7 @@ class ControlPanelUI:
                 anchor_num = apose[0]
                 self.anchors[anchor_num].position = swap_yz(apose[1][1])
                 self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
-
-                # self.indicator.position = swap_yz(apose[1][1])
-                # rq = list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat())
-                # self.indicator.quaternion = LQuaternionf(*rq)
+                self.lines[anchor_num].model = Mesh(vertices=[self.anchors[anchor_num].position, self.gantry.position], mode='line', thickness=2)
 
     def start(self):
         self.app.run()

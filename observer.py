@@ -26,6 +26,7 @@ class AsyncObserver:
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
         self.send_position_updates = True
+        self.calmode = "run"
 
         self.datastore = datastore
         self.to_ui_q = to_ui_q
@@ -77,6 +78,7 @@ class AsyncObserver:
             if 'future_winch_line' in updates and self.set_calibration_mode == 'run':
                 pass
             if 'set_calibration_mode' in updates:
+                print("set_calibration_mode") 
                 self.set_calibration_mode(updates['set_calibration_mode'])
 
     def set_calibration_mode(self, mode):
@@ -87,12 +89,13 @@ class AsyncObserver:
         "pose" - observe the origin board
         """
         if mode == "run":
-            if self.mode == "pose":
+            if self.calmode == "pose":
                 # call calibrate_pose on all anchors when exiting pose calibration mode
                 for name, client in self.bot_clients.items():
                     client.calibrate_pose()
                     client.calibration_mode = False
-            self.mode = mode
+            self.calmode = mode
+            print("run mode")
         elif mode == "cam":
             pass
         elif mode == "pose":
