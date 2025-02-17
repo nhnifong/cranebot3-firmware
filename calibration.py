@@ -3,7 +3,7 @@ import cv2.aruco as aruco
 import numpy as np
 from time import time, sleep
 from picamera2 import Picamera2
-
+from libcamera import Transform
     
 def calibate_camera():
     #Input the number of board images to use for calibration (recommended: ~20)
@@ -29,7 +29,8 @@ def calibate_camera():
 
     # for use on raspi. if on some other platform, change to some other method
     picam2 = Picamera2()
-    capture_config = picam2.create_preview_configuration(main={"size": (2304//2, 1296//2), "format": "RGB888"})
+    # capture_config = picam2.create_preview_configuration(main={"size": (2304//2, 1296//2), "format": "RGB888"})
+    capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
     picam2.configure(capture_config)
     picam2.start()
     print("started pi camera")
@@ -79,7 +80,7 @@ def calibate_camera():
     print(str(distCoeff))
 
     #Save data
-    print('Saving data file to camera_calibration.npz')
+    print('Saving data file to calibration_data.npz')
     np.savez('calibration_data', distCoeff=distCoeff, intrinsic_matrix=intrinsic_matrix)
     print('Calibration complete')
 

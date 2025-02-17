@@ -27,13 +27,14 @@ def local_aruco_detection(outq, control_queue):
     consider cropping the image to the area we beleive there to be a marker in.
     """
     from picamera2 import Picamera2
+    from libcamera import Transform
     print("PiCamera detection process started")
     picam2 = Picamera2()
     # pprint(picam2.sensor_modes) # investigate modes with cropped FOV
     # full res is 4608x2592
     # this is half res. seems it can still detect a 10cm aruco from about 2 meters at a rate of 30fps
+    # you can flip the image with transform=Transform(hflip=1, vflip=1)
     capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
-    capture_config["transform"] = libcamera.Transform(hflip=1, vflip=1)
     # allow Picamera2 to choose an efficient size close to what we requested
     picam2.align_configuration(capture_config)
     picam2.configure(capture_config)

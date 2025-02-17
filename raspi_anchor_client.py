@@ -52,6 +52,7 @@ class RaspiAnchorClient:
 
     def calibrate_pose(self):
         np.savez('anchor_pose_%i' % self.anchor_num, pose = self.anchor_pose)
+        self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
 
     def handle_detections(self, detections):
         """
@@ -71,12 +72,13 @@ class RaspiAnchorClient:
                         self.origin_poses.pop(0)
 
                     # recalculate the pose of the connected anchor from recent origin detections
-                    anchor_cam_pose = invert_pose(average_pose(self.origin_poses))
-                    self.anchor_pose = compose_poses([anchor_cam_pose, model_constants.anchor_cam_inv])
-                    # print(f'anchor {self.anchor_num} pose {pose_from_det(detection)}')
+                    # anchor_cam_pose = invert_pose(average_pose(self.origin_poses))
+                    # self.anchor_pose = compose_poses([anchor_cam_pose, model_constants.anchor_cam_inv])
+
+                    self.anchor_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(self.origin_poses)]))
+
                     # show real time updates of this process on the UI
-                    self.to_ui_q.put({'anchor_pose': (self.anchor_num, anchor_cam_pose)})
-                    self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
+                    self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
         else:
             for detection in detections:
                 # rotate and translate to where that object's origin would be
