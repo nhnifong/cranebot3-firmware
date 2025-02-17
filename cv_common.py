@@ -59,7 +59,11 @@ def locate_markers(im):
             if name == 'origin':
                 mp = marker_points*2
             
-            # x pointing up the image, y to the right, z away from the camera
+            # gives answers in a frame of reference relative to the camera.
+            # in the anchor vflip and hflip are false giving the following frame of reference
+            # X points to the left in the image.
+            # Y points up in the image
+            # Z points out of the camera, down the center of the image
             _, r, t = cv2.solvePnP(mp, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             # this is meant to be json serializable
             results.append({

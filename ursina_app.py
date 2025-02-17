@@ -9,6 +9,8 @@ from functools import partial
 from cv_common import invert_pose, compose_poses
 from math import pi
 import atexit
+from panda3d.core import LQuaternionf
+from itertools import permutations
 
 from ursina import (
     Ursina,
@@ -32,6 +34,10 @@ from ursina.shaders import (
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
     return (vec[0], vec[2], vec[1])
+
+# Transforms a rodrigues rotation vector ummmm its magic don't ask
+def fix_rot(vec):
+    return (vec[1], -vec[2], vec[0])
 
 class SplineMovingEntity(Entity):
     """
@@ -71,6 +77,12 @@ class ControlPanelUI:
         square.texture = 'origin.jpg'
         # add a 1cm sphere to clarify where the game origin is
         origin_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.01), shader=unlit_shader)  # Scale in meters
+
+        sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
+        sphereY = Entity(model='sphere', position=(0,1,0), color=color.green, scale=(0.1), shader=unlit_shader)
+        sphereZ = Entity(model='sphere', position=(0,0,1), color=color.blue, scale=(0.1), shader=unlit_shader)
+        
+        self.indicator = Entity(model='indicator', position=(0,0,0), color=color.pink, scale=(0.1), shader=lit_with_shadows_shader)
 
         #show a very large floor
         square = Entity(model='quad', position=(0, -0.05, 0), rotation=(90,0,0), color=color.brown, scale=(10, 10))  # Scale in meters
@@ -125,7 +137,9 @@ class ControlPanelUI:
         self.calibration_mode = 'pose'
 
         self.rot = [0,0,0]
-        self.anchor_cam_inv = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
+        self.yflip = (np.array([0,1,0], dtype=float)*pi, np.array([0,0,0], dtype=float))
+        self.anchor_cam_inv = (np.array([1,0,0], dtype=float)*(125.0/180*pi), np.array([0,0,0], dtype=float))
+        # self.anchor_cam_inv = (np.array([0,0.887,-0.462], dtype=float)*pi, np.array([0,0,0], dtype=float))
         self.xbut = Button(
             text='x',
             color=color.azure,
@@ -166,7 +180,6 @@ class ControlPanelUI:
             (np.array([0,self.rot[1]*pi,0], dtype=float), np.array([0,0,0], dtype=float)),
             (np.array([0,0,self.rot[2]*pi], dtype=float), np.array([0,0,0], dtype=float)),
         ]))
-        print(self.rot)
         print(f'anchor cam inv = {self.anchor_cam_inv}')
 
 
@@ -223,9 +236,11 @@ class ControlPanelUI:
                 apose = updates['anchor_pose']
                 anchor_num = apose[0]
                 self.anchors[anchor_num].position = swap_yz(apose[1][1])
-                ps = compose_poses([apose[1], self.anchor_cam_inv])
-                ps[0][0] *= -1 # flip x axis.
-                self.anchors[anchor_num].quaternion = tuple(Rotation.from_rotvec(np.array(swap_yz(ps[0]))).as_quat())
+                self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
+
+                # self.indicator.position = swap_yz(apose[1][1])
+                # rq = list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat())
+                # self.indicator.quaternion = LQuaternionf(*rq)
 
     def start(self):
         self.app.run()

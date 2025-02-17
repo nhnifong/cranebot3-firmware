@@ -30,7 +30,6 @@ class MKSSERVO42C:
         """
         self._sendSingleByteCommand(PING)
         ans = self.port.read(3)
-        print(f"ping response len = {len(ans)} ans[1] = {repr(ans[1])}")
         return len(ans) == 3 and ans[1] == 1
 
     def stop(self):
@@ -82,7 +81,6 @@ class MKSSERVO42C:
         """
         message = b'\xe0' + b
         message += self._calculateChecksum(message)
-        print(repr(message))
         self.port.write(message)
         self.port.flush()
 
