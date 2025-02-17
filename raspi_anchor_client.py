@@ -101,7 +101,7 @@ class RaspiAnchorClient:
                             offset, # constant
                         ]))
                         dest.insert(np.concatenate([[detection['s']], pose.reshape(6)]))
-                        print(f'Inserted pose in datastore name={name} t={detection['s']}, pose={pose}')
+                        # print(f'Inserted pose in datastore name={name} t={detection['s']}, pose={pose}')
 
     async def connect_websocket(self):
         # main client loop

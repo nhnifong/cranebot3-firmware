@@ -60,7 +60,7 @@ if __name__ == "__main__":
         if not args.headless:
             # allow Ursina to be the main process. it doesn't work as a subprocess.
             from ursina_app import start_ui
-            start_ui(to_ui_q, to_pe_q, to_ob_q)
+            start_ui(datastore, to_ui_q, to_pe_q, to_ob_q)
         else:
             # Keep the main process alive
             while True:

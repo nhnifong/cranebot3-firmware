@@ -31,6 +31,12 @@ class CDPR_position_estimator:
 
         The base interval of the splines is always (0,1)
 
+        self.anchors.append(add_anchor((-2,2, 3)))
+        self.anchors.append(add_anchor(( 2,2, 3)))
+        self.anchors.append(add_anchor(( -1,2,-2), rot=(0,180,0)))
+        self.anchors.append(add_anchor(( -2,2,-2), rot=(0,180,0)))
+
+
         Args:
             datastore: instance of DataStore where measurements are stored/collected
             anchor_points: A numpy array of shape (n_cables, 3) representing the 3D coordinates of the cable anchor points.
@@ -42,7 +48,12 @@ class CDPR_position_estimator:
         self.to_ob_q = to_ob_q
         self.snapshot = {}
         self.n_cables = self.datastore.n_cables
-        self.anchor_points = None
+        self.anchor_points = np.array([
+            [-2,2, 3],
+            [ 2,2, 3],
+            [ -1,2,-2],
+            [ -2,2,-2],
+        ], dtype=float)
         self.loadAnchorPoses()        
         self.gripper_mass = 0.4 # kg
         self.gantry_mass = 0.06 # kg
@@ -56,9 +67,9 @@ class CDPR_position_estimator:
         self.spline_degree = 3
 
         # these are just initial guesses of the locations
-        gant_p = np.mean(self.anchor_points, axis=0) + np.array([0,0,-2])
+        gant_p = np.mean(self.anchor_points, axis=0) + np.array([0,0,-0.2])
         control_points_gantry = np.array([gant_p for i in range(self.n_ctrl_pts)])
-        grip_p = gant_p + np.array([0,0,-2])
+        grip_p = gant_p + np.array([0,0,-0.2])
         control_points_gripper = np.array([grip_p for i in range(self.n_ctrl_pts)])
 
         # additional 1d control points for the gripper rotation spline.
@@ -249,6 +260,7 @@ class CDPR_position_estimator:
         times = position_measurements[:,0]
         if normalize_time:
             times = list(map(self.model_time, times))
+        print(f'times = {times}')
         expected = np.array(list(map(pos_model_func, times)))
         dis = np.linalg.norm(position_measurements[:,1:] - expected, axis=1)
         total = sum(dis)
@@ -308,10 +320,10 @@ class CDPR_position_estimator:
         gantry_pose = self.datastore.gantry_pose.deepCopy()
         gripper_pose = self.datastore.gripper_pose.deepCopy()
         self.snapshot = {
-            'gantry_position': gantry_pose[:,:4],
-            'gantry_rotation': gantry_pose[:,[0,4,5,6]],
-            'gripper_position': gripper_pose[:,:4],
-            'gripper_rotation': gripper_pose[:,[0,4,5,6]],
+            'gantry_rotation': gantry_pose[:,:4],
+            'gantry_position': gantry_pose[:,[0,4,5,6]],
+            'gripper_rotation': gripper_pose[:,:4],
+            'gripper_position': gripper_pose[:,[0,4,5,6]],
             'imu_accel': self.datastore.imu_accel.deepCopy(),
             'winch_line_record': self.datastore.winch_line_record.deepCopy(),
             'anchor_line_record': [a.deepCopy() for a in self.datastore.anchor_line_record]
@@ -334,21 +346,28 @@ class CDPR_position_estimator:
 
         self.snapshot_datastore()
         start = time()
+        # 
+        # L-BFGS-B
         result = optimize.minimize(
             self.cost_function,
             parameter_initial_guess,
-            method='BFGS',
-            # bounds=self.bounds,
-            options={'maxiter':1000}
+            method='COBYLA',
+            bounds=self.bounds,
+            options={'maxiter':100000}
         )
         time_taken = time() - start
 
-        # set splines from optimal model params
-        self.set_splines_from_params(result.x)
         try:
             assert result.success
         except AssertionError:
             print(result)
+            return
+
+        # set splines from optimal model params
+        self.set_splines_from_params(result.x)
+
+        dis = self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position'])
+        print(f"mean distance between gripper spline and measurements = {dis}")
 
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
         # normalized_time = self.model_time(time())
