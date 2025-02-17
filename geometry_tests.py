@@ -2,6 +2,7 @@ import unittest
 import numpy as np
 from math import pi
 from cv_common import compose_poses, invert_pose, average_pose
+from data_store import CircularBuffer
 
 def p(l): # make a numpy array of floats out of the given list. for brevity
     return np.array(l, dtype=float)
@@ -145,6 +146,23 @@ class TestPoseFunctions(unittest.TestCase):
         np.testing.assert_array_almost_equal(result[1], expected[1]) # position
 
 
+class TestDatastor(unittest.TestCase):
+    def test_circular_buffer_insert_read(self):
+        cb = CircularBuffer((3,1))
+        cb.insert(0.1)
+        out = cb.deepCopy()
+        self.assertEqual(out[0], 0.1)
+
+    def test_circularity(self):
+        cb = CircularBuffer((3,1))
+        cb.insert(0.1)
+        cb.insert(0.2)
+        cb.insert(0.3)
+        cb.insert(0.4)
+        out = cb.deepCopy()
+        self.assertEqual(out[0], 0.4)
+        self.assertEqual(out[1], 0.2)
+        self.assertEqual(out[2], 0.3)
 
 if __name__ == '__main__':
     unittest.main()

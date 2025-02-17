@@ -1,5 +1,6 @@
 import numpy as np
 from multiprocessing import RawArray, Semaphore
+from time import time
 
 class CircularBuffer:
     """
@@ -26,7 +27,7 @@ class CircularBuffer:
 
     def asNpa(self):
         """Return as numpy array with original shape"""
-        return np.array(self.arr, dtype=float).reshape(self.shape)
+        return np.frombuffer(self.arr, dtype=np.dtype(self.arr)).reshape(self.shape)
 
     def deepCopy(self):
         with self.sem:
@@ -66,8 +67,16 @@ class DataStore:
         self.horizon_s = horizon_s
         self.n_cables = n_cables
 
-        self.gantry_pose = CircularBuffer((horizon_s * 10, 7))
-        self.gripper_pose = CircularBuffer((horizon_s * 10, 7))
-        self.imu_accel = CircularBuffer((horizon_s * 20, 4))
-        self.winch_line_record = CircularBuffer((horizon_s * 10, 2))
-        self.anchor_line_record = [CircularBuffer((horizon_s * 10, 2)) for n in range(n_cables)]
+        c = int(horizon_s * 10)
+        self.gantry_pose = CircularBuffer((c, 7))
+        self.gripper_pose = CircularBuffer((c, 7))
+        self.imu_accel = CircularBuffer((c, 4))
+        self.winch_line_record = CircularBuffer((c, 2))
+        self.anchor_line_record = [CircularBuffer((c, 2)) for n in range(n_cables)]
+
+        self.gantry_pose.insertList([np.array([time(), 0,0,0,0,0,0]) for i in range(c)])
+        self.gripper_pose.insertList([np.array([time(), 0,0,0,0,0,0]) for i in range(c)])
+        self.imu_accel.insertList([np.array([time(), 0,0,0]) for i in range(c)])
+        self.winch_line_record.insertList([np.array([time(), 0]) for i in range(c)])
+        for aa in self.anchor_line_record:
+            aa.insertList([np.array([time(), 0]) for i in range(c)])

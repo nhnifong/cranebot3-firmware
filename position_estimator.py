@@ -243,13 +243,17 @@ class CDPR_position_estimator:
                 time must be the first element in each row
                 time is a floating point number of seconds since the epoch
         """
+        if len(position_measurements) == 0:
+            return 0
         # calculate distance between measured position and predicted position, sum over all measurements.
         times = position_measurements[:,0]
         if normalize_time:
             times = list(map(self.model_time, times))
         expected = np.array(list(map(pos_model_func, times)))
-        total = sum(np.linalg.norm(position_measurements[:,1:] - expected, axis=0))
-        return total / len(position_measurements)
+        dis = np.linalg.norm(position_measurements[:,1:] - expected, axis=1)
+        total = sum(dis)
+        av = total / len(position_measurements)
+        return av
 
     def cost_function(self, model_parameters):
         """
@@ -264,25 +268,25 @@ class CDPR_position_estimator:
 
         errors = np.array([
             # error between gantry position model and observation
-            self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
+            0, #self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
             self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper rotation model and observation
-            self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
+            0, #self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
             # error between gripper acceleration model and observation
-            self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
+            0, #self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
+            0, #self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
             # error between model and recorded winch line lengths
-            self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
+            0, #self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
-            sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
-                for anchor_num in range(self.n_cables)]) / self.n_cables,
+            0, #sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
+            #    for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            integrate.quad(self.mechanical_energy(self.gripper_pos_spline, self.gripper_mass), 0, self.horizon_s)[0],
-            integrate.quad(self.mechanical_energy(self.gantry_pos_spline, self.gantry_mass), 0, self.horizon_s)[0],
+            0, #integrate.quad(self.mechanical_energy(self.gripper_pos_spline, self.gripper_mass), 0, self.horizon_s)[0],
+            0, #integrate.quad(self.mechanical_energy(self.gantry_pos_spline, self.gantry_mass), 0, self.horizon_s)[0],
             # error between position model and desired future locations
-            self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions()),
+            0, #self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions()),
             
             # penalty for pulling the motors against eachother by raising the gantry too high
             # penalty for letting the gripper touch the floor
@@ -291,7 +295,7 @@ class CDPR_position_estimator:
             # penalty for unspooling so fast you make a birdsnest
         ])
 
-        return sum(errors * self.weights)
+        return sum(errors * self.weights)+0.01
 
     def snapshot_datastore(self):
         """
@@ -333,15 +337,18 @@ class CDPR_position_estimator:
         result = optimize.minimize(
             self.cost_function,
             parameter_initial_guess,
-            method='SLSQP', # Suitable for constrained optimization
-            bounds=self.bounds,
+            method='BFGS',
+            # bounds=self.bounds,
             options={'maxiter':1000}
         )
         time_taken = time() - start
-        # print(f"minimization step took {time_taken} seconds")
 
         # set splines from optimal model params
         self.set_splines_from_params(result.x)
+        try:
+            assert result.success
+        except AssertionError:
+            print(result)
 
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
         # normalized_time = self.model_time(time())
