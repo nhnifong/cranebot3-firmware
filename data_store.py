@@ -1,6 +1,7 @@
 import numpy as np
 from multiprocessing import RawArray, Semaphore
 from time import time
+from random import random
 
 class CircularBuffer:
     """
@@ -74,8 +75,8 @@ class DataStore:
         self.winch_line_record = CircularBuffer((c, 2))
         self.anchor_line_record = [CircularBuffer((c, 2)) for n in range(n_cables)]
 
-        self.gantry_pose.insertList([np.array([time(), 0,0,0,0,0,0]) for i in range(c)])
-        self.gripper_pose.insertList([np.array([time(), 0,0,0,0,0,0]) for i in range(c)])
+        self.gantry_pose.insertList([np.array([time(), random()*0.001,random()*0.001,random()*0.001,0,0,0]) for i in range(c)])
+        self.gripper_pose.insertList([np.array([time(), random()*0.001,random()*0.001,random()*0.001,0,0,0]) for i in range(c)])
         self.imu_accel.insertList([np.array([time(), 0,0,0]) for i in range(c)])
         self.winch_line_record.insertList([np.array([time(), 0]) for i in range(c)])
         for aa in self.anchor_line_record:

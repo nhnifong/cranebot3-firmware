@@ -66,8 +66,9 @@ class SplineMovingEntity(Entity):
             self.position = swap_yz(self.spline_func(t))
 
 class ControlPanelUI:
-    def __init__(self, to_pe_q, to_ob_q):
+    def __init__(self, datastore, to_pe_q, to_ob_q):
         self.app = Ursina()
+        self.datastore = datastore
         self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
 
@@ -165,6 +166,16 @@ class ControlPanelUI:
 
         self.to_ob_q.put({'set_calibration_mode': self.calibration_mode})
 
+    def render_gripper_ob(self,):
+        """
+        Display a visual indication of aruco based gripper observations
+        """
+        while True:
+            print("render gripper ob")
+            gripper_pose = self.datastore.gripper_pose.deepCopy()
+            for row in gripper_pose:
+                sphereX = Entity(model='sphere', position=(row[4],row[6],row[5]), color=color.white, scale=(0.1), shader=lit_with_shadows_shader)
+            time.sleep(15)
 
     def notify_connected_bots_change(self, available_bots={}):
         offs = 0
@@ -193,12 +204,14 @@ class ControlPanelUI:
                 self.time_domain = updates['time_domain']
 
             if 'gripper_path' in updates:
-                gripper_pos_spline = BSpline(self.knots, updates['gripper_path'], self.spline_degree, True)
+                control_points = np.array(list(map(swap_yz, updates['gripper_path'])))
+                gripper_pos_spline = BSpline(self.knots, control_points, self.spline_degree, True)
                 self.render_curve(gripper_pos_spline, 'gripper_spline')
                 self.gripper.setParams(gripper_pos_spline, self.time_domain)
 
             if 'gantry_path' in updates:
-                gantry_pos_spline = BSpline(self.knots, updates['gantry_path'], self.spline_degree, True)
+                control_points = np.array(list(map(swap_yz, updates['gantry_path'])))
+                gantry_pos_spline = BSpline(self.knots, control_points, self.spline_degree, True)
                 self.render_curve(gantry_pos_spline, 'gantry_spline')
                 self.gantry.setParams(gantry_pos_spline, self.time_domain)
 
@@ -217,15 +230,18 @@ def update():
     # seems like this only happens when this file is __main__
     print('ursina called update')
 
-def start_ui(to_ui_q, to_pe_q, to_ob_q):
+def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q):
     """
     Entry point to be used when starting this from main.py with multiprocessing
     """
-    cpui = ControlPanelUI(to_pe_q, to_ob_q)
+    cpui = ControlPanelUI(datastore, to_pe_q, to_ob_q)
 
     # use simple threading here. ursina has it's own loop that conflicts with asyncio
     estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
     estimator_update_thread.start()
+
+    rgo = threading.Thread(target=cpui.render_gripper_ob, daemon=True)
+    rgo.start()
 
     def stop_other_processes():
         print("UI window closed. stopping other processes")
