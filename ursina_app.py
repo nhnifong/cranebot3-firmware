@@ -33,6 +33,9 @@ from ursina.shaders import (
     unlit_shader,
 )
 
+# the color for the lines that connect the anchors, gantry, and gripper
+line_color = color.black
+
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
     return (vec[0], vec[2], vec[1])
@@ -41,11 +44,19 @@ def swap_yz(vec):
 def fix_rot(vec):
     return (vec[1], -vec[2], vec[0])
 
+def draw_line(point_a, point_b):
+    return Mesh(vertices=[point_a, point_b], mode='line')
+    # return Pipe(
+    #     path=[point_a, point_b],
+    #     thicknesses=(0.01, 0.01),
+    #     cap_ends=False,
+    # )
+
 class SplineMovingEntity(Entity):
     """
     An entity that moves it's position along a spline function
     """
-    def __init__(self, model, color, scale, position, rotation, shader, spline_func, **kwargs):
+    def __init__(self, ui, model, color, scale, position, rotation, shader, spline_func, **kwargs):
         super().__init__(
             model=model,
             color=color,
@@ -55,6 +66,8 @@ class SplineMovingEntity(Entity):
             shader=shader,
             **kwargs
         )
+        self.is_gantry = (model == 'gantry')
+        self.ui = ui
         self.spline_func = spline_func
         self.time_domain = (333,444)
 
@@ -67,12 +80,20 @@ class SplineMovingEntity(Entity):
             t = (time.time() - self.time_domain[0]) / (self.time_domain[1] - self.time_domain[0])
             self.position = swap_yz(self.spline_func(t))
 
+            if self.is_gantry:
+                # update the lines between the gantry and the other things
+                for anchor_num in range(self.ui.n_anchors):
+                    self.ui.lines[anchor_num].model = draw_line(self.ui.anchors[anchor_num].position, self.position)
+                self.ui.vert_line.model = draw_line(self.ui.gripper.position, self.position)
+
+
 class ControlPanelUI:
     def __init__(self, datastore, to_pe_q, to_ob_q):
         self.app = Ursina()
         self.datastore = datastore
         self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
+        self.n_anchors = datastore.n_cables
 
         # add the charuco board that represents the room origin
         # when a charuco board is located, it's origin is it's top left corner.
@@ -84,8 +105,6 @@ class ControlPanelUI:
         sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
         sphereY = Entity(model='sphere', position=(0,1,0), color=color.green, scale=(0.1), shader=unlit_shader)
         sphereZ = Entity(model='sphere', position=(0,0,1), color=color.blue, scale=(0.1), shader=unlit_shader)
-        
-        self.indicator = Entity(model='indicator', position=(0,0,0), color=color.pink, scale=(0.1), shader=lit_with_shadows_shader)
 
         #show a very large floor
         square = Entity(model='quad', position=(0, -0.05, 0), rotation=(90,0,0), color=color.brown, scale=(10, 10))  # Scale in meters
@@ -103,6 +122,7 @@ class ControlPanelUI:
         self.spline_curves = {}
 
         self.gantry = SplineMovingEntity(
+            ui=self,
             model='gantry',
             color=(0.4, 0.4, 0.0, 1.0),
             scale=0.001,
@@ -112,6 +132,7 @@ class ControlPanelUI:
             spline_func=None)
 
         self.gripper = SplineMovingEntity(
+            ui=self,
             model='gripper_closed',
             color=(0.3, 0.3, 0.9, 1.0),
             scale=0.001,
@@ -120,19 +141,11 @@ class ControlPanelUI:
             shader=lit_with_shadows_shader,
             spline_func=None)
 
-        def draw_line(point_a, point_b):
-            # return Entity(model=Mesh(vertices=[point_a, point_b], mode='line', thickness=2), color=color.light_gray)
-            return Entity(model=Pipe(
-                path=[point_a, point_b],
-                thicknesses=(0.01, 0.01),
-                cap_ends=False,
-            ), color=color.white, shader=unlit_shader)
-
         self.lines = []
         for a in self.anchors:
-            self.lines.append(draw_line(a.position, self.gantry.position))
+            self.lines.append(Entity(model=draw_line(a.position, self.gantry.position), color=line_color, shader=unlit_shader))
 
-        draw_line(self.gantry.position, self.gripper.position)
+        self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
 
         light = DirectionalLight(shadows=True)
         light.look_at(Vec3(1,-1,1))
@@ -228,7 +241,6 @@ class ControlPanelUI:
                 anchor_num = apose[0]
                 self.anchors[anchor_num].position = swap_yz(apose[1][1])
                 self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
-                self.lines[anchor_num].model = Mesh(vertices=[self.anchors[anchor_num].position, self.gantry.position], mode='line', thickness=2)
 
     def start(self):
         self.app.run()
