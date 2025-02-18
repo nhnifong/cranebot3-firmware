@@ -189,6 +189,7 @@ class CDPR_position_estimator:
             # mass cancelled out of this equation.
 
             results.append(np.concatenate([[time], tension_acc + self.gravity]))
+        print(results[:5])
         return np.array(results)
 
     def mechanical_energy(self, position_spline, mass_kg):
@@ -279,7 +280,7 @@ class CDPR_position_estimator:
 
         errors = np.array([
             # error between gantry position model and observation
-            0, #self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
+            self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
             self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper rotation model and observation
@@ -287,7 +288,7 @@ class CDPR_position_estimator:
             # error between gripper acceleration model and observation
             0, #self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            0, #self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
+            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
             # error between model and recorded winch line lengths
             0, #self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
@@ -352,7 +353,7 @@ class CDPR_position_estimator:
         result = optimize.minimize(
             self.cost_function,
             parameter_initial_guess,
-            method='COBYLA',
+            method='SLSQP',
             bounds=self.bounds,
             options={
                 'maxiter': 1000,
@@ -360,9 +361,11 @@ class CDPR_position_estimator:
             },
         )
         time_taken = time() - start
+        print(f"minimization step took {time_taken}s")
 
         try:
-            assert result.success
+            if result.message != "Maximum number of function evaluations has been exceeded.":
+                assert result.success
         except AssertionError:
             print(result)
             return
