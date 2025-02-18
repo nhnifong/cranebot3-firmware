@@ -2,7 +2,11 @@ import unittest
 import numpy as np
 from math import pi
 from cv_common import compose_poses, invert_pose, average_pose
-from data_store import CircularBuffer
+from data_store import CircularBuffer, DataStore
+from position_estimator import CDPR_position_estimator
+import time
+from multiprocessing import Queue
+
 
 def p(l): # make a numpy array of floats out of the given list. for brevity
     return np.array(l, dtype=float)
@@ -146,7 +150,7 @@ class TestPoseFunctions(unittest.TestCase):
         np.testing.assert_array_almost_equal(result[1], expected[1]) # position
 
 
-class TestDatastor(unittest.TestCase):
+class TestDatastore(unittest.TestCase):
     def test_circular_buffer_insert_read(self):
         cb = CircularBuffer((3,1))
         cb.insert(0.1)
@@ -163,6 +167,35 @@ class TestDatastor(unittest.TestCase):
         self.assertEqual(out[0], 0.4)
         self.assertEqual(out[1], 0.2)
         self.assertEqual(out[2], 0.3)
+
+class TestPositionEstimator(unittest.TestCase):
+
+    def setUp(self):
+        datastore = DataStore(horizon_s=10, n_cables=4)
+        to_ui_q = Queue()
+        to_pe_q = Queue()
+        to_ob_q = Queue()
+        to_ui_q.cancel_join_thread()
+        to_pe_q.cancel_join_thread()
+        to_ob_q.cancel_join_thread()
+        self.pe = CDPR_position_estimator(datastore, to_ui_q, to_pe_q, to_ob_q)
+
+    def test_model_time(self):
+        now = 1739888888.5555555
+        self.pe.time_domain = (now - 10, now + 10)
+        result = self.pe.model_time(now)
+        self.assertEqual(result, 0.5)
+
+
+    def test_model_time_numpy_float(self):
+        now = 1739888888.5555555
+        self.pe.time_domain = (now - 10, now + 10)
+        times = np.array([now,now,now], dtype=float)
+        result = self.pe.model_time(times[0])
+        self.assertEqual(result, 0.5)
+
+    # def test_unix_time(self):
+    #     self.assertEqual(result, expected)
 
 if __name__ == '__main__':
     unittest.main()
