@@ -1,14 +1,8 @@
-from motor_control import MKSSERVO42C
 from math import pi
 import asyncio
 import time
 
-DEFAULT_MICROSTEPS = 16
-ANGLE_RESOLUTION = 65535
-# A speed of 1 is this many revs/sec
-SPEED1_REVS = 30000.0/(DEFAULT_MICROSTEPS * 200)/60;
-SPOOL_DIAMETER_MM = 24
-METER_PER_REV = SPOOL_DIAMETER_MM * pi * 0.001;
+
 DATA_LEN = 1000
 PE_TERM = 1.5
 # maximum acceleration in meters of line per second squared
@@ -21,14 +15,15 @@ def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 class SpoolController:
-    def __init__(self):
-        self.motor = MKSSERVO42C()
+    def __init__(self, motor, spool_diameter_mm):
+        self.motor = motor
+        self.meters_per_rev = spool_diameter_mm * pi * 0.001;
+        # last commanded motor speed in revs/sec
         self.speed = 0
         # Meters of line that were spooled out when zeroAngle was set.
         self.lineAtStart = 1.9
+        # The angle of the shaft when setReferenceAngle was last called (in revolutions)
         self.zeroAngle = 0
-        # last set speed in motor units (-127 to 127)
-        self.motor_speed = 0
         # record of line length. tuples of (time, meters)
         self.record = []
         # plan of desired line lengths
@@ -61,7 +56,7 @@ class SpoolController:
         return the curren time and current unspooled line in meters
         """
         success, angle = self.motor.getShaftAngle()
-        l = METER_PER_REV * (float(angle) - self.zeroAngle) / ANGLE_RESOLUTION + self.lineAtStart
+        l = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
         # accumulate these so you can send them to the websocket
         row = (time.time(), l)
         if self.rec_loop_counter == REC_MOD:
@@ -110,7 +105,8 @@ class SpoolController:
             # result is in meters of line per second
             targetSpeed = ((self.desiredLine[self.lastIdx][1] - self.desiredLine[self.lastIdx-1][1])
                 / (self.desiredLine[self.lastIdx][0] - self.desiredLine[self.lastIdx-1][0]))
-            currentSpeed = self.motor_speed * SPEED1_REVS * METER_PER_REV
+            # change in line length in meters per second
+            currentSpeed = self.speed * self.meters_per_rev
             speed_err = targetSpeed - currentSpeed
             # If our positional error was zero, we could go exactly that speed.
             # if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
@@ -118,14 +114,15 @@ class SpoolController:
             # ideally we want to catch up in one step, but we have max acceleration constraints.
             aimSpeed = targetSpeed + position_err * PE_TERM; # meters of line per second
 
+            # limit the acceleration of the line
             wouldAccel = (aimSpeed - currentSpeed) / LOOP_DELAY_S
             if wouldAccel > MAX_ACCEL:
                 aimSpeed = MAX_ACCEL * LOOP_DELAY_S + currentSpeed
             elif wouldAccel < -MAX_ACCEL:
                 aimSpeed = -MAX_ACCEL * LOOP_DELAY_S + currentSpeed
 
-            # take this speed
-            self.speed = constrain(aimSpeed / meters_per_rev / speed1_revs, -127, 127)
+            maxspeed = self.motor.getMaxSpeed()
+            self.speed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
             self.motor.runConstantSpeed(self.speed)
 
             time.sleep(LOOP_DELAY_S)

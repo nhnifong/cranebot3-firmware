@@ -18,40 +18,8 @@ import time
 from getmac import get_mac_address
 import multiprocessing
 from spools import SpoolController
-from cv_common import locate_markers
-
-def local_aruco_detection(outq, control_queue):
-    """
-    Open the camera and detect aruco markers. put any detections on the provided queue
-    TODO this seems to chew up pretty much all the resources we have.
-    consider cropping the image to the area we beleive there to be a marker in.
-    """
-    from picamera2 import Picamera2
-    from libcamera import Transform
-    print("PiCamera detection process started")
-    picam2 = Picamera2()
-    # pprint(picam2.sensor_modes) # investigate modes with cropped FOV
-    # full res is 4608x2592
-    # this is half res. seems it can still detect a 10cm aruco from about 2 meters at a rate of 30fps
-    # you can flip the image with transform=Transform(hflip=1, vflip=1)
-    capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
-    # allow Picamera2 to choose an efficient size close to what we requested
-    picam2.align_configuration(capture_config)
-    picam2.configure(capture_config)
-    picam2.start()
-    while True:
-        if not control_queue.empty():
-            if control_queue.get_nowait() == "STOP":
-                break # exit loop, ending process
-
-        sec = time.time()
-        im = picam2.capture_array()
-        detections = locate_markers(im)
-        if len(detections) > 0:
-            for det in detections:
-                det['s'] = sec # add the time of capture to the detection
-                outq.put(det)
-    print("PiCamera detection process ended")
+from local_cam import local_aruco_detection
+from motor_control import MKSSERVO42C
 
 def dummyProcess(outq, control_queue):
     print("dummy process started")
@@ -62,9 +30,8 @@ def dummyProcess(outq, control_queue):
     print("dummy process ended")
 
 
-class RaspiAnchorServer:
+class RobotComponentServer:
     def __init__(self):
-        self.spooler = SpoolController()
         self.ws = None # active websocket connection if there is one
         self.run_client = True
 
@@ -137,7 +104,7 @@ class RaspiAnchorServer:
         loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
 
         self.run_client = True
-        asyncio.create_task(self.register_mdns_service("123.cranebot-anchor-service", "_http._tcp.local.", port))
+        asyncio.create_task(self.register_mdns_service(f"123.{self.service_type}", "_http._tcp.local.", port))
 
         # process for detecting fudicial markers
         print("starting video task")
@@ -156,7 +123,6 @@ class RaspiAnchorServer:
         # thread for controlling stepper motor
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
 
-        # todo catch that exception that happens when the client on the other end crashes and doesnt send the close frame and ignore it.
         async with websockets.serve(self.handler, "0.0.0.0", port):
             print("Websocket server started")
             # cause the server to serve only as long as these other tasks are running
@@ -177,7 +143,7 @@ class RaspiAnchorServer:
         if self.run_client:
             print('\nStopping detection listener task')
             self.run_client = False
-            print('Stopping Motor')
+            print('Stopping Spool Motor')
             self.spooler.fastStop()
 
     def get_wifi_ip(self):
@@ -203,11 +169,19 @@ class RaspiAnchorServer:
             port=port,
             properties=properties,
             addresses=[self.get_wifi_ip()],
-            server=f'raspi-anchor-{unique}',
+            server=self.name_prefix + unique,
         )
 
         await self.zc.async_register_service(info)
         print(f"Registered service: {name} ({service_type}) on port {port}")
+
+class RaspiAnchorServer(RobotComponentServer):
+    def __init__(self):
+        super().__init__()
+        self.spooler = SpoolController(MKSSERVO42C(), spool_diameter_mm=24)
+        self.name_prefix = 'raspi-anchor-'
+        self.service_type = 'cranebot-anchor-service'
+
 
 if __name__ == "__main__":
     ras = RaspiAnchorServer()
