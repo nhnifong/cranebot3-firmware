@@ -22,6 +22,8 @@ from ursina import (
     Vec3,
     Text,
     Mesh,
+    Pipe,
+    Quad,
     invoke,
     application,
     window,
@@ -119,7 +121,12 @@ class ControlPanelUI:
             spline_func=None)
 
         def draw_line(point_a, point_b):
-            return Entity(model=Mesh(vertices=[point_a, point_b], mode='line', thickness=2), color=color.light_gray)
+            # return Entity(model=Mesh(vertices=[point_a, point_b], mode='line', thickness=2), color=color.light_gray)
+            return Entity(model=Pipe(
+                path=[point_a, point_b],
+                thicknesses=(0.01, 0.01),
+                cap_ends=False,
+            ), color=color.white, shader=unlit_shader)
 
         self.lines = []
         for a in self.anchors:
@@ -144,14 +151,15 @@ class ControlPanelUI:
     # renders a function that returns 3D points in a domain from 0 to 1
     # the y and z coordinates are swapped
     def render_curve(self, curve_function, name):
-        model = Mesh(
-                vertices=[Vec3(swap_yz(curve_function(time))) for time in np.linspace(0,1,32)],
-                mode='line',
-                thickness=2)
+        model = Pipe(
+            path=[Vec3(swap_yz(curve_function(time))) for time in np.linspace(0,1,32)],
+            thicknesses=(0.01, 0.01),
+            cap_ends=False,
+        )
         if name in self.spline_curves:
             self.spline_curves[name].model = model
         else:
-            self.spline_curves[name] = Entity(model=model, color=color.lime)
+            self.spline_curves[name] = Entity(model=model, color=color.lime, shader=unlit_shader)
 
     def on_calibration_button_click(self):
         if self.calibration_mode == "pose":

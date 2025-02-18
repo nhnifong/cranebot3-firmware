@@ -22,7 +22,7 @@ class CircularBuffer:
     """
     def __init__(self, shape):
         self.shape = shape
-        self.arr = RawArray('f', int(np.prod(shape)))
+        self.arr = RawArray('d', int(np.prod(shape)))
         self.idx = 0
         self.sem = Semaphore(1)
 
@@ -75,9 +75,9 @@ class DataStore:
         self.winch_line_record = CircularBuffer((c, 2))
         self.anchor_line_record = [CircularBuffer((c, 2)) for n in range(n_cables)]
 
-        self.gantry_pose.insertList([np.array([time(), random()*0.001,random()*0.001,random()*0.001,0,0,0]) for i in range(c)])
-        self.gripper_pose.insertList([np.array([time(), random()*0.001,random()*0.001,random()*0.001,0,0,0]) for i in range(c)])
-        self.imu_accel.insertList([np.array([time(), 0,0,0]) for i in range(c)])
-        self.winch_line_record.insertList([np.array([time(), 0]) for i in range(c)])
+        self.gantry_pose.insertList([np.array([time()+random()*20, 0,0,0, random()*0.001,random()*0.001,random()*0.001], dtype=np.float64) for i in range(c)])
+        self.gripper_pose.insertList([np.array([time()+random()*20, 0,0,0, random()*0.001,random()*0.001,random()*0.001], dtype=np.float64) for i in range(c)])
+        self.imu_accel.insertList([np.array([time(), 0,0,0], dtype=np.float64) for i in range(c)])
+        self.winch_line_record.insertList([np.array([time(), 0], dtype=np.float64) for i in range(c)])
         for aa in self.anchor_line_record:
             aa.insertList([np.array([time(), 0]) for i in range(c)])

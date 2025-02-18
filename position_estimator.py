@@ -232,7 +232,7 @@ class CDPR_position_estimator:
         Convert a floating point number of seconds since the epoch into a time relative to the base interval of the model splines.
         assumes base interval is (0,1)
         """
-        return float(m) / (self.time_domain[1] - self.time_domain[0])
+        return (float(t) - self.time_domain[0]) / (self.time_domain[1] - self.time_domain[0])
 
     def unix_time(self, t):
         """
@@ -345,14 +345,19 @@ class CDPR_position_estimator:
 
         self.snapshot_datastore()
         start = time()
-        # 
+
+        # SLSQP
+        # COBYLA
         # L-BFGS-B
         result = optimize.minimize(
             self.cost_function,
             parameter_initial_guess,
             method='COBYLA',
             bounds=self.bounds,
-            options={'maxiter':100000}
+            options={
+                'maxiter': 1000,
+                'disp': False,
+            },
         )
         time_taken = time() - start
 
@@ -364,9 +369,6 @@ class CDPR_position_estimator:
 
         # set splines from optimal model params
         self.set_splines_from_params(result.x)
-
-        dis = self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position'])
-        print(f"mean distance between gripper spline and measurements = {dis}")
 
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
         # normalized_time = self.model_time(time())
