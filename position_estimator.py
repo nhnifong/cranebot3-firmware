@@ -232,14 +232,14 @@ class CDPR_position_estimator:
         Convert a floating point number of seconds since the epoch into a time relative to the base interval of the model splines.
         assumes base interval is (0,1)
         """
-        return (t - self.time_domain[0]) / (self.time_domain[1] - self.time_domain[0])
+        return float(m) / (self.time_domain[1] - self.time_domain[0])
 
     def unix_time(self, t):
         """
         Convert a time relative to the base interval of the model splines into a floating point number of seconds since the epoch
         assumes base interval is (0,1)
         """
-        return t * (self.time_domain[1] - self.time_domain[0]) + self.time_domain[0]
+        return float(t) * (self.time_domain[1] - self.time_domain[0]) + self.time_domain[0]
 
     def error_meas(self, pos_model_func, position_measurements, normalize_time=True):
         """
@@ -260,7 +260,6 @@ class CDPR_position_estimator:
         times = position_measurements[:,0]
         if normalize_time:
             times = list(map(self.model_time, times))
-        print(f'times = {times}')
         expected = np.array(list(map(pos_model_func, times)))
         dis = np.linalg.norm(position_measurements[:,1:] - expected, axis=1)
         total = sum(dis)
