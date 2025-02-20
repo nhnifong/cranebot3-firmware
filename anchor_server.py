@@ -168,6 +168,7 @@ class RobotComponentServer:
             port=port,
             properties=properties,
             addresses=[self.get_wifi_ip()],
+            server=name,
         )
 
         await self.zc.async_register_service(info)
