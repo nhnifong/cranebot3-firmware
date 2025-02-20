@@ -288,7 +288,7 @@ class CDPR_position_estimator:
             # error between gripper acceleration model and observation
             0, #self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
+            0, #self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
             # error between model and recorded winch line lengths
             0, #self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
@@ -356,12 +356,12 @@ class CDPR_position_estimator:
             method='SLSQP',
             bounds=self.bounds,
             options={
-                'maxiter': 1000,
+                'maxiter': 10000,
                 'disp': False,
             },
         )
         time_taken = time() - start
-        print(f"minimization step took {time_taken}s")
+        # print(f"minimization step took {time_taken}s")
 
         try:
             if result.message != "Maximum number of function evaluations has been exceeded.":
