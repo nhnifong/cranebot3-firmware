@@ -146,6 +146,9 @@ def compose_poses(poses):
     if not poses:
         return None
 
+    if any([pose[0].dtype != float or pose[1].dtype != float for pose in poses]):
+        poses = homogenize_types(poses)
+
     rvec_global = poses[0][0].copy()
     tvec_global = poses[0][1].copy()
 
@@ -188,6 +191,15 @@ def generateMarkerImages():
         framed_image[-border_px:, :border_px] = 0
 
         cv2.imwrite(os.path.join('boards',name+'.png'), framed_image)
+
+def homogenize_types(poses):
+    output = []
+    for pose in poses:
+        output.append((
+            np.array(pose[0], dtype=float),
+            np.array(pose[1], dtype=float),
+        ))
+    return output
 
 if __name__ == "__main__":
     generateMarkerImages()

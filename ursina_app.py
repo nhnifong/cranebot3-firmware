@@ -260,8 +260,8 @@ def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q):
     estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
     estimator_update_thread.start()
 
-    rgo = threading.Thread(target=cpui.render_gripper_ob, daemon=True)
-    rgo.start()
+    # rgo = threading.Thread(target=cpui.render_gripper_ob, daemon=True)
+    # rgo.start()
 
     def stop_other_processes():
         print("UI window closed. stopping other processes")
