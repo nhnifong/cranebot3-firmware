@@ -104,7 +104,7 @@ class RobotComponentServer:
         loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
 
         self.run_client = True
-        asyncio.create_task(self.register_mdns_service(f"123.{self.service_type}", "_http._tcp.local.", port))
+        asyncio.create_task(self.register_mdns_service(f"123.{self.service_name}", "_http._tcp.local.", port))
 
         # process for detecting fudicial markers
         print("starting video task")
@@ -162,14 +162,12 @@ class RobotComponentServer:
         """Registers an mDNS service on the network."""
 
         self.zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.All)
-        unique = ''.join(get_mac_address().split(':'))
         info = zeroconf.ServiceInfo(
             service_type,
             name + "." + service_type,
             port=port,
             properties=properties,
             addresses=[self.get_wifi_ip()],
-            server=self.name_prefix + unique,
         )
 
         await self.zc.async_register_service(info)
@@ -179,8 +177,8 @@ class RaspiAnchorServer(RobotComponentServer):
     def __init__(self):
         super().__init__()
         self.spooler = SpoolController(MKSSERVO42C(), spool_diameter_mm=24)
-        self.name_prefix = 'raspi-anchor-'
-        self.service_type = 'cranebot-anchor-service'
+        unique = ''.join(get_mac_address().split(':'))
+        self.service_name = 'cranebot-anchor-service.' + unique
 
 
 if __name__ == "__main__":
