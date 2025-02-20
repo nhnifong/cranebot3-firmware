@@ -101,6 +101,7 @@ class AsyncObserver:
         elif mode == "pose":
             for name, client in self.bot_clients.items():
                 client.calibration_mode = True
+                print(f'setting {name} to pose calibration mode')
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange

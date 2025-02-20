@@ -68,6 +68,7 @@ class RaspiAnchorClient:
                 # sys.stdout.flush()
 
                 if detection['n'] == "origin":
+                    print(f'detected origin {detection}')
                     self.origin_poses.append(pose_from_det(detection))
                     if len(self.origin_poses) > max_origin_detections:
                         self.origin_poses.pop(0)
