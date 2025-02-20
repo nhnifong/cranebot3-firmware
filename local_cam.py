@@ -1,5 +1,6 @@
 from cv_common import locate_markers
 import time
+from pprint import pprint
 
 def local_aruco_detection(outq, control_queue):
     """
@@ -11,11 +12,12 @@ def local_aruco_detection(outq, control_queue):
     from picamera2 import Picamera2
     from libcamera import Transform
     picam2 = Picamera2()
-    # pprint(picam2.sensor_modes) # investigate modes with cropped FOV
+    pprint(picam2.sensor_modes) # investigate modes with cropped FOV
     # full res is 4608x2592
     # this is half res. seems it can still detect a 10cm aruco from about 2 meters at a rate of 30fps
     # you can flip the image with transform=Transform(hflip=1, vflip=1)
-    capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
+    # capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
+    capture_config = picam2.create_still_configuration(main={"size": (4608, 2592), "format": "RGB888"})
     # allow Picamera2 to choose an efficient size close to what we requested
     picam2.align_configuration(capture_config)
     picam2.configure(capture_config)
