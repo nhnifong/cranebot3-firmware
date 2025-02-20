@@ -512,6 +512,7 @@ class CDPR_position_estimator:
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         while self.run:
             self.estimate()
+            await asyncio.sleep(2)
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """

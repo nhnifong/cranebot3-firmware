@@ -30,7 +30,7 @@ def calibate_camera():
     # for use on raspi. if on some other platform, change to some other method
     picam2 = Picamera2()
     # capture_config = picam2.create_preview_configuration(main={"size": (2304//2, 1296//2), "format": "RGB888"})
-    capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
+    capture_config = picam2.create_still_configuration(main={"size": (4608, 2592), "format": "RGB888"})
     picam2.configure(capture_config)
     picam2.start()
     print("started pi camera")
