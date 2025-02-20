@@ -1,4 +1,5 @@
 from cv_common import locate_markers
+import time
 
 def local_aruco_detection(outq, control_queue):
     """
