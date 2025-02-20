@@ -16,7 +16,7 @@ video_port = 8888
 websocket_port = 8765
 
 def pose_from_det(det):
-    return (np.array(det['r']), np.array(det['t']))
+    return (np.array(det['r'], dtype=float), np.array(det['t'], dtype=float))
 
 # this client is designed for the raspberri pi based anchor
 class RaspiAnchorClient:
@@ -35,7 +35,7 @@ class RaspiAnchorClient:
         try:
             # read calibration data from file
             saved_info = np.load('anchor_pose_%i.npz' % self.anchor_num)
-            self.anchor_pose = tuple(saved_info['pose'])
+            self.anchor_pose = tuple(saved_info['pose'].astype(float))
             print(f"Read pose of anchor {self.anchor_num} from file: {self.anchor_pose}")
             self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
             self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
