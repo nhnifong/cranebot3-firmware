@@ -131,6 +131,7 @@ class AsyncObserver:
                 else:
                     anchor_num = self.next_available_anchor_num
                     self.anchor_num_map[info.server] = anchor_num
+                    self.next_available_anchor_num += 1
                     self.save_anchor_num_map()
                 ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q)
                 self.bot_clients[info.server] = ac

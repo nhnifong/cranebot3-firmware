@@ -30,6 +30,8 @@ add the following lines lines to to `/boot/firmware/config.txt` and reboot)
     enable_uart=1
     dtoverlay=disable-bt
 
+You also need to run `sudo raspi-config` and enable serial port
+
 Since we require the picamera2 module and it can't be installed with pip, you have to create a virtualenv that can use site packages 
 
     sudo apt install python3-picamera2 imx500-all --no-install-recommends
