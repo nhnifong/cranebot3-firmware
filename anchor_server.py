@@ -67,6 +67,15 @@ class RobotComponentServer:
                     self.spooler.setPlan(update['length_plan'])
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
+                if 'video_task_mode' in update:
+                    
+                # command for turning on and off location detection
+                # command for turning on and off image streaming
+                # command to kill or restart the camera task
+                # sleep
+                # slow stop
+                # emergency stop
+                # command to toggle autofocus mode
 
                 response = {"status": "OK"}
                 await websocket.send(json.dumps(response)) #Encode JSON
