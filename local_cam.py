@@ -22,6 +22,7 @@ def local_aruco_detection(outq, control_queue):
     picam2.align_configuration(capture_config)
     picam2.configure(capture_config)
     picam2.start()
+    picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.000001, "AfSpeed": controls.AfSpeedEnum.Fast}) 
     while True:
         if not control_queue.empty():
             if control_queue.get_nowait() == "STOP":
