@@ -99,6 +99,7 @@ class AsyncObserver:
         elif mode == "cam":
             pass
         elif mode == "pose":
+            self.calmode = mode
             for name, client in self.bot_clients.items():
                 client.calibration_mode = True
                 print(f'setting {name} to pose calibration mode')

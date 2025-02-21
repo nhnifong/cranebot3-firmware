@@ -11,7 +11,7 @@ import numpy as np
 import model_constants
 
 # number of origin detections to average
-max_origin_detections = 1
+max_origin_detections = 10
 video_port = 8888
 websocket_port = 8765
 
@@ -52,7 +52,8 @@ class RaspiAnchorClient:
         ]
 
     def calibrate_pose(self):
-        np.savez('anchor_pose_%i' % self.anchor_num, pose = self.anchor_pose)
+        print(f"writing 'anchor_pose_{self.anchor_num}.npz'")
+        np.savez(f'anchor_pose_{self.anchor_num}.npz', pose = self.anchor_pose)
         self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
 
     def handle_detections(self, detections):
