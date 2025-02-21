@@ -12,22 +12,7 @@ import atexit
 from panda3d.core import LQuaternionf
 from itertools import permutations
 
-from ursina import (
-    Ursina,
-    Entity,
-    Button,
-    EditorCamera,
-    color,
-    DirectionalLight,
-    Vec3,
-    Text,
-    Mesh,
-    Pipe,
-    Quad,
-    invoke,
-    application,
-    window,
-)
+from ursina import *
 from ursina.shaders import (
     lit_with_shadows_shader,
     unlit_shader,
@@ -52,18 +37,42 @@ def draw_line(point_a, point_b):
     #     cap_ends=False,
     # )
 
+def create_wall(p1, p2, height=1):
+    """Creates a vertical quad wall between two points."""
+    p1.y = 0
+    p2.y = 0
+    center = (p1 + p2) / 2
+    center.y = height/2
+    direction = (p2 - p1).normalized()
+    up = Vec3(0, 1, 0)
+
+    # Calculate the right vector (perpendicular to direction and up)
+    right = direction.cross(up).normalized()
+
+    # Calculate the scale (width) of the wall.  Adjust as needed.
+    width = (p2 - p1).length()
+
+    # Create the quad
+    wall = Entity(
+        model='quad',
+        position=center,
+        # rotation=Quaternion.look_at(direction, up), # Key for correct rotation
+        scale = (width, height),
+        texture='vertical_gradient',
+        color=(1.0,0.358,0.0,0.5),
+        shader=unlit_shader,
+        double_sided=True,
+    )
+    wall.look_at(center+right);
+    return wall
+
 class SplineMovingEntity(Entity):
     """
     An entity that moves it's position along a spline function
     """
-    def __init__(self, ui, model, color, scale, position, rotation, shader, spline_func, **kwargs):
+    def __init__(self, ui, spline_func, model, **kwargs):
         super().__init__(
             model=model,
-            color=color,
-            scale=scale,
-            position=position,
-            rotation=rotation,
-            shader=shader,
             **kwargs
         )
         self.is_gantry = (model == 'gantry')
@@ -87,6 +96,122 @@ class SplineMovingEntity(Entity):
                 self.ui.vert_line.model = draw_line(self.ui.gripper.position, self.position)
 
 
+class Gripper(SplineMovingEntity):
+    def __init__(self, ui, spline_func, **kwargs):
+        super().__init__(
+            ui=ui,
+            spline_func=spline_func,
+            collider='box', # for mouse interaction
+            **kwargs
+        )
+        self.label_offset = (0.00, 0.04)
+        self.label = Text(
+            color=(0.1,0.1,0.1,1.0),
+            text=f"Gripper Not Detected",
+            scale=0.7,
+        )
+
+    def setStatus(self, status):
+        self.label.text = f"Anchor {self.num} {status}"
+
+    def update(self):
+        self.label.position = world_position_to_screen_position(self.position) + self.label_offset
+
+    def on_mouse_enter(self):
+        self.color = anchor_color_selected
+
+    def on_mouse_exit(self):
+        self.color = anchor_color
+
+    def on_click(self):
+        self.wp = WindowPanel(
+        title=f"Gripper Controls",
+        content=(
+            Button(text='Open', color=color.gold, text_color=color.black),
+            Button(text='Show video feed', color=color.gold, text_color=color.black),
+            Button(text='Autofocus', color=color.gold, text_color=color.black),
+            Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
+            Button(text='Reel in 20cm', color=color.gold, text_color=color.black),
+            Button(text='Reel out 20cm', color=color.gold, text_color=color.black),
+            Button(text='Sleep', color=color.gold, text_color=color.black),
+            ),
+        popup=True
+        )
+
+
+anchor_color = (0.8, 0.8, 0.8, 1.0)
+anchor_color_selected = (0.9, 0.9, 1.0, 1.0)
+class Anchor(Entity):
+    def __init__(self, num, position, rotation=(0,0,0)):
+        super().__init__(
+            position=position,
+            rotation=rotation,
+            model='anchor',
+            color=anchor_color,
+            scale=0.001,
+            shader=lit_with_shadows_shader,
+            collider='box'
+        )
+        self.num = num
+        self.label_offset = (0.00, 0.04)
+
+        self.label = Text(
+            color=(0.1,0.1,0.1,1.0),
+            text=f"Anchor {self.num} Not Detected",
+            scale=0.7,
+        )
+
+    def setStatus(self, status):
+        self.label.text = f"Anchor {self.num} {status}"
+
+    def update(self):
+        self.label.position = world_position_to_screen_position(self.position) + self.label_offset
+
+    def on_mouse_enter(self):
+        self.color = anchor_color_selected
+
+    def on_mouse_exit(self):
+        self.color = anchor_color
+
+    def on_click(self):
+        self.wp = WindowPanel(
+        title=f"Anchor {self.num}",
+        content=(
+            Button(text='Show video feed', color=color.gold, text_color=color.black),
+            Button(text='Autofocus', color=color.gold, text_color=color.black),
+            Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
+            Button(text='Reel in 20cm', color=color.gold, text_color=color.black),
+            Button(text='Reel out 20cm', color=color.gold, text_color=color.black),
+            Button(text='Sleep', color=color.gold, text_color=color.black),
+            ),
+        popup=True
+        )
+
+
+class Floor(Entity):
+    def __init__(self, **kwargs):
+        super().__init__(
+            collider='box',
+            **kwargs
+        )
+        self.target = Entity(
+            model='quad',
+            position=(0, 0, 0),
+            rotation=(90,0,0),
+            color=color.white,
+            scale=(0.5, 0.5),
+            texture='green_target.png',
+        )
+
+    def on_click(self,):
+        print(mouse.world_point)
+        # send message to position estimator with desired future position
+
+    def update(self,):
+        if mouse.hovered_entity == self:
+            # Get the intersection point in world coordinates
+            self.target.position = mouse.world_point
+
 class ControlPanelUI:
     def __init__(self, datastore, to_pe_q, to_ob_q):
         self.app = Ursina()
@@ -102,44 +227,46 @@ class ControlPanelUI:
         # add a 1cm sphere to clarify where the game origin is
         origin_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.01), shader=unlit_shader)  # Scale in meters
 
-        sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
-        sphereY = Entity(model='sphere', position=(0,1,0), color=color.green, scale=(0.1), shader=unlit_shader)
-        sphereZ = Entity(model='sphere', position=(0,0,1), color=color.blue, scale=(0.1), shader=unlit_shader)
+        # sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
+        # sphereY = Entity(model='sphere', position=(0,1,0), color=color.green, scale=(0.1), shader=unlit_shader)
+        # sphereZ = Entity(model='sphere', position=(0,0,1), color=color.blue, scale=(0.1), shader=unlit_shader)
 
         #show a very large floor
-        square = Entity(model='quad', position=(0, -0.05, 0), rotation=(90,0,0), color=color.brown, scale=(10, 10))  # Scale in meters
+        floor = Floor(model='quad', position=(0, -0.05, 0), rotation=(90,0,0), color=(0.35,0.22,0.18,1.0), scale=(10, 10), shader=lit_with_shadows_shader)  # Scale in meters
 
-        # this models units are in mm, but the game units are meters
-        anchor_color = (0.9, 0.9, 0.9, 1.0)
-        def add_anchor(pos, rot=(0,  0,0)):
-            return Entity(model='anchor', color=anchor_color, scale=0.001, position=pos, rotation=(0,  0,0), shader=lit_with_shadows_shader)
+        # anchor_color = (0.9, 0.9, 0.9, 1.0)
+        # def add_anchor(pos, rot=(0,  0,0)):
+        #     # this models units are in mm, but the game units are meters
+        #     return Entity(model='anchor', color=anchor_color, scale=0.001, position=pos, rotation=(0,  0,0), shader=lit_with_shadows_shader)
         self.anchors = []
-        self.anchors.append(add_anchor((-2,2, 3)))
-        self.anchors.append(add_anchor(( 2,2, 3)))
-        self.anchors.append(add_anchor(( -1,2,-2), rot=(0,180,0)))
-        self.anchors.append(add_anchor(( -2,2,-2), rot=(0,180,0)))
+        self.anchors.append(Anchor(0, (-2,2, 3)))
+        self.anchors.append(Anchor(1, ( 2,2, 3)))
+        self.anchors.append(Anchor(2, ( -1,2,-2), rotation=(0,180,0)))
+        self.anchors.append(Anchor(3, ( -2,2,-2), rotation=(0,180,0)))
 
         self.spline_curves = {}
 
         self.gantry = SplineMovingEntity(
             ui=self,
+            spline_func=None,
             model='gantry',
             color=(0.4, 0.4, 0.0, 1.0),
             scale=0.001,
             position=(0,1,1),
             rotation=(0,0,0),
             shader=lit_with_shadows_shader,
-            spline_func=None)
+        )
 
-        self.gripper = SplineMovingEntity(
+        self.gripper = Gripper(
             ui=self,
+            spline_func=None,
             model='gripper_closed',
             color=(0.3, 0.3, 0.9, 1.0),
             scale=0.001,
             position=(0,0.3,1),
             rotation=(-90,0,0),
             shader=lit_with_shadows_shader,
-            spline_func=None)
+        )
 
         self.lines = []
         for a in self.anchors:
@@ -147,8 +274,10 @@ class ControlPanelUI:
 
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
 
-        light = DirectionalLight(shadows=True)
-        light.look_at(Vec3(1,-1,1))
+        # the color is how you control the brightness
+        DirectionalLight(position=(1, 10, 1), shadows=True, rotation=(45, -5, 5), color=(0.8,0.8,0.8,1))
+        AmbientLight(color=(0.8,0.8,0.8,1))
+        # light.look_at(Vec3(1,-1,1))
 
         self.calibration_button = Button(
             text="Enter calibration mode",
@@ -159,16 +288,30 @@ class ControlPanelUI:
         # maybe you shouldn't read those files in the clients
         self.calibration_mode = 'run'
 
+        # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
+        # between every pair of anchors, draw a horizontal line. if all the other anchors' horizontal positions are on one side of that line, proceed
+        # make a vertical quad that passes through that line and apply the fade texture to it.
+        create_wall(self.anchors[0].position, self.anchors[1].position)
+        create_wall(self.anchors[1].position, self.anchors[2].position)
+        create_wall(self.anchors[2].position, self.anchors[3].position)
+        create_wall(self.anchors[3].position, self.anchors[0].position)
+
+        Sky(color=color.light_gray)
         EditorCamera()
 
     # renders a function that returns 3D points in a domain from 0 to 1
     # the y and z coordinates are swapped
     def render_curve(self, curve_function, name):
-        model = Pipe(
-            path=[Vec3(swap_yz(curve_function(time))) for time in np.linspace(0,1,32)],
-            thicknesses=(0.01, 0.01),
-            cap_ends=False,
-        )
+        try:
+            model = Pipe(
+                path=[Vec3(swap_yz(curve_function(time))) for time in np.linspace(0,1,32)],
+                thicknesses=(0.01, 0.01),
+                cap_ends=False,
+            )
+        except:
+            # Sometimes the verts are very close together and it breaks this constructor, and in that case
+            # it's fine to just not update the model
+            return
         if name in self.spline_curves:
             self.spline_curves[name].model = model
         else:
@@ -245,11 +388,6 @@ class ControlPanelUI:
     def start(self):
         self.app.run()
 
-
-def update():
-    # seems like this only happens when this file is __main__
-    print('ursina called update')
-
 def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q):
     """
     Entry point to be used when starting this from main.py with multiprocessing
@@ -276,7 +414,9 @@ def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q):
 
 if __name__ == "__main__":
     from multiprocessing import Queue
+    from data_store import DataStore
+    datastore = DataStore(horizon_s=10, n_cables=4)
     to_ui_q = Queue()
     to_pe_q = Queue()
     to_ob_q = Queue()
-    start_ui(to_ui_q, to_pe_q, to_ob_q)
+    start_ui(datastore, to_ui_q, to_pe_q, to_ob_q)
