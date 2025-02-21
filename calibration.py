@@ -7,18 +7,21 @@ import glob
 # when on the raspi, just collect the images. it doesn't have enough ram to analyze them.
 def collect_images():
     from picamera2 import Picamera2
-    from libcamera import Transform
+    from libcamera import Transform, controls
     picam2 = Picamera2()
     capture_config = picam2.create_still_configuration(main={"size": (4608, 2592), "format": "RGB888"})
     picam2.configure(capture_config)
     picam2.start()
+    picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.000001, "AfSpeed": controls.AfSpeedEnum.Fast}) 
     print("started pi camera")
-    for i in range(20):
+    sleep(1)
+    for i in range(50):
+        sleep(1)
         im = picam2.capture_array()
         cv2.imwrite(f"images/cal/cap_{i}.jpg", im)
         sleep(1)
         print(f'collected ({i+1}/20)')
-    
+
 def calibate_camera():
     #Input the number of board images to use for calibration (recommended: ~20)
     n_boards = 20
@@ -93,4 +96,4 @@ def calibate_camera():
     return True
 
 if __name__ == "__main__":
-    calibate_camera()
+    collect_images()
