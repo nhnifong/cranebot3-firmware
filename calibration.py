@@ -2,8 +2,22 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 from time import time, sleep
-from picamera2 import Picamera2
-from libcamera import Transform
+import glob
+
+# when on the raspi, just collect the images. it doesn't have enough ram to analyze them.
+def collect_images():
+    from picamera2 import Picamera2
+    from libcamera import Transform
+    picam2 = Picamera2()
+    capture_config = picam2.create_still_configuration(main={"size": (4608, 2592), "format": "RGB888"})
+    picam2.configure(capture_config)
+    picam2.start()
+    print("started pi camera")
+    for i in range(20):
+        im = picam2.capture_array()
+        cv2.imwrite(f"images/cal/cap_{i}.jpg", im)
+        sleep(1)
+        print(f'collected ({i+1}/20)')
     
 def calibate_camera():
     #Input the number of board images to use for calibration (recommended: ~20)
@@ -27,48 +41,32 @@ def calibate_camera():
     objp = np.zeros((board_h*board_w,3), np.float32)
     objp[:,:2] = np.mgrid[0:(board_w*board_dim):board_dim,0:(board_h*board_dim):board_dim].T.reshape(-1,2)
 
-    # for use on raspi. if on some other platform, change to some other method
-    picam2 = Picamera2()
-    # capture_config = picam2.create_preview_configuration(main={"size": (2304//2, 1296//2), "format": "RGB888"})
-    capture_config = picam2.create_still_configuration(main={"size": (4608, 2592), "format": "RGB888"})
-    picam2.configure(capture_config)
-    picam2.start()
-    print("started pi camera")
-
     #Loop through the images.  Find checkerboard corners and save the data to ipts.
     images_obtained = 0
-    start_time = time()
-    timeout = 60
-    while images_obtained < n_boards and time() < (start_time + timeout):
-        #Capture image
-        image = im = picam2.capture_array()
-        print("analyzing image")
-        # image = cv2.imread('images/chess.png')
+    for filepath in glob.glob('images/cal/*.jpg'):
+        print(f"analyzing {filepath}")
+        image = cv2.imread(filepath)
 
         #Convert to grayscale
         grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
+        # thresh = cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+ 
         #Find chessboard corners
-        found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
+        #found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
+        found, corners = cv2.findChessboardCornersSB(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ACCURACY)
 
         if found == True:
             #Add the "true" checkerboard corners
             opts.append(objp)
-
+            
             #Improve the accuracy of the checkerboard corners found in the image and save them to the ipts variable.
-            cv2.cornerSubPix(grey_image, corners, (20, 20), (-1, -1), criteria)
+            # cv2.cornerSubPix(grey_image, corners, (20, 20), (-1, -1), criteria)
+
             ipts.append(corners)
             images_obtained += 1 
-            print("images obtained {}/{}".format(images_obtained, n_boards))
-
-            sleep(1)
-
-    if images_obtained < n_boards:
-        print("Timed out before obtaining enough images of the calibration board")
-        return False
+            print("chessboards obtained {}/{}".format(images_obtained, n_boards))
     
-    print('Finished capturing images.')
-
     #Calibrate the camera
     print('Running Calibrations...')
     ret, intrinsic_matrix, distCoeff, rvecs, tvecs = cv2.calibrateCamera(opts, ipts, grey_image.shape[::-1],None,None)
