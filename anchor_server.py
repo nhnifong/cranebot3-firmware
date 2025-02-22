@@ -69,7 +69,7 @@ class RobotComponentServer:
                     self.spooler.setReferenceLength(float(update['reference_length']))
                 if 'video_task_mode' in update:
                     modes = update['video_task_mode']
-                    f'MODE:{bool(modes['send_images'])}:{bool(modes['send_detections'])}'
+                    f'MODE:{bool(modes["send_images"])}:{bool(modes["send_detections"])}'
                 # command to kill or restart the camera task
                 # sleep
                 # slow stop
@@ -92,7 +92,7 @@ class RobotComponentServer:
             # pull up to 20 detections or one image off the queue. This is to keep ws messages smaller
             detections = []
             message = {}
-            while !detection_queue.empty() and (len(detections) < 20 or ('image' not in message)):
+            while (not detection_queue.empty()) and (len(detections) < 20 or ('image' not in message)):
                 item = detection_queue.get_nowait()
                 if 'detection' in item:
                     detections.append(item['detection'])
