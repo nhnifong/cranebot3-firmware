@@ -68,9 +68,8 @@ class RobotComponentServer:
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
                 if 'video_task_mode' in update:
-                    
-                # command for turning on and off location detection
-                # command for turning on and off image streaming
+                    modes = update['video_task_mode']
+                    f'MODE:{bool(modes['send_images'])}:{bool(modes['send_detections'])}'
                 # command to kill or restart the camera task
                 # sleep
                 # slow stop
@@ -90,16 +89,21 @@ class RobotComponentServer:
 
     async def listen_detector(self, detection_queue):
         while self.run_client:
-            # pull up to 20 things off the queue. This is to keep ws messages smaller
-            dets = []
-            for i in range(20):
-                if detection_queue.empty():
-                    break
-                dets.append(detection_queue.get_nowait())
-            if len(dets) > 0 and self.ws:
-                print(f"sending {len(dets)} detections")
+            # pull up to 20 detections or one image off the queue. This is to keep ws messages smaller
+            detections = []
+            message = {}
+            while !detection_queue.empty() and (len(detections) < 20 or ('image' not in message)):
+                item = detection_queue.get_nowait()
+                if 'detection' in item:
+                    detections.append(item['detection'])
+                if 'image' in item:
+                    message['image'] = item['image']
+            if len(detections) > 0:
+                message['detections'] = detections
+            if message != {} and self.ws:
+                print(f"sending {len(detections)} detections, with_image={('image' in message)}")
                 try:
-                    await self.ws.send(json.dumps({'detections': dets}))
+                    await self.ws.send(json.dumps(message))
                 except (ConnectionClosedOK, ConnectionClosedError):
                     # no problem, client left. just throw these out
                     await asyncio.sleep(2.0)

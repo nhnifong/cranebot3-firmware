@@ -23,19 +23,35 @@ def local_aruco_detection(outq, control_queue):
     picam2.align_configuration(capture_config)
     picam2.configure(capture_config)
     picam2.start()
-    picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.000001, "AfSpeed": controls.AfSpeedEnum.Fast}) 
+    picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.1, "AfSpeed": controls.AfSpeedEnum.Fast}) 
+    send_images
+    send_detections
     while True:
         if not control_queue.empty():
-            if control_queue.get_nowait() == "STOP":
+            message = control_queue.get_nowait()
+            if message == 'STOP':
                 break # exit loop, ending process
-
-        sec = time.time()
-        im = picam2.capture_array()
-        detections = locate_markers(im)
-        if len(detections) > 0:
-            for det in detections:
-                det['s'] = sec # add the time of capture to the detection
-                outq.put(det)
+            if message.startswith('MODE'):
+                m = message.split(':')
+                send_images = m[1] == 'True'
+                send_detections m[2] == 'True'
+        if send_images or send_detections:
+            sec = time.time()
+            im = picam2.capture_array()
+            if send_images:
+                result, encoded_img = cv2.imencode(ext, image)  # Encode to memory buffer
+                if result:
+                    outq.put({'image':{'timestamp':sec, 'data':encoded_img.tobytes()}})
+                else:
+                    print(f"Encoding failed with extension {ext}")
+            if send_detections:
+                detections = locate_markers(im)
+                if len(detections) > 0:
+                    for det in detections:
+                        det['s'] = sec # add the time of capture to the detection
+                        outq.put({'detection':det})
+        else:
+            time.sleep(1)
     print("PiCamera detection process ended")
 
 
