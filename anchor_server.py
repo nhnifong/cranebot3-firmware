@@ -56,6 +56,7 @@ class RobotComponentServer:
     async def handler(self,websocket):
         print('Websocket connected')
         self.ws = websocket
+        self.control_queue.put(f'MODE:True:False')
         stream = asyncio.create_task(self.stream_measurements(websocket))
         while True:
             try:
@@ -69,7 +70,7 @@ class RobotComponentServer:
                     self.spooler.setReferenceLength(float(update['reference_length']))
                 if 'video_task_mode' in update:
                     modes = update['video_task_mode']
-                    f'MODE:{bool(modes["send_images"])}:{bool(modes["send_detections"])}'
+                    self.control_queue.put(f'MODE:{bool(modes["send_images"])}:{bool(modes["send_detections"])}')
                 # command to kill or restart the camera task
                 # sleep
                 # slow stop
@@ -81,9 +82,11 @@ class RobotComponentServer:
 
             except ConnectionClosedOK:
                 print("Client disconnected")
+                self.control_queue.put(f'MODE:False:False')
                 break
             except ConnectionClosedError as e:
                 print(f"Client disconnected with {e}")
+                self.control_queue.put(f'MODE:False:False')
                 break
         stream.cancel()
 
@@ -92,8 +95,8 @@ class RobotComponentServer:
             # pull up to 20 detections or one image off the queue. This is to keep ws messages smaller
             detections = []
             message = {}
-            while (not detection_queue.empty()) and (len(detections) < 20 or ('image' not in message)):
-                item = detection_queue.get_nowait()
+            while (not self.detection_queue.empty()) and (len(detections) < 20 or ('image' not in message)):
+                item = self.detection_queue.get_nowait()
                 if 'detection' in item:
                     detections.append(item['detection'])
                 if 'image' in item:
