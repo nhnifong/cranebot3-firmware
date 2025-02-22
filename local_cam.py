@@ -2,6 +2,7 @@ from cv_common import locate_markers
 import time
 from pprint import pprint
 import cv2
+import base64
 
 def local_aruco_detection(outq, control_queue):
     """
@@ -42,7 +43,10 @@ def local_aruco_detection(outq, control_queue):
             if send_images:
                 result, encoded_img = cv2.imencode('.jpg', im)  # Encode to memory buffer
                 if result:
-                    outq.put({'image':{'timestamp':sec, 'data':encoded_img.tobytes()}})
+                    outq.put({'image':{
+                        'timestamp':sec,
+                        'data':base64.b64encode(encoded_img.tobytes()).decode('utf-8')
+                    }})
                 else:
                     print(f"Encoding failed with extension {ext}")
             if send_detections:
