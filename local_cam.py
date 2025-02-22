@@ -1,6 +1,7 @@
 from cv_common import locate_markers
 import time
 from pprint import pprint
+import cv2
 
 def local_aruco_detection(outq, control_queue):
     """
@@ -10,7 +11,7 @@ def local_aruco_detection(outq, control_queue):
     """
     print("PiCamera detection process started")
     from picamera2 import Picamera2
-    from libcamera import Transform
+    from libcamera import Transform, controls
     picam2 = Picamera2()
     pprint(picam2.sensor_modes) # investigate modes with cropped FOV
     # full res is 4608x2592
@@ -24,8 +25,8 @@ def local_aruco_detection(outq, control_queue):
     picam2.configure(capture_config)
     picam2.start()
     picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.1, "AfSpeed": controls.AfSpeedEnum.Fast}) 
-    send_images
-    send_detections
+    send_images = True
+    send_detections = True
     while True:
         if not control_queue.empty():
             message = control_queue.get_nowait()
@@ -34,12 +35,12 @@ def local_aruco_detection(outq, control_queue):
             if message.startswith('MODE'):
                 m = message.split(':')
                 send_images = m[1] == 'True'
-                send_detections m[2] == 'True'
+                send_detections = m[2] == 'True'
         if send_images or send_detections:
             sec = time.time()
             im = picam2.capture_array()
             if send_images:
-                result, encoded_img = cv2.imencode(ext, image)  # Encode to memory buffer
+                result, encoded_img = cv2.imencode('.jpg', im)  # Encode to memory buffer
                 if result:
                     outq.put({'image':{'timestamp':sec, 'data':encoded_img.tobytes()}})
                 else:
