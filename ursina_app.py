@@ -395,6 +395,7 @@ class ControlPanelUI:
                 print('received pil image in UI')
                 pili = updates['pil_image']
                 self.camview.texture = Texture(pili.convert("RGBA"))
+                
 
     def start(self):
         self.app.run()

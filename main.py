@@ -2,6 +2,7 @@ import multiprocessing
 import numpy as np
 import time
 import argparse
+from multiprocessing import Pool
 
 from data_store import DataStore
 from observer import start_observation
@@ -36,46 +37,47 @@ if __name__ == "__main__":
     to_pe_q.cancel_join_thread()
     to_ob_q.cancel_join_thread()
 
+    with Pool(processes=6) as pool:
 
-    # Create and start the observer process
-    observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q, to_pe_q, to_ob_q))
-    observer_process.daemon = True
+        # Create and start the observer process
+        observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q, to_pe_q, to_ob_q, pool))
+        observer_process.daemon = True
 
-    # error minimization process
-    minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q, to_pe_q, to_ob_q))
-    minimizer_process.daemon = True
+        # error minimization process
+        minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q, to_pe_q, to_ob_q))
+        minimizer_process.daemon = True
 
-    # add ui process if not in headless mode
-    # if not args.headless:
-    #     from ursina_app import start_ui
-    #     ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, to_pe_q, to_ob_q))
-    #     ui_process.daemon = True
+        # add ui process if not in headless mode
+        # if not args.headless:
+        #     from ursina_app import start_ui
+        #     ui_process = multiprocessing.Process(target=start_ui, args=(to_ui_q, to_pe_q, to_ob_q))
+        #     ui_process.daemon = True
 
-    # todo use logging module in these processes.
-    observer_process.start()
-    minimizer_process.start()
+        # todo use logging module in these processes.
+        observer_process.start()
+        minimizer_process.start()
 
 
-    try:
-        if not args.headless:
-            # allow Ursina to be the main process. it doesn't work as a subprocess.
-            from ursina_app import start_ui
-            start_ui(datastore, to_ui_q, to_pe_q, to_ob_q)
-        else:
-            # Keep the main process alive
-            while True:
-                time.sleep(1)
-    except KeyboardInterrupt:
-        print("Exiting...")
-        to_ob_q.put({'STOP':None})
-        to_pe_q.put({'STOP':None})
-        if not args.headless:
-            to_ui_q.put({'STOP':None})
+        try:
+            if not args.headless:
+                # allow Ursina to be the main process. it doesn't work as a subprocess.
+                from ursina_app import start_ui
+                start_ui(datastore, to_ui_q, to_pe_q, to_ob_q)
+            else:
+                # Keep the main process alive
+                while True:
+                    time.sleep(1)
+        except KeyboardInterrupt:
+            print("Exiting...")
+            to_ob_q.put({'STOP':None})
+            to_pe_q.put({'STOP':None})
+            if not args.headless:
+                to_ui_q.put({'STOP':None})
 
-        observer_process.join()
-        # minimizer_process.join()
-        if not args.headless:
-            ui_process.join()
+            observer_process.join()
+            # minimizer_process.join()
+            if not args.headless:
+                ui_process.join()
 
 # Other tasks not yet accounted for:
 #   triggering the calibration process from the UI
