@@ -90,7 +90,7 @@ class RobotComponentServer:
                 break
         stream.cancel()
 
-    async def listen_detector(self, detection_queue):
+    async def listen_detector(self):
         while self.run_client:
             # pull up to 20 detections or one image off the queue. This is to keep ws messages smaller
             detections = []
@@ -124,17 +124,17 @@ class RobotComponentServer:
 
         # process for detecting fudicial markers
         print("starting video task")
-        control_queue = multiprocessing.Queue()
-        detection_queue = multiprocessing.Queue()
-        control_queue.cancel_join_thread()
-        detection_queue.cancel_join_thread()
+        self.control_queue = multiprocessing.Queue()
+        self.detection_queue = multiprocessing.Queue()
+        self.control_queue.cancel_join_thread()
+        self.detection_queue.cancel_join_thread()
 
-        aruco_process = multiprocessing.Process(target=local_aruco_detection, args=(detection_queue, control_queue))
+        aruco_process = multiprocessing.Process(target=local_aruco_detection, args=(self.detection_queue, self.control_queue))
         aruco_process.daemon = True
         aruco_process.start()
 
         # thread for listening to aruco detector process
-        listen_detector_task = asyncio.create_task(self.listen_detector(detection_queue))
+        listen_detector_task = asyncio.create_task(self.listen_detector())
 
         # thread for controlling stepper motor
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
@@ -147,7 +147,7 @@ class RobotComponentServer:
             print("Closing websocket server")
 
         # once that context has exited, stop and join the aruco process
-        control_queue.put("STOP")
+        self.control_queue.put("STOP")
         aruco_process.join()
 
         await self.zc.async_unregister_all_services()

@@ -9,6 +9,9 @@ from cv_common import locate_markers, compose_poses, invert_pose, average_pose
 import cv2
 import numpy as np
 import model_constants
+from PIL import Image
+import base64
+from io import BytesIO
 
 # number of origin detections to average
 max_origin_detections = 10
@@ -55,6 +58,9 @@ class RaspiAnchorClient:
         print(f"writing 'anchor_pose_{self.anchor_num}.npz'")
         np.savez(f'anchor_pose_{self.anchor_num}.npz', pose = self.anchor_pose)
         self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
+
+    def handle_image(self, timestamp, image):
+        pass
 
     def handle_detections(self, detections):
         """
@@ -138,6 +144,13 @@ class RaspiAnchorClient:
                     self.datastore.anchor_line_record[self.anchor_num].insertList(data['line_record'])
                 if 'detections' in data:
                     self.handle_detections(data['detections'])
+                if 'image' in data:
+                    timestamp = float(data['image']['timestamp'])
+                    print(f'decoding image at timestamp {timestamp}')
+                    # cv2_image = cv2.imdecode(np.frombuffer(base64.b64decode(data['image']['data']), np.uint8), cv2.IMREAD_COLOR)
+                    self.to_ui_q.put({'pil_image': Image.open(BytesIO(base64.b64decode(data['image']['data'])))})
+                    # self.handle_image(timestamp, image)
+
             except Exception as e:
                 # don't catch websockets.exceptions.ConnectionClosedOK because we want it to trip the infinite generator in websockets.connect
                 # so it will stop retrying.

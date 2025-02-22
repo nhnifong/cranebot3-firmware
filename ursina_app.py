@@ -10,7 +10,6 @@ from cv_common import invert_pose, compose_poses
 from math import pi
 import atexit
 from panda3d.core import LQuaternionf
-from itertools import permutations
 
 from ursina import *
 from ursina.shaders import (
@@ -296,6 +295,13 @@ class ControlPanelUI:
         create_wall(self.anchors[2].position, self.anchors[3].position)
         create_wall(self.anchors[3].position, self.anchors[0].position)
 
+        # img = cv2.cvtColor(cv2.imread('images/cap_0.jpg'), cv2.COLOR_BGR2RGB)
+        # im_pil = Image.fromarray(img)
+        # im_pil = im_pil.convert("RGBA")
+        # texture = Texture(im_pil)
+        # texture = Texture('images/cap_0.jpg')
+        self.camview = Entity(model='quad', scale=(2*1.777777, 2), position=(0,4,0))
+
         Sky(color=color.light_gray)
         EditorCamera()
 
@@ -384,6 +390,11 @@ class ControlPanelUI:
                 anchor_num = apose[0]
                 self.anchors[anchor_num].position = swap_yz(apose[1][1])
                 self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
+
+            if 'pil_image' in updates:
+                print('received pil image in UI')
+                pili = updates['pil_image']
+                self.camview.texture = Texture(pili.convert("RGBA"))
 
     def start(self):
         self.app.run()
