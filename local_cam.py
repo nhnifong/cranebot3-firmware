@@ -25,8 +25,8 @@ def local_aruco_detection(outq, control_queue):
     picam2.configure(capture_config)
     picam2.start()
     picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.1, "AfSpeed": controls.AfSpeedEnum.Fast}) 
-    send_images = True
-    send_detections = True
+    send_images = False
+    send_detections = False
     while True:
         if not control_queue.empty():
             message = control_queue.get_nowait()
