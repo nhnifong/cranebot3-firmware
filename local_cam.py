@@ -3,6 +3,7 @@ import time
 from pprint import pprint
 import cv2
 import base64
+import subprocess
 
 def local_aruco_detection(outq, control_queue):
     """

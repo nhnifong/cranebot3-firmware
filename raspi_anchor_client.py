@@ -9,9 +9,7 @@ from cv_common import locate_markers, compose_poses, invert_pose, average_pose
 import cv2
 import numpy as np
 import model_constants
-from PIL import Image
-import base64
-from io import BytesIO
+from functools import partial
 
 # number of origin detections to average
 max_origin_detections = 10
@@ -23,7 +21,7 @@ def pose_from_det(det):
 
 # this client is designed for the raspberri pi based anchor
 class RaspiAnchorClient:
-    def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q):
+    def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q, pool):
         self.address = address
         self.origin_poses = []
         self.anchor_num = anchor_num # which anchor are we connected to
@@ -35,6 +33,8 @@ class RaspiAnchorClient:
         self.receive_task = None  # Task for receiving messages from websocket
         self.video_task = None  # Task for streaming video
         self.calibration_mode = False
+        self.frame_times = {}
+        self.pool = pool
         try:
             # read calibration data from file
             saved_info = np.load('anchor_pose_%i.npz' % self.anchor_num)
@@ -54,15 +54,37 @@ class RaspiAnchorClient:
             ('gantry_back', model_constants.gantry_aruco_back_inv, datastore.gantry_pose),
         ]
 
+    async def receive_video(self):
+        # don't connect to early or you will be rejected
+        await asyncio.sleep(3)
+        cap = cv2.VideoCapture('tcp://{self.address}:{video_port}')
+        while self.connected:
+            ret, frame = cap.read()
+            if ret:
+                fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+                try:
+                    timestamp = self.frame_times[fnum]
+                    del self.frame_times[fnum]
+                except KeyError:
+                    print('received a frame without knowing when it was captured, assuming 0.7 seconds ago')
+                    timestamp = time.time() - 0.7
+                self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+
     def calibrate_pose(self):
         print(f"writing 'anchor_pose_{self.anchor_num}.npz'")
         np.savez(f'anchor_pose_{self.anchor_num}.npz', pose = self.anchor_pose)
         self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
 
-    def handle_image(self, timestamp, image):
-        pass
+    def handle_frame_times(self, frame_time_list):
+        for ft in frame_time_list:
+            # this item represents the time that rpicam-vid captured the frame with the given number.
+            # we need to know this for when we get frames from the stream
+            if len(self.frame_times) > 500:
+                print('How did we miss 500 frames? Video task crashed?')
+                self.shutdown()
+            self.frame_times[int(ft['fnum'])] = double(ft['time'])
 
-    def handle_detections(self, detections):
+    def handle_detections(self, detections, timestamp):
         """
         handle a list of aruco detections from the server
         """
@@ -108,7 +130,7 @@ class RaspiAnchorClient:
                             pose_from_det(detection), # the pose obtained just now
                             offset, # constant
                         ]))
-                        dest.insert(np.concatenate([[detection['s']], pose.reshape(6)]))
+                        dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
                         # print(f'Inserted pose in datastore name={name} t={detection['s']}, pose={pose}')
 
     async def connect_websocket(self):
@@ -134,22 +156,17 @@ class RaspiAnchorClient:
         # loop of a single websocket connection.
         # save a reference to this for send_anchor_commands_async
         self.websocket = websocket
+        vid_task = asyncio.create_task(asyncio.to_thread(self.receive_video))
         # Loop until disconnected
         while self.connected:
             try:
                 message = await websocket.recv()
                 # print(f'received message of length {len(message)}')
-                data = json.loads(message)
-                if 'line_record' in data and not self.calibration_mode:
-                    self.datastore.anchor_line_record[self.anchor_num].insertList(data['line_record'])
-                if 'detections' in data:
-                    self.handle_detections(data['detections'])
-                if 'image' in data:
-                    timestamp = float(data['image']['timestamp'])
-                    print(f'decoding image at timestamp {timestamp}')
-                    # cv2_image = cv2.imdecode(np.frombuffer(base64.b64decode(data['image']['data']), np.uint8), cv2.IMREAD_COLOR)
-                    self.to_ui_q.put({'pil_image': Image.open(BytesIO(base64.b64decode(data['image']['data'])))})
-                    # self.handle_image(timestamp, image)
+                update = json.loads(message)
+                if 'line_record' in update and not self.calibration_mode:
+                    self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
+                if 'frames' in update:
+                    self.handle_frame_times(update['frames'])
 
             except Exception as e:
                 # don't catch websockets.exceptions.ConnectionClosedOK because we want it to trip the infinite generator in websockets.connect
@@ -159,6 +176,7 @@ class RaspiAnchorClient:
                 self.websocket = None
                 raise e
                 break
+        await vid_task
 
     async def send_anchor_commands(self, update):
         if self.connected:
@@ -192,7 +210,7 @@ if __name__ == "__main__":
     to_ob_q.cancel_join_thread()
 
     async def main():
-        ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, to_pe_q)
+        ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, to_pe_q, None)
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), ac.shutdown)
         await ac.startup()

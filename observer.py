@@ -21,7 +21,7 @@ cranebot_gripper_service_name = 'cranebot-gripper-service'
 
 # Manager of multiple tasks running clients connected to each robot component
 class AsyncObserver:
-    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q) -> None:
+    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q, pool) -> None:
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
@@ -32,6 +32,7 @@ class AsyncObserver:
         self.to_ui_q = to_ui_q
         self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
+        self.pool = pool
 
         # keyed by server name
         self.bot_clients = {}
@@ -135,7 +136,7 @@ class AsyncObserver:
                     self.anchor_num_map[info.server] = anchor_num
                     self.next_available_anchor_num += 1
                     self.save_anchor_num_map()
-                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q)
+                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool)
                 self.bot_clients[info.server] = ac
                 await ac.startup()
 

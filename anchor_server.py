@@ -1,4 +1,5 @@
 import asyncio
+from asyncio.subprocess import PIPE, STDOUT
 import os
 import signal
 import websockets
@@ -15,25 +16,26 @@ from zeroconf.asyncio import (
 import uuid
 import socket
 import time
+import re
 from getmac import get_mac_address
-import multiprocessing
 from spools import SpoolController
-from local_cam import local_aruco_detection
 from motor_control import MKSSERVO42C
 
-def dummyProcess(outq, control_queue):
-    print("dummy process started")
-    while True:
-        if not control_queue.empty():
-            if control_queue.get_nowait() == "STOP":
-                break # exit loop, ending process
-    print("dummy process ended")
-
+stream_command = """
+rpicam-vid -t 0
+  --width=4608 --height=2592
+  --listen -o tcp://0.0.0.0:8888
+  --codec mjpeg
+  --vflip --hflip
+  --buffer-count=5
+  --autofocus-mode manual
+  --lens-position 0.1""".split()
+frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 
 class RobotComponentServer:
     def __init__(self):
-        self.ws = None # active websocket connection if there is one
         self.run_client = True
+        self.frametimes = []
 
     async def stream_measurements(self, ws):
         """
@@ -42,22 +44,76 @@ class RobotComponentServer:
         """
         while ws:
             try:
+                update = {}
+
+                # add line lengths
                 meas = self.spooler.popMeasurements()
                 if len(meas) > 0:
                     if len(meas) > 50:
                         meas = meas[:50]
-                    print(f"sending {len(meas)} line length data")
-                    await ws.send(json.dumps({'line_record': meas}))
-                await asyncio.sleep(0.5)
+                    update['line_record']= meas
+
+                # add frame times if we have any
+                if len(self.frametimes) > 0:
+                    update['frames'] = self.frametimes
+                self.frametimes = []
+
+                # send on websocket
+                if update != {}
+                    await ws.send(json.dumps(update))
+
+                # chill
+                await asyncio.sleep(0.3)
             except (ConnectionClosedOK, ConnectionClosedError):
                 print("stopped streaming measurements")
                 break
 
+    async def stream_mjpeg(self, line_timeout=5):
+        """
+        Start the rpicam-vid stream process with a timeout.
+        If no line is printed for timeout seconds, kill the process.
+        rpicam-vid listens for a single connection on 8888 and streams video to it, then terminates when the client disconnects.
+        it prints a line for every frame. Every time it does that, record the time and frame number.
+        spit that down the provided websocket connection, if there is one.
+        rpicam-vid has no way of sending timestamps on its own as of Feb 2025
+        """
+        process = await asyncio.create_subprocess_exec(stream_command,
+                stdout=PIPE, stderr=STDOUT)
+        while True:
+            try:
+                line = await asyncio.wait_for(process.stdout.readline(), line_timeout)
+                t = time.time()
+                if not line: # EOF
+                    break
+                else:
+                    match = frame_line_re.match(line)
+                    if match:
+                        self.frametimes.append({
+                            'time': t,
+                            'fnum': int(match.group(1)),
+                            # 'fps': match.group(2),
+                            # 'exposure': match.group(3),
+                            # 'analog_gain': match.group(4),
+                            # 'digital_gain': match.group(5),
+                        })
+                    else:
+                        print(line)
+                    continue # nothing wrong keep going
+            except asyncio.TimeoutError:
+                print(f'rpicam-vid wrote no lines for {line_timeout} seconds')
+            except asyncio.CancelledError:
+                break
+
+            # unless continue is hit above because we got a line of output quick enough, we kill the process.
+            process.kill()
+            break
+        return await process.wait() # Wait for the child process to exit normally, such as when the client disconnects
+
     async def handler(self,websocket):
         print('Websocket connected')
-        self.ws = websocket
         self.control_queue.put(f'MODE:True:False')
         stream = asyncio.create_task(self.stream_measurements(websocket))
+        mjpeg = asyncio.create_task(self.stream_mjpeg())
         while True:
             try:
                 message = await websocket.recv()
@@ -68,51 +124,21 @@ class RobotComponentServer:
                     self.spooler.setPlan(update['length_plan'])
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
-                if 'video_task_mode' in update:
-                    modes = update['video_task_mode']
-                    self.control_queue.put(f'MODE:{bool(modes["send_images"])}:{bool(modes["send_detections"])}')
                 # command to kill or restart the camera task
                 # sleep
                 # slow stop
                 # emergency stop
-                # command to toggle autofocus mode
 
                 response = {"status": "OK"}
                 await websocket.send(json.dumps(response)) #Encode JSON
 
             except ConnectionClosedOK:
                 print("Client disconnected")
-                self.control_queue.put(f'MODE:False:False')
                 break
             except ConnectionClosedError as e:
                 print(f"Client disconnected with {e}")
-                self.control_queue.put(f'MODE:False:False')
                 break
         stream.cancel()
-
-    async def listen_detector(self):
-        while self.run_client:
-            # pull up to 20 detections or one image off the queue. This is to keep ws messages smaller
-            detections = []
-            message = {}
-            while (not self.detection_queue.empty()) and (len(detections) < 20 or ('image' not in message)):
-                item = self.detection_queue.get_nowait()
-                if 'detection' in item:
-                    detections.append(item['detection'])
-                if 'image' in item:
-                    message['image'] = item['image']
-            if len(detections) > 0:
-                message['detections'] = detections
-            if message != {} and self.ws:
-                print(f"sending {len(detections)} detections, with_image={('image' in message)}")
-                try:
-                    await self.ws.send(json.dumps(message))
-                except (ConnectionClosedOK, ConnectionClosedError):
-                    # no problem, client left. just throw these out
-                    await asyncio.sleep(2.0)
-                    continue
-            else:
-                await asyncio.sleep(0.1)
 
 
     async def main(self, port=8765):
@@ -121,20 +147,6 @@ class RobotComponentServer:
 
         self.run_client = True
         asyncio.create_task(self.register_mdns_service(f"123.{self.service_name}", "_http._tcp.local.", port))
-
-        # process for detecting fudicial markers
-        print("starting video task")
-        self.control_queue = multiprocessing.Queue()
-        self.detection_queue = multiprocessing.Queue()
-        self.control_queue.cancel_join_thread()
-        self.detection_queue.cancel_join_thread()
-
-        aruco_process = multiprocessing.Process(target=local_aruco_detection, args=(self.detection_queue, self.control_queue))
-        aruco_process.daemon = True
-        aruco_process.start()
-
-        # thread for listening to aruco detector process
-        listen_detector_task = asyncio.create_task(self.listen_detector())
 
         # thread for controlling stepper motor
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
@@ -146,9 +158,6 @@ class RobotComponentServer:
             # if those tasks finish, exiting this context will cause the server's close() method to be called.
             print("Closing websocket server")
 
-        # once that context has exited, stop and join the aruco process
-        self.control_queue.put("STOP")
-        aruco_process.join()
 
         await self.zc.async_unregister_all_services()
         print("Service unregistered")
