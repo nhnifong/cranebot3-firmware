@@ -301,6 +301,7 @@ class ControlPanelUI:
         # texture = Texture(im_pil)
         # texture = Texture('images/cap_0.jpg')
         self.camview = Entity(model='quad', scale=(2*1.777777, 2), position=(0,4,0))
+        self.camview.enabled = False
 
         Sky(color=color.light_gray)
         EditorCamera()
@@ -395,7 +396,7 @@ class ControlPanelUI:
                 print('received pil image in UI')
                 pili = updates['pil_image']
                 self.camview.texture = Texture(pili.convert("RGBA"))
-                
+
 
     def start(self):
         self.app.run()
