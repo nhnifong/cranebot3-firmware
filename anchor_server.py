@@ -22,7 +22,7 @@ from spools import SpoolController
 from motor_control import MKSSERVO42C
 
 stream_command = """
-rpicam-vid -t 0
+/usr/bin/rpicam-vid -t 0
   --width=4608 --height=2592
   --listen -o tcp://0.0.0.0:8888
   --codec mjpeg
@@ -59,7 +59,7 @@ class RobotComponentServer:
                 self.frametimes = []
 
                 # send on websocket
-                if update != {}
+                if update != {}:
                     await ws.send(json.dumps(update))
 
                 # chill
@@ -68,7 +68,7 @@ class RobotComponentServer:
                 print("stopped streaming measurements")
                 break
 
-    async def stream_mjpeg(self, line_timeout=5):
+    async def stream_mjpeg(self, line_timeout=30):
         """
         Start the rpicam-vid stream process with a timeout.
         If no line is printed for timeout seconds, kill the process.
@@ -77,8 +77,7 @@ class RobotComponentServer:
         spit that down the provided websocket connection, if there is one.
         rpicam-vid has no way of sending timestamps on its own as of Feb 2025
         """
-        process = await asyncio.create_subprocess_exec(stream_command,
-                stdout=PIPE, stderr=STDOUT)
+        process = await asyncio.create_subprocess_exec(stream_command[0], *stream_command[1:], stdout=PIPE, stderr=STDOUT)
         while True:
             try:
                 line = await asyncio.wait_for(process.stdout.readline(), line_timeout)
@@ -86,6 +85,7 @@ class RobotComponentServer:
                 if not line: # EOF
                     break
                 else:
+                    line = line.decode()
                     match = frame_line_re.match(line)
                     if match:
                         self.frametimes.append({
@@ -111,7 +111,6 @@ class RobotComponentServer:
 
     async def handler(self,websocket):
         print('Websocket connected')
-        self.control_queue.put(f'MODE:True:False')
         stream = asyncio.create_task(self.stream_measurements(websocket))
         mjpeg = asyncio.create_task(self.stream_mjpeg())
         while True:
@@ -154,7 +153,7 @@ class RobotComponentServer:
         async with websockets.serve(self.handler, "0.0.0.0", port):
             print("Websocket server started")
             # cause the server to serve only as long as these other tasks are running
-            await asyncio.gather(listen_detector_task, spool_task)
+            await spool_task
             # if those tasks finish, exiting this context will cause the server's close() method to be called.
             print("Closing websocket server")
 
