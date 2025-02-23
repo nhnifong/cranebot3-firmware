@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import model_constants
 from functools import partial
+import threading
 
 # number of origin detections to average
 max_origin_detections = 10
@@ -54,10 +55,13 @@ class RaspiAnchorClient:
             ('gantry_back', model_constants.gantry_aruco_back_inv, datastore.gantry_pose),
         ]
 
-    async def receive_video(self):
+    def receive_video(self):
         # don't connect to early or you will be rejected
-        await asyncio.sleep(3)
-        cap = cv2.VideoCapture('tcp://{self.address}:{video_port}')
+        time.sleep(6)
+        video_uri = f'tcp://{self.address}:{video_port}'
+        print(f'Connecting to {video_uri}')
+        cap = cv2.VideoCapture(video_uri)
+        print(cap)
         while self.connected:
             ret, frame = cap.read()
             if ret:
@@ -68,6 +72,7 @@ class RaspiAnchorClient:
                 except KeyError:
                     print('received a frame without knowing when it was captured, assuming 0.7 seconds ago')
                     timestamp = time.time() - 0.7
+                print(f'frame {timestamp}')
                 self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
 
     def calibrate_pose(self):
@@ -82,12 +87,13 @@ class RaspiAnchorClient:
             if len(self.frame_times) > 500:
                 print('How did we miss 500 frames? Video task crashed?')
                 self.shutdown()
-            self.frame_times[int(ft['fnum'])] = double(ft['time'])
+            self.frame_times[int(ft['fnum'])] = float(ft['time'])
 
     def handle_detections(self, detections, timestamp):
         """
         handle a list of aruco detections from the server
         """
+        print(f'handle_detections {detections}')
         if self.calibration_mode:
             for detection in detections:
                 # print(f"Name: {detection['n']}")
@@ -156,7 +162,9 @@ class RaspiAnchorClient:
         # loop of a single websocket connection.
         # save a reference to this for send_anchor_commands_async
         self.websocket = websocket
-        vid_task = asyncio.create_task(asyncio.to_thread(self.receive_video))
+        # just could not make asyncio deal with this, so I used threading. hey it works, go figure
+        vid_thread = threading.Thread(target=self.receive_video)
+        vid_thread.start()
         # Loop until disconnected
         while self.connected:
             try:
@@ -176,7 +184,7 @@ class RaspiAnchorClient:
                 self.websocket = None
                 raise e
                 break
-        await vid_task
+        vid_thread.join()
 
     async def send_anchor_commands(self, update):
         if self.connected:

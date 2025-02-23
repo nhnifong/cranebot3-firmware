@@ -13,6 +13,7 @@ from zeroconf.asyncio import (
     AsyncZeroconf,
     AsyncZeroconfServiceTypes,
 )
+from multiprocessing import Pool
 from raspi_anchor_client import RaspiAnchorClient
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
@@ -21,7 +22,7 @@ cranebot_gripper_service_name = 'cranebot-gripper-service'
 
 # Manager of multiple tasks running clients connected to each robot component
 class AsyncObserver:
-    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q, pool) -> None:
+    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q) -> None:
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
@@ -32,7 +33,7 @@ class AsyncObserver:
         self.to_ui_q = to_ui_q
         self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
-        self.pool = pool
+        self.pool = None
 
         # keyed by server name
         self.bot_clients = {}
@@ -142,31 +143,33 @@ class AsyncObserver:
 
     async def main(self) -> None:
         # main process loop
-        self.aiozc = AsyncZeroconf(ip_version=IPVersion.All)
+        with Pool(processes=6) as pool:
+            self.pool = pool
+            self.aiozc = AsyncZeroconf(ip_version=IPVersion.All)
 
-        try:
-            print("get services list")
-            services = list(
-                await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
-            )
-            print("start service browser")
-            self.aiobrowser = AsyncServiceBrowser(
-                self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
-            )
-        except asyncio.exceptions.CancelledError:
-            await self.aiozc.async_close()
-            return
+            try:
+                print("get services list")
+                services = list(
+                    await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
+                )
+                print("start service browser")
+                self.aiobrowser = AsyncServiceBrowser(
+                    self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
+                )
+            except asyncio.exceptions.CancelledError:
+                await self.aiozc.async_close()
+                return
 
-        print("start position listener")
-        self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
+            print("start position listener")
+            self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
 
 
-        # await something that will end when the program closes that to keep zeroconf alive and discovering services.
-        try:
-            await self.position_update_task
-        except asyncio.exceptions.CancelledError:
-            pass
-        await self.async_close()
+            # await something that will end when the program closes that to keep zeroconf alive and discovering services.
+            try:
+                await self.position_update_task
+            except asyncio.exceptions.CancelledError:
+                pass
+            await self.async_close()
 
     async def async_close(self) -> None:
         self.send_position_updates = False
