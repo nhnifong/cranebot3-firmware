@@ -14,6 +14,8 @@ from zeroconf.asyncio import (
     AsyncZeroconfServiceTypes,
 )
 from multiprocessing import Pool
+from math import sin,cos
+import numpy as np
 from raspi_anchor_client import RaspiAnchorClient
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
@@ -163,6 +165,7 @@ class AsyncObserver:
             print("start position listener")
             self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
 
+            asyncio.create_task(self.add_simulated_data())
 
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
@@ -181,6 +184,14 @@ class AsyncObserver:
             client.shutdown()
         # if self.position_update_task:
         #     await self.position_update_task
+
+    async def add_simulated_data(self):
+        while self.send_position_updates:
+            t = time.time()
+            dp = np.array([t, 0,0,0, sin(t/2),cos(t/2),2])
+            self.datastore.gantry_pose.insert(dp)
+            self.datastore.winch_line_record.insert(np.array([t+10, 1.0])) # winch line always 1 meter, even in the future
+            await asyncio.sleep(0.2)
 
 def start_observation(datastore, to_ui_q, to_pe_q, to_ob_q):
     """

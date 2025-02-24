@@ -1,7 +1,6 @@
 import numpy as np
 import scipy.optimize as optimize
 from scipy.interpolate import BSpline
-from scipy.special import softmax
 import scipy.integrate as integrate
 from time import time
 from data_store import DataStore
@@ -24,7 +23,7 @@ import sys
 # 1. directional calculation, where one variable can be computed from the other.
 # 2. equality, where the two variables are supposed to represent the same thing, and the error between them should be part of the cost function.
 class CDPR_position_estimator:
-    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q, gravity=9.81):
+    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q):
         """
         Initializes the CDPR (Cable Driven Parallel Robot)
         All units are SI. these vales are assumed to be obtained from the auto calibration step
@@ -59,10 +58,10 @@ class CDPR_position_estimator:
         self.gantry_mass = 0.06 # kg
         self.rough_gripper_speed = 0.5 # m/s
         # self.platform_inertia = np.array(platform_inertia)
-        self.gravity = np.array([0,0,-1*gravity])
+        self.gravity = np.array([0,0,-9.81])
 
         # number of control points in position splines
-        self.n_ctrl_pts = 4
+        self.n_ctrl_pts = 14
         # cublic splines
         self.spline_degree = 3
 
@@ -93,21 +92,29 @@ class CDPR_position_estimator:
         self.gripper_rot_spline = BSpline(self.knots, ctrlp_rotation, self.spline_degree, True) # 1 dimensional. represents angle only
         self.gantry_accel_func = self.gripper_pos_spline.derivative(2)
 
-        lpos = 16 # maximum meters from origin than a position spline control point can be
-        self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 7
+        lpos = 10 # maximum meters from origin than a position spline control point can be
+        self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 7 # two 3d splines and a 1d spline
 
-        self.weights = softmax(np.array([
-            1, # gantry position from charuco
-            1, # gripper position from charuco
+        # 
+        spline3d_model_size = self.n_ctrl_pts * 3
+        start = spline3d_model_size
+        while start < spline3d_model_size*2:
+            self.bounds[start+2] = (1,4) # keep z position of gantry within 1 to 4 meters
+            start += 3
+
+
+        self.weights = np.array([
+            8, # gantry position from charuco
+            8, # gripper position from charuco
             1, # gripper local z rotation from charuco
-            1, # gripper inertial measurements
+            2, # gripper inertial measurements
             1, # calculated forces
-            1, # winch line record
+            4, # winch line record
             1, # anchor line record
-            1, # total energy of gripper
-            1, # total energy of gantry
-            2, # desired gripper location
-        ]))
+            0.5, # total energy of gripper
+            0.5, # total energy of gantry
+            1, # desired gripper location
+        ])
 
         now = time()
         self.horizon_s = self.datastore.horizon_s
@@ -140,14 +147,14 @@ class CDPR_position_estimator:
         # the magnitude of the rodrigues vector represents the angle of rotation in radians.
         return rotational_axis / np.linalg.norm(rotational_axis) * self.gripper_rot_spline(time)
 
-    def anchor_line_length(self, anchor_index, time):
+    def anchor_line_length(self, anchor_index, times):
         """
-        Return the length of an anchor line at a given time based on the the gantry position spline
+        Return the length of an anchor line at a given array of times based on the the gantry position spline
         Not applicable to the gripper winch line
 
-        time shoud be in the base interval of the model splines
+        times shoud be in the base interval of the model splines
 
-        returns a scalar for the line length
+        returns an array of scalars for the line length. one for each time
 
         Args:
             anchor_index: which line to estimate
@@ -155,16 +162,16 @@ class CDPR_position_estimator:
         """
 
         # evaluate the gantry position spline at a given instant and measure distance to anchor
-        return np.linalg.norm(self.anchor_points[anchor_index] - self.gantry_pos_spline(time))
+        return np.linalg.norm(self.anchor_points[anchor_index] - self.gantry_pos_spline(times), axis=1, keepdims=True)
 
-    def winch_line_len(self, time):
+    def winch_line_len(self, times):
         """
-        Return the winch line length at a point in time
+        Return the winch line lengths at an array of points in time
         time shoud be in the base interval of the model splines
         """
-        return np.linalg.norm(self.gantry_pos_spline(time) - self.gantry_pos_spline(time))
+        return np.linalg.norm(self.gantry_pos_spline(times) - self.gripper_pos_spline(times), axis=1, keepdims=True)
 
-    def calc_gripper_accel_from_forces(self, steps):
+    def calc_gripper_accel_from_forces(self, steps=100):
         """
         Calculate the expected acceleration on the gripper's IMU based on the forces it should experience due to
         it being a pendulum hanging from a moving object
@@ -176,25 +183,40 @@ class CDPR_position_estimator:
         Args:
             steps: number of discrete points at which to measure forces.
         """
-        results = []
-        for time in np.linspace(0,1,steps): # only look in the future
-            gant_pos = self.gantry_pos_spline(time)
-            # the center of gravity is the location that matters for this calculation
-            grip_pos = self.gripper_pos_spline(time)
+        # results = []
+        # for time in np.linspace(0,1,steps): # only look in the future
+        #     gant_pos = self.gantry_pos_spline(time)
+        #     # the center of gravity is the location that matters for this calculation
+        #     grip_pos = self.gripper_pos_spline(time)
 
-            # normalized direction vector from gantry pointing towards gripper
-            direction = np.linalg.norm(grip_pos - gant_pos)
-            # component of gravity pointing in that direction * -1
-            tension_acc = np.dot(self.gravity, direction) * -1
-            # mass cancelled out of this equation.
+        #     # direction vector from gantry pointing towards gripper
+        #     direction = grip_pos - gant_pos
+        #     direction = direction / np.linalg.norm(direction)
+        #     # magnitude of the component of gravity pointing in that direction * -1
+        #     tension = np.dot(self.gravity, direction)
+        #     # tension acceleration vector
+        #     tension_acc = -tension * direction
+        #     # mass cancelled out of this equation.
+        #     results.append(np.concatenate([[time], tension_acc + self.gravity]))
+        # return np.array(results)
 
-            results.append(np.concatenate([[time], tension_acc + self.gravity]))
-        print(results[:5])
-        return np.array(results)
+        times = np.linspace(0, 1, steps)
+        gant_positions = self.gantry_pos_spline(times)  # Vectorized spline evaluation
+        grip_positions = self.gripper_pos_spline(times)  # Vectorized spline evaluation
+
+        directions = grip_positions - gant_positions
+        magnitudes = np.linalg.norm(directions, axis=1, keepdims=True) #Calculate magnitudes
+        normalized_directions = directions / magnitudes #Normalize
+
+        tensions = np.einsum('i,ij->j', self.gravity, normalized_directions.T) #Vectorized dot product
+        tension_accs = -tensions[:, np.newaxis] * normalized_directions
+
+        results = np.concatenate([times[:, np.newaxis], tension_accs + self.gravity], axis=1)
+        return results
 
     def mechanical_energy(self, position_spline, mass_kg):
         """
-        return a function that gives the kinetic energy + potential energy of an object over the model window.
+        return a function that gives the kinetic energy + potential energy of an object at a particular time between 0 and 1
         The function returns a scalar in Joules
         """
         velocity = position_spline.derivative(1)
@@ -202,6 +224,23 @@ class CDPR_position_estimator:
             0.5 * np.linalg.norm(velocity(t)) ** 2 # kinetic energy
             + 9.81 * position_spline(t)[2] # potential energy
         )
+
+    def mechanical_energy_vectorized(self, position_spline, mass_kg, steps=100):
+        """
+        Return a function that gives the kinetic energy + potential energy of an object at a particular time.
+        """
+        velocity = position_spline.derivative(1)
+        times = np.linspace(0, 1, steps)
+        position_values = position_spline(times)
+        velocity_values = velocity(times)
+
+        kinetic_energy = 0.5 * mass_kg * np.linalg.norm(velocity_values, axis=1) ** 2
+        potential_energy = mass_kg * 9.81 * abs(position_values[:, 2])  # z-coordinate is index 2
+
+        total_energy_values = kinetic_energy + potential_energy
+        time_step = 1.0 / (steps - 1)  # Time step between points
+        total_energy = np.sum(total_energy_values) * time_step
+        return total_energy
 
     def clamped_knot_vector(self, n_ctrl_pts, base_interval=(0,1)):
         """
@@ -228,46 +267,53 @@ class CDPR_position_estimator:
         self.gripper_rot_spline.c = params[start : start + spline1d_model_size].reshape((self.n_ctrl_pts,))
         self.gantry_accel_func = self.gripper_pos_spline.derivative(2)
 
-    def model_time(self, t):
+    def model_time(self, times):
         """
         Convert a floating point number of seconds since the epoch into a time relative to the base interval of the model splines.
         assumes base interval is (0,1)
-        """
-        return (float(t) - self.time_domain[0]) / (self.time_domain[1] - self.time_domain[0])
 
-    def unix_time(self, t):
+        pass an array of times. if you have only one pass [t]
+        """
+        time_domain_diff = self.time_domain[1] - self.time_domain[0]
+        return (times - self.time_domain[0]) / time_domain_diff
+
+    def unix_time(self, times):
         """
         Convert a time relative to the base interval of the model splines into a floating point number of seconds since the epoch
         assumes base interval is (0,1)
+
+        pass an array of times. if you have only one pass [t]
         """
-        return float(t) * (self.time_domain[1] - self.time_domain[0]) + self.time_domain[0]
+        time_domain_diff = self.time_domain[1] - self.time_domain[0]
+        return times * time_domain_diff + self.time_domain[0]
 
     def error_meas(self, pos_model_func, position_measurements, normalize_time=True):
         """
         Return the mean distance between the given position model and all the position measurements in the given array
         this works both for the position splines and the line length functions.
 
-        TODO: in theory if I express this in a certain way, then autograd can differentiate it for me.
-
         Args:
             pos_model_func: model (function) that returns an N-dimensional point when evaluated at a time T, such as a BSpline
+                the function must support vectorized evaluation
             position_measurements: An array of shape (n_measurements, N+1) representing measurement time and an N-dimensional point (TXYZ).
                 time must be the first element in each row
                 time is a floating point number of seconds since the epoch
         """
-        if len(position_measurements) == 0:
-            return 0
-        # calculate distance between measured position and predicted position, sum over all measurements.
+        if position_measurements.shape[0] == 0:
+            return 0.0
+
+        # convert array of unix times to array of model times if necessary
         times = position_measurements[:,0]
         if normalize_time:
-            times = list(map(self.model_time, times))
-        expected = np.array(list(map(pos_model_func, times)))
-        dis = np.linalg.norm(position_measurements[:,1:] - expected, axis=1)
-        total = sum(dis)
-        av = total / len(position_measurements)
-        return av
+            time_domain_diff = self.time_domain[1] - self.time_domain[0]
+            times = (times - self.time_domain[0]) / time_domain_diff
 
-    def cost_function(self, model_parameters):
+        # calculate distance between measured position and predicted position, sum over all measurements.
+        expected = pos_model_func(times)
+        distances = np.linalg.norm(position_measurements[:, 1:] - expected, axis=1)
+        return np.mean(distances)
+
+    def cost_function(self, model_parameters, p=False):
         """
         Return the total error between a model and measurements as a scalar
 
@@ -276,27 +322,27 @@ class CDPR_position_estimator:
         """
         self.set_splines_from_params(model_parameters)
         
-        steps = 100
+        steps = 20
 
         errors = np.array([
             # error between gantry position model and observation
             self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
-            self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
+            0, #self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper rotation model and observation
             0, #self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
             # error between gripper acceleration model and observation
             0, #self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            0, #self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
+            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
             # error between model and recorded winch line lengths
-            0, #self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
+            self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
             0, #sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
             #    for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            0, #integrate.quad(self.mechanical_energy(self.gripper_pos_spline, self.gripper_mass), 0, self.horizon_s)[0],
-            0, #integrate.quad(self.mechanical_energy(self.gantry_pos_spline, self.gantry_mass), 0, self.horizon_s)[0],
+            self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
+            self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
             # error between position model and desired future locations
             0, #self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions()),
             
@@ -306,8 +352,11 @@ class CDPR_position_estimator:
             # penalty for exceeding max gripper acceleration since it could shake loose the payload
             # penalty for unspooling so fast you make a birdsnest
         ])
+        if p:
+            print(errors)
 
-        return sum(errors * self.weights)+0.01
+        s = np.sum(errors * self.weights)+0.01
+        return s
 
     def snapshot_datastore(self):
         """
@@ -356,21 +405,24 @@ class CDPR_position_estimator:
             method='SLSQP',
             bounds=self.bounds,
             options={
-                'maxiter': 10000,
-                'disp': False,
+                'maxiter': 200,
+                'disp': True,
+                # 'ftol':0.001, # Precision goal for the value of f in the stopping criterion.
+                #'eps':0.2, # Step size used for numerical approximation of the Jacobian.
+                #'finite_diff_rel_step':, # the relative step size to use for numerical approximation of jac
             },
         )
         time_taken = time() - start
         # print(f"minimization step took {time_taken}s")
-
         try:
-            if result.message != "Maximum number of function evaluations has been exceeded.":
+            if not result.message.startswith("Iteration limit reached"):
                 assert result.success
         except AssertionError:
             print(result)
             return
 
         # set splines from optimal model params
+        self.cost_function(result.x, p=True)
         self.set_splines_from_params(result.x)
 
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
@@ -378,15 +430,14 @@ class CDPR_position_estimator:
         # current_gripper_pos = self.gripper_pos_spline(normalized_time)
 
         # evaluate line lengths in the future and put them in a queue for immediate transmission to the robot
-        future_anchor_lines = [[
-            (self.unix_time(t), self.anchor_line_length(anchor, t))
-            for t in self.future_times] for anchor in range(self.n_cables)]
+        # future_anchor_lines = [[
+        #     (self.unix_time(t), self.anchor_line_length(anchor, t))
+        #     for t in self.future_times] for anchor in range(self.n_cables)]
 
-        future_winch_line = np.array([
-            np.concatenate([[self.unix_time(t)], [self.winch_line_len(t)]])
-            for t in self.future_times])
+        future_winch_line = np.column_stack((self.unix_time(self.future_times), self.winch_line_len(self.future_times)))
+
         update_for_observer = {
-            'future_anchor_lines': future_anchor_lines,
+            # 'future_anchor_lines': future_anchor_lines,
             'future_winch_line': future_winch_line,
         }
         self.to_ob_q.put(update_for_observer)
@@ -512,7 +563,7 @@ class CDPR_position_estimator:
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         while self.run:
             self.estimate()
-            await asyncio.sleep(2)
+            await asyncio.sleep(0.2)
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """
