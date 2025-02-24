@@ -86,7 +86,7 @@ class SplineMovingEntity(Entity):
     def update(self):
         if self.spline_func is not None:
             t = (time.time() - self.time_domain[0]) / (self.time_domain[1] - self.time_domain[0])
-            self.position = swap_yz(self.spline_func(t))
+            self.position = self.spline_func(t)
 
             if self.is_gantry:
                 # update the lines between the gantry and the other things
@@ -106,15 +106,21 @@ class Gripper(SplineMovingEntity):
         self.label_offset = (0.00, 0.04)
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
-            text=f"Gripper Not Detected",
+            text=f"Gripper\nNot Detected",
             scale=0.7,
         )
+        self.last_ob_render = time.time()
+
 
     def setStatus(self, status):
         self.label.text = f"Anchor {self.num} {status}"
 
     def update(self):
+        super().update()
         self.label.position = world_position_to_screen_position(self.position) + self.label_offset
+        if time.time() > self.last_ob_render+0.5:
+            self.ui.render_gripper_ob()
+            self.last_ob_render = time.time()
 
     def on_mouse_enter(self):
         self.color = anchor_color_selected
@@ -156,7 +162,7 @@ class Anchor(Entity):
 
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
-            text=f"Anchor {self.num} Not Detected",
+            text=f"Anchor {self.num}\nNot Detected",
             scale=0.7,
         )
 
@@ -303,6 +309,10 @@ class ControlPanelUI:
         self.camview = Entity(model='quad', scale=(2*1.777777, 2), position=(0,4,0))
         self.camview.enabled = False
 
+        self.go_quads = []
+        self.max_go_quads = 100
+        self.go_quad_next = 0
+
         Sky(color=color.light_gray)
         EditorCamera()
 
@@ -311,7 +321,7 @@ class ControlPanelUI:
     def render_curve(self, curve_function, name):
         try:
             model = Pipe(
-                path=[Vec3(swap_yz(curve_function(time))) for time in np.linspace(0,1,32)],
+                path=[Vec3(tuple(curve_function(time))) for time in np.linspace(0,1,32)],
                 thicknesses=(0.01, 0.01),
                 cap_ends=False,
             )
@@ -337,16 +347,24 @@ class ControlPanelUI:
 
         self.to_ob_q.put({'set_calibration_mode': self.calibration_mode})
 
+    def render_gripper_ob_inner(self, row):
+        if len(self.go_quads) < self.max_go_quads:
+            self.go_quads.append(Entity(
+                model='cube',
+                position=(row[4],row[6],row[5]),
+                color=color.white, scale=(0.03),
+                shader=unlit_shader))
+        else:
+            self.go_quads[self.go_quad_next].position = (row[4],row[6],row[5])
+            self.go_quad_next = (self.go_quad_next+1)%self.max_go_quads
+
     def render_gripper_ob(self,):
         """
         Display a visual indication of aruco based gripper observations
         """
-        while True:
-            print("render gripper ob")
-            gripper_pose = self.datastore.gripper_pose.deepCopy()
-            for row in gripper_pose:
-                sphereX = Entity(model='sphere', position=(row[4],row[6],row[5]), color=color.white, scale=(0.1), shader=lit_with_shadows_shader)
-            time.sleep(15)
+        gripper_pose = self.datastore.gantry_pose.deepCopy()
+        for row in gripper_pose:
+            self.render_gripper_ob_inner(row)
 
     def notify_connected_bots_change(self, available_bots={}):
         offs = 0
@@ -411,8 +429,8 @@ def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q):
     estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
     estimator_update_thread.start()
 
-    # rgo = threading.Thread(target=cpui.render_gripper_ob, daemon=True)
-    # rgo.start()
+    rgo = threading.Thread(target=cpui.render_gripper_ob, daemon=True)
+    rgo.start()
 
     def stop_other_processes():
         print("UI window closed. stopping other processes")

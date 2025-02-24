@@ -70,9 +70,8 @@ class RaspiAnchorClient:
                     timestamp = self.frame_times[fnum]
                     del self.frame_times[fnum]
                 except KeyError:
-                    print('received a frame without knowing when it was captured, assuming 0.7 seconds ago')
-                    timestamp = time.time() - 0.7
-                print(f'frame {timestamp}')
+                    print('received a frame without knowing when it was captured')
+                    continue
                 self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
 
     def calibrate_pose(self):
@@ -93,7 +92,6 @@ class RaspiAnchorClient:
         """
         handle a list of aruco detections from the server
         """
-        print(f'handle_detections {detections}')
         if self.calibration_mode:
             for detection in detections:
                 # print(f"Name: {detection['n']}")
@@ -123,6 +121,7 @@ class RaspiAnchorClient:
                 # store the time and that position in the appropriate measurement array in observer.
 
                 for name, offset, dest  in self.arucos:
+                    print(name)
                     if detection['n'] == name:
                         # you have the pose of gripper_front relative to a particular anchor camera
                         # Anchor is relative to the origin
@@ -137,7 +136,7 @@ class RaspiAnchorClient:
                             offset, # constant
                         ]))
                         dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
-                        # print(f'Inserted pose in datastore name={name} t={detection['s']}, pose={pose}')
+                        print(f'Inserted pose in datastore name={name} t={detection['s']}, pose={pose}')
 
     async def connect_websocket(self):
         # main client loop
