@@ -123,14 +123,7 @@ class RobotComponentServer:
                     self.spooler.setPlan(update['length_plan'])
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
-                # command to kill or restart the camera task
-                # sleep
-                # slow stop
-                # emergency stop
-
-                response = {"status": "OK"}
-                await websocket.send(json.dumps(response)) #Encode JSON
-
+                self.processOtherUpdates(update)
             except ConnectionClosedOK:
                 print("Client disconnected")
                 break
@@ -204,6 +197,9 @@ class RaspiAnchorServer(RobotComponentServer):
         self.spooler = SpoolController(MKSSERVO42C(), spool_diameter_mm=24)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
+        
+    def processOtherUpdates(self, update):
+        pass
 
 
 if __name__ == "__main__":

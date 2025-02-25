@@ -64,6 +64,7 @@ def locate_markers(im):
             # X points to the left in the image.
             # Y points up in the image
             # Z points out of the camera, down the center of the image
+            # consider using solvePnPRansac instead
             _, r, t = cv2.solvePnP(mp, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             # this is meant to be json serializable
             results.append({

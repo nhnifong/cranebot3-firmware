@@ -76,7 +76,7 @@ class AsyncObserver:
                 for client in self.bot_clients.values():
                     # this thread doesn't actually have a running event loop.
                     # so run this back in the main thread.
-                    asyncio.run_coroutine_threadsafe(client.send_anchor_commands({
+                    asyncio.run_coroutine_threadsafe(client.send_commands({
                         'length_plan' : updates['future_anchor_lines'][client.anchor_num]
                     }), loop)
             if 'future_winch_line' in updates and self.set_calibration_mode == 'run':
@@ -192,6 +192,16 @@ class AsyncObserver:
             self.datastore.gantry_pose.insert(dp)
             self.datastore.winch_line_record.insert(np.array([t+10, 1.0])) # winch line always 1 meter, even in the future
             await asyncio.sleep(0.2)
+
+    async def reset_reference_lengths(self):
+        """Tell the anchors how much actual line they have spooled out, from an external reference
+        This is like zeroing the axis, but we don't have to zero them, we can use the camera
+        """
+        # stop all the motors for a while,
+        # average the gripper positions from the datastore
+        # calculate the distance to each anchor
+        for client in self.bot_clients.values():
+            client.send_commands({'reference_length', calculated_distance_to_gantry})
 
 def start_observation(datastore, to_ui_q, to_pe_q, to_ob_q):
     """

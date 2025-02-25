@@ -15,13 +15,24 @@ def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 class SpoolController:
-    def __init__(self, motor, spool_diameter_mm):
+    def __init__(self, motor, empty_diameter, full_diameter, full_length):
+        """
+        Create a controller for a spool of line.
+        empty_diameter_mm is the diameter of the spool in millimeters when no line is on it.
+        full_diameter is the diameter in mm of the bulk of wrapped line when full_length meters of line are wrapped.
+        line_capacity_m is the length of line in meters that is attached to this spool.
+            if all of it were reeled in, the object at the end would reach the limit switch, if there is one.
+        """
         self.motor = motor
-        self.meters_per_rev = spool_diameter_mm * pi * 0.001;
+        self.empty_diameter = empty_diameter
+        self.full_diameter = full_diameter
+        self.full_length = full_length
+        # self.meters_per_rev = spool_diameter_mm * pi * 0.001;
         # last commanded motor speed in revs/sec
         self.speed = 0
         # Meters of line that were spooled out when zeroAngle was set.
         self.lineAtStart = 1.9
+        self.meters_per_rev =  self.meters_per_rev(self.lineAtStart)
         # The angle of the shaft when setReferenceAngle was last called (in revolutions)
         self.zeroAngle = 0
         # record of line length. tuples of (time, meters)
@@ -31,6 +42,12 @@ class SpoolController:
         self.lastIndex = 0
         self.runSpoolLoop = True
         self.rec_loop_counter = 0
+
+    def meters_per_rev(self, currentLenUnspooled):
+        # interpolate between empty and full diamter based on how much line is on the spool
+        fraction_wrapped = full_length / (full_length - currentLenUnspooled)
+        current_diameter = (full_diameter - empty_diameter) * fraction_wrapped + empty_diameter
+        return current_diameter * pi * 0.001;
 
     def setReferenceLength(self, length):
         """
@@ -53,13 +70,14 @@ class SpoolController:
 
     def currentLineLength(self):
         """
-        return the curren time and current unspooled line in meters
+        return the current time and current unspooled line in meters
         """
         success, angle = self.motor.getShaftAngle()
         l = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
         # accumulate these so you can send them to the websocket
         row = (time.time(), l)
         if self.rec_loop_counter == REC_MOD:
+            self.meters_per_rev =  self.meters_per_rev(l) # this also doesn't need to be updated at a high frequency.
             self.record.append(row)
             self.rec_loop_counter = 0
         self.rec_loop_counter += 1

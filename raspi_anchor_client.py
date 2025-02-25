@@ -56,7 +56,7 @@ class RaspiAnchorClient:
         ]
 
     def receive_video(self):
-        # don't connect to early or you will be rejected
+        # don't connect too early or you will be rejected
         time.sleep(6)
         video_uri = f'tcp://{self.address}:{video_port}'
         print(f'Connecting to {video_uri}')
@@ -136,7 +136,7 @@ class RaspiAnchorClient:
                             offset, # constant
                         ]))
                         dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
-                        print(f'Inserted pose in datastore name={name} t={detection['s']}, pose={pose}')
+                        print(f'Inserted pose in datastore name={name} t={detection["s"]}, pose={pose}')
 
     async def connect_websocket(self):
         # main client loop
@@ -185,7 +185,7 @@ class RaspiAnchorClient:
                 break
         vid_thread.join()
 
-    async def send_anchor_commands(self, update):
+    async def send_commands(self, update):
         if self.connected:
             print(f'would send {update}')
             # await self.websocket.send(json.dumps(update))
