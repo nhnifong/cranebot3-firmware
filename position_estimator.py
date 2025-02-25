@@ -30,12 +30,6 @@ class CDPR_position_estimator:
 
         The base interval of the splines is always (0,1)
 
-        self.anchors.append(add_anchor((-2,2, 3)))
-        self.anchors.append(add_anchor(( 2,2, 3)))
-        self.anchors.append(add_anchor(( -1,2,-2), rot=(0,180,0)))
-        self.anchors.append(add_anchor(( -2,2,-2), rot=(0,180,0)))
-
-
         Args:
             datastore: instance of DataStore where measurements are stored/collected
             anchor_points: A numpy array of shape (n_cables, 3) representing the 3D coordinates of the cable anchor points.
@@ -113,7 +107,7 @@ class CDPR_position_estimator:
             1, # anchor line record
             0.5, # total energy of gripper
             0.5, # total energy of gantry
-            1, # desired gripper location
+            10, # desired gripper location
         ])
 
         now = time()
@@ -183,23 +177,6 @@ class CDPR_position_estimator:
         Args:
             steps: number of discrete points at which to measure forces.
         """
-        # results = []
-        # for time in np.linspace(0,1,steps): # only look in the future
-        #     gant_pos = self.gantry_pos_spline(time)
-        #     # the center of gravity is the location that matters for this calculation
-        #     grip_pos = self.gripper_pos_spline(time)
-
-        #     # direction vector from gantry pointing towards gripper
-        #     direction = grip_pos - gant_pos
-        #     direction = direction / np.linalg.norm(direction)
-        #     # magnitude of the component of gravity pointing in that direction * -1
-        #     tension = np.dot(self.gravity, direction)
-        #     # tension acceleration vector
-        #     tension_acc = -tension * direction
-        #     # mass cancelled out of this equation.
-        #     results.append(np.concatenate([[time], tension_acc + self.gravity]))
-        # return np.array(results)
-
         times = np.linspace(0, 1, steps)
         gant_positions = self.gantry_pos_spline(times)  # Vectorized spline evaluation
         grip_positions = self.gripper_pos_spline(times)  # Vectorized spline evaluation
@@ -344,7 +321,7 @@ class CDPR_position_estimator:
             self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
             self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
             # error between position model and desired future locations
-            0, #self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions()),
+            self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions(), normalize_time=False),
             
             # penalty for pulling the motors against eachother by raising the gantry too high
             # penalty for letting the gripper touch the floor
@@ -507,7 +484,7 @@ class CDPR_position_estimator:
         t = time()
         # starting with the highest priority item
         item_index = 0
-        # which we may already be holdin
+        # which we may already be holding
         holding = self.holding_something_now()
         while t < self.time_domain[1]:
             if holding:
