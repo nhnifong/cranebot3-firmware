@@ -107,7 +107,7 @@ class CDPR_position_estimator:
             1, # anchor line record
             0.5, # total energy of gripper
             0.5, # total energy of gantry
-            10, # desired gripper location
+            1, # desired gripper location
         ])
 
         now = time()
@@ -321,7 +321,7 @@ class CDPR_position_estimator:
             self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
             self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
             # error between position model and desired future locations
-            self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions(), normalize_time=False),
+            0,#self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions(), normalize_time=True),
             
             # penalty for pulling the motors against eachother by raising the gantry too high
             # penalty for letting the gripper touch the floor
@@ -383,7 +383,6 @@ class CDPR_position_estimator:
             bounds=self.bounds,
             options={
                 'maxiter': 200,
-                'disp': True,
                 # 'ftol':0.001, # Precision goal for the value of f in the stopping criterion.
                 #'eps':0.2, # Step size used for numerical approximation of the Jacobian.
                 #'finite_diff_rel_step':, # the relative step size to use for numerical approximation of jac
@@ -405,6 +404,10 @@ class CDPR_position_estimator:
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
         # normalized_time = self.model_time(time())
         # current_gripper_pos = self.gripper_pos_spline(normalized_time)
+
+        # dgp = self.desired_gripper_positions()
+        # print(f'desired {dgp}')
+        # print(self.error_meas(self.gripper_pos_spline, dgp, normalize_time=True))
 
         unix_times = self.unix_time(self.future_times)
 
@@ -493,16 +496,16 @@ class CDPR_position_estimator:
                 destination = self.gripper_over_bin_location()
             else:
                 # you want to be over the next target item
-                destination = self.item_priority_list(item_todo)
+                destination = self.item_priority_list(item_index)
                 item_index += 1
             # at a point in the future (distance to the destination) / rough_gripper_speed seconds from now
             travel_time = np.linalg.norm(destination - self.gripper_pos_spline(self.model_time(t))) / self.rough_gripper_speed
             t += travel_time
-            desired_positions.append(np.concatenate([[t], destination]))
+            desired_positions.append(np.concatenate([[t], destination], dtype=float))
             # and also remaining at the destination at a point in the future after a fixed lingering period, if it's still within our time domain
             t += linger
             if t < self.time_domain[1]:
-                desired_positions.append(np.concatenate([[t], destination]))
+                desired_positions.append(np.concatenate([[t], destination], dtype=float))
             # assume we will drop/pick up the item at this time.
             # we cannot know whether we will succeed, but have to assume we will for planning
             holding = not holding
@@ -541,7 +544,7 @@ class CDPR_position_estimator:
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         while self.run:
             self.estimate()
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.02)
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """

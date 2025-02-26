@@ -92,6 +92,7 @@ class SpoolController:
         self.motor.stop()
 
     def fastStop(self):
+        # todo: fast stop should not be permanent, but this is if it causes the trackingloop task to stop
         self.runSpoolLoop = False
         self.motor.stop()
 
