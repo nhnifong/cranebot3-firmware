@@ -128,10 +128,9 @@ class RobotComponentServer:
                     speed = update['hold_speed']
                     # todo this doesn't really hold speed at all
                     self.spooler.fastStop()
-                self.processOtherUpdates(update)
 
-                response = {"status": "OK"}
-                await websocket.send(json.dumps(response)) #Encode JSON
+                # defer to specific server subclass
+                self.processOtherUpdates(update)
 
             except ConnectionClosedOK:
                 print("Client disconnected")
@@ -206,6 +205,9 @@ class RaspiAnchorServer(RobotComponentServer):
         self.spooler = SpoolController(MKSSERVO42C(), spool_diameter_mm=24)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
+
+    def processOtherUpdates(self, updates):
+        pass
 
 
 if __name__ == "__main__":

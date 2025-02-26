@@ -22,6 +22,7 @@ class GripperSpoolMotor():
     def __init__(self, hat):
         self.servo = self.hat.servos[SERVO_1]
         self.hat = hat
+        self.run = True
         pass
 
     def ping(self):
@@ -86,19 +87,21 @@ class RaspiGripperServer(RobotComponentServer):
         if we wish to be holding somehting right now, command fingers closed, and maintain pressure.
         maintain an estimate at all times of whether we are successfully holding something.
         """
-        if self.shouldBeFingersClosed:
-            self.hand_servo.value(0)
-        else:
-            self.hand_servo.value(180)
+        while self.run:
+            if self.shouldBeFingersClosed:
+                # todo: in gripper closed mode, hold pressure constant
+                self.hand_servo.value(0)
+            else:
+                self.hand_servo.value(180)
 
     def processOtherUpdates(self, update):
         if 'grip' in update:
-            if update['grip'] = 'open':
+            if update['grip'] == 'open':
                 self.shouldBeFingersClosed = False
-            elif update['grip'] = 'closed':
+            elif update['grip'] == 'closed':
                 self.shouldBeFingersClosed = True
 
 
 if __name__ == "__main__":
-    ras = RaspiAnchorServer()
-    asyncio.run(ras.main())
+    gs = RaspiGripperServer()
+    asyncio.run(gs.main())
