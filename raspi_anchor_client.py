@@ -191,6 +191,10 @@ class RaspiAnchorClient:
             # await self.websocket.send(json.dumps(update))
         # just discard the update if not connected.
 
+    async def stop_motor(self):
+        if self.connected:
+            await self.websocket.send(json.dumps({'hold_speed':0}))
+
     async def startup(self):
         self.ct = asyncio.create_task(self.connect_websocket())
         await self.ct

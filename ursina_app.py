@@ -293,6 +293,12 @@ class ControlPanelUI:
         # maybe you shouldn't read those files in the clients
         self.calibration_mode = 'run'
 
+        self.stop_button = Button(
+            text="STOP",
+            color=color.red,
+            position=(0.7, -0.45), scale=(.15, .033),
+            on_click=self.on_stop_button)
+
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
         # between every pair of anchors, draw a horizontal line. if all the other anchors' horizontal positions are on one side of that line, proceed
         # make a vertical quad that passes through that line and apply the fade texture to it.
@@ -345,7 +351,10 @@ class ControlPanelUI:
             self.calibration_button.text = "Freeze Anchor Locations"
             # self.calibration_button.color=color.azure,
 
-        self.to_ob_q.put({'set_calibration_mode': self.calibration_mode})
+        self.to_ob_q.put({'set_run_mode': self.calibration_mode})
+
+    def on_stop_button(self):
+        self.to_ob_q.put({'set_run_mode':'pause'})
 
     def render_gripper_ob_inner(self, row):
         if len(self.go_quads) < self.max_go_quads:
