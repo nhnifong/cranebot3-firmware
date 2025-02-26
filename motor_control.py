@@ -56,7 +56,7 @@ class MKSSERVO42C:
         """
 
         # convert revs/sec to valid speed range (-127 +127)
-        command_speed = max(-127, min(int(SPEED1_REVS * speed), 127))
+        command_speed = max(-127, min(int(speed / SPEED1_REVS), 127))
 
         # the first bit is direction
         if command_speed > 0:

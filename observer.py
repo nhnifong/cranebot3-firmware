@@ -71,7 +71,7 @@ class AsyncObserver:
             if 'STOP' in updates:
                 print('stopping listen_position_updates thread due to STOP message in queue')
                 break
-            if 'future_anchor_lines' in updates and self.set_calibration_mode == 'run':
+            if 'future_anchor_lines' in updates and self.calmode == 'run':
                 # this should have one column for each anchor
                 for client in self.bot_clients.values():
                     # this thread doesn't actually have a running event loop.
@@ -79,18 +79,19 @@ class AsyncObserver:
                     asyncio.run_coroutine_threadsafe(client.send_commands({
                         'length_plan' : updates['future_anchor_lines'][client.anchor_num]
                     }), loop)
-            if 'future_winch_line' in updates and self.set_calibration_mode == 'run':
+            if 'future_winch_line' in updates and self.calmode == 'run':
                 pass
-            if 'set_calibration_mode' in updates:
-                print("set_calibration_mode") 
-                self.set_calibration_mode(updates['set_calibration_mode'])
+            if 'set_run_mode' in updates:
+                print("set_run_mode") 
+                self.set_run_mode(updates['set_run_mode'], loop)
 
-    def set_calibration_mode(self, mode):
+    def set_run_mode(self, mode, loop):
         """
         Sets the calibration mode of connected bots
         "run" - not in a calibration mode
         "cam" - calibrate distortion parameters of cameras
         "pose" - observe the origin board
+        "pause" - hold all motors at current position
         """
         if mode == "run":
             if self.calmode == "pose":
@@ -107,6 +108,9 @@ class AsyncObserver:
             for name, client in self.bot_clients.items():
                 client.calibration_mode = True
                 print(f'setting {name} to pose calibration mode')
+        elif mode == "pause":
+            for name, client in self.bot_clients.items():
+                asyncio.run_coroutine_threadsafe(client.stop_motor(), loop)
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange

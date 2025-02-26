@@ -123,7 +123,16 @@ class RobotComponentServer:
                     self.spooler.setPlan(update['length_plan'])
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
+                if 'hold_speed' in update:
+                    # manual override of motor speed setting in revs/sec
+                    speed = update['hold_speed']
+                    # todo this doesn't really hold speed at all
+                    self.spooler.fastStop()
                 self.processOtherUpdates(update)
+
+                response = {"status": "OK"}
+                await websocket.send(json.dumps(response)) #Encode JSON
+
             except ConnectionClosedOK:
                 print("Client disconnected")
                 break
@@ -197,9 +206,6 @@ class RaspiAnchorServer(RobotComponentServer):
         self.spooler = SpoolController(MKSSERVO42C(), spool_diameter_mm=24)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
-        
-    def processOtherUpdates(self, update):
-        pass
 
 
 if __name__ == "__main__":

@@ -27,6 +27,8 @@ marker_names = [
     'gantry_front',
     'gantry_back',
     'bin_other',
+    'debug_reel_in',
+    'debug_reel_out',
 ]
 
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
@@ -172,8 +174,8 @@ def generateMarkerImages():
     border_px = 40
     marker_side_px = 500
     cm = (marker_size/marker_side_px)*(marker_side_px+border_px*2)*100
-    print('boards should be printed with a side length of %0.2f cm (%0.2f in)' % cm, cm*0.393701)
-    print('origin should be printed with a side length of %0.2f cm (%0.2f in)' % cm*2, cm*2*0.393701)
+    print('boards should be printed with a side length of %0.2f cm (%0.2f in)' % (cm, cm*0.393701))
+    print('origin should be printed with a side length of %0.2f cm (%0.2f in)' % (cm*2, cm*2*0.393701))
     for i, name in enumerate(marker_names):
         marker_image = cv2.aruco.generateImageMarker(aruco_dict, i, marker_side_px)
 

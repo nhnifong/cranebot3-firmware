@@ -155,8 +155,8 @@ class CDPR_position_estimator:
             gantry_pos_spline: BSpline. the model of the gantry position in time.
         """
 
-        # evaluate the gantry position spline at a given instant and measure distance to anchor
-        return np.linalg.norm(self.anchor_points[anchor_index] - self.gantry_pos_spline(times), axis=1, keepdims=True)
+        # evaluate the gantry position spline at every instant in the times aray and measure distance to anchor
+        return np.linalg.norm(self.anchor_points[anchor_index] - self.gantry_pos_spline(times), axis=1)
 
     def winch_line_len(self, times):
         """
@@ -406,15 +406,16 @@ class CDPR_position_estimator:
         # normalized_time = self.model_time(time())
         # current_gripper_pos = self.gripper_pos_spline(normalized_time)
 
-        # evaluate line lengths in the future and put them in a queue for immediate transmission to the robot
-        # future_anchor_lines = [[
-        #     (self.unix_time(t), self.anchor_line_length(anchor, t))
-        #     for t in self.future_times] for anchor in range(self.n_cables)]
+        unix_times = self.unix_time(self.future_times)
 
-        future_winch_line = np.column_stack((self.unix_time(self.future_times), self.winch_line_len(self.future_times)))
+        # evaluate line lengths in the future and put them in a queue for immediate transmission to the robot
+        future_anchor_lines = np.array([(unix_times, self.anchor_line_length(anchor, self.future_times))
+            for anchor in range(self.n_cables)])
+
+        future_winch_line = np.column_stack((unix_times, self.winch_line_len(self.future_times)))
 
         update_for_observer = {
-            # 'future_anchor_lines': future_anchor_lines,
+            'future_anchor_lines': future_anchor_lines,
             'future_winch_line': future_winch_line,
         }
         self.to_ob_q.put(update_for_observer)
