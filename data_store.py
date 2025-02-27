@@ -68,7 +68,7 @@ class DataStore:
         self.horizon_s = horizon_s
         self.n_cables = n_cables
 
-        c = int(horizon_s * 10)
+        c = int(horizon_s * 3)
         self.gantry_pose = CircularBuffer((c, 7))
         self.gripper_pose = CircularBuffer((c, 7))
         self.imu_accel = CircularBuffer((c, 4))

@@ -192,10 +192,10 @@ class AsyncObserver:
     async def add_simulated_data(self):
         while self.send_position_updates:
             t = time.time()
-            dp = np.array([t, 0,0,0, sin(t/2),cos(t/2),2])
+            dp = np.array([t, 0,0,0, sin(t/8),cos(t/8),2])
             self.datastore.gantry_pose.insert(dp)
             self.datastore.winch_line_record.insert(np.array([t+10, 1.0])) # winch line always 1 meter, even in the future
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.8)
 
     async def reset_reference_lengths(self):
         """Tell the anchors how much actual line they have spooled out, from an external reference

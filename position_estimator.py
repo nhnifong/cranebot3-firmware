@@ -50,7 +50,7 @@ class CDPR_position_estimator:
         self.loadAnchorPoses()        
         self.gripper_mass = 0.4 # kg
         self.gantry_mass = 0.06 # kg
-        self.rough_gripper_speed = 0.5 # m/s
+        self.rough_gripper_speed = 0.7 # m/s
         # self.platform_inertia = np.array(platform_inertia)
         self.gravity = np.array([0,0,-9.81])
 
@@ -102,12 +102,12 @@ class CDPR_position_estimator:
             8, # gripper position from charuco
             1, # gripper local z rotation from charuco
             2, # gripper inertial measurements
-            1, # calculated forces
+            0, # calculated forces
             4, # winch line record
             1, # anchor line record
             0.5, # total energy of gripper
             0.5, # total energy of gantry
-            1, # desired gripper location
+            0, # desired gripper location
         ])
 
         now = time()
@@ -214,7 +214,7 @@ class CDPR_position_estimator:
         kinetic_energy = 0.5 * mass_kg * np.linalg.norm(velocity_values, axis=1) ** 2
         potential_energy = mass_kg * 9.81 * abs(position_values[:, 2])  # z-coordinate is index 2
 
-        total_energy_values = kinetic_energy + potential_energy
+        total_energy_values = kinetic_energy# + potential_energy
         time_step = 1.0 / (steps - 1)  # Time step between points
         total_energy = np.sum(total_energy_values) * time_step
         return total_energy
@@ -305,7 +305,7 @@ class CDPR_position_estimator:
             # error between gantry position model and observation
             self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
-            0, #self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
+            0,#self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper rotation model and observation
             0, #self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
             # error between gripper acceleration model and observation
@@ -321,7 +321,7 @@ class CDPR_position_estimator:
             self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
             self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
             # error between position model and desired future locations
-            0,#self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions(), normalize_time=True),
+            self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions(), normalize_time=True),
             
             # penalty for pulling the motors against eachother by raising the gantry too high
             # penalty for letting the gripper touch the floor
@@ -371,7 +371,7 @@ class CDPR_position_estimator:
         ])
 
         self.snapshot_datastore()
-        start = time()
+        self.start = time()
 
         # SLSQP
         # COBYLA
@@ -388,7 +388,7 @@ class CDPR_position_estimator:
                 #'finite_diff_rel_step':, # the relative step size to use for numerical approximation of jac
             },
         )
-        time_taken = time() - start
+        time_taken = time() - self.start
         # print(f"minimization step took {time_taken}s")
         try:
             if not result.message.startswith("Iteration limit reached"):
@@ -398,16 +398,14 @@ class CDPR_position_estimator:
             return
 
         # set splines from optimal model params
-        self.cost_function(result.x, p=True)
         self.set_splines_from_params(result.x)
+
+        # print errors
+        self.cost_function(result.x, p=True)
 
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
         # normalized_time = self.model_time(time())
         # current_gripper_pos = self.gripper_pos_spline(normalized_time)
-
-        # dgp = self.desired_gripper_positions()
-        # print(f'desired {dgp}')
-        # print(self.error_meas(self.gripper_pos_spline, dgp, normalize_time=True))
 
         unix_times = self.unix_time(self.future_times)
 
@@ -483,9 +481,10 @@ class CDPR_position_estimator:
         Return a list of one or more future desired gripper positions
         """
         desired_positions = []
-        linger = 2.0 # seconds to hover over bin or object
-        # starting at the present in unix time
-        t = time()
+        linger = 2.00 # seconds to hover over bin or object
+        # starting at the clock read before scikit.minimize was called.
+        # using time() directly here would make the error function nondeterministic, which many solvers seem to hate.
+        t = self.start
         # starting with the highest priority item
         item_index = 0
         # which we may already be holding
@@ -503,9 +502,10 @@ class CDPR_position_estimator:
             t += travel_time
             desired_positions.append(np.concatenate([[t], destination], dtype=float))
             # and also remaining at the destination at a point in the future after a fixed lingering period, if it's still within our time domain
-            t += linger
-            if t < self.time_domain[1]:
+            end_linger = t + linger
+            while t < self.time_domain[1] and t < end_linger:
                 desired_positions.append(np.concatenate([[t], destination], dtype=float))
+                t += 0.3
             # assume we will drop/pick up the item at this time.
             # we cannot know whether we will succeed, but have to assume we will for planning
             holding = not holding
@@ -518,7 +518,7 @@ class CDPR_position_estimator:
         pl = np.array([ [-1.5,0, 2.2],
                         [ 0.9,0, 1.0],
                         [ 0.2,0,-1.2]])
-        return pl[idx]
+        return pl[idx%3]
 
     def gripper_over_bin_location(self):
         return np.array([0,0.2,1])
