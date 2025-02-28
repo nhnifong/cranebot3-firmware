@@ -20,6 +20,7 @@ import re
 from getmac import get_mac_address
 from spools import SpoolController
 from motor_control import MKSSERVO42C
+import argparse
 
 stream_command = """
 /usr/bin/rpicam-vid -t 0
@@ -35,7 +36,8 @@ frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d
 class RobotComponentServer:
     def __init__(self):
         self.run_client = True
-        self.frametimes = []
+        # a dict of update to be flushed periodically to the websocket
+        self.update = {}
 
     async def stream_measurements(self, ws):
         """
@@ -44,7 +46,8 @@ class RobotComponentServer:
         """
         while ws:
             try:
-                update = {}
+                update = self.update
+                self.update = {'frames': []}
 
                 # add line lengths
                 meas = self.spooler.popMeasurements()
@@ -52,11 +55,6 @@ class RobotComponentServer:
                     if len(meas) > 50:
                         meas = meas[:50]
                     update['line_record']= meas
-
-                # add frame times if we have any
-                if len(self.frametimes) > 0:
-                    update['frames'] = self.frametimes
-                self.frametimes = []
 
                 # send on websocket
                 if update != {}:
@@ -88,7 +86,7 @@ class RobotComponentServer:
                     line = line.decode()
                     match = frame_line_re.match(line)
                     if match:
-                        self.frametimes.append({
+                        self.update['frames'].append({
                             'time': t,
                             'fnum': int(match.group(1)),
                             # 'fps': match.group(2),
@@ -123,11 +121,6 @@ class RobotComponentServer:
                     self.spooler.setPlan(update['length_plan'])
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
-                if 'hold_speed' in update:
-                    # manual override of motor speed setting in revs/sec
-                    speed = update['hold_speed']
-                    # todo this doesn't really hold speed at all
-                    self.spooler.fastStop()
 
                 # defer to specific server subclass
                 self.processOtherUpdates(update)
@@ -200,9 +193,14 @@ class RobotComponentServer:
         print(f"Registered service: {name} ({service_type}) on port {port}")
 
 class RaspiAnchorServer(RobotComponentServer):
-    def __init__(self):
+    def __init__(self, power_anchor=False):
         super().__init__()
-        self.spooler = SpoolController(MKSSERVO42C(), spool_diameter_mm=24)
+        if power_anchor:
+            # the large spool is wound with a 2 core pvc sheathed wire
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=28, full_diameter=64, full_length=9)
+        else:
+            # the small spools are wound with 50lb test braided fishing line
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=24, full_diameter=25, full_length=9)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
 
@@ -211,5 +209,12 @@ class RaspiAnchorServer(RobotComponentServer):
 
 
 if __name__ == "__main__":
-    ras = RaspiAnchorServer()
+
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--power", action="store_true",
+                        help="Configures this anchor as the one which has the power line")
+    args = parser.parse_args()
+
+    ras = RaspiAnchorServer(args.power)
     asyncio.run(ras.main())

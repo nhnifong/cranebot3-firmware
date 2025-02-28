@@ -37,7 +37,7 @@ class CDPR_position_estimator:
         self.run = True # run main loop
         self.datastore = datastore
         self.to_ui_q = to_ui_q
-        self.to_pe_q = to_pe_q # todo, start thread to read this
+        self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
         self.snapshot = {}
         self.n_cables = self.datastore.n_cables

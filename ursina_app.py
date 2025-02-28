@@ -225,6 +225,10 @@ class ControlPanelUI:
         self.to_ob_q = to_ob_q
         self.n_anchors = datastore.n_cables
 
+        # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
+        # maybe you shouldn't read those files in the clients
+        self.calibration_mode = 'run'
+
         # add the charuco board that represents the room origin
         # when a charuco board is located, it's origin is it's top left corner.
         square = Entity(model='quad', position=(0.03, 0, -0.03), rotation=(90,0,0), color=color.white, scale=(0.06, 0.06))  # Scale in meters
@@ -284,14 +288,11 @@ class ControlPanelUI:
         AmbientLight(color=(0.8,0.8,0.8,1))
         # light.look_at(Vec3(1,-1,1))
 
-        self.calibration_button = Button(
-            text="Enter calibration mode",
+        self.menu_button = Button(
+            text="Menu",
             color=color.azure,
-            position=(-0.7, -0.45), scale=(.35, .033),
-            on_click=self.on_calibration_button_click)
-        # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
-        # maybe you shouldn't read those files in the clients
-        self.calibration_mode = 'run'
+            position=(-0.7, -0.45), scale=(.25, .033),
+            on_click=self.on_menu_click)
 
         self.stop_button = Button(
             text="STOP",
@@ -340,18 +341,27 @@ class ControlPanelUI:
         else:
             self.spline_curves[name] = Entity(model=model, color=color.lime, shader=unlit_shader)
 
-    def on_calibration_button_click(self):
+    def on_menu_click(self):
+        wp = WindowPanel(
+            title=f"Robot Actions",
+            content=(
+                Button(text='Calibrate Anchor Positions', color=color.azure, on_click=self.on_calibration_button),
+                Button(text='Calibrate Lines', color=color.azure, on_click=self.on_line_button),
+            ),
+            popup=True,
+        )
+
+    def on_calibration_button(self):
         if self.calibration_mode == "pose":
             self.calibration_mode = "run"
-            self.calibration_button.text = "Enter calibration mode"
-            # self.calibration_button.color=color.green,
-
         elif self.calibration_mode == "run":
             self.calibration_mode = "pose"
-            self.calibration_button.text = "Freeze Anchor Locations"
-            # self.calibration_button.color=color.azure,
-
         self.to_ob_q.put({'set_run_mode': self.calibration_mode})
+
+    def on_line_button(self):
+        # calibrate line lengths
+        # Assume we have been stopped for a while.
+        self.to_ob_q.put({'do_line_calibration': None})
 
     def on_stop_button(self):
         self.to_ob_q.put({'set_run_mode':'pause'})

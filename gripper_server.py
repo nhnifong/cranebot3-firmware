@@ -11,6 +11,10 @@ WINCH_DEAD_ZONE = 4
 WINCH_MAX_RPM = 1.0166
 # converts from speed setting to rpm. the speed relationship is probably close to linear, but I have not confirmed
 SPEED1_REVS = WINCH_MAX_RPM / (WINCH_MAX_SPEED - WINCH_DEAD_ZONE)
+# gpio pin of infrared rangefinder
+RANGEFINDER_PIN = 0
+# gpio pin of pressure sensing resistor
+PRESSURE_PIN = 1
 
 class GripperSpoolMotor():
     """
@@ -59,23 +63,16 @@ class RaspiGripperServer(RobotComponentServer):
         self.service_type = 'cranebot-gripper-service'
 
         self.hat = InventorHATMini(init_leds=False)
-        # self.spool_servo = board.servos[SERVO_1]
-        # self.hand_servo = board.servos[SERVO_2]
-        self.hat.gpio_pin_mode(0, ADC) # infrared range
-        self.hat.gpio_pin_mode(1, ADC) # pressure resistor
+        self.hand_servo = board.servos[SERVO_2]
+        self.hat.gpio_pin_mode(RANGEFINDER_PIN, ADC) # infrared range
+        self.hat.gpio_pin_mode(PRESSURE_PIN, ADC) # pressure resistor
         self.shouldBeFingersClosed = False
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
-        self.spooler = SpoolController(GripperSpoolMotor(self.hat), spool_diameter_mm=19.71)
+        self.spooler = SpoolController(GripperSpoolMotor(self.hat), empty_diameter=20, full_diameter=36, full_length=1)
 
     def readAnalog(self)
-        voltage = board.gpio_pin_value(0)
-
-    def getSpoolMeasurements(self):
-        return self.spooler.popMeasurements()
-
-    def stopMotors(self):
-        self.spooler.fastStop()
+        voltage = board.gpio_pin_value(RANGEFINDER_PIN)
 
     def spoolTrackingLoop(self)
         # return the spool tracking function
@@ -86,13 +83,25 @@ class RaspiGripperServer(RobotComponentServer):
         Main control loop for fingers
         if we wish to be holding somehting right now, command fingers closed, and maintain pressure.
         maintain an estimate at all times of whether we are successfully holding something.
+
+        without actually training a network, holding something would be indicated by
+         * finger pressure being high
+         * high enough elapsed time since we started closing the fingers
+         * rangefinger reading is low and constant despite moving relative to the floor
+        
+        the camera may also be a way of determining whether somehting is held.
+        Either by doing something in opencv with a reference image of a closed, empty gripper,
+        or by looking at the output tensor of the AI camera 
         """
-        while self.run:
+        while self.run_client:
             if self.shouldBeFingersClosed:
                 # todo: in gripper closed mode, hold pressure constant
                 self.hand_servo.value(0)
             else:
                 self.hand_servo.value(180)
+            voltage = board.gpio_pin_value(PRESSURE_PIN)
+            # putting anything in the self.update dict means it will get flushed to the websocket
+            self.update['holding'] = voltage > 1.5
 
     def processOtherUpdates(self, update):
         if 'grip' in update:
