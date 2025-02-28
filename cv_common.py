@@ -6,7 +6,7 @@ import time
 from functools import lru_cache
 
 try:
-    calib = np.load('calibration_data.npz')
+    calib = np.load('camera_coef.npz')
     mtx = calib['intrinsic_matrix']
     distortion = calib['distCoeff']
 except:

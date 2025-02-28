@@ -17,6 +17,7 @@ from multiprocessing import Pool
 from math import sin,cos
 import numpy as np
 from raspi_anchor_client import RaspiAnchorClient
+import model_constants
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -65,6 +66,9 @@ class AsyncObserver:
     def listen_position_updates(self, loop):
         """
         Receive any updates on our process input queue
+
+        this thread doesn't actually have a running event loop.
+        so run any coroutines back in the main thread with asyncio.run_coroutine_threadsafe
         """
         while self.send_position_updates:
             updates = self.to_ob_q.get()
@@ -74,8 +78,6 @@ class AsyncObserver:
             if 'future_anchor_lines' in updates and self.calmode == 'run':
                 # this should have one column for each anchor
                 for client in self.bot_clients.values():
-                    # this thread doesn't actually have a running event loop.
-                    # so run this back in the main thread.
                     asyncio.run_coroutine_threadsafe(client.send_commands({
                         'length_plan' : updates['future_anchor_lines'][client.anchor_num]
                     }), loop)
@@ -84,6 +86,8 @@ class AsyncObserver:
             if 'set_run_mode' in updates:
                 print("set_run_mode") 
                 self.set_run_mode(updates['set_run_mode'], loop)
+            if 'do_line_calibration' in updates:
+                self.line_calibration(loop)
 
     def set_run_mode(self, mode, loop):
         """
@@ -91,7 +95,7 @@ class AsyncObserver:
         "run" - not in a calibration mode
         "cam" - calibrate distortion parameters of cameras
         "pose" - observe the origin board
-        "pause" - hold all motors at current position
+        "pause" - hold all motors at current position, but continue to make observations
         """
         if mode == "run":
             if self.calmode == "pose":
@@ -101,8 +105,6 @@ class AsyncObserver:
                     client.calibration_mode = False
             self.calmode = mode
             print("run mode")
-        elif mode == "cam":
-            pass
         elif mode == "pose":
             self.calmode = mode
             for name, client in self.bot_clients.items():
@@ -110,7 +112,20 @@ class AsyncObserver:
                 print(f'setting {name} to pose calibration mode')
         elif mode == "pause":
             for name, client in self.bot_clients.items():
-                asyncio.run_coroutine_threadsafe(client.stop_motor(), loop)
+                # Slow stop all spools. gripper too
+                asyncio.run_coroutine_threadsafe(client.slow_stop_spool(), loop)
+
+    def line_calibration(self, loop):
+        # average recent gantry poses.
+        gantry_position = average_pose(self.datastore.gantry_pose.deepCopy())[:3]
+        for name, client in self.bot_clients.items():
+            if name.contains('anchor'):
+                grommet_position = compose_poses([client.anchor_pose, model_constants.anchor_grommet])[:3]
+                distance = np.linalg.norm(grommet_position - gantry_position)
+                distance -= 0.02 # to make up for the distance between the gantry origin and it's grommets, which are all symmetric
+                print(f'anchor {client.anchor_num} line length estimated at {distance}m')
+                asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': distance}), loop)
+
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange

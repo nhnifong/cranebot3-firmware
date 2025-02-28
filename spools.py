@@ -83,18 +83,12 @@ class SpoolController:
         self.rec_loop_counter += 1
         return row
 
-    def slowStop(self):
-        direction = self.speed / self.speed
-        while abs(self.speed) > 0:
-            self.speed -= direction
-            self.motor.runConstantSpeed(self.speed)
-            time.sleep(0.05)
-        self.motor.stop()
-
     def fastStop(self):
-        # todo: fast stop should not be permanent, but this is if it causes the trackingloop task to stop
-        self.runSpoolLoop = False
+        # fast stop is permanent.
+        # it causes the trackingloop task to stop,
+        # causing the websocket connection to close
         self.motor.stop()
+        self.runSpoolLoop = False
 
     def trackingLoop(self):
         """
@@ -102,18 +96,18 @@ class SpoolController:
         """
         while self.runSpoolLoop:
             t, currentLen = self.currentLineLength()
-            if len(self.desiredLine) == 0:
-                if self.speed != 0:
-                    self.slowStop()
-                continue
 
             # Find the earliest entry in desiredLine that is still in the future.
-            while self.desiredLine[self.lastIndex][0] <= t:
+            while self.desiredLine[self.lastIndex][0] <= t and self.lastIndex < len(self.desiredLine):
                 self.lastIndex += 1
 
-            if self.lastIndex >= DATA_LEN:
+            # slow stop when there is no data to track
+            if self.lastIndex >= len(self.desiredLine):
                 if self.speed != 0:
-                    self.slowStop()
+                    direction = self.speed / self.speed
+                    self.speed -= direction * 0.1
+                    self.motor.runConstantSpeed(self.speed)
+                time.sleep(LOOP_DELAY_S)
                 continue
 
             targetLen = self.desiredLine[self.lastIndex][1]

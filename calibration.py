@@ -4,6 +4,12 @@ import numpy as np
 from time import time, sleep
 import glob
 
+#the number of squares on the board (width and height)
+board_w = 9
+board_h = 6
+# side length of one square in meters
+board_dim = 0.02246
+
 # when on the raspi, just collect the images. it doesn't have enough ram to analyze them.
 def collect_images():
     from picamera2 import Picamera2
@@ -22,78 +28,93 @@ def collect_images():
         sleep(1)
         print(f'collected ({i+1}/20)')
 
-def calibate_camera():
-    #Input the number of board images to use for calibration (recommended: ~20)
-    n_boards = 20
-    #Input the number of squares on the board (width and height)
-    board_w = 9
-    board_h = 6
-    # side length of one square in meters
-    board_dim = 0.02246
-    #Initializing variables
-    board_n = board_w * board_h
-    opts = []
-    ipts = []
-    npts = np.zeros((n_boards, 1), np.int32)
-    intrinsic_matrix = np.zeros((3, 3), np.float32)
-    distCoeffs = np.zeros((5, 1), np.float32)
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.1)
+# calibrate interactively
+class CalibrationInteractive:
+    def __init__(self):
+        self.cameraIdentifier = cameraIdentifier
+        #Initializing variables
+        self.board_n = board_w * board_h
+        self.opts = []
+        self.ipts = []
+        self.intrinsic_matrix = np.zeros((3, 3), np.float32)
+        self.distCoeffs = np.zeros((5, 1), np.float32)
+        self.criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.1)
 
-    # prepare object points based on the actual dimensions of the calibration board
-    # like (0,0,0), (25,0,0), (50,0,0) ....,(200,125,0)
-    objp = np.zeros((board_h*board_w,3), np.float32)
-    objp[:,:2] = np.mgrid[0:(board_w*board_dim):board_dim,0:(board_h*board_dim):board_dim].T.reshape(-1,2)
+        # prepare object points based on the actual dimensions of the calibration board
+        # like (0,0,0), (25,0,0), (50,0,0) ....,(200,125,0)
+        self.objp = np.zeros((board_h*board_w,3), np.float32)
+        self.objp[:,:2] = np.mgrid[0:(board_w*board_dim):board_dim,0:(board_h*board_dim):board_dim].T.reshape(-1,2)
 
-    #Loop through the images.  Find checkerboard corners and save the data to ipts.
-    images_obtained = 0
-    for filepath in glob.glob('images/cal/*.jpg'):
-        print(f"analyzing {filepath}")
-        image = cv2.imread(filepath)
+        self.images_obtained = 0
+        self.image_shape = None
 
+    def addImage(self, image):
         #Convert to grayscale
         grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-
-        # thresh = cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
- 
+        self.image_shape = grey_image.shape[::-1]
         #Find chessboard corners
-        #found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
         found, corners = cv2.findChessboardCornersSB(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ACCURACY)
 
         if found == True:
             #Add the "true" checkerboard corners
-            opts.append(objp)
-            
-            #Improve the accuracy of the checkerboard corners found in the image and save them to the ipts variable.
-            # cv2.cornerSubPix(grey_image, corners, (20, 20), (-1, -1), criteria)
+            self.opts.append(self.objp)
 
-            ipts.append(corners)
-            images_obtained += 1 
-            print("chessboards obtained {}/{}".format(images_obtained, n_boards))
-    
-    #Calibrate the camera
-    print('Running Calibrations...')
-    ret, intrinsic_matrix, distCoeff, rvecs, tvecs = cv2.calibrateCamera(opts, ipts, grey_image.shape[::-1],None,None)
+            self.ipts.append(corners)
+            self.images_obtained += 1 
+            print(f"chessboards obtained {images_obtained}")
 
-    #Save matrices
-    print('Intrinsic Matrix: ')
-    print(str(intrinsic_matrix))
-    print('Distortion Coefficients: ')
-    print(str(distCoeff))
+    def calibrate(self):
+        if self.images_obtained < 20:
+            raise RuntimeError(f'Obtained {self.images_obtained} images of checkerboard. Required 20')
 
-    #Save data
-    print('Saving data file to calibration_data.npz')
-    np.savez('calibration_data', distCoeff=distCoeff, intrinsic_matrix=intrinsic_matrix)
-    print('Calibration complete')
+        print('Running Calibrations...')
+        ret, self.intrinsic_matrix, self.distCoeff, rvecs, tvecs = cv2.calibrateCamera(
+            self.opts, self.ipts, self.image_shape, None, None)
 
-    #Calculate the total reprojection error.  The closer to zero the better.
-    tot_error = 0
-    for i in range(len(opts)):
-        imgpoints2, _ = cv2.projectPoints(opts[i], rvecs[i], tvecs[i], intrinsic_matrix, distCoeff)
-        error = cv2.norm(ipts[i],imgpoints2, cv2.NORM_L2)/len(imgpoints2)
-        tot_error += error
+        #Save matrices
+        print('Intrinsic Matrix: ')
+        print(str(self.intrinsic_matrix))
+        print('Distortion Coefficients: ')
+        print(str(self.distCoeff))
+        print('Calibration complete')
 
-    print("Total reprojection error: ", tot_error/len(opts))
-    return True
+        #Calculate the total reprojection error.  The closer to zero the better.
+        tot_error = 0
+        for i in range(len(opts)):
+            imgpoints2, _ = cv2.projectPoints(self.opts[i], rvecs[i], tvecs[i], self.intrinsic_matrix, self.distCoeff)
+            error = cv2.norm(self.ipts[i], imgpoints2, cv2.NORM_L2)/len(imgpoints2)
+            tot_error += error
+        terr = tot_error/len(self.opts)
+        print("Total reprojection error: ", terr)
+
+    def save(self): 
+        fname = 'camera_coef.npz'
+        print(f'Saving data file to {fname}')
+        np.savez(fname, distCoeff=self.distCoeff, intrinsic_matrix=self.intrinsic_matrix)
+
+# calibrate from files locally
+def calibrate_from_files():
+    ce = CalibrationInteractive()
+    for filepath in glob.glob('images/cal/*.jpg'):
+        print(f"analyzing {filepath}")
+        image = cv2.imread(filepath)
+        ce.addImage(image)
+    ce.calibrate()
+    ce.save()
+
+def calibrate_from_stream():
+    video_uri = 'tcp://192.168.1.151:8888'
+    print(f'Connecting to {video_uri}')
+    cap = cv2.VideoCapture(video_uri)
+    print(cap)
+    ce = CalibrationInteractive()
+    while ce.images_obtained < 20:
+        ret, frame = cap.read()
+        if ret:
+            ce.addImage(frame)
+            sleep(0.5)
+    ce.calibrate()
+    ce.save()
 
 if __name__ == "__main__":
-    collect_images()
+    calibrate_from_stream()

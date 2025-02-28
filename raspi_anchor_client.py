@@ -33,7 +33,7 @@ class RaspiAnchorClient:
         self.connected = False  # status of connection to websocket
         self.receive_task = None  # Task for receiving messages from websocket
         self.video_task = None  # Task for streaming video
-        self.calibration_mode = False
+        self.calibration_mode = False # true is pose calibration mode.
         self.frame_times = {}
         self.pool = pool
         try:
@@ -191,9 +191,8 @@ class RaspiAnchorClient:
             # await self.websocket.send(json.dumps(update))
         # just discard the update if not connected.
 
-    async def stop_motor(self):
-        if self.connected:
-            await self.websocket.send(json.dumps({'hold_speed':0}))
+    async def slow_stop_spool(self):
+        await self.send_commands({'length_plan' : []})
 
     async def startup(self):
         self.ct = asyncio.create_task(self.connect_websocket())
