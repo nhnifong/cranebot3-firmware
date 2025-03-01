@@ -401,7 +401,7 @@ class CDPR_position_estimator:
         self.set_splines_from_params(result.x)
 
         # print errors
-        self.cost_function(result.x, p=True)
+        # self.cost_function(result.x, p=True)
 
         # now you can use splines to calculate position at any point in the time interval, such as this instant.
         # normalized_time = self.model_time(time())

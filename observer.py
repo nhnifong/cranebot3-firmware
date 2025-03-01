@@ -30,7 +30,7 @@ class AsyncObserver:
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
         self.send_position_updates = True
-        self.calmode = "run"
+        self.calmode = "pause"
 
         self.datastore = datastore
         self.to_ui_q = to_ui_q
@@ -111,6 +111,7 @@ class AsyncObserver:
                 client.calibration_mode = True
                 print(f'setting {name} to pose calibration mode')
         elif mode == "pause":
+            self.calmode = mode
             for name, client in self.bot_clients.items():
                 # Slow stop all spools. gripper too
                 asyncio.run_coroutine_threadsafe(client.slow_stop_spool(), loop)
