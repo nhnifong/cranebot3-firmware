@@ -43,7 +43,7 @@ class SpoolController:
         self.runSpoolLoop = True
         self.rec_loop_counter = 0
 
-    def meters_per_rev(self, currentLenUnspooled):
+    def calc_meters_per_rev(self, currentLenUnspooled):
         # interpolate between empty and full diamter based on how much line is on the spool
         fraction_wrapped = self.full_length / (self.full_length - currentLenUnspooled)
         current_diameter = (self.full_diameter - self.empty_diameter) * fraction_wrapped + self.empty_diameter
