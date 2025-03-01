@@ -5,5 +5,5 @@ __pycache__
 anchor_mapping.txt
 anchor_pose_*.npz
 camera_coef.npz
-assets/*.blend1
+*/*.blend1
 images/cal

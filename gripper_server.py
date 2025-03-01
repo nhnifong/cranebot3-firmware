@@ -1,6 +1,7 @@
 import asyncio
 from anchor_server import RobotComponentServer
-from inventorhatmini import InventorHATMini, SERVO_1
+from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2, ADC
+from ioexpander import IN_PU
 
 # these two constants are obtained experimentally
 # the speed will not increase at settings beyond this value
@@ -15,6 +16,8 @@ SPEED1_REVS = WINCH_MAX_RPM / (WINCH_MAX_SPEED - WINCH_DEAD_ZONE)
 RANGEFINDER_PIN = 0
 # gpio pin of pressure sensing resistor
 PRESSURE_PIN = 1
+# gpio pin of limit switch. 0 is closed
+LIMIT_SWITCH_PIN = 2
 
 class GripperSpoolMotor():
     """
@@ -72,7 +75,12 @@ class RaspiGripperServer(RobotComponentServer):
         self.spooler = SpoolController(GripperSpoolMotor(self.hat), empty_diameter=20, full_diameter=36, full_length=1)
 
     def readAnalog(self)
-        voltage = board.gpio_pin_value(RANGEFINDER_PIN)
+        # 5cm - 2.3v
+        # 10cm - 2.0v
+        # 15cm - 1.5v
+        # 20cm - 1.15v
+        # the measurement is not thrown off by the fingers being closed at all
+        voltage = self.hat.gpio_pin_value(RANGEFINDER_PIN)
 
     def spoolTrackingLoop(self)
         # return the spool tracking function
@@ -96,9 +104,9 @@ class RaspiGripperServer(RobotComponentServer):
         while self.run_client:
             if self.shouldBeFingersClosed:
                 # todo: in gripper closed mode, hold pressure constant
-                self.hand_servo.value(0)
+                self.hand_servo.value(90)
             else:
-                self.hand_servo.value(180)
+                self.hand_servo.value(-90)
             voltage = board.gpio_pin_value(PRESSURE_PIN)
             # putting anything in the self.update dict means it will get flushed to the websocket
             self.update['holding'] = voltage > 1.5
