@@ -32,7 +32,7 @@ class SpoolController:
         self.speed = 0
         # Meters of line that were spooled out when zeroAngle was set.
         self.lineAtStart = 1.9
-        self.meters_per_rev =  self.meters_per_rev(self.lineAtStart)
+        self.meters_per_rev =  self.calc_meters_per_rev(self.lineAtStart)
         # The angle of the shaft when setReferenceAngle was last called (in revolutions)
         self.zeroAngle = 0
         # record of line length. tuples of (time, meters)
@@ -77,7 +77,7 @@ class SpoolController:
         # accumulate these so you can send them to the websocket
         row = (time.time(), l)
         if self.rec_loop_counter == REC_MOD:
-            self.meters_per_rev =  self.meters_per_rev(l) # this also doesn't need to be updated at a high frequency.
+            self.meters_per_rev =  self.calc_meters_per_rev(l) # this also doesn't need to be updated at a high frequency.
             self.record.append(row)
             self.rec_loop_counter = 0
         self.rec_loop_counter += 1
@@ -98,7 +98,7 @@ class SpoolController:
             t, currentLen = self.currentLineLength()
 
             # Find the earliest entry in desiredLine that is still in the future.
-            while self.desiredLine[self.lastIndex][0] <= t and self.lastIndex < len(self.desiredLine):
+            while self.lastIndex < len(self.desiredLine) and self.desiredLine[self.lastIndex][0] <= t:
                 self.lastIndex += 1
 
             # slow stop when there is no data to track
@@ -136,7 +136,10 @@ class SpoolController:
 
             maxspeed = self.motor.getMaxSpeed()
             self.speed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
-            self.motor.runConstantSpeed(self.speed)
+
+            #self.motor.runConstantSpeed(self.speed)
+            print(f'would run at {self.speed}')
+            self.motor.runConstantSpeed(0)
 
             time.sleep(LOOP_DELAY_S)
 
