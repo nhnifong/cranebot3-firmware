@@ -19,6 +19,16 @@ except:
     distortion = np.array(
     [[ 0.01959627, 0.56390969, -0.00256158, -0.00496641, -0.93400812]])
 
+"""
+Intrinsic Matrix: 
+[[2.48327492e+04 0.00000000e+00 2.31676910e+03]
+ [0.00000000e+00 4.27958444e+04 1.28436095e+03]
+ [0.00000000e+00 0.00000000e+00 1.00000000e+00]]
+Distortion Coefficients: 
+[[ 1.45428008e+01 -9.27187979e+02 -1.10364125e-01 -4.74887005e-01
+  -1.67286185e+01]]
+"""
+
 # the ids are the index in the list
 marker_names = [
     'origin',
@@ -29,12 +39,17 @@ marker_names = [
     'bin_other',
     'debug_reel_in',
     'debug_reel_out',
+    'charuco_origin_1',
+    'charuco_origin_2',
+    'charuco_origin_3',
+    'charuco_origin_4',
 ]
 
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
 parameters = aruco.DetectorParameters()
 parameters.minMarkerPerimeterRate = 0.04
 parameters.maxMarkerPerimeterRate = 4.0
+parameters.useAruco3Detection = True
 detector = aruco.ArucoDetector(aruco_dict, parameters)
 marker_size = 0.09 # Length of ArUco marker in meters
 
@@ -170,14 +185,21 @@ def compose_poses(poses):
 
     return rvec_global.reshape((3,)), tvec_global
 
-def generateMarkerImages():
-    border_px = 40
+def generateMarkerImages(border=False):
+    if border:
+        border_px = 40
+    else:
+        border_px = 0
     marker_side_px = 500
     cm = (marker_size/marker_side_px)*(marker_side_px+border_px*2)*100
     print('boards should be printed with a side length of %0.2f cm (%0.2f in)' % (cm, cm*0.393701))
     print('origin should be printed with a side length of %0.2f cm (%0.2f in)' % (cm*2, cm*2*0.393701))
     for i, name in enumerate(marker_names):
         marker_image = cv2.aruco.generateImageMarker(aruco_dict, i, marker_side_px)
+        if border == False:
+            cv2.imwrite(os.path.join('boards',name+'.png'), marker_image)
+            continue
+
 
         # white frame with black corner squares
         total_size = marker_side_px + 2 * border_px
@@ -204,5 +226,18 @@ def homogenize_types(poses):
         ))
     return output
 
+origin_charuco_board = cv2.aruco.CharucoBoard(
+    (3, 3), # board size
+    0.15, # square length in meters
+    0.10, # marker length in meters
+    aruco_dict,
+    np.array([8,9,10,11])
+)
+
+def generate_origin_charuco():
+    img = origin_charuco_board.generateImage((1200, 1200))
+    cv2.imwrite('boards/charuco_origin.png', img)
+
 if __name__ == "__main__":
     generateMarkerImages()
+    generate_origin_charuco()
