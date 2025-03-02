@@ -186,8 +186,7 @@ class RaspiAnchorClient:
 
     async def send_commands(self, update):
         if self.connected:
-            print(f'would send {update}')
-            # await self.websocket.send(json.dumps(update))
+            await self.websocket.send(json.dumps(update))
         # just discard the update if not connected.
 
     async def slow_stop_spool(self):
