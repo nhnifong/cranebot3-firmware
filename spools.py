@@ -95,51 +95,55 @@ class SpoolController:
         Constantly try to match the position and speed given in an array
         """
         while self.runSpoolLoop:
-            t, currentLen = self.currentLineLength()
+            try:
+                t, currentLen = self.currentLineLength()
 
-            # Find the earliest entry in desiredLine that is still in the future.
-            while self.lastIndex < len(self.desiredLine) and self.desiredLine[self.lastIndex][0] <= t:
-                self.lastIndex += 1
+                # Find the earliest entry in desiredLine that is still in the future.
+                while self.lastIndex < len(self.desiredLine) and self.desiredLine[self.lastIndex][0] <= t:
+                    self.lastIndex += 1
 
-            # slow stop when there is no data to track
-            if self.lastIndex >= len(self.desiredLine):
-                if self.speed != 0:
-                    direction = self.speed / self.speed
-                    self.speed -= direction * 0.1
-                    self.motor.runConstantSpeed(self.speed)
+                # slow stop when there is no data to track
+                if self.lastIndex >= len(self.desiredLine):
+                    if self.speed != 0:
+                        direction = self.speed / self.speed
+                        self.speed -= direction * 0.1
+                        self.motor.runConstantSpeed(self.speed)
+                    time.sleep(LOOP_DELAY_S)
+                    continue
+
+                targetLen = self.desiredLine[self.lastIndex][1]
+                position_err = targetLen - currentLen
+
+                # What would the speed be between the two datapoints tha straddle the present?
+                # Positive values mean line is lengthening
+                # result is in meters of line per second
+                targetSpeed = ((self.desiredLine[self.lastIdx][1] - self.desiredLine[self.lastIdx-1][1])
+                    / (self.desiredLine[self.lastIdx][0] - self.desiredLine[self.lastIdx-1][0]))
+                # change in line length in meters per second
+                currentSpeed = self.speed * self.meters_per_rev
+                speed_err = targetSpeed - currentSpeed
+                # If our positional error was zero, we could go exactly that speed.
+                # if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
+                # (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
+                # ideally we want to catch up in one step, but we have max acceleration constraints.
+                aimSpeed = targetSpeed + position_err * PE_TERM; # meters of line per second
+
+                # limit the acceleration of the line
+                wouldAccel = (aimSpeed - currentSpeed) / LOOP_DELAY_S
+                if wouldAccel > MAX_ACCEL:
+                    aimSpeed = MAX_ACCEL * LOOP_DELAY_S + currentSpeed
+                elif wouldAccel < -MAX_ACCEL:
+                    aimSpeed = -MAX_ACCEL * LOOP_DELAY_S + currentSpeed
+
+                maxspeed = self.motor.getMaxSpeed()
+                self.speed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
+
+                #self.motor.runConstantSpeed(self.speed)
+                print(f'would run at {self.speed}')
+                self.motor.runConstantSpeed(0)
+
                 time.sleep(LOOP_DELAY_S)
-                continue
-
-            targetLen = self.desiredLine[self.lastIndex][1]
-            position_err = targetLen - currentLen
-
-            # What would the speed be between the two datapoints tha straddle the present?
-            # Positive values mean line is lengthening
-            # result is in meters of line per second
-            targetSpeed = ((self.desiredLine[self.lastIdx][1] - self.desiredLine[self.lastIdx-1][1])
-                / (self.desiredLine[self.lastIdx][0] - self.desiredLine[self.lastIdx-1][0]))
-            # change in line length in meters per second
-            currentSpeed = self.speed * self.meters_per_rev
-            speed_err = targetSpeed - currentSpeed
-            # If our positional error was zero, we could go exactly that speed.
-            # if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
-            # (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
-            # ideally we want to catch up in one step, but we have max acceleration constraints.
-            aimSpeed = targetSpeed + position_err * PE_TERM; # meters of line per second
-
-            # limit the acceleration of the line
-            wouldAccel = (aimSpeed - currentSpeed) / LOOP_DELAY_S
-            if wouldAccel > MAX_ACCEL:
-                aimSpeed = MAX_ACCEL * LOOP_DELAY_S + currentSpeed
-            elif wouldAccel < -MAX_ACCEL:
-                aimSpeed = -MAX_ACCEL * LOOP_DELAY_S + currentSpeed
-
-            maxspeed = self.motor.getMaxSpeed()
-            self.speed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
-
-            #self.motor.runConstantSpeed(self.speed)
-            print(f'would run at {self.speed}')
-            self.motor.runConstantSpeed(0)
-
-            time.sleep(LOOP_DELAY_S)
+            except serial.serialutil.SerialTimeoutException as e:
+                print('Lost serial contact with motor')
+                break
 
