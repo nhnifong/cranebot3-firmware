@@ -28,10 +28,23 @@ def collect_images():
         sleep(1)
         print(f'collected ({i+1}/20)')
 
+def collect_images_stream():
+    video_uri = 'tcp://192.168.1.151:8888'
+    print(f'Connecting to {video_uri}')
+    cap = cv2.VideoCapture(video_uri)
+    print(cap)
+    i = 0
+    while i < 50:
+        ret, frame = cap.read()
+        fpath = f'images/cal/cap_{i}.jpg'
+        cv2.imwrite(fpath, frame)
+        i += 1
+        print(f'saved frame to {fpath}')
+        sleep(0.5)
+
 # calibrate interactively
 class CalibrationInteractive:
     def __init__(self):
-        self.cameraIdentifier = cameraIdentifier
         #Initializing variables
         self.board_n = board_w * board_h
         self.opts = []
@@ -47,13 +60,16 @@ class CalibrationInteractive:
 
         self.images_obtained = 0
         self.image_shape = None
+        self.cnt = 0
 
     def addImage(self, image):
         #Convert to grayscale
         grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         self.image_shape = grey_image.shape[::-1]
         #Find chessboard corners
-        found, corners = cv2.findChessboardCornersSB(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ACCURACY)
+        print(f'search image {self.cnt}')
+        self.cnt+=1
+        found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ACCURACY)
 
         if found == True:
             #Add the "true" checkerboard corners
@@ -61,7 +77,7 @@ class CalibrationInteractive:
 
             self.ipts.append(corners)
             self.images_obtained += 1 
-            print(f"chessboards obtained {images_obtained}")
+            print(f"chessboards obtained {self.images_obtained}")
 
     def calibrate(self):
         if self.images_obtained < 20:
@@ -80,7 +96,7 @@ class CalibrationInteractive:
 
         #Calculate the total reprojection error.  The closer to zero the better.
         tot_error = 0
-        for i in range(len(opts)):
+        for i in range(len(self.opts)):
             imgpoints2, _ = cv2.projectPoints(self.opts[i], rvecs[i], tvecs[i], self.intrinsic_matrix, self.distCoeff)
             error = cv2.norm(self.ipts[i], imgpoints2, cv2.NORM_L2)/len(imgpoints2)
             tot_error += error
@@ -117,4 +133,6 @@ def calibrate_from_stream():
     ce.save()
 
 if __name__ == "__main__":
-    calibrate_from_stream()
+    # calibrate_from_stream()
+    # collect_images_stream()
+    calibrate_from_files()
