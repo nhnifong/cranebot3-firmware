@@ -1,6 +1,7 @@
 from math import pi
 import asyncio
 import time
+import serial
 
 
 DATA_LEN = 1000
