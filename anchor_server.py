@@ -29,8 +29,7 @@ stream_command = """
   --codec mjpeg
   --vflip --hflip
   --buffer-count=5
-  --autofocus-mode manual
-  --lens-position 0.1""".split()
+  --autofocus-mode continuous""".split()
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 
 class RobotComponentServer:
