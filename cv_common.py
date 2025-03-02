@@ -52,16 +52,17 @@ parameters.maxMarkerPerimeterRate = 4.0
 parameters.useAruco3Detection = True
 detector = aruco.ArucoDetector(aruco_dict, parameters)
 marker_size = 0.09 # Length of ArUco marker in meters
+origin_marker_size = 0.188
 
 def locate_markers(im):
     corners, ids, rejectedImgPoints = detector.detectMarkers(im)
     results = []
     if ids is not None:
         #estimate pose of every marker in the image
-        marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
-                                  [marker_size / 2, marker_size / 2, 0],
-                                  [marker_size / 2, -marker_size / 2, 0],
-                                  [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
+        marker_points = np.array([[-0.5, 0.5, 0],
+                                  [0.5, 0.5, 0],
+                                  [0.5, -0.5, 0],
+                                  [-0.5, -0.5, 0]], dtype=np.float32)
 
         for i,c in zip(ids, corners):
             try:
@@ -72,9 +73,11 @@ def locate_markers(im):
                 continue
 
             # expect origin board to be twice as big
-            mp = marker_points
             if name == 'origin':
-                mp = marker_points*2
+                mp = marker_points * origin_marker_size
+            else:
+                mp = marker_points * marker_size
+
             
             # gives answers in a frame of reference relative to the camera.
             # in the anchor vflip and hflip are false giving the following frame of reference

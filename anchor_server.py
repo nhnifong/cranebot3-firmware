@@ -28,7 +28,7 @@ stream_command = """
   --listen -o tcp://0.0.0.0:8888
   --codec mjpeg
   --vflip --hflip
-  --buffer-count=5
+  --buffer-count=4
   --autofocus-mode continuous""".split()
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 
