@@ -18,6 +18,7 @@ from math import sin,cos
 import numpy as np
 from raspi_anchor_client import RaspiAnchorClient
 import model_constants
+from cv_common import average_pose
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -88,6 +89,13 @@ class AsyncObserver:
                 self.set_run_mode(updates['set_run_mode'], loop)
             if 'do_line_calibration' in updates:
                 self.line_calibration(loop)
+            if 'jog_spool' in updates:
+                for client in self.bot_clients.values():
+                    if client.anchor_num == updates['jog_spool']['anchor']:
+                        # send an anchor the command 'jog' with a relative length change in meters.
+                        asyncio.run_coroutine_threadsafe(client.send_commands({
+                            'jog' : updates['jog_spool']['rel']
+                        }), loop)
 
     def set_run_mode(self, mode, loop):
         """
