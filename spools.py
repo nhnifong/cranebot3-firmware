@@ -126,8 +126,8 @@ class SpoolController:
                 # What would the speed be between the two datapoints tha straddle the present?
                 # Positive values mean line is lengthening
                 # result is in meters of line per second
-                targetSpeed = ((self.desiredLine[self.lastIdx][1] - self.desiredLine[self.lastIdx-1][1])
-                    / (self.desiredLine[self.lastIdx][0] - self.desiredLine[self.lastIdx-1][0]))
+                targetSpeed = ((self.desiredLine[self.lastIndex][1] - self.desiredLine[self.lastIndex-1][1])
+                    / (self.desiredLine[self.lastIndex][0] - self.desiredLine[self.lastIndex-1][0]))
                 # change in line length in meters per second
                 currentSpeed = self.speed * self.meters_per_rev
                 speed_err = targetSpeed - currentSpeed
