@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 import cv2.aruco as aruco
-from cv_common import detector, mtx, distortion, origin_charuco_board, parameters
+from cv_common import locate_markers, detector, mtx, distortion, origin_charuco_board, parameters
 from time import sleep
 
 
@@ -28,6 +28,7 @@ while True:
     if not ret:
         sleep(0.5)
         continue
+    
     marker_corners, marker_ids, rejectedImgPoints = detector.detectMarkers(image)
     if marker_ids is not None:
         diamondCorners, diamondIds, _, _ = charc_detector.detectDiamonds(image, marker_corners, marker_ids)
@@ -36,6 +37,10 @@ while True:
             # estimate pose
             _, rvec, tvec = cv2.solvePnP(corner_points, diamondCorners[0][0], mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             cv2.drawFrameAxes(image, mtx, distortion, rvec, tvec, 0.1)  # 0.1 is the axis length in meters
+
+    # for d in locate_markers(image):
+    #     cv2.drawFrameAxes(image, mtx, distortion, np.array(d['r']), np.array(d['t']), 0.1)  # 0.1 is the axis length in meters
+
     image = cv2.resize(image, (2304, 1296),  interpolation = cv2.INTER_LINEAR)
     cv2.imshow("Detected ChArUco Board", image)
     cv2.waitKey(1)
