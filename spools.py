@@ -32,6 +32,7 @@ class SpoolController:
         self.speed = 0
         # Meters of line that were spooled out when zeroAngle was set.
         self.lineAtStart = 1.9
+        self.lastLength = 1.9
         self.meters_per_rev =  self.calc_meters_per_rev(self.lineAtStart)
         # The angle of the shaft when setReferenceAngle was last called (in revolutions)
         self.zeroAngle = 0
@@ -63,6 +64,13 @@ class SpoolController:
         self.desiredLine = plan
         self.lastIndex = 0
 
+    def jogRelativeLen(self, rel):
+        new_l = self.lastLength + rel
+        self.desiredLine = [
+            (time.time(), self.lastLength),
+            (time.time()+2, new_l),
+        ]
+
     def popMeasurements(self):
         copy_record = self.record
         self.record = []
@@ -73,11 +81,11 @@ class SpoolController:
         return the current time and current unspooled line in meters
         """
         success, angle = self.motor.getShaftAngle()
-        l = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
+        self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
         # accumulate these so you can send them to the websocket
         row = (time.time(), l)
         if self.rec_loop_counter == REC_MOD:
-            self.meters_per_rev =  self.calc_meters_per_rev(l) # this also doesn't need to be updated at a high frequency.
+            self.meters_per_rev =  self.calc_meters_per_rev(self.lastLength) # this also doesn't need to be updated at a high frequency.
             self.record.append(row)
             self.rec_loop_counter = 0
         self.rec_loop_counter += 1

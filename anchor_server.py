@@ -118,6 +118,8 @@ class RobotComponentServer:
 
                 if 'length_plan' in update:
                     self.spooler.setPlan(update['length_plan'])
+                if 'jog' in update:
+                    self.spooler.jogRelativeLen(float(update['jog']))
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
 

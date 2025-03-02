@@ -136,18 +136,21 @@ class Gripper(SplineMovingEntity):
             Button(text='Show video feed', color=color.gold, text_color=color.black),
             Button(text='Autofocus', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
-            Button(text='Reel in 20cm', color=color.gold, text_color=color.black),
-            Button(text='Reel out 20cm', color=color.gold, text_color=color.black),
+            Button(text='Reel in 20cm', color=color.orange, text_color=color.black, on_click=self.reel_manual),
+            Button(text='Reel out 20cm', color=color.orange, text_color=color.black, on_click=self.reel_manual),
             Button(text='Sleep', color=color.gold, text_color=color.black),
             ),
         popup=True
         )
 
+    def reel_manual(self, delta_meters):
+        self.wp.enabled = False
+
 
 anchor_color = (0.8, 0.8, 0.8, 1.0)
 anchor_color_selected = (0.9, 0.9, 1.0, 1.0)
 class Anchor(Entity):
-    def __init__(self, num, position, rotation=(0,0,0)):
+    def __init__(self, num, to_ob_q, position, rotation=(0,0,0)):
         super().__init__(
             position=position,
             rotation=rotation,
@@ -159,6 +162,7 @@ class Anchor(Entity):
         )
         self.num = num
         self.label_offset = (0.00, 0.04)
+        self.to_ob_q = to_ob_q
 
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
@@ -185,12 +189,16 @@ class Anchor(Entity):
             Button(text='Show video feed', color=color.gold, text_color=color.black),
             Button(text='Autofocus', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
-            Button(text='Reel in 20cm', color=color.gold, text_color=color.black),
-            Button(text='Reel out 20cm', color=color.gold, text_color=color.black),
+            Button(text='Reel in 20cm', color=color.orange, text_color=color.black, on_click=partial(self.reel_manual, -20)),
+            Button(text='Reel out 20cm', color=color.orange, text_color=color.black, on_click=partial(self.reel_manual, 20)),
             Button(text='Sleep', color=color.gold, text_color=color.black),
             ),
         popup=True
         )
+
+    def reel_manual(self, delta_meters):
+        self.wp.enabled = False
+        self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'rel':delta_meters}})        
 
 
 class Floor(Entity):
@@ -248,10 +256,10 @@ class ControlPanelUI:
         #     # this models units are in mm, but the game units are meters
         #     return Entity(model='anchor', color=anchor_color, scale=0.001, position=pos, rotation=(0,  0,0), shader=lit_with_shadows_shader)
         self.anchors = []
-        self.anchors.append(Anchor(0, (-2,2, 3)))
-        self.anchors.append(Anchor(1, ( 2,2, 3)))
-        self.anchors.append(Anchor(2, ( -1,2,-2), rotation=(0,180,0)))
-        self.anchors.append(Anchor(3, ( -2,2,-2), rotation=(0,180,0)))
+        self.anchors.append(Anchor(0, to_ob_q, (-2,2, 3)))
+        self.anchors.append(Anchor(1, to_ob_q, ( 2,2, 3)))
+        self.anchors.append(Anchor(2, to_ob_q, ( -1,2,-2), rotation=(0,180,0)))
+        self.anchors.append(Anchor(3, to_ob_q, ( -2,2,-2), rotation=(0,180,0)))
 
         self.spline_curves = {}
 
@@ -303,10 +311,10 @@ class ControlPanelUI:
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
         # between every pair of anchors, draw a horizontal line. if all the other anchors' horizontal positions are on one side of that line, proceed
         # make a vertical quad that passes through that line and apply the fade texture to it.
-        create_wall(self.anchors[0].position, self.anchors[1].position)
-        create_wall(self.anchors[1].position, self.anchors[2].position)
-        create_wall(self.anchors[2].position, self.anchors[3].position)
-        create_wall(self.anchors[3].position, self.anchors[0].position)
+        # create_wall(self.anchors[0].position, self.anchors[1].position)
+        # create_wall(self.anchors[1].position, self.anchors[2].position)
+        # create_wall(self.anchors[2].position, self.anchors[3].position)
+        # create_wall(self.anchors[3].position, self.anchors[0].position)
 
         # img = cv2.cvtColor(cv2.imread('images/cap_0.jpg'), cv2.COLOR_BGR2RGB)
         # im_pil = Image.fromarray(img)
