@@ -119,9 +119,8 @@ class RaspiAnchorClient:
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
-
+                print(f'detection {detection}')
                 for name, offset, dest  in self.arucos:
-                    print(name)
                     if detection['n'] == name:
                         # you have the pose of gripper_front relative to a particular anchor camera
                         # Anchor is relative to the origin

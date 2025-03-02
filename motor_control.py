@@ -30,6 +30,8 @@ class MockSerial:
 class MKSSERVO42C:
     def __init__(self):
         self.port = serial.Serial ("/dev/ttyAMA0", 38400)
+        self.port.timeout = 1
+        self.port.write_timeout = 1
         # self.port = MockSerial()
 
     def ping(self):
