@@ -17,12 +17,40 @@ from multiprocessing import Pool
 from math import sin,cos
 import numpy as np
 from raspi_anchor_client import RaspiAnchorClient
+from raspi_gripper_client import RaspiGripperClient
 import model_constants
 from cv_common import average_pose
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
+
+class StatCounter:
+    def __init__(self, to_ui_q):
+        self.to_ui_q = to_ui_q
+        self.detection_count = 0
+        self.latency = []
+        self.framerate = []
+        self.last_update = time.time()
+        self.run = True
+
+    async def stat_main(self):
+        while self.run:
+            now = time.time()
+            elapsed = now-self.last_update
+            mean_latency = np.mean(np.array(self.latency))
+            mean_framerate = np.mean(np.array(self.framerate))
+            detection_rate = self.detection_count / elapsed
+            self.last_update = now
+            self.latency = []
+            self.framerate = []
+            self.detection_count = 0
+            self.to_ui_q.put({
+                'detection_rate':detection_rate,
+                'video_latency':mean_latency,
+                'video_framerate':mean_framerate,
+                })
+            await asyncio.sleep(0.5)
 
 # Manager of multiple tasks running clients connected to each robot component
 class AsyncObserver:
@@ -32,6 +60,7 @@ class AsyncObserver:
         self.aiozc: AsyncZeroconf | None = None
         self.send_position_updates = True
         self.calmode = "pause"
+        self.detection_count = 0
 
         self.datastore = datastore
         self.to_ui_q = to_ui_q
@@ -46,6 +75,7 @@ class AsyncObserver:
         self.next_available_anchor_num = 0;
         self.anchor_num_map = {}
         self.load_anchor_num_map()
+        self.stat = StatCounter(to_ui_q)
 
     def load_anchor_num_map(self):
         try:
@@ -156,7 +186,8 @@ class AsyncObserver:
             print(f"Service {name} added, service info: {info}, type: {service_type}")
             address = socket.inet_ntoa(info.addresses[0])
 
-            if name.split(".")[1] == cranebot_anchor_service_name:
+            name_component = name.split('.')[1]
+            if name_component == cranebot_anchor_service_name:
                 # the number of anchors is decided ahead of time (in main.py)
                 # but they are assigned numbers as we find them on the network
                 # and the chosen numbers are persisted on disk
@@ -168,12 +199,22 @@ class AsyncObserver:
                     self.next_available_anchor_num += 1
                     self.save_anchor_num_map()
                 self.to_ui_q.put({'connection_status': {
-                    'anchor_num': anchor_num,
-                    'status': 'Connecting...', # user visible string
-                    }})
-                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool)
+                    'anchor_num': self.anchor_num,
+                    'websocket': 1,
+                    'video': False,
+                }})
+                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat)
                 self.bot_clients[info.server] = ac
                 await ac.startup()
+            elif name_component == cranebot_gripper_service_name:
+                self.to_ui_q.put({'connection_status': {
+                    'gripper':True,
+                    'websocket': 1,
+                    'video': False,
+                }})
+                gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat)
+                self.bot_clients[info.server] = gc
+                await gc.startup()
 
     async def main(self) -> None:
         # main process loop
@@ -197,6 +238,7 @@ class AsyncObserver:
             print("start position listener")
             self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
 
+            asyncio.create_task(self.stat.stat_main())
             asyncio.create_task(self.add_simulated_data())
 
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
@@ -208,6 +250,7 @@ class AsyncObserver:
 
     async def async_close(self) -> None:
         self.send_position_updates = False
+        self.stat.run = False
         if self.aiobrowser is not None:
             await self.aiobrowser.async_cancel()
         if self.aiozc is not None:
