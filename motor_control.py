@@ -26,6 +26,8 @@ class MockSerial:
         return b'x01'*l
     def write(self, l):
         pass
+    def flush():
+        pass
 
 class MKSSERVO42C:
     def __init__(self):
@@ -56,7 +58,6 @@ class MKSSERVO42C:
         Command the motor to run at a constant speed in revolutions per second
         Return true if the motor replied status ok
         """
-        print(f'runConstantSpeed({speed})')
         # convert revs/sec to valid speed range (-127 +127)
         command_speed = max(-127, min(int(speed / SPEED1_REVS), 127))
 
