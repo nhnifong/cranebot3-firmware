@@ -29,10 +29,10 @@ class MockSerial:
 
 class MKSSERVO42C:
     def __init__(self):
-        self.port = serial.Serial ("/dev/ttyAMA0", 38400)
+        # self.port = serial.Serial ("/dev/ttyAMA0", 38400)
+        self.port = MockSerial()
         self.port.timeout = 1
         self.port.write_timeout = 1
-        # self.port = MockSerial()
 
     def ping(self):
         """
@@ -56,7 +56,7 @@ class MKSSERVO42C:
         Command the motor to run at a constant speed in revolutions per second
         Return true if the motor replied status ok
         """
-
+        print(f'runConstantSpeed({speed})')
         # convert revs/sec to valid speed range (-127 +127)
         command_speed = max(-127, min(int(speed / SPEED1_REVS), 127))
 
