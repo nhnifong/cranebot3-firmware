@@ -16,9 +16,17 @@ from ursina.shaders import (
     lit_with_shadows_shader,
     unlit_shader,
 )
+from ursina.prefabs.dropdown_menu import DropdownMenu, DropdownMenuButton
 
 # the color for the lines that connect the anchors, gantry, and gripper
 line_color = color.black
+
+# user readable mode names
+mode_names = {
+    'run':   'Run Normally',
+    'pause': 'Pause/Observe',
+    'pose':  'Find Anchor Postions',
+}
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -237,7 +245,7 @@ class ControlPanelUI:
 
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
         # maybe you shouldn't read those files in the clients
-        self.calibration_mode = 'run'
+        self.calibration_mode = 'pause'
 
         # add the charuco board that represents the room origin
         # when a charuco board is located, it's origin is it's top left corner.
@@ -298,16 +306,10 @@ class ControlPanelUI:
         AmbientLight(color=(0.8,0.8,0.8,1))
         # light.look_at(Vec3(1,-1,1))
 
-        self.menu_button = Button(
-            text="Menu",
-            color=color.azure,
-            position=(-0.7, -0.45), scale=(.25, .033),
-            on_click=self.on_menu_click)
-
         self.stop_button = Button(
             text="STOP",
             color=color.red,
-            position=(0.7, -0.45), scale=(.15, .033),
+            position=(0.8, -0.45), scale=(.15, .033),
             on_click=self.on_stop_button)
 
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
@@ -330,8 +332,45 @@ class ControlPanelUI:
         self.max_go_quads = 100
         self.go_quad_next = 0
 
+        self.modePanel = Panel(model='quad', z=99, 
+            color=(0.1,0.1,0.1,1.0),
+            position=(0,-0.48),
+            scale=(3,0.1),
+            on_click=self.clear_error,
+        )
+        self.modePanelLine1y = -0.44
+        self.modePanelLine2y = -0.48
+
+        self.error = Text(
+            color=color.white,
+            position=(0.1,self.modePanelLine2y),
+            text="error",
+            scale=0.7,
+            enabled=False,
+        )
+
+        self.mode_text = Text(
+            color=(0.0,1.0,0.3,1.0),
+            position=(-0.1,self.modePanelLine1y),
+            text=mode_names[self.calibration_mode],
+            scale=0.7,
+            enabled=True,
+        )
+
+        DropdownMenu('Menu', buttons=(
+            DropdownMenu('Mode', buttons=(
+                DropdownMenuButton(mode_names['run'], on_click=partial(self.set_mode, 'run')),
+                DropdownMenuButton(mode_names['pause'], on_click=partial(self.set_mode, 'pause')),
+                DropdownMenuButton(mode_names['pose'], on_click=partial(self.set_mode, 'pose')),
+                )),
+            DropdownMenuButton('Calibrate Line Lengths', on_click=self.calibrate_lines),
+            ))
+
         Sky(color=color.light_gray)
         EditorCamera()
+
+    def clear_error(self):
+        self.error.enabled = False
 
     # renders a function that returns 3D points in a domain from 0 to 1
     # the y and z coordinates are swapped
@@ -351,26 +390,19 @@ class ControlPanelUI:
         else:
             self.spline_curves[name] = Entity(model=model, color=color.lime, shader=unlit_shader)
 
-    def on_menu_click(self):
-        wp = WindowPanel(
-            title=f"Robot Actions",
-            content=(
-                Button(text='Calibrate Anchor Positions', color=color.azure, on_click=self.on_calibration_button),
-                Button(text='Calibrate Lines', color=color.azure, on_click=self.on_line_button),
-            ),
-            popup=True,
-        )
-
-    def on_calibration_button(self):
-        if self.calibration_mode == "pose":
-            self.calibration_mode = "run"
-        elif self.calibration_mode == "run":
-            self.calibration_mode = "pose"
+    def set_mode(self, mode):
+        self.calibration_mode = mode
+        self.mode_text.text = mode_names[mode]
         self.to_ob_q.put({'set_run_mode': self.calibration_mode})
 
-    def on_line_button(self):
+    def calibrate_lines(self):
         # calibrate line lengths
         # Assume we have been stopped for a while.
+        if self.calibration_mode != 'pause':
+            self.error.text = "Line calibration can only be performed while in Pause/Observe mode"
+            self.error.enabled = True
+            return
+        print('Do line calibration')
         self.to_ob_q.put({'do_line_calibration': None})
 
     def on_stop_button(self):
@@ -443,6 +475,10 @@ class ControlPanelUI:
                 print('received pil image in UI')
                 pili = updates['pil_image']
                 self.camview.texture = Texture(pili.convert("RGBA"))
+
+            if 'connection_status' in updates:
+                stat = updates['connection_status']
+                self.anchors[stat['anchor_num']].setStatus(stat['status'])
 
 
     def start(self):

@@ -132,7 +132,7 @@ class AsyncObserver:
                 grommet_position = compose_poses([client.anchor_pose, model_constants.anchor_grommet])[:3]
                 distance = np.linalg.norm(grommet_position - gantry_position)
                 distance -= 0.02 # to make up for the distance between the gantry origin and it's grommets, which are all symmetric
-                print(f'anchor {client.anchor_num} line length estimated at {distance}m')
+                print(f'anchor {client.anchor_num} line length estimated at {distance} m')
                 asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': distance}), loop)
 
 
@@ -167,6 +167,10 @@ class AsyncObserver:
                     self.anchor_num_map[info.server] = anchor_num
                     self.next_available_anchor_num += 1
                     self.save_anchor_num_map()
+                self.to_ui_q.put({'connection_status': {
+                    'anchor_num': anchor_num,
+                    'status': 'Connecting...', # user visible string
+                    }})
                 ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool)
                 self.bot_clients[info.server] = ac
                 await ac.startup()
