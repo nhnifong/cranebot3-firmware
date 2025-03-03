@@ -157,6 +157,10 @@ class RaspiAnchorClient:
             return
 
     async def receive_loop(self, websocket):
+        self.to_ui_q.put({'connection_status': {
+            'anchor_num': self.anchor_num,
+            'status': 'Online', # user visible string
+        }})
         # loop of a single websocket connection.
         # save a reference to this for send_anchor_commands_async
         self.websocket = websocket
@@ -180,6 +184,10 @@ class RaspiAnchorClient:
                 print(f"Connection to anchor {self.anchor_num} closed.")
                 self.connected = False
                 self.websocket = None
+                self.to_ui_q.put({'connection_status': {
+                    'anchor_num': self.anchor_num,
+                    'status': 'Offline', # user visible string
+                }})
                 raise e
                 break
         vid_thread.join()
