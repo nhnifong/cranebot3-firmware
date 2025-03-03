@@ -27,6 +27,9 @@ mode_names = {
     'pause': 'Pause/Observe',
     'pose':  'Find Anchor Postions',
 }
+detections_format_str = 'Detections/sec {val:.2f}'
+video_latency_format_str = 'Video latency {val:.2f} s'
+video_framerate_format_str = 'Avg framerate {val:.2f} fps'
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -309,7 +312,7 @@ class ControlPanelUI:
         self.stop_button = Button(
             text="STOP",
             color=color.red,
-            position=(0.8, -0.45), scale=(.15, .033),
+            position=(0.83, -0.45), scale=(.10, .033),
             on_click=self.on_stop_button)
 
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
@@ -336,16 +339,16 @@ class ControlPanelUI:
             color=(0.1,0.1,0.1,1.0),
             position=(0,-0.48),
             scale=(3,0.1),
-            on_click=self.clear_error,
         )
         self.modePanelLine1y = -0.44
-        self.modePanelLine2y = -0.48
+        self.modePanelLine2y = -0.46
+        self.modePanelLine3y = -0.48
 
         self.error = Text(
             color=color.white,
-            position=(0.1,self.modePanelLine2y),
+            position=(0.1,self.modePanelLine3y),
             text="error",
-            scale=0.7,
+            scale=0.5,
             enabled=False,
         )
 
@@ -356,6 +359,44 @@ class ControlPanelUI:
             scale=0.7,
             enabled=True,
         )
+
+        self.detections_text = Text(
+            color=color.white,
+            position=(-0.805,self.modePanelLine1y),
+            text=detections_format_str.format(val=0),
+            scale=0.5,
+            enabled=True,
+        )
+
+        self.video_latency_text = Text(
+            color=color.white,
+            position=(-0.805,self.modePanelLine2y),
+            text=video_latency_format_str.format(val=0),
+            scale=0.5,
+            enabled=True,
+        )
+
+        self.video_framerate_text = Text(
+            color=color.white,
+            position=(-0.805,self.modePanelLine3y),
+            text=video_framerate_format_str.format(val=0),
+            scale=0.5,
+            enabled=True,
+        )
+
+        # make a little video monitor icon for each camera status.
+        x = -0.869
+        y = -0.483
+        offx = 0.042
+        offy = 0.037
+        self.vid_status = [Panel(model='quad', z=91, 
+            color=color.white,
+            texture='vid_out.png',
+            position=position,
+            scale=(0.01998,0.01498),
+        ) for position in [(x,y), (x+offx,y), (x,y+offy), (x+offx,y+offy), ((x+offx/2,y+offy/2))]]
+
+
 
         DropdownMenu('Menu', buttons=(
             DropdownMenu('Mode', buttons=(
@@ -477,8 +518,36 @@ class ControlPanelUI:
                 self.camview.texture = Texture(pili.convert("RGBA"))
 
             if 'connection_status' in updates:
-                stat = updates['connection_status']
-                self.anchors[stat['anchor_num']].setStatus(stat['status'])
+                status = updates['connection_status']
+                if status['websocket'] == 0:
+                    user_status_str = 'Online'
+                elif status['websocket'] == 1:
+                    user_status_str = 'Connecting...'
+                else:
+                    user_status_str = 'Offline'
+
+                if status['video']:
+                    vidstatus_tex = 'vid_ok.png'
+                else:
+                    vidstatus_tex = 'vid_out.png'
+
+                if 'anchor_num' in status:
+                    self.anchors[status['anchor_num']].setStatus(user_status_str)
+                    self.vid_status[status['anchor_num']].texture = vidstatus_tex
+                elif 'gripper' in status:
+                    self.gripper.setStatus(user_status_str)
+                    self.vid_status[4].texture = vidstatus_tex
+
+            if 'detection_rate' in updates:
+                self.detections_text.text = detections_format_str.format(val=updates['detection_rate'])
+
+            if 'video_latency' in updates:
+                self.video_latency_text.text = video_latency_format_str.format(val=updates['video_latency'])
+
+            if 'video_framerate' in updates:
+                self.video_framerate_text.text = video_framerate_format_str.format(val=updates['video_framerate'])
+
+                
 
 
     def start(self):
