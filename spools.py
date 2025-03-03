@@ -147,9 +147,7 @@ class SpoolController:
                 maxspeed = self.motor.getMaxSpeed()
                 self.speed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
 
-                #self.motor.runConstantSpeed(self.speed)
-                print(f'would run at {self.speed}')
-                self.motor.runConstantSpeed(0)
+                self.motor.runConstantSpeed(self.speed)
 
                 time.sleep(LOOP_DELAY_S)
             except serial.serialutil.SerialTimeoutException as e:
