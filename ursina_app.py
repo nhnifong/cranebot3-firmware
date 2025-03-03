@@ -189,8 +189,10 @@ class Anchor(Entity):
             Button(text='Show video feed', color=color.gold, text_color=color.black),
             Button(text='Autofocus', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
-            Button(text='Reel in 20cm', color=color.orange, text_color=color.black, on_click=partial(self.reel_manual, -20)),
-            Button(text='Reel out 20cm', color=color.orange, text_color=color.black, on_click=partial(self.reel_manual, 20)),
+            Button(text='Reel in 20cm', color=color.orange, text_color=color.black,
+                on_click=partial(self.reel_manual, -0.2)),
+            Button(text='Reel out 20cm', color=color.orange, text_color=color.black,
+                on_click=partial(self.reel_manual, 0.2)),
             Button(text='Sleep', color=color.gold, text_color=color.black),
             ),
         popup=True

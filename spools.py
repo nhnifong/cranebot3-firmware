@@ -83,6 +83,7 @@ class SpoolController:
         """
         success, angle = self.motor.getShaftAngle()
         self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
+        print(f'line length = {self.lastLength} m')
         # accumulate these so you can send them to the websocket
         row = (time.time(), self.lastLength)
         if self.rec_loop_counter == REC_MOD:
@@ -113,9 +114,10 @@ class SpoolController:
 
                 # slow stop when there is no data to track
                 if self.lastIndex >= len(self.desiredLine):
-                    if self.speed != 0:
-                        direction = self.speed / self.speed
-                        self.speed -= direction * 0.1
+                    if abs(self.speed) > 0:
+                        self.speed *= 0.9
+                        if abs(self.speed) < 0.1:
+                            self.speed = 0
                         self.motor.runConstantSpeed(self.speed)
                     time.sleep(LOOP_DELAY_S)
                     continue
@@ -150,7 +152,7 @@ class SpoolController:
                 self.motor.runConstantSpeed(self.speed)
 
                 time.sleep(LOOP_DELAY_S)
-            except serial.serialutil.SerialTimeoutException as e:
+            except serial.serialutil.SerialTimeoutException:
                 print('Lost serial contact with motor')
                 break
 
