@@ -251,11 +251,25 @@ class AsyncObserver:
         #     await self.position_update_task
 
     async def add_simulated_data(self):
+        sim_anchors = np.array([
+            [-2,2, 3],
+            [ 2,2, 3],
+            [ -1,2,-2],
+            [ -2,2,-2]])
         while self.send_position_updates:
             t = time.time()
-            dp = np.array([t, 0,0,0, sin(t/8),cos(t/8),2])
+            # move the gantry in a circle
+            dp = np.array([t, 0,0,0, sin(t/8),cos(t/8), 2])
             self.datastore.gantry_pose.insert(dp)
-            self.datastore.winch_line_record.insert(np.array([t+1, 1.0])) # winch line always 1 meter, even in the future
+            # winch line always 1 meter
+            self.datastore.winch_line_record.insert(np.array([t, 1.0]))
+            # grippers always directly below gantry
+            dp[6] = 1
+            self.datastore.gripper_pose.insert(dp)
+            # anchor lines always perfectly agree with gripper position
+            for i, simanc in enumerate(sim_anchors):
+                dist = np.linalg.norm(simanc - dp[4:])
+                self.datastore.anchor_line_record[i].insert(np.array([t, dist]))
             await asyncio.sleep(0.8)
 
     async def reset_reference_lengths(self):
