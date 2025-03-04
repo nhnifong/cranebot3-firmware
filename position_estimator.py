@@ -329,7 +329,7 @@ class CDPR_position_estimator:
             # error between gantry position model and observation
             self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
-            0, #self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
+            self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper rotation model and observation
             0, #self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
             # error between gripper acceleration model and observation
@@ -339,11 +339,11 @@ class CDPR_position_estimator:
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
-            0, #sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
-            #    for anchor_num in range(self.n_cables)]) / self.n_cables,
+            sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
+                for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            0, #self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
-            0, #self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
+            self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
+            self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
             # error between position model and desired future locations
             0, #self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
             # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
@@ -387,7 +387,6 @@ class CDPR_position_estimator:
         Find curves that tell us the positions of the gripper and gantry over a fixed time window
         by minimizing self.cost_function
         """
-        print(f'estimate {self.des_grip_locations}')
         self.move_to_present()
         model_size = 6 * self.n_ctrl_pts
 
@@ -410,8 +409,9 @@ class CDPR_position_estimator:
             method='SLSQP',
             bounds=self.bounds,
             options={
+                'disp': True,
                 'maxiter': 200,
-                # 'ftol':0.001, # Precision goal for the value of f in the stopping criterion.
+                # 'ftol':0.0001, # Precision goal for the value of f in the stopping criterion.
                 #'eps':0.2, # Step size used for numerical approximation of the Jacobian.
                 #'finite_diff_rel_step':, # the relative step size to use for numerical approximation of jac
             },
@@ -429,7 +429,7 @@ class CDPR_position_estimator:
         self.set_splines_from_params(result.x)
 
         # print errors
-        # self.cost_function(result.x, p=True)
+        self.cost_function(result.x, p=True)
 
         # Where will the gantry be at the point when the next minimization step finishes?
         self.jolt_time = time()+time_taken
@@ -574,7 +574,8 @@ class CDPR_position_estimator:
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         while self.run:
             self.estimate()
-            # await asyncio.sleep(0.02)
+            # some sleep is necessary or we will not receive updates
+            await asyncio.sleep(0.01)
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """
