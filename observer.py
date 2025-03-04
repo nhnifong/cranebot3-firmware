@@ -199,7 +199,7 @@ class AsyncObserver:
                     self.next_available_anchor_num += 1
                     self.save_anchor_num_map()
                 self.to_ui_q.put({'connection_status': {
-                    'anchor_num': self.anchor_num,
+                    'anchor_num': anchor_num,
                     'websocket': 1,
                     'video': False,
                 }})
