@@ -83,7 +83,6 @@ class SpoolController:
         """
         success, angle = self.motor.getShaftAngle()
         self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
-        print(f'line length = {self.lastLength} m')
         # accumulate these so you can send them to the websocket
         row = (time.time(), self.lastLength)
         if self.rec_loop_counter == REC_MOD:
