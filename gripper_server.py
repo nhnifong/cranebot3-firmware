@@ -48,7 +48,7 @@ class GripperSpoolMotor():
             command_speed = speed / SPEED1_REVS + WINCH_DEAD_ZONE
         elif speed < 0:
             command_speed = speed / SPEED1_REVS - WINCH_DEAD_ZONE
-        self.servo.value(command_speed)
+        # self.servo.value(command_speed)
 
     def getShaftAngle(self):
         # in revolutions
@@ -104,9 +104,11 @@ class RaspiGripperServer(RobotComponentServer):
         while self.run_client:
             if self.shouldBeFingersClosed:
                 # todo: in gripper closed mode, hold pressure constant
-                self.hand_servo.value(90)
+                pass
+                # self.hand_servo.value(90)
             else:
-                self.hand_servo.value(-90)
+                pass
+                # self.hand_servo.value(-90)
             voltage = board.gpio_pin_value(PRESSURE_PIN)
             # putting anything in the self.update dict means it will get flushed to the websocket
             self.update['holding'] = voltage > 1.5

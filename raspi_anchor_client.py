@@ -36,7 +36,7 @@ class RaspiAnchorClient:
         self.calibration_mode = False # true is pose calibration mode.
         self.frame_times = {}
         self.pool = pool
-        self.stat
+        self.stat = stat
         try:
             # read calibration data from file
             saved_info = np.load('anchor_pose_%i.npz' % self.anchor_num)

@@ -32,7 +32,7 @@ class RaspiGripperClient:
         self.video_task = None  # Task for streaming video
         self.frame_times = {}
         self.pool = pool
-        self.stat
+        self.stat = stat
 
     def receive_video(self):
         # don't connect too early or you will be rejected
@@ -99,7 +99,7 @@ class RaspiGripperClient:
         self.to_ui_q.put({'connection_status': {
             'gripper': True,
             'websocket': 2,
-            'video': True,
+            'video': False,
         }})
         # loop of a single websocket connection.
         self.websocket = websocket
