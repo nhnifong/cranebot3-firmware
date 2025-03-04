@@ -21,6 +21,7 @@ default_weights = np.array([
     0.5, # total energy of gripper
     0.5, # total energy of gantry
     4, # desired gripper location
+    1, # spline jolt
 ])
 
 weight_names = [
@@ -34,6 +35,7 @@ weight_names = [
     'gripper energy',
     'gantry energy',
     'goal locations',
+    'spline_jolt',
 ]
 
 # X, Y are horizontal
@@ -132,6 +134,10 @@ class CDPR_position_estimator:
         # in the time domain of the model splines. the domain is 0-1, and we want only the right half, representing the future.
         bot_loop_freq = 30 # hz
         self.future_times = np.linspace(0.5, 1, self.horizon_s * 4)
+        self.des_grip_locations = np.array([])
+
+        self.jolt_time = time()+1
+        self.gantry_jolt_pos = self.gantry_pos_spline(self.model_time(self.jolt_time))
 
     def loadAnchorPoses(self):
         pts = []
@@ -233,6 +239,10 @@ class CDPR_position_estimator:
         total_energy = np.sum(total_energy_values) * time_step
         return total_energy
 
+    def spline_jolt(self):
+        """Measure the amount of distance expected in the jolt from the last spline to the current one."""
+        return np.linalg.norm(self.gantry_jolt_pos - self.gantry_pos_spline(self.model_time(self.jolt_time)))
+
     def clamped_knot_vector(self, n_ctrl_pts, base_interval=(0,1)):
         """
         Return a clamped knot vector suitable for constructing a cubic spline with n_ctrl_pts
@@ -319,29 +329,32 @@ class CDPR_position_estimator:
             # error between gantry position model and observation
             self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
-            self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
+            0, #self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper rotation model and observation
             0, #self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
             # error between gripper acceleration model and observation
             0, #self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
+            0,#self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
-            sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
-                for anchor_num in range(self.n_cables)]) / self.n_cables,
+            0, #sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
+            #    for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
-            self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
+            0, #self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
+            0, #self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
             # error between position model and desired future locations
-            self.error_meas(self.gripper_pos_spline, self.desired_gripper_positions(), normalize_time=True),
+            0, #self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
+            # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
+            self.spline_jolt(),
             
             # penalty for pulling the motors against eachother by raising the gantry too high
             # penalty for letting the gripper touch the floor
             # penalty for letting the gantry touch an imaginary plane 6 feet from the ground (heuristic for dodging furniture)
             # penalty for exceeding max gripper acceleration since it could shake loose the payload
             # penalty for unspooling so fast you make a birdsnest
+
         ])
         if p:
             print(errors)
@@ -374,6 +387,7 @@ class CDPR_position_estimator:
         Find curves that tell us the positions of the gripper and gantry over a fixed time window
         by minimizing self.cost_function
         """
+        print(f'estimate {self.des_grip_locations}')
         self.move_to_present()
         model_size = 6 * self.n_ctrl_pts
 
@@ -417,17 +431,17 @@ class CDPR_position_estimator:
         # print errors
         # self.cost_function(result.x, p=True)
 
-        # now you can use splines to calculate position at any point in the time interval, such as this instant.
-        # normalized_time = self.model_time(time())
-        # current_gripper_pos = self.gripper_pos_spline(normalized_time)
+        # Where will the gantry be at the point when the next minimization step finishes?
+        self.jolt_time = time()+time_taken
+        self.gantry_jolt_pos = self.gantry_pos_spline(self.model_time(self.jolt_time))
 
         unix_times = self.unix_time(self.future_times)
 
         # evaluate line lengths in the future and put them in a queue for immediate transmission to the robot
         future_anchor_lines = np.array([(unix_times, self.anchor_line_length(anchor, self.future_times))
             for anchor in range(self.n_cables)])
-
         future_winch_line = np.column_stack((unix_times, self.winch_line_len(self.future_times)))
+        self.des_grip_locations = self.desired_gripper_positions()
 
         update_for_observer = {
             'future_anchor_lines': future_anchor_lines,
@@ -441,6 +455,7 @@ class CDPR_position_estimator:
             'gripper_path': self.gripper_pos_spline.c,
             'gantry_path': self.gantry_pos_spline.c,
             'minimization_step_seconds': time_taken,
+            'goal_points': self.des_grip_locations[:,[1,2,3]],
         }
         self.to_ui_q.put(update_for_ui)
 
@@ -516,10 +531,8 @@ class CDPR_position_estimator:
             t += travel_time
             desired_positions.append(np.concatenate([[t], destination], dtype=float))
             # and also remaining at the destination at a point in the future after a fixed lingering period, if it's still within our time domain
-            end_linger = t + linger
-            while t < self.time_domain[1] and t < end_linger:
-                desired_positions.append(np.concatenate([[t], destination], dtype=float))
-                t += 0.3
+            t += linger
+            desired_positions.append(np.concatenate([[t], destination], dtype=float))
             # assume we will drop/pick up the item at this time.
             # we cannot know whether we will succeed, but have to assume we will for planning
             holding = not holding
@@ -561,7 +574,7 @@ class CDPR_position_estimator:
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         while self.run:
             self.estimate()
-            await asyncio.sleep(0.02)
+            # await asyncio.sleep(0.02)
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """

@@ -255,7 +255,7 @@ class AsyncObserver:
             t = time.time()
             dp = np.array([t, 0,0,0, sin(t/8),cos(t/8),2])
             self.datastore.gantry_pose.insert(dp)
-            self.datastore.winch_line_record.insert(np.array([t+10, 1.0])) # winch line always 1 meter, even in the future
+            self.datastore.winch_line_record.insert(np.array([t+1, 1.0])) # winch line always 1 meter, even in the future
             await asyncio.sleep(0.8)
 
     async def reset_reference_lengths(self):

@@ -305,6 +305,16 @@ class ControlPanelUI:
 
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
 
+        # show a visualization of goal positions
+        self.goals = [Entity(
+                position=(0,0,0),
+                model='sphere', # todo use a map marker thing
+                color=color.azure,
+                scale=0.1,
+                shader=lit_with_shadows_shader,
+                enabled=False,
+            ) for i in range(8)]
+
         # the color is how you control the brightness
         DirectionalLight(position=(1, 10, 1), shadows=True, rotation=(45, -5, 5), color=(0.8,0.8,0.8,1))
         AmbientLight(color=(0.8,0.8,0.8,1))
@@ -566,6 +576,16 @@ class ControlPanelUI:
 
             if 'video_framerate' in updates:
                 self.video_framerate_text.text = video_framerate_format_str.format(val=updates['video_framerate'])
+
+            if 'goal_points' in updates:
+                for i, gp in enumerate(updates['goal_points']):
+                    if i == len(self.goals):
+                        break
+                    self.goals[i].enabled = True
+                    self.goals[i].position = swap_yz(gp)
+                # disable the rest
+                for i in range(len(updates['goal_points']), len(self.goals)):
+                    self.goals[i].enabled = False
 
                 
 
