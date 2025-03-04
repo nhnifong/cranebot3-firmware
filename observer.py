@@ -198,20 +198,10 @@ class AsyncObserver:
                     self.anchor_num_map[info.server] = anchor_num
                     self.next_available_anchor_num += 1
                     self.save_anchor_num_map()
-                self.to_ui_q.put({'connection_status': {
-                    'anchor_num': anchor_num,
-                    'websocket': 1,
-                    'video': False,
-                }})
                 ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat)
                 self.bot_clients[info.server] = ac
                 await ac.startup()
             elif name_component == cranebot_gripper_service_name:
-                self.to_ui_q.put({'connection_status': {
-                    'gripper':True,
-                    'websocket': 1,
-                    'video': False,
-                }})
                 gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat)
                 self.bot_clients[info.server] = gc
                 await gc.startup()

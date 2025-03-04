@@ -10,6 +10,7 @@ from cv_common import invert_pose, compose_poses
 from math import pi
 import atexit
 from panda3d.core import LQuaternionf
+from position_estimator import default_weights, weight_names
 
 from ursina import *
 from ursina.shaders import (
@@ -118,13 +119,13 @@ class Gripper(SplineMovingEntity):
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
             text=f"Gripper\nNot Detected",
-            scale=0.7,
+            scale=0.6,
         )
         self.last_ob_render = time.time()
 
 
     def setStatus(self, status):
-        self.label.text = f"Anchor {self.num} {status}"
+        self.label.text = f"Gripper\n{status}"
 
     def update(self):
         super().update()
@@ -178,11 +179,11 @@ class Anchor(Entity):
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
             text=f"Anchor {self.num}\nNot Detected",
-            scale=0.7,
+            scale=0.6,
         )
 
     def setStatus(self, status):
-        self.label.text = f"Anchor {self.num} {status}"
+        self.label.text = f"Anchor {self.num}\n{status}"
 
     def update(self):
         self.label.position = world_position_to_screen_position(self.position) + self.label_offset
@@ -396,7 +397,22 @@ class ControlPanelUI:
             scale=(0.01998,0.01498),
         ) for position in [(x,y), (x+offx,y), (x,y+offy), (x+offx,y+offy), ((x+offx/2,y+offy/2))]]
 
-
+        # position estimator controls
+        slider_row_h = 0.025
+        self.sliders = [ThinSlider(
+            text=weight_names[i],
+            dynamic=True,
+            scale=0.5,
+            position=(0.62, -0.15 - slider_row_h*i),
+            max=10,
+            value=default_weights[i],
+            on_value_changed=partial(self.change_weight, i),
+        ) for i in range(len(default_weights))]
+        for thing in self.sliders:
+            thing.bg.color = color.black
+            thing.knob.color = color.black
+            thing.label.color = color.black
+            thing.knob.text_color = color.black
 
         DropdownMenu('Menu', buttons=(
             DropdownMenu('Mode', buttons=(
@@ -409,6 +425,9 @@ class ControlPanelUI:
 
         Sky(color=color.light_gray)
         EditorCamera()
+
+    def change_weight(self, index):
+        self.to_pe_q.put({'weight_change': (index, self.sliders[index].value)})
 
     def clear_error(self):
         self.error.enabled = False
@@ -519,12 +538,13 @@ class ControlPanelUI:
 
             if 'connection_status' in updates:
                 status = updates['connection_status']
+                print(status)
                 if status['websocket'] == 0:
-                    user_status_str = 'Online'
+                    user_status_str = 'Not Detected'
                 elif status['websocket'] == 1:
                     user_status_str = 'Connecting...'
                 else:
-                    user_status_str = 'Offline'
+                    user_status_str = 'Online'
 
                 if status['video']:
                     vidstatus_tex = 'vid_ok.png'

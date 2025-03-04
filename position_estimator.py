@@ -10,6 +10,32 @@ import asyncio
 import signal
 import sys
 
+default_weights = np.array([
+    8, # gantry position from charuco
+    8, # gripper position from charuco
+    1, # gripper local z rotation from charuco
+    2, # gripper inertial measurements
+    1, # calculated forces
+    4, # winch line record
+    4, # anchor line record
+    0.5, # total energy of gripper
+    0.5, # total energy of gantry
+    4, # desired gripper location
+])
+
+weight_names = [
+    'gantry markers',
+    'gripper markers',
+    'gripper z rot',
+    'gripper IMU',
+    'calculated forces',
+    'winch line',
+    'anchor lines',
+    'gripper energy',
+    'gantry energy',
+    'goal locations',
+]
+
 # X, Y are horizontal
 # positive Z points at the ceiling.
 
@@ -96,19 +122,7 @@ class CDPR_position_estimator:
             self.bounds[start+2] = (1,4) # keep z position of gantry within 1 to 4 meters
             start += 3
 
-
-        self.weights = np.array([
-            8, # gantry position from charuco
-            8, # gripper position from charuco
-            1, # gripper local z rotation from charuco
-            2, # gripper inertial measurements
-            0, # calculated forces
-            4, # winch line record
-            1, # anchor line record
-            0.5, # total energy of gripper
-            0.5, # total energy of gantry
-            0, # desired gripper location
-        ])
+        self.weights = default_weights
 
         now = time()
         self.horizon_s = self.datastore.horizon_s
@@ -305,7 +319,7 @@ class CDPR_position_estimator:
             # error between gantry position model and observation
             self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
             # error between gripper position model and observation
-            0,#self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
+            self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper rotation model and observation
             0, #self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
             # error between gripper acceleration model and observation
@@ -315,8 +329,8 @@ class CDPR_position_estimator:
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
-            0, #sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
-            #    for anchor_num in range(self.n_cables)]) / self.n_cables,
+            sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
+                for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
             self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
             self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
@@ -536,6 +550,9 @@ class CDPR_position_estimator:
                     print("stop running")
                     self.run = False
                     break
+                if 'weight_change' in update:
+                    idx, val = update['weight_change']
+                    self.weights[idx] = val
             except Exception as e:
                 self.run = False
                 raise e
