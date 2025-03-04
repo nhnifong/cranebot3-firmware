@@ -26,7 +26,7 @@ class MockSerial:
         return b'x01'*l
     def write(self, l):
         pass
-    def flush():
+    def flush(self):
         pass
 
 class MKSSERVO42C:
