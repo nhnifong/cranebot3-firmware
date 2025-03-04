@@ -2,6 +2,8 @@ import asyncio
 from anchor_server import RobotComponentServer
 from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2, ADC
 from ioexpander import IN_PU
+from spools import SpoolController
+from getmac import get_mac_address
 
 # these two constants are obtained experimentally
 # the speed will not increase at settings beyond this value
@@ -27,7 +29,7 @@ class GripperSpoolMotor():
     but using a mouse wheel encoder for position feedback.
     """
     def __init__(self, hat):
-        self.servo = self.hat.servos[SERVO_1]
+        self.servo = hat.servos[SERVO_1]
         self.hat = hat
         self.run = True
         pass
@@ -53,7 +55,7 @@ class GripperSpoolMotor():
     def getShaftAngle(self):
         # in revolutions
         # we assume that an encoder has been conected to the motot A port, even if there is no motor
-        return self.hat.encoders[0].degrees()/360
+        return True, self.hat.encoders[0].degrees()/360
 
     def getMaxSpeed(self):
         return 1.0166
@@ -66,7 +68,7 @@ class RaspiGripperServer(RobotComponentServer):
         self.service_type = 'cranebot-gripper-service'
 
         self.hat = InventorHATMini(init_leds=False)
-        self.hand_servo = board.servos[SERVO_2]
+        self.hand_servo = self.hat.servos[SERVO_2]
         self.hat.gpio_pin_mode(RANGEFINDER_PIN, ADC) # infrared range
         self.hat.gpio_pin_mode(PRESSURE_PIN, ADC) # pressure resistor
         self.shouldBeFingersClosed = False
@@ -74,7 +76,10 @@ class RaspiGripperServer(RobotComponentServer):
         # the superclass, RobotComponentServer, assumes the presense of this attribute
         self.spooler = SpoolController(GripperSpoolMotor(self.hat), empty_diameter=20, full_diameter=36, full_length=1)
 
-    def readAnalog(self)
+        unique = ''.join(get_mac_address().split(':'))
+        self.service_name = 'cranebot-gripper-service.' + unique
+
+    def readAnalog(self):
         # 5cm - 2.3v
         # 10cm - 2.0v
         # 15cm - 1.5v
@@ -82,7 +87,7 @@ class RaspiGripperServer(RobotComponentServer):
         # the measurement is not thrown off by the fingers being closed at all
         voltage = self.hat.gpio_pin_value(RANGEFINDER_PIN)
 
-    def spoolTrackingLoop(self)
+    def spoolTrackingLoop(self):
         # return the spool tracking function
         return self.spooler.trackingLoop
 
@@ -109,7 +114,7 @@ class RaspiGripperServer(RobotComponentServer):
             else:
                 pass
                 # self.hand_servo.value(-90)
-            voltage = board.gpio_pin_value(PRESSURE_PIN)
+            voltage = hat.gpio_pin_value(PRESSURE_PIN)
             # putting anything in the self.update dict means it will get flushed to the websocket
             self.update['holding'] = voltage > 1.5
 
