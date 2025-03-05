@@ -38,6 +38,21 @@ weight_names = [
     'spline_jolt',
 ]
 
+def find_intersection(positions, lengths):
+    """Triangulation by least squares
+    returns scipy result object with .succes and .x
+    """
+    # Initial guess for the intersection point (e.g., the mean of the positions)
+    initial_guess = np.mean(positions, axis=0)
+    initial_guess[2] -= 1
+
+    def error_function(intersection, positions, lengths):
+        distances = np.linalg.norm(positions - intersection, axis=1)
+        errors = distances - lengths
+        return errors
+
+    return optimize.least_squares(error_function, initial_guess, args=(positions, lengths))
+
 # X, Y are horizontal
 # positive Z points at the ceiling.
 

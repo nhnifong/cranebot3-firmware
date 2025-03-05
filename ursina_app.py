@@ -10,7 +10,9 @@ from cv_common import invert_pose, compose_poses
 from math import pi
 import atexit
 from panda3d.core import LQuaternionf
-from position_estimator import default_weights, weight_names
+from position_estimator import default_weights, weight_names, find_intersection
+from cv_common import average_pose, compose_poses
+import model_constants
 
 from ursina import *
 from ursina.shaders import (
@@ -28,9 +30,32 @@ mode_names = {
     'pause': 'Pause/Observe',
     'pose':  'Find Anchor Postions',
 }
+mode_descriptions = {
+    'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
+    'pause': 'WASD-QE moves the gantry, scroll moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
+    'pose':  'Place the origin card on the floor in the center of the room. Anchor positions are continuously estimated from this card.',
+}
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
 video_framerate_format_str = 'Avg framerate {val:.2f} fps'
+
+ds = 0.1 # direct movement speed in meters per second
+key_behavior = {
+    # key: (axis, speed)
+    'a': (0, -ds),
+    'd': (0, ds),
+    'w': (1, ds),
+    's': (1, -ds),
+    'q': (2, -ds),
+    'e': (2, ds),
+
+    'a up': (0, 0),
+    'd up': (0, 0),
+    'w up': (1, 0),
+    's up': (1, 0),
+    'q up': (2, 0),
+    'e up': (2, 0),
+}
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -121,7 +146,7 @@ class Gripper(SplineMovingEntity):
             text=f"Gripper\nNot Detected",
             scale=0.6,
         )
-        self.last_ob_render = time.time()
+        # self.last_ob_render = time.time()
 
 
     def setStatus(self, status):
@@ -130,9 +155,9 @@ class Gripper(SplineMovingEntity):
     def update(self):
         super().update()
         self.label.position = world_position_to_screen_position(self.position) + self.label_offset
-        if time.time() > self.last_ob_render+0.5:
-            self.ui.render_gripper_ob()
-            self.last_ob_render = time.time()
+        # if time.time() > self.last_ob_render+0.5:
+        #     self.ui.render_gripper_ob()
+        #     self.last_ob_render = time.time()
 
     def on_mouse_enter(self):
         self.color = anchor_color_selected
@@ -175,6 +200,7 @@ class Anchor(Entity):
         self.num = num
         self.label_offset = (0.00, 0.04)
         self.to_ob_q = to_ob_q
+        self.pose = np.array((rotation, position))
 
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
@@ -221,13 +247,31 @@ class Floor(Entity):
             collider='box',
             **kwargs
         )
+        self.alt = 0.3 # altitude of blue circle in meters
         self.target = Entity(
             model='quad',
             position=(0, 0, 0),
             rotation=(90,0,0),
             color=color.white,
-            scale=(0.5, 0.5),
+            scale=(0.5, 0.5, 0.5),
             texture='green_target.png',
+        )
+        self.pipe = Entity(
+            model=Pipe(
+                path=[(0,0,0), (0,self.alt*2,0)], # have to multiply by 2 because it inherited the scale of it's parent
+                thicknesses=(0.01, 0.01),
+                cap_ends=True),
+            rotation=(-90,0,0),
+            parent=self.target,
+            color=color.white,
+        )
+        self.circle = Entity(
+            model='quad',
+            position=(0, 0, -self.alt*2),
+            color=color.white,
+            scale=(0.2, 0.2, 0.2),
+            parent=self.target,
+            texture='blue_circle.png',
         )
 
     def on_click(self,):
@@ -239,6 +283,10 @@ class Floor(Entity):
             # Get the intersection point in world coordinates
             self.target.position = mouse.world_point
 
+# ursina expects this in a global scope
+def input(key):
+    pass
+
 class ControlPanelUI:
     def __init__(self, datastore, to_pe_q, to_ob_q):
         self.app = Ursina()
@@ -247,6 +295,13 @@ class ControlPanelUI:
         self.to_ob_q = to_ob_q
         self.n_anchors = datastore.n_cables
         self.time_domain = (1,2)
+        self.grip_closed = True
+        self.direction = np.array([0,0,0], dtype=float)
+        self.could_be_moving = False
+
+        # hijack the input function
+        global input
+        input = self.input
 
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
         # maybe you shouldn't read those files in the clients
@@ -357,10 +412,10 @@ class ControlPanelUI:
         self.modePanelLine3y = -0.48
 
         self.error = Text(
-            color=color.white,
+            color=color.red,
             position=(0.1,self.modePanelLine3y),
             text="error",
-            scale=0.5,
+            scale=0.6,
             enabled=False,
         )
 
@@ -372,8 +427,16 @@ class ControlPanelUI:
             enabled=True,
         )
 
+        self.mode_descrip_text = Text(
+            color=(0.9,0.9,0.9,1.0),
+            position=(-0.45,self.modePanelLine2y),
+            text=mode_descriptions[self.calibration_mode],
+            scale=0.6,
+            enabled=True,
+        )
+
         self.detections_text = Text(
-            color=color.white,
+            color=(0.9,0.9,0.9,1.0),
             position=(-0.805,self.modePanelLine1y),
             text=detections_format_str.format(val=0),
             scale=0.5,
@@ -381,7 +444,7 @@ class ControlPanelUI:
         )
 
         self.video_latency_text = Text(
-            color=color.white,
+            color=(0.9,0.9,0.9,1.0),
             position=(-0.805,self.modePanelLine2y),
             text=video_latency_format_str.format(val=0),
             scale=0.5,
@@ -389,7 +452,7 @@ class ControlPanelUI:
         )
 
         self.video_framerate_text = Text(
-            color=color.white,
+            color=(0.9,0.9,0.9,1.0),
             position=(-0.805,self.modePanelLine3y),
             text=video_framerate_format_str.format(val=0),
             scale=0.5,
@@ -425,6 +488,8 @@ class ControlPanelUI:
             thing.label.color = color.black
             thing.knob.text_color = color.black
 
+        # self.direct_move_indicator = Entity(model='arrow', color=color.lime, scale=(1, 1, 1), position=(0,0.5,0))
+
         DropdownMenu('Menu', buttons=(
             DropdownMenu('Mode', buttons=(
                 DropdownMenuButton(mode_names['run'], on_click=partial(self.set_mode, 'run')),
@@ -437,8 +502,21 @@ class ControlPanelUI:
         Sky(color=color.light_gray)
         EditorCamera()
 
+    def input(self, key):
+        if key == 'space':
+            self.grip_closed = not self.grip_closed
+            self.to_ob_q.put({'set_grip': self.grip_closed})
+
+        if key in key_behavior:
+            axis, speed = key_behavior[key]
+            self.direction[axis] = speed
+
     def change_weight(self, index):
         self.to_pe_q.put({'weight_change': (index, self.sliders[index].value)})
+
+    def show_error(self, error):
+        self.error.text = error
+        self.error.enabled = True
 
     def clear_error(self):
         self.error.enabled = False
@@ -464,6 +542,7 @@ class ControlPanelUI:
     def set_mode(self, mode):
         self.calibration_mode = mode
         self.mode_text.text = mode_names[mode]
+        self.mode_descrip_text.text = mode_descriptions[mode]
         self.to_ob_q.put({'set_run_mode': self.calibration_mode})
 
     def calibrate_lines(self):
@@ -474,12 +553,42 @@ class ControlPanelUI:
             self.error.enabled = True
             return
         print('Do line calibration')
-        self.to_ob_q.put({'do_line_calibration': None})
+        # average recent gantry poses.
+        poses = self.datastore.gantry_pose.deepCopy()
+        gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))[:3]
+        lengths = [1,1,1,1] 
+        for i, anchor in enumerate(self.anchors):
+            grommet_pose = compose_poses([anchor.pose, model_constants.anchor_grommet])[:3]
+            distance = np.linalg.norm(grommet_pose[1] - gantry_pose[1])
+            lengths[i] = distance - 0.02 # to make up for the distance between the gantry origin and it's grommets, which are all symmetric
+        # display a confirmation dialog
+        fmt = '{:.3f}'
+        self.line_cal_confirm = WindowPanel(
+            title=f"Calculated Anchor Line Lengths",
+            content=(
+                Text(text='Distances in meters'),
+                InputField(default_value=fmt.format(lengths[0])),
+                InputField(default_value=fmt.format(lengths[1])),
+                InputField(default_value=fmt.format(lengths[2])),
+                InputField(default_value=fmt.format(lengths[3])),
+                Button(text='Confirm', color=color.azure,  on_click=self.finish_calibration),
+                ),
+            popup=True
+            )
+
+    def finish_calibration(self):
+        # read the lengths that the user may have modified
+        try:
+            lengths = [float(self.line_cal_confirm.content[1].text) for i in range(4)]
+        except ValueError:
+            return
+        self.to_ob_q.put({'do_line_calibration': lengths})
+        self.line_cal_confirm.enabled = False
 
     def on_stop_button(self):
         self.to_ob_q.put({'set_run_mode':'pause'})
 
-    def render_gripper_ob_inner(self, row):
+    def render_gripper_ob(self, row):
         if len(self.go_quads) < self.max_go_quads:
             self.go_quads.append(Entity(
                 model='cube',
@@ -490,19 +599,82 @@ class ControlPanelUI:
             self.go_quads[self.go_quad_next].position = (row[4],row[6],row[5])
             self.go_quad_next = (self.go_quad_next+1)%self.max_go_quads
 
-    def render_gripper_ob(self,):
+    def periodic_actions(self):
         """
-        Display a visual indication of aruco based gripper observations
+        Run certain actions at a rate slightly less than, and independent of the framerate.
         """
-        gripper_pose = self.datastore.gantry_pose.deepCopy()
-        for row in gripper_pose:
-            self.render_gripper_ob_inner(row)
+        # Display a visual indication of aruco based gripper observations
+        time.sleep(2)
+        while True:
+            gripper_pose = self.datastore.gantry_pose.deepCopy()
+            for row in gripper_pose:
+                invoke(self.render_gripper_ob, row)
+
+            # send a direct move command in pause mode
+            if self.calibration_mode == 'pause':
+                invoke(self.direct_move)
+            
+            time.sleep(0.25)
 
     def notify_connected_bots_change(self, available_bots={}):
         offs = 0
         for server,info in available_bots.items():
             text_entity = Text(server, world_scale=16, position=(-0.1, -0.4 + offs))
             offs -= 0.03
+
+    def get_simplified_position(self):
+        """
+        Calculate a gantry position based solely on the last line record from each anchor and the anchor poses
+        """
+        lengths = []
+        anchor_positions = []
+        for i, alr in enumerate(self.datastore.anchor_line_record):
+            lengths.append(alr.getLast()[-1])
+            anchor_positions.append(swap_yz(self.anchors[i].position))
+        if sum(lengths) == 0:
+            invoke(self.show_error, "Must be connected and perform line calibration before using direct movement")
+            return anchor_positions, False, None
+        anchor_positions = np.array(anchor_positions)
+        lengths = np.array(lengths)
+        result = find_intersection(anchor_positions, lengths)
+        return anchor_positions, result.x, result.success
+
+    def direct_move(self):
+        """
+        Send planned anchor lines to the robot that would move the gantry in a straight line
+        in the direction of self.direction for 2 seconds.
+        """
+        if self.calibration_mode != 'pause':
+            return
+        if sum(self.direction) == 0:
+            if self.could_be_moving:
+                # immediately cancel whatever remains of the movement
+                self.to_ob_q.put({'slow_stop_all': None})
+                # set a flag so we don't do this constantly, even though it would be harmless.
+                self.could_be_moving = False
+            return
+        anchor_positions, start, success = self.get_simplified_position()
+        if not success:
+            return
+        # TODO invoke a function that will visually indicate the position and direction
+        # calculate a few time intervals in the near future
+        times = np.linspace(0, 2, 12, dtype=np.float64).reshape(-1, 1)
+        # where we want the gantry to be at the time intervals
+        gantry_positions = self.direction * times + start
+        # represent as absolute times
+        times = times + time.time()
+        # the anchor line lengths if the gantry were at those positions
+        # format as an array of times and lengths, one array for each anchor
+        future_anchor_lines = np.array([
+            np.column_stack([
+                times,
+                np.linalg.norm(gantry_positions - pos, axis=1)])
+            for pos in anchor_positions])
+        # send it
+        self.to_ob_q.put({
+            'future_anchor_lines': future_anchor_lines,
+        })
+        self.could_be_moving = True
 
     def receive_updates(self, min_to_ui_q):
         while True:
@@ -544,6 +716,7 @@ class ControlPanelUI:
         if 'anchor_pose' in updates:
             apose = updates['anchor_pose']
             anchor_num = apose[0]
+            self.anchors[anchor_num].pose = apose[1]
             self.anchors[anchor_num].position = swap_yz(apose[1][1])
             self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
 
@@ -604,7 +777,7 @@ def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q):
     estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
     estimator_update_thread.start()
 
-    rgo = threading.Thread(target=cpui.render_gripper_ob, daemon=True)
+    rgo = threading.Thread(target=cpui.periodic_actions, daemon=True)
     rgo.start()
 
     def stop_other_processes():
