@@ -37,15 +37,19 @@ class CircularBuffer:
 
     def insert(self, row):
         with self.sem:
-            self.asNpa()[self.idx] = row
             self.idx = (self.idx + 1) % self.shape[0]
+            self.asNpa()[self.idx] = row
 
     def insertList(self, row_list):
         with self.sem:
             arr = self.asNpa()
             for row in row_list:
-                arr[self.idx] = row
                 self.idx = (self.idx + 1) % self.shape[0]
+                arr[self.idx] = row
+
+    def getLast(self):
+        with self.sem:
+            return self.asNpa()[self.idx]
 
 class DataStore:
     """
