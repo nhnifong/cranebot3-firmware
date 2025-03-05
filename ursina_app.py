@@ -246,6 +246,7 @@ class ControlPanelUI:
         self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
         self.n_anchors = datastore.n_cables
+        self.time_domain = (1,2)
 
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
         # maybe you shouldn't read those files in the clients
@@ -505,89 +506,89 @@ class ControlPanelUI:
 
     def receive_updates(self, min_to_ui_q):
         while True:
+            # queue.get has to happen in a thread, because it blocks
             updates = min_to_ui_q.get()
-            if 'STOP' in updates:
-                application.quit()
+            # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
+            invoke(self.process_update, updates)
 
-            if 'knots' in updates:
-                self.knots = updates['knots']
+    def process_update(self, updates):
+        if 'STOP' in updates:
+            application.quit()
 
-            if 'spline_degree' in updates:
-                self.spline_degree = updates['spline_degree']
+        if 'knots' in updates:
+            self.knots = updates['knots']
 
-            if 'minimization_step_seconds' in updates:
-                # print(f"minimization_step_seconds = {updates['minimization_step_seconds']}")
-                pass
+        if 'spline_degree' in updates:
+            self.spline_degree = updates['spline_degree']
 
-            if 'time_domain' in updates:
-                # the time domain in unix seconds over which the gripper and gantry splines are defined.
-                self.time_domain = updates['time_domain']
+        if 'minimization_step_seconds' in updates:
+            # print(f"minimization_step_seconds = {updates['minimization_step_seconds']}")
+            pass
 
-            if 'gripper_path' in updates:
-                control_points = np.array(list(map(swap_yz, updates['gripper_path'])))
-                gripper_pos_spline = BSpline(self.knots, control_points, self.spline_degree, True)
-                self.render_curve(gripper_pos_spline, 'gripper_spline')
-                self.gripper.setParams(gripper_pos_spline, self.time_domain)
+        if 'time_domain' in updates:
+            # the time domain in unix seconds over which the gripper and gantry splines are defined.
+            self.time_domain = updates['time_domain']
 
-            if 'gantry_path' in updates:
-                control_points = np.array(list(map(swap_yz, updates['gantry_path'])))
-                gantry_pos_spline = BSpline(self.knots, control_points, self.spline_degree, True)
-                self.render_curve(gantry_pos_spline, 'gantry_spline')
-                self.gantry.setParams(gantry_pos_spline, self.time_domain)
+        if 'gripper_path' in updates:
+            control_points = np.array(list(map(swap_yz, updates['gripper_path'])))
+            gripper_pos_spline = BSpline(self.knots, control_points, self.spline_degree, True)
+            self.render_curve(gripper_pos_spline, 'gripper_spline')
+            self.gripper.setParams(gripper_pos_spline, self.time_domain)
 
-            if 'anchor_pose' in updates:
-                apose = updates['anchor_pose']
-                anchor_num = apose[0]
-                self.anchors[anchor_num].position = swap_yz(apose[1][1])
-                self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
+        if 'gantry_path' in updates:
+            control_points = np.array(list(map(swap_yz, updates['gantry_path'])))
+            gantry_pos_spline = BSpline(self.knots, control_points, self.spline_degree, True)
+            self.render_curve(gantry_pos_spline, 'gantry_spline')
+            self.gantry.setParams(gantry_pos_spline, self.time_domain)
 
-            if 'pil_image' in updates:
-                print('received pil image in UI')
-                pili = updates['pil_image']
-                self.camview.texture = Texture(pili.convert("RGBA"))
+        if 'anchor_pose' in updates:
+            apose = updates['anchor_pose']
+            anchor_num = apose[0]
+            self.anchors[anchor_num].position = swap_yz(apose[1][1])
+            self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
 
-            if 'connection_status' in updates:
-                status = updates['connection_status']
-                print(status)
-                if status['websocket'] == 0:
-                    user_status_str = 'Not Detected'
-                elif status['websocket'] == 1:
-                    user_status_str = 'Connecting...'
-                else:
-                    user_status_str = 'Online'
+        if 'pil_image' in updates:
+            print('received pil image in UI')
+            pili = updates['pil_image']
+            self.camview.texture = Texture(pili.convert("RGBA"))
 
-                if status['video']:
-                    vidstatus_tex = 'vid_ok.png'
-                else:
-                    vidstatus_tex = 'vid_out.png'
+        if 'connection_status' in updates:
+            status = updates['connection_status']
+            print(status)
+            if status['websocket'] == 0:
+                user_status_str = 'Not Detected'
+            elif status['websocket'] == 1:
+                user_status_str = 'Connecting...'
+            else:
+                user_status_str = 'Online'
 
-                if 'anchor_num' in status:
-                    self.anchors[status['anchor_num']].setStatus(user_status_str)
-                    self.vid_status[status['anchor_num']].texture = vidstatus_tex
-                elif 'gripper' in status:
-                    self.gripper.setStatus(user_status_str)
-                    self.vid_status[4].texture = vidstatus_tex
+            if status['video']:
+                vidstatus_tex = 'vid_ok.png'
+            else:
+                vidstatus_tex = 'vid_out.png'
 
-            if 'detection_rate' in updates:
-                self.detections_text.text = detections_format_str.format(val=updates['detection_rate'])
+            if 'anchor_num' in status:
+                self.anchors[status['anchor_num']].setStatus(user_status_str)
+                self.vid_status[status['anchor_num']].texture = vidstatus_tex
+            elif 'gripper' in status:
+                self.gripper.setStatus(user_status_str)
+                self.vid_status[4].texture = vidstatus_tex
 
-            if 'video_latency' in updates:
-                self.video_latency_text.text = video_latency_format_str.format(val=updates['video_latency'])
+        if 'vid_stats' in updates:
+            stats = updates['vid_stats']
+            self.detections_text.text = detections_format_str.format(val=stats['detection_rate'])
+            self.video_latency_text.text = video_latency_format_str.format(val=stats['video_latency'])
+            self.video_framerate_text.text = video_framerate_format_str.format(val=stats['video_framerate'])
 
-            if 'video_framerate' in updates:
-                self.video_framerate_text.text = video_framerate_format_str.format(val=updates['video_framerate'])
-
-            if 'goal_points' in updates:
-                for i, gp in enumerate(updates['goal_points']):
-                    if i == len(self.goals):
-                        break
-                    self.goals[i].enabled = True
-                    self.goals[i].position = swap_yz(gp)
-                # disable the rest
-                for i in range(len(updates['goal_points']), len(self.goals)):
-                    self.goals[i].enabled = False
-
-                
+        if 'goal_points' in updates:
+            for i, gp in enumerate(updates['goal_points']):
+                if i == len(self.goals):
+                    break
+                self.goals[i].enabled = True
+                self.goals[i].position = swap_yz(gp)
+            # disable the rest
+            for i in range(len(updates['goal_points']), len(self.goals)):
+                self.goals[i].enabled = False
 
 
     def start(self):

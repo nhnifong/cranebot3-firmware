@@ -11,17 +11,17 @@ import signal
 import sys
 
 default_weights = np.array([
-    8, # gantry position from charuco
-    8, # gripper position from charuco
-    1, # gripper local z rotation from charuco
-    2, # gripper inertial measurements
-    1, # calculated forces
-    4, # winch line record
-    4, # anchor line record
-    0.5, # total energy of gripper
-    0.5, # total energy of gantry
-    4, # desired gripper location
-    1, # spline jolt
+    8.0, # gantry position from charuco
+    2.0, # gripper position from charuco
+    0.0, # gripper local z rotation from charuco
+    0.0, # gripper inertial measurements
+    6.0, # calculated forces
+    9.0, # winch line record
+    0.0, # anchor line record
+    0.75, # total energy of gripper
+    0.75, # total energy of gantry
+    5.0, # desired gripper location
+    0.45, # spline jolt
 ])
 
 weight_names = [
@@ -83,7 +83,7 @@ class CDPR_position_estimator:
         self.gravity = np.array([0,0,-9.81])
 
         # number of control points in position splines
-        self.n_ctrl_pts = 14
+        self.n_ctrl_pts = 10
         # cublic splines
         self.spline_degree = 3
 
@@ -114,7 +114,7 @@ class CDPR_position_estimator:
         self.gripper_rot_spline = BSpline(self.knots, ctrlp_rotation, self.spline_degree, True) # 1 dimensional. represents angle only
         self.gantry_accel_func = self.gripper_pos_spline.derivative(2)
 
-        lpos = 10 # maximum meters from origin than a position spline control point can be
+        lpos = 4 # maximum meters from origin than a position spline control point can be
         self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 7 # two 3d splines and a 1d spline
 
         # 
@@ -136,8 +136,9 @@ class CDPR_position_estimator:
         self.future_times = np.linspace(0.5, 1, self.horizon_s * 4)
         self.des_grip_locations = np.array([])
 
-        self.jolt_time = time()+1
+        self.jolt_time = now+1
         self.gantry_jolt_pos = self.gantry_pos_spline(self.model_time(self.jolt_time))
+        self.last_intermediate_update = now
 
     def loadAnchorPoses(self):
         pts = []
@@ -185,7 +186,7 @@ class CDPR_position_estimator:
         """
         return np.linalg.norm(self.gantry_pos_spline(times) - self.gripper_pos_spline(times), axis=1, keepdims=True)
 
-    def calc_gripper_accel_from_forces(self, steps=100):
+    def calc_gripper_accel_from_forces(self, times, gant_positions, grip_positions):
         """
         Calculate the expected acceleration on the gripper's IMU based on the forces it should experience due to
         it being a pendulum hanging from a moving object
@@ -197,9 +198,9 @@ class CDPR_position_estimator:
         Args:
             steps: number of discrete points at which to measure forces.
         """
-        times = np.linspace(0, 1, steps)
-        gant_positions = self.gantry_pos_spline(times)  # Vectorized spline evaluation
-        grip_positions = self.gripper_pos_spline(times)  # Vectorized spline evaluation
+        # times = np.linspace(0, 1, steps)
+        # gant_positions = self.gantry_pos_spline(times)  # Vectorized spline evaluation
+        # grip_positions = self.gripper_pos_spline(times)  # Vectorized spline evaluation
 
         directions = grip_positions - gant_positions
         magnitudes = np.linalg.norm(directions, axis=1, keepdims=True) #Calculate magnitudes
@@ -222,13 +223,14 @@ class CDPR_position_estimator:
             + 9.81 * position_spline(t)[2] # potential energy
         )
 
-    def mechanical_energy_vectorized(self, position_spline, mass_kg, steps=100):
+    def mechanical_energy_vectorized(self, position_spline, times, position_values, mass_kg, steps=100):
         """
         Return a function that gives the kinetic energy + potential energy of an object at a particular time.
+        provide precalculated positions for the spline to optimize
         """
         velocity = position_spline.derivative(1)
-        times = np.linspace(0, 1, steps)
-        position_values = position_spline(times)
+        # times = np.linspace(0, 1, steps)
+        # position_values = position_spline(times)
         velocity_values = velocity(times)
 
         kinetic_energy = 0.5 * mass_kg * np.linalg.norm(velocity_values, axis=1) ** 2
@@ -323,7 +325,11 @@ class CDPR_position_estimator:
         """
         self.set_splines_from_params(model_parameters)
         
-        steps = 20
+        steps = 100
+        # precalcuate things
+        times = np.linspace(0, 1, steps)
+        gant_positions = self.gantry_pos_spline(times)  # Vectorized spline evaluation
+        grip_positions = self.gripper_pos_spline(times)  # Vectorized spline evaluation
 
         errors = np.array([
             # error between gantry position model and observation
@@ -335,17 +341,17 @@ class CDPR_position_estimator:
             # error between gripper acceleration model and observation
             0, #self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            0,#self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(steps=steps), normalize_time=False),
+            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(times, gant_positions, grip_positions), normalize_time=False),
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
             sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
                 for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            self.mechanical_energy_vectorized(self.gripper_pos_spline, self.gripper_mass, steps),
-            self.mechanical_energy_vectorized(self.gantry_pos_spline, self.gantry_mass, steps),
+            self.mechanical_energy_vectorized(self.gripper_pos_spline, times, grip_positions, self.gripper_mass, steps),
+            self.mechanical_energy_vectorized(self.gantry_pos_spline, times, gant_positions, self.gantry_mass, steps),
             # error between position model and desired future locations
-            0, #self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
+            self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
             # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
             self.spline_jolt(),
             
@@ -403,14 +409,17 @@ class CDPR_position_estimator:
         # SLSQP
         # COBYLA
         # L-BFGS-B
+        # Powell
+        # Nelder-Mead
         result = optimize.minimize(
             self.cost_function,
             parameter_initial_guess,
             method='SLSQP',
             bounds=self.bounds,
+            # callback=self.intermediate_result,
             options={
                 'disp': True,
-                'maxiter': 200,
+                'maxiter': 120,
                 # 'ftol':0.0001, # Precision goal for the value of f in the stopping criterion.
                 #'eps':0.2, # Step size used for numerical approximation of the Jacobian.
                 #'finite_diff_rel_step':, # the relative step size to use for numerical approximation of jac
@@ -458,6 +467,17 @@ class CDPR_position_estimator:
             'goal_points': self.des_grip_locations[:,[1,2,3]],
         }
         self.to_ui_q.put(update_for_ui)
+
+    def intermediate_result(self, params):
+        now = time()
+        if now - self.last_intermediate_update > 0.15:
+            self.last_intermediate_update = now
+            sp_size = self.n_ctrl_pts * 3
+            update_for_ui = {
+                'gripper_path': params[0 : sp_size].reshape((self.n_ctrl_pts, 3)),
+                'gantry_path': params[sp_size : sp_size*2].reshape((self.n_ctrl_pts, 3)),
+            }
+            self.to_ui_q.put(update_for_ui)
 
     def move_spline_domain_fast(self, spline, offset):
         """
@@ -572,6 +592,7 @@ class CDPR_position_estimator:
 
     async def main(self):
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
+        await asyncio.sleep(5)
         while self.run:
             self.estimate()
             # some sleep is necessary or we will not receive updates
