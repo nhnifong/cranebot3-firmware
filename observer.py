@@ -45,11 +45,11 @@ class StatCounter:
             self.latency = []
             self.framerate = []
             self.detection_count = 0
-            self.to_ui_q.put({
+            self.to_ui_q.put({'vid_stats':{
                 'detection_rate':detection_rate,
                 'video_latency':mean_latency,
                 'video_framerate':mean_framerate,
-                })
+                }})
             await asyncio.sleep(0.5)
 
 # Manager of multiple tasks running clients connected to each robot component
@@ -267,9 +267,9 @@ class AsyncObserver:
             dp[6] = 1
             self.datastore.gripper_pose.insert(dp)
             # anchor lines always perfectly agree with gripper position
-            for i, simanc in enumerate(sim_anchors):
-                dist = np.linalg.norm(simanc - dp[4:])
-                self.datastore.anchor_line_record[i].insert(np.array([t, dist]))
+            # for i, simanc in enumerate(sim_anchors):
+            #     dist = np.linalg.norm(simanc - dp[4:])
+            #     self.datastore.anchor_line_record[i].insert(np.array([t, dist]))
             await asyncio.sleep(0.8)
 
     async def reset_reference_lengths(self):
