@@ -364,7 +364,7 @@ class ControlPanelUI:
         # show a visualization of goal positions
         self.goals = [Entity(
                 position=(0,0,0),
-                model='sphere', # todo use a map marker thing
+                model='map_marker',
                 color=color.azure,
                 scale=0.1,
                 shader=lit_with_shadows_shader,
@@ -488,7 +488,13 @@ class ControlPanelUI:
             thing.label.color = color.black
             thing.knob.text_color = color.black
 
-        # self.direct_move_indicator = Entity(model='arrow', color=color.lime, scale=(1, 1, 1), position=(0,0.5,0))
+        self.direct_move_indicator = Entity(
+            model='arrow',
+            color=color.black,
+            scale=(1, 1, 1),
+            position=(0,0.5,0),
+            enabled=False,
+        )
 
         DropdownMenu('Menu', buttons=(
             DropdownMenu('Mode', buttons=(
@@ -662,7 +668,7 @@ class ControlPanelUI:
         if not success:
             print('could not obtain position from line lengths')
             return
-        # TODO invoke a function that will visually indicate the position and direction
+        invoke(self.update_direct_move_indicator, start)
         # calculate a few time intervals in the near future
         times = np.linspace(0, move_duration, 6, dtype=np.float64).reshape(-1, 1)
         # where we want the gantry to be at the time intervals
@@ -681,6 +687,10 @@ class ControlPanelUI:
             'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
         })
         self.could_be_moving = True
+
+    def update_direct_move_indicator(self, start):
+        self.direct_move_indicator.position = swap_yz(start)
+        self.direct_move_indicator.look_at(swap_yz(start + self.direction))
 
     def receive_updates(self, min_to_ui_q):
         while True:
