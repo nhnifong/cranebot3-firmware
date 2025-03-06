@@ -44,6 +44,14 @@ def collect_images_stream():
         print(f'saved frame to {fpath}')
         sleep(1)
 
+def is_blurry(image, threshold=6.0):
+    """
+    Checks if an image is too blurry based on Laplacian variance.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) #ensure grayscale
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    return laplacian_var < threshold
+
 # calibrate interactively
 class CalibrationInteractive:
     def __init__(self):
@@ -83,6 +91,7 @@ class CalibrationInteractive:
             print(f"chessboards obtained {self.images_obtained}")
 
             image = cv2.drawChessboardCorners(image, (14,9), corners, found)
+        # this resize is only for display and should not affect calibration
         image = cv2.resize(image, (2304, 1296),  interpolation = cv2.INTER_LINEAR)
         cv2.imshow('img', image)
         cv2.waitKey(500)
