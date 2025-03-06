@@ -646,8 +646,9 @@ class ControlPanelUI:
     def direct_move(self):
         """
         Send planned anchor lines to the robot that would move the gantry in a straight line
-        in the direction of self.direction for 2 seconds.
+        in the direction of self.direction for a small amount of time.
         """
+        move_duration = 1 # seconds
         if self.calibration_mode != 'pause':
             return
         if sum(self.direction) == 0:
@@ -663,7 +664,7 @@ class ControlPanelUI:
             return
         # TODO invoke a function that will visually indicate the position and direction
         # calculate a few time intervals in the near future
-        times = np.linspace(0, 2, 12, dtype=np.float64).reshape(-1, 1)
+        times = np.linspace(0, move_duration, 6, dtype=np.float64).reshape(-1, 1)
         # where we want the gantry to be at the time intervals
         gantry_positions = self.direction * times + start
         # represent as absolute times
@@ -677,7 +678,7 @@ class ControlPanelUI:
             for pos in anchor_positions])
         # send it
         self.to_ob_q.put({
-            'future_anchor_lines': future_anchor_lines,
+            'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
         })
         self.could_be_moving = True
 

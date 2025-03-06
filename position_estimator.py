@@ -468,10 +468,10 @@ class CDPR_position_estimator:
         self.des_grip_locations = self.desired_gripper_positions()
 
         update_for_observer = {
-            'future_anchor_lines': future_anchor_lines,
-            'future_winch_line': future_winch_line,
+            'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
+            'future_winch_line': {'sender':'pe', 'data':future_winch_line},
         }
-        # self.to_ob_q.put(update_for_observer)
+        self.to_ob_q.put(update_for_observer)
 
         # send control points of position splines to UI for visualization
         update_for_ui = {

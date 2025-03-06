@@ -109,16 +109,22 @@ class AsyncObserver:
                 print('stopping listen_position_updates thread due to STOP message in queue')
                 break
             if 'future_anchor_lines' in updates:
+                fal = updates['future_anchor_lines']
+                if fal['sender'] == 'pe' and self.calmode != 'run':
+                    return
                 for client in self.anchors:
                     print(f'blaaaaaaa {client.anchor_num}')
                     asyncio.run_coroutine_threadsafe(client.send_commands({
-                        'length_plan' : updates['future_anchor_lines'][client.anchor_num].tolist()
+                        'length_plan' : fal['data'][client.anchor_num].tolist()
                     }), loop)
 
             if 'future_winch_line' in updates:
+                fal = updates['future_anchor_lines']
+                if fal['sender'] == 'pe' and self.calmode != 'run':
+                    return
                 if self.gripper_client is not None:
                     asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
-                        'length_plan' : updates['future_winch_line']
+                        'length_plan' : fal['data']
                     }), loop)
             if 'set_run_mode' in updates:
                 print("set_run_mode") 
@@ -169,6 +175,11 @@ class AsyncObserver:
                 client.calibration_mode = True
                 print(f'setting {name} to pose calibration mode')
         elif mode == "pause":
+            if self.calmode == "pose":
+                # call calibrate_pose on all anchors when exiting pose calibration mode
+                for name, client in self.bot_clients.items():
+                    client.calibrate_pose()
+                    client.calibration_mode = False
             self.calmode = mode
             self.slow_stop_all_spools(loop)
 

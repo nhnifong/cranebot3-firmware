@@ -67,7 +67,7 @@ def locate_markers(im):
         for i,c in zip(ids, corners):
             try:
                 name = marker_names[i[0]]
-            except KeyError:
+            except IndexError:
                 # saw something that's not part of my robot
                 print(f'Unknown marker spotted with id {i}')
                 continue
@@ -76,7 +76,7 @@ def locate_markers(im):
             if name == 'origin':
                 mp = marker_points * origin_marker_size
             else:
-                mp = marker_points * marker_size * 0.5
+                mp = marker_points * marker_size
 
             
             # gives answers in a frame of reference relative to the camera.
