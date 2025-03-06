@@ -556,11 +556,11 @@ class ControlPanelUI:
         # average recent gantry poses.
         poses = self.datastore.gantry_pose.deepCopy()
         gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))[:3]
-        lengths = [1,1,1,1] 
-        for i, anchor in enumerate(self.anchors):
-            grommet_pose = compose_poses([anchor.pose, model_constants.anchor_grommet])[:3]
-            distance = np.linalg.norm(grommet_pose[1] - gantry_pose[1])
-            lengths[i] = distance - 0.02 # to make up for the distance between the gantry origin and it's grommets, which are all symmetric
+        lengths = [3.79,4.94,2.95,4.08] 
+        # for i, anchor in enumerate(self.anchors):
+        #     grommet_pose = compose_poses([anchor.pose, model_constants.anchor_grommet])[:3]
+        #     distance = np.linalg.norm(grommet_pose[1] - gantry_pose[1])
+        #     lengths[i] = distance - 0.02 # to make up for the distance between the gantry origin and it's grommets, which are all symmetric
         # display a confirmation dialog
         fmt = '{:.3f}'
         self.line_cal_confirm = WindowPanel(
@@ -679,7 +679,6 @@ class ControlPanelUI:
         self.to_ob_q.put({
             'future_anchor_lines': future_anchor_lines,
         })
-        print(future_anchor_lines)
         self.could_be_moving = True
 
     def receive_updates(self, min_to_ui_q):
