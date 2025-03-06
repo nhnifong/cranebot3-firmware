@@ -108,12 +108,14 @@ class AsyncObserver:
             if 'STOP' in updates:
                 print('stopping listen_position_updates thread due to STOP message in queue')
                 break
-            if 'future_anchor_lines' in updates and self.calmode == 'run':
+            if 'future_anchor_lines' in updates:
                 for client in self.anchors:
+                    print(f'blaaaaaaa {client.anchor_num}')
                     asyncio.run_coroutine_threadsafe(client.send_commands({
-                        'length_plan' : updates['future_anchor_lines'][client.anchor_num]
+                        'length_plan' : updates['future_anchor_lines'][client.anchor_num].tolist()
                     }), loop)
-            if 'future_winch_line' in updates and self.calmode == 'run':
+
+            if 'future_winch_line' in updates:
                 if self.gripper_client is not None:
                     asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
                         'length_plan' : updates['future_winch_line']
