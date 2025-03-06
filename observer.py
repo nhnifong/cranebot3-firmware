@@ -68,6 +68,8 @@ class AsyncObserver:
 
         # all clients by server name
         self.bot_clients = {}
+        # all connected anchors
+        self.anchors = []
         # convenience reference to gripper client
         self.gripper_client = None
 
@@ -107,11 +109,10 @@ class AsyncObserver:
                 print('stopping listen_position_updates thread due to STOP message in queue')
                 break
             if 'future_anchor_lines' in updates and self.calmode == 'run':
-                for name, client in self.bot_clients.items():
-                    if name.startswith(cranebot_anchor_service_name):
-                        asyncio.run_coroutine_threadsafe(client.send_commands({
-                            'length_plan' : updates['future_anchor_lines'][client.anchor_num]
-                        }), loop)
+                for client in self.anchors:
+                    asyncio.run_coroutine_threadsafe(client.send_commands({
+                        'length_plan' : updates['future_anchor_lines'][client.anchor_num]
+                    }), loop)
             if 'future_winch_line' in updates and self.calmode == 'run':
                 if self.gripper_client is not None:
                     asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
@@ -121,9 +122,9 @@ class AsyncObserver:
                 print("set_run_mode") 
                 self.set_run_mode(updates['set_run_mode'], loop)
             if 'do_line_calibration' in updates:
-                for name, client in self.bot_clients.items():
-                    if name.contains('anchor'):
-                        asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': lengths[client.anchor_num]}), loop)
+                lengths = updates['do_line_calibration']
+                for client in self.anchors:
+                    asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': lengths[client.anchor_num]}), loop)
             if 'jog_spool' in updates:
                 for client in self.bot_clients.values():
                     if client.anchor_num == updates['jog_spool']['anchor']:
@@ -203,6 +204,7 @@ class AsyncObserver:
                     self.save_anchor_num_map()
                 ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat)
                 self.bot_clients[info.server] = ac
+                self.anchors.append(ac)
                 await ac.startup()
             elif name_component == cranebot_gripper_service_name:
                 gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat)
@@ -233,7 +235,7 @@ class AsyncObserver:
             self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
 
             asyncio.create_task(self.stat.stat_main())
-            asyncio.create_task(self.add_simulated_data())
+            # asyncio.create_task(self.add_simulated_data())
 
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
