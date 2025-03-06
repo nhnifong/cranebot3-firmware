@@ -76,7 +76,7 @@ def locate_markers(im):
             if name == 'origin':
                 mp = marker_points * origin_marker_size
             else:
-                mp = marker_points * marker_size
+                mp = marker_points * marker_size * 0.5
 
             
             # gives answers in a frame of reference relative to the camera.

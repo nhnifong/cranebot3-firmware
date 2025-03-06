@@ -56,7 +56,9 @@ class SpoolController:
         Provide an external observation of the current line length
         """
         self.lineAtStart = length
-        self.zeroAngle = self.motor.getShaftAngle()
+        success, l = self.motor.getShaftAngle()
+        if success:
+            self.zeroAngle = l
 
     def setPlan(self, plan):
         """

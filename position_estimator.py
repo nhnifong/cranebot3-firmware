@@ -608,10 +608,10 @@ class CDPR_position_estimator:
     async def main(self):
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         await asyncio.sleep(5)
-        while self.run:
-            self.estimate()
-            # some sleep is necessary or we will not receive updates
-            await asyncio.sleep(0.01)
+        # while self.run:
+        #     self.estimate()
+        #     # some sleep is necessary or we will not receive updates
+        #     await asyncio.sleep(0.01)
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """

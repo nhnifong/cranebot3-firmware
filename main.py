@@ -6,6 +6,7 @@ import argparse
 from data_store import DataStore
 from observer import start_observation
 from position_estimator import start_estimator
+from ursina_app import start_ui
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Crane Robot Controller")
@@ -54,10 +55,13 @@ if __name__ == "__main__":
     observer_process.start()
     minimizer_process.start()
 
+    # ursina expects this in a global scope in the main file and it won't be called anywhere else.
+    def input(key):
+        to_ui_q.put({'input':key})
+
     try:
         if not args.headless:
             # allow Ursina to be the main process. it doesn't work as a subprocess.
-            from ursina_app import start_ui
             start_ui(datastore, to_ui_q, to_pe_q, to_ob_q)
         else:
             # Keep the main process alive

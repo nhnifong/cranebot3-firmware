@@ -57,13 +57,17 @@ key_behavior = {
     'e up': (2, 0),
 }
 
+def input(key):
+    pass
+
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
     return (vec[0], vec[2], vec[1])
 
 # Transforms a rodrigues rotation vector ummmm its magic don't ask
 def fix_rot(vec):
-    return (vec[1], -vec[2], vec[0])
+    # return (vec[1], -vec[2], vec[0])
+    return (vec[0], vec[2], vec[1])
 
 def draw_line(point_a, point_b):
     return Mesh(vertices=[point_a, point_b], mode='line')
@@ -283,10 +287,6 @@ class Floor(Entity):
             # Get the intersection point in world coordinates
             self.target.position = mouse.world_point
 
-# ursina expects this in a global scope
-def input(key):
-    pass
-
 class ControlPanelUI:
     def __init__(self, datastore, to_pe_q, to_ob_q):
         self.app = Ursina()
@@ -299,7 +299,7 @@ class ControlPanelUI:
         self.direction = np.array([0,0,0], dtype=float)
         self.could_be_moving = False
 
-        # hijack the input function
+        # only matters when this file is main
         global input
         input = self.input
 
@@ -399,7 +399,7 @@ class ControlPanelUI:
         self.camview.enabled = False
 
         self.go_quads = []
-        self.max_go_quads = 100
+        self.max_go_quads = 200
         self.go_quad_next = 0
 
         self.modePanel = Panel(model='quad', z=99, 
@@ -588,15 +588,16 @@ class ControlPanelUI:
     def on_stop_button(self):
         self.to_ob_q.put({'set_run_mode':'pause'})
 
-    def render_gripper_ob(self, row):
+    def render_gripper_ob(self, row, color):
         if len(self.go_quads) < self.max_go_quads:
             self.go_quads.append(Entity(
                 model='cube',
                 position=(row[4],row[6],row[5]),
-                color=color.white, scale=(0.03),
+                color=color, scale=(0.03),
                 shader=unlit_shader))
         else:
             self.go_quads[self.go_quad_next].position = (row[4],row[6],row[5])
+            self.go_quads[self.go_quad_next].color = color
             self.go_quad_next = (self.go_quad_next+1)%self.max_go_quads
 
     def periodic_actions(self):
@@ -606,9 +607,12 @@ class ControlPanelUI:
         # Display a visual indication of aruco based gripper observations
         time.sleep(2)
         while True:
-            gripper_pose = self.datastore.gantry_pose.deepCopy()
+            gantry_pose = self.datastore.gantry_pose.deepCopy()
+            for row in gantry_pose:
+                invoke(self.render_gripper_ob, row, color.white)
+            gripper_pose = self.datastore.gripper_pose.deepCopy()
             for row in gripper_pose:
-                invoke(self.render_gripper_ob, row)
+                invoke(self.render_gripper_ob, row, color.light_gray)
 
             # send a direct move command in pause mode
             if self.calibration_mode == 'pause':
@@ -655,6 +659,7 @@ class ControlPanelUI:
             return
         anchor_positions, start, success = self.get_simplified_position()
         if not success:
+            print('could not obtain position from line lengths')
             return
         # TODO invoke a function that will visually indicate the position and direction
         # calculate a few time intervals in the near future
@@ -674,6 +679,7 @@ class ControlPanelUI:
         self.to_ob_q.put({
             'future_anchor_lines': future_anchor_lines,
         })
+        print(future_anchor_lines)
         self.could_be_moving = True
 
     def receive_updates(self, min_to_ui_q):
@@ -762,6 +768,9 @@ class ControlPanelUI:
             # disable the rest
             for i in range(len(updates['goal_points']), len(self.goals)):
                 self.goals[i].enabled = False
+
+        if 'input' in updates:
+            self.input(updates['input'])
 
 
     def start(self):
