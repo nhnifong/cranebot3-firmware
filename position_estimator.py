@@ -22,6 +22,7 @@ default_weights = np.array([
     0.75, # total energy of gantry
     5.0, # desired gripper location
     0.45, # spline jolt
+    1.0, # ideal gantry height
 ])
 
 weight_names = [
@@ -36,7 +37,11 @@ weight_names = [
     'gantry energy',
     'goal locations',
     'spline_jolt',
+    'ideal_gantry_height'
 ]
+
+# the ideal gantry height is heigh enough not to hit you in the head, but otherwise as low as possible to maximize payload capacity
+ideal_gantry_height = 1.828 # meters
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -260,6 +265,9 @@ class CDPR_position_estimator:
         """Measure the amount of distance expected in the jolt from the last spline to the current one."""
         return np.linalg.norm(self.gantry_jolt_pos - self.gantry_pos_spline(self.model_time(self.jolt_time)))
 
+    def gantry_height_penalty(self, gantry_position_values):
+        return np.sum((gantry_position_values[:,2] - ideal_gantry_height)**2)
+
     def clamped_knot_vector(self, n_ctrl_pts, base_interval=(0,1)):
         """
         Return a clamped knot vector suitable for constructing a cubic spline with n_ctrl_pts
@@ -369,10 +377,9 @@ class CDPR_position_estimator:
             self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
             # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
             self.spline_jolt(),
+            # minimize squared distance from ideal gantry height
+            self.gantry_height_penalty(gant_positions),
             
-            # penalty for pulling the motors against eachother by raising the gantry too high
-            # penalty for letting the gripper touch the floor
-            # penalty for letting the gantry touch an imaginary plane 6 feet from the ground (heuristic for dodging furniture)
             # penalty for exceeding max gripper acceleration since it could shake loose the payload
             # penalty for unspooling so fast you make a birdsnest
 
