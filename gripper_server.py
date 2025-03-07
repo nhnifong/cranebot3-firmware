@@ -4,6 +4,7 @@ from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2, ADC
 from ioexpander import IN_PU
 from spools import SpoolController
 from getmac import get_mac_address
+import logging
 
 # these two constants are obtained experimentally
 # the speed will not increase at settings beyond this value
@@ -106,7 +107,7 @@ class RaspiGripperServer(RobotComponentServer):
         Either by doing something in opencv with a reference image of a closed, empty gripper,
         or by looking at the output tensor of the AI camera 
         """
-        while self.run_client:
+        while self.run_server:
             if self.shouldBeFingersClosed:
                 # todo: in gripper closed mode, hold pressure constant
                 pass
@@ -127,5 +128,9 @@ class RaspiGripperServer(RobotComponentServer):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
     gs = RaspiGripperServer()
     asyncio.run(gs.main())

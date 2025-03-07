@@ -21,7 +21,15 @@ from getmac import get_mac_address
 from spools import SpoolController
 from motor_control import MKSSERVO42C
 import argparse
+import logging
 
+# video framerate and latency are limited by the memory on the raspberry pi zero.
+# with more memory, we could increase buffer-count to 10 or 20 and get great performance.
+# 6 is is the highest I have ever seen it work at full resolution, but not very reliably.
+# 5 works about 80% of the time and 4 works about 95%
+# higher framerate is possible with lower resolution, but it is not useful because at fullres
+# I can still barely detect a 9cm aruco marker at 5 meters.
+# There is an --roi arg to crop the image but it doesnt lessen the amount of memory rpicam-vid attempts to allocate.
 stream_command = """
 /usr/bin/rpicam-vid -t 0
   --width=4608 --height=2592
@@ -34,7 +42,8 @@ frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d
 
 class RobotComponentServer:
     def __init__(self):
-        self.run_client = True
+        self.run_server = True
+        self.ws_client_connected = False
         # a dict of update to be flushed periodically to the websocket
         self.update = {}
 
@@ -62,10 +71,15 @@ class RobotComponentServer:
                 # chill
                 await asyncio.sleep(0.3)
             except (ConnectionClosedOK, ConnectionClosedError):
-                print("stopped streaming measurements")
+                logging.info("stopped streaming measurements")
                 break
 
-    async def stream_mjpeg(self, line_timeout=60):
+    async def stream_mjpeg(self):
+        while self.ws_client_connected:
+            await self.run_rpicam_vid()
+            await asyncio.sleep(0.5)
+
+    async def run_rpicam_vid(self, line_timeout=60):
         """
         Start the rpicam-vid stream process with a timeout.
         If no line is printed for timeout seconds, kill the process.
@@ -75,6 +89,7 @@ class RobotComponentServer:
         rpicam-vid has no way of sending timestamps on its own as of Feb 2025
         """
         process = await asyncio.create_subprocess_exec(stream_command[0], *stream_command[1:], stdout=PIPE, stderr=STDOUT)
+        # read all the lines of output
         while True:
             try:
                 line = await asyncio.wait_for(process.stdout.readline(), line_timeout)
@@ -94,29 +109,37 @@ class RobotComponentServer:
                             # 'digital_gain': match.group(5),
                         })
                     else:
-                        # todo, restart if
-                        # ERROR: *** failed to allocate capture buffers for stream ***
-                        print(line)
+                        logging.info(line)
+                        if line.strip() == "ERROR: *** failed to allocate capture buffers for stream ***":
+                            logging.warning(f'rpicam-vid failed to allocate buffers. restarting...')
+                            break
                     continue # nothing wrong keep going
             except asyncio.TimeoutError:
-                print(f'rpicam-vid wrote no lines for {line_timeout} seconds')
+                logging.warning(f'rpicam-vid wrote no lines for {line_timeout} seconds')
+                process.kill()
+                break
             except asyncio.CancelledError:
+                logging.info("Killing rpicam-vid because the task has been cancelled")
+                process.kill()
                 break
 
             # unless continue is hit above because we got a line of output quick enough, we kill the process.
             process.kill()
             break
-        return await process.wait() # Wait for the child process to exit normally, such as when the client disconnects
+        # Wait for the child process to exit. whether normally as when the client disconnects,
+        # or because we just killed it.
+        return await process.wait()
 
     async def handler(self,websocket):
-        print('Websocket connected')
+        logging.info('Websocket connected')
+        self.ws_client_connected = True
         stream = asyncio.create_task(self.stream_measurements(websocket))
         mjpeg = asyncio.create_task(self.stream_mjpeg())
         while True:
             try:
                 message = await websocket.recv()
                 update = json.loads(message)
-                print(f"Received: {update}")
+                logging.debug(f"Received: {update}")
 
                 if 'length_plan' in update:
                     self.spooler.setPlan(update['length_plan'])
@@ -129,42 +152,44 @@ class RobotComponentServer:
                 self.processOtherUpdates(update)
 
             except ConnectionClosedOK:
-                print("Client disconnected")
+                logging.info("Client disconnected")
                 break
             except ConnectionClosedError as e:
-                print(f"Client disconnected with {e}")
+                logging.info(f"Client disconnected with {e}")
                 break
+        self.ws_client_connected = False
         stream.cancel()
+        mjpeg.cancel()
 
 
     async def main(self, port=8765):
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
 
-        self.run_client = True
+        self.run_server = True
         asyncio.create_task(self.register_mdns_service(f"123.{self.service_name}", "_http._tcp.local.", port))
 
         # thread for controlling stepper motor
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
 
         async with websockets.serve(self.handler, "0.0.0.0", port):
-            print("Websocket server started")
+            logging.info("Websocket server started")
             # cause the server to serve only as long as these other tasks are running
             await spool_task
             # if those tasks finish, exiting this context will cause the server's close() method to be called.
-            print("Closing websocket server")
+            logging.info("Closing websocket server")
 
 
         await self.zc.async_unregister_all_services()
-        print("Service unregistered")
+        logging.info("Service unregistered")
 
 
     def shutdown(self):
         # this might get called twice
-        if self.run_client:
-            print('\nStopping detection listener task')
-            self.run_client = False
-            print('Stopping Spool Motor')
+        if self.run_server:
+            logging.info('\nStopping detection listener task')
+            self.run_server = False
+            logging.info('Stopping Spool Motor')
             self.spooler.fastStop()
 
     def get_wifi_ip(self):
@@ -176,7 +201,7 @@ class RobotComponentServer:
             s.close()
             return ip
         except Exception:
-            print(f"Error getting IP address: {e}")
+            logging.error(f"Error getting IP address: {e}")
             return None
 
     async def register_mdns_service(self, name, service_type, port, properties={}):
@@ -193,7 +218,7 @@ class RobotComponentServer:
         )
 
         await self.zc.async_register_service(info)
-        print(f"Registered service: {name} ({service_type}) on port {port}")
+        logging.info(f"Registered service: {name} ({service_type}) on port {port}")
 
 class RaspiAnchorServer(RobotComponentServer):
     def __init__(self, power_anchor=False):
@@ -212,7 +237,10 @@ class RaspiAnchorServer(RobotComponentServer):
 
 
 if __name__ == "__main__":
-
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--power", action="store_true",
