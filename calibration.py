@@ -8,7 +8,7 @@ import glob
 board_w = 14
 board_h = 9
 # side length of one square in meters
-board_dim = 0.021
+board_dim = 0.075
 
 # when on the raspi, just collect the images. it doesn't have enough ram to analyze them.
 def collect_images():
@@ -29,7 +29,7 @@ def collect_images():
         print(f'collected ({i+1}/20)')
 
 def collect_images_stream():
-    video_uri = 'tcp://192.168.1.153:8888'
+    video_uri = 'tcp://192.168.1.151:8888'
     print(f'Connecting to {video_uri}')
     cap = cv2.VideoCapture(video_uri)
     print(cap)
@@ -66,8 +66,9 @@ class CalibrationInteractive:
         # prepare object points based on the actual dimensions of the calibration board
         # like (0,0,0), (25,0,0), (50,0,0) ....,(200,125,0)
         self.objp = np.zeros((board_n,3), np.float32)
-        self.objp[:,:2] = np.mgrid[0:board_h,0:board_w].T.reshape(-1,2)
+        self.objp[:,:2] = np.mgrid[0:board_w,0:board_h].T.reshape(-1,2)
         self.objp = self.objp * board_dim
+        print(self.objp)
 
         self.images_obtained = 0
         self.image_shape = None
@@ -80,7 +81,8 @@ class CalibrationInteractive:
         #Find chessboard corners
         print(f'search image {self.cnt}')
         self.cnt+=1
-        found, corners = cv2.findChessboardCornersSB(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ACCURACY)
+        found, corners = cv2.findChessboardCornersSB(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
+        # found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ADAPTIVE_THRESH)
 
         if found == True:
             #Add the "true" checkerboard corners
@@ -151,6 +153,6 @@ def calibrate_from_stream():
     ce.save()
 
 if __name__ == "__main__":
-    calibrate_from_stream()
+    # calibrate_from_stream()
     # collect_images_stream()
-    # calibrate_from_files()
+    calibrate_from_files()
