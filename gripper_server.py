@@ -42,7 +42,7 @@ class GripperSpoolMotor():
 
     def runConstantSpeed(self, speed):
         # in revolutions per second
-        # command_speed = max(-127, min(int(SPEED1_REVS * speed), 127))
+        command_speed = max(-127, min(int(SPEED1_REVS * speed), 127))
 
         if speed == 0:
             command_speed = 0
@@ -50,7 +50,7 @@ class GripperSpoolMotor():
             command_speed = speed / SPEED1_REVS + WINCH_DEAD_ZONE
         elif speed < 0:
             command_speed = speed / SPEED1_REVS - WINCH_DEAD_ZONE
-        # self.servo.value(command_speed)
+        self.servo.value(command_speed)
 
     def getShaftAngle(self):
         # in revolutions
