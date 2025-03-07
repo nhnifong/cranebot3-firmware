@@ -29,8 +29,8 @@ gripper_cog = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
 # rotation and translation of the anchor camera (the frame of reference used in aruco detection) in the reference frame of the anchor
 anchor_camera = compose_poses([
 	(np.array([0.045625, -0.034915, 0.004762], dtype=float), np.array([0,0,0], dtype=float)),
-    # (np.array([0,1,0], dtype=float)*pi, np.array([0,0,0], dtype=float)), # the camera is mounted upside down
-    (np.array([1,0,0], dtype=float)*(125/180*pi), np.array([0,0,0], dtype=float)), # and tilted 125 deg away from the anchor model's z axis
+    (np.array([0,1,0], dtype=float)*pi, np.array([0,0,0], dtype=float)), # the camera is mounted upside down
+    (np.array([1,0,0], dtype=float)*(55/180*pi), np.array([0,0,0], dtype=float)), # and tilted 125 deg away from the anchor model's z axis
 ])
 
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant

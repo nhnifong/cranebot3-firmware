@@ -61,6 +61,8 @@ class ComponentClient:
                     print('received a frame without knowing when it was captured')
                     continue
                 self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+            else:
+                time.sleep(0.1)
 
     def handle_frame_times(self, frame_time_list):
         """
