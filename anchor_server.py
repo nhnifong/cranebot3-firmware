@@ -65,7 +65,7 @@ class RobotComponentServer:
                 print("stopped streaming measurements")
                 break
 
-    async def stream_mjpeg(self, line_timeout=30):
+    async def stream_mjpeg(self, line_timeout=60):
         """
         Start the rpicam-vid stream process with a timeout.
         If no line is printed for timeout seconds, kill the process.
@@ -94,6 +94,8 @@ class RobotComponentServer:
                             # 'digital_gain': match.group(5),
                         })
                     else:
+                        # todo, restart if
+                        # ERROR: *** failed to allocate capture buffers for stream ***
                         print(line)
                     continue # nothing wrong keep going
             except asyncio.TimeoutError:
