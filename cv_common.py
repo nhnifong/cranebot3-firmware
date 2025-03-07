@@ -43,6 +43,8 @@ marker_names = [
     'charuco_origin_2',
     'charuco_origin_3',
     'charuco_origin_4',
+    'gripper_left',
+    'gripper_right',
 ]
 
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
