@@ -70,10 +70,10 @@ class SpoolController:
 
     def jogRelativeLen(self, rel):
         new_l = self.lastLength + rel
-        self.desiredLine = [
+        self.setPlan([
             (time.time(), self.lastLength),
             (time.time()+2, new_l),
-        ]
+        ])
 
     def popMeasurements(self):
         copy_record = self.record
@@ -130,7 +130,6 @@ class SpoolController:
                             self.speed = 0
                         logging.debug('Slow stopping')
                         self.motor.runConstantSpeed(self.speed)
-                    logging.debug('No data to track')
                     time.sleep(LOOP_DELAY_S)
                     continue
 
