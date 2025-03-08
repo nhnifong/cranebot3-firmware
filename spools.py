@@ -126,11 +126,12 @@ class SpoolController:
                 if self.lastIndex >= len(self.desiredLine):
                     if abs(self.speed) > 0:
                         self.speed *= 0.9
-                        if abs(self.speed) < 0.1:
+                        if abs(self.speed) < 0.2:
                             self.speed = 0
                         self.motor.runConstantSpeed(self.speed)
-                    time.sleep(LOOP_DELAY_S)
-                    continue
+                        time.sleep(LOOP_DELAY_S)
+                        logging.debug('Slow stopping')
+                        continue
 
                 targetLen = self.desiredLine[self.lastIndex][1]
                 position_err = targetLen - currentLen

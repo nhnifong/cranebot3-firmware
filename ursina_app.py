@@ -493,7 +493,7 @@ class ControlPanelUI:
             color=color.black,
             scale=(1, 1, 1),
             position=(0,0.5,0),
-            enabled=False,
+            enabled=True,
         )
 
         DropdownMenu('Menu', buttons=(
