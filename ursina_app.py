@@ -299,10 +299,6 @@ class ControlPanelUI:
         self.direction = np.array([0,0,0], dtype=float)
         self.could_be_moving = False
 
-        # only matters when this file is main
-        global input
-        input = self.input
-
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
         # maybe you shouldn't read those files in the clients
         self.calibration_mode = 'pause'
@@ -491,9 +487,9 @@ class ControlPanelUI:
         self.direct_move_indicator = Entity(
             model='arrow',
             color=color.black,
-            scale=(1, 1, 1),
+            scale=(0.1, 0.1, 0.1),
             position=(0,0.5,0),
-            enabled=True,
+            enabled=False,
         )
 
         DropdownMenu('Menu', buttons=(
@@ -509,6 +505,7 @@ class ControlPanelUI:
         EditorCamera()
 
     def input(self, key):
+        print(f'UI instance input {key}')
         if key == 'space':
             self.grip_closed = not self.grip_closed
             self.to_ob_q.put({'set_grip': self.grip_closed})
@@ -624,7 +621,7 @@ class ControlPanelUI:
             if self.calibration_mode == 'pause':
                 invoke(self.direct_move)
             
-            time.sleep(0.25)
+            time.sleep(1)
 
     def notify_connected_bots_change(self, available_bots={}):
         offs = 0
@@ -663,6 +660,7 @@ class ControlPanelUI:
                 self.to_ob_q.put({'slow_stop_all': None})
                 # set a flag so we don't do this constantly, even though it would be harmless.
                 self.could_be_moving = False
+                invoke(self.update_direct_move_indicator, None)
             return
         anchor_positions, start, success = self.get_simplified_position()
         if not success:
@@ -683,14 +681,20 @@ class ControlPanelUI:
                 np.linalg.norm(gantry_positions - pos, axis=1)])
             for pos in anchor_positions])
         # send it
-        self.to_ob_q.put({
-            'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
-        })
+        # self.to_ob_q.put({
+        #     'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
+        # })
         self.could_be_moving = True
 
     def update_direct_move_indicator(self, start):
+        if start is None:
+            self.direct_move_indicator.enabled = False
+            return
+        self.direct_move_indicator.enabled = True
         self.direct_move_indicator.position = swap_yz(start)
-        self.direct_move_indicator.look_at(swap_yz(start + self.direction))
+        lookat = swap_yz((start + self.direction).tolist())
+        print(f'look at {lookat}, direction={self.direction}')
+        self.direct_move_indicator.look_at(lookat)
 
     def receive_updates(self, min_to_ui_q):
         while True:
@@ -779,18 +783,15 @@ class ControlPanelUI:
             for i in range(len(updates['goal_points']), len(self.goals)):
                 self.goals[i].enabled = False
 
-        if 'input' in updates:
-            self.input(updates['input'])
-
-
     def start(self):
         self.app.run()
 
-def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q):
+def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q, register_input):
     """
     Entry point to be used when starting this from main.py with multiprocessing
     """
     cpui = ControlPanelUI(datastore, to_pe_q, to_ob_q)
+    register_input(cpui)
 
     # use simple threading here. ursina has it's own loop that conflicts with asyncio
     estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
@@ -808,7 +809,7 @@ def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q):
     # ursina has no way to tell us when the window is closed. but this python module can do it.
     atexit.register(stop_other_processes)
 
-    cpui.start();
+    cpui.start()
 
 if __name__ == "__main__":
     from multiprocessing import Queue
@@ -817,4 +818,7 @@ if __name__ == "__main__":
     to_ui_q = Queue()
     to_pe_q = Queue()
     to_ob_q = Queue()
-    start_ui(datastore, to_ui_q, to_pe_q, to_ob_q)
+    def register_input_2(cpui):
+        global input
+        input = cpui.input
+    start_ui(datastore, to_ui_q, to_pe_q, to_ob_q, register_input_2)

@@ -57,12 +57,16 @@ if __name__ == "__main__":
 
     # ursina expects this in a global scope in the main file and it won't be called anywhere else.
     def input(key):
-        to_ui_q.put({'input':key})
+        print('If this is called, we failed to hijack the global input function')
+
+    def register_input(cpui):
+        global input
+        input = cpui.input
 
     try:
         if not args.headless:
             # allow Ursina to be the main process. it doesn't work as a subprocess.
-            start_ui(datastore, to_ui_q, to_pe_q, to_ob_q)
+            start_ui(datastore, to_ui_q, to_pe_q, to_ob_q, register_input)
         else:
             # Keep the main process alive
             while True:

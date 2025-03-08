@@ -11,10 +11,10 @@ from math import pi
 # rotation and translation vectors of the gripper aruco markers in the gripper reference frame.
 # the front of the device is the side with the camera mount.
 # if you are looking at the front face, the right face is on your right.
-gripper_aruco_front = (np.array([0,pi,0], dtype=float), np.array([0,61,-41], dtype=float))
-gripper_aruco_back = (np.array([0,0,0], dtype=float), np.array([0,61,71], dtype=float))
-gripper_aruco_right = (np.array([0,-0.5*pi,0], dtype=float), np.array([-51,66,13], dtype=float))
-gripper_aruco_left = (np.array([0,0.5*pi,0], dtype=float), np.array([51,66,13], dtype=float))
+gripper_aruco_front = (np.array([0,pi,0], dtype=float), np.array([0,0.061,-0.041], dtype=float))
+gripper_aruco_back = (np.array([0,0,0], dtype=float), np.array([0,0.061,0.071], dtype=float))
+gripper_aruco_right = (np.array([0,-0.5*pi,0], dtype=float), np.array([-0.051,0.066,0.013], dtype=float))
+gripper_aruco_left = (np.array([0,0.5*pi,0], dtype=float), np.array([0.051,0.066,0.013], dtype=float))
 
 # rotation and translation vectors of the gripper camera (the frame of reference used in aruco detection) in the gripper reference frame
 gripper_camera = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
