@@ -139,7 +139,6 @@ class RobotComponentServer:
             try:
                 message = await websocket.recv()
                 update = json.loads(message)
-                logging.debug(f"Received: {update}")
 
                 if 'length_plan' in update:
                     self.spooler.setPlan(update['length_plan'])
