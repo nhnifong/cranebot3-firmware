@@ -1,5 +1,6 @@
 import cv2
-from cv_common import locate_markers
+import numpy as np
+from cv_common import locate_markers, mtx, distortion
 from multiprocessing import Pool, TimeoutError, Queue
 
 # video streamed with the command from start_stream.sh
@@ -10,15 +11,27 @@ if not cap.isOpened():
     print("Error: Could not open video.")
     exit()
 
-queue = Queue()
-with Pool(processes=6) as pool:
-    while True:
-        try:
-            ret, frame = cap.read()
-            if ret:
-                async_result = pool.apply_async(locate_markers, (frame,), callback=print)
-        except KeyboardInterrupt:
-            break
+def pool_test():
+    queue = Queue()
+    with Pool(processes=6) as pool:
+        while True:
+            try:
+                ret, frame = cap.read()
+                if ret:
+                    async_result = pool.apply_async(locate_markers, (frame,), callback=print)
+            except KeyboardInterrupt:
+                break
+
+
+while True:
+    ret, frame = cap.read()
+    if ret:
+        dets = locate_markers(frame)
+        for det in dets:
+            cv2.drawFrameAxes(frame, mtx, distortion, np.array(det['r']), np.array(det['t']), 0.1, 6);
+    sframe = cv2.resize(frame, (2304, 1296),  interpolation = cv2.INTER_LINEAR)
+    cv2.imshow('192.168.1.151:8888', sframe)
+    cv2.waitKey(1)
 
 # there is no information in the stream about the capture time of the frames.
 # but we can get the frame number with this attribute,

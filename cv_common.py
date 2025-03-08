@@ -47,14 +47,20 @@ marker_names = [
     'gripper_right',
 ]
 
+# some markers are different sizes
+special_sizes = {
+    'origin': 0.188,
+    'gripper_left': 0.082,
+    'gripper_right': 0.082,
+}
+
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
 parameters = aruco.DetectorParameters()
 parameters.minMarkerPerimeterRate = 0.04
 parameters.maxMarkerPerimeterRate = 4.0
 parameters.useAruco3Detection = True
 detector = aruco.ArucoDetector(aruco_dict, parameters)
-marker_size = 0.09 # Length of ArUco marker in meters
-origin_marker_size = 0.188
+marker_size = 0.09 # The default length of ArUco marker in meters
 
 def locate_markers(im):
     corners, ids, rejectedImgPoints = detector.detectMarkers(im)
@@ -75,8 +81,8 @@ def locate_markers(im):
                 continue
 
             # expect origin board to be twice as big
-            if name == 'origin':
-                mp = marker_points * origin_marker_size
+            if name in special_sizes:
+                mp = marker_points * special_sizes[name]
             else:
                 mp = marker_points * marker_size
 
