@@ -88,6 +88,8 @@ class MKSSERVO42C:
         if len(ans) != 6:
             return False, 0
         motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=False)
+        if motor_angle == 2**32-1:
+            return False, 0
         return True, float(motor_angle) / ANGLE_RESOLUTION
 
     def _sendSingleByteCommand(self, b):

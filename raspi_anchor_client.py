@@ -177,8 +177,10 @@ class RaspiAnchorClient(ComponentClient):
         # to help with a loop that does the same thing four times in handle_detections
         # name, offset, datastore
         self.arucos = [
-            ('gripper_front', model_constants.gripper_aruco_front_inv, datastore.gripper_pose),
-            ('gripper_back', model_constants.gripper_aruco_back_inv, datastore.gripper_pose),
+            ('gripper_front', invert_pose(model_constants.gripper_aruco_front), datastore.gripper_pose),
+            ('gripper_back', invert_pose(model_constants.gripper_aruco_back), datastore.gripper_pose),
+            ('gripper_left', invert_pose(model_constants.gripper_aruco_left), datastore.gripper_pose),
+            ('gripper_right', invert_pose(model_constants.gripper_aruco_right), datastore.gripper_pose),
             ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pose),
             ('gantry_back', model_constants.gantry_aruco_back_inv, datastore.gantry_pose),
         ]

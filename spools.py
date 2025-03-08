@@ -84,6 +84,8 @@ class SpoolController:
         return the current time and current unspooled line in meters
         """
         success, angle = self.motor.getShaftAngle()
+        if not success:
+            return (time.time(), self.lastLength)
         self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
         # accumulate these so you can send them to the websocket
         row = (time.time(), self.lastLength)
