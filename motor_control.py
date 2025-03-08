@@ -87,9 +87,7 @@ class MKSSERVO42C:
         ans = self.port.read(6) # address byte, 32 bit integer, checksum byte
         if len(ans) != 6:
             return False, 0
-        motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=False)
-        if motor_angle > 2**32-10:
-            return False, 0
+        motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=True)
         return True, float(motor_angle) / ANGLE_RESOLUTION
 
     def _sendSingleByteCommand(self, b):
