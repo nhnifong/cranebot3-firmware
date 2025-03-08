@@ -89,7 +89,7 @@ class SpoolController:
             return (time.time(), self.lastLength)
         self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
 
-        if currentLen < 0 or self.lastLength > self.full_length:
+        if self.lastLength < 0 or self.lastLength > self.full_length:
             logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}, zeroAngle={self.zeroAngle}, lineAtStart={self.lineAtStart}, meters_per_rev={self.meters_per_rev}")
             self.motor.runConstantSpeed(0)
             self.runSpoolLoop = False
