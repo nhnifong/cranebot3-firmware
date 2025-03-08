@@ -60,7 +60,11 @@ class ComponentClient:
                 except KeyError:
                     print('received a frame without knowing when it was captured')
                     continue
-                self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                try:
+                    self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                except ValueError:
+                    return # the pool is no running
+                # self.handle_detections(locate_markers(frame), timestamp=timestamp)
             else:
                 time.sleep(0.1)
 
@@ -241,7 +245,7 @@ class RaspiAnchorClient(ComponentClient):
                             offset, # constant
                         ]))
                         dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
-                        print(f'Inserted pose in datastore name={name} t={detection["s"]}, pose={pose}')
+                        # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
 
 if __name__ == "__main__":
     from multiprocessing import Queue

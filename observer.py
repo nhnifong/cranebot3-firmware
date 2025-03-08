@@ -113,7 +113,6 @@ class AsyncObserver:
                 if fal['sender'] == 'pe' and self.calmode != 'run':
                     return
                 for client in self.anchors:
-                    print(f'blaaaaaaa {client.anchor_num}')
                     asyncio.run_coroutine_threadsafe(client.send_commands({
                         'length_plan' : fal['data'][client.anchor_num].tolist()
                     }), loop)
