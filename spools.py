@@ -2,6 +2,7 @@ from math import pi
 import asyncio
 import time
 import serial
+import logging
 
 
 DATA_LEN = 1000
@@ -47,7 +48,7 @@ class SpoolController:
 
     def calc_meters_per_rev(self, currentLenUnspooled):
         # interpolate between empty and full diamter based on how much line is on the spool
-        fraction_wrapped = self.full_length / (self.full_length - currentLenUnspooled)
+        fraction_wrapped = (self.full_length - currentLenUnspooled) / self.full_length
         current_diameter = (self.full_diameter - self.empty_diameter) * fraction_wrapped + self.empty_diameter
         return current_diameter * pi * 0.001;
 
@@ -87,6 +88,12 @@ class SpoolController:
         if not success:
             return (time.time(), self.lastLength)
         self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
+
+        if currentLen < 0 or currentLen > self.full_length:
+            logging.error(f"Bad length calculation! length={currentLen}, shaftAngle={angle}, zeroAngle={self.zeroAngle}, lineAtStart={self.lineAtStart}, meters_per_rev={self.meters_per_rev}")
+            self.motor.runConstantSpeed(0)
+            self.runSpoolLoop = False
+
         # accumulate these so you can send them to the websocket
         row = (time.time(), self.lastLength)
         if self.rec_loop_counter == REC_MOD:
