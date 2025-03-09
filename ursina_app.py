@@ -533,6 +533,9 @@ class ControlPanelUI:
             axis, speed = key_behavior[key]
             self.direction[axis] = speed
 
+        if self.calibration_mode == 'pause':
+            self.direct_move()
+
     def change_weight(self, index):
         self.to_pe_q.put({'weight_change': (index, self.sliders[index].value)})
 
@@ -637,8 +640,8 @@ class ControlPanelUI:
                 invoke(self.render_gripper_ob, row, color.light_gray)
 
             # send a direct move command in pause mode
-            if self.calibration_mode == 'pause':
-                invoke(self.direct_move)
+            # if self.calibration_mode == 'pause':
+            #     invoke(self.direct_move)
             
             time.sleep(1)
 
@@ -673,6 +676,7 @@ class ControlPanelUI:
         move_duration = 1 # seconds
         if self.calibration_mode != 'pause':
             return
+        print(f'make direct move {self.direction}')
         if sum(self.direction) == 0:
             if self.could_be_moving:
                 # immediately cancel whatever remains of the movement
@@ -700,9 +704,9 @@ class ControlPanelUI:
                 np.linalg.norm(gantry_positions - pos, axis=1)])
             for pos in anchor_positions])
         # send it
-        # self.to_ob_q.put({
-        #     'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
-        # })
+        self.to_ob_q.put({
+            'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
+        })
         self.could_be_moving = True
 
     def update_direct_move_indicator(self, start):
