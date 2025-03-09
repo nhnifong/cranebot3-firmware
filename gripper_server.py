@@ -2,9 +2,11 @@ import asyncio
 from anchor_server import RobotComponentServer
 from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2, ADC
 from ioexpander import IN_PU
+from ioexpander.common import PID, clamp
 from spools import SpoolController
 from getmac import get_mac_address
 import logging
+from collections import deque
 
 # these two constants are obtained experimentally
 # the speed will not increase at settings beyond this value
@@ -21,6 +23,22 @@ RANGEFINDER_PIN = 0
 PRESSURE_PIN = 1
 # gpio pin of limit switch. 0 is closed
 LIMIT_SWITCH_PIN = 2
+# PID values for pressure loop
+POS_KP = 0.14
+POS_KI = 0.0
+POS_KD = 0.0022
+# update rate of finger pressure PID loop in updates per second
+UPDATE_RATE = 40
+# voltage of pressure sensor at ideal grip pressure
+TARGET_HOLDING_PRESSURE = 1.5
+# threshold just abolve the lowest pressure voltage we expect to read
+PRESSURE_MIN = 0.5
+# The total servo value change per second below which we say it has stabilized.
+MEAN_SERVO_VAL_CHANGE_THRESHOLD = 5
+# The servo value at which the fingers press against eachother empty with TARGET_HOLDING_PRESSURE
+FINGER_TOUCH = 80
+# max open servo value
+OPEN = -80
 
 class GripperSpoolMotor():
     """
@@ -72,7 +90,11 @@ class RaspiGripperServer(RobotComponentServer):
         self.hand_servo = self.hat.servos[SERVO_2]
         self.hat.gpio_pin_mode(RANGEFINDER_PIN, ADC) # infrared range
         self.hat.gpio_pin_mode(PRESSURE_PIN, ADC) # pressure resistor
-        self.shouldBeFingersClosed = False
+
+        # when false, open and release the object
+        # when true, repeatedly try to grasp the object
+        self.tryHold = False
+        self.tryHoldChanged = asyncio.Event()
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
         self.spooler = SpoolController(GripperSpoolMotor(self.hat), empty_diameter=20, full_diameter=36, full_length=1)
@@ -80,56 +102,130 @@ class RaspiGripperServer(RobotComponentServer):
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-gripper-service.' + unique
 
-    def readAnalog(self):
+        self.last_value = 0
+        self.past_val_rates = deque(maxlen=UPDATE_RATE)
+
+    def readOtherSensors(self):
         # 5cm - 2.3v
         # 10cm - 2.0v
         # 15cm - 1.5v
         # 20cm - 1.15v
         # the measurement is not thrown off by the fingers being closed at all
         voltage = self.hat.gpio_pin_value(RANGEFINDER_PIN)
+        logging.info(f'IR rangefinder voltage {voltage}')
+        self.update['IR range'] = voltage*(-11)+33
 
     def spoolTrackingLoop(self):
         # return the spool tracking function
         return self.spooler.trackingLoop
 
-    def fingerLoop(self):
+    async def holdPressurePid(self, target_v):
         """
-        Main control loop for fingers
-        if we wish to be holding somehting right now, command fingers closed, and maintain pressure.
-        maintain an estimate at all times of whether we are successfully holding something.
+        control the hand servo to hold the voltage on the pressure pin at the target
+        """
+        voltage_pid = PID(POS_KP, POS_KI, POS_KD, UPDATE_RATE)
+        voltage_pid.setpoint - target_v
+        while self.holdPressure:
+            # get the current pressure
+            voltage = hat.gpio_pin_value(PRESSURE_PIN)
+            # run pid calcucaltion
+            val = pos_pid.calculate(voltage)
+            # set servo position
+            self.hand_servo.value(clamp(val,-90,90))
+            # record the absolute value change to know if it is stabilizing
+            past_val_rates.append(abs(val - self.last_value))
+            self.last_value = val
+            asyncio.sleep(1/UPDATE_RATE)
 
-        without actually training a network, holding something would be indicated by
-         * finger pressure being high
-         * high enough elapsed time since we started closing the fingers
-         * rangefinger reading is low and constant despite moving relative to the floor
+    async def readStableFingerValue(self):
+        # wait for value to stabilize
+        # todo, what if the client commands tryHold=False while we are in this loop
+        # this might also need a timeout.
+        while sum(self.past_val_rates)/UPDATE_RATE > MEAN_SERVO_VAL_CHANGE_THRESHOLD:
+            await asyncio.sleep(0.25)
+        return self.last_value
+
+
+    async def fingerLoop(self):
+        """
+        Main control loop for fingers.
+
+        The gripper has explicit states, open and trying to hold something.
+        In the trying to hold something state, called 'hold' for short, the grip will repeatedly alternate between two more states,
+        closing to maintain a pressure, and opening again
+            during the maintain pressure state, set the desired grip pressure to maybe 500g.
+            A pid loop then attempts to find the servo value that results in this pressure.
+            In this loop. when we see the servo value stabilize,
+            If it is low, like 65, this means something is held. we always report whether somethig is held back to the client on the websocket.
+            stay in this state.
+            if it was high, like 85, this means no object was grasped and the fingers are pressing against eachother.
+            pause the pressure pid loop, and set to fully open, sleeping long enough for it to fully open.
+            wait up to a certain timeout for the object to be in the sweet spot, and reenter the hold pressure mode.
         
-        the camera may also be a way of determining whether somehting is held.
+        TODO: the camera may also be a way of determining whether somehting is held.
         Either by doing something in opencv with a reference image of a closed, empty gripper,
         or by looking at the output tensor of the AI camera 
         """
         while self.run_server:
-            if self.shouldBeFingersClosed:
-                # todo: in gripper closed mode, hold pressure constant
-                pass
-                # self.hand_servo.value(90)
+            # repeatedly try to grasp the object
+            while self.tryHold:
+                if not self.holding:
+                    # wait for the target to be in the sweet spot
+                    pass
+                    # Start gripping
+                    logging.info(f'Close grip and maintain pressure')
+                    asyncio.create_task(holdPressurePid(TARGET_HOLDING_PRESSURE))
+                    await asyncio.sleep(0.5)
+                finger_val = await self.readStableFingerValue()
+                logging.info(f'Grip pressure stable at {finger_val}')
+                # look where it stabilized
+                if finger_val < FINGER_TOUCH:
+                    # object is present
+                    # putting anything in the self.update dict means it will get flushed to the websocket
+                    self.holding = True
+                    self.update['holding'] = True
+                    await asyncio.sleep(0.25)
+                    # stay in the loop, checking stable finger position
+                else:
+                    # grasped nothing. stop the pid loop, open the grip, and wait one second.
+                    # We also reach this if the object slipped out, and the value restabilized with the fingers touching.
+                    logging.info(f'Fingers closed on nothing. self.holding was {self.holding}')
+                    self.holdPressure = False
+                    self.hand_servo.value(OPEN)
+                    self.holding = False
+                    self.update['holding'] = False
+                    # consider sending a count of the number of times we failed to grasp.
+                    # by the time we wake, we expect the fingers to be open, and the estimator to have decided whether tryHold should still be true
+                    await asyncio.sleep(2.0)
+
             else:
-                pass
-                # self.hand_servo.value(-90)
-            voltage = hat.gpio_pin_value(PRESSURE_PIN)
-            # putting anything in the self.update dict means it will get flushed to the websocket
-            self.update['holding'] = voltage > 1.5
+                # the else condition runs if the loop completes without a break statement or an exception
+                # this should occur only when a websocket update was received setting self.tryHold to false.
+                # open completely.
+                logging.info(f'Grip commanded open.')
+                self.hand_servo.value(OPEN)
+                # do not leave the station until the passengers have fully departed.
+                while hat.gpio_pin_value(PRESSURE_PIN) > PRESSURE_MIN:
+                    await asyncio.sleep(0.05)\
+                # now you can tell the controller its ok to move to the next destination.
+                self.update['holding'] = False
+                # stay in this state until commanded to do otherwise.
+                await self.tryHoldChanged.wait()
+                self.tryHoldChanged.clear()
+
 
     def processOtherUpdates(self, update):
         if 'grip' in update:
             if update['grip'] == 'open':
-                self.shouldBeFingersClosed = False
+                self.tryHold = False
             elif update['grip'] == 'closed':
-                self.shouldBeFingersClosed = True
+                self.tryHold = True
+                self.tryHoldChanged.set()
 
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     gs = RaspiGripperServer()

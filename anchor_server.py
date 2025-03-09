@@ -64,6 +64,8 @@ class RobotComponentServer:
                         meas = meas[:50]
                     update['line_record']= meas
 
+                self.readOtherSensors()
+
                 # send on websocket
                 if update != {}:
                     await ws.send(json.dumps(update))
@@ -232,6 +234,9 @@ class RaspiAnchorServer(RobotComponentServer):
         self.service_name = 'cranebot-anchor-service.' + unique
 
     def processOtherUpdates(self, updates):
+        pass
+
+    def readOtherSensors(self):
         pass
 
 
