@@ -17,7 +17,7 @@ def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 class SpoolController:
-    def __init__(self, motor, empty_diameter, full_diameter, full_length):
+    def __init__(self, motor, empty_diameter, full_diameter, full_length, start_len=4.0):
         """
         Create a controller for a spool of line.
         empty_diameter_mm is the diameter of the spool in millimeters when no line is on it.
@@ -33,8 +33,8 @@ class SpoolController:
         # last commanded motor speed in revs/sec
         self.speed = 0
         # Meters of line that were spooled out when zeroAngle was set.
-        self.lineAtStart = 1.9
-        self.lastLength = 1.9
+        self.lineAtStart = start_len
+        self.lastLength = start_len
         self.meters_per_rev =  self.calc_meters_per_rev(self.lineAtStart)
         # The angle of the shaft when setReferenceAngle was last called (in revolutions)
         self.zeroAngle = 0
