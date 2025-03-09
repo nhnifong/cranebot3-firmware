@@ -442,7 +442,7 @@ class CDPR_position_estimator:
             bounds=self.bounds,
             # callback=self.intermediate_result,
             options={
-                'disp': True,
+                'disp': False,
                 'maxiter': 120,
                 # 'ftol':0.0001, # Precision goal for the value of f in the stopping criterion.
                 #'eps':0.2, # Step size used for numerical approximation of the Jacobian.
@@ -624,11 +624,11 @@ class CDPR_position_estimator:
     async def main(self):
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         await asyncio.sleep(5)
-        while self.run:
-            self.estimate()
-            # some sleep is necessary or we will not receive updates
-            rem = (0.25 - self.time_taken)
-            await asyncio.sleep(max(0.02, rem))
+        # while self.run:
+        #     self.estimate()
+        #     # some sleep is necessary or we will not receive updates
+        #     rem = (0.25 - self.time_taken)
+        #     await asyncio.sleep(max(0.02, rem))
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """

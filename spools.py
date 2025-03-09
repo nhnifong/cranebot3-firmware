@@ -8,7 +8,7 @@ import logging
 DATA_LEN = 1000
 PE_TERM = 1.5
 # maximum acceleration in meters of line per second squared
-MAX_ACCEL = 8.0
+MAX_ACCEL = 1.0
 LOOP_DELAY_S = 0.03
 # record line length every 10th iteration
 REC_MOD = 10
