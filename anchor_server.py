@@ -171,6 +171,7 @@ class RobotComponentServer:
         asyncio.create_task(self.register_mdns_service(f"123.{self.service_name}", "_http._tcp.local.", port))
 
         # thread for controlling stepper motor
+        self.spooler.setReferenceLength(0.5)
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
 
         async with websockets.serve(self.handler, "0.0.0.0", port):
