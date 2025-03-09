@@ -133,7 +133,7 @@ class RaspiGripperServer(RobotComponentServer):
         voltage_pid.setpoint - target_v
         while self.holdPressure:
             # get the current pressure
-            voltage = hat.gpio_pin_value(PRESSURE_PIN)
+            voltage = self.hat.gpio_pin_value(PRESSURE_PIN)
             # run pid calcucaltion
             val = pos_pid.calculate(voltage)
             # set servo position
@@ -212,7 +212,7 @@ class RaspiGripperServer(RobotComponentServer):
                 logging.info(f'Grip commanded open.')
                 self.hand_servo.value(OPEN)
                 # do not leave the station until the passengers have fully departed.
-                while hat.gpio_pin_value(PRESSURE_PIN) > PRESSURE_MIN:
+                while self.hat.gpio_pin_value(PRESSURE_PIN) > PRESSURE_MIN:
                     await asyncio.sleep(0.05)\
                 # now you can tell the controller its ok to move to the next destination.
                 self.update['holding'] = False
