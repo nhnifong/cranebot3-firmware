@@ -104,6 +104,7 @@ class RaspiGripperServer(RobotComponentServer):
 
         self.last_value = 0
         self.past_val_rates = deque(maxlen=UPDATE_RATE)
+        self.holding = False
 
     def readOtherSensors(self):
         # 5cm - 2.3v
