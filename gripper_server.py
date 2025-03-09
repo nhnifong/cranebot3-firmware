@@ -24,17 +24,17 @@ PRESSURE_PIN = 1
 # gpio pin of limit switch. 0 is closed
 LIMIT_SWITCH_PIN = 2
 # PID values for pressure loop
-POS_KP = 0.14
+POS_KP = 5.0
 POS_KI = 0.0
-POS_KD = 0.0022
+POS_KD = 0.022
 # update rate of finger pressure PID loop in updates per second
 UPDATE_RATE = 40
 # voltage of pressure sensor at ideal grip pressure
-TARGET_HOLDING_PRESSURE = 1.5
+TARGET_HOLDING_PRESSURE = 0.6
 # threshold just abolve the lowest pressure voltage we expect to read
 PRESSURE_MIN = 0.5
 # The total servo value change per second below which we say it has stabilized.
-MEAN_SERVO_VAL_CHANGE_THRESHOLD = 5
+MEAN_SERVO_VAL_CHANGE_THRESHOLD = 3
 # The servo value at which the fingers press against eachother empty with TARGET_HOLDING_PRESSURE
 FINGER_TOUCH = 80
 # max open servo value
@@ -131,19 +131,22 @@ class RaspiGripperServer(RobotComponentServer):
         """
         control the hand servo to hold the voltage on the pressure pin at the target
         """
-        voltage_pid = PID(POS_KP, POS_KI, POS_KD, UPDATE_RATE)
-        voltage_pid.setpoint - target_v
-        while self.holdPressure:
+        voltage_pid = PID(POS_KP, POS_KI, POS_KD, 1/UPDATE_RATE)
+        voltage_pid.setpoint = target_v
+        pos = OPEN
+        while self.holdPressure and self.tryHold:
             # get the current pressure
             voltage = self.hat.gpio_pin_value(PRESSURE_PIN)
-            # run pid calcucaltion
-            val = pos_pid.calculate(voltage)
+            # run pid calcucaltion. it tells you how much to move
+            val = voltage_pid.calculate(voltage)
+            pos += val
+            logging.debug(f'calculated pid value {val}, servo pos = {pos}')
             # set servo position
-            self.hand_servo.value(clamp(val,-90,90))
+            self.hand_servo.value(clamp(pos,-90,90))
             # record the absolute value change to know if it is stabilizing
-            past_val_rates.append(abs(val - self.last_value))
-            self.last_value = val
-            asyncio.sleep(1/UPDATE_RATE)
+            self.past_val_rates.append(abs(pos - self.last_value))
+            self.last_value = pos
+            await asyncio.sleep(1/UPDATE_RATE)
 
     async def readStableFingerValue(self):
         # wait for value to stabilize
@@ -187,7 +190,8 @@ class RaspiGripperServer(RobotComponentServer):
                     asyncio.create_task(self.holdPressurePid(TARGET_HOLDING_PRESSURE))
                     await asyncio.sleep(0.5)
                 finger_val = await self.readStableFingerValue()
-                logging.info(f'Grip pressure stable at {finger_val}')
+                logging.info(f'Finger stable at {finger_val} with mean absolute change of {sum(self.past_val_rates)/UPDATE_RATE} over the last second')
+                logging.info(f'pressure pad voltage = {self.hat.gpio_pin_value(PRESSURE_PIN)}')
                 # look where it stabilized
                 if finger_val < FINGER_TOUCH:
                     # object is present
