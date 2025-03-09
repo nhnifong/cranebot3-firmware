@@ -105,6 +105,7 @@ class RaspiGripperServer(RobotComponentServer):
         self.last_value = 0
         self.past_val_rates = deque(maxlen=UPDATE_RATE)
         self.holding = False
+        self.holdPressure = False
 
     def readOtherSensors(self):
         # 5cm - 2.3v
@@ -182,7 +183,8 @@ class RaspiGripperServer(RobotComponentServer):
                     pass
                     # Start gripping
                     logging.info(f'Close grip and maintain pressure')
-                    asyncio.create_task(holdPressurePid(TARGET_HOLDING_PRESSURE))
+                    self.holdPressure = True
+                    asyncio.create_task(self.holdPressurePid(TARGET_HOLDING_PRESSURE))
                     await asyncio.sleep(0.5)
                 finger_val = await self.readStableFingerValue()
                 logging.info(f'Grip pressure stable at {finger_val}')
