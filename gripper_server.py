@@ -97,7 +97,7 @@ class RaspiGripperServer(RobotComponentServer):
         self.tryHoldChanged = asyncio.Event()
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
-        self.spooler = SpoolController(GripperSpoolMotor(self.hat), empty_diameter=20, full_diameter=36, full_length=1)
+        self.spooler = SpoolController(GripperSpoolMotor(self.hat), empty_diameter=20, full_diameter=36, full_length=1, start_len=0.5)
 
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-gripper-service.' + unique
