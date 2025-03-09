@@ -85,7 +85,7 @@ class MKSSERVO42C:
         """
         self._sendSingleByteCommand(READ_ANGLE)
         ans = self.port.read(6) # address byte, 32 bit integer, checksum byte
-        if len(ans) != 6:
+        if len(ans) != 6: # todo, it doesn't hit this , it throws SerialException
             return False, 0
         motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=True)
         return True, float(motor_angle) / ANGLE_RESOLUTION

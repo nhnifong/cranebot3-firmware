@@ -174,6 +174,8 @@ class RobotComponentServer:
         self.spooler.setReferenceLength(0.5)
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
 
+        self.startOtherTasks()
+
         async with websockets.serve(self.handler, "0.0.0.0", port):
             logging.info("Websocket server started")
             # cause the server to serve only as long as these other tasks are running
@@ -238,6 +240,9 @@ class RaspiAnchorServer(RobotComponentServer):
         pass
 
     def readOtherSensors(self):
+        pass
+
+    def startOtherTasks(self):
         pass
 
 

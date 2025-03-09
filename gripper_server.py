@@ -110,10 +110,16 @@ class RaspiGripperServer(RobotComponentServer):
         # 10cm - 2.0v
         # 15cm - 1.5v
         # 20cm - 1.15v
+
+        # 22cm - 1.8v
         # the measurement is not thrown off by the fingers being closed at all
         voltage = self.hat.gpio_pin_value(RANGEFINDER_PIN)
         logging.info(f'IR rangefinder voltage {voltage}')
         self.update['IR range'] = voltage*(-11)+33
+
+    def startOtherTasks(self):
+        # any tasks started here must stop on their own when self.run_server goes false
+        asyncio.create_task(self.fingerLoop())
 
     def spoolTrackingLoop(self):
         # return the spool tracking function
@@ -169,6 +175,7 @@ class RaspiGripperServer(RobotComponentServer):
         while self.run_server:
             # repeatedly try to grasp the object
             while self.tryHold:
+                logging.info(f'tryHold={self.tryHold} holding={self.holding}')
                 if not self.holding:
                     # wait for the target to be in the sweet spot
                     pass
@@ -216,6 +223,7 @@ class RaspiGripperServer(RobotComponentServer):
 
     def processOtherUpdates(self, update):
         if 'grip' in update:
+            logging.info(f'setting grip {update["grip"]}')
             if update['grip'] == 'open':
                 self.tryHold = False
             elif update['grip'] == 'closed':
