@@ -209,7 +209,7 @@ class Anchor(Entity):
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
             text=f"Anchor {self.num}\nNot Detected",
-            scale=0.6,
+            scale=0.5,
         )
 
     def setStatus(self, status):
@@ -287,6 +287,32 @@ class Floor(Entity):
             # Get the intersection point in world coordinates
             self.target.position = mouse.world_point
 
+class GoalPoint(Entity):
+    def __init__(self, **kwargs):
+        super().__init__(
+            position=(0,0,0),
+            rotation=(-90,0,0),
+            model='map_marker',
+            color=color.azure,
+            scale=0.075,
+            shader=lit_with_shadows_shader,
+            enabled=True,
+            **kwargs
+        )
+        self.atime = time.time()+10
+        self.fmt = 'ETA {val:.2f}'
+        self.label_offset = (-0.02, -0.03)
+        self.label = Text(
+            color=(0.1,0.1,0.1,1.0),
+            text=f"",
+            scale=0.5,
+        )
+
+    def update(self):
+        self.label.position = world_position_to_screen_position(self.position) + self.label_offset
+        self.label.text = self.fmt.format(val=(time.time()-self.atime))
+
+
 class ControlPanelUI:
     def __init__(self, datastore, to_pe_q, to_ob_q):
         self.app = Ursina()
@@ -358,14 +384,7 @@ class ControlPanelUI:
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
 
         # show a visualization of goal positions
-        self.goals = [Entity(
-                position=(0,0,0),
-                model='map_marker',
-                color=color.azure,
-                scale=0.1,
-                shader=lit_with_shadows_shader,
-                enabled=False,
-            ) for i in range(8)]
+        self.goals = [GoalPoint() for i in range(8)]
 
         # the color is how you control the brightness
         DirectionalLight(position=(1, 10, 1), shadows=True, rotation=(45, -5, 5), color=(0.8,0.8,0.8,1))
@@ -778,7 +797,8 @@ class ControlPanelUI:
                 if i == len(self.goals):
                     break
                 self.goals[i].enabled = True
-                self.goals[i].position = swap_yz(gp)
+                self.goals[i].position = swap_yz(gp[1:])
+                self.goals[i].atime = float(gp[0])
             # disable the rest
             for i in range(len(updates['goal_points']), len(self.goals)):
                 self.goals[i].enabled = False

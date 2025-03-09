@@ -41,7 +41,7 @@ weight_names = [
 ]
 
 # the ideal gantry height is heigh enough not to hit you in the head, but otherwise as low as possible to maximize payload capacity
-ideal_gantry_height = 1.828 # meters
+ideal_gantry_height = 1.75 # meters
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -103,7 +103,7 @@ class CDPR_position_estimator:
         self.gravity = np.array([0,0,-9.81])
 
         # number of control points in position splines
-        self.n_ctrl_pts = 10
+        self.n_ctrl_pts = 12
         # cublic splines
         self.spline_degree = 3
 
@@ -159,6 +159,7 @@ class CDPR_position_estimator:
         self.jolt_time = now+1
         self.gantry_jolt_pos = self.gantry_pos_spline(self.model_time(self.jolt_time))
         self.last_intermediate_update = now
+        self.time_taken = 1
 
     def loadAnchorPoses(self):
         pts = []
@@ -427,6 +428,7 @@ class CDPR_position_estimator:
 
         self.snapshot_datastore()
         self.start = time()
+        self.des_grip_locations = self.desired_gripper_positions()
 
         # SLSQP
         # COBYLA
@@ -447,13 +449,16 @@ class CDPR_position_estimator:
                 #'finite_diff_rel_step':, # the relative step size to use for numerical approximation of jac
             },
         )
-        time_taken = time() - self.start
-        # print(f"minimization step took {time_taken}s")
+        self.time_taken = time() - self.start
         try:
             if not result.message.startswith("Iteration limit reached"):
                 assert result.success
         except AssertionError:
             print(result)
+            return
+
+        if result.nit == 1:
+            print('reached minimum in one iteration, this is usually garbage')
             return
 
         # set splines from optimal model params
@@ -463,7 +468,7 @@ class CDPR_position_estimator:
         self.cost_function(result.x, p=True)
 
         # Where will the gantry be at the point when the next minimization step finishes?
-        self.jolt_time = time()+time_taken
+        self.jolt_time = time() + self.time_taken
         self.gantry_jolt_pos = self.gantry_pos_spline(self.model_time(self.jolt_time))
 
         unix_times = self.unix_time(self.future_times)
@@ -472,7 +477,7 @@ class CDPR_position_estimator:
         future_anchor_lines = np.array([(unix_times, self.anchor_line_length(anchor, self.future_times))
             for anchor in range(self.n_cables)])
         future_winch_line = np.column_stack((unix_times, self.winch_line_len(self.future_times)))
-        self.des_grip_locations = self.desired_gripper_positions()
+        print(f'sending goal points {self.des_grip_locations}')
 
         update_for_observer = {
             'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
@@ -485,8 +490,8 @@ class CDPR_position_estimator:
             'time_domain': self.time_domain,
             'gripper_path': self.gripper_pos_spline.c,
             'gantry_path': self.gantry_pos_spline.c,
-            'minimization_step_seconds': time_taken,
-            'goal_points': self.des_grip_locations[:,[1,2,3]],
+            'minimization_step_seconds': self.time_taken,
+            'goal_points': self.des_grip_locations, # each goal is a time and a position
         }
         self.to_ui_q.put(update_for_ui)
 
@@ -570,11 +575,12 @@ class CDPR_position_estimator:
                 item_index += 1
             # at a point in the future (distance to the destination) / rough_gripper_speed seconds from now
             travel_time = np.linalg.norm(destination - self.gripper_pos_spline(self.model_time(t))) / self.rough_gripper_speed
+            print(f'would travel to {destination} in {travel_time} seconds')
             t += travel_time
             desired_positions.append(np.concatenate([[t], destination], dtype=float))
             # and also remaining at the destination at a point in the future after a fixed lingering period, if it's still within our time domain
             t += linger
-            desired_positions.append(np.concatenate([[t], destination], dtype=float))
+            # desired_positions.append(np.concatenate([[t], destination], dtype=float))
             # assume we will drop/pick up the item at this time.
             # we cannot know whether we will succeed, but have to assume we will for planning
             holding = not holding
@@ -584,9 +590,13 @@ class CDPR_position_estimator:
         return True
 
     def item_priority_list(self, idx):
-        pl = np.array([ [-1.5,0, 2.2],
-                        [ 0.9,0, 1.0],
-                        [ 0.2,0,-1.2]])
+        pl = np.array([ [-1.5, 0, 0.2],
+                        [ 0.9, 1, 0.1],
+                        [ -0.8, -1, 0.4],
+                        [ 2.9, -0.5, 0.2],
+                        [ 2.1, 0.5, 0.1],
+                        [ -1.2, 2, 0.1],
+                        [ 0.5, 1,0.3]])
         return pl[idx%3]
 
     def gripper_over_bin_location(self):
@@ -615,10 +625,11 @@ class CDPR_position_estimator:
     async def main(self):
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         await asyncio.sleep(5)
-        # while self.run:
-        #     self.estimate()
-        #     # some sleep is necessary or we will not receive updates
-        #     await asyncio.sleep(0.01)
+        while self.run:
+            self.estimate()
+            # some sleep is necessary or we will not receive updates
+            rem = (0.25 - self.time_taken)
+            await asyncio.sleep(max(0.02, rem))
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """

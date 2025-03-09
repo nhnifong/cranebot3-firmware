@@ -35,7 +35,7 @@ marker_names = [
     'gripper_front',
     'gripper_back',
     'gantry_front',
-    'gantry_back',
+    'UNUSED',
     'bin_other',
     'debug_reel_in',
     'debug_reel_out',

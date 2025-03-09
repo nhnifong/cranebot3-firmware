@@ -18,6 +18,7 @@ from math import sin,cos
 import numpy as np
 from raspi_anchor_client import RaspiAnchorClient
 from raspi_gripper_client import RaspiGripperClient
+from random import random
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -110,21 +111,19 @@ class AsyncObserver:
                 break
             if 'future_anchor_lines' in updates:
                 fal = updates['future_anchor_lines']
-                if fal['sender'] == 'pe' and self.calmode != 'run':
-                    return
-                for client in self.anchors:
-                    asyncio.run_coroutine_threadsafe(client.send_commands({
-                        'length_plan' : fal['data'][client.anchor_num].tolist()
-                    }), loop)
+                if not (fal['sender'] == 'pe' and self.calmode != 'run'):
+                    for client in self.anchors:
+                        asyncio.run_coroutine_threadsafe(client.send_commands({
+                            'length_plan' : fal['data'][client.anchor_num].tolist()
+                        }), loop)
 
             if 'future_winch_line' in updates:
                 fal = updates['future_anchor_lines']
-                if fal['sender'] == 'pe' and self.calmode != 'run':
-                    return
-                if self.gripper_client is not None:
-                    asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
-                        'length_plan' : fal['data']
-                    }), loop)
+                if not (fal['sender'] == 'pe' and self.calmode != 'run'):
+                    if self.gripper_client is not None:
+                        asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
+                            'length_plan' : fal['data']
+                        }), loop)
             if 'set_run_mode' in updates:
                 print("set_run_mode") 
                 self.set_run_mode(updates['set_run_mode'], loop)
@@ -270,19 +269,19 @@ class AsyncObserver:
 
     async def add_simulated_data(self):
         sim_anchors = np.array([
-            [-2,2, 3],
-            [ 2,2, 3],
-            [ -1,2,-2],
-            [ -2,2,-2]])
+            [-2,2.6, 3],
+            [ 2,2.6, 3],
+            [ -1,2.6,-2],
+            [ -2,2.6,-2]])
         while self.send_position_updates:
             t = time.time()
             # move the gantry in a circle
-            dp = np.array([t, 0,0,0, sin(t/8),cos(t/8), 2])
+            dp = np.array([t, 0,0,0, sin(t/8) + random()*0.2, cos(t/8) + random()*0.2, 1.8 + random()*0.2])
             self.datastore.gantry_pose.insert(dp)
             # winch line always 1 meter
             self.datastore.winch_line_record.insert(np.array([t, 1.0]))
             # grippers always directly below gantry
-            dp[6] = 1
+            dp[6] = 1 + random()*0.2
             self.datastore.gripper_pose.insert(dp)
             # anchor lines always perfectly agree with gripper position
             # for i, simanc in enumerate(sim_anchors):
