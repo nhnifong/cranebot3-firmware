@@ -465,7 +465,7 @@ class CDPR_position_estimator:
         self.set_splines_from_params(result.x)
 
         # print errors
-        self.cost_function(result.x, p=True)
+        # self.cost_function(result.x, p=True)
 
         # Where will the gantry be at the point when the next minimization step finishes?
         self.jolt_time = time() + self.time_taken
@@ -477,7 +477,6 @@ class CDPR_position_estimator:
         future_anchor_lines = np.array([(unix_times, self.anchor_line_length(anchor, self.future_times))
             for anchor in range(self.n_cables)])
         future_winch_line = np.column_stack((unix_times, self.winch_line_len(self.future_times)))
-        print(f'sending goal points {self.des_grip_locations}')
 
         update_for_observer = {
             'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
@@ -575,7 +574,7 @@ class CDPR_position_estimator:
                 item_index += 1
             # at a point in the future (distance to the destination) / rough_gripper_speed seconds from now
             travel_time = np.linalg.norm(destination - self.gripper_pos_spline(self.model_time(t))) / self.rough_gripper_speed
-            print(f'would travel to {destination} in {travel_time} seconds')
+            # print(f'would travel to {destination} in {travel_time} seconds')
             t += travel_time
             desired_positions.append(np.concatenate([[t], destination], dtype=float))
             # and also remaining at the destination at a point in the future after a fixed lingering period, if it's still within our time domain

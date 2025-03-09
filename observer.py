@@ -132,7 +132,7 @@ class AsyncObserver:
                 for client in self.anchors:
                     asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': lengths[client.anchor_num]}), loop)
             if 'jog_spool' in updates:
-                for client in self.bot_clients.values():
+                for client in self.anchors:
                     if client.anchor_num == updates['jog_spool']['anchor']:
                         # send an anchor the command 'jog' with a relative length change in meters.
                         asyncio.run_coroutine_threadsafe(client.send_commands({
