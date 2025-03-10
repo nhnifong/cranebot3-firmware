@@ -7,3 +7,4 @@ anchor_pose_*.npz
 camera_coef.npz
 */*.blend1
 images/cal
+*.pt

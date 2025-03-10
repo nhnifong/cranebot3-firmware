@@ -8,3 +8,4 @@ zeroconf==0.141.0
 asyncio
 websockets
 trimesh=4.6.2
+ultralytics

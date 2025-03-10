@@ -4,7 +4,7 @@ from cv_common import locate_markers, mtx, distortion
 from multiprocessing import Pool, TimeoutError, Queue
 
 # video streamed with the command from start_stream.sh
-video_path = 'tcp://192.168.1.151:8888'
+video_path = 'tcp://192.168.1.153:8888'
 cap = cv2.VideoCapture(video_path)
 
 if not cap.isOpened():
@@ -25,13 +25,14 @@ def pool_test():
 
 while True:
     ret, frame = cap.read()
+    # if ret:
+    #     dets = locate_markers(frame)
+    #     for det in dets:
+    #         cv2.drawFrameAxes(frame, mtx, distortion, np.array(det['r']), np.array(det['t']), 0.1, 6);
+    #sframe = cv2.resize(frame, (2304, 1296),  interpolation = cv2.INTER_LINEAR)
     if ret:
-        dets = locate_markers(frame)
-        for det in dets:
-            cv2.drawFrameAxes(frame, mtx, distortion, np.array(det['r']), np.array(det['t']), 0.1, 6);
-    sframe = cv2.resize(frame, (2304, 1296),  interpolation = cv2.INTER_LINEAR)
-    cv2.imshow('192.168.1.151:8888', sframe)
-    cv2.waitKey(1)
+        cv2.imshow('192.168.1.155:8888', frame)
+        cv2.waitKey(1)
 
 # there is no information in the stream about the capture time of the frames.
 # but we can get the frame number with this attribute,
