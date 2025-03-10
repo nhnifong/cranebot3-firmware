@@ -77,35 +77,6 @@ def draw_line(point_a, point_b):
     #     cap_ends=False,
     # )
 
-def create_wall(p1, p2, height=1):
-    """Creates a vertical quad wall between two points."""
-    p1.y = 0
-    p2.y = 0
-    center = (p1 + p2) / 2
-    center.y = height/2
-    direction = (p2 - p1).normalized()
-    up = Vec3(0, 1, 0)
-
-    # Calculate the right vector (perpendicular to direction and up)
-    right = direction.cross(up).normalized()
-
-    # Calculate the scale (width) of the wall.  Adjust as needed.
-    width = (p2 - p1).length()
-
-    # Create the quad
-    wall = Entity(
-        model='quad',
-        position=center,
-        # rotation=Quaternion.look_at(direction, up), # Key for correct rotation
-        scale = (width, height),
-        texture='vertical_gradient',
-        color=(1.0,0.358,0.0,0.5),
-        shader=unlit_shader,
-        double_sided=True,
-    )
-    wall.look_at(center+right);
-    return wall
-
 class SplineMovingEntity(Entity):
     """
     An entity that moves it's position along a spline function
@@ -128,12 +99,14 @@ class SplineMovingEntity(Entity):
         if self.spline_func is not None:
             t = (time.time() - self.time_domain[0]) / (self.time_domain[1] - self.time_domain[0])
             self.position = self.spline_func(t)
-
             if self.is_gantry:
-                # update the lines between the gantry and the other things
-                for anchor_num in range(self.ui.n_anchors):
-                    self.ui.lines[anchor_num].model = draw_line(self.ui.anchors[anchor_num].position, self.position)
-                self.ui.vert_line.model = draw_line(self.ui.gripper.position, self.position)
+                self.redraw_wires()
+
+    def redraw_wires(self):
+        # update the lines between the gantry and the other things
+        for anchor_num in range(self.ui.n_anchors):
+            self.ui.lines[anchor_num].model = draw_line(self.ui.anchors[anchor_num].position, self.position)
+        self.ui.vert_line.model = draw_line(self.ui.gripper.position, self.position)
 
 
 class Gripper(SplineMovingEntity):
@@ -197,7 +170,7 @@ class Anchor(Entity):
             rotation=rotation,
             model='anchor',
             color=anchor_color,
-            scale=0.001,
+            scale=0.01,
             shader=lit_with_shadows_shader,
             collider='box'
         )
@@ -387,7 +360,7 @@ class ControlPanelUI:
         self.goals = [GoalPoint() for i in range(8)]
 
         # the color is how you control the brightness
-        DirectionalLight(position=(1, 10, 1), shadows=True, rotation=(45, -5, 5), color=(0.8,0.8,0.8,1))
+        DirectionalLight(position=(2, 20, 1), shadows=True, rotation=(35, -5, 5), color=(0.8,0.8,0.8,1))
         AmbientLight(color=(0.8,0.8,0.8,1))
         # light.look_at(Vec3(1,-1,1))
 
@@ -397,13 +370,14 @@ class ControlPanelUI:
             position=(0.83, -0.45), scale=(.10, .033),
             on_click=self.on_stop_button)
 
-        # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
-        # between every pair of anchors, draw a horizontal line. if all the other anchors' horizontal positions are on one side of that line, proceed
-        # make a vertical quad that passes through that line and apply the fade texture to it.
-        # create_wall(self.anchors[0].position, self.anchors[1].position)
-        # create_wall(self.anchors[1].position, self.anchors[2].position)
-        # create_wall(self.anchors[2].position, self.anchors[3].position)
-        # create_wall(self.anchors[3].position, self.anchors[0].position)
+        self.walls = [Entity(
+            model='quad',
+            texture='vertical_gradient',
+            color=(0.9, 0.9, 0.9, 0.2),
+            shader=unlit_shader,
+            double_sided=True
+            ) for i in range(4)]
+        self.redraw_walls()
 
         # img = cv2.cvtColor(cv2.imread('images/cap_0.jpg'), cv2.COLOR_BGR2RGB)
         # im_pil = Image.fromarray(img)
@@ -523,6 +497,31 @@ class ControlPanelUI:
         Sky(color=color.light_gray)
         EditorCamera()
 
+    def redraw_walls(self):
+        # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
+        # between every pair of anchors, draw a horizontal line. if all the other anchors' horizontal positions are on one side of that line, proceed
+        # make a vertical quad that passes through that line and apply the fade texture to it.
+        order = [0,1,3,2]
+        height = 1.5
+
+        for i in range(4):
+            p1 = self.anchors[order[i]].position
+            p2 = self.anchors[order[(i+1)%4]].position
+            p1.y = 0
+            p2.y = 0
+            center = (p1 + p2) / 2
+            center.y = height/2
+            direction = (p2 - p1).normalized()
+            up = Vec3(0, 1, 0)
+            # Calculate the right vector (perpendicular to direction and up)
+            right = direction.cross(up).normalized()
+            # Calculate the scale (width) of the wall.  Adjust as needed.
+            width = (p2 - p1).length()
+            self.walls[i].position = center
+            self.walls[i].scale = (width, height)
+            self.walls[i].look_at(center+right);
+
+
     def input(self, key):
         print(f'UI instance input {key}')
         if key == 'space':
@@ -532,9 +531,8 @@ class ControlPanelUI:
         if key in key_behavior:
             axis, speed = key_behavior[key]
             self.direction[axis] = speed
-
-        if self.calibration_mode == 'pause':
-            self.direct_move()
+            if self.calibration_mode == 'pause':
+                self.direct_move()
 
     def change_weight(self, index):
         self.to_pe_q.put({'weight_change': (index, self.sliders[index].value)})
@@ -762,6 +760,8 @@ class ControlPanelUI:
             self.anchors[anchor_num].pose = apose[1]
             self.anchors[anchor_num].position = swap_yz(apose[1][1])
             self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
+            self.gantry.redraw_wires()
+            self.redraw_walls()
 
         if 'pil_image' in updates:
             print('received pil image in UI')
