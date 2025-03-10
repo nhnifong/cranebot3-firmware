@@ -7,5 +7,7 @@ ursina==7.0.0
 zeroconf==0.141.0
 asyncio
 websockets
-trimesh=4.6.2
+trimesh==4.6.2
+mapbox-earcut
+manifold3d
 ultralytics
