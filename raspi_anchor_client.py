@@ -17,6 +17,12 @@ max_origin_detections = 10
 video_port = 8888
 websocket_port = 8765
 
+# fastSAM parameters
+# seconds between processing frames with fastSAM. there is no need need to run it on every frame, since 
+# we are looking at a relatively static image.
+sam_rate = 1.0 # per second
+sam_confidence_cutoff = 0.75
+
 def pose_from_det(det):
     return (np.array(det['r'], dtype=float), np.array(det['t'], dtype=float))
 
@@ -65,6 +71,8 @@ class ComponentClient:
                 except ValueError:
                     return # the pool is no running
                 # self.handle_detections(locate_markers(frame), timestamp=timestamp)
+                # sam_result = model(frame, conf=sam_confidence_cutoff)
+                
             else:
                 time.sleep(0.1)
 
