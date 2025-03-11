@@ -2,31 +2,104 @@ from ultralytics import FastSAM
 import sys
 import cv2
 import numpy as np
-from trimesh.creation import extrude_polygon, triangulate_polygon
 from trimesh import Trimesh
+from trimesh.creation import extrude_polygon, triangulate_polygon
+from trimesh.transformations import compose_matrix, translation_matrix
+from trimesh.boolean import intersection
 from shapely.geometry import Polygon
 import math
 import torch
-
+from scipy.cluster.hierarchy import DisjointSet
 
 
 # Run inference
 # results = model.track(source=sys.argv[1], imgsz=640, show=True, conf=0.8)
 # results = model(source=sys.argv[1], show=True)
 
-def make_shapes(contours):
-    height = 6
-    fov = 1.15192 # radians
-    for contour in contours:
-        shape = extrude_polygon(Polygon(contour), height=height)
-        top_scale = math.sin(fov)*height
-        for i in range(len(shape.vertices)):
-            if shape.vertices[i][2] == 0:
-                continue
-            shape.vertices[i][0] *= top_scale
-            shape.vertices[i][1] *= top_scale
-        assert(shape.is_watertight)
-    # shape.show()
+class ShapeTracker:
+    def __init__(self):
+        self.collision_manager = trimesh.collision.CollisionManager()
+
+        # after extrusion the shape's narrow end is at z=0 and it extends up along the z axis.
+        # The narrow end is still in the normalized units the contours were in.
+        # since the contours were normalized, the width of the frame is 1 unit, so the truncated prism's
+        # narrow end should be placed 1 meter from the camera in world space.
+        # TODO find out if x and y were normalized independently, or only based on the larger dimension.
+        # if it was independent, then restore the original aspect ratio
+        # use the camera matrix to undo any spherical distortion
+        self.standard_transform = compose_matrix(
+            translation_matrix([0,0,1]) # move up 1 meter
+        )
+
+    def setCameraPoses(self, poses):
+        self.camera_poses = poses
+
+    def make_shapes(self, anchor_num, contours):
+        """Project contours from a particular camera into shapes in world space
+        The shapes are like a truncated prism with the outline of the contour and the tapering
+        ratio of a frustum
+        contours = {'object_id', [[x, y],...]}
+        """
+        height = 6
+        fov = 1.15192 # radians
+        shapes = {}
+        for object_id, contour in contours.items():
+            shape = extrude_polygon(Polygon(contour), height=height)
+            top_scale = math.sin(fov)*height
+            for i in range(len(shape.vertices)):
+                if shape.vertices[i][2] == 0:
+                    continue
+                shape.vertices[i][0] *= top_scale
+                shape.vertices[i][1] *= top_scale
+            assert(shape.is_watertight)
+            shape.apply_transform(self.standard_transform)
+            # shape.show()
+            # transform the shape to align with the camera's pose
+            shapes[f'{anchor_num}-{object_id}'] = shape
+        return shapes
+
+    def merge_shapes(self, shapes):
+        """
+        Take a dictionary of shapes with ids, and find the intersections.
+        key structure must be f'{anchor_num}-{object_id}'
+
+        We know we can make ids stable between subsequet pictures from a single camera
+        Put all the shapes in the trimesh CollisionManager named by their anchor_num-id,
+        request the full list of collisions
+        initially throw out collisions that do not occur close to the floor.
+        Collisions may have multiple contacts, but just look at the z of contacts[0].point
+        Find the disjoint sets of node pairs. (scipy.cluster.hierarchy.DisjointSet)
+        initially every node is it's own set. for ever collision pair, merge the sets that those two nodes belong to.
+        Once complete, for every subset in the disjoint set containing 2 or more nodes, take the boolean intersection of all
+        the original shapes those nodes represent. Keep any objects that have volume
+        tag these resulting objects with the original ids from any views they were observed in,
+        and any text prompts that were used to select them
+        """
+        results = []
+        ds = DisjointSet()
+        for name, mesh in shapes.items():
+            self.collision_manager.add_object(name, mesh)
+            ds.add(name)
+        aru, names, data = self.collision_manager.in_collision_internal(return_names=True, return_data=True)
+        if aru:
+            for name_pair, collision in zip(names, data):
+                # disregard collisions that occured more than 1 meter from the floor
+                if collision.contacts[0].point[2] > 1:
+                    continue
+                # disregard collisions of two shapes from the same camera
+                cam_numbers = [name_pair.split('-')[0] for name in name_pair]
+                if cam_numbers[0] == cam_numbers[1]:
+                    continue
+                ds.merge(*name_pair)
+            for subset in ds.subsets():
+                if len(subset) > 1:
+                    final_shape = intersection([shapes[name] for name in subset], engine='manifold')
+                    results.append({
+                        'mesh': final_shape,
+                        original_ids: list(subset)
+                    })
+        return results
+
 
 def stream():
     model = FastSAM("FastSAM-s.pt")

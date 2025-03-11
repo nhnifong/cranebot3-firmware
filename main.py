@@ -38,11 +38,11 @@ if __name__ == "__main__":
     to_ob_q.cancel_join_thread()
 
     # Create and start the observer process
-    observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q, to_pe_q, to_ob_q))
+    observer_process = multiprocessing.Process(target=start_observation, args=(datastore, to_ui_q, to_pe_q, to_ob_q), name='observer')
     observer_process.daemon = False # not deamonic so it can have children. (a pool)
 
     # error minimization process
-    minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q, to_pe_q, to_ob_q))
+    minimizer_process = multiprocessing.Process(target=start_estimator, args=(datastore, to_ui_q, to_pe_q, to_ob_q), name='estimator')
     minimizer_process.daemon = True
 
     # add ui process if not in headless mode
