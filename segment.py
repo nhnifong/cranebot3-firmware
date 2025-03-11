@@ -1,13 +1,12 @@
 from ultralytics import FastSAM
-# from ultralytics import YOLO
 import sys
 import cv2
 import numpy as np
 from trimesh.creation import extrude_polygon, triangulate_polygon
 from trimesh import Trimesh
-from trimesh.transformations import clip_matrix, inverse_matrix, projection_matrix
 from shapely.geometry import Polygon
 import math
+import torch
 
 
 
@@ -30,34 +29,35 @@ def make_shapes(contours):
     # shape.show()
 
 def stream():
-    # Load a model
     model = FastSAM("FastSAM-s.pt")
-    # model = YOLO("yolov8s-world.pt")
-    model.info()
-    cap = cv2.VideoCapture(sys.argv[1])
-    while True:
-        ret, frame = cap.read()
-        # if ret:
-        #     dets = locate_markers(frame)
-        #     for det in dets:
-        #         cv2.drawFrameAxes(frame, mtx, distortion, np.array(det['r']), np.array(det['t']), 0.1, 6);
-        #sframe = cv2.resize(frame, (2304, 1296),  interpolation = cv2.INTER_LINEAR)
-        if ret:
-            results = model.track(frame, conf=0.8, persist=True)
-            # print(results[0].masks.xyn[0]) # it's already a contour!
 
-            # make_shapes(results[0].masks.xyn)
+    # for results in model(sys.argv[1], stream=True, texts="a peice of clutter", conf=0.8):
+    for results in model.track(sys.argv[1], stream=True, conf=0.75, save=False):
+        # make_shapes(results[0].masks.xyn)
+        if results:
+            areas = results.boxes.xywhn[:, 2] * results.boxes.xywhn[:, 3]
+            if results.boxes.id is None:
+                continue
+            box_sizes = torch.stack((results.boxes.id, areas), dim=1)
+            filtered_masks = results.masks.xyn[box_sizes[:, 1] <= 0.002]
+            # results.orig_img
+            shapes = make_shapes(filtered_masks)
+            # print(results.masks)
 
-            annotated_frame = results[0].plot()
-            # int_points = results[0].masks.xy[0].astype(np.int32)
-            # cv2.polylines(frame, [int_points], isClosed=True, color=(0, 255, 0), thickness=2)
+        annotated_frame = results.plot()
 
-            # Display the annotated frame
-            cv2.imshow("Tracking", annotated_frame)
+        # int_points = results[0].masks.xy[0].astype(np.int32)
+        # cv2.polylines(frame, [int_points], isClosed=True, color=(0, 255, 0), thickness=2)
 
-            # Break the loop if 'q' is pressed
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+        cv2.imshow("Tracking", annotated_frame)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
 
-cont = np.load('cont.npz')['cont']
-make_shapes([cont])
+# cont = np.load('cont.npz')['cont']
+# make_shapes([cont])
+
+stream()
+
+
+# On every frame received from a camera, perform inference on that frame with the model, (ignore persist=True for now, there is probably some way to context switch)
+# for every detected object, check that it is within the right size range.
