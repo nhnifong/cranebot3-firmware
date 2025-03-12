@@ -129,8 +129,43 @@ def stream():
 # cont = np.load('cont.npz')['cont']
 # make_shapes([cont])
 
-stream()
+# stream()
 
+# are the ids still stable if you use the same model on interleaved frames from different threads?
+import threading
 
-# On every frame received from a camera, perform inference on that frame with the model, (ignore persist=True for now, there is probably some way to context switch)
-# for every detected object, check that it is within the right size range.
+def frame_generator(num):
+    video_uri = f'tcp://192.168.1.{num}:8888'
+    print(f'Connecting to {video_uri}')
+    cap = cv2.VideoCapture(video_uri)
+    while True:
+        ret, frame = cap.read()
+        if ret:
+            yield frame
+
+def receive_video(num, model, show=False):
+    my_predictor = None
+    for frame in frame_generator(num):
+        try:
+            if my_predictor is not None:
+                model.predictor = my_predictor
+            results = model.track(frame, conf=0.75, imgsz=1024, save=False, persist=True)
+            my_predictor = model.predictor
+            if results:
+                print(f'{num} ids = {results[0].boxes.id}')
+
+                if show:
+                    annotated_frame = results[0].plot()
+                    cv2.imshow("Tracking", annotated_frame)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
+        except KeyboardInterrupt:
+            return
+
+mod = FastSAM("FastSAM-s.pt")
+vid_1 = threading.Thread(target=receive_video, args=(151, mod))
+# vid_2 = threading.Thread(target=receive_video, args=(153, mod))
+vid_1.start()
+# vid_2.start()
+
+receive_video(153, mod, True)

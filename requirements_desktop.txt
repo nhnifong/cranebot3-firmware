@@ -11,3 +11,4 @@ trimesh==4.6.2
 mapbox-earcut
 manifold3d
 ultralytics
+shapely
