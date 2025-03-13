@@ -28,7 +28,7 @@ def pose_from_det(det):
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
-    def __init__(self, address, datastore, to_ui_q, to_pe_q, pool, stat):
+    def __init__(self, address, datastore, to_ui_q, to_pe_q, pool, stat, shape_tracker):
         self.address = address
         self.origin_poses = []
         self.datastore = datastore
@@ -41,6 +41,7 @@ class ComponentClient:
         self.frame_times = {}
         self.pool = pool
         self.stat = stat
+        self.shape_tracker = shape_tracker
 
     def receive_video(self):
         # don't connect too early or you will be rejected
@@ -51,6 +52,7 @@ class ComponentClient:
         print(cap)
         self.conn_status['video'] = True
         self.notify_video = True
+        lastSam = time.time()
         while self.connected:
             last_time = time.time()
             ret, frame = cap.read()
@@ -69,10 +71,14 @@ class ComponentClient:
                 try:
                     self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                 except ValueError:
-                    return # the pool is no running
+                    return # the pool is not running
                 # self.handle_detections(locate_markers(frame), timestamp=timestamp)
-                # sam_result = model(frame, conf=sam_confidence_cutoff)
-                
+
+                if self.shape_tracker is not None:
+                    # send one frame per second to the fastSAM model
+                    if time.time() > lastSam+1:
+                        self.lastSam = time.time()
+                        self.shape_tracker.processFrame(self.anchor_num, frame)
             else:
                 time.sleep(0.1)
 

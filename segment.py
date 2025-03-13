@@ -63,14 +63,6 @@ class ShapeTracker:
             print(f'cam {anchor_num} showing {len(filtered_masks)} objects with an area smaller than {self.size_thresh}')
         self.last_shapes_by_camera[anchor_num] = self.make_shapes(anchor_num, filtered_masks)
 
-        # trigger the shape merge once per cycle, presumably we receive frames from the other three cameras
-        if anchor_num == 0:
-            mgd = {}
-            for shapes in self.last_shapes_by_camera:
-                mgd.update(shapes)
-            r = self.merge_shapes(mgd)
-            print(r)
-
     def make_shapes(self, anchor_num, contours):
         """Project contours from a particular camera into shapes in world space
         The shapes are like a truncated prism with the outline of the contour and the tapering
@@ -94,11 +86,8 @@ class ShapeTracker:
             shapes[f'{anchor_num}-{object_id}'] = shape
         return shapes
 
-    def merge_shapes(self, shapes):
+    def merge_shapes(self):
         """
-        Take a dictionary of shapes with ids, and find the intersections.
-        key structure must be f'{anchor_num}-{object_id}'
-
         We know we can make ids stable between subsequet pictures from a single camera
         Put all the shapes in the trimesh CollisionManager named by their anchor_num-id,
         request the full list of collisions
@@ -111,9 +100,18 @@ class ShapeTracker:
         tag these resulting objects with the original ids from any views they were observed in,
         and any text prompts that were used to select them
         """
+
+        # trigger the shape merge once per cycle, presumably we receive frames from each camera
+        mgd = {}
+        for shapes in self.last_shapes_by_camera:
+            mgd.update(shapes)
+        r = self.merge_shapes(mgd)
+        # mgd is a dictionary of shapes with ids
+        # key structure is f'{anchor_num}-{object_id}'
+
         results = []
         ds = DisjointSet()
-        for name, mesh in shapes.items():
+        for name, mesh in mgd.items():
             self.collision_manager.add_object(name, mesh)
             ds.add(name)
         aru, names, data = self.collision_manager.in_collision_internal(return_names=True, return_data=True)
@@ -129,7 +127,7 @@ class ShapeTracker:
                 ds.merge(*name_pair)
             for subset in ds.subsets():
                 if len(subset) > 1:
-                    final_shape = intersection([shapes[name] for name in subset], engine='manifold')
+                    final_shape = intersection([mgd[name] for name in subset], engine='manifold')
                     results.append({
                         'mesh': final_shape,
                         'original_ids': list(subset)
