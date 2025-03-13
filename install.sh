@@ -13,10 +13,10 @@ fi
 
 apt install python3-picamera2 imx500-all --no-install-recommends
 
-python3 -m venv --system-site-packages venv
-source venv/bin/activate
-pip3 install -r requirements_raspi.txt
-deactivate
+# python3 -m venv --system-site-packages venv
+# source venv/bin/activate
+# pip3 install -r requirements_raspi.txt
+# deactivate
 
 # Create service file
 cat <<EOF > "$SERVICE_FILE"
