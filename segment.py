@@ -1,6 +1,7 @@
 from ultralytics import FastSAM
 import sys
 import cv2
+import threading
 import numpy as np
 from trimesh import Trimesh
 from trimesh.creation import extrude_polygon, triangulate_polygon
@@ -161,14 +162,6 @@ def stream():
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
-# cont = np.load('cont.npz')['cont']
-# make_shapes([cont])
-
-# stream()
-
-# are the ids still stable if you use the same model on interleaved frames from different threads?
-import threading
-
 def frame_generator(num):
     video_uri = f'tcp://192.168.1.{num}:8888'
     print(f'Connecting to {video_uri}')
@@ -187,12 +180,18 @@ def receive_video(num, st):
         except KeyboardInterrupt:
             return
 
-# mod = FastSAM("FastSAM-s.pt")
-st = ShapeTracker()
+# cont = np.load('cont.npz')['cont']
+# make_shapes([cont])
 
-vid_1 = threading.Thread(target=receive_video, args=(151, st))
+# stream()
+
+
+# mod = FastSAM("FastSAM-s.pt")
+# st = ShapeTracker()
+
+# vid_1 = threading.Thread(target=receive_video, args=(151, st))
 # vid_2 = threading.Thread(target=receive_video, args=(153, mod))
-vid_1.start()
+# vid_1.start()
 # vid_2.start()
 
-receive_video(153, st)
+# receive_video(153, st)
