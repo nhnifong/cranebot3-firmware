@@ -19,6 +19,7 @@ import numpy as np
 from raspi_anchor_client import RaspiAnchorClient
 from raspi_gripper_client import RaspiGripperClient
 from random import random
+from segment import ShapeTracker
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -216,7 +217,7 @@ class AsyncObserver:
                     self.anchor_num_map[info.server] = anchor_num
                     self.next_available_anchor_num += 1
                     self.save_anchor_num_map()
-                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat)
+                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat, self.shape_tracker)
                 self.bot_clients[info.server] = ac
                 self.anchors.append(ac)
                 await ac.startup()
@@ -269,6 +270,16 @@ class AsyncObserver:
             client.shutdown()
         # if self.position_update_task:
         #     await self.position_update_task
+
+    async def run_shape_tracker(self):
+        while self.send_position_updates:
+            if len(self.anchors) > 1:
+                trimesh_list = self.shape_tracker.merge_shapes()
+                self.to_ui_q.put({
+                    'merged_shapes':trimesh_list,
+                    # 'prisms':self.shape_tracker.last_shapes_by_camera,
+                })
+            await asyncio.sleep(1.0)
 
     async def add_simulated_data(self):
         sim_anchors = np.array([

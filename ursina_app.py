@@ -77,6 +77,9 @@ def draw_line(point_a, point_b):
     #     cap_ends=False,
     # )
 
+def ursinaMeshFromTrimesh(tm):
+    return Mesh(vertices=map(swap_yz, tm.vertices), triangles=tm.triangles)
+
 class SplineMovingEntity(Entity):
     """
     An entity that moves it's position along a spline function
@@ -485,6 +488,12 @@ class ControlPanelUI:
             enabled=False,
         )
 
+        self.max_prisms = 80
+        self.prisms = list()
+        self.max_merged = 20
+        self.merged = list()
+
+
         DropdownMenu('Menu', buttons=(
             DropdownMenu('Mode', buttons=(
                 DropdownMenuButton(mode_names['run'], on_click=partial(self.set_mode, 'run')),
@@ -806,6 +815,31 @@ class ControlPanelUI:
             # disable the rest
             for i in range(len(updates['goal_points']), len(self.goals)):
                 self.goals[i].enabled = False
+
+        if 'merged_shapes' in updates:
+            print(f'Displaying {len(updates["merged_shapes"])} merged shapes')
+            i = 0
+            for shape in updates['merged_shapes']:
+                if i == self.max_merged:
+                    print('There are more merged shapes than we can display')
+                    break
+                mesh = ursinaMeshFromTrimesh(shape)
+                if len(self.merged) == i:
+                    self.merged.append(Entity(
+                        model=mesh,
+                        color=color.yellow,
+                        shader=lit_with_shadows_shader,
+                    ))
+                # re-use one
+                self.merged[i].mesh = mesh
+                self.merged[i].enabled = True
+                i += 1
+            # hide the rest
+            for i in range(i, len(self.merged)):
+                self.merged[i].enabled = False
+
+        if 'prisms' in updates:
+            pass
 
     def start(self):
         self.app.run()
