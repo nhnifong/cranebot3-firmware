@@ -12,3 +12,4 @@ mapbox-earcut
 manifold3d
 ultralytics
 shapely
+python-fcl

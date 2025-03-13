@@ -6,19 +6,32 @@ from trimesh import Trimesh
 from trimesh.creation import extrude_polygon, triangulate_polygon
 from trimesh.transformations import compose_matrix, translation_matrix
 from trimesh.boolean import intersection
+from trimesh.collision import CollisionManager
 from shapely.geometry import Polygon
 import math
 import torch
 from scipy.cluster.hierarchy import DisjointSet
 
+def rodrigues_matrix(rvec):
+    """
+    Creates a 4x4 rotation matrix from a Rodrigues vector (rvec)
+    as returned by cv2.solvePnP.
+    """
+    rotation_matrix_3x3, _ = cv2.Rodrigues(rvec)
+    # Convert 3x3 to 4x4 matrix
+    rotation_matrix_4x4 = np.eye(4)  # Identity matrix
+    rotation_matrix_4x4[:3, :3] = rotation_matrix_3x3
+    return rotation_matrix_4x4
 
-# Run inference
-# results = model.track(source=sys.argv[1], imgsz=640, show=True, conf=0.8)
-# results = model(source=sys.argv[1], show=True)
 
 class ShapeTracker:
     def __init__(self):
-        self.collision_manager = trimesh.collision.CollisionManager()
+        self.model = FastSAM("FastSAM-s.pt")
+        self.collision_manager = CollisionManager()
+        self.size_thresh = 0.003
+        self.last_shapes_by_camera = [{}, {}, {}, {}]
+        self.camera_transforms = []
+
 
         # after extrusion the shape's narrow end is at z=0 and it extends up along the z axis.
         # The narrow end is still in the normalized units the contours were in.
@@ -27,23 +40,46 @@ class ShapeTracker:
         # TODO find out if x and y were normalized independently, or only based on the larger dimension.
         # if it was independent, then restore the original aspect ratio
         # use the camera matrix to undo any spherical distortion
-        self.standard_transform = compose_matrix(
-            translation_matrix([0,0,1]) # move up 1 meter
-        )
+        self.standard_transform = translation_matrix([0,0,1]) # move up 1 meter
+        
 
     def setCameraPoses(self, poses):
-        self.camera_poses = poses
+        self.camera_transforms = [
+            compose_matrix(
+                translation_matrix(tvec),
+                rodrigues_matrix(rvec),
+            )
+            for rvec,tvec in poses]
+
+    def processFrame(self, anchor_num, frame):
+        results = self.model(frame, conf=0.75, imgsz=(1138,640), save=False)
+        filtered_masks = []
+        if results:
+            # pick out only objects that are small
+            r = results[0]
+            area_mask = r.boxes.xywhn[:, 2] * r.boxes.xywhn[:, 3] < self.size_thresh
+            filtered_masks = [r.masks.xyn[i] for i in range(len(r.masks.xyn)) if area_mask[i]]
+            print(f'cam {anchor_num} showing {len(filtered_masks)} objects with an area smaller than {self.size_thresh}')
+        self.last_shapes_by_camera[anchor_num] = self.make_shapes(anchor_num, filtered_masks)
+
+        # trigger the shape merge once per cycle, presumably we receive frames from the other three cameras
+        if anchor_num == 0:
+            mgd = {}
+            for shapes in self.last_shapes_by_camera:
+                mgd.update(shapes)
+            r = self.merge_shapes(mgd)
+            print(r)
 
     def make_shapes(self, anchor_num, contours):
         """Project contours from a particular camera into shapes in world space
         The shapes are like a truncated prism with the outline of the contour and the tapering
         ratio of a frustum
-        contours = {'object_id', [[x, y],...]}
+        contours = [[x, y],...]
         """
         height = 6
         fov = 1.15192 # radians
         shapes = {}
-        for object_id, contour in contours.items():
+        for object_id, contour in enumerate(contours):
             shape = extrude_polygon(Polygon(contour), height=height)
             top_scale = math.sin(fov)*height
             for i in range(len(shape.vertices)):
@@ -53,8 +89,7 @@ class ShapeTracker:
                 shape.vertices[i][1] *= top_scale
             assert(shape.is_watertight)
             shape.apply_transform(self.standard_transform)
-            # shape.show()
-            # transform the shape to align with the camera's pose
+            shape.apply_transform(self.camera_transforms[anchor_num])
             shapes[f'{anchor_num}-{object_id}'] = shape
         return shapes
 
@@ -84,10 +119,10 @@ class ShapeTracker:
         if aru:
             for name_pair, collision in zip(names, data):
                 # disregard collisions that occured more than 1 meter from the floor
-                if collision.contacts[0].point[2] > 1:
+                if collision.point[2] > 1:
                     continue
                 # disregard collisions of two shapes from the same camera
-                cam_numbers = [name_pair.split('-')[0] for name in name_pair]
+                cam_numbers = [name.split('-')[0] for name in name_pair]
                 if cam_numbers[0] == cam_numbers[1]:
                     continue
                 ds.merge(*name_pair)
@@ -96,7 +131,7 @@ class ShapeTracker:
                     final_shape = intersection([shapes[name] for name in subset], engine='manifold')
                     results.append({
                         'mesh': final_shape,
-                        original_ids: list(subset)
+                        'original_ids': list(subset)
                     })
         return results
 
@@ -105,17 +140,17 @@ def stream():
     model = FastSAM("FastSAM-s.pt")
 
     # for results in model(sys.argv[1], stream=True, texts="a peice of clutter", conf=0.8):
-    for results in model.track(sys.argv[1], stream=True, conf=0.75, save=False):
+    for results in model.track(sys.argv[1], stream=True, conf=0.75, save=False, texts="a silly kid"):
         # make_shapes(results[0].masks.xyn)
-        if results:
-            areas = results.boxes.xywhn[:, 2] * results.boxes.xywhn[:, 3]
-            if results.boxes.id is None:
-                continue
-            box_sizes = torch.stack((results.boxes.id, areas), dim=1)
-            filtered_masks = results.masks.xyn[box_sizes[:, 1] <= 0.002]
-            # results.orig_img
-            shapes = make_shapes(filtered_masks)
-            # print(results.masks)
+        # if results:
+        #     areas = results.boxes.xywhn[:, 2] * results.boxes.xywhn[:, 3]
+        #     if results.boxes.id is None:
+        #         continue
+        #     box_sizes = torch.stack((results.boxes.id, areas), dim=1)
+        #     filtered_masks = results.masks.xyn[box_sizes[:, 1] <= 0.002]
+        #     # results.orig_img
+        #     shapes = make_shapes(filtered_masks)
+        #     # print(results.masks)
 
         annotated_frame = results.plot()
 
@@ -138,34 +173,26 @@ def frame_generator(num):
     video_uri = f'tcp://192.168.1.{num}:8888'
     print(f'Connecting to {video_uri}')
     cap = cv2.VideoCapture(video_uri)
+    i = 0
     while True:
         ret, frame = cap.read()
-        if ret:
+        if ret and i==0:
             yield frame
+        i = (i+1)%30
 
-def receive_video(num, model, show=False):
-    my_predictor = None
+def receive_video(num, st):
     for frame in frame_generator(num):
         try:
-            if my_predictor is not None:
-                model.predictor = my_predictor
-            results = model.track(frame, conf=0.75, imgsz=1024, save=False, persist=True)
-            my_predictor = model.predictor
-            if results:
-                print(f'{num} ids = {results[0].boxes.id}')
-
-                if show:
-                    annotated_frame = results[0].plot()
-                    cv2.imshow("Tracking", annotated_frame)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
+            st.processFrame(num-151, frame)
         except KeyboardInterrupt:
             return
 
-mod = FastSAM("FastSAM-s.pt")
-vid_1 = threading.Thread(target=receive_video, args=(151, mod))
+# mod = FastSAM("FastSAM-s.pt")
+st = ShapeTracker()
+
+vid_1 = threading.Thread(target=receive_video, args=(151, st))
 # vid_2 = threading.Thread(target=receive_video, args=(153, mod))
 vid_1.start()
 # vid_2.start()
 
-receive_video(153, mod, True)
+receive_video(153, st)
