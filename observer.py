@@ -80,6 +80,9 @@ class AsyncObserver:
         self.load_anchor_num_map()
         self.stat = StatCounter(to_ui_q)
 
+        # FastSAM model
+        self.shape_tracker = ShapeTracker()
+
     def load_anchor_num_map(self):
         try:
             with open('anchor_mapping.txt', 'r') as f:
