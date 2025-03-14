@@ -250,7 +250,7 @@ class AsyncObserver:
             self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
 
             asyncio.create_task(self.stat.stat_main())
-            # asyncio.create_task(self.add_simulated_data())
+            asyncio.create_task(self.run_shape_tracker())
 
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
@@ -275,9 +275,12 @@ class AsyncObserver:
         while self.send_position_updates:
             if len(self.anchors) > 1:
                 trimesh_list = self.shape_tracker.merge_shapes()
+                prisms = []
+                for sdict in self.shape_tracker.last_shapes_by_camera:
+                    prisms.extend(sdict.values())
                 self.to_ui_q.put({
-                    'merged_shapes':trimesh_list,
-                    # 'prisms':self.shape_tracker.last_shapes_by_camera,
+                    'solids': trimesh_list,
+                    'prisms': prisms,
                 })
             await asyncio.sleep(1.0)
 

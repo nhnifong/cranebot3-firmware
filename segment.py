@@ -5,7 +5,7 @@ import threading
 import numpy as np
 from trimesh import Trimesh
 from trimesh.creation import extrude_polygon, triangulate_polygon
-from trimesh.transformations import compose_matrix, translation_matrix
+from trimesh.transformations import translation_matrix
 from trimesh.boolean import intersection
 from trimesh.collision import CollisionManager
 from shapely.geometry import Polygon
@@ -31,7 +31,7 @@ class ShapeTracker:
         self.collision_manager = CollisionManager()
         self.size_thresh = 0.003
         self.last_shapes_by_camera = [{}, {}, {}, {}]
-        self.camera_transforms = []
+        self.camera_transforms = [None, None, None, None]
 
 
         # after extrusion the shape's narrow end is at z=0 and it extends up along the z axis.
@@ -44,23 +44,20 @@ class ShapeTracker:
         self.standard_transform = translation_matrix([0,0,1]) # move up 1 meter
         
 
-    def setCameraPoses(self, poses):
-        self.camera_transforms = [
-            compose_matrix(
-                translation_matrix(tvec),
-                rodrigues_matrix(rvec),
-            )
-            for rvec,tvec in poses]
+    def setCameraPoses(self, anchor_num, pose):
+        print(f'shape tracker setting pose {pose}')
+        self.camera_transforms[anchor_num] = np.dot(translation_matrix(pose[1]), rodrigues_matrix(pose[0]))
 
     def processFrame(self, anchor_num, frame):
-        results = self.model(frame, conf=0.75, imgsz=(1138,640), save=False)
+        results = self.model(frame, conf=0.75, save=False, imgsz=2048) 
         filtered_masks = []
         if results:
             # pick out only objects that are small
             r = results[0]
-            area_mask = r.boxes.xywhn[:, 2] * r.boxes.xywhn[:, 3] < self.size_thresh
-            filtered_masks = [r.masks.xyn[i] for i in range(len(r.masks.xyn)) if area_mask[i]]
-            print(f'cam {anchor_num} showing {len(filtered_masks)} objects with an area smaller than {self.size_thresh}')
+            if r.masks is not None:
+                area_mask = r.boxes.xywhn[:, 2] * r.boxes.xywhn[:, 3] < self.size_thresh
+                filtered_masks = [r.masks.xyn[i] for i in range(len(r.masks.xyn)) if area_mask[i]]
+                print(f'cam {anchor_num} showing {len(filtered_masks)} objects with an area smaller than {self.size_thresh}')
         self.last_shapes_by_camera[anchor_num] = self.make_shapes(anchor_num, filtered_masks)
 
     def make_shapes(self, anchor_num, contours):
@@ -80,10 +77,14 @@ class ShapeTracker:
                     continue
                 shape.vertices[i][0] *= top_scale
                 shape.vertices[i][1] *= top_scale
-            assert(shape.is_watertight)
-            shape.apply_transform(self.standard_transform)
-            shape.apply_transform(self.camera_transforms[anchor_num])
-            shapes[f'{anchor_num}-{object_id}'] = shape
+            try:
+                assert(shape.is_watertight)
+                shape.apply_transform(self.standard_transform)
+                if self.camera_transforms[anchor_num] is not None:
+                    shape.apply_transform(self.camera_transforms[anchor_num])
+                shapes[f'{anchor_num}-{object_id}'] = shape
+            except AssertionError:
+                print('discarded a shape from a contour because it was not watertight')
         return shapes
 
     def merge_shapes(self):
@@ -105,34 +106,39 @@ class ShapeTracker:
         mgd = {}
         for shapes in self.last_shapes_by_camera:
             mgd.update(shapes)
-        r = self.merge_shapes(mgd)
         # mgd is a dictionary of shapes with ids
         # key structure is f'{anchor_num}-{object_id}'
 
-        results = []
+        solids = []
         ds = DisjointSet()
         for name, mesh in mgd.items():
             self.collision_manager.add_object(name, mesh)
             ds.add(name)
         aru, names, data = self.collision_manager.in_collision_internal(return_names=True, return_data=True)
         if aru:
+            print(f'examining {len(names)} collision candidates')
             for name_pair, collision in zip(names, data):
                 # disregard collisions that occured more than 1 meter from the floor
                 if collision.point[2] > 1:
+                    print(f'Collision discarded for being too far above the floor ({collision.point[2]})')
                     continue
                 # disregard collisions of two shapes from the same camera
                 cam_numbers = [name.split('-')[0] for name in name_pair]
                 if cam_numbers[0] == cam_numbers[1]:
+                    print(f'Collision {name_pair} discarded for not involving two unique camera views')
                     continue
                 ds.merge(*name_pair)
             for subset in ds.subsets():
                 if len(subset) > 1:
+                    print('Intersecting shape')
                     final_shape = intersection([mgd[name] for name in subset], engine='manifold')
-                    results.append({
-                        'mesh': final_shape,
-                        'original_ids': list(subset)
-                    })
-        return results
+                    # I may have some reason in the future to know the ids
+                    # solids.append({
+                    #     'mesh': final_shape,
+                    #     'original_ids': list(subset)
+                    # })
+                    solids.append(final_shape)
+        return solids
 
 
 def stream():

@@ -28,7 +28,7 @@ def pose_from_det(det):
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
-    def __init__(self, address, datastore, to_ui_q, to_pe_q, pool, stat, shape_tracker):
+    def __init__(self, address, datastore, to_ui_q, to_pe_q, pool, stat):
         self.address = address
         self.origin_poses = []
         self.datastore = datastore
@@ -41,7 +41,6 @@ class ComponentClient:
         self.frame_times = {}
         self.pool = pool
         self.stat = stat
-        self.shape_tracker = shape_tracker
 
     def receive_video(self):
         # don't connect too early or you will be rejected
@@ -77,7 +76,7 @@ class ComponentClient:
                 if self.shape_tracker is not None:
                     # send one frame per second to the fastSAM model
                     if time.time() > lastSam+1:
-                        self.lastSam = time.time()
+                        lastSam = time.time()
                         self.shape_tracker.processFrame(self.anchor_num, frame)
             else:
                 time.sleep(0.1)
@@ -176,11 +175,12 @@ class ComponentClient:
             self.ct.cancel()
 
 class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q, pool, stat):
+    def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q, pool, stat, shape_tracker):
         super().__init__(address, datastore, to_ui_q, to_pe_q, pool, stat)
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = {'anchor_num': self.anchor_num}
         self.calibration_mode = False # true is pose calibration mode.
+        self.shape_tracker = shape_tracker
 
         try:
             # read calibration data from file
@@ -191,6 +191,7 @@ class RaspiAnchorClient(ComponentClient):
             self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
         except FileNotFoundError:
             self.anchor_pose = (np.array([0,0,0]), np.array([0,0,0]))
+        self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
 
         # to help with a loop that does the same thing four times in handle_detections
         # name, offset, datastore
@@ -235,6 +236,7 @@ class RaspiAnchorClient(ComponentClient):
                     # self.anchor_pose = compose_poses([anchor_cam_pose, model_constants.anchor_cam_inv])
 
                     self.anchor_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(self.origin_poses)]))
+                    self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
 
                     # show real time updates of this process on the UI
                     self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
