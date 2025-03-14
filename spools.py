@@ -45,6 +45,7 @@ class SpoolController:
         self.lastIndex = 0
         self.runSpoolLoop = True
         self.rec_loop_counter = 0
+        self.moveAllowed = True
 
     def calc_meters_per_rev(self, currentLenUnspooled):
         # interpolate between empty and full diamter based on how much line is on the spool
@@ -86,13 +87,14 @@ class SpoolController:
         """
         success, angle = self.motor.getShaftAngle()
         if not success:
+            logging.error("Could not read shaft angle from motor")
             return (time.time(), self.lastLength)
         self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
 
+        self.moveAllowed = True
         if self.lastLength < 0 or self.lastLength > self.full_length:
             logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}, zeroAngle={self.zeroAngle}, lineAtStart={self.lineAtStart}, meters_per_rev={self.meters_per_rev}")
-            self.motor.runConstantSpeed(0)
-            self.runSpoolLoop = False
+            self.moveAllowed = False
 
         # accumulate these so you can send them to the websocket
         row = (time.time(), self.lastLength)
@@ -167,7 +169,10 @@ class SpoolController:
                 maxspeed = self.motor.getMaxSpeed()
                 self.speed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
 
-                self.motor.runConstantSpeed(self.speed)
+                if self.moveAllowed:
+                    self.motor.runConstantSpeed(self.speed)
+                else:
+                    logging.warning("would move at speed={self.speed} but length is invalid. calibrate length first.")
 
                 time.sleep(LOOP_DELAY_S)
             except serial.serialutil.SerialTimeoutException:
