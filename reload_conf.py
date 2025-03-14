@@ -10,6 +10,7 @@ class Anchor:
 class Config:
     def __init__(self):
         self.anchors = [Anchor(i) for i in range(4)]
+        self.anchor_num_map = {}
         # default configuration
         self.resolution = (4608, 2592)
         self.intrinsic_matrix = np.array(
@@ -26,9 +27,12 @@ class Config:
 
     def reload(self):
         conf = json.loads(open('configuration.json').read())
+        self.anchor_num_map = {} # convenience map from service name to num
         for a in conf['anchors']:
             self.anchors[a['num']].pose = (np.array(a['rotation'], dtype=float), np.array(a['position'], dtype=float))
             self.anchors[a['num']].service_name = a['service_name']
+            if a['service_name']:
+                self.anchor_num_map[a['service_name']] = a['num']
         cam = conf['camera_cal']
         self.resolution = tuple(cam['resolution'])
         self.intrinsic_matrix = np.array(cam['intrinsic_matrix'])

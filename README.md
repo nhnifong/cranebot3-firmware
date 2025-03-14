@@ -31,15 +31,6 @@ After booting any raspberry pi from a fresh image, perform an update
 
 you may have to hit enter a few times during full-upgrade.
 
-Since we require the picamera2 module and it can't be installed with pip, you have to install it with apt and create a virtualenv that can use site packages 
-
-    sudo apt install python3-picamera2 imx500-all --no-install-recommends
-    git clone https://github.com/nhnifong/cranebot3-firmware.git
-    cd cranebot3-firmware
-    python3 -m venv --system-site-packages venv
-    source venv/bin/activate
-    pip3 install -r requirements_raspi.txt
-
 ### Anchors
 
 Setup for any raspberry pi that will be part of an anchor
@@ -53,9 +44,12 @@ Then reboot after this change
     enable_uart=1
     dtoverlay=disable-bt
 
-Start server
+Uncomment the `anchor` or `power anchor` line in the `server.conf` file depending on whether this anchor is the one having the power line to the gripper.
 
-    python3 anchor/anchor_server.py
+install server
+
+    chmod +x install.sh
+    sudo ./install.sh
 
 ### Gripper
 
@@ -68,10 +62,20 @@ Add this line to `/boot/firmware/config.txt` just under `dtparam=i2c_arm=on` and
 
     dtparam=i2c_baudrate=400000
 
-Start server
+Uncomment the `gripper` line in the `server.conf` file
 
-    python3 anchor/gripper_server.py
+install server
 
+    chmod +x install.sh
+    sudo ./install.sh
 
+### Development
 
+Since we require the picamera2 module and it can't be installed with pip, you have to install it with apt and create a virtualenv that can use site packages 
 
+    sudo apt install python3-picamera2 imx500-all --no-install-recommends
+    git clone https://github.com/nhnifong/cranebot3-firmware.git
+    cd cranebot3-firmware
+    python3 -m venv --system-site-packages venv
+    source venv/bin/activate
+    pip3 install -r requirements_raspi.txt

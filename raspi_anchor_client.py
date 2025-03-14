@@ -11,6 +11,7 @@ import numpy as np
 import model_constants
 from functools import partial
 import threading
+from reload_conf import Config
 
 # number of origin detections to average
 max_origin_detections = 10
@@ -41,6 +42,7 @@ class ComponentClient:
         self.frame_times = {}
         self.pool = pool
         self.stat = stat
+        self.shape_tracker = None
 
     def receive_video(self):
         # don't connect too early or you will be rejected
@@ -182,16 +184,10 @@ class RaspiAnchorClient(ComponentClient):
         self.calibration_mode = False # true is pose calibration mode.
         self.shape_tracker = shape_tracker
 
-        try:
-            # read calibration data from file
-            saved_info = np.load('anchor_pose_%i.npz' % self.anchor_num)
-            self.anchor_pose = tuple(saved_info['pose'].astype(float))
-            print(f"Read pose of anchor {self.anchor_num} from file: {self.anchor_pose}")
-            self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
-            self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
-        except FileNotFoundError:
-            self.anchor_pose = (np.array([0,0,0]), np.array([0,0,0]))
+        config = Config()
+        self.anchor_pose = config.anchors[anchor_num].pose
         self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
+        self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
 
         # to help with a loop that does the same thing four times in handle_detections
         # name, offset, datastore
@@ -206,11 +202,6 @@ class RaspiAnchorClient(ComponentClient):
     def handle_update_from_ws(self, update):
         if 'line_record' in update and not self.calibration_mode:
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
-
-    def calibrate_pose(self):
-        print(f"writing 'anchor_pose_{self.anchor_num}.npz'")
-        np.savez(f'anchor_pose_{self.anchor_num}.npz', pose = self.anchor_pose)
-        self.to_pe_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
 
     def handle_detections(self, detections, timestamp):
         """

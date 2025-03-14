@@ -416,7 +416,7 @@ class ControlPanelUI:
         self.walls = [Entity(
             model='quad',
             texture='vertical_gradient',
-            color=(0.9, 0.9, 0.9, 0.2),
+            color=(0.0, 1.0, 0.0, 0.2),
             shader=unlit_shader,
             double_sided=True
             ) for i in range(4)]
