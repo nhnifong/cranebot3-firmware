@@ -20,6 +20,7 @@ from raspi_anchor_client import RaspiAnchorClient
 from raspi_gripper_client import RaspiGripperClient
 from random import random
 from segment import ShapeTracker
+from reload_conf import Config
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -75,31 +76,13 @@ class AsyncObserver:
         # convenience reference to gripper client
         self.gripper_client = None
 
-        # read a mapping of server names to anchor numbers from a file
-        self.next_available_anchor_num = 0;
-        self.anchor_num_map = {}
-        self.load_anchor_num_map()
+        # read a mapping of server names to anchor numbers from the config file
+        self.config = Config()
+
         self.stat = StatCounter(to_ui_q)
 
         # FastSAM model
         self.shape_tracker = ShapeTracker()
-
-    def load_anchor_num_map(self):
-        try:
-            with open('anchor_mapping.txt', 'r') as f:
-                for line in f:
-                    s = line.split(':')
-                    self.anchor_num_map[s[0]] = int(s[1])
-            if len(self.anchor_num_map) == 0:
-                return
-            self.next_available_anchor_num = max(self.anchor_num_map.values())+1
-        except FileNotFoundError:
-            pass
-
-    def save_anchor_num_map(self):
-        with open('anchor_mapping.txt', 'w') as f:
-            for k,v in self.anchor_num_map.items():
-                f.write(f'{k}:{v}\n')
 
     def listen_position_updates(self, loop):
         """
@@ -165,10 +148,12 @@ class AsyncObserver:
         """
         if mode == "run":
             if self.calmode == "pose":
-                # call calibrate_pose on all anchors when exiting pose calibration mode
-                for name, client in self.bot_clients.items():
-                    client.calibrate_pose()
+                config = Config()
+                for client in self.anchors:
                     client.calibration_mode = False
+                    config.anchors[client.anchor_num].pose = client.anchor_pose
+                config.write()
+                print('Wrote new anchor poses to configuration.json')
             self.calmode = mode
             print("run mode")
         elif mode == "pose":
@@ -179,7 +164,7 @@ class AsyncObserver:
         elif mode == "pause":
             if self.calmode == "pose":
                 # call calibrate_pose on all anchors when exiting pose calibration mode
-                for name, client in self.bot_clients.items():
+                for client in self.anchors:
                     client.calibrate_pose()
                     client.calibration_mode = False
             self.calmode = mode
@@ -210,13 +195,19 @@ class AsyncObserver:
                 # the number of anchors is decided ahead of time (in main.py)
                 # but they are assigned numbers as we find them on the network
                 # and the chosen numbers are persisted on disk
-                if info.server in self.anchor_num_map:
-                    anchor_num = self.anchor_num_map[info.server]
+
+                if info.server in self.config.anchor_num_map:
+                    anchor_num = self.config.anchor_num_map[info.server]
                 else:
-                    anchor_num = self.next_available_anchor_num
-                    self.anchor_num_map[info.server] = anchor_num
-                    self.next_available_anchor_num += 1
-                    self.save_anchor_num_map()
+                    anchor_num = len(self.config.anchor_num_map)
+                    if anchor_num >= 4:
+                        # we do not support yet multiple crane bot assemblies on a single network
+                        print(f"Discovered another anchor server on the network, but we already know of 4 {info.server} {address}")
+                        return
+                    self.config.anchor_num_map[info.server] = anchor_num
+                    self.config.anchors[anchor_num].service_name = info.server
+                    self.config.write()
+
                 ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat, self.shape_tracker)
                 self.bot_clients[info.server] = ac
                 self.anchors.append(ac)
@@ -273,7 +264,17 @@ class AsyncObserver:
 
     async def run_shape_tracker(self):
         while self.send_position_updates:
-            if len(self.anchors) > 1:
+            if self.calmode == "pose":
+                # send the UI some shapes representing the whole frustum of each camera
+                prisms = []
+                for anchor_num in range(4):
+                    shps = self.shape_tracker.make_shapes(anchor_num, [[[0.0,1.0], [1.0,1.0], [1.0,0.0], [0.0,0.0]]])
+                    prisms.append(shps.values()[0])
+                self.to_ui_q.put({
+                    'prisms': prisms,
+                })
+
+            elif len(self.anchors) > 1:
                 trimesh_list = self.shape_tracker.merge_shapes()
                 prisms = []
                 for sdict in self.shape_tracker.last_shapes_by_camera:
@@ -282,6 +283,7 @@ class AsyncObserver:
                     'solids': trimesh_list,
                     'prisms': prisms,
                 })
+
             await asyncio.sleep(1.0)
 
     async def add_simulated_data(self):

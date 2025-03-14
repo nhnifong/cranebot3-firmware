@@ -4,30 +4,11 @@ import cv2.aruco as aruco
 import numpy as np
 import time
 from functools import lru_cache
+from reload_conf import Config
 
-try:
-    calib = np.load('camera_coef.npz')
-    mtx = calib['intrinsic_matrix']
-    distortion = calib['distCoeff']
-except:
-    # Intrinsic Matrix:
-    mtx = np.array(
-    [[1.37167317e+03, 0.00000000e+00, 5.50300368e+02],
-     [0.00000000e+00, 1.37632021e+03, 3.16524984e+02],
-     [0.00000000e+00, 0.00000000e+00, 1.00000000e+00]])
-    # Distortion Coefficients: 
-    distortion = np.array(
-    [[ 0.01959627, 0.56390969, -0.00256158, -0.00496641, -0.93400812]])
-
-"""
-Intrinsic Matrix: 
-[[2.48327492e+04 0.00000000e+00 2.31676910e+03]
- [0.00000000e+00 4.27958444e+04 1.28436095e+03]
- [0.00000000e+00 0.00000000e+00 1.00000000e+00]]
-Distortion Coefficients: 
-[[ 1.45428008e+01 -9.27187979e+02 -1.10364125e-01 -4.74887005e-01
-  -1.67286185e+01]]
-"""
+config = Config()
+mtx = config.intrinsic_matrix
+distortion = config.distortion_coeff
 
 # the ids are the index in the list
 marker_names = [

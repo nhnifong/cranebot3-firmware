@@ -45,19 +45,27 @@ class ShapeTracker:
         
 
     def setCameraPoses(self, anchor_num, pose):
-        print(f'shape tracker setting pose {pose}')
+        print(f'shape tracker setting pose for camera {anchor_num} to {pose}')
         self.camera_transforms[anchor_num] = np.dot(translation_matrix(pose[1]), rodrigues_matrix(pose[0]))
 
     def processFrame(self, anchor_num, frame):
         results = self.model(frame, conf=0.75, save=False, imgsz=2048) 
+        yratio = frame.shape[0] / frame.shape[1]
         filtered_masks = []
         if results:
             # pick out only objects that are small
             r = results[0]
             if r.masks is not None:
                 area_mask = r.boxes.xywhn[:, 2] * r.boxes.xywhn[:, 3] < self.size_thresh
-                filtered_masks = [r.masks.xyn[i] for i in range(len(r.masks.xyn)) if area_mask[i]]
+                filtered_masks = []
+                for i in range(len(r.masks.xyn)):
+                    if area_mask[i]:
+                        # fix the aspect ratio of the mask
+                        r.masks.xyn[i] += np.array([-0.5, -0.5])
+                        r.masks.xyn[i][:,1] *= yratio
+                        filtered_masks.append(r.masks.xyn[i])
                 print(f'cam {anchor_num} showing {len(filtered_masks)} objects with an area smaller than {self.size_thresh}')
+
         self.last_shapes_by_camera[anchor_num] = self.make_shapes(anchor_num, filtered_masks)
 
     def make_shapes(self, anchor_num, contours):
@@ -67,7 +75,7 @@ class ShapeTracker:
         contours = [[x, y],...]
         """
         height = 6
-        fov = 1.15192 # radians
+        fov = 1.15192 # horizontal field of view in radians
         shapes = {}
         for object_id, contour in enumerate(contours):
             shape = extrude_polygon(Polygon(contour), height=height)
@@ -108,6 +116,7 @@ class ShapeTracker:
             mgd.update(shapes)
         # mgd is a dictionary of shapes with ids
         # key structure is f'{anchor_num}-{object_id}'
+        print(mgd.keys())
 
         solids = []
         ds = DisjointSet()
@@ -120,7 +129,7 @@ class ShapeTracker:
             for name_pair, collision in zip(names, data):
                 # disregard collisions that occured more than 1 meter from the floor
                 if collision.point[2] > 1:
-                    print(f'Collision discarded for being too far above the floor ({collision.point[2]})')
+                    print(f'Collision discarded for being too far away from the floor ({collision.point[2]})')
                     continue
                 # disregard collisions of two shapes from the same camera
                 cam_numbers = [name.split('-')[0] for name in name_pair]

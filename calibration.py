@@ -3,6 +3,7 @@ import cv2.aruco as aruco
 import numpy as np
 from time import time, sleep
 import glob
+from reload_conf import Config
 
 #the number of squares on the board (width and height)
 board_w = 14
@@ -123,9 +124,12 @@ class CalibrationInteractive:
         print("Total reprojection error: ", terr)
 
     def save(self): 
-        fname = 'camera_coef.npz'
-        print(f'Saving data file to {fname}')
-        np.savez(fname, distCoeff=self.distCoeff, intrinsic_matrix=self.intrinsic_matrix)
+        print(f'Saving data to configuration.json')
+        config = Config()
+        config.intrinsic_matrix = self.intrinsic_matrix
+        config.distortion_coeff = self.distCoeff
+        config.resolution = (self.image_shape[1], self.image_shape[0])
+        config.write()
 
 # calibrate from files locally
 def calibrate_from_files():
