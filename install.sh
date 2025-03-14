@@ -1,6 +1,6 @@
 #!/bin/bash
 
-APP_DIR="$HOME/cranebot-firmware"
+APP_DIR="/home/$SUDO_USER/cranebot3-firmware"
 VENV_DIR="$APP_DIR/venv"
 SERVICE_NAME="cranebot.service"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
@@ -12,12 +12,14 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 apt install python3-picamera2 --no-install-recommends
-apt install imx500-all
+# apt install imx500-all
 
-# python3 -m venv --system-site-packages venv
-# source venv/bin/activate
-# pip3 install -r requirements_raspi.txt
-# deactivate
+if [[ ! -d "venv" ]]; then
+  python3 -m venv --system-site-packages venv
+fi
+source venv/bin/activate
+pip3 install -r requirements_raspi.txt
+deactivate
 
 # Create service file
 cat <<EOF > "$SERVICE_FILE"
@@ -30,7 +32,7 @@ StartLimitIntervalSec=0
 Type=simple
 Restart=always
 RestartSec=1
-User=$USER
+User=$SUDO_USER
 WorkingDirectory=$APP_DIR
 ExecStart=$VENV_DIR/bin/python3 component_server.py
 Restart=always
@@ -47,4 +49,5 @@ chmod 644 "$SERVICE_FILE"
 systemctl enable "$SERVICE_NAME"
 systemctl start "$SERVICE_NAME"
 
-echo "Cranebot service installed and started."
+echo "Cranebot service installed"
+systemctl status --no-pager "$SERVICE_NAME"

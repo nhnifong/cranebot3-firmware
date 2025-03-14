@@ -164,6 +164,7 @@ class RobotComponentServer:
 
 
     async def main(self, port=8765):
+        logging.info('Starting cranebot server')
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
 
