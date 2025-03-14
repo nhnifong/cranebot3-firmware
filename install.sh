@@ -11,7 +11,8 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-apt install python3-picamera2 imx500-all --no-install-recommends
+apt install python3-picamera2 --no-install-recommends
+apt install imx500-all
 
 # python3 -m venv --system-site-packages venv
 # source venv/bin/activate

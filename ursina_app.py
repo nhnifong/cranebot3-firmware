@@ -77,8 +77,8 @@ def draw_line(point_a, point_b):
     #     cap_ends=False,
     # )
 
-def ursinaMeshFromTrimesh(tm):
-    return Mesh(vertices=map(swap_yz, tm.vertices), triangles=tm.triangles)
+def update_from_trimesh(tm, entity):
+    entity.model = Mesh(vertices=tm.vertices[:, [0, 2, 1]].tolist(), triangles=tm.faces.tolist())
 
 class SplineMovingEntity(Entity):
     """
@@ -288,6 +288,46 @@ class GoalPoint(Entity):
         self.label.position = world_position_to_screen_position(self.position) + self.label_offset
         self.label.text = self.fmt.format(val=(time.time()-self.atime))
 
+class EntityPool:
+    def __init__(self, max_items, new_entity_fn):
+        self.entities = []
+        self.max_items = max_items
+        self.next = 0
+        self.new_entity_fn = new_entity_fn
+
+    def replace(self, item_list, update_entity_fn):
+        """show up to max_items from items_list and nothing more
+        update_entity_fn(a, b) will be called for each item in item_list, where a is the item and b is the entity to be updated
+        disable anything else in the pool that was not updated by this call
+        """
+        i = 0
+        while i < min(len(item_list), self.max_items):
+            # show an item with this entity
+            if len(self.entities) <= i:
+                self.entities.append(self.new_entity_fn())
+            update_entity_fn(item_list[i], self.entities[i])
+            self.entities[i].enabled = True
+            i += 1
+        # disable whatever remains
+        while i < len(self.entities):
+            self.entities[i].enabled = False
+            i += 1
+        self.next = 0
+
+    def add(self, update_entity_fn):
+        """show a new item, reusing the oldest one if needed"""
+        if len(self.entities) < self.max_items:
+            self.entities.append(self.new_entity_fn())
+            update_entity_fn(self.entities[-1])
+            self.entities[-1].enabled = True
+        else:
+            update_entity_fn(self.entities[self.next])
+            self.entities[-1].enabled = True
+            self.next = (self.next + 1) % self.max_items
+
+def update_go_quad(row, color, e):
+    e.position = (row[4],row[6],row[5])
+    e.color = color
 
 class ControlPanelUI:
     def __init__(self, datastore, to_pe_q, to_ob_q):
@@ -390,9 +430,10 @@ class ControlPanelUI:
         self.camview = Entity(model='quad', scale=(2*1.777777, 2), position=(0,4,0))
         self.camview.enabled = False
 
-        self.go_quads = []
-        self.max_go_quads = 200
-        self.go_quad_next = 0
+        self.go_quads = EntityPool(200, lambda: Entity(
+                model='cube',
+                color=color.white, scale=(0.03),
+                shader=unlit_shader))
 
         self.modePanel = Panel(model='quad', z=99, 
             color=(0.1,0.1,0.1,1.0),
@@ -488,10 +529,12 @@ class ControlPanelUI:
             enabled=False,
         )
 
-        self.max_prisms = 80
-        self.prisms = list()
-        self.max_merged = 20
-        self.merged = list()
+        self.prisms = EntityPool(80, lambda: Entity(
+            color=(1.0, 1.0, 1.0, 0.2),
+            shader=lit_with_shadows_shader))
+        self.solids = EntityPool(20, lambda: Entity(
+            color=(1.0, 1.0, 0.5, 1.0),
+            shader=lit_with_shadows_shader))
 
 
         DropdownMenu('Menu', buttons=(
@@ -621,16 +664,7 @@ class ControlPanelUI:
         self.to_ob_q.put({'set_run_mode':'pause'})
 
     def render_gripper_ob(self, row, color):
-        if len(self.go_quads) < self.max_go_quads:
-            self.go_quads.append(Entity(
-                model='cube',
-                position=(row[4],row[6],row[5]),
-                color=color, scale=(0.03),
-                shader=unlit_shader))
-        else:
-            self.go_quads[self.go_quad_next].position = (row[4],row[6],row[5])
-            self.go_quads[self.go_quad_next].color = color
-            self.go_quad_next = (self.go_quad_next+1)%self.max_go_quads
+        self.go_quads.add(partial(update_go_quad, row, color))
 
     def periodic_actions(self):
         """
@@ -816,30 +850,11 @@ class ControlPanelUI:
             for i in range(len(updates['goal_points']), len(self.goals)):
                 self.goals[i].enabled = False
 
-        if 'merged_shapes' in updates:
-            print(f'Displaying {len(updates["merged_shapes"])} merged shapes')
-            i = 0
-            for shape in updates['merged_shapes']:
-                if i == self.max_merged:
-                    print('There are more merged shapes than we can display')
-                    break
-                mesh = ursinaMeshFromTrimesh(shape)
-                if len(self.merged) == i:
-                    self.merged.append(Entity(
-                        model=mesh,
-                        color=color.yellow,
-                        shader=lit_with_shadows_shader,
-                    ))
-                # re-use one
-                self.merged[i].mesh = mesh
-                self.merged[i].enabled = True
-                i += 1
-            # hide the rest
-            for i in range(i, len(self.merged)):
-                self.merged[i].enabled = False
+        if 'solids' in updates:
+            self.solids.replace(updates["solids"], update_from_trimesh)
 
         if 'prisms' in updates:
-            pass
+            self.prisms.replace(updates["prisms"], update_from_trimesh)
 
     def start(self):
         self.app.run()

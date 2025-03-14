@@ -7,7 +7,7 @@ websocket_port = 8765
 
 class RaspiGripperClient(ComponentClient):
     def __init__(self, address, datastore, to_ui_q, to_pe_q, pool, stat):
-        super().__init__(address, datastore, to_ui_q, to_pe_q, pool, stat, None)
+        super().__init__(address, datastore, to_ui_q, to_pe_q, pool, stat)
         self.conn_status = {'gripper': True}
 
     def handle_update_from_ws(self, update):
