@@ -64,10 +64,9 @@ def input(key):
 def swap_yz(vec):
     return (vec[0], vec[2], vec[1])
 
-# Transforms a rodrigues rotation vector ummmm its magic don't ask
+# Transforms a rodrigues rotation vector into an ursina euler rotation tuple in degrees
 def fix_rot(vec):
-    # return (vec[1], -vec[2], vec[0])
-    return (vec[0], vec[2], vec[1])
+    return (Rotation.from_rotvec(np.array(vec)).as_euler('xzy') + np.array([-pi/2, -pi/2, 0])) * (180/pi)
 
 def draw_line(point_a, point_b):
     return Mesh(vertices=[point_a, point_b], mode='line')
@@ -79,6 +78,17 @@ def draw_line(point_a, point_b):
 
 def update_from_trimesh(tm, entity):
     entity.model = Mesh(vertices=tm.vertices[:, [0, 2, 1]].tolist(), triangles=tm.faces.tolist())
+
+def update_from_trimesh_with_color(color, tm, entity):
+    entity.color = color
+    update_from_trimesh(tm, entity)
+
+# what color to show a solid depending on how many cameras it was seen by
+solid_colors = {
+    2: (1.0, 0.951, 0.71, 1.0),
+    3: (1.0, 0.684, 0.71, 0.5),
+    4: (1.0, 0.417, 0.71, 1.0),
+}
 
 class SplineMovingEntity(Entity):
     """
@@ -187,6 +197,22 @@ class Anchor(Entity):
             text=f"Anchor {self.num}\nNot Detected",
             scale=0.5,
         )
+
+        # img = cv2.cvtColor(cv2.imread('images/cap_0.jpg'), cv2.COLOR_BGR2RGB)
+        # im_pil = Image.fromarray(img)
+        # im_pil = im_pil.convert("RGBA")
+        # texture = Texture(im_pil)
+        # texture = Texture('images/cap_0.jpg')
+        self.empty = Entity(
+            scale=100,
+            rotation=(-35,-90,180),
+            parent=self)
+        self.camview = Entity(
+            model='quad',
+            scale=(2, 2/1.777777),
+            position=(0,0,2),
+            texture='cap_38.jpg',
+            parent=self.empty)
 
     def setStatus(self, status):
         self.label.text = f"Anchor {self.num}\n{status}"
@@ -422,14 +448,6 @@ class ControlPanelUI:
             ) for i in range(4)]
         self.redraw_walls()
 
-        # img = cv2.cvtColor(cv2.imread('images/cap_0.jpg'), cv2.COLOR_BGR2RGB)
-        # im_pil = Image.fromarray(img)
-        # im_pil = im_pil.convert("RGBA")
-        # texture = Texture(im_pil)
-        # texture = Texture('images/cap_0.jpg')
-        self.camview = Entity(model='quad', scale=(2*1.777777, 2), position=(0,4,0))
-        self.camview.enabled = False
-
         self.go_quads = EntityPool(200, lambda: Entity(
                 model='cube',
                 color=color.white, scale=(0.03),
@@ -530,9 +548,9 @@ class ControlPanelUI:
         )
 
         self.prisms = EntityPool(80, lambda: Entity(
-            color=(1.0, 1.0, 1.0, 0.2),
+            color=(1.0, 1.0, 1.0, 0.1),
             shader=lit_with_shadows_shader))
-        self.solids = EntityPool(20, lambda: Entity(
+        self.solids = EntityPool(100, lambda: Entity(
             color=(1.0, 1.0, 0.5, 1.0),
             shader=lit_with_shadows_shader))
 
@@ -802,7 +820,8 @@ class ControlPanelUI:
             anchor_num = apose[0]
             self.anchors[anchor_num].pose = apose[1]
             self.anchors[anchor_num].position = swap_yz(apose[1][1])
-            self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
+            # self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
+            self.anchors[anchor_num].rotation = fix_rot(apose[1][0])
             self.gantry.redraw_wires()
             self.redraw_walls()
 
@@ -851,7 +870,9 @@ class ControlPanelUI:
                 self.goals[i].enabled = False
 
         if 'solids' in updates:
-            self.solids.replace(updates["solids"], update_from_trimesh)
+            for key, val in updates["solids"].items():
+                for mesh in val:
+                    self.solids.add(partial(update_from_trimesh_with_color, solid_colors[key], mesh))
 
         if 'prisms' in updates:
             self.prisms.replace(updates["prisms"], update_from_trimesh)

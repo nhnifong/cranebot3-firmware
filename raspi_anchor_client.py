@@ -46,7 +46,7 @@ class ComponentClient:
 
     def receive_video(self):
         # don't connect too early or you will be rejected
-        time.sleep(6)
+        time.sleep(7)
         video_uri = f'tcp://{self.address}:{video_port}'
         print(f'Connecting to {video_uri}')
         cap = cv2.VideoCapture(video_uri)
@@ -58,6 +58,14 @@ class ComponentClient:
             last_time = time.time()
             ret, frame = cap.read()
             if ret:
+                if self.shape_tracker is not None:
+                    # send one frame per second to the fastSAM model
+                    if time.time() > lastSam + self.shape_tracker.preferred_delay:
+                        lastSam = time.time()
+                        if not self.connected:
+                            return
+                        self.shape_tracker.processFrame(self.anchor_num, frame)
+
                 fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
                 try:
                     timestamp = self.frame_times[fnum]
@@ -67,19 +75,15 @@ class ComponentClient:
                     self.stat.framerate.append(1/(now - last_time))
                     last_time = now
                 except KeyError:
-                    print('received a frame without knowing when it was captured')
+                    # print(f'received a frame without knowing when it was captured')
                     continue
                 try:
+                    if not self.connected:
+                        return
                     self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                 except ValueError:
                     return # the pool is not running
                 # self.handle_detections(locate_markers(frame), timestamp=timestamp)
-
-                if self.shape_tracker is not None:
-                    # send one frame per second to the fastSAM model
-                    if time.time() > lastSam+1:
-                        lastSam = time.time()
-                        self.shape_tracker.processFrame(self.anchor_num, frame)
             else:
                 time.sleep(0.1)
 

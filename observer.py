@@ -259,11 +259,10 @@ class AsyncObserver:
             await self.aiozc.async_close()
         for client in self.bot_clients.values():
             client.shutdown()
-        # if self.position_update_task:
-        #     await self.position_update_task
 
     async def run_shape_tracker(self):
         while self.send_position_updates:
+            elapsed = 0
             if self.calmode == "pose":
                 # send the UI some shapes representing the whole frustum of each camera
                 prisms = []
@@ -275,16 +274,21 @@ class AsyncObserver:
                 })
 
             elif len(self.anchors) > 1:
+                start = time.time()
                 trimesh_list = self.shape_tracker.merge_shapes()
+                elapsed = time.time() - start
+                print(f'Shape merging took {elapsed} sec')
                 prisms = []
                 for sdict in self.shape_tracker.last_shapes_by_camera:
                     prisms.extend(sdict.values())
+                if not self.send_position_updates:
+                    return
                 self.to_ui_q.put({
                     'solids': trimesh_list,
                     'prisms': prisms,
                 })
 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(max(0.05, self.shape_tracker.preferred_delay - elapsed))
 
     async def add_simulated_data(self):
         sim_anchors = np.array([
