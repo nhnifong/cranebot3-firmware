@@ -65,8 +65,9 @@ def swap_yz(vec):
     return (vec[0], vec[2], vec[1])
 
 # Transforms a rodrigues rotation vector into an ursina euler rotation tuple in degrees
-def fix_rot(vec):
-    return (Rotation.from_rotvec(np.array(vec)).as_euler('xzy') + np.array([-pi/2, -pi/2, 0])) * (180/pi)
+def to_ursina_rotation(rvec):
+    euler = Rotation.from_rotvec(rvec).as_euler('xyz', degrees=True)
+    return (-euler[0], -euler[2], euler[1])
 
 def draw_line(point_a, point_b):
     return Mesh(vertices=[point_a, point_b], mode='line')
@@ -821,7 +822,7 @@ class ControlPanelUI:
             self.anchors[anchor_num].pose = apose[1]
             self.anchors[anchor_num].position = swap_yz(apose[1][1])
             # self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
-            self.anchors[anchor_num].rotation = fix_rot(apose[1][0])
+            self.anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
             self.gantry.redraw_wires()
             self.redraw_walls()
 

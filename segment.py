@@ -33,7 +33,6 @@ def simplify_contour_scipy_convexhull(contour):
 class ShapeTracker:
     def __init__(self):
         self.model = FastSAM("FastSAM-s.pt")
-
         self.size_thresh = 0.05
         self.confidence_thresh = 0.81
         self.max_height = 0.2 # height limit in meters of detected objects
