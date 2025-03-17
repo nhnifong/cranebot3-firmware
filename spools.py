@@ -17,18 +17,20 @@ def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 class SpoolController:
-    def __init__(self, motor, empty_diameter, full_diameter, full_length):
+    def __init__(self, motor, empty_diameter, full_diameter, full_length, gear_ratio=1.0):
         """
         Create a controller for a spool of line.
         empty_diameter_mm is the diameter of the spool in millimeters when no line is on it.
         full_diameter is the diameter in mm of the bulk of wrapped line when full_length meters of line are wrapped.
         line_capacity_m is the length of line in meters that is attached to this spool.
             if all of it were reeled in, the object at the end would reach the limit switch, if there is one.
+        gear_ratio refers to how many rotations the spool makes for one rotation of the motor shaft.
         """
         self.motor = motor
         self.empty_diameter = empty_diameter
         self.full_diameter = full_diameter
         self.full_length = full_length
+        self.gear_ratio = gear_ratio
         # self.meters_per_rev = spool_diameter_mm * pi * 0.001;
         # last commanded motor speed in revs/sec
         self.speed = 0
@@ -89,7 +91,7 @@ class SpoolController:
         if not success:
             logging.error("Could not read shaft angle from motor")
             return (time.time(), self.lastLength)
-        self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
+        self.lastLength = self.meters_per_rev * self.gear_ratio * (angle - self.zeroAngle) + self.lineAtStart
 
         self.moveAllowed = True
         if self.lastLength < 0 or self.lastLength > self.full_length:

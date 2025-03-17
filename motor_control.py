@@ -53,7 +53,7 @@ class MKSSERVO42C:
         ans = self.port.read(3)
         return len(ans) == 3 and ans[1] == b'\x01'
 
-    def runConstantSpeed(self, speed):
+    def   (self, speed):
         """
         Command the motor to run at a constant speed in revolutions per second
         Return true if the motor replied status ok

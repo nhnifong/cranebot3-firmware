@@ -228,12 +228,14 @@ class RobotComponentServer:
 class RaspiAnchorServer(RobotComponentServer):
     def __init__(self, power_anchor=False):
         super().__init__()
+        ratio = 16/40 # 16 drive gear teeth, 40 spool teeth. the spool makes 0.4 rotations per motor rotation.
         if power_anchor:
-            # the large spool is wound with a 2 core pvc sheathed wire
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=28, full_diameter=64, full_length=9)
+            # A power anchor spool is wound with a 2 core pvc sheathed wire with a thickness of 2.00mm
+            # the 22mm wide spool in theory has room for 11 windings per layer, though it does not wind evenly.
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=54, full_length=9, gear_ratio=ratio)
         else:
-            # the small spools are wound with 50lb test braided fishing line
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=24, full_diameter=25, full_length=9)
+            # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=27, full_length=9, gear_ratio=ratio)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
 

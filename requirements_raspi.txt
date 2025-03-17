@@ -2,7 +2,6 @@ websockets
 zeroconf==0.141.0
 pyserial
 getmac
-opencv-contrib-python==4.11.0.86
-opencv-python==4.11.0.86
 inventorhatmini
 gpiodevice
+adafruit-circuitpython-bno08x

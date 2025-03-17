@@ -3,15 +3,13 @@ import sys
 import cv2
 import threading
 import numpy as np
-from trimesh import Trimesh
-from trimesh.creation import extrude_polygon, triangulate_polygon
-from trimesh.transformations import translation_matrix
-from trimesh.boolean import intersection
-from trimesh.collision import CollisionManager
+import trimesh
+from itertools import combinations
 from shapely.geometry import Polygon
 import math
 import torch
 from scipy.cluster.hierarchy import DisjointSet
+from scipy.spatial import ConvexHull
 
 def rodrigues_matrix(rvec):
     """
@@ -24,12 +22,23 @@ def rodrigues_matrix(rvec):
     rotation_matrix_4x4[:3, :3] = rotation_matrix_3x3
     return rotation_matrix_4x4
 
+def simplify_contour_scipy_convexhull(contour):
+    """Simplifies a contour using scipy.spatial.ConvexHull.
+    Expect about a 10:1 reduction and almost total elimination of boolean op errors"""
+    hull = ConvexHull(contour.squeeze()) #remove extra dimension.
+    simplified_contour = contour[hull.vertices]
+    return simplified_contour
+
 
 class ShapeTracker:
     def __init__(self):
         self.model = FastSAM("FastSAM-s.pt")
-        self.collision_manager = CollisionManager()
-        self.size_thresh = 0.003
+
+        self.size_thresh = 0.05
+        self.confidence_thresh = 0.81
+        self.max_height = 0.2 # height limit in meters of detected objects
+        self.min_views = 2 # minimum number of views an object must be seen from. 2 or 3
+        self.preferred_delay = 0.6 # sec
         self.last_shapes_by_camera = [{}, {}, {}, {}]
         self.camera_transforms = [None, None, None, None]
 
@@ -41,15 +50,17 @@ class ShapeTracker:
         # TODO find out if x and y were normalized independently, or only based on the larger dimension.
         # if it was independent, then restore the original aspect ratio
         # use the camera matrix to undo any spherical distortion
-        self.standard_transform = translation_matrix([0,0,1]) # move up 1 meter
+        self.standard_transform = trimesh.transformations.translation_matrix([0,0,1]) # move up 1 meter
         
 
     def setCameraPoses(self, anchor_num, pose):
         print(f'shape tracker setting pose for camera {anchor_num} to {pose}')
-        self.camera_transforms[anchor_num] = np.dot(translation_matrix(pose[1]), rodrigues_matrix(pose[0]))
+        self.camera_transforms[anchor_num] = np.dot(
+            trimesh.transformations.translation_matrix(pose[1]),
+            rodrigues_matrix(pose[0]))
 
     def processFrame(self, anchor_num, frame):
-        results = self.model(frame, conf=0.75, save=False, imgsz=2048) 
+        results = self.model(frame, conf=self.confidence_thresh, save=False, imgsz=2048,) 
         yratio = frame.shape[0] / frame.shape[1]
         filtered_masks = []
         if results:
@@ -64,8 +75,6 @@ class ShapeTracker:
                         r.masks.xyn[i] += np.array([-0.5, -0.5])
                         r.masks.xyn[i][:,1] *= yratio
                         filtered_masks.append(r.masks.xyn[i])
-                print(f'cam {anchor_num} showing {len(filtered_masks)} objects with an area smaller than {self.size_thresh}')
-
         self.last_shapes_by_camera[anchor_num] = self.make_shapes(anchor_num, filtered_masks)
 
     def make_shapes(self, anchor_num, contours):
@@ -77,8 +86,11 @@ class ShapeTracker:
         height = 6
         fov = 1.15192 # horizontal field of view in radians
         shapes = {}
+        collision_manager = trimesh.collision.CollisionManager()
         for object_id, contour in enumerate(contours):
-            shape = extrude_polygon(Polygon(contour), height=height)
+            # simplified_contour = cv2.approxPolyDP(contour, 2.0, True)
+            simplified_contour = simplify_contour_scipy_convexhull(contour)
+            shape = trimesh.creation.extrude_polygon(Polygon(simplified_contour), height=height)
             top_scale = math.sin(fov)*height
             for i in range(len(shape.vertices)):
                 if shape.vertices[i][2] == 0:
@@ -90,12 +102,84 @@ class ShapeTracker:
                 shape.apply_transform(self.standard_transform)
                 if self.camera_transforms[anchor_num] is not None:
                     shape.apply_transform(self.camera_transforms[anchor_num])
-                shapes[f'{anchor_num}-{object_id}'] = shape
+                key = f'{anchor_num}-{object_id}'
+                shapes[key] = shape
+                collision_manager.add_object(key, shape)
             except AssertionError:
                 print('discarded a shape from a contour because it was not watertight')
+
+        # no overlapping shapes are allowed. they trash the downstream boolean operations
+        aru, names = collision_manager.in_collision_internal(return_names=True)
+        for name_pair in names:
+            # delete one
+            try:
+                del shapes[name_pair[1]]
+                collision_manager.remove_object(name_pair[1])
+            except KeyError:
+                pass
+        # aru = collision_manager.in_collision_internal()
+        # assert(not aru)
+
         return shapes
 
     def merge_shapes(self):
+        """
+        for each camera, concatenate the shapes together. trimesh.util.concatenate([mesh1, mesh2])
+        intersect each of these four shapes with a flat rectangle that rises about 20cm from the floor.
+        you have one flat multipart shape for each camera containing things near the floor.
+        create an intersection for every pair of cameras.
+        an intersection for every triplet of cameras
+        and an intersection for all four cameras.
+        split every resulting intersection object by disconnected parts mesh.graph.connected_components()
+
+        the problem with this algorithm seems to be that there are shapes from the same camera that overlap
+        so when [floorbox, concat] are intersected, you get a non-watertight volume.
+        """
+        floorbox = trimesh.creation.box([10, 10, self.max_height])
+        floorbox.apply_translation([0, 0, self.max_height / 2])
+        floorshapes = []
+        for i,shapes in enumerate(self.last_shapes_by_camera):
+            if len(shapes) > 0:
+                concat  = trimesh.util.concatenate(shapes.values())
+                # concat = trimesh.boolean.union(shapes.values(), engine='manifold')
+                try:
+                    x = trimesh.boolean.intersection([floorbox, concat], engine='manifold')
+                    floorshapes.append(x)
+                except ValueError:
+                    pass
+            # moving the floorbox a tiny bit helps avoid coplanar faces
+            floorbox.apply_translation([0.0001, 0.0001, 0.0001])
+
+        if len(floorshapes) <= 1:
+            return {}
+
+        solids = {} # key: number of cameras seen in, value, list of meshes
+        for set_size in range(self.min_views, len(floorshapes)+1):
+            solids[set_size] = []
+            for indices in combinations(set(range(len(floorshapes))), set_size):
+                try:
+                    flats = trimesh.boolean.intersection([floorshapes[i] for i in indices], engine='manifold')
+                    solids[set_size].extend(trimesh.graph.split(flats))
+                except ValueError as e:
+                    # for i,fs in enumerate(floorshapes):
+                    #     fs.export(f'debug_solids_{i}.stl')
+                    print(f'could not intersect objects from cameras {indices} {e}')
+            # print(f'{len(solids[set_size])} objects are visible from {set_size} cameras')
+        return solids
+
+
+        # intersection is kind of slow, hence the funny method here instead of the elegant way
+        # if len(floorshapes) > 2:
+        #     seen_thrice = [trimesh.boolean.intersection([seen_twice[0], floorshapes[2]], engine='manifold')]
+        #     if len(floorshapes) > 3:
+        #         # we have (0, 1, 2), we also need (0, 1, 3), (0, 2, 3), (1, 2, 3)
+        #         seen_thrice.extend([trimesh.boolean.intersection([seen_twice[sti], floorshapes[fsi]], engine='manifold')
+        #             for sti, fsi in [(0, 3), (1, 3), (3, 3)]])
+        #         seen_force = [trimesh.boolean.intersection([seen_twice[0], seen_twice[-1]], engine='manifold')]
+
+
+
+    def merge_shapes_with_disjoint_se(self):
         """
         We know we can make ids stable between subsequet pictures from a single camera
         Put all the shapes in the trimesh CollisionManager named by their anchor_num-id,
@@ -108,6 +192,20 @@ class ShapeTracker:
         the original shapes those nodes represent. Keep any objects that have volume
         tag these resulting objects with the original ids from any views they were observed in,
         and any text prompts that were used to select them
+
+
+        the problem with this algorithm seems to be that it doesn't take too many collisions for all the shapes to end up in the same disjoint set
+        and when they intersect, there's nothing in common between all of them.
+        you might have the set {'3-14', '0-0', '3-7', '1-7'} for example becase 0-0 shot through two shapes from cam 3 and one shape from cam 1.
+        we are never interested in an intersection between two shapes from the same camera.
+
+        Another problem seems to be that the collision engine doesn't report collisions every time, even if the shapes are never moving.
+        But the collision manager is fast and cheap, so maybe running it more than once will help  
+
+        We are only interested in taking intersections of the outlines of objects if they really are the same object from different angles.
+        The only reliably heuristic we have that indicates they are the same object is the location on the floor.
+        find the point where the ray in the center of the object's bounding box intersects the floor.
+        For all shape pairs, regardless of whether they collide, if their floor points are close, take their intersection.
         """
 
         # trigger the shape merge once per cycle, presumably we receive frames from each camera
@@ -116,19 +214,19 @@ class ShapeTracker:
             mgd.update(shapes)
         # mgd is a dictionary of shapes with ids
         # key structure is f'{anchor_num}-{object_id}'
-        print(mgd.keys())
 
         solids = []
-        ds = DisjointSet()
+        # ds = DisjointSet()
+        collision_manager = trimesh.collision.CollisionManager()
         for name, mesh in mgd.items():
-            self.collision_manager.add_object(name, mesh)
-            ds.add(name)
-        aru, names, data = self.collision_manager.in_collision_internal(return_names=True, return_data=True)
+            collision_manager.add_object(name, mesh)
+            # ds.add(name)
+        aru, names, data = collision_manager.in_collision_internal(return_names=True, return_data=True)
         if aru:
             print(f'examining {len(names)} collision candidates')
             for name_pair, collision in zip(names, data):
                 # disregard collisions that occured more than 1 meter from the floor
-                if collision.point[2] > 1:
+                if abs(collision.point[2]) > 1:
                     print(f'Collision discarded for being too far away from the floor ({collision.point[2]})')
                     continue
                 # disregard collisions of two shapes from the same camera
@@ -136,11 +234,14 @@ class ShapeTracker:
                 if cam_numbers[0] == cam_numbers[1]:
                     print(f'Collision {name_pair} discarded for not involving two unique camera views')
                     continue
+                print(f'collision valid {name_pair}')
+                # solids.append(intersection([mgd[name] for name in name_pair], engine='manifold'))
                 ds.merge(*name_pair)
+            print(f'Disjoint subsets {ds.subsets()}')
             for subset in ds.subsets():
                 if len(subset) > 1:
                     print('Intersecting shape')
-                    final_shape = intersection([mgd[name] for name in subset], engine='manifold')
+                    final_shape = trimesh.boolean.intersection([mgd[name] for name in subset], engine='manifold')
                     # I may have some reason in the future to know the ids
                     # solids.append({
                     #     'mesh': final_shape,

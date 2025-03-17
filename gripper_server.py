@@ -74,7 +74,7 @@ class GripperSpoolMotor():
     def getShaftAngle(self):
         # in revolutions
         # we assume that an encoder has been conected to the motot A port, even if there is no motor
-        return True, self.hat.encoders[0].degrees()/360
+        return True, self.hat.encoders[0].revolutions()
 
     def getMaxSpeed(self):
         return 1.0166

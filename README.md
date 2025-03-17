@@ -31,6 +31,10 @@ After booting any raspberry pi from a fresh image, perform an update
 
 you may have to hit enter a few times during full-upgrade.
 
+When starting with the lite raspi image, you will be missing the following, so install those.
+
+    sudo apt install git python3-dev
+
 ### Anchors
 
 Setup for any raspberry pi that will be part of an anchor
