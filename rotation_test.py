@@ -4,6 +4,10 @@ from math import pi
 import numpy as np
 from scipy.spatial.transform import Rotation
 from cv_common import compose_poses
+from ursina.shaders import (
+    lit_with_shadows_shader,
+    unlit_shader,
+)
 
 def to_ursina_rotation(rvec):
     euler = Rotation.from_rotvec(rvec).as_euler('xyz', degrees=True)
@@ -12,7 +16,8 @@ def to_ursina_rotation(rvec):
 class Ind(Entity):
     def __init__(self, **kwargs):
         super().__init__(
-            model='cube',
+            model='anchor',
+            shader='lit_with_shadows_shader',
             **kwargs
         )
         self.x_thing = Entity(

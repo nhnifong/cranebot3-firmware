@@ -13,6 +13,7 @@ from panda3d.core import LQuaternionf
 from position_estimator import default_weights, weight_names, find_intersection
 from cv_common import average_pose, compose_poses
 import model_constants
+from PIL import Image
 
 from ursina import *
 from ursina.shaders import (
@@ -184,7 +185,7 @@ class Anchor(Entity):
             rotation=rotation,
             model='anchor',
             color=anchor_color,
-            scale=0.01,
+            scale=1,
             shader=lit_with_shadows_shader,
             collider='box'
         )
@@ -205,15 +206,21 @@ class Anchor(Entity):
         # texture = Texture(im_pil)
         # texture = Texture('images/cap_0.jpg')
         self.empty = Entity(
-            scale=100,
-            rotation=(-35,-90,180),
+            scale=1,
+            # rotation=(-35,-90,180),
+            rotation=to_ursina_rotation(compose_poses([
+                model_constants.anchor_camera,
+                (np.array([pi/2,0,0], dtype=float), np.array([0,0,0], dtype=float))
+                ])[0]),
             parent=self)
         self.camview = Entity(
             model='quad',
             scale=(2, 2/1.777777),
             position=(0,0,2),
             texture='cap_38.jpg',
+            shader=unlit_shader,
             parent=self.empty)
+        self.hasSetImage = False
 
     def setStatus(self, status):
         self.label.text = f"Anchor {self.num}\n{status}"
@@ -781,10 +788,15 @@ class ControlPanelUI:
 
     def receive_updates(self, min_to_ui_q):
         while True:
-            # queue.get has to happen in a thread, because it blocks
-            updates = min_to_ui_q.get()
-            # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
-            invoke(self.process_update, updates)
+            try:
+                # queue.get has to happen in a thread, because it blocks
+                updates = min_to_ui_q.get()
+                # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
+                invoke(self.process_update, updates)
+            except OSError:
+                # sometimes when closing the app, this thread gets left hanging because that queue is gone
+                return
+
 
     def process_update(self, updates):
         if 'STOP' in updates:
@@ -827,9 +839,14 @@ class ControlPanelUI:
             self.redraw_walls()
 
         if 'pil_image' in updates:
-            print('received pil image in UI')
             pili = updates['pil_image']
-            self.camview.texture = Texture(pili.convert("RGBA"))
+            anchor = self.anchors[pili['anchor_num']]
+            if anchor.hasSetImage:
+                anchor.camview.texture._texture.setRamImage(pili['image'])
+            else:
+                # we only need to do this the first time, so the allocated texture is the right size
+                anchor.camview.texture = Texture(Image.fromarray(pili['image']))
+                anchor.hasSetImage = True
 
         if 'connection_status' in updates:
             status = updates['connection_status']
