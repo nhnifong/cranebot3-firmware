@@ -9,6 +9,7 @@ class RaspiGripperClient(ComponentClient):
     def __init__(self, address, datastore, to_ui_q, to_pe_q, pool, stat):
         super().__init__(address, datastore, to_ui_q, to_pe_q, pool, stat)
         self.conn_status = {'gripper': True}
+        self.anchor_num = None
 
     def handle_update_from_ws(self, update):
         if 'line_record' in update:
