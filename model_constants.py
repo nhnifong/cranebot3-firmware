@@ -39,10 +39,7 @@ anchor_camera = compose_poses([
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.013,-0.025,-0.043], dtype=float))
 
 # rotation and translation vectors of the 'gantry_front' aruco marker in the gantry reference frame.
-gantry_aruco_front = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
-
-# rotation and translation vectors of the 'gantry_back' aruco marker in the gantry reference frame.
-gantry_aruco_back = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
+gantry_aruco_front = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105], dtype=float))
 
 # position of the gantry keyring point in the gantry reference frame
 gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))

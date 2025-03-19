@@ -200,8 +200,9 @@ class RaspiAnchorClient(ComponentClient):
             ('gripper_back', invert_pose(model_constants.gripper_aruco_back), datastore.gripper_pose),
             ('gripper_left', invert_pose(model_constants.gripper_aruco_left), datastore.gripper_pose),
             ('gripper_right', invert_pose(model_constants.gripper_aruco_right), datastore.gripper_pose),
+
+            # the gantry has 4-way symmetry and all four sides have the same sticker.
             ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pose),
-            ('gantry_back', model_constants.gantry_aruco_back_inv, datastore.gantry_pose),
         ]
     def handle_update_from_ws(self, update):
         if 'line_record' in update and not self.calibration_mode:
