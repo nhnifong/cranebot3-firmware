@@ -96,8 +96,10 @@ class RaspiGripperServer(RobotComponentServer):
         self.tryHold = False
         self.tryHoldChanged = asyncio.Event()
 
+        self.motor = GripperSpoolMotor(self.hat)
+
         # the superclass, RobotComponentServer, assumes the presense of this attribute
-        self.spooler = SpoolController(GripperSpoolMotor(self.hat), empty_diameter=20, full_diameter=36, full_length=1)
+        self.spooler = SpoolController(self.motor, empty_diameter=20, full_diameter=36, full_length=1)
 
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-gripper-service.' + unique
@@ -122,10 +124,6 @@ class RaspiGripperServer(RobotComponentServer):
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
         asyncio.create_task(self.fingerLoop())
-
-    def spoolTrackingLoop(self):
-        # return the spool tracking function
-        return self.spooler.trackingLoop
 
     async def holdPressurePid(self, target_v):
         """
@@ -227,6 +225,14 @@ class RaspiGripperServer(RobotComponentServer):
                 await self.tryHoldChanged.wait()
                 self.tryHoldChanged.clear()
 
+    async def performZeroWinchLine(self):
+        self.spooler.pauseTrackingLoop()
+        while self.hat.gpio_pin_value(LIMIT_SWITCH_PIN) == 0 and self.run_server:
+            self.motor.runConstantSpeed(-1)
+            await asyncio.sleep(0.03)
+        self.spooler.setReferenceLength(0.01) # 1 cm
+        self.spooler.resumeTrackingLoop()
+
 
     def processOtherUpdates(self, update):
         if 'grip' in update:
@@ -236,6 +242,8 @@ class RaspiGripperServer(RobotComponentServer):
             elif update['grip'] == 'closed':
                 self.tryHold = True
                 self.tryHoldChanged.set()
+        if 'zero_winch_line' in update:
+            self.performZeroWinchLine()
 
 
 if __name__ == "__main__":
