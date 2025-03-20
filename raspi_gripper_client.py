@@ -14,6 +14,10 @@ class RaspiGripperClient(ComponentClient):
     def handle_update_from_ws(self, update):
         if 'line_record' in update:
             self.datastore.winch_line_record.insertList(update['line_record'])
+        if 'imu' in update:
+            accel = update['imu']['accel'] # timestamp, x, y, z
+            print(f'Gripper acceleration ({accel[1]}, {accel[2]}, {accel[3]})')
+            self.datastore.imu_accel.insert(np.array(accel, dtype=float))
 
     def handle_detections(self, detections, timestamp):
         """

@@ -43,6 +43,9 @@ weight_names = [
 # the ideal gantry height is heigh enough not to hit you in the head, but otherwise as low as possible to maximize payload capacity
 ideal_gantry_height = 1.75 # meters
 
+# maximum line length speed we can command from the anchor motor
+max_line_speed = 0.6234 # m/s
+
 def find_intersection(positions, lengths):
     """Triangulation by least squares
     returns scipy result object with .succes and .x
@@ -57,6 +60,12 @@ def find_intersection(positions, lengths):
         return errors
 
     return optimize.least_squares(error_function, initial_guess, args=(positions, lengths))
+
+def penalty_beyond(x, bound):
+    if x < bound:
+        return 0
+    else:
+        return (x-bound)**3
 
 # X, Y are horizontal
 # positive Z points at the ceiling.
@@ -161,6 +170,11 @@ class CDPR_position_estimator:
         self.last_intermediate_update = now
         self.time_taken = 1
 
+        # number of steps to use when evaluating certain functions
+        self.steps = 100
+        # model times at which to evaluate the functions, concentrated near the present
+        self.times = np.linspace(-1,1,self.steps)**3 * 0.5 + 0.5
+
     def loadAnchorPoses(self):
         pts = []
         for i in range(self.n_cables):
@@ -207,7 +221,7 @@ class CDPR_position_estimator:
         """
         return np.linalg.norm(self.gantry_pos_spline(times) - self.gripper_pos_spline(times), axis=1, keepdims=True)
 
-    def calc_gripper_accel_from_forces(self, times, gant_positions, grip_positions):
+    def calc_gripper_accel_from_forces(self, gant_positions, grip_positions):
         """
         Calculate the expected acceleration on the gripper's IMU based on the forces it should experience due to
         it being a pendulum hanging from a moving object
@@ -215,13 +229,7 @@ class CDPR_position_estimator:
         two forces act on it
         gravity acts to accelerate the mass down.
         a tension force acts in the direction of the gantry equal to the component of gravity opposite that direction.
-
-        Args:
-            steps: number of discrete points at which to measure forces.
         """
-        # times = np.linspace(0, 1, steps)
-        # gant_positions = self.gantry_pos_spline(times)  # Vectorized spline evaluation
-        # grip_positions = self.gripper_pos_spline(times)  # Vectorized spline evaluation
 
         directions = grip_positions - gant_positions
         magnitudes = np.linalg.norm(directions, axis=1, keepdims=True) #Calculate magnitudes
@@ -230,7 +238,7 @@ class CDPR_position_estimator:
         tensions = np.einsum('i,ij->j', self.gravity, normalized_directions.T) #Vectorized dot product
         tension_accs = -tensions[:, np.newaxis] * normalized_directions
 
-        results = np.concatenate([times[:, np.newaxis], tension_accs + self.gravity], axis=1)
+        results = np.concatenate([self.times[:, np.newaxis], tension_accs + self.gravity], axis=1)
         return results
 
     def mechanical_energy(self, position_spline, mass_kg):
@@ -244,7 +252,7 @@ class CDPR_position_estimator:
             + 9.81 * position_spline(t)[2] # potential energy
         )
 
-    def mechanical_energy_vectorized(self, position_spline, times, position_values, mass_kg, steps=100):
+    def mechanical_energy_vectorized(self, position_spline, position_values, mass_kg, steps=100):
         """
         Return a function that gives the kinetic energy + potential energy of an object at a particular time.
         provide precalculated positions for the spline to optimize
@@ -252,7 +260,7 @@ class CDPR_position_estimator:
         velocity = position_spline.derivative(1)
         # times = np.linspace(0, 1, steps)
         # position_values = position_spline(times)
-        velocity_values = velocity(times)
+        velocity_values = velocity(self.times)
 
         kinetic_energy = 0.5 * mass_kg * np.linalg.norm(velocity_values, axis=1) ** 2
         potential_energy = mass_kg * 9.81 * abs(position_values[:, 2])  # z-coordinate is index 2
@@ -314,6 +322,15 @@ class CDPR_position_estimator:
         time_domain_diff = self.time_domain[1] - self.time_domain[0]
         return times * time_domain_diff + self.time_domain[0]
 
+    def excessive_speed_penalty(self, times):
+
+        # get the speed of the gantry. (1st deriv of position spline)
+        # calculate gantry speed at times
+        # calculate vector pointing to each anchor at times
+        # calculate component of gantry speed in direction of vector at times.
+
+        penalty_beyond(abs(speed), max_line_speed*0.9)*5000
+
     def error_meas(self, pos_model_func, position_measurements, normalize_time=True):
         """
         Return the mean distance between the given position model and all the position measurements in the given array
@@ -349,11 +366,8 @@ class CDPR_position_estimator:
         """
         self.set_splines_from_params(model_parameters)
         
-        steps = 100
-        # precalcuate things
-        times = np.linspace(0, 1, steps)
-        gant_positions = self.gantry_pos_spline(times)  # Vectorized spline evaluation
-        grip_positions = self.gripper_pos_spline(times)  # Vectorized spline evaluation
+        gant_positions = self.gantry_pos_spline(self.times)  # Vectorized spline evaluation
+        grip_positions = self.gripper_pos_spline(self.times)  # Vectorized spline evaluation
 
         errors = np.array([
             # error between gantry position model and observation
@@ -363,17 +377,17 @@ class CDPR_position_estimator:
             # error between gripper rotation model and observation
             0, #self.error_meas(self.gripper_rotation,  self.snapshot['gripper_rotation']),
             # error between gripper acceleration model and observation
-            0, #self.error_meas(self.gantry_accel_func,  self.snapshot['imu_accel']),
+            self.error_meas(self.gripper_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(times, gant_positions, grip_positions), normalize_time=False),
+            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(gant_positions, grip_positions), normalize_time=False),
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
             sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
                 for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            self.mechanical_energy_vectorized(self.gripper_pos_spline, times, grip_positions, self.gripper_mass, steps),
-            self.mechanical_energy_vectorized(self.gantry_pos_spline, times, gant_positions, self.gantry_mass, steps),
+            self.mechanical_energy_vectorized(self.gripper_pos_spline, grip_positions, self.gripper_mass, steps),
+            self.mechanical_energy_vectorized(self.gantry_pos_spline, gant_positions, self.gantry_mass, steps),
             # error between position model and desired future locations
             self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
             # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
@@ -382,7 +396,8 @@ class CDPR_position_estimator:
             self.gantry_height_penalty(gant_positions),
             
             # penalty for exceeding max gripper acceleration since it could shake loose the payload
-            # penalty for unspooling so fast you make a birdsnest
+            # penalty for exceeding maximum spool speed
+            # penalty for exceeding minimum or maximum 
 
         ])
         if p:

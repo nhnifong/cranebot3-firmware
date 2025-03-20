@@ -31,7 +31,6 @@ class SpoolController:
         self.full_diameter = full_diameter
         self.full_length = full_length
         self.gear_ratio = gear_ratio
-        # self.meters_per_rev = spool_diameter_mm * pi * 0.001;
         # last commanded motor speed in revs/sec
         self.speed = 0
         # Meters of line that were spooled out when zeroAngle was set.
@@ -57,7 +56,7 @@ class SpoolController:
         # interpolate between empty and full diamter based on how much line is on the spool
         fraction_wrapped = (self.full_length - currentLenUnspooled) / self.full_length
         current_diameter = (self.full_diameter - self.empty_diameter) * fraction_wrapped + self.empty_diameter
-        return current_diameter * pi * 0.001;
+        return current_diameter * pi * 0.001 * self.gear_ratio
 
     def setReferenceLength(self, length):
         """
@@ -95,7 +94,7 @@ class SpoolController:
         if not success:
             logging.error("Could not read shaft angle from motor")
             return (time.time(), self.lastLength)
-        self.lastLength = self.meters_per_rev * self.gear_ratio * (angle - self.zeroAngle) + self.lineAtStart
+        self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
 
         self.moveAllowed = True
         if self.lastLength < 0 or self.lastLength > self.full_length:
