@@ -7,6 +7,12 @@ from spools import SpoolController
 from getmac import get_mac_address
 import logging
 from collections import deque
+import time
+
+import board
+import busio
+from adafruit_bno08x import BNO_REPORT_ACCELEROMETER
+from adafruit_bno08x.i2c import BNO08X_I2C
 
 # these two constants are obtained experimentally
 # the speed will not increase at settings beyond this value
@@ -91,6 +97,10 @@ class RaspiGripperServer(RobotComponentServer):
         self.hat.gpio_pin_mode(RANGEFINDER_PIN, ADC) # infrared range
         self.hat.gpio_pin_mode(PRESSURE_PIN, ADC) # pressure resistor
 
+        i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
+        self.imu = BNO08X_I2C(i2c)
+        self.imu.enable_feature(BNO_REPORT_ACCELEROMETER)
+
         # when false, open and release the object
         # when true, repeatedly try to grasp the object
         self.tryHold = False
@@ -117,9 +127,9 @@ class RaspiGripperServer(RobotComponentServer):
 
         # 22cm - 1.8v
         # the measurement is not thrown off by the fingers being closed at all
-        voltage = self.hat.gpio_pin_value(RANGEFINDER_PIN)
-        logging.info(f'IR rangefinder voltage {voltage}')
-        self.update['IR range'] = voltage*(-11)+33
+        self.update['IR range'] = self.hat.gpio_pin_value(RANGEFINDER_PIN)*(-11)+33
+        self.update['imu']['accel'] = [time.time(), *self.imu.acceleration]
+
 
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
