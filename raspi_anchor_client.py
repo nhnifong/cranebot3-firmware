@@ -11,7 +11,7 @@ import numpy as np
 import model_constants
 from functools import partial
 import threading
-from reload_conf import Config
+from config import Config
 from PIL import Image
 
 # number of origin detections to average
@@ -51,6 +51,8 @@ class ComponentClient:
         video_uri = f'tcp://{self.address}:{video_port}'
         print(f'Connecting to {video_uri}')
         cap = cv2.VideoCapture(video_uri)
+        # todo implement video connection retry loop
+        print(f'connection successful = {cap.isOpened()}')
         print(cap)
         self.conn_status['video'] = True
         self.notify_video = True

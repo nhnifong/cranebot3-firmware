@@ -63,8 +63,8 @@ class DataStore:
         all measurements
         n_measurements can be different for every array
         
-        gantry_position: shape (n_measurements, 4) T XYZ ROT
-        gripper_position: shape (n_measurements, 4) T XYZ ROT
+        gantry_position: shape (n_measurements, 4) T ROT XYZ
+        gripper_position: shape (n_measurements, 4) T ROT XYZ
         imu_accel: shape (n_measurements, 4) each row TXYZ
         winch_line_record: shape (n_measurements, 2) TL
         anchor_line_record: shape (n_measurements, n_cables+1) TLLL one L for each line

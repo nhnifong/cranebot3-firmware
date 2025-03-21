@@ -48,5 +48,4 @@ gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float)
 
 # precompute some inverts
 gantry_aruco_front_inv = invert_pose(gantry_aruco_front)
-gantry_aruco_back_inv = invert_pose(gantry_aruco_back)
 anchor_cam_inv = invert_pose(anchor_camera)
