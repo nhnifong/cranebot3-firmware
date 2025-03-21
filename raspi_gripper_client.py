@@ -1,5 +1,6 @@
 
 from raspi_anchor_client import ComponentClient
+import numpy as np
 
 # number of origin detections to average
 video_port = 8888

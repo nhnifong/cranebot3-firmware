@@ -12,6 +12,7 @@ import time
 import board
 import busio
 import adafruit_bno08x
+from adafruit_bno08x.i2c import BNO08X_I2C
 
 # these two constants are obtained experimentally
 # the speed will not increase at settings beyond this value
@@ -97,7 +98,7 @@ class RaspiGripperServer(RobotComponentServer):
         self.hat.gpio_pin_mode(PRESSURE_PIN, ADC) # pressure resistor
 
         i2c = busio.I2C(board.SCL, board.SDA)
-        self.imu = adafruit_bno08x.i2c.BNO08X_I2C(i2c)
+        self.imu = BNO08X_I2C(i2c)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_LINEAR_ACCELERATION)
 
@@ -128,8 +129,10 @@ class RaspiGripperServer(RobotComponentServer):
         # 22cm - 1.8v
         # the measurement is not thrown off by the fingers being closed at all
         self.update['IR range'] = self.hat.gpio_pin_value(RANGEFINDER_PIN)*(-11)+33
-        self.update['imu']['accel'] = [time.time(), *self.imu.linear_acceleration]
-        self.update['imu']['quat'] = self.imu.quaternion
+        self.update['imu'] = {
+            'accel': [time.time(), *self.imu.linear_acceleration],
+            'quat': self.imu.quaternion
+        }
 
 
     def startOtherTasks(self):
