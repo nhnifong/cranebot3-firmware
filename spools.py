@@ -48,9 +48,8 @@ class SpoolController:
         self.rec_loop_counter = 0
         self.moveAllowed = True
 
-        # when this event is set, spool tracking can occur. when it is cleared, spool tracking will be paused.
-        self.spoolPause = asyncio.Event()
-        self.spoolPause.set()
+        # when this bool is set, spool tracking will pause.
+        self.spoolPause = False
 
     def calc_meters_per_rev(self, currentLenUnspooled):
         # interpolate between empty and full diamter based on how much line is on the spool
@@ -117,18 +116,21 @@ class SpoolController:
         self.motor.stop()
         self.runSpoolLoop = False
 
-    def pauseTrackingLoop(self)
-        self.spoolPause.clear()
+    def pauseTrackingLoop(self):
+        self.spoolPause = True
 
-    def resumeTrackingLoop(self)
-        self.spoolPause.set()
+    def resumeTrackingLoop(self):
+        self.spoolPause = False
 
     def trackingLoop(self):
         """
         Constantly try to match the position and speed given in an array
+
         """
         while self.runSpoolLoop:
-            await self.spoolPause.wait()  # Pause if event is not set
+            if self.spoolPause:
+                time.sleep(0.2)
+                continue
             try:
                 t, currentLen = self.currentLineLength()
 
