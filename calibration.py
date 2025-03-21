@@ -3,7 +3,7 @@ import cv2.aruco as aruco
 import numpy as np
 from time import time, sleep
 import glob
-from reload_conf import Config
+from config import Config
 
 #the number of squares on the board (width and height)
 board_w = 14

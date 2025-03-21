@@ -4,7 +4,7 @@ import cv2.aruco as aruco
 import numpy as np
 import time
 from functools import lru_cache
-from reload_conf import Config
+from config import Config
 
 config = Config()
 mtx = config.intrinsic_matrix

@@ -20,7 +20,7 @@ from raspi_anchor_client import RaspiAnchorClient
 from raspi_gripper_client import RaspiGripperClient
 from random import random
 from segment import ShapeTracker
-from reload_conf import Config
+from config import Config
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'

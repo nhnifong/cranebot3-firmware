@@ -15,10 +15,10 @@ class FirebeetleAnchorClient:
         # to help with a loop that does the same thing four times in handle_image
         # name, offset, datastore
         self.arucos = [
-            ('gripper_front', model_constants.gripper_aruco_front_inv, datastore.gripper_pose),
-            ('gripper_back', model_constants.gripper_aruco_back_inv, datastore.gripper_pose),
-            ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pose),
-            ('gantry_back', model_constants.gantry_aruco_back_inv, datastore.gantry_pose),
+            ('gripper_front', model_constants.gripper_aruco_front_inv, datastore.gripper_pos),
+            ('gripper_back', model_constants.gripper_aruco_back_inv, datastore.gripper_pos),
+            ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pos),
+            ('gantry_back', model_constants.gantry_aruco_back_inv, datastore.gantry_pos),
         ]
 
     def calibrate_pose(self):
@@ -82,7 +82,8 @@ class FirebeetleAnchorClient:
                                 (detection.rotation, detection.translation), # the pose obtained just now
                                 offset, # constant
                             ]))
-                            dest.insert(np.concatenate([[timestamp], gripper_global_pose.reshape(6)]))
+                            position = gripper_global_pose[1]
+                            dest.insert(np.concatenate([[timestamp], position]))
 
 
     def handle_json(self, headers, buf):

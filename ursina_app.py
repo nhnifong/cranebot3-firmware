@@ -655,7 +655,7 @@ class ControlPanelUI:
             return
         print('Do line calibration')
         # average recent gantry poses.
-        poses = self.datastore.gantry_pose.deepCopy()
+        poses = self.datastore.gantry_pos.deepCopy()
         gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))[:3]
         lengths = [3.79,4.94,2.95,4.08] 
         for i, anchor in enumerate(self.anchors):
@@ -894,6 +894,9 @@ class ControlPanelUI:
 
         if 'prisms' in updates:
             self.prisms.replace(updates["prisms"], update_from_trimesh)
+
+        if 'gripper_quat' in updates:
+            self.gripper.quaternion = LQuaternionf(updates['gripper_quat'])
 
     def start(self):
         self.app.run()
