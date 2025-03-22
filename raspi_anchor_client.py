@@ -45,6 +45,9 @@ class ComponentClient:
         self.stat = stat
         self.shape_tracker = None
 
+        # todo: receive a command in observer that will set this value
+        self.sendPreviewToUi = False
+
     def receive_video(self):
         # don't connect too early or you will be rejected
         time.sleep(7)
@@ -72,9 +75,10 @@ class ComponentClient:
                             return
                         self.shape_tracker.processFrame(self.anchor_num, frame)
                         
-                        # send frame to UI
-                        preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA), None, fx=0.25, fy=0.25), 0)
-                        self.to_ui_q.put({'pil_image': {'anchor_num':self.anchor_num, 'image':preview}})
+                        if self.sendPreviewToUi:
+                            # send frame to UI
+                            preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA), None, fx=0.25, fy=0.25), 0)
+                            self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
 
                 # determine timestamp of frame
                 fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))

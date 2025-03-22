@@ -130,10 +130,11 @@ class CDPR_position_estimator:
         # So it is critical that we only create this once and then update the control points in the cost function.
         self.gripper_pos_spline = BSpline(self.knots, control_points_gripper, self.spline_degree, True)
         self.gantry_pos_spline = BSpline(self.knots, control_points_gantry, self.spline_degree, True)
-        self.gantry_accel_func = self.gripper_pos_spline.derivative(2)
+        self.gantry_accel_func = self.gantry_pos_spline.derivative(2)
+        self.gripper_accel_func = self.gripper_pos_spline.derivative(2)
 
         lpos = 4 # maximum meters from origin than a position spline control point can be
-        self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 7 # two 3d splines and a 1d spline
+        self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 6 # two 3d splines
 
         # 
         spline3d_model_size = self.n_ctrl_pts * 3
@@ -231,7 +232,7 @@ class CDPR_position_estimator:
             + 9.81 * position_spline(t)[2] # potential energy
         )
 
-    def mechanical_energy_vectorized(self, position_spline, position_values, mass_kg, steps=100):
+    def mechanical_energy_vectorized(self, position_spline, position_values, mass_kg):
         """
         Return a function that gives the kinetic energy + potential energy of an object at a particular time.
         provide precalculated positions for the spline to optimize
@@ -245,8 +246,7 @@ class CDPR_position_estimator:
         potential_energy = mass_kg * 9.81 * abs(position_values[:, 2])  # z-coordinate is index 2
 
         total_energy_values = kinetic_energy# + potential_energy
-        time_step = 1.0 / (steps - 1)  # Time step between points
-        total_energy = np.sum(total_energy_values) * time_step
+        total_energy = np.sum(total_energy_values) / len(self.times)
         return total_energy
 
     def spline_jolt(self):
@@ -276,7 +276,8 @@ class CDPR_position_estimator:
         self.gripper_pos_spline.c = params[start : spline3d_model_size].reshape((self.n_ctrl_pts, 3))
         start += spline3d_model_size
         self.gantry_pos_spline.c = params[start : start + spline3d_model_size].reshape((self.n_ctrl_pts, 3))
-        self.gantry_accel_func = self.gripper_pos_spline.derivative(2)
+        self.gantry_accel_func = self.gantry_pos_spline.derivative(2)
+        self.gripper_accel_func = self.gripper_pos_spline.derivative(2)
 
     def model_time(self, times):
         """
@@ -360,8 +361,8 @@ class CDPR_position_estimator:
             sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
                 for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            self.mechanical_energy_vectorized(self.gripper_pos_spline, grip_positions, self.gripper_mass, steps),
-            self.mechanical_energy_vectorized(self.gantry_pos_spline, gant_positions, self.gantry_mass, steps),
+            self.mechanical_energy_vectorized(self.gripper_pos_spline, grip_positions, self.gripper_mass),
+            self.mechanical_energy_vectorized(self.gantry_pos_spline, gant_positions, self.gantry_mass),
             # error between position model and desired future locations
             self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
             # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
@@ -388,8 +389,8 @@ class CDPR_position_estimator:
         Note that the calls to deepCopy will grab the semaphore for each array during its copy, blocking any thread in the observer process that
         may have a measurement to write to it.
         """
-        gantry_pose = self.datastore.gantry_pos.deepCopy()
-        gripper_pose = self.datastore.gripper_pos.deepCopy()
+        gantry_pose = self.datastore.gantry_pose.deepCopy()
+        gripper_pose = self.datastore.gripper_pose.deepCopy()
         self.snapshot = {
             'gantry_position': gantry_pose[:,[0,4,5,6]],
             'gripper_position': gripper_pose[:,[0,4,5,6]],
