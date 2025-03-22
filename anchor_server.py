@@ -121,7 +121,7 @@ class RobotComponentServer:
                 process.kill()
                 break
             except asyncio.CancelledError:
-                logging.info("Killing rpicam-vid because the task has been cancelled")
+                logging.info("Killing rpicam-vid because the client disconnected")
                 process.kill()
                 break
 

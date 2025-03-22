@@ -1,6 +1,9 @@
 
 from raspi_anchor_client import ComponentClient
 import numpy as np
+from scipy.spatial.transform import Rotation
+from cv_common import compose_poses
+import model_constants
 
 # number of origin detections to average
 video_port = 8888
@@ -18,7 +21,13 @@ class RaspiGripperClient(ComponentClient):
         if 'imu' in update:
             accel = update['imu']['accel'] # timestamp, x, y, z
             self.datastore.imu_accel.insert(np.array(accel, dtype=float))
-            self.to_ui_q({'gripper_quat': update['imu']['quat']})
+
+            grip_pose = compose_poses([
+                (Rotation.from_quat(update['imu']['quat']).as_rotvec(), np.array([0,0,0])),
+                model_constants.gripper_imu,
+            ])
+
+            self.to_ui_q.put({'gripper_rvec': grip_pose[0]})
 
     def handle_detections(self, detections, timestamp):
         """

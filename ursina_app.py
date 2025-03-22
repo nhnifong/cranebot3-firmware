@@ -130,6 +130,9 @@ class Gripper(SplineMovingEntity):
             ui=ui,
             spline_func=spline_func,
             collider='box', # for mouse interaction
+            model='gripper_body',
+            scale=0.001,
+            color=(0.9, 0.9, 0.9, 1.0),
             **kwargs
         )
         self.label_offset = (0.00, 0.04)
@@ -138,7 +141,19 @@ class Gripper(SplineMovingEntity):
             text=f"Gripper\nNot Detected",
             scale=0.6,
         )
-        # self.last_ob_render = time.time()
+        self.left_finger = Entity(
+            parent=self,
+            model='gripper_finger',
+            position=(-25,41,-10.5),
+            color=(0.0, 0.2, 0.0, 1.0),
+        )
+        self.right_finger = Entity(
+            parent=self,
+            model='gripper_finger',
+            position=(25,41,-10.5),
+            scale=(-1,1,1),
+            color=(0.0, 0.2, 0.0, 1.0),
+        )
 
 
     def setStatus(self, status):
@@ -174,6 +189,14 @@ class Gripper(SplineMovingEntity):
 
     def reel_manual(self, delta_meters):
         self.wp.enabled = False
+
+    def setAppearanceClosed(self, closed):
+        if closed:
+            self.left_finger.rotation = (0,0,0)
+            self.right_finger.rotation = (0,0,0)
+        else:
+            self.left_finger.rotation = (0,0,60)
+            self.right_finger.rotation = (0,0,-60)
 
 
 anchor_color = (0.8, 0.8, 0.8, 1.0)
@@ -213,13 +236,17 @@ class Anchor(Entity):
                 (np.array([pi/2,0,0], dtype=float), np.array([0,0,0], dtype=float))
                 ])[0]),
             parent=self)
+
         self.camview = Entity(
             model='quad',
             scale=(2, 2/1.777777),
             position=(0,0,2),
             texture='cap_38.jpg',
             shader=unlit_shader,
-            parent=self.empty)
+            parent=self.empty,
+            enabled=False)
+
+        # flag for doing something once
         self.hasSetImage = False
 
     def setStatus(self, status):
@@ -419,11 +446,7 @@ class ControlPanelUI:
         self.gripper = Gripper(
             ui=self,
             spline_func=None,
-            model='gripper_closed',
-            color=(0.3, 0.3, 0.9, 1.0),
-            scale=0.001,
             position=(0,0.3,1),
-            rotation=(-90,0,0),
             shader=lit_with_shadows_shader,
         )
 
@@ -450,7 +473,7 @@ class ControlPanelUI:
         self.walls = [Entity(
             model='quad',
             texture='vertical_gradient',
-            color=(0.0, 1.0, 0.0, 0.2),
+            color=(0.0, 1.0, 0.0, 0.1),
             shader=unlit_shader,
             double_sided=True
             ) for i in range(4)]
@@ -605,6 +628,7 @@ class ControlPanelUI:
         if key == 'space':
             self.grip_closed = not self.grip_closed
             self.to_ob_q.put({'set_grip': self.grip_closed})
+            self.gripper.setAppearanceClosed(self.grip_closed)
 
         if key in key_behavior:
             axis, speed = key_behavior[key]
@@ -838,13 +862,14 @@ class ControlPanelUI:
             self.gantry.redraw_wires()
             self.redraw_walls()
 
-        if 'pil_image' in updates:
-            pili = updates['pil_image']
+        if 'preview_image' in updates:
+            pili = updates['preview_image']
             anchor = self.anchors[pili['anchor_num']]
             if anchor.hasSetImage:
                 anchor.camview.texture._texture.setRamImage(pili['image'])
             else:
                 # we only need to do this the first time, so the allocated texture is the right size
+                # even though this method of updating a texture exists, it's horribly slow.
                 anchor.camview.texture = Texture(Image.fromarray(pili['image']))
                 anchor.hasSetImage = True
 
@@ -895,8 +920,8 @@ class ControlPanelUI:
         if 'prisms' in updates:
             self.prisms.replace(updates["prisms"], update_from_trimesh)
 
-        if 'gripper_quat' in updates:
-            self.gripper.quaternion = LQuaternionf(updates['gripper_quat'])
+        if 'gripper_rvec' in updates:
+            self.gripper.rotation = to_ursina_rotation(updates['gripper_rvec'])
 
     def start(self):
         self.app.run()
