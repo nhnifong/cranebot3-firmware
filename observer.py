@@ -241,7 +241,9 @@ class AsyncObserver:
             self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
 
             asyncio.create_task(self.stat.stat_main())
-            asyncio.create_task(self.run_shape_tracker())
+            # asyncio.create_task(self.run_shape_tracker())
+            asyncio.create_task(self.add_simulated_data())
+            
 
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
