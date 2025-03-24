@@ -560,7 +560,7 @@ class ControlPanelUI:
             text=weight_names[i],
             dynamic=True,
             scale=0.5,
-            position=(0.62, -0.15 - slider_row_h*i),
+            position=(0.62, -0.05 - slider_row_h*i),
             max=10,
             value=default_weights[i],
             on_value_changed=partial(self.change_weight, i),

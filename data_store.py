@@ -23,7 +23,9 @@ class CircularBuffer:
     def __init__(self, shape):
         self.shape = shape
         self.arr = RawArray('d', int(np.prod(shape)))
-        self.idx = 0
+        # start pointed at the last item in the array. When we write the first, it will be written to 0
+        # at any time, self.idx would then point to the last item to be written.
+        self.idx = shape[0]-1
         self.sem = Semaphore(1)
 
     def asNpa(self):

@@ -23,6 +23,7 @@ default_weights = np.array([
     0.45, # spline jolt
     1.0, # ideal gantry height
     1.0, # spool_speed_limit
+    1.0, # gripper peak accel
 ])
 
 weight_names = [
@@ -38,6 +39,7 @@ weight_names = [
     'spline_jolt',
     'ideal_gantry_height',
     'spool_speed_limit',
+    'gripper_peak_accel',
 ]
 
 # the ideal gantry height is heigh enough not to hit you in the head, but otherwise as low as possible to maximize payload capacity
@@ -219,31 +221,16 @@ class CDPR_position_estimator:
         results = np.concatenate([self.times[:, np.newaxis], tension_accs + self.gravity], axis=1)
         return results
 
-    def mechanical_energy(self, position_spline, mass_kg):
+    def kinetic_energy_vectorized(self, velocity_values, mass_kg):
         """
-        return a function that gives the kinetic energy + potential energy of an object at a particular time between 0 and 1
-        The function returns a scalar in Joules
+        Return a function that gives the kinetic energy of an object at an array of times.
+        provide precalculated velocities to avoid calculating them again
         """
-        velocity = position_spline.derivative(1)
-        return lambda t: mass_kg * (
-            0.5 * np.linalg.norm(velocity(t)) ** 2 # kinetic energy
-            + 9.81 * position_spline(t)[2] # potential energy
-        )
-
-    def mechanical_energy_vectorized(self, position_values, velocity_values, mass_kg):
-        """
-        Return a function that gives the kinetic energy + potential energy of an object at a particular time.
-        provide precalculated positions for the spline to optimize
-        """
-        kinetic_energy = 0.5 * mass_kg * np.linalg.norm(velocity_values, axis=1) ** 2
-        potential_energy = mass_kg * 9.81 * abs(position_values[:, 2])  # z-coordinate is index 2
-
-        total_energy_values = kinetic_energy# + potential_energy
-        total_energy = np.sum(total_energy_values) / len(self.times)
-        return total_energy
+        return np.mean(0.5 * mass_kg * np.linalg.norm(velocity_values, axis=1) ** 2)
 
     def spline_jolt(self):
-        """Measure the amount of distance expected in the jolt from the last spline to the current one."""
+        """Measure the amount of distance that the gantry would move if the last spline were
+        updated with the current one at self.jolt_time."""
         return np.linalg.norm(self.gantry_jolt_pos - self.gantry_pos_spline(self.model_time(self.jolt_time)))
 
     def gantry_height_penalty(self, gantry_position_values):
@@ -313,10 +300,12 @@ class CDPR_position_estimator:
         direction_units = np.transpose(direction_units, (0, 2, 1))
         magnitudes = np.einsum('ij,ijk->ik', velocities, direction_units)
         speeds = np.abs(magnitudes).flatten()
-        print(f'Speeds {speeds}')
         # apply a nonlinear function that rises sharply above the speed limit
-        penalties = np.where(speeds < bound, 0, 50 * (speeds - bound)**2)
+        penalties = np.where(speeds < max_line_speed, 0, 50 * (speeds - max_line_speed)**2)
         return np.sum(penalties)
+
+    def peak_acceleration(self, accel_spline, times):
+        return np.max(np.linalg.norm(accel_spline(times), axis=1))
 
     def error_meas(self, pos_model_func, position_measurements, normalize_time=True):
         """
@@ -359,6 +348,8 @@ class CDPR_position_estimator:
         gantry_vel = self.gantry_velocity(self.times)
         gripper_vel = self.gripper_velocity(self.times)
 
+        mid = int(self.steps/2)
+
         errors = np.array([
             # error between gantry position model and observation
             self.error_meas(self.gantry_pos_spline, self.snapshot['gantry_position']),
@@ -373,21 +364,23 @@ class CDPR_position_estimator:
             # error between model and recorded anchor line lengths
             sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
                 for anchor_num in range(self.n_cables)]) / self.n_cables,
-            # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            self.mechanical_energy_vectorized(grip_positions, gripper_vel, self.gripper_mass),
-            self.mechanical_energy_vectorized(gantry_positions, gantry_vel, self.gantry_mass),
+            # integral of the kinetic energy of the moving parts from now till the end in Joule*seconds
+            self.kinetic_energy_vectorized(gripper_vel, self.gripper_mass),
+            self.kinetic_energy_vectorized(gantry_vel, self.gantry_mass),
             # error between position model and desired future locations
             self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
             # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
             self.spline_jolt(),
-            # minimize squared distance from ideal gantry height
+            # minimize squared distance from ideal gantry height.
             self.gantry_height_penalty(gantry_positions),
             # penalty for exceeding maximum spool speed. Evaluate only future positions
-            self.excessive_speed_penalty(gantry_positions[self.steps/2:], gantry_vel[self.steps/2:]),
-            
-            # penalty for exceeding max gripper acceleration since it could shake loose the payload
-            # penalty for exceeding minimum or maximum line length
+            self.excessive_speed_penalty(gantry_positions[mid:], gantry_vel[mid:]),
+            # minimize acceleration of gripper
+            self.peak_acceleration(self.gripper_accel_func, self.times),
 
+
+            # penalty for exceeding minimum or maximum line length
+            # penalty for gripper diving under the floor.
         ])
         if p:
             print(errors)
@@ -466,7 +459,7 @@ class CDPR_position_estimator:
         self.set_splines_from_params(result.x)
 
         # print errors
-        # self.cost_function(result.x, p=True)
+        self.cost_function(result.x, p=True)
 
         # Where will the gantry be at the point when the next minimization step finishes?
         self.jolt_time = time() + self.time_taken
