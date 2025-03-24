@@ -26,6 +26,7 @@ marker_names = [
     'charuco_origin_4',
     'gripper_left',
     'gripper_right',
+    'gantry_front_new',
 ]
 
 # some markers are different sizes
@@ -33,6 +34,7 @@ special_sizes = {
     'origin': 0.188,
     'gripper_left': 0.082,
     'gripper_right': 0.082,
+    'gantry_front_new': 0.0909,
 }
 
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
@@ -179,7 +181,7 @@ def compose_poses(poses):
 
 def generateMarkerImages(border=False):
     if border:
-        border_px = 40
+        border_px = 44
     else:
         border_px = 0
     marker_side_px = 500
@@ -193,19 +195,18 @@ def generateMarkerImages(border=False):
             continue
 
 
-        # white frame with black corner squares
+        # white frame with light grey cutout line
         total_size = marker_side_px + 2 * border_px
         framed_image = np.ones((total_size, total_size), dtype=np.uint8) * 255
 
         # Place the marker image in the center
         framed_image[border_px:border_px + marker_side_px, border_px:border_px + marker_side_px] = marker_image
 
-        # Draw black squares in the corners
-
-        framed_image[:border_px, :border_px] = 0
-        framed_image[-border_px:, -border_px:] = 0
-        framed_image[:border_px, -border_px:] = 0
-        framed_image[-border_px:, :border_px] = 0
+        # Draw thin grey line around the outside
+        framed_image[0,:] = 128
+        framed_image[-1,:] = 128
+        framed_image[:,0] = 128
+        framed_image[:,-1] = 128
 
         cv2.imwrite(os.path.join('boards',name+'.png'), framed_image)
 
@@ -231,5 +232,5 @@ def generate_origin_charuco():
     cv2.imwrite('boards/charuco_origin.png', img)
 
 if __name__ == "__main__":
-    generateMarkerImages()
-    generate_origin_charuco()
+    generateMarkerImages(True)
+    # generate_origin_charuco()
