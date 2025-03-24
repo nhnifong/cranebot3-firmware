@@ -22,6 +22,7 @@ default_weights = np.array([
     5.0, # desired gripper location
     0.45, # spline jolt
     1.0, # ideal gantry height
+    1.0, # spool_speed_limit
 ])
 
 weight_names = [
@@ -35,7 +36,8 @@ weight_names = [
     'gantry energy',
     'goal locations',
     'spline_jolt',
-    'ideal_gantry_height'
+    'ideal_gantry_height',
+    'spool_speed_limit',
 ]
 
 # the ideal gantry height is heigh enough not to hit you in the head, but otherwise as low as possible to maximize payload capacity
@@ -58,12 +60,6 @@ def find_intersection(positions, lengths):
         return errors
 
     return optimize.least_squares(error_function, initial_guess, args=(positions, lengths))
-
-def penalty_beyond(x, bound):
-    if x < bound:
-        return 0
-    else:
-        return (x-bound)**3
 
 # X, Y are horizontal
 # positive Z points at the ceiling.
@@ -130,6 +126,8 @@ class CDPR_position_estimator:
         # So it is critical that we only create this once and then update the control points in the cost function.
         self.gripper_pos_spline = BSpline(self.knots, control_points_gripper, self.spline_degree, True)
         self.gantry_pos_spline = BSpline(self.knots, control_points_gantry, self.spline_degree, True)
+        self.gantry_velocity = self.gantry_pos_spline.derivative(1)
+        self.gripper_velocity = self.gripper_pos_spline.derivative(1)
         self.gantry_accel_func = self.gantry_pos_spline.derivative(2)
         self.gripper_accel_func = self.gripper_pos_spline.derivative(2)
 
@@ -232,16 +230,11 @@ class CDPR_position_estimator:
             + 9.81 * position_spline(t)[2] # potential energy
         )
 
-    def mechanical_energy_vectorized(self, position_spline, position_values, mass_kg):
+    def mechanical_energy_vectorized(self, position_values, velocity_values, mass_kg):
         """
         Return a function that gives the kinetic energy + potential energy of an object at a particular time.
         provide precalculated positions for the spline to optimize
         """
-        velocity = position_spline.derivative(1)
-        # times = np.linspace(0, 1, steps)
-        # position_values = position_spline(times)
-        velocity_values = velocity(self.times)
-
         kinetic_energy = 0.5 * mass_kg * np.linalg.norm(velocity_values, axis=1) ** 2
         potential_energy = mass_kg * 9.81 * abs(position_values[:, 2])  # z-coordinate is index 2
 
@@ -276,6 +269,8 @@ class CDPR_position_estimator:
         self.gripper_pos_spline.c = params[start : spline3d_model_size].reshape((self.n_ctrl_pts, 3))
         start += spline3d_model_size
         self.gantry_pos_spline.c = params[start : start + spline3d_model_size].reshape((self.n_ctrl_pts, 3))
+        self.gantry_velocity = self.gantry_pos_spline.derivative(1)
+        self.gripper_velocity = self.gripper_pos_spline.derivative(1)
         self.gantry_accel_func = self.gantry_pos_spline.derivative(2)
         self.gripper_accel_func = self.gripper_pos_spline.derivative(2)
 
@@ -299,14 +294,29 @@ class CDPR_position_estimator:
         time_domain_diff = self.time_domain[1] - self.time_domain[0]
         return times * time_domain_diff + self.time_domain[0]
 
-    def excessive_speed_penalty(self, times):
+    def excessive_speed_penalty(self, positions, velocities):
+        """ Return a scalar representing the total penalty for exceeding the speed limit on any anchor line
 
-        # get the speed of the gantry. (1st deriv of position spline)
-        # calculate gantry speed at times
-        # calculate vector pointing to each anchor at times
-        # calculate component of gantry speed in direction of vector at times.
+        positions is a pre-evaluated vector of the gantry position at self.times.
+        velocities is a pre-evaluated vector of the gantry velocities at self.times.
+        """
 
-        penalty_beyond(abs(speed), max_line_speed*0.9)*5000
+        # Calculate direction vectors: (100, 4, 3)
+        directions = self.anchor_points[np.newaxis, :, :] - positions[:, np.newaxis, :]
+        # Calculate direction norms: (100, 4)
+        direction_norms = np.linalg.norm(directions, axis=2)
+        # Handle zero norms to prevent division by zero
+        direction_norms[direction_norms == 0] = 1e-8  # Replace zeros with a small value
+        # Normalize direction vectors: (100, 4, 3)
+        direction_units = directions / direction_norms[:, :, np.newaxis]
+        # Calculate dot products (velocity projection): (100, 4)
+        direction_units = np.transpose(direction_units, (0, 2, 1))
+        magnitudes = np.einsum('ij,ijk->ik', velocities, direction_units)
+        speeds = np.abs(magnitudes).flatten()
+        print(f'Speeds {speeds}')
+        # apply a nonlinear function that rises sharply above the speed limit
+        penalties = np.where(speeds < bound, 0, 50 * (speeds - bound)**2)
+        return np.sum(penalties)
 
     def error_meas(self, pos_model_func, position_measurements, normalize_time=True):
         """
@@ -343,8 +353,11 @@ class CDPR_position_estimator:
         """
         self.set_splines_from_params(model_parameters)
         
-        gant_positions = self.gantry_pos_spline(self.times)  # Vectorized spline evaluation
+        gantry_positions = self.gantry_pos_spline(self.times)  # Vectorized spline evaluation
         grip_positions = self.gripper_pos_spline(self.times)  # Vectorized spline evaluation
+
+        gantry_vel = self.gantry_velocity(self.times)
+        gripper_vel = self.gripper_velocity(self.times)
 
         errors = np.array([
             # error between gantry position model and observation
@@ -354,25 +367,26 @@ class CDPR_position_estimator:
             # error between gripper acceleration model and observation
             self.error_meas(self.gripper_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(gant_positions, grip_positions), normalize_time=False),
+            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(gantry_positions, grip_positions), normalize_time=False),
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
             sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
                 for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the mechanical energy of the moving parts from now till the end in Joule*seconds
-            self.mechanical_energy_vectorized(self.gripper_pos_spline, grip_positions, self.gripper_mass),
-            self.mechanical_energy_vectorized(self.gantry_pos_spline, gant_positions, self.gantry_mass),
+            self.mechanical_energy_vectorized(grip_positions, gripper_vel, self.gripper_mass),
+            self.mechanical_energy_vectorized(gantry_positions, gantry_vel, self.gantry_mass),
             # error between position model and desired future locations
             self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
             # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
             self.spline_jolt(),
             # minimize squared distance from ideal gantry height
-            self.gantry_height_penalty(gant_positions),
+            self.gantry_height_penalty(gantry_positions),
+            # penalty for exceeding maximum spool speed. Evaluate only future positions
+            self.excessive_speed_penalty(gantry_positions[self.steps/2:], gantry_vel[self.steps/2:]),
             
             # penalty for exceeding max gripper acceleration since it could shake loose the payload
-            # penalty for exceeding maximum spool speed
-            # penalty for exceeding minimum or maximum 
+            # penalty for exceeding minimum or maximum line length
 
         ])
         if p:

@@ -401,6 +401,7 @@ class ControlPanelUI:
         self.grip_closed = True
         self.direction = np.array([0,0,0], dtype=float)
         self.could_be_moving = False
+        self.run_periodic_actions = True
 
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
         # maybe you shouldn't read those files in the clients
@@ -722,7 +723,7 @@ class ControlPanelUI:
         """
         # Display a visual indication of aruco based gripper observations
         time.sleep(2)
-        while True:
+        while self.run_periodic_actions:
             gantry_pose = self.datastore.gantry_pose.deepCopy()
             for row in gantry_pose:
                 invoke(self.render_gripper_ob, row, color.white)
@@ -942,6 +943,7 @@ def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q, register_input):
 
     def stop_other_processes():
         print("UI window closed. stopping other processes")
+        cpui.run_periodic_actions = False
         to_ui_q.put({'STOP':None}) # stop our own listening thread too
         to_pe_q.put({'STOP':None})
         to_ob_q.put({'STOP':None})
