@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.optimize as optimize
 from scipy.interpolate import BSpline
-import scipy.integrate as integrate
+from scipy.special import softmax
 from time import time
 from data_store import DataStore
 from cv_common import compose_poses
@@ -10,6 +10,7 @@ import asyncio
 import signal
 import sys
 from math import pi
+# import cProfile
 
 default_weights = np.array([
     8.0, # gantry position from charuco
@@ -137,8 +138,8 @@ class CDPR_position_estimator:
         self.gantry_pos_spline = BSpline(self.knots, control_points_gantry, self.spline_degree, True)
         self.gantry_velocity = self.gantry_pos_spline.derivative(1)
         self.gripper_velocity = self.gripper_pos_spline.derivative(1)
-        self.gantry_accel_func = self.gantry_pos_spline.derivative(2)
-        self.gripper_accel_func = self.gripper_pos_spline.derivative(2)
+        self.gantry_accel_func = self.gantry_velocity.derivative(1)
+        self.gripper_accel_func = self.gripper_velocity.derivative(1)
 
         lpos = 4 # maximum meters from origin than a position spline control point can be
         self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 6 # two 3d splines
@@ -329,7 +330,7 @@ class CDPR_position_estimator:
     def peak_acceleration(self, accel_spline, times):
         return np.max(np.linalg.norm(accel_spline(times), axis=1)) * 0.01
 
-    def error_meas(self, pos_model_func, position_measurements, normalize_time=True):
+    def error_meas(self, pos_model_func, position_measurements, normalize_time=False):
         """
         Return the mean distance between the given position model and all the position measurements in the given array
         this works both for the position splines and the line length functions.
@@ -355,7 +356,7 @@ class CDPR_position_estimator:
         distances = np.linalg.norm(position_measurements[:, 1:] - expected, axis=1)
         return np.mean(distances)
 
-    def cost_function(self, model_parameters, p=False):
+    def cost_function(self, model_parameters, p=False, store=False):
         """
         Return the total error between a model and measurements as a scalar
 
@@ -380,7 +381,7 @@ class CDPR_position_estimator:
             # error between gripper acceleration model and observation
             self.error_meas(self.gripper_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
-            self.error_meas(self.gantry_accel_func, self.calc_gripper_accel_from_forces(gantry_positions, grip_positions), normalize_time=False),
+            self.error_meas(self.gripper_accel_func, self.calc_gripper_accel_from_forces(gantry_positions, grip_positions)),
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
             # error between model and recorded anchor line lengths
@@ -408,8 +409,11 @@ class CDPR_position_estimator:
             # penalty for exceeding minimum or maximum line length
             # penalty for gripper diving under the floor.
         ])
+
         if p:
             print(errors)
+        if store:
+            self.errors = errors
 
         s = np.sum(errors * self.weights)+0.01
         return s
@@ -431,7 +435,15 @@ class CDPR_position_estimator:
             'winch_line_record': self.datastore.winch_line_record.deepCopy(),
             'anchor_line_record': [a.deepCopy() for a in self.datastore.anchor_line_record]
         }
-        # todo normalize all times here rather than in cost_function
+        # convert unix times on all measurements to model times.
+        # time domain will be fixed for the duration of this estimate
+        time_domain_diff = self.time_domain[1] - self.time_domain[0]
+        for key, arr in self.snapshot.items():
+            if key=='anchor_line_record':
+                for anchor_array in arr:
+                    anchor_array[:,0] = self.model_time(anchor_array[:,0])
+            else:
+                arr[:,0] = self.model_time(arr[:,0])
 
     def estimate(self):
         """
@@ -486,7 +498,7 @@ class CDPR_position_estimator:
         self.set_splines_from_params(result.x)
 
         # print errors
-        self.cost_function(result.x, p=True)
+        self.cost_function(result.x, store=True)
 
         # Where will the gantry be at the point when the next minimization step finishes?
         self.jolt_time = time() + self.time_taken
@@ -510,7 +522,11 @@ class CDPR_position_estimator:
             'time_domain': self.time_domain,
             'gripper_path': self.gripper_pos_spline.c,
             'gantry_path': self.gantry_pos_spline.c,
-            'minimization_step_seconds': self.time_taken,
+            'minimizer_stats': {
+                'errors': softmax(self.errors),
+                'data_ts': np.max(self.snapshot['gantry_position'][:,0]), # timestamp of last observed gantry position
+                'time_taken': self.time_taken,
+            },
             'goal_points': self.des_grip_locations, # each goal is a time and a position
         }
         self.to_ui_q.put(update_for_ui)
@@ -647,6 +663,7 @@ class CDPR_position_estimator:
         while self.run:
             try:
                 self.estimate()
+                # cProfile.runctx('self.estimate()', globals(), locals())
                 # some sleep is necessary or we will not receive updates
                 rem = (0.25 - self.time_taken)
                 await asyncio.sleep(max(0.02, rem))

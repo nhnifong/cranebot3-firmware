@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.interpolate import BSpline
 import sys
-import threading
+from direct.stdpy import threading # panda3d drop in replacement that is compatible with it's event loop
 import time
 from position_estimator import CDPR_position_estimator
 from scipy.spatial.transform import Rotation
@@ -39,6 +39,7 @@ mode_descriptions = {
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
 video_framerate_format_str = 'Avg framerate {val:.2f} fps'
+spline_age_format_str = 'Spline age {val:.2f} s'
 
 ds = 0.1 # direct movement speed in meters per second
 key_behavior = {
@@ -386,6 +387,34 @@ class EntityPool:
             self.entities[-1].enabled = True
             self.next = (self.next + 1) % self.max_items
 
+class ThinSliderLog2(ThinSlider):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # feedback for the errors of the last minimizer step
+        self.errorbar = Entity(
+            parent=self.bg,
+            model=Quad(
+                radius=0.01,
+                segments=3),
+            origin_x=-0.5,
+            scale=(0.5, 0.035),
+            color=color.red,
+            z=0.2,
+        )
+
+        self._update_text()
+
+    def setErrorBar(self, value):
+        """value expected in range of 0 to 1"""
+        self.errorbar.scale = (value/2, 0.035)
+
+    def finalValue(self):
+        return 2**(self.value-5)
+
+    def _update_text(self):
+        self.knob.text_entity.text = str(round(self.finalValue(), 3))
+
 def update_go_quad(row, color, e):
     e.position = (row[4],row[6],row[5])
     e.color = color
@@ -542,6 +571,14 @@ class ControlPanelUI:
             enabled=True,
         )
 
+        self.spline_age_text = Text(
+            color=(0.9,0.9,0.9,1.0),
+            position=(-0.45,self.modePanelLine3y),
+            text=spline_age_format_str.format(val=0),
+            scale=0.5,
+            enabled=True,
+        )
+
         # make a little video monitor icon for each camera status.
         x = -0.869
         y = -0.483
@@ -556,7 +593,7 @@ class ControlPanelUI:
 
         # position estimator controls
         slider_row_h = 0.025
-        self.sliders = [ThinSlider(
+        self.sliders = [ThinSliderLog2(
             text=weight_names[i],
             dynamic=True,
             scale=0.5,
@@ -594,10 +631,15 @@ class ControlPanelUI:
                 DropdownMenuButton(mode_names['pose'], on_click=partial(self.set_mode, 'pose')),
                 )),
             DropdownMenuButton('Calibrate Line Lengths', on_click=self.calibrate_lines),
+            DropdownMenuButton('Show/Hide weight sliders', on_click=self.toggle_weight_sliders),
             ))
 
         Sky(color=color.light_gray)
         EditorCamera()
+
+    def toggle_weight_sliders(self):
+        for s in self.sliders:
+            s.enabled = not s.enabled
 
     def redraw_walls(self):
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
@@ -638,7 +680,7 @@ class ControlPanelUI:
                 self.direct_move()
 
     def change_weight(self, index):
-        self.to_pe_q.put({'weight_change': (index, self.sliders[index].value)})
+        self.to_pe_q.put({'weight_change': (index, self.sliders[index].finalValue())})
 
     def show_error(self, error):
         self.error.text = error
@@ -833,9 +875,12 @@ class ControlPanelUI:
         if 'spline_degree' in updates:
             self.spline_degree = updates['spline_degree']
 
-        if 'minimization_step_seconds' in updates:
-            # print(f"minimization_step_seconds = {updates['minimization_step_seconds']}")
-            pass
+        if 'minimizer_stats' in updates:
+            if self.sliders[0].enabled:
+                for i, errval in enumerate(updates['minimizer_stats']['errors']):
+                    self.sliders[i].setErrorBar(errval)
+            spline_age = time.time() - updates['minimizer_stats']['data_ts']
+            self.spline_age_text.text = spline_age_format_str.format(val=spline_age)
 
         if 'time_domain' in updates:
             # the time domain in unix seconds over which the gripper and gantry splines are defined.
