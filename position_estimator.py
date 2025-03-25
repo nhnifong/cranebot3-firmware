@@ -9,6 +9,7 @@ from functools import partial
 import asyncio
 import signal
 import sys
+from math import pi
 
 default_weights = np.array([
     8.0, # gantry position from charuco
@@ -23,7 +24,9 @@ default_weights = np.array([
     0.45, # spline jolt
     1.0, # ideal gantry height
     1.0, # spool_speed_limit
-    1.0, # gripper peak accel
+    1.0, # winch_speed_limit
+    0.1, # gripper peak accel
+    0.1, # gantry peak accel
 ])
 
 weight_names = [
@@ -39,7 +42,9 @@ weight_names = [
     'spline_jolt',
     'ideal_gantry_height',
     'spool_speed_limit',
+    'winch_speed_limit',
     'gripper_peak_accel',
+    'gantry_peak_accel',
 ]
 
 # the ideal gantry height is heigh enough not to hit you in the head, but otherwise as low as possible to maximize payload capacity
@@ -47,6 +52,8 @@ ideal_gantry_height = 1.75 # meters
 
 # maximum line length speed we can command from the anchor motor
 max_line_speed = 0.6234 # m/s
+# maximum line speed we can command from the winch motor
+max_winch_speed = (61/60)*(0.02*pi) # m/s
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -143,7 +150,7 @@ class CDPR_position_estimator:
             self.bounds[start+2] = (1,4) # keep z position of gantry within 1 to 4 meters
             start += 3
 
-        self.weights = default_weights
+        self.weights = 2** (default_weights-5)
 
         now = time()
         self.horizon_s = self.datastore.horizon_s
@@ -301,11 +308,26 @@ class CDPR_position_estimator:
         magnitudes = np.einsum('ij,ijk->ik', velocities, direction_units)
         speeds = np.abs(magnitudes).flatten()
         # apply a nonlinear function that rises sharply above the speed limit
-        penalties = np.where(speeds < max_line_speed, 0, 50 * (speeds - max_line_speed)**2)
+        penalties = np.where(speeds < max_line_speed, 0, 5000 * (speeds - max_line_speed)**2)
+        return np.sum(penalties)
+
+    def winch_speed_penalty(self, gripper_positions, gantry_positions, gripper_velocities, gantry_velocities):
+        # Calculate the relative position vector
+        relative_position = gantry_positions - gripper_positions
+        # Calculate the relative velocity vector
+        relative_velocity = gantry_velocities - gripper_velocities
+        # Calculate the normalized relative position vector.
+        relative_position_norm = np.linalg.norm(relative_position, axis=1, keepdims=True)
+        relative_position_unit = np.where(relative_position_norm > 0, relative_position / relative_position_norm, 0)
+        # Calculate the relative closing speed.
+        closing_speed = np.sum(relative_velocity * relative_position_unit, axis=1)
+        speeds = np.abs(closing_speed)
+        # apply a nonlinear function that rises sharply above the speed limit
+        penalties = np.where(speeds < max_winch_speed, 0, 5000 * (speeds - max_winch_speed)**2)
         return np.sum(penalties)
 
     def peak_acceleration(self, accel_spline, times):
-        return np.max(np.linalg.norm(accel_spline(times), axis=1))
+        return np.max(np.linalg.norm(accel_spline(times), axis=1)) * 0.01
 
     def error_meas(self, pos_model_func, position_measurements, normalize_time=True):
         """
@@ -375,8 +397,12 @@ class CDPR_position_estimator:
             self.gantry_height_penalty(gantry_positions),
             # penalty for exceeding maximum spool speed. Evaluate only future positions
             self.excessive_speed_penalty(gantry_positions[mid:], gantry_vel[mid:]),
+            # pentalty for excessive winch speed
+            self.winch_speed_penalty(grip_positions[mid:], gantry_positions[mid:], gripper_vel[mid:], gantry_vel[mid:]),
             # minimize acceleration of gripper
             self.peak_acceleration(self.gripper_accel_func, self.times),
+            # minimize acceleration of gantry
+            self.peak_acceleration(self.gantry_accel_func, self.times),
 
 
             # penalty for exceeding minimum or maximum line length
@@ -405,6 +431,7 @@ class CDPR_position_estimator:
             'winch_line_record': self.datastore.winch_line_record.deepCopy(),
             'anchor_line_record': [a.deepCopy() for a in self.datastore.anchor_line_record]
         }
+        # todo normalize all times here rather than in cost_function
 
     def estimate(self):
         """
@@ -608,7 +635,7 @@ class CDPR_position_estimator:
                     break
                 if 'weight_change' in update:
                     idx, val = update['weight_change']
-                    self.weights[idx] = val
+                    self.weights[idx] = 2**(val-5)
             except Exception as e:
                 self.run = False
                 raise e
