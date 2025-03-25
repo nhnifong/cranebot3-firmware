@@ -266,8 +266,9 @@ class CDPR_position_estimator:
         self.gantry_pos_spline.c = params[start : start + spline3d_model_size].reshape((self.n_ctrl_pts, 3))
         self.gantry_velocity = self.gantry_pos_spline.derivative(1)
         self.gripper_velocity = self.gripper_pos_spline.derivative(1)
-        self.gantry_accel_func = self.gantry_pos_spline.derivative(2)
-        self.gripper_accel_func = self.gripper_pos_spline.derivative(2)
+        # this is faster than running derivative(2) on pos spline
+        self.gantry_accel_func = self.gantry_velocity.derivative(1)
+        self.gripper_accel_func = self.gripper_velocity.derivative(1)
 
     def model_time(self, times):
         """
