@@ -309,10 +309,10 @@ class AsyncObserver:
             dp[6] = 1 + random()*0.2
             self.datastore.gripper_pose.insert(dp)
             # anchor lines always perfectly agree with gripper position
-            # for i, simanc in enumerate(sim_anchors):
-            #     dist = np.linalg.norm(simanc - dp[4:])
-            #     self.datastore.anchor_line_record[i].insert(np.array([t, dist]))
-            await asyncio.sleep(0.8)
+            for i, simanc in enumerate(sim_anchors):
+                dist = np.linalg.norm(simanc - dp[4:])
+                self.datastore.anchor_line_record[i].insert(np.array([t, dist]))
+            await asyncio.sleep(0.15)
 
     async def reset_reference_lengths(self):
         """Tell the anchors how much actual line they have spooled out, from an external reference

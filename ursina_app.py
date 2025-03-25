@@ -726,14 +726,14 @@ class ControlPanelUI:
         while self.run_periodic_actions:
             gantry_pose = self.datastore.gantry_pose.deepCopy()
             for row in gantry_pose:
-                invoke(self.render_gripper_ob, row, color.white)
+                invoke(self.render_gripper_ob, row, color.white, delay=0.0001)
             gripper_pose = self.datastore.gripper_pose.deepCopy()
             for row in gripper_pose:
-                invoke(self.render_gripper_ob, row, color.light_gray)
+                invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
 
             # send a direct move command in pause mode
             # if self.calibration_mode == 'pause':
-            #     invoke(self.direct_move)
+            #     invoke(self.direct_move, delay=0.0001)
             
             time.sleep(1)
 
@@ -753,7 +753,7 @@ class ControlPanelUI:
             lengths.append(alr.getLast()[-1])
             anchor_positions.append(swap_yz(self.anchors[i].position))
         if sum(lengths) == 0:
-            invoke(self.show_error, "Must be connected and perform line calibration before using direct movement")
+            invoke(self.show_error, "Must be connected and perform line calibration before using direct movement", delay=0.0001)
             return anchor_positions, False, None
         anchor_positions = np.array(anchor_positions)
         lengths = np.array(lengths)
@@ -775,13 +775,13 @@ class ControlPanelUI:
                 self.to_ob_q.put({'slow_stop_all': None})
                 # set a flag so we don't do this constantly, even though it would be harmless.
                 self.could_be_moving = False
-                invoke(self.update_direct_move_indicator, None)
+                invoke(self.update_direct_move_indicator, None, delay=0.0001)
             return
         anchor_positions, start, success = self.get_simplified_position()
         if not success:
             print('could not obtain position from line lengths')
             return
-        invoke(self.update_direct_move_indicator, start)
+        invoke(self.update_direct_move_indicator, start, delay=0.0001)
         # calculate a few time intervals in the near future
         times = np.linspace(0, move_duration, 6, dtype=np.float64).reshape(-1, 1)
         # where we want the gantry to be at the time intervals
@@ -817,7 +817,7 @@ class ControlPanelUI:
                 # queue.get has to happen in a thread, because it blocks
                 updates = min_to_ui_q.get()
                 # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
-                invoke(self.process_update, updates)
+                invoke(self.process_update, updates, delay=0.0001)
             except OSError:
                 # sometimes when closing the app, this thread gets left hanging because that queue is gone
                 return
