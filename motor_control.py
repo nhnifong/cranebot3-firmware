@@ -10,6 +10,7 @@ from time import sleep
 PING = b'\x3a'
 STOP = b'\xf7'
 READ_ANGLE = b'\x36'
+READ_ANGLE_ERROR = b'\x39'
 
 DEFAULT_MICROSTEPS = 16
 # number of angle ticks returned from READ_ANGLE command per revolution
@@ -85,10 +86,24 @@ class MKSSERVO42C:
         """
         self._sendSingleByteCommand(READ_ANGLE)
         ans = self.port.read(6) # address byte, 32 bit integer, checksum byte
-        if len(ans) != 6: # todo, it doesn't hit this , it throws SerialException
+        if len(ans) != 6:
             return False, 0
         motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=True)
         return True, float(motor_angle) / ANGLE_RESOLUTION
+
+    def getShaftError(self):
+        """
+        Get the shaft error (difference between observed shaft and the motor's internal pid loop set point)
+        This can be used as a rough indication of the tension on the line.
+
+        Returns the shaft error in degrees.
+        """
+        self._sendSingleByteCommand(READ_ANGLE_ERROR)
+        ans = self.port.read(4) # address byte, 16 bit uint, checksum byte
+        if len(ans) != 4:
+            return False, 0
+        angle_error = int.from_bytes(ans[1:3], byteorder='big', signed=False)
+        return True, float(angle_error) / (ANGLE_RESOLUTION/360)
 
     def _sendSingleByteCommand(self, b):
         """

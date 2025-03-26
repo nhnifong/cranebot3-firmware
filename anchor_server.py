@@ -40,12 +40,16 @@ stream_command = """
   --autofocus-mode continuous""".split()
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 
+RUNNING_WS_DELAY = 0.3
+CALIBRATING_WS_DELAY = 0.05
+
 class RobotComponentServer:
     def __init__(self):
         self.run_server = True
         self.ws_client_connected = False
         # a dict of update to be flushed periodically to the websocket
         self.update = {}
+        self.ws_delay = RUNNING_WS_DELAY
 
     async def stream_measurements(self, ws):
         """
@@ -71,7 +75,7 @@ class RobotComponentServer:
                     await ws.send(json.dumps(update))
 
                 # chill
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(self.ws_delay)
             except (ConnectionClosedOK, ConnectionClosedError):
                 logging.info("stopped streaming measurements")
                 break
@@ -150,7 +154,7 @@ class RobotComponentServer:
                     self.spooler.setReferenceLength(float(update['reference_length']))
 
                 # defer to specific server subclass
-                self.processOtherUpdates(update)
+                await self.processOtherUpdates(update)
 
             except ConnectionClosedOK:
                 logging.info("Client disconnected")
@@ -240,12 +244,37 @@ class RaspiAnchorServer(RobotComponentServer):
             self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=27, full_length=9, gear_ratio=ratio)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
+        self.eq_tension_stop_event = asyncio.Event()
 
-    def processOtherUpdates(self, updates):
-        pass
+    def sendData(self, update):
+        # add key value pairs to the dict that gets periodically sent on the websocket
+        # added for use by equalizeSpoolTension where the spooler needed to communicate with the controller directly.
+        self.update.update(update)
+
+    async def processOtherUpdates(self, updates):
+
+        # the observer is expected to start tension based calibration by sending {'equalize_tension': {'action': 'start'}}
+        # then periodically send higher thresholds, then send either complete or abort.
+        if 'equalize_tension' in updates:
+            action = updates['equalize_tension']['action']
+            if action == 'start':
+                self.ws_delay = CALIBRATING_WS_DELAY
+                self.eq_tension_stop_event.clear()
+                asyncio.create_task(self.spooler.equalizeSpoolTension(self.eq_tension_stop_event, self.sendData))
+            elif action == 'complete':
+                # set the event, without setting abort_equalize_tension to indicate approval and commit the line length change
+                self.eq_tension_stop_event.set()
+                self.ws_delay = RUNNING_WS_DELAY
+            elif action == 'abort':
+                self.spooler.abort_equalize_tension = True
+                self.eq_tension_stop_event.set()
+                self.ws_delay = RUNNING_WS_DELAY
+            elif action == 'threshold':
+                self.spooler.live_err_tight_thresh = updates['equalize_tension']['th']
 
     def readOtherSensors(self):
-        pass
+        _, angle_err = self.motor.getShaftError()
+        self.update['angle_error'] = angle_err
 
     def startOtherTasks(self):
         pass

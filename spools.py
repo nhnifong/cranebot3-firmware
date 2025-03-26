@@ -3,6 +3,7 @@ import asyncio
 import time
 import serial
 import logging
+import asyncio
 
 
 DATA_LEN = 1000
@@ -12,6 +13,13 @@ MAX_ACCEL = 0.4
 LOOP_DELAY_S = 0.03
 # record line length every 10th iteration
 REC_MOD = 10
+
+# Constants used in tension equalization process
+ERR_SLACK_THRESH = 2.0 # below this, line is assumed to be slack
+ERR_TIGHT_THRESH = 6.0 # ABOVE this, line is assumed to be slack.
+MOTOR_SPEED_DURING_CALIBRATION = 0.5 # revolutions per second
+MAX_LINE_CHANGE_DURING_CALIBRATION = 0.5 # meters
+
 
 def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
@@ -47,6 +55,10 @@ class SpoolController:
         self.runSpoolLoop = True
         self.rec_loop_counter = 0
         self.moveAllowed = True
+        self.abort_equalize_tension = False
+
+        # the high threshold used in tension calibration may be updated during the process.
+        self.live_err_tight_thresh = ERR_TIGHT_THRESH
 
         # when this bool is set, spool tracking will pause.
         self.spoolPause = False
@@ -193,3 +205,53 @@ class SpoolController:
                 print('Lost serial contact with motor')
                 break
 
+    async def equalizeSpoolTension(self, controllerApprovalEvent, sendUpdatesFunc):
+        """Without tracking any particular length, reel the spool until the line tension is within a predefined range
+
+        Pause spool tracking loop
+        Measure the starting shaft angle
+        measure shaft angle error. Very low errors indicate slackness, higher errors indicate tightness.
+        While (angle error is not in the middle of it's range) and (calibration not aborted) and (line change is less than safe threshold):
+            run the motor at a constant very low speed (positive for tight lines, negative for slack lines)
+            Measure the shaft angle and compute the change in the amount of outspooled line since start
+        report the value to the controller and remain paused.
+        When the controller approves,
+        Change the reference length by that amount.
+        Unpause the tracking loop.
+
+        While the loop is running, the controller (observer process) may increase the high shaft error threshold,
+        so that only the tightest two lines are reeling in.
+        """
+        self.pauseTrackingLoop()
+        self.motor.runConstantSpeed(0)
+        logging.info("Equalizing spool tension")
+        self.abort_equalize_tension = False
+        _, angle = self.motor.getShaftAngle()
+        startLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
+        lineDelta = 0
+        _, angleError = self.motor.getShaftError()
+        while not (ERR_SLACK_THRESH < angleError < self.live_err_tight_thresh) and not self.abort_equalize_tension and abs(lineDelta < MAX_LINE_CHANGE_DURING_CALIBRATION):
+            if angleError < ERR_SLACK_THRESH:
+                self.motor.runConstantSpeed(-MOTOR_SPEED_DURING_CALIBRATION)
+            elif angleError > self.live_err_tight_thresh:
+                self.motor.runConstantSpeed(MOTOR_SPEED_DURING_CALIBRATION)
+            await asyncio.sleep(0.1)
+            _, angle = self.motor.getShaftAngle()
+            _, angleError = self.motor.getShaftError()
+            curLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
+            lineDelta = curLength - startLength
+            sendUpdatesFunc({
+                'angle_error': angleError,
+                # 'line_delta': lineDelta,
+            })
+        # inform controller that we hit a trigger and stopped.
+        sendUpdatesFunc({
+            'reached_normal_tension': None,
+        })
+        self.motor.runConstantSpeed(0)
+        await asyncio.wait_for(controllerApprovalEvent.wait(), timeout=30)
+        # the caller will have set this flag while we were waiting to indicate approval.
+        if not self.abort_equalize_tension:
+            # alter reference length but not zero angle.
+            self.lineAtStart += lineDelta
+        self.resumeTrackingLoop()
