@@ -60,9 +60,13 @@ def find_intersection(positions, lengths):
     """Triangulation by least squares
     returns scipy result object with .succes and .x
     """
+    # this code may benefit from some noise
+    noise = np.random.normal(0, 1e-6, positions.shape)
+    positions = positions + noise
     # Initial guess for the intersection point (e.g., the mean of the positions)
     initial_guess = np.mean(positions, axis=0)
     initial_guess[2] -= 1
+    print(f'initial_guess {initial_guessd}')
 
     def error_function(intersection, positions, lengths):
         distances = np.linalg.norm(positions - intersection, axis=1)
@@ -660,6 +664,7 @@ class CDPR_position_estimator:
     async def main(self):
         asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         await asyncio.sleep(5)
+        return
         print('Starting position estimator')
         while self.run:
             try:
