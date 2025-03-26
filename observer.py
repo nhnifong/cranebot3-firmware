@@ -118,6 +118,8 @@ class AsyncObserver:
                 lengths = updates['do_line_calibration']
                 for client in self.anchors:
                     asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': lengths[client.anchor_num]}), loop)
+            if 'equalize_line_tension' in updates:
+                asyncio.run_coroutine_threadsafe(self.equalize_tension, loop)
             if 'jog_spool' in updates:
                 for client in self.anchors:
                     if client.anchor_num == updates['jog_spool']['anchor']:
@@ -241,6 +243,7 @@ class AsyncObserver:
             self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
 
             asyncio.create_task(self.stat.stat_main())
+            asyncio.create_task(self.monitor_tension())
             # asyncio.create_task(self.run_shape_tracker())
             # asyncio.create_task(self.add_simulated_data())
             
@@ -314,15 +317,51 @@ class AsyncObserver:
                 self.datastore.anchor_line_record[i].insert(np.array([t, dist]))
             await asyncio.sleep(0.15)
 
-    async def reset_reference_lengths(self):
-        """Tell the anchors how much actual line they have spooled out, from an external reference
-        This is like zeroing the axis, but we don't have to zero them, we can use the camera
+    async def run_tension_based_line_calibration(self):
         """
-        # stop all the motors for a while,
-        # average the gripper positions from the datastore
-        # calculate the distance to each anchor
-        for client in self.bot_clients.values():
-            client.send_commands({'reference_length', calculated_distance_to_gantry})
+        Tension based line calibration process is as follows
+
+        Set the reference length on the lines the original way (aruco observation of gantry)
+            do while disparity in line tension is large,
+                Move to a new position, maybe 20cm away.
+                Measure disparity in line tension
+                Equalize the tension on the lines, as estimated by the motor shaft error.
+                Change reference length by whatever amount of line was spooled or unspooled.
+        """
+        pass
+
+    async def equalize_tension(self):
+        """Inner loop of run_tension_based_line_calibration"""
+        for client in self.anchors:
+            asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'start'}}))
+        # wait for some feedback in the form of new angle error messages from all anchors
+
+        while True:
+            # collect all the angle errors.
+            levels = [a.last_angle_error for a in self.anchors]
+            print(f'levels = {levels}')
+            levels.sort()
+            # pick a threshold such that only the tightest two lines would unspool.
+            # if you raise the threshold high enough all anchors stop moving.
+            # alternatively, pick a threshold such that all lines which are not slack will unspool as long as
+            # there are still slack lines reeling in.
+            # our ending condition is not necessarily to see the same tension on every line.
+            # since the gantry being close to an anchor means that anchor bears more of the weight.
+            # our ending condition is that there are no slack lines, and we are only unspooling tight lines in an attempt to
+            # have no net change in height. I guess one way to do this is to ahve any length taken up by slack lines distributed equally
+            # into all non slack lines.
+
+            # th = 2.0
+            # for client in self.anchors:
+            #     asyncio.create_task(client.send_commands({'equalize_tension': {'threshold': th}}))
+            await asyncio.sleep(0.1)
+
+    async def monitor_tension(self):
+        while self.send_position_update:
+            levels = [a.last_angle_error for a in self.anchors]
+            print(f'levels = {levels}')
+            await asyncio.sleep(0.1)
+
 
 def start_observation(datastore, to_ui_q, to_pe_q, to_ob_q):
     """

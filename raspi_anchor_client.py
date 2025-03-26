@@ -209,6 +209,8 @@ class RaspiAnchorClient(ComponentClient):
         self.anchor_pose = config.anchors[anchor_num].pose
         self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
         self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
+        # angle error received during tension based calibration
+        self.last_angle_error = 0;
 
         # to help with a loop that does the same thing four times in handle_detections
         # name, offset, datastore
@@ -222,8 +224,12 @@ class RaspiAnchorClient(ComponentClient):
             ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pose),
         ]
     def handle_update_from_ws(self, update):
-        if 'line_record' in update and not self.calibration_mode:
+        if 'line_record' in update and not self.calibration_mode: # specifically referring to pose calibration
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
+
+        # the following updates are sent at a high rate directly from spools.py during tension based calibration
+        if 'angle_error' in update:
+            self.last_angle_error = update['angle_error']
 
     def handle_detections(self, detections, timestamp):
         """

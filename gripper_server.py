@@ -248,7 +248,7 @@ class RaspiGripperServer(RobotComponentServer):
         self.spooler.resumeTrackingLoop()
 
 
-    def processOtherUpdates(self, update):
+    async def processOtherUpdates(self, update):
         if 'grip' in update:
             logging.info(f'setting grip {update["grip"]}')
             if update['grip'] == 'open':
@@ -257,7 +257,7 @@ class RaspiGripperServer(RobotComponentServer):
                 self.tryHold = True
                 self.tryHoldChanged.set()
         if 'zero_winch_line' in update:
-            self.performZeroWinchLine()
+            asyncio.create_task(self.performZeroWinchLine())
 
 
 if __name__ == "__main__":
