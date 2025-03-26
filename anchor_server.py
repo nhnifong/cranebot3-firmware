@@ -226,13 +226,15 @@ class RobotComponentServer:
         logging.info(f"Registered service: {name} ({service_type}) on port {port}")
 
 class RaspiAnchorServer(RobotComponentServer):
-    def __init__(self, power_anchor=False):
+    def __init__(self, power_anchor=False, flat=False):
         super().__init__()
         ratio = 16/40 # 16 drive gear teeth, 40 spool teeth. the spool makes 0.4 rotations per motor rotation.
         if power_anchor:
             # A power anchor spool is wound with a 2 core pvc sheathed wire with a thickness of 2.00mm
             # the 22mm wide spool in theory has room for 11 windings per layer, though it does not wind evenly.
             self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=54, full_length=9, gear_ratio=ratio)
+        elif flat:
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=23.7, full_diameter=25, full_length=9, gear_ratio=1)
         else:
             # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
             self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=27, full_length=9, gear_ratio=ratio)
@@ -258,6 +260,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--power", action="store_true",
                         help="Configures this anchor as the one which has the power line")
+    parser.add_argument("--flat", action="store_true",
+                        help="Configures this anchor as one of the old direct drive type")
     args = parser.parse_args()
 
     ras = RaspiAnchorServer(args.power)
