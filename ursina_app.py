@@ -722,7 +722,7 @@ class ControlPanelUI:
             return
         print('Do line calibration')
         # average recent gantry poses.
-        poses = self.datastore.gantry_pos.deepCopy()
+        poses = self.datastore.gantry_pose.deepCopy()
         gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))[:3]
         lengths = [3.79,4.94,2.95,4.08] 
         for i, anchor in enumerate(self.anchors):
@@ -774,8 +774,8 @@ class ControlPanelUI:
                 invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
 
             # send a direct move command in pause mode
-            # if self.calibration_mode == 'pause':
-            #     invoke(self.direct_move, delay=0.0001)
+            if self.calibration_mode == 'pause':
+                invoke(self.direct_move, delay=0.0001)
             
             time.sleep(1)
 
@@ -880,7 +880,7 @@ class ControlPanelUI:
                 for i, errval in enumerate(updates['minimizer_stats']['errors']):
                     self.sliders[i].setErrorBar(errval)
             spline_age = time.time() - updates['minimizer_stats']['data_ts']
-            self.spline_age_text.text = spline_age_format_str.format(val=spline_age)
+            self.spline_age_text.text = spline_age_format_str.format(val=time.time()-spline_age)
 
         if 'time_domain' in updates:
             # the time domain in unix seconds over which the gripper and gantry splines are defined.
