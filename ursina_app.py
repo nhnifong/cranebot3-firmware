@@ -525,7 +525,7 @@ class ControlPanelUI:
                 updates = min_to_ui_q.get()
                 # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
                 invoke(self.process_update, updates, delay=0.0001)
-            except OSError:
+            except (OSError, EOFError):
                 # sometimes when closing the app, this thread gets left hanging because that queue is gone
                 return
 
