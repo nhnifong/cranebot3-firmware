@@ -102,7 +102,7 @@ class MKSSERVO42C:
         ans = self.port.read(4) # address byte, 16 bit uint, checksum byte
         if len(ans) != 4:
             return False, 0
-        angle_error = int.from_bytes(ans[1:3], byteorder='big', signed=False)
+        angle_error = int.from_bytes(ans[1:3], byteorder='big', signed=True)
         return True, float(angle_error) / (ANGLE_RESOLUTION/360)
 
     def _sendSingleByteCommand(self, b):

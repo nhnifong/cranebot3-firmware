@@ -58,7 +58,6 @@ class RobotComponentServer:
         """
         logging.info('start streaming measurements')
         while ws:
-            logging.info('go around')
             try:
                 update = self.update
                 self.update = {'frames': []}
@@ -276,8 +275,7 @@ class RaspiAnchorServer(RobotComponentServer):
                 self.spooler.live_err_tight_thresh = updates['equalize_tension']['th']
 
     def readOtherSensors(self):
-        _, angle_err = self.motor.getShaftError()
-        print(f'read angle error {angle_err}')
+        _, angle_err = self.spooler.motor.getShaftError()
         self.update['angle_error'] = angle_err
 
     def startOtherTasks(self):
@@ -286,7 +284,7 @@ class RaspiAnchorServer(RobotComponentServer):
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
