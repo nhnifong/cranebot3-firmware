@@ -8,3 +8,4 @@ camera_coef.npz
 */*.blend1
 images/cal
 *.pt
+cranebot.log
