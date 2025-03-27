@@ -357,7 +357,7 @@ class AsyncObserver:
             await asyncio.sleep(0.1)
 
     async def monitor_tension(self):
-        while self.send_position_update:
+        while self.send_position_updates:
             levels = [a.last_angle_error for a in self.anchors]
             print(f'levels = {levels}')
             await asyncio.sleep(0.1)

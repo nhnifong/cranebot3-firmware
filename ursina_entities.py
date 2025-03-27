@@ -3,6 +3,18 @@ from ursina.shaders import (
     lit_with_shadows_shader,
     unlit_shader,
 )
+import numpy as np
+from cv_common import invert_pose, compose_poses
+import model_constants
+from scipy.spatial.transform import Rotation
+
+# Transforms a rodrigues rotation vector into an ursina euler rotation tuple in degrees
+def to_ursina_rotation(rvec):
+    euler = Rotation.from_rotvec(rvec).as_euler('xyz', degrees=True)
+    return (-euler[0], -euler[2], euler[1])
+
+def draw_line(point_a, point_b):
+    return Mesh(vertices=[point_a, point_b], mode='line')
 
 class SplineMovingEntity(Entity):
     """
