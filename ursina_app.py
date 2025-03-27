@@ -295,12 +295,16 @@ class ControlPanelUI:
                 DropdownMenuButton(mode_names['pause'], on_click=partial(self.set_mode, 'pause')),
                 DropdownMenuButton(mode_names['pose'], on_click=partial(self.set_mode, 'pose')),
                 )),
-            DropdownMenuButton('Calibrate Line Lengths', on_click=self.calibrate_lines),
+            DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
+            DropdownMenuButton('Equalize line tension', on_click=self.equalize_lines),
             DropdownMenuButton('Show/Hide weight sliders', on_click=self.toggle_weight_sliders),
             ))
 
         Sky(color=color.light_gray)
         EditorCamera()
+
+    def equalize_lines(self):
+        self.to_ob_q.put({'equalize_line_tension': None})
 
     def toggle_weight_sliders(self):
         for s in self.sliders:
