@@ -4,7 +4,6 @@ import sys
 from direct.stdpy import threading # panda3d drop in replacement that is compatible with it's event loop
 import time
 from position_estimator import CDPR_position_estimator
-from scipy.spatial.transform import Rotation
 from functools import partial
 from cv_common import invert_pose, compose_poses
 from math import pi
@@ -66,19 +65,6 @@ def input(key):
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
     return (vec[0], vec[2], vec[1])
-
-# Transforms a rodrigues rotation vector into an ursina euler rotation tuple in degrees
-def to_ursina_rotation(rvec):
-    euler = Rotation.from_rotvec(rvec).as_euler('xyz', degrees=True)
-    return (-euler[0], -euler[2], euler[1])
-
-def draw_line(point_a, point_b):
-    return Mesh(vertices=[point_a, point_b], mode='line')
-    # return Pipe(
-    #     path=[point_a, point_b],
-    #     thicknesses=(0.01, 0.01),
-    #     cap_ends=False,
-    # )
 
 def update_from_trimesh(tm, entity):
     entity.model = Mesh(vertices=tm.vertices[:, [0, 2, 1]].tolist(), triangles=tm.faces.tolist())
@@ -582,7 +568,6 @@ class ControlPanelUI:
             anchor_num = apose[0]
             self.anchors[anchor_num].pose = apose[1]
             self.anchors[anchor_num].position = swap_yz(apose[1][1])
-            # self.anchors[anchor_num].quaternion = LQuaternionf(*list(Rotation.from_rotvec(np.array(fix_rot(apose[1][0]))).as_quat()))
             self.anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
             self.gantry.redraw_wires()
             self.redraw_walls()

@@ -73,7 +73,7 @@ class ComponentClient:
                         lastSam = time.time()
                         if not self.connected:
                             return
-                        self.shape_tracker.processFrame(self.anchor_num, frame)
+                        # self.shape_tracker.processFrame(self.anchor_num, frame)
                         
                         if self.sendPreviewToUi:
                             # send frame to UI

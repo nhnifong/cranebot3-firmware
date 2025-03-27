@@ -56,7 +56,9 @@ class RobotComponentServer:
         stream line length measurements to the provided websocket connection
         as long as it exists
         """
+        logging.info('start streaming measurements')
         while ws:
+            logging.info('go around')
             try:
                 update = self.update
                 self.update = {'frames': []}
@@ -79,6 +81,7 @@ class RobotComponentServer:
             except (ConnectionClosedOK, ConnectionClosedError):
                 logging.info("stopped streaming measurements")
                 break
+        logging.info('stop streaming measurements because websocket is {ws}')
 
     async def stream_mjpeg(self):
         while self.ws_client_connected:
@@ -274,6 +277,7 @@ class RaspiAnchorServer(RobotComponentServer):
 
     def readOtherSensors(self):
         _, angle_err = self.motor.getShaftError()
+        print(f'read angle error {angle_err}')
         self.update['angle_error'] = angle_err
 
     def startOtherTasks(self):
@@ -282,7 +286,7 @@ class RaspiAnchorServer(RobotComponentServer):
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
