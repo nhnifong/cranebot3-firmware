@@ -15,10 +15,11 @@ LOOP_DELAY_S = 0.03
 REC_MOD = 10
 
 # Constants used in tension equalization process
-ERR_SLACK_THRESH = 2.0 # below this, line is assumed to be slack
-ERR_TIGHT_THRESH = 6.0 # ABOVE this, line is assumed to be slack.
+TENSION_SLACK_THRESH = 10 # below this, line is assumed to be slack
+TENSION_TIGHT_THRESH = 50 # above this, line is assumed to be too tight.
 MOTOR_SPEED_DURING_CALIBRATION = 0.5 # revolutions per second
 MAX_LINE_CHANGE_DURING_CALIBRATION = 0.5 # meters
+MKS42C_TORQUE_FACTOR = 100.0 # TODO measure this. units are newton meters per degreee of error
 
 
 def constrain(value, minimum, maximum):
@@ -56,6 +57,7 @@ class SpoolController:
         self.rec_loop_counter = 0
         self.moveAllowed = True
         self.abort_equalize_tension = False
+        self.live_tension_tight_thresh = TENSION_TIGHT_THRESH
 
         # the high threshold used in tension calibration may be updated during the process.
         self.live_err_tight_thresh = ERR_TIGHT_THRESH
@@ -64,6 +66,7 @@ class SpoolController:
         self.spoolPause = False
 
     def calc_meters_per_rev(self, currentLenUnspooled):
+        """meters of line change per motor revolution"""
         # interpolate between empty and full diamter based on how much line is on the spool
         fraction_wrapped = (self.full_length - currentLenUnspooled) / self.full_length
         current_diameter = (self.full_diameter - self.empty_diameter) * fraction_wrapped + self.empty_diameter
@@ -120,6 +123,16 @@ class SpoolController:
             self.rec_loop_counter = 0
         self.rec_loop_counter += 1
         return row
+
+    def currentTension(self):
+        """return the line tension in newtons.
+        Only possible for the MKSServo42C
+        """
+        _, angleError = self.motor.getShaftError()
+        # the angle error is proportional to the torque
+        torque = MKS42C_TORQUE_FACTOR * angleError
+        return torque / self.meters_per_rev
+
 
     def fastStop(self):
         # fast stop is permanent.
@@ -223,30 +236,32 @@ class SpoolController:
         so that only the tightest two lines are reeling in.
         """
         self.pauseTrackingLoop()
+        # make sure the tracking loop is definitely not running. it's on another thread. 
+        await asyncio.sleep(LOOP_DELAY_S * )
         self.motor.runConstantSpeed(0)
         logging.info("Equalizing spool tension")
         self.abort_equalize_tension = False
         _, angle = self.motor.getShaftAngle()
         startLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
         lineDelta = 0
-        _, angleError = self.motor.getShaftError()
-        while not (ERR_SLACK_THRESH < angleError < self.live_err_tight_thresh) and not self.abort_equalize_tension and abs(lineDelta < MAX_LINE_CHANGE_DURING_CALIBRATION):
+        tension = self.currentTension()
+        while not (TENSION_SLACK_THRESH < tension < self.live_tension_tight_thresh) and not self.abort_equalize_tension and abs(lineDelta < MAX_LINE_CHANGE_DURING_CALIBRATION):
             if angleError < ERR_SLACK_THRESH:
                 self.motor.runConstantSpeed(-MOTOR_SPEED_DURING_CALIBRATION)
             elif angleError > self.live_err_tight_thresh:
                 self.motor.runConstantSpeed(MOTOR_SPEED_DURING_CALIBRATION)
             await asyncio.sleep(0.1)
             _, angle = self.motor.getShaftAngle()
-            _, angleError = self.motor.getShaftError()
+            tension = self.currentTension()
             curLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
             lineDelta = curLength - startLength
             sendUpdatesFunc({
-                'angle_error': angleError,
+                'tension': tension,
                 # 'line_delta': lineDelta,
             })
         # inform controller that we hit a trigger and stopped.
         sendUpdatesFunc({
-            'reached_normal_tension': None,
+            'tension_seek_stopped': None,
         })
         self.motor.runConstantSpeed(0)
         await asyncio.wait_for(controllerApprovalEvent.wait(), timeout=30)

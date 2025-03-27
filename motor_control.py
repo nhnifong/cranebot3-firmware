@@ -6,6 +6,7 @@
 
 import serial # note this is pyserial not the module named serial in pip
 from time import sleep
+import threading
 
 PING = b'\x3a'
 STOP = b'\xf7'
@@ -36,23 +37,26 @@ class MKSSERVO42C:
         # self.port = MockSerial()
         self.port.timeout = 1
         self.port.write_timeout = 1
+        self.lock = threading.Lock() 
 
     def ping(self):
         """
         Return true if the motor is awake and enabled
         """
-        self._sendSingleByteCommand(PING)
-        ans = self.port.read(3)
-        return len(ans) == 3 and ans[1] == 1
+        with self.lock:
+            self._sendSingleByteCommand(PING)
+            ans = self.port.read(3)
+            return len(ans) == 3 and ans[1] == 1
 
     def stop(self):
         """
         Command the motor to stop immediately.
         Return true if the motor replied status ok
         """
-        self._sendSingleByteCommand(STOP)
-        ans = self.port.read(3)
-        return len(ans) == 3 and ans[1] == b'\x01'
+        with self.lock:
+            self._sendSingleByteCommand(STOP)
+            ans = self.port.read(3)
+            return len(ans) == 3 and ans[1] == b'\x01'
 
     def runConstantSpeed(self, speed):
         """
@@ -73,9 +77,10 @@ class MKSSERVO42C:
 
         message = b'\xe0\xf6' + combined
         message += self._calculateChecksum(message)
-        self.port.write(message)
-        ans = self.port.read(3)
-        return len(ans) == 3 and ans[1] == b'\x01'
+        with self.lock:
+            self.port.write(message)
+            ans = self.port.read(3)
+            return len(ans) == 3 and ans[1] == b'\x01'
 
     def getShaftAngle(self):
         """
@@ -84,12 +89,13 @@ class MKSSERVO42C:
 
         When spinning with negative speeds passed to runConstantSpeed, the angle reported by getMotorShaftAngle is decreasing.
         """
-        self._sendSingleByteCommand(READ_ANGLE)
-        ans = self.port.read(6) # address byte, 32 bit integer, checksum byte
-        if len(ans) != 6:
-            return False, 0
-        motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=True)
-        return True, float(motor_angle) / ANGLE_RESOLUTION
+        with self.lock:
+            self._sendSingleByteCommand(READ_ANGLE)
+            ans = self.port.read(6) # address byte, 32 bit integer, checksum byte
+            if len(ans) != 6:
+                return False, 0
+            motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=True)
+            return True, float(motor_angle) / ANGLE_RESOLUTION
 
     def getShaftError(self):
         """
@@ -98,12 +104,13 @@ class MKSSERVO42C:
 
         Returns the shaft error in degrees.
         """
-        self._sendSingleByteCommand(READ_ANGLE_ERROR)
-        ans = self.port.read(4) # address byte, 16 bit uint, checksum byte
-        if len(ans) != 4:
-            return False, 0
-        angle_error = int.from_bytes(ans[1:3], byteorder='big', signed=True)
-        return True, float(angle_error) / (ANGLE_RESOLUTION/360)
+        with self.lock:
+            self._sendSingleByteCommand(READ_ANGLE_ERROR)
+            ans = self.port.read(4) # address byte, 16 bit uint, checksum byte
+            if len(ans) != 4:
+                return False, 0
+            angle_error = int.from_bytes(ans[1:3], byteorder='big', signed=True)
+            return True, float(angle_error) / (ANGLE_RESOLUTION/360)
 
     def _sendSingleByteCommand(self, b):
         """

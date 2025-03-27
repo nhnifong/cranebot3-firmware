@@ -243,7 +243,7 @@ class AsyncObserver:
             self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
 
             asyncio.create_task(self.stat.stat_main())
-            asyncio.create_task(self.monitor_tension())
+            # asyncio.create_task(self.monitor_tension())
             # asyncio.create_task(self.run_shape_tracker())
             # asyncio.create_task(self.add_simulated_data())
             
@@ -333,12 +333,13 @@ class AsyncObserver:
     async def equalize_tension(self):
         """Inner loop of run_tension_based_line_calibration"""
         for client in self.anchors:
+            client.tension_seek_stopped = False
             asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'start'}}))
         # wait for some feedback in the form of new angle error messages from all anchors
 
         while True:
-            # collect all the angle errors.
-            levels = [a.last_angle_error for a in self.anchors]
+            # collect all the tension readings.
+            levels = [a.last_tension for a in self.anchors]
             print(f'levels = {levels}')
             levels.sort()
             # pick a threshold such that only the tightest two lines would unspool.
@@ -350,10 +351,12 @@ class AsyncObserver:
             # our ending condition is that there are no slack lines, and we are only unspooling tight lines in an attempt to
             # have no net change in height. I guess one way to do this is to ahve any length taken up by slack lines distributed equally
             # into all non slack lines.
+            # the expected amount of tension on a tight line also depends on other factor like the gantry height and the size of the room
+            # what does the tension look like when the motor is moving?
 
-            # th = 2.0
-            # for client in self.anchors:
-            #     asyncio.create_task(client.send_commands({'equalize_tension': {'threshold': th}}))
+            th = (levels[1] + levels[2]) * 0.5
+            for client in self.anchors:
+                asyncio.create_task(client.send_commands({'equalize_tension': {'threshold': th}}))
             await asyncio.sleep(0.1)
 
     async def monitor_tension(self):

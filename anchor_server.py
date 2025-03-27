@@ -275,8 +275,9 @@ class RaspiAnchorServer(RobotComponentServer):
                 self.spooler.live_err_tight_thresh = updates['equalize_tension']['th']
 
     def readOtherSensors(self):
-        _, angle_err = self.spooler.motor.getShaftError()
-        self.update['angle_error'] = angle_err
+        # _, angle_err = self.spooler.motor.getShaftError()
+        # self.update['angle_error'] = angle_err
+        pass
 
     def startOtherTasks(self):
         pass
