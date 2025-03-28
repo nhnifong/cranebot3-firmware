@@ -245,7 +245,7 @@ class SpoolController:
         """
         self.pauseTrackingLoop()
         # make sure the tracking loop is definitely paused. it's on another thread. 
-        await asyncio.sleep(LOOP_DELAY_S * )
+        await asyncio.sleep(LOOP_DELAY_S * 2)
         self.motor.runConstantSpeed(0)
         self.speed = 0
         logging.info("Equalizing spool tension")
@@ -258,8 +258,14 @@ class SpoolController:
         self.live_tension_low_thresh = TENSION_SLACK_THRESH
         self.live_tension_high_thresh = TENSION_TIGHT_THRESH
 
+        # measuring tension at rest is not possible. measure in motion
+        self.motor.runConstantSpeed(-0.4)
+        for i in range(18):
+            t, curLength, tension = self.currentLineLength()
+            await asyncio.sleep(1/30)
+
         # decide initial speed. motor direction will not change during the loop
-        if self.smoothed_tension < ERR_SLACK_THRESH:
+        if self.smoothed_tension < 0.45:
             started_slack = True
             self.speed = -MOTOR_SPEED_DURING_CALIBRATION
         else:
@@ -271,7 +277,7 @@ class SpoolController:
         # wait for stop condition
         while ((started_slack == is_slack)
                and not self.abort_equalize_tension
-               and abs(lineDelta < MAX_LINE_CHANGE_DURING_CALIBRATION)):
+               and abs(line_delta < MAX_LINE_CHANGE_DURING_CALIBRATION)):
             await asyncio.sleep(1/30)
             # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
             # is periodically flushed to the websocket by a task that is always running while the ws is connected
@@ -292,7 +298,7 @@ class SpoolController:
             }
         })
 
-        logging.info(f"Stopped equalization with tension={self.smoothed_tension} and a line delta of {lineDelta}")
+        logging.info(f"Stopped equalization with tension={self.smoothed_tension} and a line delta of {line_delta}")
         self.motor.runConstantSpeed(0)
         await asyncio.wait_for(controllerApprovalEvent.wait(), timeout=30)
         # the caller will have set this flag while we were waiting to indicate approval.
