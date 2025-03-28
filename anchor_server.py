@@ -50,6 +50,7 @@ class RobotComponentServer:
         # a dict of update to be flushed periodically to the websocket
         self.update = {}
         self.ws_delay = RUNNING_WS_DELAY
+        self.stream_command = stream_command
 
     async def stream_measurements(self, ws):
         """
@@ -96,7 +97,7 @@ class RobotComponentServer:
         spit that down the provided websocket connection, if there is one.
         rpicam-vid has no way of sending timestamps on its own as of Feb 2025
         """
-        process = await asyncio.create_subprocess_exec(stream_command[0], *stream_command[1:], stdout=PIPE, stderr=STDOUT)
+        process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
         while True:
             try:
@@ -275,9 +276,7 @@ class RaspiAnchorServer(RobotComponentServer):
                 self.spooler.live_err_tight_thresh = updates['equalize_tension']['th']
 
     def readOtherSensors(self):
-        # _, angle_err = self.spooler.motor.getShaftError()
-        # self.update['angle_error'] = angle_err
-        pass
+        self.update['tension'] = self.spooler.last_tension
 
     def startOtherTasks(self):
         pass

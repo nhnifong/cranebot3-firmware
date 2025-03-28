@@ -211,7 +211,7 @@ class RaspiAnchorClient(ComponentClient):
         self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
         # angle error received during tension based calibration
         self.last_tension = 0;
-        self.tension_seek_stopped = False
+        self.tension_seek_running = False
 
         # to help with a loop that does the same thing four times in handle_detections
         # name, offset, datastore
@@ -233,7 +233,7 @@ class RaspiAnchorClient(ComponentClient):
             self.last_tension = update['tension']
         if 'tension_seek_stopped' in update:
             # observer needs to know when all anchors have received this message.
-            self.tension_seek_stopped = True
+            self.tension_seek_running = False
 
     def handle_detections(self, detections, timestamp):
         """

@@ -115,8 +115,10 @@ class SpoolController:
             logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}, zeroAngle={self.zeroAngle}, lineAtStart={self.lineAtStart}, meters_per_rev={self.meters_per_rev}")
             self.moveAllowed = False
 
+        tension = self.currentTension()
+
         # accumulate these so you can send them to the websocket
-        row = (time.time(), self.lastLength)
+        row = (time.time(), self.lastLength, tension)
         if self.rec_loop_counter == REC_MOD:
             self.meters_per_rev =  self.calc_meters_per_rev(self.lastLength) # this also doesn't need to be updated at a high frequency.
             self.record.append(row)
