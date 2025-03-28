@@ -135,6 +135,10 @@ class AsyncObserver:
                     }), loop)
             if 'slow_stop_all' in updates:
                 self.slow_stop_all_spools(loop)
+            if 'stop_if_not_slack' in updates:
+                # a command to stop any spools that were reeling in during tension equaliztion
+                for client in self.anchors:
+                    asyncio.run_coroutine_threadsafe(client.send_commands({'equalize_tension': {'action': 'stop_if_not_slack'}}), loop)
 
     def slow_stop_all_spools(self, loop):
         for name, client in self.bot_clients.items():
@@ -335,39 +339,13 @@ class AsyncObserver:
         """Inner loop of run_tension_based_line_calibration"""
         for client in self.anchors:
             client.tension_seek_running = True
+            client.slack_line_stop_cb = stop_reelers
             asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'start'}}))
-        # wait for some feedback in the form of new angle error messages from all anchors
 
+        # wait for all clients to finish
         while any([a.tension_seek_running for a in self.anchors]):
-            # pick a threshold such that only the tightest two lines would unspool.
-            # if you raise the threshold high enough all anchors stop moving.
-            # alternatively, pick a threshold such that all lines which are not slack will unspool as long as
-            # there are still slack lines reeling in.
-            # our ending condition is not necessarily to see the same tension on every line.
-            # since the gantry being close to an anchor means that anchor bears more of the weight.
-            # our ending condition is that there are no slack lines, and we are only unspooling tight lines in an attempt to
-            # have no net change in height. I guess one way to do this is to ahve any length taken up by slack lines distributed equally
-            # into all non slack lines.
-            # the expected amount of tension on a tight line also depends on other factor like the gantry height and the size of the room
-            # what does the tension look like when the motor is moving? (iirc it looks proportionally larger no matter which way the motor moves)
-
-            # another way to do this might be to not assume any hard thresholds. Take the tensions, shift their values so they add up to zero.
-            # scale the shifted values by a constant and use it to set how much line to pull in or out.
-
-            # collect all the tension readings.
-            levels = [a.last_tension for a in self.anchors]
-            print(f'levels = {levels}')
-            levels.sort()
-            high = (levels[1] + levels[2]) * 0.5
-            low = TENSION_SLACK_THRESH
-
-            # if there are no more slack lines, set the high thresh high enough to stop the other spools
-            if min(th) > TENSION_SLACK_THRESH:
-                high = 100
-
-            for client in self.anchors:
-                asyncio.create_task(client.send_commands({'equalize_tension': {'thresholds': (low, high)}}))
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1/10)
+        asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'complete'}}))
         print('tension equalization finished.')
 
 

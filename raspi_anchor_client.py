@@ -212,6 +212,7 @@ class RaspiAnchorClient(ComponentClient):
         # angle error received during tension based calibration
         self.last_tension = 0;
         self.tension_seek_running = False
+        self.tension_seek_result = None
 
         # to help with a loop that does the same thing four times in handle_detections
         # name, offset, datastore
@@ -234,6 +235,10 @@ class RaspiAnchorClient(ComponentClient):
         if 'tension_seek_stopped' in update:
             # observer needs to know when all anchors have received this message.
             self.tension_seek_running = False
+            self.tension_seek_result = update['tension_seek_stopped']
+            if self.tension_seek_result['started_slack']:
+                # if any spool that started slack becomes tight, get the observer to stop any spools that started tight from spooling out. 
+                self.to_ob_q.put({'stop_if_not_slack': None})
 
     def handle_detections(self, detections, timestamp):
         """
