@@ -68,8 +68,8 @@ class DataStore:
         gantry_position: shape (n_measurements, 4) T ROT XYZ
         gripper_position: shape (n_measurements, 4) T ROT XYZ
         imu_accel: shape (n_measurements, 4) each row TXYZ
-        winch_line_record: shape (n_measurements, 2) TL
-        anchor_line_record: shape (n_measurements, n_cables+1) TLLL one L for each line
+        winch_line_record: shape (n_measurements, 3) TLT
+        anchor_line_record: shape (n_measurements, 3) TLT  time, length, tension. one for each line
         """
         self.horizon_s = horizon_s
         self.n_cables = n_cables
@@ -79,7 +79,7 @@ class DataStore:
         self.gripper_pose = CircularBuffer((c, 7))
         self.imu_accel = CircularBuffer((c, 4))
         self.winch_line_record = CircularBuffer((c, 2))
-        self.anchor_line_record = [CircularBuffer((c, 2)) for n in range(n_cables)]
+        self.anchor_line_record = [CircularBuffer((c, 3)) for n in range(n_cables)]
 
         self.gantry_pose.insertList([np.array([time()+random()*20, 0,0,0, random()*0.1,random()*0.1,random()*0.1], dtype=np.float64) for i in range(c)])
         self.gripper_pose.insertList([np.array([time()+random()*20, 0,0,0, random()*0.1,random()*0.1,random()*0.1], dtype=np.float64) for i in range(c)])

@@ -14,6 +14,15 @@ import busio
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 
+# this will require a different calibration matrix
+half_res_stream_command = """
+/usr/bin/rpicam-vid -t 0
+  --width=2304 --height=1296
+  --listen -o tcp://0.0.0.0:8888
+  --codec mjpeg
+  --buffer-count=12
+  --autofocus-mode continuous""".split()
+
 # these two constants are obtained experimentally
 # the speed will not increase at settings beyond this value
 WINCH_MAX_SPEED = 43
@@ -57,7 +66,6 @@ class GripperSpoolMotor():
         self.servo = hat.servos[SERVO_1]
         self.hat = hat
         self.run = True
-        pass
 
     def ping(self):
         return True
@@ -81,6 +89,9 @@ class GripperSpoolMotor():
         # in revolutions
         # we assume that an encoder has been conected to the motot A port, even if there is no motor
         return True, self.hat.encoders[0].revolutions()
+
+    def getShaftError(self):
+        return 0 # unsupported
 
     def getMaxSpeed(self):
         return 1.0166
@@ -119,6 +130,8 @@ class RaspiGripperServer(RobotComponentServer):
         self.past_val_rates = deque(maxlen=UPDATE_RATE)
         self.holding = False
         self.holdPressure = False
+
+        self.stream_command = half_res_stream_command
 
     def readOtherSensors(self):
         # 5cm - 2.3v

@@ -21,6 +21,7 @@ from raspi_gripper_client import RaspiGripperClient
 from random import random
 from segment import ShapeTracker
 from config import Config
+from spools import TENSION_SLACK_THRESH
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -333,15 +334,11 @@ class AsyncObserver:
     async def equalize_tension(self):
         """Inner loop of run_tension_based_line_calibration"""
         for client in self.anchors:
-            client.tension_seek_stopped = False
+            client.tension_seek_running = True
             asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'start'}}))
         # wait for some feedback in the form of new angle error messages from all anchors
 
-        while True:
-            # collect all the tension readings.
-            levels = [a.last_tension for a in self.anchors]
-            print(f'levels = {levels}')
-            levels.sort()
+        while any([a.tension_seek_running for a in self.anchors]):
             # pick a threshold such that only the tightest two lines would unspool.
             # if you raise the threshold high enough all anchors stop moving.
             # alternatively, pick a threshold such that all lines which are not slack will unspool as long as
@@ -352,12 +349,25 @@ class AsyncObserver:
             # have no net change in height. I guess one way to do this is to ahve any length taken up by slack lines distributed equally
             # into all non slack lines.
             # the expected amount of tension on a tight line also depends on other factor like the gantry height and the size of the room
-            # what does the tension look like when the motor is moving?
+            # what does the tension look like when the motor is moving? (iirc it looks proportionally larger no matter which way the motor moves)
 
+            # another way to do this might be to not assume any hard thresholds. Take the tensions, shift their values so they add up to zero.
+            # scale the shifted values by a constant and use it to set how much line to pull in or out.
+
+            # collect all the tension readings.
+            levels = [a.last_tension for a in self.anchors]
+            print(f'levels = {levels}')
+            levels.sort()
             th = (levels[1] + levels[2]) * 0.5
+
+            # if there are no more slack lines
+            if min(th) > TENSION_SLACK_THRESH:
+                th = 1000
+
             for client in self.anchors:
                 asyncio.create_task(client.send_commands({'equalize_tension': {'threshold': th}}))
             await asyncio.sleep(0.1)
+        print('tension equalizing finished.')
 
     async def monitor_tension(self):
         while self.send_position_updates:

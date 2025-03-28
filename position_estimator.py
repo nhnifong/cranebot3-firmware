@@ -437,8 +437,8 @@ class CDPR_position_estimator:
             'gantry_position': gantry_pose[:,[0,4,5,6]],
             'gripper_position': gripper_pose[:,[0,4,5,6]],
             'imu_accel': self.datastore.imu_accel.deepCopy(),
-            'winch_line_record': self.datastore.winch_line_record.deepCopy(),
-            'anchor_line_record': [a.deepCopy() for a in self.datastore.anchor_line_record]
+            'winch_line_record': self.datastore.winch_line_record.deepCopy()[:,[0,1]],
+            'anchor_line_record': [a.deepCopy()[:,[0,1]] for a in self.datastore.anchor_line_record]
         }
         # convert unix times on all measurements to model times.
         # time domain will be fixed for the duration of this estimate
