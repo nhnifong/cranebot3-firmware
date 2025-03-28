@@ -58,6 +58,7 @@ class SpoolController:
         self.rec_loop_counter = 0
         self.moveAllowed = True
         self.abort_equalize_tension = False
+        self.tensioneq_outspooling_allowed = True
         self.live_tension_low_thresh = TENSION_SLACK_THRESH
         self.live_tension_high_thresh = TENSION_TIGHT_THRESH
         self.smoothed_tension = 0
@@ -250,6 +251,7 @@ class SpoolController:
         self.speed = 0
         logging.info("Equalizing spool tension")
         self.abort_equalize_tension = False
+        self.tensioneq_outspooling_allowed = False
         t, curLength, tension = self.currentLineLength()
         startLength = curLength
         line_delta = 0
@@ -277,7 +279,8 @@ class SpoolController:
         # wait for stop condition
         while ((started_slack == is_slack)
                and not self.abort_equalize_tension
-               and abs(line_delta < MAX_LINE_CHANGE_DURING_CALIBRATION)):
+               and abs(line_delta < MAX_LINE_CHANGE_DURING_CALIBRATION)
+               and (started_slack or tensioneq_outspooling_allowed)):
             await asyncio.sleep(1/30)
             # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
             # is periodically flushed to the websocket by a task that is always running while the ws is connected

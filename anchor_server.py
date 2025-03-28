@@ -272,6 +272,8 @@ class RaspiAnchorServer(RobotComponentServer):
                 self.spooler.abort_equalize_tension = True
                 self.eq_tension_stop_event.set()
                 self.ws_delay = RUNNING_WS_DELAY
+            elif action == 'stop_if_not_slack':
+                self.spooler.tensioneq_outspooling_allowed = False
             elif action == 'thresholds':
                 self.spooler.live_err_low_thresh = updates['equalize_tension']['th'][0]
                 self.spooler.live_err_high_thresh = updates['equalize_tension']['th'][1]
