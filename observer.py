@@ -358,22 +358,17 @@ class AsyncObserver:
             levels = [a.last_tension for a in self.anchors]
             print(f'levels = {levels}')
             levels.sort()
-            th = (levels[1] + levels[2]) * 0.5
+            high = (levels[1] + levels[2]) * 0.5
+            low = TENSION_SLACK_THRESH
 
-            # if there are no more slack lines
+            # if there are no more slack lines, set the high thresh high enough to stop the other spools
             if min(th) > TENSION_SLACK_THRESH:
-                th = 1000
+                high = 100
 
             for client in self.anchors:
-                asyncio.create_task(client.send_commands({'equalize_tension': {'threshold': th}}))
+                asyncio.create_task(client.send_commands({'equalize_tension': {'thresholds': (low, high)}}))
             await asyncio.sleep(0.1)
-        print('tension equalizing finished.')
-
-    async def monitor_tension(self):
-        while self.send_position_updates:
-            levels = [a.last_angle_error for a in self.anchors]
-            print(f'levels = {levels}')
-            await asyncio.sleep(0.1)
+        print('tension equalization finished.')
 
 
 def start_observation(datastore, to_ui_q, to_pe_q, to_ob_q):

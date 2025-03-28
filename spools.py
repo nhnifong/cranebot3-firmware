@@ -15,11 +15,12 @@ LOOP_DELAY_S = 0.03
 REC_MOD = 10
 
 # Constants used in tension equalization process
-TENSION_SLACK_THRESH = 10 # below this, line is assumed to be slack
-TENSION_TIGHT_THRESH = 50 # above this, line is assumed to be too tight.
-MOTOR_SPEED_DURING_CALIBRATION = 0.5 # revolutions per second
+TENSION_SLACK_THRESH = 0.4 # kilograms. below this, line is assumed to be slack
+TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too tight.
+MOTOR_SPEED_DURING_CALIBRATION = 1 # revolutions per second
 MAX_LINE_CHANGE_DURING_CALIBRATION = 0.5 # meters
-MKS42C_TORQUE_FACTOR = 100.0 # TODO measure this. units are newton meters per degreee of error
+MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
+MKS42C_TORQUE_FACTOR = 0.031 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
 
 
 def constrain(value, minimum, maximum):
@@ -57,10 +58,9 @@ class SpoolController:
         self.rec_loop_counter = 0
         self.moveAllowed = True
         self.abort_equalize_tension = False
-        self.live_tension_tight_thresh = TENSION_TIGHT_THRESH
-
-        # the high threshold used in tension calibration may be updated during the process.
-        self.live_err_tight_thresh = ERR_TIGHT_THRESH
+        self.live_tension_low_thresh = TENSION_SLACK_THRESH
+        self.live_tension_high_thresh = TENSION_TIGHT_THRESH
+        self.smoothed_tension = 0
 
         # when this bool is set, spool tracking will pause.
         self.spoolPause = False
@@ -115,10 +115,10 @@ class SpoolController:
             logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}, zeroAngle={self.zeroAngle}, lineAtStart={self.lineAtStart}, meters_per_rev={self.meters_per_rev}")
             self.moveAllowed = False
 
-        tension = self.currentTension()
+        self.smoothed_tension = self.currentTension() * 0.2 + self.smoothed_tension * 0.8
 
         # accumulate these so you can send them to the websocket
-        row = (time.time(), self.lastLength, tension)
+        row = (time.time(), self.lastLength, self.smoothed_tension)
         if self.rec_loop_counter == REC_MOD:
             self.meters_per_rev =  self.calc_meters_per_rev(self.lastLength) # this also doesn't need to be updated at a high frequency.
             self.record.append(row)
@@ -127,12 +127,14 @@ class SpoolController:
         return row
 
     def currentTension(self):
-        """return the line tension in newtons.
-        Only possible for the MKSServo42C
+        """return the line tension in kilograms of force.
+        Only possible for the MKS42C
         """
         _, angleError = self.motor.getShaftError()
-        # the angle error is proportional to the torque
-        torque = MKS42C_TORQUE_FACTOR * angleError
+        baseline = MKS42C_EXPECTED_ERR * self.speed
+        load_err = (angleError - baseline) * -1
+        # The load on the line subtracts about 1 degree of angle error from the baseline per kilogram.
+        torque = MKS42C_TORQUE_FACTOR * load_err
         return torque / self.meters_per_rev
 
 
@@ -159,7 +161,7 @@ class SpoolController:
                 time.sleep(0.2)
                 continue
             try:
-                t, currentLen = self.currentLineLength()
+                t, currentLen, tension = self.currentLineLength()
 
                 # Find the earliest entry in desiredLine that is still in the future.
                 while self.lastIndex < len(self.desiredLine) and self.desiredLine[self.lastIndex][0] <= t:
@@ -234,41 +236,68 @@ class SpoolController:
         Change the reference length by that amount.
         Unpause the tracking loop.
 
-        While the loop is running, the controller (observer process) may increase the high shaft error threshold,
-        so that only the tightest two lines are reeling in.
+        Any lines that started slack will begin to reel in
+        Any line that didn't start slack will begin to reel out.
+        reeling (out or in) should immediately stop if
+          1. the slackness threshold is crossed (we can see this locally)
+        reeling out should also stop if
+          2. Any other line that started slack has stopped (controller will inform us)
         """
         self.pauseTrackingLoop()
-        # make sure the tracking loop is definitely not running. it's on another thread. 
+        # make sure the tracking loop is definitely paused. it's on another thread. 
         await asyncio.sleep(LOOP_DELAY_S * )
         self.motor.runConstantSpeed(0)
+        self.speed = 0
         logging.info("Equalizing spool tension")
         self.abort_equalize_tension = False
-        _, angle = self.motor.getShaftAngle()
-        startLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
-        lineDelta = 0
-        tension = self.currentTension()
-        while not (TENSION_SLACK_THRESH < tension < self.live_tension_tight_thresh) and not self.abort_equalize_tension and abs(lineDelta < MAX_LINE_CHANGE_DURING_CALIBRATION):
-            if angleError < ERR_SLACK_THRESH:
-                self.motor.runConstantSpeed(-MOTOR_SPEED_DURING_CALIBRATION)
-            elif angleError > self.live_err_tight_thresh:
-                self.motor.runConstantSpeed(MOTOR_SPEED_DURING_CALIBRATION)
-            await asyncio.sleep(0.1)
-            _, angle = self.motor.getShaftAngle()
-            tension = self.currentTension()
-            curLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
-            lineDelta = curLength - startLength
-            sendUpdatesFunc({
-                'tension': tension,
-                # 'line_delta': lineDelta,
-            })
+        t, curLength, tension = self.currentLineLength()
+        startLength = curLength
+        line_delta = 0
+
+        # reset thresholds to default
+        self.live_tension_low_thresh = TENSION_SLACK_THRESH
+        self.live_tension_high_thresh = TENSION_TIGHT_THRESH
+
+        # decide initial speed. motor direction will not change during the loop
+        if self.smoothed_tension < ERR_SLACK_THRESH:
+            started_slack = True
+            self.speed = -MOTOR_SPEED_DURING_CALIBRATION
+        else:
+            started_slack = False
+            self.speed = MOTOR_SPEED_DURING_CALIBRATION # starts tight
+        self.motor.runConstantSpeed(self.speed)
+        is_slack = started_slack
+
+        # wait for stop condition
+        while ((started_slack == is_slack)
+               and not self.abort_equalize_tension
+               and abs(lineDelta < MAX_LINE_CHANGE_DURING_CALIBRATION)):
+            await asyncio.sleep(1/30)
+            # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
+            # is periodically flushed to the websocket by a task that is always running while the ws is connected
+            t, curLength, tension = self.currentLineLength()
+            print(f'curLength={curLength} tension={tension}')
+            line_delta = curLength - startLength
+            is_slack = self.smoothed_tension < self.live_tension_low_thresh
+
+        # todo, verify by experiment
+        # if you started tight but became slack, reel back in a small amount
+
         # inform controller that we hit a trigger and stopped.
         sendUpdatesFunc({
-            'tension_seek_stopped': None,
+            'tension_seek_stopped': {
+                'line_delta': line_delta,
+                'started_slack': started_slack,
+                'is_slack': is_slack,
+            }
         })
+
+        logging.info(f"Stopped equalization with tension={self.smoothed_tension} and a line delta of {lineDelta}")
         self.motor.runConstantSpeed(0)
         await asyncio.wait_for(controllerApprovalEvent.wait(), timeout=30)
         # the caller will have set this flag while we were waiting to indicate approval.
         if not self.abort_equalize_tension:
             # alter reference length but not zero angle.
-            self.lineAtStart += lineDelta
+            self.lineAtStart += line_delta
+        self.desiredLine = []
         self.resumeTrackingLoop()

@@ -261,7 +261,7 @@ class RaspiAnchorServer(RobotComponentServer):
         if 'equalize_tension' in updates:
             action = updates['equalize_tension']['action']
             if action == 'start':
-                self.ws_delay = CALIBRATING_WS_DELAY
+                self.ws_delay = CALIBRATING_WS_DELAY # send updates faster
                 self.eq_tension_stop_event.clear()
                 asyncio.create_task(self.spooler.equalizeSpoolTension(self.eq_tension_stop_event, self.sendData))
             elif action == 'complete':
@@ -272,8 +272,9 @@ class RaspiAnchorServer(RobotComponentServer):
                 self.spooler.abort_equalize_tension = True
                 self.eq_tension_stop_event.set()
                 self.ws_delay = RUNNING_WS_DELAY
-            elif action == 'threshold':
-                self.spooler.live_err_tight_thresh = updates['equalize_tension']['th']
+            elif action == 'thresholds':
+                self.spooler.live_err_low_thresh = updates['equalize_tension']['th'][0]
+                self.spooler.live_err_high_thresh = updates['equalize_tension']['th'][1]
 
     def readOtherSensors(self):
         self.update['tension'] = self.spooler.last_tension
