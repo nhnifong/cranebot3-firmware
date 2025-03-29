@@ -280,7 +280,7 @@ class SpoolController:
         is_slack = started_slack
 
         logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
-
+        return
         DANGEROUS_TENSION = 3.0
         try:
             # wait for stop condition
