@@ -133,7 +133,8 @@ class SpoolController:
         """
         _, angleError = self.motor.getShaftError()
         baseline = MKS42C_EXPECTED_ERR * self.speed
-        load_err = (angleError - baseline) * -1
+        load_err = (angleError - baseline) * -1 # the redidual position error attributable to load on the spool, not commanded motor speed
+        logging.debug(f'angle error = {angleError} risidual = {load_err}')
         # The load on the line subtracts about 1 degree of angle error from the baseline per kilogram.
         torque = MKS42C_TORQUE_FACTOR * load_err
         return torque / self.meters_per_rev
