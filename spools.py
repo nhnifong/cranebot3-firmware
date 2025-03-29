@@ -134,7 +134,6 @@ class SpoolController:
         _, angleError = self.motor.getShaftError()
         baseline = MKS42C_EXPECTED_ERR * self.speed
         load_err = (angleError - baseline) * -1 # the redidual position error attributable to load on the spool, not commanded motor speed
-        logging.debug(f'angle error = {angleError} risidual = {load_err}')
         # The load on the line subtracts about 1 degree of angle error from the baseline per kilogram.
         torque = MKS42C_TORQUE_FACTOR * load_err
         return torque / self.meters_per_rev
@@ -264,6 +263,7 @@ class SpoolController:
         # measuring tension at rest is not possible. measure in motion
         MEASUREMENT_SPEED = -0.4
         self.motor.runConstantSpeed(MEASUREMENT_SPEED)
+        self.speed = MEASUREMENT_SPEED
         for i in range(18):
             t, curLength, tension = self.currentLineLength()
             logging.debug(f'getting stabilized tension reading {self.smoothed_tension}')
@@ -281,12 +281,14 @@ class SpoolController:
 
         logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
 
+        DANGEROUS_TENSION = 3.0
         try:
             # wait for stop condition
             while ((started_slack == is_slack)
                    and not self.abort_equalize_tension
                    and abs(line_delta < MAX_LINE_CHANGE_DURING_CALIBRATION)
-                   and (started_slack or self.tensioneq_outspooling_allowed)):
+                   and (started_slack or self.tensioneq_outspooling_allowed)
+                   and self.smoothed_tension < DANGEROUS_TENSION):
                 await asyncio.sleep(1/30)
                 # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
                 # is periodically flushed to the websocket by a task that is always running while the ws is connected
