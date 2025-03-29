@@ -304,7 +304,7 @@ class SpoolController:
                 is_slack = self.smoothed_tension < self.live_tension_low_thresh
         except e:
             self.motor.runConstantSpeed(0)
-        self.speed = 0
+            self.speed = 0
             raise e
 
         # todo, verify by experiment
