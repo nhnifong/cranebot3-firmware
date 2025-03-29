@@ -276,18 +276,22 @@ class SpoolController:
         self.motor.runConstantSpeed(self.speed)
         is_slack = started_slack
 
-        # wait for stop condition
-        while ((started_slack == is_slack)
-               and not self.abort_equalize_tension
-               and abs(line_delta < MAX_LINE_CHANGE_DURING_CALIBRATION)
-               and (started_slack or tensioneq_outspooling_allowed)):
-            await asyncio.sleep(1/30)
-            # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
-            # is periodically flushed to the websocket by a task that is always running while the ws is connected
-            t, curLength, tension = self.currentLineLength()
-            print(f'curLength={curLength} tension={tension}')
-            line_delta = curLength - startLength
-            is_slack = self.smoothed_tension < self.live_tension_low_thresh
+        try:
+            # wait for stop condition
+            while ((started_slack == is_slack)
+                   and not self.abort_equalize_tension
+                   and abs(line_delta < MAX_LINE_CHANGE_DURING_CALIBRATION)
+                   and (started_slack or self.tensioneq_outspooling_allowed)):
+                await asyncio.sleep(1/30)
+                # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
+                # is periodically flushed to the websocket by a task that is always running while the ws is connected
+                t, curLength, tension = self.currentLineLength()
+                logging.debug(f'curLength={curLength} tension={tension}')
+                line_delta = curLength - startLength
+                is_slack = self.smoothed_tension < self.live_tension_low_thresh
+        except e:
+            self.motor.runConstantSpeed(0)
+            raise e
 
         # todo, verify by experiment
         # if you started tight but became slack, reel back in a small amount
