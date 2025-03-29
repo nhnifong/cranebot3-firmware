@@ -18,7 +18,7 @@ REC_MOD = 10
 TENSION_SLACK_THRESH = 0.4 # kilograms. below this, line is assumed to be slack
 TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too tight.
 MOTOR_SPEED_DURING_CALIBRATION = 1 # revolutions per second
-MAX_LINE_CHANGE_DURING_CALIBRATION = 0.4 # meters
+MAX_LINE_CHANGE_DURING_CALIBRATION = 0.3 # meters
 MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
 MKS42C_TORQUE_FACTOR = 0.031 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
 
@@ -249,7 +249,6 @@ class SpoolController:
         await asyncio.sleep(LOOP_DELAY_S * 2)
         self.motor.runConstantSpeed(0)
         self.speed = 0
-        logging.info("Equalizing spool tension")
         self.abort_equalize_tension = False
         self.tensioneq_outspooling_allowed = False
         t, curLength, tension = self.currentLineLength()
@@ -260,10 +259,13 @@ class SpoolController:
         self.live_tension_low_thresh = TENSION_SLACK_THRESH
         self.live_tension_high_thresh = TENSION_TIGHT_THRESH
 
+        logging.info("Measuring tension in motion")
         # measuring tension at rest is not possible. measure in motion
-        self.motor.runConstantSpeed(-0.4)
+        MEASUREMENT_SPEED = -0.4
+        self.motor.runConstantSpeed(MEASUREMENT_SPEED)
         for i in range(18):
             t, curLength, tension = self.currentLineLength()
+            logging.debug(f'getting stabilized tension reading {self.smoothed_tension}')
             await asyncio.sleep(1/30)
 
         # decide initial speed. motor direction will not change during the loop
@@ -275,6 +277,9 @@ class SpoolController:
             self.speed = MOTOR_SPEED_DURING_CALIBRATION # starts tight
         self.motor.runConstantSpeed(self.speed)
         is_slack = started_slack
+
+        ss = started_slack ? "slack" : "taut"
+        logging.info(f'Line appears to be {ss} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
 
         try:
             # wait for stop condition
@@ -307,10 +312,14 @@ class SpoolController:
 
         logging.info(f"Stopped equalization with tension={self.smoothed_tension} and a line delta of {line_delta}")
         self.motor.runConstantSpeed(0)
-        await asyncio.wait_for(controllerApprovalEvent.wait(), timeout=30)
-        # the caller will have set this flag while we were waiting to indicate approval.
-        if not self.abort_equalize_tension:
-            # alter reference length but not zero angle.
-            self.lineAtStart += line_delta
+        try:
+            logging.info('Waiting for tension_eq result approval from controller')
+            await asyncio.wait_for(controllerApprovalEvent.wait(), timeout=30)
+            # the caller will have set this flag while we were waiting to indicate approval.
+            if not self.abort_equalize_tension:
+                # alter reference length but not zero angle.
+                self.lineAtStart += line_delta
+        except TimeoutError:
+            pass
         self.desiredLine = []
         self.resumeTrackingLoop()
