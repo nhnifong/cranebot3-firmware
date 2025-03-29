@@ -18,7 +18,7 @@ REC_MOD = 10
 TENSION_SLACK_THRESH = 0.4 # kilograms. below this, line is assumed to be slack
 TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too tight.
 MOTOR_SPEED_DURING_CALIBRATION = 1 # revolutions per second
-MAX_LINE_CHANGE_DURING_CALIBRATION = 0.5 # meters
+MAX_LINE_CHANGE_DURING_CALIBRATION = 0.4 # meters
 MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
 MKS42C_TORQUE_FACTOR = 0.031 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
 
