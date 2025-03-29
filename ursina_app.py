@@ -479,7 +479,6 @@ class ControlPanelUI:
         move_duration = 1 # seconds
         if self.calibration_mode != 'pause':
             return
-        print(f'make direct move {self.direction}')
         if sum(self.direction) == 0:
             if self.could_be_moving:
                 # immediately cancel whatever remains of the movement
