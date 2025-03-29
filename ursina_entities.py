@@ -7,6 +7,7 @@ import numpy as np
 from cv_common import invert_pose, compose_poses
 import model_constants
 from scipy.spatial.transform import Rotation
+from functools import partial
 
 # Transforms a rodrigues rotation vector into an ursina euler rotation tuple in degrees
 def to_ursina_rotation(rvec):

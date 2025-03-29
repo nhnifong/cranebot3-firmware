@@ -120,7 +120,8 @@ class AsyncObserver:
                 for client in self.anchors:
                     asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': lengths[client.anchor_num]}), loop)
             if 'equalize_line_tension' in updates:
-                asyncio.run_coroutine_threadsafe(self.equalize_tension, loop)
+                print('equalize line tension')
+                asyncio.run_coroutine_threadsafe(self.equalize_tension(), loop)
             if 'jog_spool' in updates:
                 for client in self.anchors:
                     if client.anchor_num == updates['jog_spool']['anchor']:
@@ -337,11 +338,13 @@ class AsyncObserver:
 
     async def equalize_tension(self):
         """Inner loop of run_tension_based_line_calibration"""
+        print('equalize_tension 1')
         for client in self.anchors:
             client.tension_seek_running = True
-            client.slack_line_stop_cb = stop_reelers
+            print('send_commands 1')
             asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'start'}}))
 
+        print('equalize_tension 2')
         # wait for all clients to finish
         while any([a.tension_seek_running for a in self.anchors]):
             await asyncio.sleep(1/10)

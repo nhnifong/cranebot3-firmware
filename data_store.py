@@ -78,12 +78,12 @@ class DataStore:
         self.gantry_pose = CircularBuffer((c, 7))
         self.gripper_pose = CircularBuffer((c, 7))
         self.imu_accel = CircularBuffer((c, 4))
-        self.winch_line_record = CircularBuffer((c, 2))
+        self.winch_line_record = CircularBuffer((c, 3))
         self.anchor_line_record = [CircularBuffer((c, 3)) for n in range(n_cables)]
 
         self.gantry_pose.insertList([np.array([time()+random()*20, 0,0,0, random()*0.1,random()*0.1,random()*0.1], dtype=np.float64) for i in range(c)])
         self.gripper_pose.insertList([np.array([time()+random()*20, 0,0,0, random()*0.1,random()*0.1,random()*0.1], dtype=np.float64) for i in range(c)])
         self.imu_accel.insertList([np.array([time(), 0,0,0], dtype=np.float64) for i in range(c)])
-        self.winch_line_record.insertList([np.array([time(), 1], dtype=np.float64) for i in range(c)])
+        self.winch_line_record.insertList([np.array([time(), 1, 0], dtype=np.float64) for i in range(c)])
         for aa in self.anchor_line_record:
-            aa.insertList([np.array([time(), 0]) for i in range(c)])
+            aa.insertList([np.array([time(), 0, 0]) for i in range(c)])
