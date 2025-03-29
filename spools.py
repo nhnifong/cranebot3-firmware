@@ -280,7 +280,13 @@ class SpoolController:
         is_slack = started_slack
 
         logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
+        self.desiredLine = []
+        self.motor.runConstantSpeed(0)
+        self.speed = 0
+        self.resumeTrackingLoop()
         return
+
+
         DANGEROUS_TENSION = 3.0
         try:
             # wait for stop condition
@@ -298,6 +304,7 @@ class SpoolController:
                 is_slack = self.smoothed_tension < self.live_tension_low_thresh
         except e:
             self.motor.runConstantSpeed(0)
+        self.speed = 0
             raise e
 
         # todo, verify by experiment
@@ -314,6 +321,7 @@ class SpoolController:
 
         logging.info(f"Stopped equalization with tension={self.smoothed_tension} and a line delta of {line_delta}")
         self.motor.runConstantSpeed(0)
+        self.speed = 0
         try:
             logging.info('Waiting for tension_eq result approval from controller')
             await asyncio.wait_for(controllerApprovalEvent.wait(), timeout=30)
