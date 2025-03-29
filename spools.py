@@ -278,8 +278,7 @@ class SpoolController:
         self.motor.runConstantSpeed(self.speed)
         is_slack = started_slack
 
-        ss = started_slack ? "slack" : "taut"
-        logging.info(f'Line appears to be {ss} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
+        logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
 
         try:
             # wait for stop condition
