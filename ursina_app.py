@@ -92,7 +92,6 @@ class ControlPanelUI:
         self.to_ob_q = to_ob_q
         self.n_anchors = datastore.n_cables
         self.time_domain = (1,2)
-        self.grip_closed = True
         self.direction = np.array([0,0,0], dtype=float)
         self.could_be_moving = False
         self.run_periodic_actions = True
@@ -123,7 +122,7 @@ class ControlPanelUI:
         self.anchors.append(Anchor(0, to_ob_q, (-2,2, 3)))
         self.anchors.append(Anchor(1, to_ob_q, ( 2,2, 3)))
         self.anchors.append(Anchor(2, to_ob_q, ( -1,2,-2), rotation=(0,180,0)))
-        self.anchors.append(Anchor(3, to_ob_q, ( -2,2,-2), rotation=(0,180,0)))
+        self.anchors.append(Anchor(3, to_ob_q, ( 2,2,-2), rotation=(0,180,0)))
 
         self.spline_curves = {}
 
@@ -141,6 +140,7 @@ class ControlPanelUI:
         self.gripper = Gripper(
             ui=self,
             spline_func=None,
+            to_ob_q=self.to_ob_q,
             position=(0,0.3,1),
             shader=lit_with_shadows_shader,
         )
@@ -338,9 +338,7 @@ class ControlPanelUI:
     def input(self, key):
         print(f'UI instance input {key}')
         if key == 'space':
-            self.grip_closed = not self.grip_closed
-            self.to_ob_q.put({'set_grip': self.grip_closed})
-            self.gripper.setAppearanceClosed(self.grip_closed)
+            self.gripper.toggleClosed()
 
         if key in key_behavior:
             axis, speed = key_behavior[key]

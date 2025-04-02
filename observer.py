@@ -21,7 +21,8 @@ from raspi_gripper_client import RaspiGripperClient
 from random import random
 from segment import ShapeTracker
 from config import Config
-from spools import TENSION_SLACK_THRESH
+
+TENSION_SLACK_THRESH = 0.4
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -123,12 +124,18 @@ class AsyncObserver:
                 print('equalize line tension')
                 asyncio.run_coroutine_threadsafe(self.equalize_tension(), loop)
             if 'jog_spool' in updates:
-                for client in self.anchors:
-                    if client.anchor_num == updates['jog_spool']['anchor']:
-                        # send an anchor the command 'jog' with a relative length change in meters.
-                        asyncio.run_coroutine_threadsafe(client.send_commands({
-                            'jog' : updates['jog_spool']['rel']
-                        }), loop)
+                if 'anchor' in updates['jog_spool']:
+                    for client in self.anchors:
+                        if client.anchor_num == updates['jog_spool']['anchor']:
+                            # send an anchor the command 'jog' with a relative length change in meters.
+                            asyncio.run_coroutine_threadsafe(client.send_commands({
+                                'jog' : updates['jog_spool']['rel']
+                            }), loop)
+                elif 'gripper' in updates['jog_spool']:
+                    # we can also jog the gripper spool
+                    asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
+                        'jog' : updates['jog_spool']['rel']
+                    }), loop)
             if 'set_grip' in updates:
                 if self.gripper_client is not None:
                     asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
