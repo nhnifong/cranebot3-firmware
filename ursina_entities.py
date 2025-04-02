@@ -50,7 +50,7 @@ class SplineMovingEntity(Entity):
 
 
 class Gripper(SplineMovingEntity):
-    def __init__(self, ui, spline_func, **kwargs):
+    def __init__(self, ui, spline_func, to_ob_q, **kwargs):
         super().__init__(
             ui=ui,
             spline_func=spline_func,
@@ -60,6 +60,8 @@ class Gripper(SplineMovingEntity):
             color=(0.9, 0.9, 0.9, 1.0),
             **kwargs
         )
+        self.closed = False
+        self.to_ob_q = to_ob_q
         self.label_offset = (0.00, 0.04)
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
@@ -87,9 +89,6 @@ class Gripper(SplineMovingEntity):
     def update(self):
         super().update()
         self.label.position = world_position_to_screen_position(self.position) + self.label_offset
-        # if time.time() > self.last_ob_render+0.5:
-        #     self.ui.render_gripper_ob()
-        #     self.last_ob_render = time.time()
 
     def on_mouse_enter(self):
         self.color = anchor_color_selected
@@ -101,19 +100,26 @@ class Gripper(SplineMovingEntity):
         self.wp = WindowPanel(
         title=f"Gripper Controls",
         content=(
-            Button(text='Open', color=color.gold, text_color=color.black),
+            Button(text='Open (Space)', color=color.gold, text_color=color.black),
             Button(text='Show video feed', color=color.gold, text_color=color.black),
-            Button(text='Autofocus', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
-            Button(text='Reel in 20cm', color=color.orange, text_color=color.black, on_click=self.reel_manual),
-            Button(text='Reel out 20cm', color=color.orange, text_color=color.black, on_click=self.reel_manual),
-            Button(text='Sleep', color=color.gold, text_color=color.black),
+            Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
+                on_click=partial(self.reel_manual, -0.05)),
+            Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
+                on_click=partial(self.reel_manual, 0.05)),
             ),
         popup=True
         )
 
     def reel_manual(self, delta_meters):
         self.wp.enabled = False
+        self.to_ob_q.put({'jog_spool':{'gripper':None, 'rel':delta_meters}})
+
+
+    def toggleClosed(self)
+        self.closed = not self.closed
+        self.to_ob_q.put({'set_grip': self.closed})
+        self.gripper.setAppearanceClosed(self.closed)
 
     def setAppearanceClosed(self, closed):
         if closed:
@@ -188,9 +194,9 @@ class Anchor(Entity):
             Button(text='Show video feed', color=color.gold, text_color=color.black),
             Button(text='Autofocus', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
-            Button(text='Reel in 20cm', color=color.orange, text_color=color.black,
+            Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
                 on_click=partial(self.reel_manual, -0.05)),
-            Button(text='Reel out 20cm', color=color.orange, text_color=color.black,
+            Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
                 on_click=partial(self.reel_manual, 0.05)),
             Button(text='Sleep', color=color.gold, text_color=color.black),
             ),
