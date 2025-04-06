@@ -3,6 +3,8 @@
 Control code for a crane mounted household robotic crane consisting of a gripper than hangs from multiple lines
 attached to spools in AI-camera equipped anchor points on the walls of a room.
 
+## [Build Guides and Documentation](https://nhnifong.github.io/neufangled-site/)
+
 ## Desktop setup
 
     sudo apt install python3-pip python3-virtualenv
@@ -77,9 +79,12 @@ install server
 
 Since we require the picamera2 module and it can't be installed with pip, you have to install it with apt and create a virtualenv that can use site packages 
 
-    sudo apt install python3-picamera2 imx500-all --no-install-recommends
     git clone https://github.com/nhnifong/cranebot3-firmware.git
     cd cranebot3-firmware
     python3 -m venv --system-site-packages venv
     source venv/bin/activate
     pip3 install -r requirements_raspi.txt
+
+## Support this project
+
+[Donate on Ko-fi](https://ko-fi.com/neufangled)
