@@ -116,10 +116,10 @@ class Gripper(SplineMovingEntity):
         self.to_ob_q.put({'jog_spool':{'gripper':None, 'rel':delta_meters}})
 
 
-    def toggleClosed(self)
+    def toggleClosed(self):
         self.closed = not self.closed
         self.to_ob_q.put({'set_grip': self.closed})
-        self.gripper.setAppearanceClosed(self.closed)
+        self.setAppearanceClosed(self.closed)
 
     def setAppearanceClosed(self, closed):
         if closed:
