@@ -113,6 +113,7 @@ class SpoolController:
 
         if abs(angle - self.lastAngle):
             logging.warning(f'motor moved more than 1 rev in a single tick, lastAngle={self.lastAngle} angle={angle} diff={angle - self.lastAngle}')
+        self.lastAngle = angle
 
         self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
 
