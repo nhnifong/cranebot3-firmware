@@ -461,6 +461,7 @@ class ControlPanelUI:
         for i, alr in enumerate(self.datastore.anchor_line_record):
             lengths.append(alr.getLast()[-1])
             anchor_positions.append(swap_yz(self.anchors[i].position))
+        print(f'get_simplified_position from lengths {lengths}')
         if sum(lengths) == 0:
             invoke(self.show_error, "Must be connected and perform line calibration before using direct movement", delay=0.0001)
             return anchor_positions, False, None

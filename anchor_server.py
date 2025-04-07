@@ -279,7 +279,7 @@ class RaspiAnchorServer(RobotComponentServer):
                 self.spooler.live_err_high_thresh = updates['equalize_tension']['th'][1]
 
     def readOtherSensors(self):
-        self.update['tension'] = self.spooler.last_tension
+        self.update['tension'] = self.spooler.smoothed_tension
 
     def startOtherTasks(self):
         pass
