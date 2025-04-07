@@ -109,7 +109,7 @@ class RaspiGripperServer(RobotComponentServer):
         self.hat.gpio_pin_mode(PRESSURE_PIN, ADC) # pressure resistor
 
         i2c = busio.I2C(board.SCL, board.SDA)
-        self.imu = BNO08X_I2C(i2c)
+        self.imu = BNO08X_I2C(i2c, address=0x4b)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_LINEAR_ACCELERATION)
 

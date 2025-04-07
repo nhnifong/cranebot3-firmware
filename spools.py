@@ -46,6 +46,7 @@ class SpoolController:
         # Meters of line that were spooled out when zeroAngle was set.
         self.lineAtStart = 0.5
         self.lastLength = 0.5
+        self.lastAngle = 0.0
         self.meters_per_rev =  self.calc_meters_per_rev(self.lineAtStart)
         # The angle of the shaft when setReferenceAngle was last called (in revolutions)
         self.zeroAngle = 0
@@ -109,6 +110,10 @@ class SpoolController:
         if not success:
             logging.error("Could not read shaft angle from motor")
             return (time.time(), self.lastLength)
+
+        if abs(angle - self.lastAngle):
+            logging.warning(f'motor moved more than 1 rev in a single tick, lastAngle={self.lastAngle} angle={angle} diff={angle - self.lastAngle}')
+
         self.lastLength = self.meters_per_rev * (angle - self.zeroAngle) + self.lineAtStart
 
         self.moveAllowed = True
@@ -216,7 +221,7 @@ class SpoolController:
                 if self.moveAllowed:
                     self.motor.runConstantSpeed(self.speed)
                 else:
-                    logging.warning("would move at speed={self.speed} but length is invalid. calibrate length first.")
+                    logging.warning(f"would move at speed={self.speed} but length is invalid. calibrate length first.")
 
                 time.sleep(LOOP_DELAY_S)
             except serial.serialutil.SerialTimeoutException:
