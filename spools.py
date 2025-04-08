@@ -109,7 +109,7 @@ class SpoolController:
         success, angle = self.motor.getShaftAngle()
         if not success:
             logging.error("Could not read shaft angle from motor")
-            return (time.time(), self.lastLength)
+            return (time.time(), self.lastLength, self.smoothed_tension)
 
         if abs(angle - self.lastAngle) > 1:
             logging.warning(f'motor moved more than 1 rev in a single tick, lastAngle={self.lastAngle} angle={angle} diff={angle - self.lastAngle}')
