@@ -6,4 +6,3 @@ inventorhatmini
 gpiodevice
 adafruit-circuitpython-bno08x
 adafruit-circuitpython-vl53l1x
-busio

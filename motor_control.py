@@ -108,7 +108,12 @@ class MKSSERVO42C:
             if msg_rchk != rchk:
                 logging.debug(f'Discarded corrupted message. checksum {rchk} != {msg_rchk}, message={ans}')
                 return False, 0
+            rchk = self._calculateChecksum(ans[:-1])
+            if ans[-1] != rchk:
+                print(f'Read corrupted calculated checksum = {rchk} message checksum = {ans[-1]}')
+                return False, 0
             motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=True)
+            print(f'motor_angle = {bin(motor_angle)}')
             return True, float(motor_angle) / ANGLE_RESOLUTION
 
     def getShaftError(self):
