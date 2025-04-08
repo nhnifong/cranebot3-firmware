@@ -40,9 +40,11 @@ When starting with the lite raspi image, you will be missing the following, so i
 ### Anchors
 
 Setup for any raspberry pi that will be part of an anchor
-Enable uart serial harware interface
+Enable uart serial harware interface interactively.
 
-    sudo raspi-config nonint do_serial_hw 0
+    sudo raspi-config
+
+In interface optoins, select serial port. disable the login shell, but enable hardware serial.
 
 add the following lines lines to to `/boot/firmware/config.txt`  at the end this disables bluetooth, which would otherwise occupy the uart hardware.
 Then reboot after this change
