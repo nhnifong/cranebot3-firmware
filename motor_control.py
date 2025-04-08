@@ -7,6 +7,7 @@
 import serial # note this is pyserial not the module named serial in pip
 from time import sleep
 import threading
+import logging
 
 PING = b'\x3a'
 STOP = b'\xf7'
@@ -33,7 +34,7 @@ class MockSerial:
 
 class MKSSERVO42C:
     def __init__(self):
-        self.port = serial.Serial ("/dev/ttyAMA0", 38400)
+        self.port = serial.Serial ("/dev/ttyAMA0", 25000) # 38400
         # self.port = MockSerial()
         self.port.timeout = 1
         self.port.write_timeout = 1
@@ -92,7 +93,20 @@ class MKSSERVO42C:
         with self.lock:
             self._sendSingleByteCommand(READ_ANGLE)
             ans = self.port.read(6) # address byte, 32 bit integer, checksum byte
-            if len(ans) != 6:
+            # if the first byte is not 0xe0, the motor address, its trash.
+            # sometimes there is one byte of trash. Probably noise
+            if ans[0] != 0xe0:
+                logging.debug(f'first byte is not motor address, got {ans}')
+                if ans[1] == 0xe0:
+                    one = self.port.read(1)
+                    ans = ans[1:] + one # it was just off by one
+                else:
+                    logging.debug(f'where is the motor address?')
+                    return False, 0
+            rchk = int.from_bytes(self._calculateChecksum(ans[:-1]))
+            msg_rchk = ans[-1]
+            if msg_rchk != rchk:
+                logging.debug(f'Discarded corrupted message. checksum {rchk} != {msg_rchk}, message={ans}')
                 return False, 0
             motor_angle = int.from_bytes(ans[1:5], byteorder='big', signed=True)
             return True, float(motor_angle) / ANGLE_RESOLUTION
