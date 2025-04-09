@@ -64,6 +64,8 @@ class SpoolController:
         self.live_tension_low_thresh = TENSION_SLACK_THRESH
         self.live_tension_high_thresh = TENSION_TIGHT_THRESH
         self.smoothed_tension = 0
+        # calibrate a specific value for this motor
+        self.mks42c_expected_err = MKS42C_EXPECTED_ERR
 
         # when this bool is set, spool tracking will pause.
         self.spoolPause = False
@@ -136,12 +138,12 @@ class SpoolController:
 
     def currentTension(self):
         """return the line tension in kilograms of force.
-        Only possible for the MKS42C
+        Only designed for the MKS42C
         """
         _, angleError = self.motor.getShaftError()
-        baseline = MKS42C_EXPECTED_ERR * self.speed
-        load_err = (angleError - baseline) * -1 # the redidual position error attributable to load on the spool, not commanded motor speed
-        # The load on the line subtracts about 1 degree of angle error from the baseline per kilogram.
+        baseline = self.mks42c_expected_err * self.speed
+        load_err = (angleError - baseline) * -1 # the residual position error attributable to load on the spool, not commanded motor speed
+        # greater load on the line subtracts from angleError regardless of the commanded motor direction.
         torque = MKS42C_TORQUE_FACTOR * load_err
         return torque / self.meters_per_rev
 
@@ -230,6 +232,25 @@ class SpoolController:
                 print('Lost serial contact with motor')
                 break
 
+    async def measureNoLoad(self):
+        """
+        Obtain an estimate of the expected angle error with no load per commanded rev/sec specific to this motor.
+        """
+        self.pauseTrackingLoop()
+        data = []
+        for speed in [-0.4, 1, 0.4, -1]:
+            self.motor.runConstantSpeed(speed)
+            for i in range(18):
+                valid, err = self.motor.getShaftError()
+                if valid:
+                    data.append(err * speed)
+                await asyncio.sleep(1/30)
+        self.motor.runConstantSpeed(0)
+        self.speed = 0
+        self.mks42c_expected_err = sum(data)/len(data)
+        print(f'calibrated mks42c_expected_err = {self.mks42c_expected_err} deg')
+        self.resumeTrackingLoop()
+
     async def equalizeSpoolTension(self, controllerApprovalEvent, sendUpdatesFunc):
         """Without tracking any particular length, reel the spool until the line tension is within a predefined range
 
@@ -296,7 +317,7 @@ class SpoolController:
             # wait for stop condition
             while ((started_slack == is_slack)
                    and not self.abort_equalize_tension
-                   and abs(line_delta < MAX_LINE_CHANGE_DURING_CALIBRATION)
+                   and abs(line_delta) < MAX_LINE_CHANGE_DURING_CALIBRATION
                    and (started_slack or self.tensioneq_outspooling_allowed)
                    and self.smoothed_tension < DANGEROUS_TENSION):
                 await asyncio.sleep(1/30)
