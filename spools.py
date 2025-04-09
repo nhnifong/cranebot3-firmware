@@ -15,8 +15,9 @@ LOOP_DELAY_S = 0.03
 REC_MOD = 10
 
 # Constants used in tension equalization process
-TENSION_SLACK_THRESH = 0.4 # kilograms. below this, line is assumed to be slack
-TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too tight.
+TENSION_SLACK_THRESH = 0.4 # kilograms. below this, line is assumed to be slack during tensioning
+TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too tight during tensioning.
+SLACK_THRESH_INITIAL = 0.35 # threshold below which line is assumed to be slack during initial measurement.
 MOTOR_SPEED_DURING_CALIBRATION = 1 # revolutions per second
 MAX_LINE_CHANGE_DURING_CALIBRATION = 0.3 # meters
 MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
@@ -256,7 +257,6 @@ class SpoolController:
         self.motor.runConstantSpeed(0)
         self.speed = 0
         self.abort_equalize_tension = False
-        self.tensioneq_outspooling_allowed = False
         t, curLength, tension = self.currentLineLength()
         startLength = curLength
         line_delta = 0
@@ -276,7 +276,7 @@ class SpoolController:
             await asyncio.sleep(1/30)
 
         # decide initial speed. motor direction will not change during the loop
-        if self.smoothed_tension < 0.45:
+        if self.smoothed_tension < SLACK_THRESH_INITIAL:
             started_slack = True
             self.speed = -MOTOR_SPEED_DURING_CALIBRATION
         else:
@@ -286,13 +286,7 @@ class SpoolController:
         is_slack = started_slack
 
         logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
-        self.desiredLine = []
-        self.motor.runConstantSpeed(0)
-        self.speed = 0
-        self.resumeTrackingLoop()
-        return
-
-
+ 
         DANGEROUS_TENSION = 3.0
         try:
             # wait for stop condition
