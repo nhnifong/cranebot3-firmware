@@ -17,7 +17,6 @@ REC_MOD = 10
 # Constants used in tension equalization process
 TENSION_SLACK_THRESH = 0.4 # kilograms. below this, line is assumed to be slack during tensioning
 TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too tight during tensioning.
-SLACK_THRESH_INITIAL = 0.35 # threshold below which line is assumed to be slack during initial measurement.
 MOTOR_SPEED_DURING_CALIBRATION = 1 # revolutions per second
 MAX_LINE_CHANGE_DURING_CALIBRATION = 0.3 # meters
 MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
@@ -301,7 +300,7 @@ class SpoolController:
         self.motor.runConstantSpeed(0)
 
         # decide initial speed. motor direction will not change during the loop
-        if self.smoothed_tension < SLACK_THRESH_INITIAL:
+        if self.smoothed_tension < TENSION_SLACK_THRESH:
             started_slack = True
             self.speed = -MOTOR_SPEED_DURING_CALIBRATION
         else:
