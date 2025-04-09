@@ -41,6 +41,7 @@ class SpoolController:
         self.full_diameter = full_diameter * 0.001
         self.full_length = full_length
         self.gear_ratio = gear_ratio
+        self.motor_orientation = -1
 
         # since line accumulates on the spool in a spiral, the amount of wrapped line is an exponential function of the spool angle.
         self.diameter_diff = self.full_diameter - self.empty_diameter
@@ -89,12 +90,12 @@ class SpoolController:
             # how many revs must the motor have turned since empty be to have this length
             spooled_length = self.full_length - length
             relative_angle = math.log(spooled_length / self.k1_over_k2 + 1) / self.k2
-            # relative_angle *= -1 # because of motor mounting orientation
-            self.zero_angle = angle - relative_angle
-            print(f'Set zero angle to be {self.zero_angle} revs. {relative_angle} revs from the current value of {angle}')
+            angle *= self.motor_orientation
+            self.zero_angle= angle - relative_angle
+            logging.info(f'Set zero angle to be {self.zero_angle} revs. {relative_angle} revs from the current value of {angle}')
 
     def _get_spooled_length(self, motor_angle_revs):
-        relative_angle = motor_angle_revs - self.zero_angle
+        relative_angle = self.motor_orientation* motor_angle_revs - self.zero_angle # shaft angle relative to zero_angle
         if self.diameter_diff == 0:
             return relative_angle * self.gear_ratio * math.pi * self.empty_diameter
         else:
@@ -104,7 +105,7 @@ class SpoolController:
         return self.full_length - self._get_spooled_length(motor_angle_revs)
 
     def get_unspool_rate(self, motor_angle_revs):
-        relative_angle = motor_angle_revs - self.zero_angle
+        relative_angle = self.motor_orientation * motor_angle_revs - self.zero_angle
 
         if self.diameter_diff == 0:
             return math.pi * self.empty_diameter * self.gear_ratio
@@ -135,6 +136,7 @@ class SpoolController:
     def currentLineLength(self):
         """
         return the current time and current unspooled line in meters
+        Also store the length in an array to be popped later.
         """
         success, angle = self.motor.getShaftAngle()
         if not success:
@@ -142,16 +144,16 @@ class SpoolController:
             return (time.time(), self.lastLength)
 
         if abs(angle - self.lastAngle) > 1:
-            logging.warning(f'motor moved more than 1 rev in a single tick, lastAngle={self.lastAngle} angle={angle} diff={angle - self.lastAngle}')
+            logging.warning(f'motor moved more than 1 rev since last read, lastAngle={self.lastAngle} angle={angle} diff={angle - self.lastAngle}')
         self.lastAngle = angle
 
         self.lastLength = self.get_unspooled_length(angle)
         self.meters_per_rev = self.get_unspool_rate(angle)
-        print(f'current unspooled line = {self.lastLength} m. rate = {self.meters_per_rev} m/r')
+        logging.debug(f'current unspooled line = {self.lastLength} m. rate = {self.meters_per_rev} m/r')
 
         self.moveAllowed = True
         if self.lastLength < 0 or self.lastLength > self.full_length:
-            logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}")
+            logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}. Movement disallowed until new reference length received.")
             self.moveAllowed = False
 
         self.smoothed_tension = self.currentTension() * 0.2 + self.smoothed_tension * 0.8
@@ -257,7 +259,7 @@ class SpoolController:
 
                 time.sleep(LOOP_DELAY_S)
             except serial.serialutil.SerialTimeoutException:
-                print('Lost serial contact with motor')
+                logging.error('Lost serial contact with motor')
                 break
 
     async def equalizeSpoolTension(self, controllerApprovalEvent, sendUpdatesFunc):
