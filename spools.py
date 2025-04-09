@@ -274,6 +274,10 @@ class SpoolController:
             t, curLength, tension = self.currentLineLength()
             logging.debug(f'getting stabilized tension reading {self.smoothed_tension}')
             await asyncio.sleep(1/30)
+        # undo motion that occurred during reading
+        self.motor.runConstantSpeed(-MEASUREMENT_SPEED)
+        await asyncio.sleep(18/30)
+        self.motor.runConstantSpeed(0)
 
         # decide initial speed. motor direction will not change during the loop
         if self.smoothed_tension < SLACK_THRESH_INITIAL:
