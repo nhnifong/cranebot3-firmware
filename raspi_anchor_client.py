@@ -181,7 +181,10 @@ class ComponentClient:
         # just discard the update if not connected.
 
     async def slow_stop_spool(self):
-        await self.send_commands({'length_plan' : []})
+        await self.send_commands({
+            'length_plan' : [],
+            'equalize_tension': {'action': 'abort'}
+        })
 
     async def startup(self):
         self.ct = asyncio.create_task(self.connect_websocket())

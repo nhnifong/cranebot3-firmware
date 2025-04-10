@@ -147,6 +147,9 @@ class AsyncObserver:
                 # a command to stop any spools that were reeling in during tension equaliztion
                 for client in self.anchors:
                     asyncio.run_coroutine_threadsafe(client.send_commands({'equalize_tension': {'action': 'stop_if_not_slack'}}), loop)
+            if 'measure_no_load' in updates:
+                for client in self.anchors:
+                    asyncio.run_coroutine_threadsafe(client.send_commands({'measure_no_load': None}), loop)
 
     def slow_stop_all_spools(self, loop):
         for name, client in self.bot_clients.items():

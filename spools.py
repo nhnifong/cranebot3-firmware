@@ -13,6 +13,7 @@ MAX_ACCEL = 0.4
 LOOP_DELAY_S = 0.03
 # record line length every 10th iteration
 REC_MOD = 10
+TENSION_SMOOTHING_FACTOR = 0.2
 
 # Constants used in tension equalization process
 TENSION_SLACK_THRESH = 0.4 # kilograms. below this, line is assumed to be slack during tensioning
@@ -21,7 +22,9 @@ MOTOR_SPEED_DURING_CALIBRATION = 1 # revolutions per second
 MAX_LINE_CHANGE_DURING_CALIBRATION = 0.3 # meters
 MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
 MKS42C_TORQUE_FACTOR = 0.031 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
-
+MEASUREMENT_SPEED = -0.4 # speed at which to measure initial tension. slowest possible motor speed
+MEASUREMENT_TICKS = 18 # number of 1/30 second ticks to measure to obtain a stable value.
+DANGEROUS_TENSION = 2.5 # if this tension is exceeded, motion will stop.
 
 def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
@@ -69,7 +72,6 @@ class SpoolController:
         self.rec_loop_counter = 0
         self.moveAllowed = True
         self.abort_equalize_tension = False
-        self.tensioneq_outspooling_allowed = True
         self.live_tension_low_thresh = TENSION_SLACK_THRESH
         self.live_tension_high_thresh = TENSION_TIGHT_THRESH
         self.smoothed_tension = 0
@@ -164,7 +166,7 @@ class SpoolController:
             logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}. Movement disallowed until new reference length received.")
             self.moveAllowed = False
 
-        self.smoothed_tension = self.currentTension() * 0.2 + self.smoothed_tension * 0.8
+        self.smoothed_tension = self.currentTension() * TENSION_SMOOTHING_FACTOR + self.smoothed_tension * (1-TENSION_SMOOTHING_FACTOR)
 
         # accumulate these so you can send them to the websocket
         row = (time.time(), self.lastLength, self.smoothed_tension)
@@ -287,7 +289,11 @@ class SpoolController:
         print(f'calibrated mks42c_expected_err = {self.mks42c_expected_err} deg')
         self.resumeTrackingLoop()
 
-    async def equalizeSpoolTension(self, controllerApprovalEvent, sendUpdatesFunc):
+    async def equalizeSpoolTension(self,
+        controllerApprovalEvent,
+        sendUpdatesFunc,
+        maxLineChange=MAX_LINE_CHANGE_DURING_CALIBRATION,
+        allowOutSpooling=True):
         """Without tracking any particular length, reel the spool until the line tension is within a predefined range
 
         Pause spool tracking loop
@@ -323,15 +329,14 @@ class SpoolController:
 
         logging.info("Measuring tension in motion")
         # measuring tension at rest is not possible. measure in motion
-        MEASUREMENT_SPEED = -0.4
         self.commandSpeed(MEASUREMENT_SPEED)
-        for i in range(18):
+        for i in range(MEASUREMENT_TICKS):
             t, curLength, tension = self.currentLineLength()
             logging.debug(f'getting stabilized tension reading {self.smoothed_tension}')
             await asyncio.sleep(1/30)
         # undo motion that occurred during reading
         self.commandSpeed(-MEASUREMENT_SPEED)
-        await asyncio.sleep(18/30)
+        await asyncio.sleep(MEASUREMENT_TICKS/30)
         self.commandSpeed(0)
 
         # decide initial speed. motor direction will not change during the loop
@@ -345,13 +350,12 @@ class SpoolController:
 
         logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
  
-        DANGEROUS_TENSION = 3.0
         try:
             # wait for stop condition
             while ((started_slack == is_slack)
                    and not self.abort_equalize_tension
-                   and abs(line_delta) < MAX_LINE_CHANGE_DURING_CALIBRATION
-                   and (started_slack or self.tensioneq_outspooling_allowed)
+                   and abs(line_delta) < maxLineChange
+                   and (started_slack or allowOutSpooling)
                    and self.smoothed_tension < DANGEROUS_TENSION):
                 await asyncio.sleep(1/30)
                 # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
