@@ -226,12 +226,12 @@ class AsyncObserver:
                     self.config.anchors[anchor_num].service_name = info.server
                     self.config.write()
 
-                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat, self.shape_tracker)
+                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
                 self.bot_clients[info.server] = ac
                 self.anchors.append(ac)
                 await ac.startup()
             elif name_component == cranebot_gripper_service_name:
-                gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_pe_q, self.pool, self.stat)
+                gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_pe_q, self.to_ob_q, self.pool, self.stat)
                 self.bot_clients[info.server] = gc
                 self.gripper_client = gc
                 await gc.startup()

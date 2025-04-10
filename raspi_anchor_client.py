@@ -30,12 +30,13 @@ def pose_from_det(det):
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
-    def __init__(self, address, datastore, to_ui_q, to_pe_q, pool, stat):
+    def __init__(self, address, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat):
         self.address = address
         self.origin_poses = []
         self.datastore = datastore
         self.to_ui_q = to_ui_q
         self.to_pe_q = to_pe_q
+        self.to_ob_q = to_ob_q
         self.websocket = None
         self.connected = False  # status of connection to websocket
         self.receive_task = None  # Task for receiving messages from websocket
@@ -201,8 +202,8 @@ class ComponentClient:
             self.ct.cancel()
 
 class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q, pool, stat, shape_tracker):
-        super().__init__(address, datastore, to_ui_q, to_pe_q, pool, stat)
+    def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat, shape_tracker):
+        super().__init__(address, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat)
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = {'anchor_num': self.anchor_num}
         self.calibration_mode = False # true is pose calibration mode.

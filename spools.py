@@ -21,7 +21,7 @@ TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too ti
 MOTOR_SPEED_DURING_CALIBRATION = 1 # revolutions per second
 MAX_LINE_CHANGE_DURING_CALIBRATION = 0.3 # meters
 MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
-MKS42C_TORQUE_FACTOR = 0.031 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
+MKS42C_TORQUE_FACTOR = 0.031 * 1.8 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
 MEASUREMENT_SPEED = -0.4 # speed at which to measure initial tension. slowest possible motor speed
 MEASUREMENT_TICKS = 18 # number of 1/30 second ticks to measure to obtain a stable value.
 DANGEROUS_TENSION = 2.5 # if this tension is exceeded, motion will stop.
@@ -174,6 +174,13 @@ class SpoolController:
             self.moveAllowed = False
 
         self.smoothed_tension = self.currentTension() * TENSION_SMOOTHING_FACTOR + self.smoothed_tension * (1-TENSION_SMOOTHING_FACTOR)
+        if self.smoothed_tension > DANGEROUS_TENSION:
+            logging.warning(f"Tension of {self.smoothed_tension} is too high!")
+            # try to loosen up right away to avoid breaking something
+            self.commandSpeed(1)
+            time.sleep(1)
+            self.commandSpeed(0)
+            self.moveAllowed = False
 
         # accumulate these so you can send them to the websocket
         row = (time.time(), self.lastLength, self.smoothed_tension)
@@ -191,7 +198,7 @@ class SpoolController:
         baseline = self.mks42c_expected_err * self.speed
         load_err = (angleError - baseline) * -1 # the residual position error attributable to load on the spool, not commanded motor speed
         # greater load on the line subtracts from angleError regardless of the commanded motor direction.
-        torque = MKS42C_TORQUE_FACTOR * load_err
+        torque = MKS42C_TORQUE_FACTOR * (load_err / baseline)
         return torque / self.meters_per_rev
 
 
@@ -231,7 +238,7 @@ class SpoolController:
                         if abs(newspeed) < 0.2:
                             newspeed = 0
                         logging.debug(f'Slow stopping {newspeed}')
-                        commandSpeed(newspeed)
+                        self.commandSpeed(newspeed)
                     time.sleep(LOOP_DELAY_S)
                     continue
 
@@ -295,7 +302,7 @@ class SpoolController:
         self.mks42c_expected_err = sum(data)/len(data)
         print(f'calibrated mks42c_expected_err = {self.mks42c_expected_err} deg')
         with open('mks42c_expected_err.cal', 'w') as f:
-            f.write(self.mks42c_expected_err)
+            f.write(f'{self.mks42c_expected_err}\n')
         self.resumeTrackingLoop()
 
     async def equalizeSpoolTension(self,

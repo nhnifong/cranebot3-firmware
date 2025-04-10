@@ -276,7 +276,7 @@ class ControlPanelUI:
         self.direct_move_indicator = Entity(
             model='arrow',
             color=color.black,
-            scale=(0.1, 0.1, 0.1),
+            scale=(0.5, 0.5, 0.5),
             position=(0,0.5,0),
             enabled=False,
         )
@@ -445,8 +445,8 @@ class ControlPanelUI:
                 invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
 
             # send a direct move command in pause mode
-            if self.calibration_mode == 'pause':
-                invoke(self.direct_move, delay=0.0001)
+            # if self.calibration_mode == 'pause':
+            #     invoke(self.direct_move, delay=0.0001)
             
             time.sleep(1)
 
@@ -499,6 +499,7 @@ class ControlPanelUI:
         times = np.linspace(0, move_duration, 6, dtype=np.float64).reshape(-1, 1)
         # where we want the gantry to be at the time intervals
         gantry_positions = self.direction * times + start
+        print(f'direct move start = {start} finish = {gantry_positions[-1]}')
         # represent as absolute times
         times = times + time.time()
         # the anchor line lengths if the gantry were at those positions
