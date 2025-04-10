@@ -75,8 +75,15 @@ class SpoolController:
         self.live_tension_low_thresh = TENSION_SLACK_THRESH
         self.live_tension_high_thresh = TENSION_TIGHT_THRESH
         self.smoothed_tension = 0
-        # calibrate a specific value for this motor
+
         self.mks42c_expected_err = MKS42C_EXPECTED_ERR
+        # use a specific value for this motor
+        try:
+            with open('mks42c_expected_err.cal', 'w') as f:
+                self.mks42c_expected_err = float(r.read())
+                logging.info(f'Used stored mks42c_expected_err value of {self.mks42c_expected_err }')
+        except (FileNotFoundError, ValueError):
+            pass
 
         # when this bool is set, spool tracking will pause.
         self.spoolPause = False
@@ -287,6 +294,8 @@ class SpoolController:
         self.commandSpeed(0)
         self.mks42c_expected_err = sum(data)/len(data)
         print(f'calibrated mks42c_expected_err = {self.mks42c_expected_err} deg')
+        with open('mks42c_expected_err.cal', 'w') as f:
+            f.write(self.mks42c_expected_err)
         self.resumeTrackingLoop()
 
     async def equalizeSpoolTension(self,

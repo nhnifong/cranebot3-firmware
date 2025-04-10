@@ -263,6 +263,12 @@ class RaspiAnchorServer(RobotComponentServer):
             if action == 'start':
                 self.ws_delay = CALIBRATING_WS_DELAY # send updates faster
                 self.eq_tension_stop_event.clear()
+                maxLineChange = 0.3 # max meters of line that is allowed to reel in
+                if 'max_line_change' in updates['equalize_tension']:
+                    maxLineChange = updates['equalize_tension']['max_line_change']
+                allowOutSpooling = True
+                if 'allow_outspooling' in updates['equalize_tension']:
+                    allowOutSpooling = updates['equalize_tension']['allow_outspooling']
                 asyncio.create_task(self.spooler.equalizeSpoolTension(self.eq_tension_stop_event, self.sendData, maxLineChange, allowOutSpooling))
             elif action == 'complete':
                 # set the event, without setting abort_equalize_tension to indicate approval and commit the line length change
