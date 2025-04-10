@@ -352,7 +352,9 @@ class AsyncObserver:
         for client in self.anchors:
             client.tension_seek_running = True
             print('send_commands 1')
-            asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'start'}}))
+            asyncio.create_task(client.send_commands({'equalize_tension': {
+                'action': 'start',
+            }}))
 
         print('equalize_tension 2')
         # wait for all clients to finish
