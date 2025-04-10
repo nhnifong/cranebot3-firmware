@@ -159,7 +159,7 @@ class SpoolController:
 
         self.lastLength = self.get_unspooled_length(angle)
         self.meters_per_rev = self.get_unspool_rate(angle)
-        logging.debug(f'current unspooled line = {self.lastLength} m. rate = {self.meters_per_rev} m/r')
+        # logging.debug(f'current unspooled line = {self.lastLength} m. rate = {self.meters_per_rev} m/r')
 
         self.moveAllowed = True
         if self.lastLength < 0 or self.lastLength > self.full_length:
