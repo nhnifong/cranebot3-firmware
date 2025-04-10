@@ -297,6 +297,7 @@ class ControlPanelUI:
                 )),
             DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Equalize line tension', on_click=self.equalize_lines),
+            DropdownMenuButton('Measure zero load', on_click=self.measure_zero_load),
             DropdownMenuButton('Show/Hide weight sliders', on_click=self.toggle_weight_sliders),
             ))
 
@@ -305,6 +306,9 @@ class ControlPanelUI:
 
     def equalize_lines(self):
         self.to_ob_q.put({'equalize_line_tension': None})
+
+    def measure_zero_load(self):
+        self.to_ob_q.put({'measure_no_load': None})
 
     def toggle_weight_sliders(self):
         for s in self.sliders:
@@ -421,7 +425,7 @@ class ControlPanelUI:
         self.line_cal_confirm.enabled = False
 
     def on_stop_button(self):
-        self.to_ob_q.put({'set_run_mode':'pause'})
+        self.to_ob_q.put({'slow_stop_all':None})
 
     def render_gripper_ob(self, row, color):
         self.go_quads.add(partial(update_go_quad, row, color))
