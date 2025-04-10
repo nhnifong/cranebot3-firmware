@@ -80,7 +80,7 @@ class SpoolController:
         # use a specific value for this motor
         try:
             with open('mks42c_expected_err.cal', 'w') as f:
-                self.mks42c_expected_err = float(r.read())
+                self.mks42c_expected_err = float(f.read())
                 logging.info(f'Used stored mks42c_expected_err value of {self.mks42c_expected_err }')
         except (FileNotFoundError, ValueError):
             pass
