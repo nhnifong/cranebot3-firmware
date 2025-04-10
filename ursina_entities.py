@@ -195,9 +195,9 @@ class Anchor(Entity):
             Button(text='Autofocus', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
             Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
-                on_click=partial(self.reel_manual, -0.05)),
+                on_click=partial(self.reel_manual, -0.15)),
             Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                on_click=partial(self.reel_manual, 0.05)),
+                on_click=partial(self.reel_manual, 0.15)),
             Button(text='Sleep', color=color.gold, text_color=color.black),
             ),
         popup=True

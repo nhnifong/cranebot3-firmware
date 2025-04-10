@@ -10,8 +10,8 @@ video_port = 8888
 websocket_port = 8765
 
 class RaspiGripperClient(ComponentClient):
-    def __init__(self, address, datastore, to_ui_q, to_pe_q, pool, stat):
-        super().__init__(address, datastore, to_ui_q, to_pe_q, pool, stat)
+    def __init__(self, address, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat):
+        super().__init__(address, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat)
         self.conn_status = {'gripper': True}
         self.anchor_num = None
 
