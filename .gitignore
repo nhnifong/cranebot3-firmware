@@ -9,3 +9,4 @@ camera_coef.npz
 images/cal
 *.pt
 cranebot.log
+mks42c_expected_err.cal
