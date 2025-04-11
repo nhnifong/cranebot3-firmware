@@ -21,7 +21,7 @@ TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too ti
 MOTOR_SPEED_DURING_CALIBRATION = 1 # revolutions per second
 MAX_LINE_CHANGE_DURING_CALIBRATION = 0.3 # meters
 MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
-MKS42C_TORQUE_FACTOR = 0.031 * 1.8 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
+MKS42C_TORQUE_FACTOR = 0.031 / 1.8 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
 MEASUREMENT_SPEED = -0.4 # speed at which to measure initial tension. slowest possible motor speed
 MEASUREMENT_TICKS = 18 # number of 1/30 second ticks to measure to obtain a stable value.
 DANGEROUS_TENSION = 2.5 # if this tension is exceeded, motion will stop.
@@ -79,10 +79,11 @@ class SpoolController:
         self.mks42c_expected_err = MKS42C_EXPECTED_ERR
         # use a specific value for this motor
         try:
-            with open('mks42c_expected_err.cal', 'w') as f:
+            with open('mks42c_expected_err.cal', 'r') as f:
                 self.mks42c_expected_err = float(f.read())
                 logging.info(f'Used stored mks42c_expected_err value of {self.mks42c_expected_err }')
         except (FileNotFoundError, ValueError):
+            print('Could not read saved mks42c_expected_err')
             pass
 
         # when this bool is set, spool tracking will pause.
@@ -168,19 +169,19 @@ class SpoolController:
         self.meters_per_rev = self.get_unspool_rate(angle)
         # logging.debug(f'current unspooled line = {self.lastLength} m. rate = {self.meters_per_rev} m/r')
 
-        self.moveAllowed = True
-        if self.lastLength < 0 or self.lastLength > self.full_length:
-            logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}. Movement disallowed until new reference length received.")
-            self.moveAllowed = False
+        # self.moveAllowed = True
+        # if self.lastLength < 0 or self.lastLength > self.full_length:
+        #     logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}. Movement disallowed until new reference length received.")
+        #     self.moveAllowed = False
 
         self.smoothed_tension = self.currentTension() * TENSION_SMOOTHING_FACTOR + self.smoothed_tension * (1-TENSION_SMOOTHING_FACTOR)
-        if self.smoothed_tension > DANGEROUS_TENSION:
-            logging.warning(f"Tension of {self.smoothed_tension} is too high!")
-            # try to loosen up right away to avoid breaking something
-            self.commandSpeed(1)
-            time.sleep(1)
-            self.commandSpeed(0)
-            self.moveAllowed = False
+        # if self.smoothed_tension > DANGEROUS_TENSION:
+        #     logging.warning(f"Tension of {self.smoothed_tension} is too high!")
+        #     # try to loosen up right away to avoid breaking something
+        #     self.commandSpeed(1)
+        #     time.sleep(1)
+        #     self.commandSpeed(0)
+        #     self.moveAllowed = False
 
         # accumulate these so you can send them to the websocket
         row = (time.time(), self.lastLength, self.smoothed_tension)
@@ -193,14 +194,28 @@ class SpoolController:
     def currentTension(self):
         """return the line tension in kilograms of force.
         Only designed for the MKS42C
+        Measurements are basically invalid below speeds of 0.4
         """
         _, angleError = self.motor.getShaftError()
         baseline = self.mks42c_expected_err * self.speed
-        load_err = (angleError - baseline) * -1 # the residual position error attributable to load on the spool, not commanded motor speed
+        load_err = baseline - angleError # the residual position error attributable to load on the spool, not commanded motor speed
         # greater load on the line subtracts from angleError regardless of the commanded motor direction.
-        torque = MKS42C_TORQUE_FACTOR * (load_err / baseline)
+        ratio = load_err / baseline
+        special = load_err
+        if self.speed < 0: special /= abs(self.speed-1)
+        print(f'currentTension() baseline={baseline:.3f} load_err={load_err:.3f} ratio={ratio:.3f} special={special:.3f}')
+        torque = MKS42C_TORQUE_FACTOR * load_err
         return torque / self.meters_per_rev
 
+    def measure_t(self):
+        try:
+            while True:
+                self.commandSpeed(math.sin(time.time()/4)*2)
+                t, l, tension = self.currentLineLength()
+                print(f'tension = {tension:.3f}')
+                time.sleep(1/30)
+        except KeyboardInterrupt:
+            self.commandSpeed(0)
 
     def fastStop(self):
         # fast stop is permanent.
@@ -296,7 +311,7 @@ class SpoolController:
             for i in range(18):
                 valid, err = self.motor.getShaftError()
                 if valid:
-                    data.append(err * speed)
+                    data.append(err / speed)
                 await asyncio.sleep(1/30)
         self.commandSpeed(0)
         self.mks42c_expected_err = sum(data)/len(data)
