@@ -16,6 +16,7 @@ FILES = [
 ]
 REMOTE_DIR = "cranebot3-firmware"
 
+# blocking version
 def run_command(command):
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
@@ -27,8 +28,17 @@ def run_command(command):
 
 async def copy_up(host):
     print(f"Copying files to {host}:{REMOTE_DIR}...")
-    if not run_command(f"scp {" ".join(FILES)} {host}:{REMOTE_DIR}"):
-        print(f"Failed to copy to {host}. Skipping restart.")
+    run_command(f"scp {" ".join(FILES)} {host}:{REMOTE_DIR}")
+    # process = await asyncio.create_subprocess_shell(
+    #     f"scp {" ".join(FILES)} {host}:{REMOTE_DIR}",
+    #     stdout=asyncio.subprocess.PIPE,  # We still need these to create the process
+    #     stderr=asyncio.subprocess.PIPE,  # Even if we don't use the output.
+    # )
+    # stdout, stderr = await process.communicate() # Get the output
+    # if process.returncode != 0:
+    #     print(f"Failed to copy to {host}. Command exited with error code {process.returncode}")
+    #     print(stderr.decode())
+    # return process.returncode  # Return the exit code
 
 async def main():
     for host in REMOTE_HOSTS:
