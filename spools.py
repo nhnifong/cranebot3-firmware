@@ -77,11 +77,14 @@ class SpoolController:
         self.smoothed_tension = 0
 
         self.mks42c_expected_err = MKS42C_EXPECTED_ERR
+        self.mks42c_torque_factor = MKS42C_TORQUE_FACTOR
         # use a specific value for this motor
         try:
             with open('mks42c_expected_err.cal', 'r') as f:
-                self.mks42c_expected_err = float(f.read())
+                self.mks42c_expected_err = float(f.readline())
                 logging.info(f'Used stored mks42c_expected_err value of {self.mks42c_expected_err }')
+                self.mks42c_torque_factor = float(f.readline())
+                logging.info(f'Used stored mks42c_torque_factor value of {self.mks42c_torque_factor }')
         except (FileNotFoundError, ValueError):
             print('Could not read saved mks42c_expected_err')
             pass
@@ -201,8 +204,7 @@ class SpoolController:
         load_err = baseline - angleError # the residual position error attributable to load on the spool, not commanded motor speed
         # greater load on the line subtracts from angleError regardless of the commanded motor direction.
         ratio = load_err / baseline
-        special = load_err
-        if self.speed < 0: special /= abs(self.speed-1)
+        special = load_err - self.speed*0.25
         print(f'currentTension() baseline={baseline:.3f} load_err={load_err:.3f} ratio={ratio:.3f} special={special:.3f}')
         torque = MKS42C_TORQUE_FACTOR * load_err
         return torque / self.meters_per_rev
@@ -300,24 +302,46 @@ class SpoolController:
                 logging.error('Lost serial contact with motor')
                 break
 
-    async def measureNoLoad(self):
+    async def measureRefLoad(self, load=0, freq=5):
         """
         Obtain an estimate of the expected angle error with no load per commanded rev/sec specific to this motor.
         """
         self.pauseTrackingLoop()
         data = []
-        for speed in [-0.4, 1, 0.4, -1]:
+        for i in range(120):
+            speed = math.sin(time.time()*freq)*3
+            if abs(speed) < 0.4:
+                if speed > 0:
+                    speed = 0.4
+                else:
+                    speed = -0.4
             self.commandSpeed(speed)
-            for i in range(18):
-                valid, err = self.motor.getShaftError()
-                if valid:
+            valid, err = self.motor.getShaftError()
+            if valid:
+                if load==0:
+                    # with no load, we are measuring expected_err
                     data.append(err / speed)
-                await asyncio.sleep(1/30)
+                else:
+                    # under load we are measuring torque_factor
+                    # record what torque would be if torque_factor were 1
+                    data.append((self.mks42c_expected_err * self.speed - err) / self.meters_per_rev)
+            await asyncio.sleep(1/30)
         self.commandSpeed(0)
-        self.mks42c_expected_err = sum(data)/len(data)
-        print(f'calibrated mks42c_expected_err = {self.mks42c_expected_err} deg')
+        print(f'Collected {len(data)} data points')
+        if load==0:
+            self.mks42c_expected_err = sum(data)/len(data)
+            # fun fact. if we were using degrees/sec to measure speed instead of revolutions/sec, the units of this constant would be seconds.
+            # I guess it would mean how long in seconds the motor is from theoretically catching up to it's set point.
+            # why is this different for every motor? it seems to change drastically if the motor's own calibration is performed with any mass
+            # on the spool, so its probably just a function of the PID terms.
+            print(f'calibrated mks42c_expected_err = {self.mks42c_expected_err} deg/(rev/sec)')
+        else:
+            # divide the actual load in kg by the mean measured torque value.
+            self.mks42c_torque_factor = load / (sum(data)/len(data))
+            print(f'calibrated mks42c_torque_factor = {self.mks42c_torque_factor} kg/deg')
         with open('mks42c_expected_err.cal', 'w') as f:
             f.write(f'{self.mks42c_expected_err}\n')
+            f.write(f'{self.mks42c_torque_factor}\n')
         self.resumeTrackingLoop()
 
     async def equalizeSpoolTension(self,
