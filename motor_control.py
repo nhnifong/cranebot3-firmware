@@ -117,6 +117,8 @@ class MKSSERVO42C:
         ans = self.port.read(n)
         # if the first byte is not 0xe0, the motor address, its trash.
         # sometimes there is one byte of trash. Probably noise
+        if len(ans) == 0:
+            return False, None
         if ans[0] != 0xe0:
             logging.debug(f'first byte is not motor address, got {ans}')
             if ans[1] == 0xe0:

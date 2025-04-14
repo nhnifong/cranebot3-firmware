@@ -43,6 +43,12 @@ frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d
 RUNNING_WS_DELAY = 0.3
 CALIBRATING_WS_DELAY = 0.05
 
+# constants
+conf = {
+    'RUNNING_WS_DELAY': 0.3,
+    'CALIBRATING_WS_DELAY': 0.05,
+}
+
 class RobotComponentServer:
     def __init__(self):
         self.run_server = True
@@ -155,6 +161,8 @@ class RobotComponentServer:
                     self.spooler.jogRelativeLen(float(update['jog']))
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
+                if 'set_config_var' in update:
+                    pass
 
                 # defer to specific server subclass
                 await self.processOtherUpdates(update)
@@ -237,14 +245,11 @@ class RaspiAnchorServer(RobotComponentServer):
         super().__init__()
         ratio = 16/40 # 16 drive gear teeth, 40 spool teeth. the spool makes 0.4 rotations per motor rotation.
         if power_anchor:
-            # A power anchor spool is wound with a 2 core pvc sheathed wire with a thickness of 2.00mm
-            # the 22mm wide spool in theory has room for 11 windings per layer, though it does not wind evenly.
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=54, full_length=9, gear_ratio=ratio)
-        elif flat:
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=23.7, full_diameter=25, full_length=9, gear_ratio=1)
+            # A power anchor spool has a thicker line
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=43.7, full_length=10, gear_ratio=ratio)
         else:
             # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=27, full_length=9, gear_ratio=ratio)
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=27, full_length=10, gear_ratio=ratio)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
         self.eq_tension_stop_event = asyncio.Event()

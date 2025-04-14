@@ -49,6 +49,8 @@ class SplineMovingEntity(Entity):
         self.ui.vert_line.model = draw_line(self.ui.gripper.position, self.position)
 
 
+MAX_JOG_SPEED = 0.3
+
 class Gripper(SplineMovingEntity):
     def __init__(self, ui, spline_func, to_ob_q, **kwargs):
         super().__init__(
@@ -103,16 +105,51 @@ class Gripper(SplineMovingEntity):
             Button(text='Open (Space)', color=color.gold, text_color=color.black),
             Button(text='Show video feed', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
-            Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
-                on_click=partial(self.reel_manual, -0.05)),
-            Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                on_click=partial(self.reel_manual, 0.05)),
+            Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
+                       on_click=self.open_manual_spool_control),
             ),
-        popup=True
+        popup=True,
         )
 
-    def reel_manual(self, delta_meters):
+    def open_manual_spool_control(self):
         self.wp.enabled = False
+        self.jog_speed = 0.01
+        self.manual_spool_wp = WindowPanel(
+            title="Manual Spool Control",
+            content=(
+                Text(text="Use buttons or Up/Down arrow keys to control spool."),
+                Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
+                    on_click=partial(self.reel_manual, -0.05)),
+                Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
+                    on_click=partial(self.reel_manual, 0.05)),
+            ),
+            popup=True,
+        )
+
+    def input(self, key):
+        if hasattr(self, "manual_spool_wp") and self.manual_spool_wp.enabled:
+            if key == 'up arrow down':
+                self.reel_manual(-self.jog_speed)
+            elif key == 'up arrow hold':
+                if self.jog_speed < MAX_JOG_SPEED:
+                    self.jog_speed += 0.01
+                self.reel_manual(-self.jog_speed)
+            elif key == 'up arrow up':
+                self.jog_speed = 0.1
+                self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
+
+
+            elif key == 'down arrow down':
+                self.reel_manual(self.jog_speed)
+            elif key == 'down arrow hold':
+                if self.jog_speed < MAX_JOG_SPEED:
+                    self.jog_speed += 0.01
+                self.reel_manual(self.jog_speed)
+            elif key == 'down arrow up':
+                self.jog_speed = 0.1
+                self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
+
+    def reel_manual(self, delta_meters):
         self.to_ob_q.put({'jog_spool':{'gripper':None, 'rel':delta_meters}})
 
 
@@ -194,18 +231,54 @@ class Anchor(Entity):
             Button(text='Show video feed', color=color.gold, text_color=color.black),
             Button(text='Autofocus', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
-            Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
-                on_click=partial(self.reel_manual, -0.15)),
-            Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                on_click=partial(self.reel_manual, 0.15)),
+            Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
+                       on_click=self.open_manual_spool_control),
             Button(text='Sleep', color=color.gold, text_color=color.black),
             ),
         popup=True
         )
 
+    def open_manual_spool_control(self):
+        self.wp.enabled = False
+        self.jog_speed = 0.01
+        self.manual_spool_wp = WindowPanel(
+            title="Manual Spool Control",
+            content=(
+                Text(text="Use buttons or Up/Down arrow keys to control spool."),
+                Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
+                    on_click=partial(self.reel_manual, -0.05)),
+                Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
+                    on_click=partial(self.reel_manual, 0.05)),
+            ),
+            popup=True,
+        )
+
+    def input(self, key):
+        if hasattr(self, "manual_spool_wp") and self.manual_spool_wp.enabled:
+            if key == 'up arrow down':
+                self.reel_manual(-self.jog_speed)
+            elif key == 'up arrow hold':
+                if self.jog_speed < MAX_JOG_SPEED:
+                    self.jog_speed += 0.01
+                self.reel_manual(-self.jog_speed)
+            elif key == 'up arrow up':
+                self.jog_speed = 0.1
+                self.to_ob_q.put({'slow_stop_one':{'id':self.num}})
+
+
+            elif key == 'down arrow down':
+                self.reel_manual(self.jog_speed)
+            elif key == 'down arrow hold':
+                if self.jog_speed < MAX_JOG_SPEED:
+                    self.jog_speed += 0.01
+                self.reel_manual(self.jog_speed)
+            elif key == 'down arrow up':
+                self.jog_speed = 0.1
+                self.to_ob_q.put({'slow_stop_one':{'id':self.num}})
+
     def reel_manual(self, delta_meters):
         self.wp.enabled = False
-        self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'rel':delta_meters}})        
+        self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'rel':delta_meters}})
 
 
 class Floor(Entity):
