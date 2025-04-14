@@ -118,6 +118,7 @@ class AsyncObserver:
                 self.set_run_mode(updates['set_run_mode'], loop)
             if 'do_line_calibration' in updates:
                 lengths = updates['do_line_calibration']
+                print(f'do_line_calibration lengths={lengths}')
                 for client in self.anchors:
                     asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': lengths[client.anchor_num]}), loop)
             if 'equalize_line_tension' in updates:
@@ -132,15 +133,25 @@ class AsyncObserver:
                                 'jog' : updates['jog_spool']['rel']
                             }), loop)
                 elif 'gripper' in updates['jog_spool']:
+                    print(f"jog gripper spool {updates['jog_spool']['rel']}")
                     # we can also jog the gripper spool
-                    asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
-                        'jog' : updates['jog_spool']['rel']
-                    }), loop)
+                    if self.gripper_client is not None:
+                        asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
+                            'jog' : updates['jog_spool']['rel']
+                        }), loop)
             if 'set_grip' in updates:
                 if self.gripper_client is not None:
                     asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
                         'grip' : 'closed' if updates['set_grip'] else 'open'
                     }), loop)
+            if 'slow_stop_one' in updates:
+                if updates['slow_stop_one']['id'] == 'gripper':
+                    if self.gripper_client is not None:
+                        asyncio.run_coroutine_threadsafe(self.gripper_client.slow_stop_spool(), loop)
+                else:
+                    for client in self.anchors:
+                        if client.anchor_num == updates['slow_stop_one']['id']:
+                            asyncio.run_coroutine_threadsafe(client.slow_stop_spool(), loop)
             if 'slow_stop_all' in updates:
                 self.slow_stop_all_spools(loop)
             if 'stop_if_not_slack' in updates:

@@ -105,7 +105,7 @@ class ControlPanelUI:
         square = Entity(model='quad', position=(0.03, 0, -0.03), rotation=(90,0,0), color=color.white, scale=(0.06, 0.06))  # Scale in meters
         square.texture = 'origin.jpg'
         # add a 1cm sphere to clarify where the game origin is
-        origin_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.01), shader=unlit_shader)  # Scale in meters
+        self.origin_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.2), shader=unlit_shader)  # Scale in meters
 
         # sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
         # sphereY = Entity(model='sphere', position=(0,1,0), color=color.green, scale=(0.1), shader=unlit_shader)
@@ -280,6 +280,7 @@ class ControlPanelUI:
             position=(0,0.5,0),
             enabled=False,
         )
+        self.direct_move_indicator.look_at([0,1,0])
 
         self.prisms = EntityPool(80, lambda: Entity(
             color=(1.0, 1.0, 1.0, 0.1),
@@ -340,7 +341,6 @@ class ControlPanelUI:
 
 
     def input(self, key):
-        print(f'UI instance input {key}')
         if key == 'space':
             self.gripper.toggleClosed()
 
@@ -418,7 +418,7 @@ class ControlPanelUI:
     def finish_calibration(self):
         # read the lengths that the user may have modified
         try:
-            lengths = [float(self.line_cal_confirm.content[1].text) for i in range(4)]
+            lengths = [float(self.line_cal_confirm.content[1+i].text) for i in range(4)]
         except ValueError:
             return
         self.to_ob_q.put({'do_line_calibration': lengths})
@@ -435,7 +435,7 @@ class ControlPanelUI:
         Run certain actions at a rate slightly less than, and independent of the framerate.
         """
         # Display a visual indication of aruco based gripper observations
-        time.sleep(2)
+        time.sleep(8)
         while self.run_periodic_actions:
             gantry_pose = self.datastore.gantry_pose.deepCopy()
             for row in gantry_pose:
@@ -448,6 +448,9 @@ class ControlPanelUI:
             # if self.calibration_mode == 'pause':
             #     invoke(self.direct_move, delay=0.0001)
             
+            anchor_positions, start, success = self.get_simplified_position()
+            self.origin_sphere.position = swap_yz(start)
+
             time.sleep(1)
 
     def notify_connected_bots_change(self, available_bots={}):
@@ -463,16 +466,19 @@ class ControlPanelUI:
         lengths = []
         anchor_positions = []
         for i, alr in enumerate(self.datastore.anchor_line_record):
-            lengths.append(alr.getLast()[-1])
+            lengths.append(alr.getLast()[-2])
             anchor_positions.append(swap_yz(self.anchors[i].position))
         print(f'get_simplified_position from lengths {lengths}')
         if sum(lengths) == 0:
             invoke(self.show_error, "Must be connected and perform line calibration before using direct movement", delay=0.0001)
-            return anchor_positions, False, None
+            return anchor_positions, [0,0,0], False
         anchor_positions = np.array(anchor_positions)
         lengths = np.array(lengths)
         result = find_intersection(anchor_positions, lengths)
-        return anchor_positions, result.x, result.success
+        position = [0,0,0]
+        if result.success:
+            position = result.x
+        return anchor_positions, position, result.success
 
     def direct_move(self):
         """
@@ -491,6 +497,11 @@ class ControlPanelUI:
                 invoke(self.update_direct_move_indicator, None, delay=0.0001)
             return
         anchor_positions, start, success = self.get_simplified_position()
+
+        # poses = self.datastore.gantry_pose.deepCopy()
+        # gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))[:3]
+
+
         if not success:
             print('could not obtain position from line lengths')
             return
@@ -522,7 +533,7 @@ class ControlPanelUI:
         self.direct_move_indicator.enabled = True
         self.direct_move_indicator.position = swap_yz(start)
         lookat = swap_yz((start + self.direction).tolist())
-        print(f'look at {lookat}, direction={self.direction}')
+        print(f'look from {self.direct_move_indicator.position} to {lookat}, direction={self.direction}')
         self.direct_move_indicator.look_at(lookat)
 
     def receive_updates(self, min_to_ui_q):
