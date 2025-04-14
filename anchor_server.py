@@ -71,12 +71,16 @@ class RobotComponentServer:
 
                 # add line lengths
                 meas = self.spooler.popMeasurements()
+                logging.debug(f'spooler measurments len={len(meas)}')
                 if len(meas) > 0:
+                    logging.debug(f'spooler meas[0]={meas[0]}')
                     if len(meas) > 50:
                         meas = meas[:50]
-                    update['line_record']= meas
+                    update['line_record'] = meas
 
                 self.readOtherSensors()
+
+                logging.debug(f"update['line_record'] = {update['line_record']}")
 
                 # send on websocket
                 if update != {}:
@@ -87,6 +91,9 @@ class RobotComponentServer:
             except (ConnectionClosedOK, ConnectionClosedError):
                 logging.info("stopped streaming measurements")
                 break
+            except Error as e:
+                logging.debug(f'stream_measurements encountered {e}')
+                raise e
         logging.info('stop streaming measurements because websocket is {ws}')
 
     async def stream_mjpeg(self):
