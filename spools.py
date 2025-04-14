@@ -16,7 +16,7 @@ default_conf = {
     # sleep delay of tracking loop
     'LOOP_DELAY_S': 0.03,
     # record line length and tension every x iterations of tracking loop
-    'REC_MOD': 10,
+    'REC_MOD': 3,
     # smoothing factor. range: [0,1]. lower values are smoother.
     'TENSION_SMOOTHING_FACTOR': 0.2,
     # kilograms. below this, line is assumed to be slack during tensioning
@@ -45,7 +45,7 @@ PE_TERM = 1.5
 MAX_ACCEL = 0.8
 LOOP_DELAY_S = 0.03
 # record line length every 10th iteration
-REC_MOD = 10
+REC_MOD = 3
 TENSION_SMOOTHING_FACTOR = 0.2
 
 # Constants used in tension equalization process

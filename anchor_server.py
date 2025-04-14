@@ -40,7 +40,7 @@ stream_command = """
   --autofocus-mode continuous""".split()
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 
-RUNNING_WS_DELAY = 0.3
+RUNNING_WS_DELAY = 0.1
 CALIBRATING_WS_DELAY = 0.05
 
 # constants
@@ -55,6 +55,7 @@ class RobotComponentServer:
         self.ws_client_connected = False
         # a dict of update to be flushed periodically to the websocket
         self.update = {}
+        self.frames = []
         self.ws_delay = RUNNING_WS_DELAY
         self.stream_command = stream_command
 
@@ -66,33 +67,31 @@ class RobotComponentServer:
         logging.info('start streaming measurements')
         while ws:
             try:
-                update = self.update
-                self.update = {'frames': []}
-
                 # add line lengths
                 meas = self.spooler.popMeasurements()
-                logging.debug(f'spooler measurments len={len(meas)}')
                 if len(meas) > 0:
-                    logging.debug(f'spooler meas[0]={meas[0]}')
                     if len(meas) > 50:
                         meas = meas[:50]
-                    update['line_record'] = meas
+                    self.update['line_record'] = meas
 
                 self.readOtherSensors()
 
-                logging.debug(f"update['line_record'] = {update['line_record']}")
+                if len(self.frames) > 0:
+                    self.update['frames'] = self.frames
+                    self.frames = []
 
                 # send on websocket
-                if update != {}:
-                    await ws.send(json.dumps(update))
+                if self.update != {}:
+                    await ws.send(json.dumps(self.update))
+                self.update = {}
 
                 # chill
                 await asyncio.sleep(self.ws_delay)
             except (ConnectionClosedOK, ConnectionClosedError):
                 logging.info("stopped streaming measurements")
                 break
-            except Error as e:
-                logging.debug(f'stream_measurements encountered {e}')
+            except Exception as e:
+                logging.error(f'stream_measurements encountered {e}')
                 raise e
         logging.info('stop streaming measurements because websocket is {ws}')
 
@@ -122,7 +121,7 @@ class RobotComponentServer:
                     line = line.decode()
                     match = frame_line_re.match(line)
                     if match:
-                        self.update['frames'].append({
+                        self.frames.append({
                             'time': t,
                             'fnum': int(match.group(1)),
                             # 'fps': match.group(2),
@@ -299,7 +298,7 @@ class RaspiAnchorServer(RobotComponentServer):
             asyncio.create_task(self.spooler.measureNoLoad())
 
     def readOtherSensors(self):
-        self.update['tension'] = self.spooler.smoothed_tension
+        pass
 
     def startOtherTasks(self):
         pass
