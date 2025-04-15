@@ -412,3 +412,23 @@ class ThinSliderLog2(ThinSlider):
 
     def _update_text(self):
         self.knob.text_entity.text = str(round(self.finalValue(), 3))
+
+class DirectMoveGantryTarget(Entity):
+    def __init__(self, app, *args, **kwargs):
+        super().__init__(*args, **kwargs, 
+            model='sphere',
+            position=(0,0,0),
+            color=color.cyan,
+            scale=(0.1),
+            shader=unlit_shader)
+        self.app = app
+        self.speed = 0.1
+
+    def update(self):
+        p = self.position
+        p += Vec3(
+            self.app.direction[0] * self.speed,
+            self.app.direction[2] * self.speed,
+            self.app.direction[1] * self.speed,
+        )
+        self.position = p

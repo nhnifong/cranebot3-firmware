@@ -93,7 +93,6 @@ class ControlPanelUI:
         self.n_anchors = datastore.n_cables
         self.time_domain = (1,2)
         self.direction = np.array([0,0,0], dtype=float)
-        self.could_be_moving = False
         self.run_periodic_actions = True
 
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
@@ -105,7 +104,9 @@ class ControlPanelUI:
         square = Entity(model='quad', position=(0.03, 0, -0.03), rotation=(90,0,0), color=color.white, scale=(0.06, 0.06))  # Scale in meters
         square.texture = 'origin.jpg'
         # add a 1cm sphere to clarify where the game origin is
-        self.origin_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.2), shader=unlit_shader)  # Scale in meters
+        self.origin_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.1), shader=unlit_shader)  # Scale in meters
+
+        self.dmgt = DirectMoveGantryTarget(self)
 
         # sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
         # sphereY = Entity(model='sphere', position=(0,1,0), color=color.green, scale=(0.1), shader=unlit_shader)
@@ -276,7 +277,7 @@ class ControlPanelUI:
         self.direct_move_indicator = Entity(
             model='arrow',
             color=color.black,
-            scale=(0.5, 0.5, 0.5),
+            scale=(0.2, 0.2, 0.2),
             position=(0,0.5,0),
             enabled=False,
         )
@@ -347,8 +348,12 @@ class ControlPanelUI:
         if key in key_behavior:
             axis, speed = key_behavior[key]
             self.direction[axis] = speed
-            if self.calibration_mode == 'pause':
-                self.direct_move()
+            
+            if sum(self.direction) == 0:
+                # immediately cancel whatever remains of the movement
+                self.to_ob_q.put({'slow_stop_all': None})
+                invoke(self.update_direct_move_indicator, None, delay=0.0001)
+
 
     def change_weight(self, index):
         self.to_pe_q.put({'weight_change': (index, self.sliders[index].finalValue())})
@@ -450,8 +455,12 @@ class ControlPanelUI:
             
             anchor_positions, start, success = self.get_simplified_position()
             self.origin_sphere.position = swap_yz(start)
+            if sum(self.direction) == 0:
+                self.dmgt.position = swap_yz(start)
+            else:
+                self.direct_move(anchor_positions, start, swap_yz(self.dmgt.position))
 
-            time.sleep(1)
+            time.sleep(1/10)
 
     def notify_connected_bots_change(self, available_bots={}):
         offs = 0
@@ -466,9 +475,8 @@ class ControlPanelUI:
         lengths = []
         anchor_positions = []
         for i, alr in enumerate(self.datastore.anchor_line_record):
-            lengths.append(alr.getLast()[-2])
+            lengths.append(alr.getLast()[1])
             anchor_positions.append(swap_yz(self.anchors[i].position))
-        print(f'get_simplified_position from lengths {lengths}')
         if sum(lengths) == 0:
             invoke(self.show_error, "Must be connected and perform line calibration before using direct movement", delay=0.0001)
             return anchor_positions, [0,0,0], False
@@ -480,37 +488,24 @@ class ControlPanelUI:
             position = result.x
         return anchor_positions, position, result.success
 
-    def direct_move(self):
+    def direct_move(self, anchor_positions, start, finish, speed=0.2):
         """
         Send planned anchor lines to the robot that would move the gantry in a straight line
-        in the direction of self.direction for a small amount of time.
+        from start to finish, starting now, at the given speed.
+        positions are given in z-up coordinate system.
         """
-        move_duration = 1 # seconds
+        move_vec = finish - start
+        move_duration = np.linalg.norm(move_vec) / speed # seconds
         if self.calibration_mode != 'pause':
             return
-        if sum(self.direction) == 0:
-            if self.could_be_moving:
-                # immediately cancel whatever remains of the movement
-                self.to_ob_q.put({'slow_stop_all': None})
-                # set a flag so we don't do this constantly, even though it would be harmless.
-                self.could_be_moving = False
-                invoke(self.update_direct_move_indicator, None, delay=0.0001)
-            return
-        anchor_positions, start, success = self.get_simplified_position()
 
-        # poses = self.datastore.gantry_pose.deepCopy()
-        # gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))[:3]
-
-
-        if not success:
-            print('could not obtain position from line lengths')
-            return
         invoke(self.update_direct_move_indicator, start, delay=0.0001)
+
         # calculate a few time intervals in the near future
         times = np.linspace(0, move_duration, 6, dtype=np.float64).reshape(-1, 1)
         # where we want the gantry to be at the time intervals
-        gantry_positions = self.direction * times + start
-        print(f'direct move start = {start} finish = {gantry_positions[-1]}')
+        gantry_positions = move_vec * times + start
+        print(f'direct move start = {start} finish = {finish}')
         # represent as absolute times
         times = times + time.time()
         # the anchor line lengths if the gantry were at those positions
@@ -524,7 +519,6 @@ class ControlPanelUI:
         self.to_ob_q.put({
             'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
         })
-        self.could_be_moving = True
 
     def update_direct_move_indicator(self, start):
         if start is None:

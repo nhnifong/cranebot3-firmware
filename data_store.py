@@ -43,6 +43,7 @@ class CircularBuffer:
             self.asNpa()[self.idx] = row
 
     def insertList(self, row_list):
+        """Insert a list of measurements. Newest at end end."""
         with self.sem:
             arr = self.asNpa()
             for row in row_list:

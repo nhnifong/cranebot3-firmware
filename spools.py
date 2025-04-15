@@ -190,6 +190,7 @@ class SpoolController:
         ])
 
     def popMeasurements(self):
+        """Return up to DATA_LEN measurements. newest at the end."""
         copy_record = self.record
         self.record = []
         return copy_record
