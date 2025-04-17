@@ -99,7 +99,7 @@ class ControlPanelUI:
         # when a charuco board is located, it's origin is it's top left corner.
         square = Entity(model='quad', position=(0.03, 0, -0.03), rotation=(90,0,0), color=color.white, scale=(0.06, 0.06))  # Scale in meters
         square.texture = 'origin.jpg'
-        # add a 1cm orage sphere as an indicator of where the gantry is based only on the last line length from each anchor
+        # add a 1cm orange sphere as an indicator of where the gantry is based only on the last line length from each anchor
         self.line_pos_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.1), shader=unlit_shader)  # Scale in meters
 
         # an indicator of where the user wants the gantry to be during direct moves.
@@ -389,12 +389,11 @@ class ControlPanelUI:
         print('Do line calibration')
         # average recent gantry poses.
         poses = self.datastore.gantry_pose.deepCopy()
-        gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))[:3]
+        gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))
         lengths = [3.79,4.94,2.95,4.08] 
         for i, anchor in enumerate(self.anchors):
-            grommet_pose = compose_poses([anchor.pose, model_constants.anchor_grommet])[:3]
-            distance = np.linalg.norm(grommet_pose[1] - gantry_pose[1])
-            lengths[i] = distance - 0.02 # to make up for the distance between the gantry origin and it's grommets, which are all symmetric
+            # index 1 in a pose tuple is the position.
+            lengths[i] = np.linalg.norm(anchor.pose[1] - gantry_pose[1])
         # display a confirmation dialog
         fmt = '{:.3f}'
         self.line_cal_confirm = WindowPanel(
