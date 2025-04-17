@@ -662,9 +662,8 @@ class CDPR_position_estimator:
                 raise e
 
     async def main(self):
-        asyncio.create_task(asyncio.to_thread(self.read_input_queue))
+        read_queue_task = asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         await asyncio.sleep(5)
-        return
         print('Starting position estimator')
         while self.run:
             try:
@@ -676,6 +675,7 @@ class CDPR_position_estimator:
             except KeyboardInterrupt:
                 print('Exiting')
                 return
+        result = await read_queue_task
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """

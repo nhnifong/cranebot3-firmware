@@ -201,7 +201,8 @@ class RobotComponentServer:
         async with websockets.serve(self.handler, "0.0.0.0", port):
             logging.info("Websocket server started")
             # cause the server to serve only as long as these other tasks are running
-            await spool_task
+            # note that you must always get the result from something run with asyncio.to_thread or it will silently pass exceptions.
+            result = await spool_task
             # if those tasks finish, exiting this context will cause the server's close() method to be called.
             logging.info("Closing websocket server")
 

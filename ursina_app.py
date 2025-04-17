@@ -448,10 +448,6 @@ class ControlPanelUI:
             gripper_pose = self.datastore.gripper_pose.deepCopy()
             for row in gripper_pose:
                 invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
-
-            # send a direct move command in pause mode
-            # if self.calibration_mode == 'pause':
-            #     invoke(self.direct_move, delay=0.0001)
             
             anchor_positions, start, success = self.get_simplified_position()
             self.origin_sphere.position = swap_yz(start)
