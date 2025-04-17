@@ -9,7 +9,7 @@ from cv_common import invert_pose, compose_poses
 from math import pi
 import atexit
 from panda3d.core import LQuaternionf
-from position_estimator import default_weights, weight_names, find_intersection
+from position_estimator import default_weights, weight_names, get_simplified_position
 from cv_common import average_pose, compose_poses
 import model_constants
 from PIL import Image
@@ -62,10 +62,6 @@ key_behavior = {
 def input(key):
     pass
 
-# ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
-def swap_yz(vec):
-    return (vec[0], vec[2], vec[1])
-
 def update_from_trimesh(tm, entity):
     entity.model = Mesh(vertices=tm.vertices[:, [0, 2, 1]].tolist(), triangles=tm.faces.tolist())
 
@@ -103,9 +99,10 @@ class ControlPanelUI:
         # when a charuco board is located, it's origin is it's top left corner.
         square = Entity(model='quad', position=(0.03, 0, -0.03), rotation=(90,0,0), color=color.white, scale=(0.06, 0.06))  # Scale in meters
         square.texture = 'origin.jpg'
-        # add a 1cm sphere to clarify where the game origin is
-        self.origin_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.1), shader=unlit_shader)  # Scale in meters
+        # add a 1cm orage sphere as an indicator of where the gantry is based only on the last line length from each anchor
+        self.line_pos_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.1), shader=unlit_shader)  # Scale in meters
 
+        # an indicator of where the user wants the gantry to be during direct moves.
         self.dmgt = DirectMoveGantryTarget(self)
 
         # sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
@@ -274,15 +271,6 @@ class ControlPanelUI:
             thing.label.color = color.black
             thing.knob.text_color = color.black
 
-        self.direct_move_indicator = Entity(
-            model='arrow',
-            color=color.black,
-            scale=(0.2, 0.2, 0.2),
-            position=(0,0.5,0),
-            enabled=False,
-        )
-        self.direct_move_indicator.look_at([0,1,0])
-
         self.prisms = EntityPool(80, lambda: Entity(
             color=(1.0, 1.0, 1.0, 0.1),
             shader=lit_with_shadows_shader))
@@ -345,15 +333,17 @@ class ControlPanelUI:
         if key == 'space':
             self.gripper.toggleClosed()
 
+        was_dir = self.direction
+
         if key in key_behavior:
             axis, speed = key_behavior[key]
             self.direction[axis] = speed
             
+            # the key change results in no commanded movement of the goal point
             if sum(self.direction) == 0:
                 # immediately cancel whatever remains of the movement
                 self.to_ob_q.put({'slow_stop_all': None})
-                invoke(self.update_direct_move_indicator, None, delay=0.0001)
-
+                self.dmgt.reset()
 
     def change_weight(self, index):
         self.to_pe_q.put({'weight_change': (index, self.sliders[index].finalValue())})
@@ -449,82 +439,25 @@ class ControlPanelUI:
             for row in gripper_pose:
                 invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
             
-            anchor_positions, start, success = self.get_simplified_position()
-            self.origin_sphere.position = swap_yz(start)
+            current_pos, success = get_simplified_position(
+                self.datastore, [swap_yz(a.position) for a in self.anchors])
+            self.line_pos_sphere.position = swap_yz(current_pos)
             if sum(self.direction) == 0:
-                self.dmgt.position = swap_yz(start)
+                self.dmgt.position = self.line_pos_sphere.position
+            elif not success:
+                invoke(self.app.show_error, "Must be connected and perform line calibration before using direct movement", delay=0.0001)
             else:
-                self.direct_move(anchor_positions, start, swap_yz(self.dmgt.position))
+                # self.dmgt.position will be updated in it's own update function at the framerate.
+                # at this slightly lower rate, command the bot to move towards the goal point.
+                self.dmgt.direct_move()
 
-            time.sleep(1/10)
+            time.sleep(1/5)
 
     def notify_connected_bots_change(self, available_bots={}):
         offs = 0
         for server,info in available_bots.items():
             text_entity = Text(server, world_scale=16, position=(-0.1, -0.4 + offs))
             offs -= 0.03
-
-    def get_simplified_position(self):
-        """
-        Calculate a gantry position based solely on the last line record from each anchor and the anchor poses
-        """
-        lengths = []
-        anchor_positions = []
-        for i, alr in enumerate(self.datastore.anchor_line_record):
-            lengths.append(alr.getLast()[1])
-            anchor_positions.append(swap_yz(self.anchors[i].position))
-        if sum(lengths) == 0:
-            invoke(self.show_error, "Must be connected and perform line calibration before using direct movement", delay=0.0001)
-            return anchor_positions, [0,0,0], False
-        anchor_positions = np.array(anchor_positions)
-        lengths = np.array(lengths)
-        result = find_intersection(anchor_positions, lengths)
-        position = [0,0,0]
-        if result.success:
-            position = result.x
-        return anchor_positions, position, result.success
-
-    def direct_move(self, anchor_positions, start, finish, speed=0.2):
-        """
-        Send planned anchor lines to the robot that would move the gantry in a straight line
-        from start to finish, starting now, at the given speed.
-        positions are given in z-up coordinate system.
-        """
-        move_vec = finish - start
-        move_duration = np.linalg.norm(move_vec) / speed # seconds
-        if self.calibration_mode != 'pause':
-            return
-
-        invoke(self.update_direct_move_indicator, start, delay=0.0001)
-
-        # calculate a few time intervals in the near future
-        times = np.linspace(0, move_duration, 6, dtype=np.float64).reshape(-1, 1)
-        # where we want the gantry to be at the time intervals
-        gantry_positions = move_vec * times + start
-        print(f'direct move start = {start} finish = {finish}')
-        # represent as absolute times
-        times = times + time.time()
-        # the anchor line lengths if the gantry were at those positions
-        # format as an array of times and lengths, one array for each anchor
-        future_anchor_lines = np.array([
-            np.column_stack([
-                times,
-                np.linalg.norm(gantry_positions - pos, axis=1)])
-            for pos in anchor_positions])
-        # send it
-        self.to_ob_q.put({
-            'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
-        })
-
-    def update_direct_move_indicator(self, start):
-        if start is None:
-            self.direct_move_indicator.enabled = False
-            return
-        self.direct_move_indicator.enabled = True
-        self.direct_move_indicator.position = swap_yz(start)
-        lookat = swap_yz((start + self.direction).tolist())
-        print(f'look from {self.direct_move_indicator.position} to {lookat}, direction={self.direction}')
-        self.direct_move_indicator.look_at(lookat)
 
     def receive_updates(self, min_to_ui_q):
         while True:
