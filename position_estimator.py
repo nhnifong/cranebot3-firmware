@@ -75,6 +75,23 @@ def find_intersection(positions, lengths):
 
     return optimize.least_squares(error_function, initial_guess, args=(positions, lengths))
 
+def get_simplified_position(datastore, anchor_positions):
+    """
+    Calculate a gantry position based solely on the last line record from each anchor and the anchor positions
+    """
+    lengths = []
+    for i, alr in enumerate(datastore.anchor_line_record):
+        lengths.append(alr.getLast()[1])
+    if sum(lengths) == 0:
+        return anchor_positions, [0,0,0], False
+    anchor_positions = np.array(anchor_positions)
+    lengths = np.array(lengths)
+    result = find_intersection(anchor_positions, lengths)
+    position = [0,0,0]
+    if result.success:
+        position = result.x
+    return position, result.success
+
 # X, Y are horizontal
 # positive Z points at the ceiling.
 

@@ -8,6 +8,11 @@ from cv_common import invert_pose, compose_poses
 import model_constants
 from scipy.spatial.transform import Rotation
 from functools import partial
+import time
+
+# ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
+def swap_yz(vec):
+    return (vec[0], vec[2], vec[1])
 
 # Transforms a rodrigues rotation vector into an ursina euler rotation tuple in degrees
 def to_ursina_rotation(rvec):
@@ -414,6 +419,8 @@ class ThinSliderLog2(ThinSlider):
         self.knob.text_entity.text = str(round(self.finalValue(), 3))
 
 class DirectMoveGantryTarget(Entity):
+    """A visual indicator and manager of gantry direct movement commands"""
+
     def __init__(self, app, *args, **kwargs):
         super().__init__(*args, **kwargs, 
             model='sphere',
@@ -424,7 +431,68 @@ class DirectMoveGantryTarget(Entity):
         self.app = app
         self.speed = 0.1
 
+        # expected seconds of latency between when we calculate a movement and when the anchors start to act on it.
+        self.latency = 0.1
+
+        self.last_move_start_pos = None # numpy array in z-up coordinate space
+        self.last_move_start_time = None # float seconds since epoch
+        self.last_move_duration = None # float seconds
+        self.last_move_vec = None # numpy array in z-up coordinate space
+
+    def estimatePosition(self, t):
+        """Estimate the gantry's position at the given time and the last length plan sent"""
+        elapsed_time = t - self.last_move_start_tim
+        if elapsed_time <= 0:
+            return self.last_move_start_pos
+        elif elapsed_time >= self.last_move_duration:
+            # If the time is after the move ended, the position is the end position
+            return self.last_move_start_pos + self.last_move_vec
+        else:
+            # Calculate the fraction of the move that has been completed
+            fraction_complete = elapsed_time / self.last_move_duration
+            # Estimate the current position by interpolating along the move vector
+            estimated_position = self.last_move_start_pos + self.last_move_vec * fraction_complete
+
+    def reset(self):
+        self.last_move_vec = None
+
+    def direct_move(self, speed=0.1):
+        """
+        Send planned line lengths to the robot that would move the gantry in a straight line
+        from where it is, to the indicated goal point, at the given speed.
+        positions are given in z-up coordinate system.
+        """
+        expected_rcv_time = time.time() + self.latency
+        goal = np.array(swap_yz(self.position))
+
+        if self.last_move_vec is None:
+            self.last_move_start_pos = swap_yz(self.app.line_pos_sphere.position)
+        else:
+            self.last_move_start_pos = self.estimatePosition(expected_rcv_time)
+        self.last_move_start_time = expected_rcv_time
+        self.last_move_vec = goal - self.last_move_start_pos
+        self.last_move_duration = np.linalg.norm(elf.last_move_vec) / speed # seconds
+
+        # calculate a few time intervals in the near future
+        times = np.linspace(0, self.last_move_duration, 6, dtype=np.float64).reshape(-1, 1)
+        # where we want the gantry to be at the time intervals
+        gantry_positions = self.last_move_vec * times + start
+        # represent as absolute times
+        times = times + self.last_move_start_time
+        # find the anchor line lengths if the gantry were at those positions
+        # format as an array of times and lengths, one array for each anchor
+        future_anchor_lines = np.array([
+            np.column_stack([
+                times,
+                np.linalg.norm(gantry_positions - swap_yz(a.position), axis=1)])
+            for a in self.app.anchors])
+        # send it
+        self.app.to_ob_q.put({
+            'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
+        })
+
     def update(self):
+        # update the indicated goal position for gantry
         p = self.position
         p += Vec3(
             self.app.direction[0] * self.speed,
@@ -432,3 +500,5 @@ class DirectMoveGantryTarget(Entity):
             self.app.direction[1] * self.speed,
         )
         self.position = p
+
+        
