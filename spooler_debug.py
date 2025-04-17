@@ -58,6 +58,6 @@ async def main():
     plan = [[t + (i/6), 1.0+i*0.01]
         for i in range(6)]
     spooler.setPlan(plan)
-    await spool_task
+    result = await spool_task
 
 asyncio.run(main())

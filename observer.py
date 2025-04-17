@@ -277,7 +277,7 @@ class AsyncObserver:
 
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
-                await self.position_update_task
+                result = await self.position_update_task
             except asyncio.exceptions.CancelledError:
                 pass
             await self.async_close()
