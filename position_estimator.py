@@ -58,7 +58,7 @@ max_winch_speed = (61/60)*(0.02*pi) # m/s
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
-    returns scipy result object with .succes and .x
+    returns scipy result object with .success and .x
     """
     # this code may benefit from some noise
     noise = np.random.normal(0, 1e-6, positions.shape)
@@ -66,7 +66,6 @@ def find_intersection(positions, lengths):
     # Initial guess for the intersection point (e.g., the mean of the positions)
     initial_guess = np.mean(positions, axis=0)
     initial_guess[2] -= 1
-    print(f'initial_guess {initial_guess}')
 
     def error_function(intersection, positions, lengths):
         distances = np.linalg.norm(positions - intersection, axis=1)
