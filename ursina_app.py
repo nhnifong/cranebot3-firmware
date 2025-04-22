@@ -287,7 +287,6 @@ class ControlPanelUI:
                 )),
             DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Equalize line tension', on_click=self.equalize_lines),
-            DropdownMenuButton('Measure zero load', on_click=self.measure_zero_load),
             DropdownMenuButton('Show/Hide weight sliders', on_click=self.toggle_weight_sliders),
             ))
 
@@ -296,9 +295,6 @@ class ControlPanelUI:
 
     def equalize_lines(self):
         self.to_ob_q.put({'equalize_line_tension': None})
-
-    def measure_zero_load(self):
-        self.to_ob_q.put({'measure_no_load': None})
 
     def toggle_weight_sliders(self):
         for s in self.sliders:

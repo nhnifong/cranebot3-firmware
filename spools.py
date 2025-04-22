@@ -5,7 +5,7 @@ import serial
 import logging
 import asyncio
 
-# constants
+# values that can be overridden by the controller
 default_conf = {
     # number of records of length and tension to keep
     'DATA_LEN': 1000,
@@ -17,68 +17,34 @@ default_conf = {
     'LOOP_DELAY_S': 0.03,
     # record line length and tension every x iterations of tracking loop
     'REC_MOD': 3,
-    # smoothing factor. range: [0,1]. lower values are smoother.
-    'TENSION_SMOOTHING_FACTOR': 0.2,
-    # kilograms. below this, line is assumed to be slack during tensioning
-    'TENSION_SLACK_THRESH': 0.35,
-    # kilograms. above this, line is assumed to be too tight during tensioning.
-    'TENSION_TIGHT_THRESH': 0.7,
-    # speed to reel in and out lines turing tension equalization. m/s
-    'MOTOR_SPEED_DURING_TEQ': 1,
-    # maximum change in line length allowed during tension equalization. meters
-    'MAX_LINE_CHANGE_DURING_TEQ': 0.3,
-    # degrees of expected angle error with no load per commanded rev/sec
-    'MKS42C_EXPECTED_ERR': 1.0,
-    # kg-meters per degree of error. Factor for computing torque from the risidual angle error
-    'MKS42C_TORQUE_FACTOR': 0.172,
-    # speed at which to measure initial tension. slowest possible motor speed. reeling in, which seems to work better than out.
-    'MEASUREMENT_SPEED': -0.4,
-    # number of 1/30 second ticks to measure to obtain a stable value.
-    'MEASUREMENT_TICKS': 18,
-    # if this tension is exceeded, motion will stop.
-    'DANGEROUS_TENSION': 3.5,
 }
-
-DATA_LEN = 1000
-PE_TERM = 1.5
-# maximum acceleration in meters of line per second squared
-MAX_ACCEL = 0.8
-LOOP_DELAY_S = 0.03
-# record line length every 10th iteration
-REC_MOD = 3
-TENSION_SMOOTHING_FACTOR = 0.2
-
-# Constants used in tension equalization process
-TENSION_SLACK_THRESH = 0.35 # kilograms. below this, line is assumed to be slack during tensioning
-TENSION_TIGHT_THRESH = 0.7 # kilograms. above this, line is assumed to be too tight during tensioning.
-MOTOR_SPEED_DURING_TEQ = 1 # revolutions per second
-MAX_LINE_CHANGE_DURING_TEQ = 0.3 # meters
-MKS42C_EXPECTED_ERR = 1.8 # degrees of expected angle error with no load per commanded rev/sec
-MKS42C_TORQUE_FACTOR = 0.031 / 1.8 # kg-meters per degree of error. Factor for computing torque from the risidual angle error
-MEASUREMENT_SPEED = -0.4 # speed at which to measure initial tension. slowest possible motor speed
-MEASUREMENT_TICKS = 18 # number of 1/30 second ticks to measure to obtain a stable value.
-DANGEROUS_TENSION = 2.5 # if this tension is exceeded, motion will stop.
 
 def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 class SpoolController:
-    def __init__(self, motor, empty_diameter, full_diameter, full_length, gear_ratio=1.0, tension_safety=True):
+    def __init__(self, motor, empty_diameter, full_diameter, full_length, conf, gear_ratio=1.0, tension_support=True):
         """
         Create a controller for a spool of line.
+
         empty_diameter_mm is the diameter of the spool in millimeters when no line is on it.
         full_diameter is the diameter in mm of the bulk of wrapped line when full_length meters of line are wrapped.
         line_capacity_m is the length of line in meters that is attached to this spool.
             if all of it were reeled in, the object at the end would reach the limit switch, if there is one.
         gear_ratio refers to how many rotations the spool makes for one rotation of the motor shaft.
+        tension_support - whether the motor supports getShaftAngle which will be used to calculate tension.
+            when true, assumes presens of anchor_server's conf vars
         """
         self.motor = motor
-        self.empty_diameter = empty_diameter * 0.001
+        self.empty_diameter = empty_diameter * 0.001 # millimeter to meters
         self.full_diameter = full_diameter * 0.001
         self.full_length = full_length
         self.gear_ratio = gear_ratio
         self.motor_orientation = -1
-        self.tension_safety = tension_safety # whether to act when dangerous tension threshold is reached.
+        self.tension_support = tension_support
+
+        self.conf = conf
+        self.conf.update(default_conf)
 
         # since line accumulates on the spool in a spiral, the amount of wrapped line is an exponential function of the spool angle.
         self.diameter_diff = self.full_diameter - self.empty_diameter
@@ -94,7 +60,7 @@ class SpoolController:
         
         # last commanded motor speed in revs/sec
         self.speed = 0
-        self.lastLength = 0.5
+        self.lastLength = 3.0
         self.lastAngle = 0.0
         self.meters_per_rev = self.get_unspool_rate(self.lastAngle)
         # record of line length. tuples of (time, meters)
@@ -108,26 +74,21 @@ class SpoolController:
         self.abort_equalize_tension = False
         self.smoothed_tension = 0
 
-        self.live_tension_low_thresh = TENSION_SLACK_THRESH
-        self.live_tension_high_thresh = TENSION_TIGHT_THRESH
-        self.mks42c_expected_err = MKS42C_EXPECTED_ERR
-        self.mks42c_torque_factor = MKS42C_TORQUE_FACTOR
+        # the thresholds in the conf serve as a starting point, and the live values may change during tensioning.
+        self.live_tension_low_thresh = self.conf['TENSION_SLACK_THRESH']
+        self.live_tension_high_thresh = self.conf['TENSION_TIGHT_THRESH']
 
-        self.conf = default_conf.copy()
-
-        # use a specific value for this motor
+        # These two constants were stored in a file on their own before the broader conf dict was added
+        # read the values in the file if they are present
         try:
             with open('mks42c_expected_err.cal', 'r') as f:
-                self.mks42c_expected_err = float(f.readline())
-                logging.info(f'Used stored mks42c_expected_err value of {self.mks42c_expected_err }')
-                self.mks42c_torque_factor = float(f.readline())
-                logging.info(f'Used stored mks42c_torque_factor value of {self.mks42c_torque_factor }')
+                self.conf['MKS42C_EXPECTED_ERR'] = float(f.readline())
+                logging.info(f'Used stored mks42c_expected_err value of {self.conf["MKS42C_EXPECTED_ERR"]}')
+                self.conf['MKS42C_TORQUE_FACTOR'] = float(f.readline())
+                logging.info(f'Used stored mks42c_torque_factor value of {self.conf["MKS42C_TORQUE_FACTOR"]}')
         except (FileNotFoundError, ValueError):
-            print('Could not read saved mks42c_expected_err')
+            logging.warning('Could not read saved mks42c_expected_err')
             pass
-
-        self.conf['MKS42C_EXPECTED_ERR'] = self.mks42c_expected_err
-        self.conf['MKS42C_TORQUE_FACTOR'] = self.mks42c_torque_factor
 
         # when this bool is set, spool tracking will pause.
         self.spoolPause = False
@@ -218,19 +179,26 @@ class SpoolController:
             logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}. Movement disallowed until new reference length received.")
             # self.moveAllowed = False
 
-        self.smoothed_tension = self.currentTension() * TENSION_SMOOTHING_FACTOR + self.smoothed_tension * (1-TENSION_SMOOTHING_FACTOR)
+        if tension_support:
+            success, tension = self.currentTension()
+            if success:
+                self.smoothed_tension = (self.currentTension() * self.conf['TENSION_SMOOTHING_FACTOR']
+                    + self.smoothed_tension * (1-self.conf['TENSION_SMOOTHING_FACTOR']))
 
-        if self.tension_safety and self.smoothed_tension > DANGEROUS_TENSION:
-            logging.warning(f"Tension of {self.smoothed_tension} is too high!")
-            # try to loosen up right away to avoid breaking something
-            self.commandSpeed(1)
-            time.sleep(1)
-            self.commandSpeed(0)
-            self.moveAllowed = False
+            if self.smoothed_tension > self.conf['DANGEROUS_TENSION']:
+                logging.warning(f"Tension of {self.smoothed_tension} is too high!")
+                # try to loosen up right away to avoid breaking something
+                self.commandSpeed(1)
+                time.sleep(1)
+                self.commandSpeed(0)
+                self.moveAllowed = False
 
-        # accumulate these so you can send them to the websocket
-        row = (time.time(), self.lastLength, self.smoothed_tension)
-        if self.rec_loop_counter == REC_MOD:
+            # accumulate these so you can send them to the websocket
+            row = (time.time(), self.lastLength, self.smoothed_tension)
+        else:
+            row = (time.time(), self.lastLength)
+
+        if self.rec_loop_counter == self.conf['REC_MOD']:
             self.record.append(row)
             self.rec_loop_counter = 0
         self.rec_loop_counter += 1
@@ -241,19 +209,21 @@ class SpoolController:
         Only designed for the MKS42C
         Measurements are basically invalid below speeds of 0.4
         """
-        _, angleError = self.motor.getShaftError()
-        baseline = self.mks42c_expected_err * self.speed
+        success, angleError = self.motor.getShaftError()
+        if not success:
+            return False, 0
+        baseline = self.conf['MKS42C_EXPECTED_ERR'] * self.speed
         load_err = baseline - angleError # the residual position error attributable to load on the spool, not commanded motor speed
         # greater load on the line subtracts from angleError regardless of the commanded motor direction.
-        torque = MKS42C_TORQUE_FACTOR * load_err
-        return torque / self.meters_per_rev
+        torque = self.conf['MKS42C_TORQUE_FACTOR'] * load_err
+        return True, torque / self.meters_per_rev
 
     def measure_t(self):
         try:
             while True:
                 self.commandSpeed(math.sin(time.time()/4)*2)
                 t, l, tension = self.currentLineLength()
-                print(f'tension = {tension:.3f}')
+                logging.debug(f'tension = {tension:.3f}')
                 time.sleep(1/30)
         except KeyboardInterrupt:
             self.commandSpeed(0)
@@ -295,7 +265,7 @@ class SpoolController:
                             newspeed = 0
                         logging.debug(f'Slow stopping {newspeed}')
                         self.commandSpeed(newspeed)
-                    time.sleep(LOOP_DELAY_S)
+                    time.sleep(self.conf['LOOP_DELAY_S'])
                     continue
 
                 targetLen = self.desiredLine[self.lastIndex][1]
@@ -323,11 +293,11 @@ class SpoolController:
                 aimSpeed = targetSpeed + position_err * PE_TERM; # meters of line per second
 
                 # limit the acceleration of the line
-                wouldAccel = (aimSpeed - currentSpeed) / LOOP_DELAY_S
-                if wouldAccel > MAX_ACCEL:
-                    aimSpeed = MAX_ACCEL * LOOP_DELAY_S + currentSpeed
-                elif wouldAccel < -MAX_ACCEL:
-                    aimSpeed = -MAX_ACCEL * LOOP_DELAY_S + currentSpeed
+                wouldAccel = (aimSpeed - currentSpeed) / self.conf['LOOP_DELAY_S']
+                if wouldAccel > self.conf['MAX_ACCEL']:
+                    aimSpeed = self.conf['MAX_ACCEL'] * self.conf['LOOP_DELAY_S'] + currentSpeed
+                elif wouldAccel < -self.conf['MAX_ACCEL']:
+                    aimSpeed = -self.conf['MAX_ACCEL'] * self.conf['LOOP_DELAY_S'] + currentSpeed
 
                 maxspeed = self.motor.getMaxSpeed()
 
@@ -336,7 +306,7 @@ class SpoolController:
                 else:
                     logging.warning(f"would move at speed={self.speed} but length is invalid. calibrate length first.")
 
-                time.sleep(LOOP_DELAY_S)
+                time.sleep(self.conf['LOOP_DELAY_S'])
             except serial.serialutil.SerialTimeoutException:
                 logging.error('Lost serial contact with motor')
                 break
@@ -363,30 +333,33 @@ class SpoolController:
                 else:
                     # under load we are measuring torque_factor
                     # record what torque would be if torque_factor were 1
-                    data.append((self.mks42c_expected_err * self.speed - err) / self.meters_per_rev)
+                    data.append((self.conf['MKS42C_EXPECTED_ERR'] * self.speed - err) / self.meters_per_rev)
             await asyncio.sleep(1/30)
         self.commandSpeed(0)
-        print(f'Collected {len(data)} data points')
+        logging.debug(f'Collected {len(data)} data points')
         if load==0:
-            self.mks42c_expected_err = sum(data)/len(data)
+            new_expected_err = sum(data)/len(data)
             # fun fact. if we were using degrees/sec to measure speed instead of revolutions/sec, the units of this constant would be seconds.
             # I guess it would mean how long in seconds the motor is from theoretically catching up to it's set point.
             # why is this different for every motor? it seems to change drastically if the motor's own calibration is performed with any mass
             # on the spool, so its probably just a function of the PID terms.
-            print(f'calibrated mks42c_expected_err = {self.mks42c_expected_err} deg/(rev/sec)')
+            logging.info(f'calibrated mks42c_expected_err = {new_expected_err} deg/(rev/sec)')
+            self.conf['MKS42C_EXPECTED_ERR'] = new_expected_err
         else:
             # divide the actual load in kg by the mean measured torque value.
-            self.mks42c_torque_factor = load / (sum(data)/len(data))
-            print(f'calibrated mks42c_torque_factor = {self.mks42c_torque_factor} kg/deg')
-        with open('mks42c_expected_err.cal', 'w') as f:
-            f.write(f'{self.mks42c_expected_err}\n')
-            f.write(f'{self.mks42c_torque_factor}\n')
+            new_torque_factor = load / (sum(data)/len(data))
+            logging.info(f'calibrated mks42c_torque_factor = {new_torque_factor} kg/deg')
+            self.conf['MKS42C_TORQUE_FACTOR'] = new_torque_factor
+        # TODO send the new conf to the controller instead of writing it locally
+        # with open('mks42c_expected_err.cal', 'w') as f:
+        #     f.write(f'{self.mks42c_expected_err}\n')
+        #     f.write(f'{self.mks42c_torque_factor}\n')
         self.resumeTrackingLoop()
 
     async def equalizeSpoolTension(self,
         controllerApprovalEvent,
         sendUpdatesFunc,
-        maxLineChange=MAX_LINE_CHANGE_DURING_TEQ,
+        maxLineChange=self.conf['MAX_LINE_CHANGE_DURING_TEQ'],
         allowOutSpooling=True):
         """Without tracking any particular length, reel the spool until the line tension is within a predefined range
 
@@ -418,31 +391,31 @@ class SpoolController:
         line_delta = 0
 
         # reset thresholds to default
-        self.live_tension_low_thresh = TENSION_SLACK_THRESH
-        self.live_tension_high_thresh = TENSION_TIGHT_THRESH
+        self.live_tension_low_thresh = self.conf['TENSION_SLACK_THRESH']
+        self.live_tension_high_thresh = self.conf['TENSION_TIGHT_THRESH']
 
         logging.info("Measuring tension in motion")
         # measuring tension at rest is not possible. measure in motion
-        self.commandSpeed(MEASUREMENT_SPEED)
-        for i in range(MEASUREMENT_TICKS):
+        self.commandSpeed(self.conf['MEASUREMENT_SPEED'])
+        for i in range(self.conf['MEASUREMENT_TICKS']):
             t, curLength, tension = self.currentLineLength()
             logging.debug(f'getting stabilized tension reading {self.smoothed_tension}')
             await asyncio.sleep(1/30)
         # undo motion that occurred during reading
-        self.commandSpeed(-MEASUREMENT_SPEED)
-        await asyncio.sleep(MEASUREMENT_TICKS/30)
+        self.commandSpeed(-self.conf['MEASUREMENT_SPEED'])
+        await asyncio.sleep(self.conf['MEASUREMENT_TICKS']/30)
         self.commandSpeed(0)
 
         # decide initial speed. motor direction will not change during the loop
-        if self.smoothed_tension < TENSION_SLACK_THRESH:
+        if self.smoothed_tension < self.conf['TENSION_SLACK_THRESH']:
             started_slack = True
-            self.commandSpeed(-MOTOR_SPEED_DURING_TEQ)
+            self.commandSpeed(-self.conf['MOTOR_SPEED_DURING_TEQ'])
         else:
             started_slack = False
-            self.commandSpeed(MOTOR_SPEED_DURING_TEQ)
+            self.commandSpeed(self.conf['MOTOR_SPEED_DURING_TEQ'])
         is_slack = started_slack
 
-        logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {MEASUREMENT_SPEED} motor revs/s')
+        logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {self.conf["MEASUREMENT_SPEED"]} motor revs/s')
  
         try:
             # wait for stop condition
@@ -450,7 +423,7 @@ class SpoolController:
                    and not self.abort_equalize_tension
                    and abs(line_delta) < maxLineChange
                    and (started_slack or allowOutSpooling)
-                   and self.smoothed_tension < DANGEROUS_TENSION):
+                   and self.smoothed_tension < self.conf['DANGEROUS_TENSION']):
                 await asyncio.sleep(1/30)
                 # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
                 # is periodically flushed to the websocket by a task that is always running while the ws is connected
