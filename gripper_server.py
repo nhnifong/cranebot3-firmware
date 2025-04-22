@@ -23,7 +23,6 @@ half_res_stream_command = """
   --buffer-count=12
   --autofocus-mode continuous""".split()
 
-# these two constants are obtained experimentally
 # the speed will not increase at settings beyond this value
 WINCH_MAX_SPEED = 43
 # at or below this the motor does not spin
@@ -38,22 +37,26 @@ RANGEFINDER_PIN = 0
 PRESSURE_PIN = 1
 # gpio pin of limit switch. 0 is closed
 LIMIT_SWITCH_PIN = 2
-# PID values for pressure loop
-POS_KP = 5.0
-POS_KI = 0.0
-POS_KD = 0.022
-# update rate of finger pressure PID loop in updates per second
-UPDATE_RATE = 40
-# voltage of pressure sensor at ideal grip pressure
-TARGET_HOLDING_PRESSURE = 0.6
-# threshold just abolve the lowest pressure voltage we expect to read
-PRESSURE_MIN = 0.5
-# The total servo value change per second below which we say it has stabilized.
-MEAN_SERVO_VAL_CHANGE_THRESHOLD = 3
-# The servo value at which the fingers press against eachother empty with TARGET_HOLDING_PRESSURE
-FINGER_TOUCH = 80
-# max open servo value
-OPEN = -80
+
+# values that can be overridden by the controller
+default_conf = {
+    # PID values for pressure loop
+    'POS_KP': 5.0,
+    'POS_KI': 0.0,
+    'POS_KD': 0.022,
+    # update rate of finger pressure PID loop in updates per second
+    'UPDATE_RATE': 40,
+    # voltage of pressure sensor at ideal grip pressure
+    'TARGET_HOLDING_PRESSURE': 0.6,
+    # threshold just abolve the lowest pressure voltage we expect to read
+    'PRESSURE_MIN': 0.5,
+    # The total servo value change per second below which we say it has stabilized.
+    'MEAN_SERVO_VAL_CHANGE_THRESHOLD': 3,
+    # The servo value at which the fingers press against eachother empty with TARGET_HOLDING_PRESSURE
+    'FINGER_TOUCH': 80,
+    # max open servo value
+    'OPEN': -80,
+}
 
 class GripperSpoolMotor():
     """
@@ -100,6 +103,7 @@ class GripperSpoolMotor():
 class RaspiGripperServer(RobotComponentServer):
     def __init__(self):
         super().__init__()
+        self.conf.update(default_conf)
         self.name_prefix = 'raspi-gripper-'
         self.service_type = 'cranebot-gripper-service'
 
@@ -121,13 +125,13 @@ class RaspiGripperServer(RobotComponentServer):
         self.motor = GripperSpoolMotor(self.hat)
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
-        self.spooler = SpoolController(self.motor, empty_diameter=20, full_diameter=36, full_length=2, tension_safety=False)
+        self.spooler = SpoolController(self.motor, empty_diameter=20, full_diameter=36, full_length=2, conf=self.conf, tension_support=False)
 
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-gripper-service.' + unique
 
         self.last_value = 0
-        self.past_val_rates = deque(maxlen=UPDATE_RATE)
+        self.past_val_rates = deque(maxlen=self.conf['UPDATE_RATE'])
         self.holding = False
         self.holdPressure = False
 
@@ -156,9 +160,9 @@ class RaspiGripperServer(RobotComponentServer):
         """
         control the hand servo to hold the voltage on the pressure pin at the target
         """
-        voltage_pid = PID(POS_KP, POS_KI, POS_KD, 1/UPDATE_RATE)
+        voltage_pid = PID(self.conf['POS_KP'], self.conf['POS_KI'], self.conf['POS_KD'], 1/self.conf['UPDATE_RATE'])
         voltage_pid.setpoint = target_v
-        pos = OPEN
+        pos = self.conf['OPEN']
         while self.holdPressure and self.tryHold:
             # get the current pressure
             voltage = self.hat.gpio_pin_value(PRESSURE_PIN)
@@ -171,13 +175,13 @@ class RaspiGripperServer(RobotComponentServer):
             # record the absolute value change to know if it is stabilizing
             self.past_val_rates.append(abs(pos - self.last_value))
             self.last_value = pos
-            await asyncio.sleep(1/UPDATE_RATE)
+            await asyncio.sleep(1/self.conf['UPDATE_RATE'])
 
     async def readStableFingerValue(self):
         # wait for value to stabilize
         # todo, what if the client commands tryHold=False while we are in this loop
         # this might also need a timeout.
-        while sum(self.past_val_rates)/UPDATE_RATE > MEAN_SERVO_VAL_CHANGE_THRESHOLD:
+        while sum(self.past_val_rates)/self.conf['UPDATE_RATE'] > self.conf['MEAN_SERVO_VAL_CHANGE_THRESHOLD']:
             await asyncio.sleep(0.25)
         return self.last_value
 
@@ -212,13 +216,13 @@ class RaspiGripperServer(RobotComponentServer):
                     # Start gripping
                     logging.info(f'Close grip and maintain pressure')
                     self.holdPressure = True
-                    asyncio.create_task(self.holdPressurePid(TARGET_HOLDING_PRESSURE))
+                    asyncio.create_task(self.holdPressurePid(self.conf['TARGET_HOLDING_PRESSURE']))
                     await asyncio.sleep(0.5)
                 finger_val = await self.readStableFingerValue()
-                logging.info(f'Finger stable at {finger_val} with mean absolute change of {sum(self.past_val_rates)/UPDATE_RATE} over the last second')
+                logging.info(f'Finger stable at {finger_val} with mean absolute change of {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]} over the last second')
                 logging.info(f'pressure pad voltage = {self.hat.gpio_pin_value(PRESSURE_PIN)}')
                 # look where it stabilized
-                if finger_val < FINGER_TOUCH:
+                if finger_val < self.conf['FINGER_TOUCH']:
                     # object is present
                     # putting anything in the self.update dict means it will get flushed to the websocket
                     self.holding = True
@@ -230,7 +234,7 @@ class RaspiGripperServer(RobotComponentServer):
                     # We also reach this if the object slipped out, and the value restabilized with the fingers touching.
                     logging.info(f'Fingers closed on nothing. self.holding was {self.holding}')
                     self.holdPressure = False
-                    self.hand_servo.value(OPEN)
+                    self.hand_servo.value(self.conf['OPEN'])
                     self.holding = False
                     self.update['holding'] = False
                     # consider sending a count of the number of times we failed to grasp.
@@ -242,9 +246,9 @@ class RaspiGripperServer(RobotComponentServer):
                 # this should occur only when a websocket update was received setting self.tryHold to false.
                 # open completely.
                 logging.info(f'Grip commanded open.')
-                self.hand_servo.value(OPEN)
+                self.hand_servo.value(self.conf['OPEN'])
                 # do not leave the station until the passengers have fully departed.
-                while self.hat.gpio_pin_value(PRESSURE_PIN) > PRESSURE_MIN:
+                while self.hat.gpio_pin_value(PRESSURE_PIN) > self.conf['PRESSURE_MIN']:
                     await asyncio.sleep(0.05)\
                 # now you can tell the controller its ok to move to the next destination.
                 self.update['holding'] = False

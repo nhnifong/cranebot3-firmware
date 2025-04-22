@@ -34,3 +34,8 @@ class RaspiGripperClient(ComponentClient):
         handle a list of aruco detections from the pool
         """
         pass
+
+    async def send_config(self):
+        config = Config()
+        if len(config.gripper_vars) > 0:
+            await self.websocket.send(json.dumps({'set_config_vars': config.gripper_vars}))

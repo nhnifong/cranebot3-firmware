@@ -151,6 +151,8 @@ class ComponentClient:
         # just could not make asyncio deal with this, so I used threading. hey it works, go figure
         vid_thread = threading.Thread(target=self.receive_video)
         vid_thread.start()
+        # send configuration to robot component to override default.
+        asyncio.create_task(self.send_config())
         # Loop until disconnected
         while self.connected:
             try:
@@ -293,6 +295,12 @@ class RaspiAnchorClient(ComponentClient):
                         ]))
                         dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
                         # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
+
+    async def send_config(self):
+        config = Config()
+        anchor_config_vars = config.vars_for_anchor(self.anchor_num)
+        if len(anchor_config_vars) > 0:
+            await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
 
 if __name__ == "__main__":
     from multiprocessing import Queue

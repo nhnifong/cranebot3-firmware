@@ -40,23 +40,23 @@ stream_command = """
   --autofocus-mode continuous""".split()
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 
-RUNNING_WS_DELAY = 0.1
-CALIBRATING_WS_DELAY = 0.05
-
-# constants
-conf = {
-    'RUNNING_WS_DELAY': 0.3,
+# values that can be overridden by the controller
+default_conf = {
+    # delay in seconds between updates sent on websocket during normal operation
+    'RUNNING_WS_DELAY': 0.1,
+    # delay in seconds between updates sent on websocket during calibration
     'CALIBRATING_WS_DELAY': 0.05,
 }
 
 class RobotComponentServer:
     def __init__(self):
+        self.conf = default_conf.copy()
         self.run_server = True
         self.ws_client_connected = False
         # a dict of update to be flushed periodically to the websocket
         self.update = {}
         self.frames = []
-        self.ws_delay = RUNNING_WS_DELAY
+        self.ws_delay = self.conf['RUNNING_WS_DELAY']
         self.stream_command = stream_command
 
     async def stream_measurements(self, ws):
@@ -167,7 +167,8 @@ class RobotComponentServer:
                     self.spooler.jogRelativeLen(float(update['jog']))
                 if 'reference_length' in update:
                     self.spooler.setReferenceLength(float(update['reference_length']))
-                if 'set_config_var' in update:
+                if 'set_config_vars' in update:
+                    self.conf.update(update['set_config_vars'])
                     pass
 
                 # defer to specific server subclass
@@ -247,16 +248,40 @@ class RobotComponentServer:
         await self.zc.async_register_service(info)
         logging.info(f"Registered service: {name} ({service_type}) on port {port}")
 
+default_anchor_conf = {    
+    # smoothing factor. range: [0,1]. lower values are smoother.
+    'TENSION_SMOOTHING_FACTOR': 0.2,
+    # kilograms. below this, line is assumed to be slack during tensioning
+    'TENSION_SLACK_THRESH': 0.35,
+    # kilograms. above this, line is assumed to be too tight during tensioning.
+    'TENSION_TIGHT_THRESH': 0.7,
+    # speed to reel in and out lines turing tension equalization. m/s
+    'MOTOR_SPEED_DURING_TEQ': 1,
+    # maximum change in line length allowed during tension equalization. meters
+    'MAX_LINE_CHANGE_DURING_TEQ': 0.3,
+    # degrees of expected angle error with no load per commanded rev/sec
+    'MKS42C_EXPECTED_ERR': 1.0,
+    # kg-meters per degree of error. Factor for computing torque from the risidual angle error
+    'MKS42C_TORQUE_FACTOR': 0.172,
+    # speed at which to measure initial tension. slowest possible motor speed. reeling in, which seems to work better than out.
+    'MEASUREMENT_SPEED': -0.4,
+    # number of 1/30 second ticks to measure to obtain a stable value.
+    'MEASUREMENT_TICKS': 18,
+    # if this tension is exceeded, motion will stop.
+    'DANGEROUS_TENSION': 3.5,
+}
+
 class RaspiAnchorServer(RobotComponentServer):
     def __init__(self, power_anchor=False, flat=False):
         super().__init__()
-        ratio = 16/40 # 16 drive gear teeth, 40 spool teeth. the spool makes 0.4 rotations per motor rotation.
+        self.conf.update(default_anchor_conf)
+        ratio = 20/51 # 20 drive gear teeth, 51 spool teeth.
         if power_anchor:
             # A power anchor spool has a thicker line
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=43.7, full_length=10, gear_ratio=ratio)
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=43.7, full_length=10, conf=self.conf, gear_ratio=ratio)
         else:
             # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=27, full_length=10, gear_ratio=ratio)
+            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=27, full_length=10, conf=self.conf, gear_ratio=ratio)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
         self.eq_tension_stop_event = asyncio.Event()
@@ -273,7 +298,7 @@ class RaspiAnchorServer(RobotComponentServer):
         if 'equalize_tension' in updates:
             action = updates['equalize_tension']['action']
             if action == 'start':
-                self.ws_delay = CALIBRATING_WS_DELAY # send updates faster
+                self.ws_delay = self.conf['CALIBRATING_WS_DELAY'] # send updates faster
                 self.eq_tension_stop_event.clear()
                 maxLineChange = 0.3 # max meters of line that is allowed to reel in
                 if 'max_line_change' in updates['equalize_tension']:
@@ -285,18 +310,18 @@ class RaspiAnchorServer(RobotComponentServer):
             elif action == 'complete':
                 # set the event, without setting abort_equalize_tension to indicate approval and commit the line length change
                 self.eq_tension_stop_event.set()
-                self.ws_delay = RUNNING_WS_DELAY
+                self.ws_delay = self.conf['RUNNING_WS_DELAY']
             elif action == 'abort':
                 self.spooler.abort_equalize_tension = True
                 self.eq_tension_stop_event.set()
-                self.ws_delay = RUNNING_WS_DELAY
+                self.ws_delay = self.conf['RUNNING_WS_DELAY']
             elif action == 'stop_if_not_slack':
                 self.spooler.tensioneq_outspooling_allowed = False
             elif action == 'thresholds':
-                self.spooler.live_err_low_thresh = updates['equalize_tension']['th'][0]
-                self.spooler.live_err_high_thresh = updates['equalize_tension']['th'][1]
-        if 'measure_no_load' in updates:
-            asyncio.create_task(self.spooler.measureNoLoad())
+                self.spooler.live_tension_low_thresh = updates['equalize_tension']['th'][0]
+                self.spooler.live_tension_high_thresh = updates['equalize_tension']['th'][1]
+        if 'measure_ref_load' in updates:
+            asyncio.create_task(self.spooler.measureRefLoad(updates['measure_ref_load']))
 
     def readOtherSensors(self):
         pass
