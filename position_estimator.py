@@ -680,6 +680,7 @@ class CDPR_position_estimator:
     async def main(self):
         read_queue_task = asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         await asyncio.sleep(5)
+        return
         print('Starting position estimator')
         while self.run:
             try:
