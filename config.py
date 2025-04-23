@@ -42,13 +42,19 @@ class Config:
             self.anchors[a['num']].service_name = a['service_name']
             if a['service_name']:
                 self.anchor_num_map[a['service_name']] = a['num']
-            self.anchors[a['num']].vars = a['vars']
+            try:
+                self.anchors[a['num']].vars = a['vars']
+            except KeyError:
+                pass
         cam = conf['camera_cal']
         self.resolution = tuple(cam['resolution'])
         self.intrinsic_matrix = np.array(cam['intrinsic_matrix'])
         self.distortion_coeff = np.array(cam['distortion_coeff'])
-        self.commmon_anchor_vars = conf['common_anchor_vars']
-        self.gripper_vars = conf['gripper']
+        try:
+            self.commmon_anchor_vars = conf['common_anchor_vars']
+            self.gripper_vars = conf['gripper']
+        except KeyError:
+            pass
 
     def write(self):
         outf = open('configuration.json', 'w')
