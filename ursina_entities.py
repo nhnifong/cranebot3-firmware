@@ -464,7 +464,7 @@ class DirectMoveGantryTarget(Entity):
 
     def estimatePosition(self, t):
         """Estimate the gantry's position at the given time and the last length plan sent"""
-        elapsed_time = t - self.last_move_start_tim
+        elapsed_time = t - self.last_move_start_time
         if elapsed_time <= 0:
             return self.last_move_start_pos
         elif elapsed_time >= self.last_move_duration:
@@ -474,7 +474,7 @@ class DirectMoveGantryTarget(Entity):
             # Calculate the fraction of the move that has been completed
             fraction_complete = elapsed_time / self.last_move_duration
             # Estimate the current position by interpolating along the move vector
-            estimated_position = self.last_move_start_pos + self.last_move_vec * fraction_complete
+            return self.last_move_start_pos + self.last_move_vec * fraction_complete
 
     def reset(self):
         self.last_move_vec = None
@@ -489,25 +489,28 @@ class DirectMoveGantryTarget(Entity):
         goal = np.array(swap_yz(self.position))
 
         if self.last_move_vec is None:
-            self.last_move_start_pos = swap_yz(self.app.line_pos_sphere.position)
+            self.last_move_start_pos = np.array(swap_yz(self.app.line_pos_sphere.position))
         else:
             self.last_move_start_pos = self.estimatePosition(expected_rcv_time)
         self.last_move_start_time = expected_rcv_time
         self.last_move_vec = goal - self.last_move_start_pos
-        self.last_move_duration = np.linalg.norm(elf.last_move_vec) / speed # seconds
+        self.last_move_duration = np.linalg.norm(self.last_move_vec) / speed # seconds
 
-        # calculate a few time intervals in the near future
-        times = np.linspace(0, self.last_move_duration, 6, dtype=np.float64).reshape(-1, 1)
+        print(f'Direct move vector {self.last_move_vec}')
+
+        # calculate regular intervals
+        intervals = np.linspace(0, 1, 6, dtype=np.float64).reshape(-1, 1)
         # where we want the gantry to be at the time intervals
-        gantry_positions = self.last_move_vec * times + start
+        gantry_positions = self.last_move_vec * intervals + self.last_move_start_pos
+        print(f'first gant pos = {gantry_positions[0]}')
         # represent as absolute times
-        times = times + self.last_move_start_time
+        times = intervals * self.last_move_duration + self.last_move_start_time
         # find the anchor line lengths if the gantry were at those positions
         # format as an array of times and lengths, one array for each anchor
         future_anchor_lines = np.array([
             np.column_stack([
                 times,
-                np.linalg.norm(gantry_positions - swap_yz(a.position), axis=1)])
+                np.linalg.norm(gantry_positions - np.array(swap_yz(a.position)), axis=1)])
             for a in self.app.anchors])
         # send it
         self.app.to_ob_q.put({
