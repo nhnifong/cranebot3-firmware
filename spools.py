@@ -107,7 +107,7 @@ class SpoolController:
             spooled_length = self.full_length - length
             relative_angle = math.log(spooled_length / self.k1_over_k2 + 1) / self.k2
             angle *= self.motor_orientation
-            self.zero_angle= angle - relative_angle
+            self.zero_angle = angle - relative_angle
             logging.info(f'Reference length {length} m')
             logging.info(f'Set zero angle to be {self.zero_angle} revs. {relative_angle} revs from the current value of {angle}')
 
@@ -179,11 +179,11 @@ class SpoolController:
             logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}. Movement disallowed until new reference length received.")
             # self.moveAllowed = False
 
-        if tension_support:
+        if self.tension_support:
             success, tension = self.currentTension()
             if success:
-                self.smoothed_tension = (self.currentTension() * self.conf['TENSION_SMOOTHING_FACTOR']
-                    + self.smoothed_tension * (1-self.conf['TENSION_SMOOTHING_FACTOR']))
+                fac = self.conf['TENSION_SMOOTHING_FACTOR']
+                self.smoothed_tension = (tension * fac + self.smoothed_tension * (1-fac))
 
             if self.smoothed_tension > self.conf['DANGEROUS_TENSION']:
                 logging.warning(f"Tension of {self.smoothed_tension} is too high!")
@@ -193,10 +193,8 @@ class SpoolController:
                 self.commandSpeed(0)
                 self.moveAllowed = False
 
-            # accumulate these so you can send them to the websocket
-            row = (time.time(), self.lastLength, self.smoothed_tension)
-        else:
-            row = (time.time(), self.lastLength)
+        # accumulate these so you can send them to the websocket
+        row = (time.time(), self.lastLength)
 
         if self.rec_loop_counter == self.conf['REC_MOD']:
             self.record.append(row)
@@ -217,16 +215,6 @@ class SpoolController:
         # greater load on the line subtracts from angleError regardless of the commanded motor direction.
         torque = self.conf['MKS42C_TORQUE_FACTOR'] * load_err
         return True, torque / self.meters_per_rev
-
-    def measure_t(self):
-        try:
-            while True:
-                self.commandSpeed(math.sin(time.time()/4)*2)
-                t, l, tension = self.currentLineLength()
-                logging.debug(f'tension = {tension:.3f}')
-                time.sleep(1/30)
-        except KeyboardInterrupt:
-            self.commandSpeed(0)
 
     def fastStop(self):
         # fast stop is permanent.
@@ -251,7 +239,7 @@ class SpoolController:
                 time.sleep(0.2)
                 continue
             try:
-                t, currentLen, tension = self.currentLineLength()
+                t, currentLen = self.currentLineLength()
 
                 # Find the earliest entry in desiredLine that is still in the future.
                 while self.lastIndex < len(self.desiredLine) and self.desiredLine[self.lastIndex][0] <= t:
@@ -359,7 +347,7 @@ class SpoolController:
     async def equalizeSpoolTension(self,
         controllerApprovalEvent,
         sendUpdatesFunc,
-        maxLineChange=self.conf['MAX_LINE_CHANGE_DURING_TEQ'],
+        maxLineChange=None,
         allowOutSpooling=True):
         """Without tracking any particular length, reel the spool until the line tension is within a predefined range
 
@@ -381,12 +369,14 @@ class SpoolController:
         reeling out should also stop if
           2. Any other line that started slack has stopped (controller will inform us)
         """
+        if maxLineChange is None:
+            maxLineChange = self.conf['MAX_LINE_CHANGE_DURING_TEQ']
         self.pauseTrackingLoop()
         # make sure the tracking loop is definitely paused. it's on another thread. 
         await asyncio.sleep(LOOP_DELAY_S * 2)
         self.commandSpeed(0)
         self.abort_equalize_tension = False
-        t, curLength, tension = self.currentLineLength()
+        t, curLength = self.currentLineLength()
         startLength = curLength
         line_delta = 0
 
@@ -398,7 +388,7 @@ class SpoolController:
         # measuring tension at rest is not possible. measure in motion
         self.commandSpeed(self.conf['MEASUREMENT_SPEED'])
         for i in range(self.conf['MEASUREMENT_TICKS']):
-            t, curLength, tension = self.currentLineLength()
+            t, curLength = self.currentLineLength()
             logging.debug(f'getting stabilized tension reading {self.smoothed_tension}')
             await asyncio.sleep(1/30)
         # undo motion that occurred during reading

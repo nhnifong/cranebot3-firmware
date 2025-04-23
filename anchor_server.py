@@ -272,16 +272,20 @@ default_anchor_conf = {
 }
 
 class RaspiAnchorServer(RobotComponentServer):
-    def __init__(self, power_anchor=False, flat=False):
+    def __init__(self, power_anchor=False, flat=False, mock_motor=None):
         super().__init__()
         self.conf.update(default_anchor_conf)
         ratio = 20/51 # 20 drive gear teeth, 51 spool teeth.
+        if mock_motor is not None:
+            motor = mock_motor
+        else:
+            motor = MKSSERVO42C()
         if power_anchor:
             # A power anchor spool has a thicker line
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=43.7, full_length=10, conf=self.conf, gear_ratio=ratio)
+            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=43.7, full_length=10, conf=self.conf, gear_ratio=ratio)
         else:
             # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
-            self.spooler = SpoolController(MKSSERVO42C(), empty_diameter=25, full_diameter=27, full_length=10, conf=self.conf, gear_ratio=ratio)
+            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=27, full_length=10, conf=self.conf, gear_ratio=ratio)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
         self.eq_tension_stop_event = asyncio.Event()

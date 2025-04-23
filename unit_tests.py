@@ -1,3 +1,7 @@
+"""
+Unit tests for non-networked components that run on the desktop enviroment
+"""
+
 import unittest
 import numpy as np
 from math import pi
