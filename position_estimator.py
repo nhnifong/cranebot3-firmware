@@ -5,11 +5,13 @@ from scipy.special import softmax
 from time import time
 from data_store import DataStore
 from cv_common import compose_poses
+import model_constants
 from functools import partial
 import asyncio
 import signal
 import sys
 from math import pi
+from config import Config
 # import cProfile
 
 default_weights = np.array([
@@ -122,13 +124,16 @@ class CDPR_position_estimator:
         self.to_ob_q = to_ob_q
         self.snapshot = {}
         self.n_cables = self.datastore.n_cables
+        self.config = Config()
         self.anchor_points = np.array([
             [-2,2, 3],
             [ 2,2, 3],
             [ -1,2,-2],
             [ -2,2,-2],
         ], dtype=float)
-        self.loadAnchorPoses()        
+        for i, a in enumerate(self.config.anchors):
+            self.anchor_points[i] = np.array(compose_poses([a.pose, model_constants.anchor_grommet])[0])
+        
         self.gripper_mass = 0.4 # kg
         self.gantry_mass = 0.06 # kg
         self.rough_gripper_speed = 0.7 # m/s
@@ -193,17 +198,6 @@ class CDPR_position_estimator:
         # model times at which to evaluate the functions, concentrated near the present
         self.times = np.linspace(-1,1,self.steps)**3 * 0.5 + 0.5
 
-    def loadAnchorPoses(self):
-        pts = []
-        for i in range(self.n_cables):
-            try:
-                # read calibration data from file
-                saved_info = np.load('anchor_pose_%i' % i)
-                anchor_pose = tuple(saved_info['pose'])
-                pts.append(compose_poses([anchor_pose, model_constants.anchor_grommet])[0])
-            except FileNotFoundError:
-                pts.append(np.array([0,5,0]))
-        self.anchor_points = np.array(pts)
 
     def anchor_line_length(self, anchor_index, times):
         """
@@ -238,16 +232,18 @@ class CDPR_position_estimator:
         gravity acts to accelerate the mass down.
         a tension force acts in the direction of the gantry equal to the component of gravity opposite that direction.
         """
-
         directions = grip_positions - gant_positions
-        magnitudes = np.linalg.norm(directions, axis=1, keepdims=True) #Calculate magnitudes
-        normalized_directions = directions / magnitudes #Normalize
-
-        tensions = np.einsum('i,ij->j', self.gravity, normalized_directions.T) #Vectorized dot product
+        print(f'directions {directions}')
+        magnitudes = np.linalg.norm(directions, axis=1, keepdims=True) # Calculate magnitudes
+        print(f'magnitudes {magnitudes}')
+        normalized_directions = directions / magnitudes # Normalize
+        print(f'normalized {normalized_directions}')
+        # tensions = np.einsum('i,ij->j', self.gravity, normalized_directions.T) # Vectorized dot product
+        tensions = np.einsum('ij,j,ij->ij', normalized_directions, self.gravity, normalized_directions)
+        print(f'tensions {tensions}')
         tension_accs = -tensions[:, np.newaxis] * normalized_directions
-
-        results = np.concatenate([self.times[:, np.newaxis], tension_accs + self.gravity], axis=1)
-        return results
+        print(f'tension_accs {tension_accs}')
+        return np.concatenate([self.times[:, np.newaxis], tension_accs + self.gravity], axis=1)
 
     def kinetic_energy_vectorized(self, velocity_values, mass_kg):
         """

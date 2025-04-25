@@ -3,6 +3,8 @@ Test that starts up anchor server and connects to it with a websocket.
 
 Commands sent to the anchor server generally all just call a corresponding method in SpoolController
 So we just mock that. 
+
+Any method common to anchor and gripper server is tested here in anchor
 """
 import sys
 import os

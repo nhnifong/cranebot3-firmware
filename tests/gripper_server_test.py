@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch, Mock, MagicMock, ANY
 import asyncio
 from gripper_server import RaspiGripperServer
+from debug_motor import DebugMotor
 import websockets
 import json
 from config import Config
@@ -48,6 +49,8 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         self.mock_hat_class = Mock(spec=InventorHATMini)
         self.patchers.append(patch('gripper_server.InventorHATMini', self.mock_hat_class))
         self.mock_hat = self.mock_hat_class.return_value
+
+        # gpio pins
         self.mock_hat.gpio_pin_value.return_value = 1.0
 
         self.servos = {SERVO_1: MagicMock(), SERVO_2: MagicMock()}
@@ -68,9 +71,12 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         self.patchers.append(patch('gripper_server.BNO08X_I2C', self.mock_imu_class))
         self.mock_imu = self.mock_imu_class.return_value
 
+        # mock motor
+        self.debug_motor = DebugMotor()
+
         for p in self.patchers:
             p.start()
-        self.server = RaspiGripperServer()
+        self.server = RaspiGripperServer(self.debug_motor)
         self.server_task = asyncio.create_task(self.server.main())
         await asyncio.sleep(0.1)  # Give the server a moment to start
 
@@ -119,35 +125,30 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         except Exception as e:
             self.fail(f"Command execution failed: {e}")
 
-    async def test_send_config(self):
-        config = Config()
-        anchor_config_vars = config.vars_for_anchor(0)
-        anchor_config_vars['SPECIAL'] = 'NAT'
-
-        def check(resp):
-            self.assertEqual('NAT', self.server.conf['SPECIAL'])
-        await self.command_and_check({'set_config_vars': anchor_config_vars}, check, 0.1)
-
-    async def test_send_reference_length(self):
+    async def test_send_zero_winch_line(self):
         self.mock_spooler.setReferenceLength.reset_mock()
-        reference_length = 0.3
-        def check(resp):
-            self.mock_spooler.setReferenceLength.assert_called_once_with(reference_length)
-        await self.command_and_check({'reference_length': reference_length}, check, 0.1)
+        self.mock_hat.gpio_pin_value.return_value = 0
+        try:
+            async with websockets.connect("ws://127.0.0.1:8765") as ws:
+                await ws.send(json.dumps({'zero_winch_line': None}))
+                await asyncio.sleep(0.1)
+                self.assertFalse(self.server_task.done(), "Server should still be running")
+                self.assertEqual(-1, self.debug_motor.speed)
+                self.mock_hat.gpio_pin_value.return_value = 1
+                await asyncio.sleep(0.1)
+                self.assertEqual(0, self.debug_motor.speed)
+                self.mock_spooler.setReferenceLength.assert_called_once_with(0.01)
+                await ws.close()
+        except Exception as e:
+            self.fail(f"Command execution failed: {e}")
 
-    async def test_send_jog(self):
-        jog_value = 0.3
+    async def test_send_grip(self):
+        # There is actually a lot of complex behavior that happens as a result of setting this,
+        # but it's just not that useful to unit test. the physical tests are the only thing that
+        # really cover it. 
         def check(resp):
-            self.mock_spooler.jogRelativeLen.assert_called_once_with(jog_value)
-        await self.command_and_check({'jog': jog_value}, check, 0.1)
-
-    async def test_send_length_plan(self):
-        length_plan = [
-            [1745592964.2, 0.4],
-            [1745592965.2, 0.45],
-            [1745592966.2, 0.5],
-        ]
+            self.assertEqual(False, self.server.tryHold)
+        await self.command_and_check({'grip': 'open'}, check, 0.1)
         def check(resp):
-            pass
-            self.mock_spooler.setPlan.assert_called_once_with(length_plan)
-        await self.command_and_check({'length_plan': length_plan}, check, 0.1)
+            self.assertEqual(True, self.server.tryHold)
+        await self.command_and_check({'grip': 'closed'}, check, 0.1)

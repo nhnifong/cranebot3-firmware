@@ -101,7 +101,7 @@ class GripperSpoolMotor():
 
 
 class RaspiGripperServer(RobotComponentServer):
-    def __init__(self):
+    def __init__(self, mock_motor=None):
         super().__init__()
         self.conf.update(default_conf)
         self.name_prefix = 'raspi-gripper-'
@@ -122,7 +122,10 @@ class RaspiGripperServer(RobotComponentServer):
         self.tryHold = False
         self.tryHoldChanged = asyncio.Event()
 
-        self.motor = GripperSpoolMotor(self.hat)
+        if mock_motor is not None:
+            self.motor = mock_motor
+        else:
+            self.motor = GripperSpoolMotor(self.hat)
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
         self.spooler = SpoolController(self.motor, empty_diameter=20, full_diameter=36, full_length=2, conf=self.conf, tension_support=False)
@@ -258,9 +261,13 @@ class RaspiGripperServer(RobotComponentServer):
 
     async def performZeroWinchLine(self):
         self.spooler.pauseTrackingLoop()
-        while self.hat.gpio_pin_value(LIMIT_SWITCH_PIN) == 0 and self.run_server:
-            self.motor.runConstantSpeed(-1)
-            await asyncio.sleep(0.03)
+        try:
+            while self.hat.gpio_pin_value(LIMIT_SWITCH_PIN) == 0 and self.run_server:
+                self.motor.runConstantSpeed(-1)
+                await asyncio.sleep(0.03)
+        except Exception as e:
+            self.motor.runConstantSpeed(0)
+        self.motor.runConstantSpeed(0)
         self.spooler.setReferenceLength(0.01) # 1 cm
         self.spooler.resumeTrackingLoop()
 
