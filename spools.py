@@ -278,7 +278,7 @@ class SpoolController:
                 # if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
                 # (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
                 # ideally we want to catch up in one step, but we have max acceleration constraints.
-                aimSpeed = targetSpeed + position_err * PE_TERM; # meters of line per second
+                aimSpeed = targetSpeed + position_err * self.conf['PE_TERM']; # meters of line per second
 
                 # limit the acceleration of the line
                 wouldAccel = (aimSpeed - currentSpeed) / self.conf['LOOP_DELAY_S']

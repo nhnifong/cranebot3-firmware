@@ -1,15 +1,17 @@
 """
-Unit tests for non-networked components that run on the desktop enviroment
+Unit tests for common pose functions
 """
+
+import sys
+import os
+# This will let us import files and modules located in the parent directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 import unittest
 import numpy as np
 from math import pi
 from cv_common import compose_poses, invert_pose, average_pose
-from data_store import CircularBuffer, DataStore
-from position_estimator import CDPR_position_estimator
-import time
-from multiprocessing import Queue
 
 
 def p(l): # make a numpy array of floats out of the given list. for brevity
@@ -152,62 +154,3 @@ class TestPoseFunctions(unittest.TestCase):
         result = compose_poses(poses)
         np.testing.assert_array_almost_equal(result[0], expected[0]) # rotation
         np.testing.assert_array_almost_equal(result[1], expected[1]) # position
-
-
-class TestDatastore(unittest.TestCase):
-    def test_circular_buffer_insert_read(self):
-        cb = CircularBuffer((3,1))
-        cb.insert(0.1)
-        out = cb.deepCopy()
-        self.assertEqual(out[0], 0.1)
-
-    def test_circularity(self):
-        cb = CircularBuffer((3,1))
-        cb.insert(0.1)
-        cb.insert(0.2)
-        cb.insert(0.3)
-        cb.insert(0.4)
-        out = cb.deepCopy()
-        self.assertEqual(out[0], 0.4)
-        self.assertEqual(out[1], 0.2)
-        self.assertEqual(out[2], 0.3)
-
-class TestPositionEstimator(unittest.TestCase):
-
-    def setUp(self):
-        datastore = DataStore(horizon_s=10, n_cables=4)
-        to_ui_q = Queue()
-        to_pe_q = Queue()
-        to_ob_q = Queue()
-        to_ui_q.cancel_join_thread()
-        to_pe_q.cancel_join_thread()
-        to_ob_q.cancel_join_thread()
-        self.pe = CDPR_position_estimator(datastore, to_ui_q, to_pe_q, to_ob_q)
-        self.now = 1739888888.5555555
-        self.pe.time_domain = (self.now - 10, self.now + 10)
-
-    def test_model_time(self):
-        result = self.pe.model_time(self.now)
-        self.assertEqual(result, 0.5)
-
-
-    def test_model_time_numpy_float(self):
-        times = np.array([self.now,self.now,self.now], dtype=float)
-        result = self.pe.model_time(times[0])
-        self.assertEqual(result, 0.5)
-
-    def test_error_meas(self):
-        def func(times):
-            arr = times*2
-            return arr.reshape(-1, 1) # create column of data, like bspline
-        position_measurements = np.array([
-            [0.1, 0.21],
-            [0.2, 0.41],
-            [0.3, 0.61],
-            [0.4, 0.81],
-        ])
-        error = self.pe.error_meas(func, position_measurements, normalize_time=False)
-        self.assertAlmostEqual(error, 0.01)
-
-if __name__ == '__main__':
-    unittest.main()

@@ -59,7 +59,7 @@ class DataStore:
     This class is meant to store continuously collected measurable variables of the robot and store them in circular buffers.
     """
 
-    def __init__(self, horizon_s, n_cables):
+    def __init__(self, horizon_s, n_cables, expected_freq=3):
         """
         Initialize measurement arrays with sizes proportional to the approximate number of seconds of data we expect to store.
 
@@ -75,7 +75,7 @@ class DataStore:
         self.horizon_s = horizon_s
         self.n_cables = n_cables
 
-        c = int(horizon_s * 3)
+        c = int(horizon_s * expected_freq)
         self.gantry_pose = CircularBuffer((c, 7))
         self.gripper_pose = CircularBuffer((c, 7))
         self.imu_accel = CircularBuffer((c, 4))
