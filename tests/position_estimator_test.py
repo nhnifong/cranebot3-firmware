@@ -46,3 +46,13 @@ class TestPositionEstimator(unittest.TestCase):
         ])
         error = self.pe.error_meas(func, position_measurements, normalize_time=False)
         self.assertAlmostEqual(error, 0.01)
+
+    def test_forces_model_swing(self):
+        """If we iteratively apply the forces from calc_gripper_accel_from_forces would the pendulum actually swing?"""
+        gant_pos = np.array([[0,0,1]])
+        grip_pos = np.array([[0.4,0.0,0.1]])
+        # this function relies on the precalcuated times array. in this case we are just calcuating one item
+        self.pe.times = np.array([123.4])
+        result = self.pe.calc_gripper_accel_from_forces(gant_pos, grip_pos)
+        expected = np.array([[123.4, -0.1,-0.1,0]])
+        np.testing.assert_array_almost_equal(result[0], expected[0])
