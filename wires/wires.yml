@@ -1,0 +1,102 @@
+connectors:
+  I2C1:
+    type: JST SH 1.0
+    subtype: female
+    pinlabels: [GND, V+, SDA, SCL]
+  I2C2:
+    type: Dupont 2.54
+    subtype: female
+    pinlabels: [3V3, GND, SCL, SDA]
+  I2C3:
+    type: Dupont 2.54
+    subtype: female
+    pinlabels: [3V3, GND, SDA, SCL]
+
+  EncoderA:
+    type: JST SH 1.0
+    subtype: female
+    pinlabels: [3V3, GND, CNT, A, B, C]
+
+  Pres-gpio:
+    type: Dupont 2.54
+    subtype: female
+    pinlabels: [GND, 3V3, SIG]
+    loops: [[1,3]]
+    notes: "Loop is a 2.2k resistor"
+
+  Limit-switch-gpio:
+    type: Dupont 2.54
+    subtype: female
+    pinlabels: [GND, 3V3, SIG]
+
+  Anchor-ras:
+    type: Dupont 2.54
+    subtype: female
+    pinlabels: [RX, TX, GND, 5V]
+
+  MKS-Serial:
+    type: Dupont 2.0
+    subtype: female
+    pinlabels: [RX, TX]
+
+cables:
+  W1:
+    gauge: 28 awg
+    length: 13 cm
+    colors: [BK,RD,WH,YE]
+    wirecount: 4
+  W2:
+    gauge: 28 awg
+    length: 4 cm
+    colors: [BK,RD,WH,YE]
+    wirecount: 4
+
+  W3:
+    gauge: 28 awg
+    length: 15 cm
+    colors: [RD,BK,YE]
+    wirecount: 3
+
+  W4:
+    gauge: 28 awg
+    length: 16 cm
+    colors: [LB,LB]
+    wirecount: 2
+
+  W5:
+    gauge: 28 awg
+    length: 15 cm
+    colors: [BK,YE]
+    wirecount: 2
+
+  W6:
+    gauge: 28 awg
+    length: 20 cm
+    colors: [BU,OG,BK,RD]
+    wirecount: 4
+
+connections:
+  -
+    - I2C2: [1,2,4,3]
+    - W1:   [1-4]
+    - I2C1: [1-4]
+  -
+    - I2C2: [1,2,4,3]
+    - W2:   [1-4]
+    - I2C3: [1-4]
+  -
+    - EncoderA: [1-3]
+    - W3:   [1-3]
+  -
+    - Pres-gpio: [2,3]
+    - W4:   [1,2]
+  -
+    - Limit-switch-gpio: [1,3]
+    - W5:   [1,2]
+  -
+    - Anchor-ras: [1,2]
+    - W6:   [1,2]
+    - MKS-Serial:   [2,1]
+  -
+    - Anchor-ras: [3,4]
+    - W6:   [3,4]
