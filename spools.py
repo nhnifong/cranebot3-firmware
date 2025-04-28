@@ -164,7 +164,7 @@ class SpoolController:
         success, angle = self.motor.getShaftAngle()
         if not success:
             logging.warning("Could not read shaft angle from motor")
-            return (time.time(), self.lastLength, self.smoothed_tension)
+            return (time.time(), self.lastLength)
 
         if abs(angle - self.lastAngle) > 1:
             logging.warning(f'motor moved more than 1 rev since last read, lastAngle={self.lastAngle} angle={angle} diff={angle - self.lastAngle}')
@@ -374,7 +374,7 @@ class SpoolController:
             maxLineChange = self.conf['MAX_LINE_CHANGE_DURING_TEQ']
         self.pauseTrackingLoop()
         # make sure the tracking loop is definitely paused. it's on another thread. 
-        await asyncio.sleep(LOOP_DELAY_S * 2)
+        await asyncio.sleep(self.conf['LOOP_DELAY_S'] * 2)
         self.commandSpeed(0)
         self.abort_equalize_tension = False
         t, curLength = self.currentLineLength()
@@ -422,7 +422,7 @@ class SpoolController:
                 logging.debug(f'curLength={curLength} tension={tension}')
                 line_delta = curLength - startLength
                 is_slack = self.smoothed_tension < self.live_tension_low_thresh
-        except e:
+        except Exception as e:
             self.commandSpeed(0)
             raise e
 
