@@ -192,9 +192,10 @@ class SpoolController:
                 time.sleep(1)
                 self.commandSpeed(0)
                 self.moveAllowed = False
-
-        # accumulate these so you can send them to the websocket
-        row = (time.time(), self.lastLength)
+            row = (time.time(), self.lastLength, self.smoothed_tension)
+        else:
+            # accumulate these so you can send them to the websocket
+            row = (time.time(), self.lastLength)
 
         if self.rec_loop_counter == self.conf['REC_MOD']:
             self.record.append(row)
