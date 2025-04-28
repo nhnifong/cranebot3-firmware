@@ -201,7 +201,7 @@ class SpoolController:
             self.record.append(row)
             self.rec_loop_counter = 0
         self.rec_loop_counter += 1
-        return row
+        return row[:2]
 
     def currentTension(self):
         """return the line tension in kilograms of force.
