@@ -174,7 +174,6 @@ class AsyncObserver:
         """
         Sets the calibration mode of connected bots
         "run" - not in a calibration mode
-        "cam" - calibrate distortion parameters of cameras
         "pose" - observe the origin board
         "pause" - hold all motors at current position, but continue to make observations
         """

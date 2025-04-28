@@ -225,25 +225,22 @@ class CDPR_position_estimator:
 
     def calc_gripper_accel_from_forces(self, gant_positions, grip_positions):
         """
-        Calculate the expected acceleration on the gripper's IMU based on the forces it should experience due to
+        Approximate the expected acceleration on the gripper based on the forces it should experience due to
         it being a pendulum hanging from a moving object
-
-        two forces act on it
-        gravity acts to accelerate the mass down.
-        a tension force acts in the direction of the gantry equal to the component of gravity opposite that direction.
         """
-        directions = grip_positions - gant_positions
-        print(f'directions {directions}')
-        magnitudes = np.linalg.norm(directions, axis=1, keepdims=True) # Calculate magnitudes
-        print(f'magnitudes {magnitudes}')
-        normalized_directions = directions / magnitudes # Normalize
-        print(f'normalized {normalized_directions}')
-        # tensions = np.einsum('i,ij->j', self.gravity, normalized_directions.T) # Vectorized dot product
-        tensions = np.einsum('ij,j,ij->ij', normalized_directions, self.gravity, normalized_directions)
-        print(f'tensions {tensions}')
-        tension_accs = -tensions[:, np.newaxis] * normalized_directions
-        print(f'tension_accs {tension_accs}')
-        return np.concatenate([self.times[:, np.newaxis], tension_accs + self.gravity], axis=1)
+        # vector point from gripper towards gantry
+        directions = gant_positions - grip_positions
+        # line length
+        magnitudes = np.linalg.norm(directions, axis=1, keepdims=True)
+        # Replace zeros with a small value
+        magnitudes[magnitudes == 0] = 1e-8 
+        # null out z axis. The veritical component is completely ignored for now.
+        directions[:,2] = 0
+        # assume we accelerate towards the point under the gantry
+        # the longer the rope, the slower we move.
+        accel = directions * (1/np.sqrt(magnitudes / 9.81))**2
+        # prepend times
+        return np.concatenate([self.times[:, np.newaxis], accel], axis=1)
 
     def kinetic_energy_vectorized(self, velocity_values, mass_kg):
         """
@@ -336,7 +333,9 @@ class CDPR_position_estimator:
         relative_velocity = gantry_velocities - gripper_velocities
         # Calculate the normalized relative position vector.
         relative_position_norm = np.linalg.norm(relative_position, axis=1, keepdims=True)
-        relative_position_unit = np.where(relative_position_norm > 0, relative_position / relative_position_norm, 0)
+        # Replace zeros with a small value
+        relative_position_norm[relative_position_norm == 0] = 1e-8 
+        relative_position_unit = relative_position / relative_position_norm
         # Calculate the relative closing speed.
         closing_speed = np.sum(relative_velocity * relative_position_unit, axis=1)
         speeds = np.abs(closing_speed)
@@ -586,6 +585,7 @@ class CDPR_position_estimator:
 
         # Use least squares because eval_matrix is not square
         new_control_points = np.linalg.lstsq(eval_matrix.todense(), shifted_eval_matrix @ spline.c, rcond=None)[0]
+        spline.c = new_control_points
 
     def move_to_present(self):
         """
@@ -593,8 +593,11 @@ class CDPR_position_estimator:
         """
         old = self.time_domain[0] + self.horizon_s
         now = time()
+
+        print(f'old={old} now={now} diff={now-old}')
         self.time_domain = (now - self.horizon_s, now + self.horizon_s)
         domain_offset = (now - old) / (self.horizon_s * 2)
+        print(f'domain_offset, {domain_offset}')
 
         # if the knots are near 0
         #   move_spline_domain_fast(self.gripper_pos_spline, domain_offset)

@@ -10,6 +10,8 @@ import time
 from multiprocessing import Queue
 from data_store import DataStore
 import numpy as np
+from math import pi, sqrt
+import time
 
 class TestPositionEstimator(unittest.TestCase):
 
@@ -47,12 +49,92 @@ class TestPositionEstimator(unittest.TestCase):
         error = self.pe.error_meas(func, position_measurements, normalize_time=False)
         self.assertAlmostEqual(error, 0.01)
 
-    def test_forces_model_swing(self):
-        """If we iteratively apply the forces from calc_gripper_accel_from_forces would the pendulum actually swing?"""
+    def test_forces_stable(self):
+        """If the gripper hangs directly below the gantry, are the forces balanced?"""
         gant_pos = np.array([[0,0,1]])
-        grip_pos = np.array([[0.4,0.0,0.1]])
-        # this function relies on the precalcuated times array. in this case we are just calcuating one item
+        grip_pos = np.array([[0.,0.,0.1]])
         self.pe.times = np.array([123.4])
         result = self.pe.calc_gripper_accel_from_forces(gant_pos, grip_pos)
-        expected = np.array([[123.4, -0.1,-0.1,0]])
-        np.testing.assert_array_almost_equal(result[0], expected[0])
+        expected = np.array([[123.4, 0, 0, 0]])
+        np.testing.assert_array_almost_equal(result, expected)
+
+
+    def test_forces_model_swing(self):
+        """If we integrate the forces from calc_gripper_accel_from_forces would the pendulum actually swing?"""
+        gant_pos = np.array([[0,0,2]])
+        p = np.array([0.4,0,0.1])
+        v = np.array([0.,0.,0.])
+        time = 1000
+        tick = 1/50
+        rope_len = np.linalg.norm(gant_pos-p)
+        print(f'rope len = {rope_len}')
+        expected_period = 2*pi*sqrt(rope_len/9.81)
+
+        start = 1000
+        period = []
+        osc = 0
+
+        for i in range(2000):
+            grip_pos = np.array([p])
+            last_sign = (p[0]>0)
+
+            self.pe.times = np.array([time])
+            result = self.pe.calc_gripper_accel_from_forces(gant_pos, grip_pos)
+            accel = result[0][1:]
+            v += accel * tick
+            p += v * tick
+            time += tick
+
+            # measure the period of oscillation.
+            now_sign = (p[0]>0)
+            if last_sign != now_sign:
+                if start != 1000:
+                    period.append((time - start) * 2)
+                start = time
+                osc += 1
+
+        mean_period = np.mean(period)
+        print(f'counted {osc} half-swings')
+        print(f'mean period of oscillation = {mean_period} seconds')
+        self.assertTrue(osc>1)
+        self.assertAlmostEqual(expected_period, mean_period, 1)
+
+    def test_set_splines(self):
+        # model consists of two 3D splines.
+        # 2 splines
+        # 3 dimensions
+        # N control points
+        nsplines = 2
+        ndims = 3
+        model_size = nsplines * ndims * self.pe.n_ctrl_pts
+        params = np.concatenate([
+            np.repeat(np.arange(1, self.pe.n_ctrl_pts+1), ndims),
+            np.repeat(np.arange(1, self.pe.n_ctrl_pts+1)+10, ndims)])
+        self.assertEqual(model_size, len(params))
+
+        self.pe.set_splines_from_params(params)
+        
+        np.testing.assert_array_almost_equal(self.pe.gripper_pos_spline(0.5), [6,6,6])
+        np.testing.assert_array_almost_equal(self.pe.gantry_pos_spline(0.5),  [16,16,16])
+        
+        np.testing.assert_array_almost_equal(self.pe.gripper_velocity(0.5), [9,9,9])
+        np.testing.assert_array_almost_equal(self.pe.gantry_velocity(0.5),  [9,9,9])
+        
+        np.testing.assert_array_almost_equal(self.pe.gripper_accel_func(0.5), [0,0,0])
+        np.testing.assert_array_almost_equal(self.pe.gantry_accel_func(0.5),  [0,0,0])
+
+    def test_move_spline_domain_robust(self):
+        self.pe.move_spline_domain_robust(self.pe.gripper_pos_spline, 0.04)
+
+    def test_estimate(self):
+        ndims = 3
+        params = np.concatenate([
+            np.repeat(np.arange(1, self.pe.n_ctrl_pts+1), ndims),
+            np.repeat(np.arange(1, self.pe.n_ctrl_pts+1)+10, ndims)])
+        # noise = np.random.normal(0, 1e-6, params.shape)
+        # params = params + noise
+        self.pe.set_splines_from_params(params)
+
+        now = time.time()-1
+        self.pe.time_domain = (now - self.pe.horizon_s, now + self.pe.horizon_s)
+        self.pe.estimate()
