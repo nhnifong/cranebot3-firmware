@@ -341,6 +341,8 @@ class AsyncObserver:
             self.datastore.winch_line_record.insert(np.array([t, 1.0]))
             # gripper always directly below gantry
             grip_pose = gant_pose + np.array([0,0,0,0, 0, 0, -1])
+            # range always perfect
+            self.datastore.range_record.insert(np.array([t, grip_pose[6]]))
             dp = grip_pose + np.array([0,0,0,0, random()*0.1, random()*0.1, random()*0.1])
             self.datastore.gripper_pose.insert(dp)
             # anchor lines always perfectly agree with gripper position

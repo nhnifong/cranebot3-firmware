@@ -17,6 +17,7 @@ from config import Config
 from spools import SpoolController
 from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2
 from adafruit_bno08x.i2c import BNO08X_I2C
+from adafruit_vl53l1x import VL53L1X
 import time
 
 class TestGripperServer(unittest.IsolatedAsyncioTestCase):
@@ -70,6 +71,14 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         self.mock_imu_class = Mock(spec=BNO08X_I2C)
         self.patchers.append(patch('gripper_server.BNO08X_I2C', self.mock_imu_class))
         self.mock_imu = self.mock_imu_class.return_value
+
+        # mock Rangefinder
+        self.mock_range_class = Mock(spec=VL53L1X)
+        self.patchers.append(patch('gripper_server.VL53L1X', self.mock_range_class))
+        self.mock_range = self.mock_range_class.return_value
+        self.mock_range.model_info = (1,2,3)
+        self.mock_range.data_ready = True
+        self.mock_range.distance = 30.0
 
         # mock motor
         self.debug_motor = DebugMotor()

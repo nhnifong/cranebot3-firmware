@@ -1,0 +1,4 @@
+pytest
+
+-r ../requirements_raspi.txt
+-r ../requirements_desktop.txt
