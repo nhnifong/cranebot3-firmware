@@ -20,6 +20,7 @@ default_weights = np.array([
     0.0, # gripper inertial measurements
     6.0, # calculated forces
     9.0, # winch line record
+    2.0, # range to floor record
     4.0, # anchor line record
     0.75, # total energy of gripper
     0.75, # total energy of gantry
@@ -38,6 +39,7 @@ weight_names = [
     'gripper IMU',
     'calculated forces',
     'winch line',
+    'range to floor',
     'anchor lines',
     'gripper energy',
     'gantry energy',
@@ -188,6 +190,7 @@ class CDPR_position_estimator:
         self.steps = 100
         # model times at which to evaluate the functions, concentrated near the present
         self.times = np.linspace(-1,1,self.steps)**3 * 0.5 + 0.5
+        self.holding = False
 
 
     def anchor_line_length(self, anchor_index, times):
@@ -213,6 +216,13 @@ class CDPR_position_estimator:
         time shoud be in the base interval of the model splines
         """
         return np.linalg.norm(self.gantry_pos_spline(times) - self.gripper_pos_spline(times), axis=1, keepdims=True)
+
+    def range_to_floor(self, times):
+        """
+        Return the range from the bottom of the gripper to the floor in meters
+        The gripper origin is only 3mm from the rangefinger, so no need to offset.
+        """
+        return self.gripper_pos_spline(times)[:,2]
 
     def calc_gripper_accel_from_forces(self, gant_positions, grip_positions):
         """
@@ -396,6 +406,8 @@ class CDPR_position_estimator:
             self.error_meas(self.gripper_accel_func, self.calc_gripper_accel_from_forces(gantry_positions, grip_positions)),
             # error between model and recorded winch line lengths
             self.error_meas(self.winch_line_len, self.snapshot['winch_line_record']),
+            # error between model and recorded laser rangefinder distances
+            self.error_meas(self.range_to_floor, self.snapshot['range_record']),
             # error between model and recorded anchor line lengths
             sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
                 for anchor_num in range(self.n_cables)]) / self.n_cables,
@@ -445,7 +457,8 @@ class CDPR_position_estimator:
             'gripper_position': gripper_pose[:,[0,4,5,6]],
             'imu_accel': self.datastore.imu_accel.deepCopy(),
             'winch_line_record': self.datastore.winch_line_record.deepCopy()[:,[0,1]],
-            'anchor_line_record': [a.deepCopy()[:,[0,1]] for a in self.datastore.anchor_line_record]
+            'anchor_line_record': [a.deepCopy()[:,[0,1]] for a in self.datastore.anchor_line_record],
+            'range_record': self.datastore.range_record.deepCopy()[:,[0,1]],
         }
         # convert unix times on all measurements to model times.
         # time domain will be fixed for the duration of this estimate
@@ -634,7 +647,7 @@ class CDPR_position_estimator:
         return np.array(desired_positions)
 
     def holding_something_now(self):
-        return True
+        return self.holding
 
     def item_priority_list(self, idx):
         pl = np.array([ [-1.5, 0, 0.2],
@@ -665,6 +678,8 @@ class CDPR_position_estimator:
                 if 'weight_change' in update:
                     idx, val = update['weight_change']
                     self.weights[idx] = 2**(val-5)
+                if 'holding' in update:
+                    self.holding = update['holding']
             except Exception as e:
                 self.run = False
                 raise e

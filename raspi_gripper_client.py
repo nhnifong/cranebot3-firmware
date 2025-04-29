@@ -29,6 +29,14 @@ class RaspiGripperClient(ComponentClient):
             ])
 
             self.to_ui_q.put({'gripper_rvec': grip_pose[0]})
+        if 'range' in update:
+            # expect a tuple of (time, distance)
+            distance_measurement = update['range']
+            self.datastore.range_record.insert(distance_measurement)
+        if 'holding' in update:
+            # expect a bool. Forward it to the position estimator
+            holding = update['holding'] is True
+            self.to_pe_q.put({'holding': holding})
 
     def handle_detections(self, detections, timestamp):
         """

@@ -13,7 +13,7 @@ import board
 import busio
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
-import adafruit_vl53l1x
+from adafruit_vl53l1x import VL53L1X
 
 # this will require a different calibration matrix
 half_res_stream_command = """
@@ -116,7 +116,7 @@ class RaspiGripperServer(RobotComponentServer):
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_LINEAR_ACCELERATION)
 
-        self.rangefinder = adafruit_vl53l1x.VL53L1X(i2c)
+        self.rangefinder = VL53L1X(i2c)
         model_id, module_type, mask_rev = self.rangefinder.model_info
         logging.info(f'Rangefinder Model ID: 0x{model_id:0X} Module Type: 0x{module_type:0X} Mask Revision: 0x{mask_rev:0X}')
         self.rangefinder.distance_mode = 2 # LONG. results returned in centimeters.
