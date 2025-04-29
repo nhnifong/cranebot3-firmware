@@ -31,12 +31,10 @@ WINCH_DEAD_ZONE = 4
 WINCH_MAX_RPM = 1.0166
 # converts from speed setting to rpm. the speed relationship is probably close to linear, but I have not confirmed
 SPEED1_REVS = WINCH_MAX_RPM / (WINCH_MAX_SPEED - WINCH_DEAD_ZONE)
-# gpio pin of infrared rangefinder
-RANGEFINDER_PIN = 0
 # gpio pin of pressure sensing resistor
-PRESSURE_PIN = 1
-# gpio pin of limit switch. 0 is closed
-LIMIT_SWITCH_PIN = 2
+PRESSURE_PIN = 0
+# gpio pin of limit switch. 0 is pressed
+LIMIT_SWITCH_PIN = 1
 
 # values that can be overridden by the controller
 default_conf = {
@@ -49,7 +47,7 @@ default_conf = {
     # voltage of pressure sensor at ideal grip pressure
     'TARGET_HOLDING_PRESSURE': 0.6,
     # threshold just abolve the lowest pressure voltage we expect to read
-    'PRESSURE_MIN': 0.5,
+    'PRESSURE_MIN': 0.1,
     # The total servo value change per second below which we say it has stabilized.
     'MEAN_SERVO_VAL_CHANGE_THRESHOLD': 3,
     # The servo value at which the fingers press against eachother empty with TARGET_HOLDING_PRESSURE
@@ -109,8 +107,8 @@ class RaspiGripperServer(RobotComponentServer):
 
         self.hat = InventorHATMini(init_leds=False)
         self.hand_servo = self.hat.servos[SERVO_2]
-        self.hat.gpio_pin_mode(RANGEFINDER_PIN, ADC) # infrared range
         self.hat.gpio_pin_mode(PRESSURE_PIN, ADC) # pressure resistor
+        self.hat.gpio_pin_mode(LIMIT_SWITCH_PIN, IN_PU)
 
         i2c = busio.I2C(board.SCL, board.SDA)
         self.imu = BNO08X_I2C(i2c, address=0x4b)
@@ -184,6 +182,7 @@ class RaspiGripperServer(RobotComponentServer):
         # wait for value to stabilize
         # todo, what if the client commands tryHold=False while we are in this loop
         # this might also need a timeout.
+        logging.info(f'mean rate of change in finger servo position = {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]}')
         while sum(self.past_val_rates)/self.conf['UPDATE_RATE'] > self.conf['MEAN_SERVO_VAL_CHANGE_THRESHOLD']:
             await asyncio.sleep(0.25)
         return self.last_value

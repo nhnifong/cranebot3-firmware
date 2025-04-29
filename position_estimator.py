@@ -15,12 +15,12 @@ from config import Config
 # import cProfile
 
 default_weights = np.array([
-    8.0, # gantry position from charuco
-    2.0, # gripper position from charuco
+    6.0, # gantry position from charuco
+    6.0, # gripper position from charuco
     0.0, # gripper inertial measurements
     6.0, # calculated forces
     9.0, # winch line record
-    0.0, # anchor line record
+    4.0, # anchor line record
     0.75, # total energy of gripper
     0.75, # total energy of gantry
     5.0, # desired gripper location
@@ -28,8 +28,8 @@ default_weights = np.array([
     1.0, # ideal gantry height
     1.0, # spool_speed_limit
     1.0, # winch_speed_limit
-    0.1, # gripper peak accel
-    0.1, # gantry peak accel
+    0.2, # gripper peak accel
+    0.2, # gantry peak accel
 ])
 
 weight_names = [
@@ -84,7 +84,7 @@ def get_simplified_position(datastore, anchor_positions):
     for i, alr in enumerate(datastore.anchor_line_record):
         lengths.append(alr.getLast()[1])
     if sum(lengths) == 0:
-        return anchor_positions, [0,0,0], False
+        return [0,0,0], False
     anchor_positions = np.array(anchor_positions)
     lengths = np.array(lengths)
     result = find_intersection(anchor_positions, lengths)
@@ -166,17 +166,8 @@ class CDPR_position_estimator:
         self.gantry_accel_func = self.gantry_velocity.derivative(1)
         self.gripper_accel_func = self.gripper_velocity.derivative(1)
 
-        lpos = 4 # maximum meters from origin than a position spline control point can be
-        self.bounds = [(-lpos, lpos)] * self.n_ctrl_pts * 6 # two 3d splines
-
-        # 
-        spline3d_model_size = self.n_ctrl_pts * 3
-        start = spline3d_model_size
-        while start < spline3d_model_size*2:
-            self.bounds[start+2] = (1,4) # keep z position of gantry within 1 to 4 meters
-            start += 3
-
-        self.weights = 2** (default_weights-5)
+        self.bounds = np.concatenate([np.array([(-3,3),(-3,3),(0,2)]) for i in range(self.n_ctrl_pts*2)])
+        self.weights = 2**(default_weights-5)
 
         now = time()
         self.horizon_s = self.datastore.horizon_s
@@ -323,8 +314,8 @@ class CDPR_position_estimator:
         magnitudes = np.einsum('ij,ijk->ik', velocities, direction_units)
         speeds = np.abs(magnitudes).flatten()
         # apply a nonlinear function that rises sharply above the speed limit
-        penalties = np.where(speeds < max_line_speed, 0, 5000 * (speeds - max_line_speed)**2)
-        return np.sum(penalties)
+        # penalties = np.where(speeds < max_line_speed, 0, 5000 * (speeds - max_line_speed)**2)
+        return np.sum(speeds**2)
 
     def winch_speed_penalty(self, gripper_positions, gantry_positions, gripper_velocities, gantry_velocities):
         # Calculate the relative position vector
@@ -340,13 +331,13 @@ class CDPR_position_estimator:
         closing_speed = np.sum(relative_velocity * relative_position_unit, axis=1)
         speeds = np.abs(closing_speed)
         # apply a nonlinear function that rises sharply above the speed limit
-        penalties = np.where(speeds < max_winch_speed, 0, 5000 * (speeds - max_winch_speed)**2)
-        return np.sum(penalties)
+        # penalties = np.where(speeds < max_winch_speed, 0, 5000 * (speeds - max_winch_speed)**2)
+        return np.sum(speeds**2)
 
     def peak_acceleration(self, accel_spline, times):
         return np.max(np.linalg.norm(accel_spline(times), axis=1)) * 0.01
 
-    def error_meas(self, pos_model_func, position_measurements, normalize_time=False):
+    def error_meas(self, pos_model_func, position_measurements, normalize_time=False, pr=False):
         """
         Return the mean distance between the given position model and all the position measurements in the given array
         this works both for the position splines and the line length functions.
@@ -369,7 +360,12 @@ class CDPR_position_estimator:
 
         # calculate distance between measured position and predicted position, sum over all measurements.
         expected = pos_model_func(times)
+        if len(expected.shape) == 1:
+            expected = expected.reshape(-1,1)
         distances = np.linalg.norm(position_measurements[:, 1:] - expected, axis=1)
+        if pr:
+            print(f'measured={position_measurements[:, 1:]}')
+            print(f'expected={expected} distances={distances}')
         return np.mean(distances)
 
     def cost_function(self, model_parameters, p=False, store=False):
@@ -395,7 +391,7 @@ class CDPR_position_estimator:
             # error between gripper position model and observation
             self.error_meas(self.gripper_pos_spline,  self.snapshot['gripper_position']),
             # error between gripper acceleration model and observation
-            self.error_meas(self.gripper_accel_func,  self.snapshot['imu_accel']),
+            0,#self.error_meas(self.gripper_accel_func,  self.snapshot['imu_accel']),
             # error between gripper acceleration model and acceleration from calculated forces.
             self.error_meas(self.gripper_accel_func, self.calc_gripper_accel_from_forces(gantry_positions, grip_positions)),
             # error between model and recorded winch line lengths
@@ -404,14 +400,14 @@ class CDPR_position_estimator:
             sum([self.error_meas(partial(self.anchor_line_length, anchor_num), self.snapshot['anchor_line_record'][anchor_num])
                 for anchor_num in range(self.n_cables)]) / self.n_cables,
             # integral of the kinetic energy of the moving parts from now till the end in Joule*seconds
-            self.kinetic_energy_vectorized(gripper_vel, self.gripper_mass),
-            self.kinetic_energy_vectorized(gantry_vel, self.gantry_mass),
+            0,#self.kinetic_energy_vectorized(gripper_vel, self.gripper_mass),
+            0,#self.kinetic_energy_vectorized(gantry_vel, self.gantry_mass),
             # error between position model and desired future locations
             self.error_meas(self.gripper_pos_spline, self.des_grip_locations, normalize_time=True),
             # minimize abrupt change from last spline to this one at the point in time when the minimization step is expected to finish
             self.spline_jolt(),
             # minimize squared distance from ideal gantry height.
-            self.gantry_height_penalty(gantry_positions),
+            self.gantry_height_penalty(gantry_positions[mid:]),
             # penalty for exceeding maximum spool speed. Evaluate only future positions
             self.excessive_speed_penalty(gantry_positions[mid:], gantry_vel[mid:]),
             # pentalty for excessive winch speed
@@ -593,11 +589,8 @@ class CDPR_position_estimator:
         """
         old = self.time_domain[0] + self.horizon_s
         now = time()
-
-        print(f'old={old} now={now} diff={now-old}')
         self.time_domain = (now - self.horizon_s, now + self.horizon_s)
         domain_offset = (now - old) / (self.horizon_s * 2)
-        print(f'domain_offset, {domain_offset}')
 
         # if the knots are near 0
         #   move_spline_domain_fast(self.gripper_pos_spline, domain_offset)
@@ -679,7 +672,6 @@ class CDPR_position_estimator:
     async def main(self):
         read_queue_task = asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         await asyncio.sleep(5)
-        return
         print('Starting position estimator')
         while self.run:
             try:
