@@ -326,25 +326,27 @@ class AsyncObserver:
 
     async def add_simulated_data(self):
         sim_anchors = np.array([
-            [-2,2.6, 3],
-            [ 2,2.6, 3],
-            [ -1,2.6,-2],
-            [ -2,2.6,-2]])
+            [-2, 3, 2.6],
+            [ 2, 3, 2.6],
+            [-1,-2, 2.6],
+            [-2,-2, 2.6]])
         while self.send_position_updates:
             t = time.time()
             # move the gantry in a circle
-            dp = np.array([t, 0,0,0, sin(t/8) + random()*0.2, cos(t/8) + random()*0.2, 1.8 + random()*0.2])
+            gant_pose = np.array([t, 0,0,0, sin(t/8), cos(t/8), 1.3])
+            dp = gant_pose + np.array([0,0,0,0, random()*0.1, random()*0.1, random()*0.1])
             self.datastore.gantry_pose.insert(dp)
             # winch line always 1 meter
             self.datastore.winch_line_record.insert(np.array([t, 1.0]))
-            # grippers always directly below gantry
-            dp[6] = 1 + random()*0.2
+            # gripper always directly below gantry
+            grip_pose = gant_pose + np.array([0,0,0,0, 0, 0, -1])
+            dp = grip_pose + np.array([0,0,0,0, random()*0.1, random()*0.1, random()*0.1])
             self.datastore.gripper_pose.insert(dp)
             # anchor lines always perfectly agree with gripper position
             for i, simanc in enumerate(sim_anchors):
-                dist = np.linalg.norm(simanc - dp[4:])
-                self.datastore.anchor_line_record[i].insert(np.array([t, dist]))
-            await asyncio.sleep(0.15)
+                dist = np.linalg.norm(simanc - gant_pose[4:])
+                self.datastore.anchor_line_record[i].insert(np.array([t, dist, 1.0]))
+            await asyncio.sleep(0.25)
 
     async def run_tension_based_line_calibration(self):
         """

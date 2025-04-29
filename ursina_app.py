@@ -172,7 +172,7 @@ class ControlPanelUI:
             ) for i in range(4)]
         self.redraw_walls()
 
-        self.go_quads = EntityPool(200, lambda: Entity(
+        self.go_quads = EntityPool(400, lambda: Entity(
                 model='cube',
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))

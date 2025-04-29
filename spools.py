@@ -74,9 +74,10 @@ class SpoolController:
         self.abort_equalize_tension = False
         self.smoothed_tension = 0
 
-        # the thresholds in the conf serve as a starting point, and the live values may change during tensioning.
-        self.live_tension_low_thresh = self.conf['TENSION_SLACK_THRESH']
-        self.live_tension_high_thresh = self.conf['TENSION_TIGHT_THRESH']
+        if self.tension_support:
+            # the thresholds in the conf serve as a starting point, and the live values may change during tensioning.
+            self.live_tension_low_thresh = self.conf['TENSION_SLACK_THRESH']
+            self.live_tension_high_thresh = self.conf['TENSION_TIGHT_THRESH']
 
         # These two constants were stored in a file on their own before the broader conf dict was added
         # read the values in the file if they are present
