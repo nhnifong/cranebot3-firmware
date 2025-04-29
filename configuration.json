@@ -12,7 +12,8 @@
         -0.7853981633974483
       ],
       "service_name": "123.cranebot-anchor-service.2ccf67bc3fc4.",
-      "num": 0
+      "num": 0,
+      "vars": {}
     },
     {
       "position": [
@@ -26,7 +27,8 @@
         -2.356194490192345
       ],
       "service_name": "123.cranebot-anchor-service.2ccf67cb388a.",
-      "num": 1
+      "num": 1,
+      "vars": {}
     },
     {
       "position": [
@@ -40,7 +42,8 @@
         0.7853981633974483
       ],
       "service_name": "123.cranebot-anchor-service.2ccf67cb3898.",
-      "num": 2
+      "num": 2,
+      "vars": {}
     },
     {
       "position": [
@@ -54,7 +57,8 @@
         2.356194490192345
       ],
       "service_name": "123.cranebot-anchor-service.2ccf67bf171a.",
-      "num": 3
+      "num": 3,
+      "vars": {}
     }
   ],
   "camera_cal": {
@@ -88,5 +92,7 @@
         1.0
       ]
     ]
-  }
+  },
+  "common_anchor_vars": {},
+  "gripper": {}
 }

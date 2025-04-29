@@ -13,6 +13,7 @@ import board
 import busio
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
+import adafruit_vl53l1x
 
 # this will require a different calibration matrix
 half_res_stream_command = """
@@ -39,13 +40,13 @@ LIMIT_SWITCH_PIN = 1
 # values that can be overridden by the controller
 default_conf = {
     # PID values for pressure loop
-    'POS_KP': 5.0,
+    'POS_KP': 4.0,
     'POS_KI': 0.0,
     'POS_KD': 0.022,
     # update rate of finger pressure PID loop in updates per second
     'UPDATE_RATE': 40,
     # voltage of pressure sensor at ideal grip pressure
-    'TARGET_HOLDING_PRESSURE': 0.6,
+    'TARGET_HOLDING_PRESSURE': 1.3,
     # threshold just abolve the lowest pressure voltage we expect to read
     'PRESSURE_MIN': 0.1,
     # The total servo value change per second below which we say it has stabilized.
@@ -115,6 +116,12 @@ class RaspiGripperServer(RobotComponentServer):
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_LINEAR_ACCELERATION)
 
+        self.rangefinder = adafruit_vl53l1x.VL53L1X(i2c)
+        model_id, module_type, mask_rev = self.rangefinder.model_info
+        logging.info(f'Rangefinder Model ID: 0x{model_id:0X} Module Type: 0x{module_type:0X} Mask Revision: 0x{mask_rev:0X}')
+        self.rangefinder.distance_mode = 2 # LONG. results returned in centimeters.
+        self.rangefinder.start_ranging()
+
         # when false, open and release the object
         # when true, repeatedly try to grasp the object
         self.tryHold = False
@@ -139,14 +146,16 @@ class RaspiGripperServer(RobotComponentServer):
         self.stream_command = half_res_stream_command
 
     def readOtherSensors(self):
-        # 5cm - 2.3v
-        # 10cm - 2.0v
-        # 15cm - 1.5v
-        # 20cm - 1.15v
 
-        # 22cm - 1.8v
-        # the measurement is not thrown off by the fingers being closed at all
-        self.update['IR range'] = self.hat.gpio_pin_value(RANGEFINDER_PIN)*(-11)+33
+        if self.rangefinder.data_ready:
+            distance = self.rangefinder.distance
+            # If the floor is out of range, distance is None
+            if distance:
+                logging.debug("Distance: {} cm".format(self.rangefinder.distance))
+                self.rangefinder.clear_interrupt()
+                self.update['range'] = [time.time(), distance / 100]
+
+        # self.update['IR range'] = self.hat.gpio_pin_value(RANGEFINDER_PIN)*(-11)+33
         self.update['imu'] = {
             'accel': [time.time(), *self.imu.linear_acceleration],
             'quat': self.imu.quaternion
@@ -182,7 +191,7 @@ class RaspiGripperServer(RobotComponentServer):
         # wait for value to stabilize
         # todo, what if the client commands tryHold=False while we are in this loop
         # this might also need a timeout.
-        logging.info(f'mean rate of change in finger servo position = {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]}')
+        logging.debug(f'mean rate of change in finger servo position = {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]}')
         while sum(self.past_val_rates)/self.conf['UPDATE_RATE'] > self.conf['MEAN_SERVO_VAL_CHANGE_THRESHOLD']:
             await asyncio.sleep(0.25)
         return self.last_value
@@ -211,7 +220,7 @@ class RaspiGripperServer(RobotComponentServer):
         while self.run_server:
             # repeatedly try to grasp the object
             while self.tryHold:
-                logging.info(f'tryHold={self.tryHold} holding={self.holding}')
+                logging.debug(f'tryHold={self.tryHold} holding={self.holding}')
                 if not self.holding:
                     # wait for the target to be in the sweet spot
                     pass
@@ -221,8 +230,8 @@ class RaspiGripperServer(RobotComponentServer):
                     asyncio.create_task(self.holdPressurePid(self.conf['TARGET_HOLDING_PRESSURE']))
                     await asyncio.sleep(0.5)
                 finger_val = await self.readStableFingerValue()
-                logging.info(f'Finger stable at {finger_val} with mean absolute change of {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]} over the last second')
-                logging.info(f'pressure pad voltage = {self.hat.gpio_pin_value(PRESSURE_PIN)}')
+                logging.debug(f'Finger stable at {finger_val} with mean absolute change of {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]} over the last second')
+                logging.debug(f'pressure pad voltage = {self.hat.gpio_pin_value(PRESSURE_PIN)}')
                 # look where it stabilized
                 if finger_val < self.conf['FINGER_TOUCH']:
                     # object is present
@@ -257,6 +266,7 @@ class RaspiGripperServer(RobotComponentServer):
                 # stay in this state until commanded to do otherwise.
                 await self.tryHoldChanged.wait()
                 self.tryHoldChanged.clear()
+                self.holding = False
 
     async def performZeroWinchLine(self):
         self.spooler.pauseTrackingLoop()
@@ -285,7 +295,7 @@ class RaspiGripperServer(RobotComponentServer):
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     gs = RaspiGripperServer()

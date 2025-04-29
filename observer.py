@@ -80,6 +80,7 @@ class AsyncObserver:
 
         # read a mapping of server names to anchor numbers from the config file
         self.config = Config()
+        self.config.write()
 
         self.stat = StatCounter(to_ui_q)
 
