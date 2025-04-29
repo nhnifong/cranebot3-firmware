@@ -4,6 +4,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from cv_common import compose_poses
 import model_constants
+from config import Config
 
 # number of origin detections to average
 video_port = 8888
