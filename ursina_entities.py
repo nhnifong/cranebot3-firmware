@@ -455,7 +455,7 @@ class DirectMoveGantryTarget(Entity):
         self.speed = 0.1
 
         # expected seconds of latency between when we calculate a movement and when the anchors start to act on it.
-        self.latency = 0.1
+        self.latency = 0.05
 
         self.last_move_start_pos = None # numpy array in z-up coordinate space
         self.last_move_start_time = None # float seconds since epoch
@@ -485,7 +485,8 @@ class DirectMoveGantryTarget(Entity):
         from where it is, to the indicated goal point, at the given speed.
         positions are given in z-up coordinate system.
         """
-        expected_rcv_time = time.time() + self.latency
+        now = time.time()
+        expected_rcv_time = now + self.latency
         goal = np.array(swap_yz(self.position))
 
         if self.last_move_vec is None:
@@ -514,7 +515,11 @@ class DirectMoveGantryTarget(Entity):
             for a in self.app.anchors])
         # send it
         self.app.to_ob_q.put({
-            'future_anchor_lines': {'sender':'ui', 'data':future_anchor_lines},
+            'future_anchor_lines': {
+                'sender':'ui',
+                'data':future_anchor_lines,
+                'creation_time': now,
+            }
         })
 
     def update(self):

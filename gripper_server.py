@@ -178,10 +178,10 @@ class RaspiGripperServer(RobotComponentServer):
             voltage = self.hat.gpio_pin_value(PRESSURE_PIN)
             # run pid calcucaltion. it tells you how much to move
             val = voltage_pid.calculate(voltage)
-            pos += val
-            logging.debug(f'calculated pid value {val}, servo pos = {pos}')
+            logging.info(f'calculated pid value {val}, servo pos = {pos}')
             # set servo position
-            self.hand_servo.value(clamp(pos,-90,90))
+            pos = clamp(pos+val,-90,90)
+            self.hand_servo.value(pos)
             # record the absolute value change to know if it is stabilizing
             self.past_val_rates.append(abs(pos - self.last_value))
             self.last_value = pos
@@ -192,8 +192,10 @@ class RaspiGripperServer(RobotComponentServer):
         # todo, what if the client commands tryHold=False while we are in this loop
         # this might also need a timeout.
         logging.debug(f'mean rate of change in finger servo position = {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]}')
-        while sum(self.past_val_rates)/self.conf['UPDATE_RATE'] > self.conf['MEAN_SERVO_VAL_CHANGE_THRESHOLD']:
+        timeout = 5
+        while sum(self.past_val_rates)/self.conf['UPDATE_RATE'] > self.conf['MEAN_SERVO_VAL_CHANGE_THRESHOLD'] and timeout > 0:
             await asyncio.sleep(0.25)
+            timeout -= 0.25
         return self.last_value
 
 
@@ -230,7 +232,7 @@ class RaspiGripperServer(RobotComponentServer):
                     asyncio.create_task(self.holdPressurePid(self.conf['TARGET_HOLDING_PRESSURE']))
                     await asyncio.sleep(0.5)
                 finger_val = await self.readStableFingerValue()
-                logging.debug(f'Finger stable at {finger_val} with mean absolute change of {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]} over the last second')
+                logging.info(f'Finger stable at {finger_val} with mean absolute change of {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]} over the last second')
                 logging.debug(f'pressure pad voltage = {self.hat.gpio_pin_value(PRESSURE_PIN)}')
                 # look where it stabilized
                 if finger_val < self.conf['FINGER_TOUCH']:
@@ -295,7 +297,7 @@ class RaspiGripperServer(RobotComponentServer):
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     gs = RaspiGripperServer()

@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from cv_common import locate_markers
+# from cv_common import locate_markers
 
 # Intrinsic Matrix: 
 camera_matrix = np.array(
@@ -37,18 +37,18 @@ def receive_video_stream(stream_url):
     cap.release()
 
 # Example usage:
-raspberry_pi_ip = "192.168.1.151"  # Replace with your Pi's IP
+raspberry_pi_ip = "192.168.1.156"  # Replace with your Pi's IP
 port_number = 8888  # Replace with your port
 stream_url = f"tcp://{raspberry_pi_ip}:{port_number}"  # Construct the URL
 
 for frame in receive_video_stream(stream_url):
     if frame is not None:
 
-        detections = locate_markers(frame)
-        if len(detections) > 0:
-            print(f"Found markers: {detections}")
-            for d in detections:
-                cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, d.rotation, d.translation, 0.015)
+        # detections = locate_markers(frame)
+        # if len(detections) > 0:
+        #     print(f"Found markers: {detections}")
+        #     for d in detections:
+        #         cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, d.rotation, d.translation, 0.015)
 
         cv2.imshow("Received Video", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):  # Press 'q' to quit

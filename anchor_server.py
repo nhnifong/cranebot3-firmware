@@ -163,6 +163,8 @@ class RobotComponentServer:
 
                 if 'length_plan' in update:
                     self.spooler.setPlan(update['length_plan'])
+                if 'creation_time' in update:
+                    logging.debug(f'measured latency = {time.time() - float(update["creation_time"])}')
                 if 'jog' in update:
                     self.spooler.jogRelativeLen(float(update['jog']))
                 if 'reference_length' in update:

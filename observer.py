@@ -103,17 +103,17 @@ class AsyncObserver:
                 fal = updates['future_anchor_lines']
                 if not (fal['sender'] == 'pe' and self.calmode != 'run'):
                     for client in self.anchors:
-                        asyncio.run_coroutine_threadsafe(client.send_commands({
-                            'length_plan' : fal['data'][client.anchor_num].tolist()
-                        }), loop)
+                        message = {'length_plan' : fal['data'][client.anchor_num].tolist()}
+                        if 'creation_time' in fal:
+                            message['creation_time'] = fal['creation_time']
+                        asyncio.run_coroutine_threadsafe(client.send_commands(message), loop)
 
             if 'future_winch_line' in updates:
-                fal = updates['future_anchor_lines']
+                fal = updates['future_winch_line']
                 if not (fal['sender'] == 'pe' and self.calmode != 'run'):
                     if self.gripper_client is not None:
-                        asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
-                            'length_plan' : fal['data']
-                        }), loop)
+                        message = {'length_plan' : fal['data']}
+                        asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands(message, loop))
             if 'set_run_mode' in updates:
                 print("set_run_mode") 
                 self.set_run_mode(updates['set_run_mode'], loop)
