@@ -419,8 +419,8 @@ class SpoolController:
                 await asyncio.sleep(1/30)
                 # self.currentLineLength() causes length and tension to be calculated and recorded in a list that
                 # is periodically flushed to the websocket by a task that is always running while the ws is connected
-                t, curLength, tension = self.currentLineLength()
-                logging.debug(f'curLength={curLength} tension={tension}')
+                t, curLength = self.currentLineLength()
+                logging.debug(f'curLength={curLength} tension={self.smoothed_tension}')
                 line_delta = curLength - startLength
                 is_slack = self.smoothed_tension < self.live_tension_low_thresh
         except Exception as e:
