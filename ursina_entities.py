@@ -479,7 +479,22 @@ class DirectMoveGantryTarget(Entity):
     def reset(self):
         self.last_move_vec = None
 
-    def direct_move(self, speed=0.1):
+    def direct_move(self, speed=0.2):
+        """
+        Send speeds that would move the gantry in a straight line
+        from where it is, towards the indicated goal point, at the given speed.
+        positions are given in z-up coordinate system.
+        """
+        vector = self.app.direction
+        vector = vector / np.linalg.norm(vector)
+        self.app.to_ob_q.put({
+            'gantry_dir_sp': {
+                'direction':vector,
+                'speed':speed,
+            }
+        })
+
+    def direct_move_via_plan(self, speed=0.1):
         """
         Send planned line lengths to the robot that would move the gantry in a straight line
         from where it is, to the indicated goal point, at the given speed.
@@ -518,7 +533,7 @@ class DirectMoveGantryTarget(Entity):
             'future_anchor_lines': {
                 'sender':'ui',
                 'data':future_anchor_lines,
-                'creation_time': now,
+                'host_time': now,
             }
         })
 
