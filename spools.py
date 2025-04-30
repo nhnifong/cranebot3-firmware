@@ -60,17 +60,21 @@ class SpoolController:
         
         # last commanded motor speed in revs/sec
         self.speed = 0
-        self.lastLength = 3.0
-        self.lastAngle = 0.0
-        self.meters_per_rev = self.get_unspool_rate(self.lastAngle)
+        # speed of line change in meters/sec last sent from controller.
+        self.aim_line_speed = 0
+        # whether to track a length plan 'plan' or use aim_line_speed 'speed'
+        self.tracking_mode = 'plan'
+        self.last_length = 3.0
+        self.last_angle = 0.0
+        self.meters_per_rev = self.get_unspool_rate(self.last_angle)
         # record of line length. tuples of (time, meters)
         self.record = []
         # plan of desired line lengths
-        self.desiredLine = []
-        self.lastIndex = 0
-        self.runSpoolLoop = True
+        self.desired_line = []
+        self.last_index = 0
+        self.run_spool_loop = True
         self.rec_loop_counter = 0
-        self.moveAllowed = True
+        self.move_allowed = True
         self.abort_equalize_tension = False
         self.smoothed_tension = 0
 
@@ -131,23 +135,30 @@ class SpoolController:
             rate_spool_rev_per_spool_rev = math.pi * (self.empty_diameter + self.diameter_diff * (self._get_spooled_length(motor_angle_revs) / self.full_length))
             return rate_spool_rev_per_spool_rev * self.gear_ratio
 
-    def commandSpeed(self, speed):
+    def _commandSpeed(self, speed):
         """command a specific speed from the motor."""
         self.speed = speed
         self.motor.runConstantSpeed(self.speed)
 
-
     def setPlan(self, plan):
         """
-        set plan to an array of tuples of time and length
+        Swith to plan tracking mode and set the plan to an array of tuples of time and length
         """
-        self.desiredLine = plan
-        self.lastIndex = 0
+        self.tracking_mode = 'plan'
+        self.desired_line = plan
+        self.last_index = 0
+
+    def setAimSpeed(self, lineSpeed):
+        """Switch to speed tracking mode and set the aim speed in meters of line per second.
+        negative values reel line in.
+        """
+        self.tracking_mode = 'speed'
+        self.aim_line_speed = lineSpeed
 
     def jogRelativeLen(self, rel):
-        new_l = self.lastLength + rel
+        new_l = self.last_length + rel
         self.setPlan([
-            (time.time(), self.lastLength),
+            (time.time(), self.last_length),
             (time.time()+2, new_l),
         ])
 
@@ -165,20 +176,20 @@ class SpoolController:
         success, angle = self.motor.getShaftAngle()
         if not success:
             logging.warning("Could not read shaft angle from motor")
-            return (time.time(), self.lastLength)
+            return (time.time(), self.last_length)
 
-        if abs(angle - self.lastAngle) > 1:
-            logging.warning(f'motor moved more than 1 rev since last read, lastAngle={self.lastAngle} angle={angle} diff={angle - self.lastAngle}')
-        self.lastAngle = angle
+        if abs(angle - self.last_angle) > 1:
+            logging.warning(f'motor moved more than 1 rev since last read, last_angle={self.last_angle} angle={angle} diff={angle - self.last_angle}')
+        self.last_angle = angle
 
-        self.lastLength = self.get_unspooled_length(angle)
+        self.last_length = self.get_unspooled_length(angle)
         self.meters_per_rev = self.get_unspool_rate(angle)
-        # logging.debug(f'current unspooled line = {self.lastLength} m. rate = {self.meters_per_rev} m/r')
+        # logging.debug(f'current unspooled line = {self.last_length} m. rate = {self.meters_per_rev} m/r')
 
-        self.moveAllowed = True
-        if self.lastLength < 0 or self.lastLength > self.full_length:
-            logging.error(f"Bad length calculation! length={self.lastLength}, shaftAngle={angle}. Movement disallowed until new reference length received.")
-            # self.moveAllowed = False
+        self.move_allowed = True
+        if self.last_length < 0 or self.last_length > self.full_length:
+            logging.error(f"Bad length calculation! length={self.last_length}, shaftAngle={angle}. Movement disallowed until new reference length received.")
+            # self.move_allowed = False
 
         if self.tension_support:
             success, tension = self.currentTension()
@@ -189,14 +200,14 @@ class SpoolController:
             if self.smoothed_tension > self.conf['DANGEROUS_TENSION']:
                 logging.warning(f"Tension of {self.smoothed_tension} is too high!")
                 # try to loosen up right away to avoid breaking something
-                self.commandSpeed(1)
+                self._commandSpeed(1)
                 time.sleep(1)
-                self.commandSpeed(0)
-                self.moveAllowed = False
-            row = (time.time(), self.lastLength, self.smoothed_tension)
+                self._commandSpeed(0)
+                self.move_allowed = False
+            row = (time.time(), self.last_length, self.smoothed_tension)
         else:
             # accumulate these so you can send them to the websocket
-            row = (time.time(), self.lastLength)
+            row = (time.time(), self.last_length)
 
         if self.rec_loop_counter == self.conf['REC_MOD']:
             self.record.append(row)
@@ -223,7 +234,7 @@ class SpoolController:
         # it causes the trackingloop task to stop,
         # causing the websocket connection to close
         self.motor.stop()
-        self.runSpoolLoop = False
+        self.run_spool_loop = False
 
     def pauseTrackingLoop(self):
         self.spoolPause = True
@@ -231,58 +242,71 @@ class SpoolController:
     def resumeTrackingLoop(self):
         self.spoolPause = False
 
+    def getAimSpeedFromPlan(self, t):
+        """Compute a speed to aim for based on our position in the length plan
+
+        Combines speed error with positional error to get a speed to aim for (pre-enforcement of max accel)
+        """
+        targetLen = self.desired_line[self.last_index][1]
+        position_err = targetLen - self.last_length
+        if abs(position_err) < 0.001:
+            return 0
+
+        # What would the speed be between the two datapoints tha straddle the present?
+        # Positive values mean line is lengthening
+        # result is in meters of line per second
+        # if there is only one desired length, we can't find two that straddle the present and have to use current length and time
+        if self.last_index == 0:
+            time_A = t
+            len_A = self.last_length
+        else:
+            time_A = self.desired_line[self.last_index-1][0]
+            len_A = self.desired_line[self.last_index-1][1]
+        targetSpeed = ((self.desired_line[self.last_index][1] - len_A) / (self.desired_line[self.last_index][0] - time_A))
+        speed_err = targetSpeed - self.speed * self.meters_per_rev
+
+        # If our positional error was zero, we could go exactly that speed.
+        # if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
+        # (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
+        # ideally we want to catch up in one step, but we have max acceleration constraints.
+        return targetSpeed + position_err * self.conf['PE_TERM']; # meters of line per second
+
     def trackingLoop(self):
         """
         Constantly try to match the position and speed given in an array
 
         """
-        while self.runSpoolLoop:
+        while self.run_spool_loop:
             if self.spoolPause:
                 time.sleep(0.2)
                 continue
             try:
                 t, currentLen = self.currentLineLength()
 
-                # Find the earliest entry in desiredLine that is still in the future.
-                while self.lastIndex < len(self.desiredLine) and self.desiredLine[self.lastIndex][0] <= t:
-                    self.lastIndex += 1
-
-                # slow stop when there is no data to track
-                if self.lastIndex >= len(self.desiredLine):
-                    if abs(self.speed) > 0:
-                        newspeed = self.speed * 0.9
-                        if abs(newspeed) < 0.2:
-                            newspeed = 0
-                        logging.debug(f'Slow stopping {newspeed}')
-                        self.commandSpeed(newspeed)
-                    time.sleep(self.conf['LOOP_DELAY_S'])
-                    continue
-
-                targetLen = self.desiredLine[self.lastIndex][1]
-                position_err = targetLen - currentLen
-
-                # What would the speed be between the two datapoints tha straddle the present?
-                # Positive values mean line is lengthening
-                # result is in meters of line per second
-                # if there is only one desired length, we can't find two that straddle the present and have to use current length and time
-                if self.lastIndex == 0:
-                    last_time = t
-                    last_len = currentLen
-                else:
-                    last_time = self.desiredLine[self.lastIndex-1][0]
-                    last_len = self.desiredLine[self.lastIndex-1][1]
-                targetSpeed = ((self.desiredLine[self.lastIndex][1] - last_len)
-                    / (self.desiredLine[self.lastIndex][0] - last_time))
                 # change in line length in meters per second
-                currentSpeed = self.speed * self.meters_per_rev
-                speed_err = targetSpeed - currentSpeed
-                # If our positional error was zero, we could go exactly that speed.
-                # if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
-                # (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
-                # ideally we want to catch up in one step, but we have max acceleration constraints.
-                aimSpeed = targetSpeed + position_err * self.conf['PE_TERM']; # meters of line per second
+                if self.tracking_mode == 'plan':
+                    # Find the earliest entry in desired_line that is still in the future.
+                    while self.last_index < len(self.desired_line) and self.desired_line[self.last_index][0] <= t:
+                        self.last_index += 1
+                    # slow stop when there is no data to track
+                    if self.last_index >= len(self.desired_line):
+                        if abs(self.speed) > 0:
+                            newspeed = self.speed * 0.9
+                            if abs(newspeed) < 0.2:
+                                newspeed = 0
+                            logging.debug(f'Slow stopping {newspeed}')
+                            self._commandSpeed(newspeed)
+                        time.sleep(self.conf['LOOP_DELAY_S'])
+                        continue
+                    aimSpeed = self.getAimSpeedFromPlan(t)
+                elif self.tracking_mode == 'speed':
+                    aimSpeed = self.aim_line_speed
+                else:
+                    aimSpeed = 0
+                print(f'aimSpeed {aimSpeed}')
 
                 # limit the acceleration of the line
+                currentSpeed = self.speed * self.meters_per_rev
                 wouldAccel = (aimSpeed - currentSpeed) / self.conf['LOOP_DELAY_S']
                 if wouldAccel > self.conf['MAX_ACCEL']:
                     aimSpeed = self.conf['MAX_ACCEL'] * self.conf['LOOP_DELAY_S'] + currentSpeed
@@ -291,8 +315,8 @@ class SpoolController:
 
                 maxspeed = self.motor.getMaxSpeed()
 
-                if self.moveAllowed:
-                    self.commandSpeed(constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed))
+                if self.move_allowed:
+                    self._commandSpeed(constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed))
                 else:
                     logging.warning(f"would move at speed={self.speed} but length is invalid. calibrate length first.")
 
@@ -314,7 +338,7 @@ class SpoolController:
                     speed = 0.4
                 else:
                     speed = -0.4
-            self.commandSpeed(speed)
+            self._commandSpeed(speed)
             valid, err = self.motor.getShaftError()
             if valid:
                 if load==0:
@@ -325,7 +349,7 @@ class SpoolController:
                     # record what torque would be if torque_factor were 1
                     data.append((self.conf['MKS42C_EXPECTED_ERR'] * self.speed - err) / self.meters_per_rev)
             await asyncio.sleep(1/30)
-        self.commandSpeed(0)
+        self._commandSpeed(0)
         logging.debug(f'Collected {len(data)} data points')
         if load==0:
             new_expected_err = sum(data)/len(data)
@@ -376,7 +400,7 @@ class SpoolController:
         self.pauseTrackingLoop()
         # make sure the tracking loop is definitely paused. it's on another thread. 
         await asyncio.sleep(self.conf['LOOP_DELAY_S'] * 2)
-        self.commandSpeed(0)
+        self._commandSpeed(0)
         self.abort_equalize_tension = False
         t, curLength = self.currentLineLength()
         startLength = curLength
@@ -388,23 +412,23 @@ class SpoolController:
 
         logging.info("Measuring tension in motion")
         # measuring tension at rest is not possible. measure in motion
-        self.commandSpeed(self.conf['MEASUREMENT_SPEED'])
+        self._commandSpeed(self.conf['MEASUREMENT_SPEED'])
         for i in range(self.conf['MEASUREMENT_TICKS']):
             t, curLength = self.currentLineLength()
             logging.debug(f'getting stabilized tension reading {self.smoothed_tension}')
             await asyncio.sleep(1/30)
         # undo motion that occurred during reading
-        self.commandSpeed(-self.conf['MEASUREMENT_SPEED'])
+        self._commandSpeed(-self.conf['MEASUREMENT_SPEED'])
         await asyncio.sleep(self.conf['MEASUREMENT_TICKS']/30)
-        self.commandSpeed(0)
+        self._commandSpeed(0)
 
         # decide initial speed. motor direction will not change during the loop
         if self.smoothed_tension < self.conf['TENSION_SLACK_THRESH']:
             started_slack = True
-            self.commandSpeed(-self.conf['MOTOR_SPEED_DURING_TEQ'])
+            self._commandSpeed(-self.conf['MOTOR_SPEED_DURING_TEQ'])
         else:
             started_slack = False
-            self.commandSpeed(self.conf['MOTOR_SPEED_DURING_TEQ'])
+            self._commandSpeed(self.conf['MOTOR_SPEED_DURING_TEQ'])
         is_slack = started_slack
 
         logging.info(f'Started slack={started_slack} with a tension of {self.smoothed_tension} kg at a measurement speed of {self.conf["MEASUREMENT_SPEED"]} motor revs/s')
@@ -424,7 +448,7 @@ class SpoolController:
                 line_delta = curLength - startLength
                 is_slack = self.smoothed_tension < self.live_tension_low_thresh
         except Exception as e:
-            self.commandSpeed(0)
+            self._commandSpeed(0)
             raise e
 
         # todo, verify by experiment
@@ -440,7 +464,7 @@ class SpoolController:
         })
 
         logging.info(f"Stopped equalization with tension={self.smoothed_tension} and a line delta of {line_delta}")
-        self.commandSpeed(0)
+        self._commandSpeed(0)
         try:
             logging.info('Waiting for tension_eq result approval from controller')
             await asyncio.wait_for(controllerApprovalEvent.wait(), timeout=30)
@@ -449,5 +473,5 @@ class SpoolController:
                 self.setReferenceLength(startLength)
         except TimeoutError:
             pass
-        self.desiredLine = []
+        self.desired_line = []
         self.resumeTrackingLoop()

@@ -38,7 +38,7 @@ PRESSURE_PIN = 0
 LIMIT_SWITCH_PIN = 1
 
 # values that can be overridden by the controller
-default_conf = {
+default_gripper_conf = {
     # PID values for pressure loop
     'POS_KP': 4.0,
     'POS_KI': 0.0,
@@ -102,7 +102,7 @@ class GripperSpoolMotor():
 class RaspiGripperServer(RobotComponentServer):
     def __init__(self, mock_motor=None):
         super().__init__()
-        self.conf.update(default_conf)
+        self.conf.update(default_gripper_conf)
         self.name_prefix = 'raspi-gripper-'
         self.service_type = 'cranebot-gripper-service'
 

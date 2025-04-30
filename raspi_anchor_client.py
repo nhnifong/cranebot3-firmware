@@ -45,6 +45,7 @@ class ComponentClient:
         self.pool = pool
         self.stat = stat
         self.shape_tracker = None
+        self.last_gantry_frame_coords = None
 
         # todo: receive a command in observer that will set this value
         self.sendPreviewToUi = False
@@ -295,6 +296,9 @@ class RaspiAnchorClient(ComponentClient):
                         ]))
                         dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
                         # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
+                        
+                if detection['n'] == 'gantry_front':
+                    self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
 
     async def send_config(self):
         config = Config()

@@ -21,6 +21,7 @@ from raspi_gripper_client import RaspiGripperClient
 from random import random
 from segment import ShapeTracker
 from config import Config
+from position_estimator import get_simplified_position
 
 TENSION_SLACK_THRESH = 0.4
 
@@ -104,8 +105,8 @@ class AsyncObserver:
                 if not (fal['sender'] == 'pe' and self.calmode != 'run'):
                     for client in self.anchors:
                         message = {'length_plan' : fal['data'][client.anchor_num].tolist()}
-                        if 'creation_time' in fal:
-                            message['creation_time'] = fal['creation_time']
+                        if 'host_time' in fal:
+                            message['host_time'] = fal['host_time']
                         asyncio.run_coroutine_threadsafe(client.send_commands(message), loop)
 
             if 'future_winch_line' in updates:
@@ -140,6 +141,9 @@ class AsyncObserver:
                         asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
                             'jog' : updates['jog_spool']['rel']
                         }), loop)
+            if 'gantry_dir_sp' in updates:
+                dir_sp = updates['gantry_dir_sp']
+                asyncio.run_coroutine_threadsafe(self.move_direction_speed(dir_sp['direction'], dir_sp['speed']), loop)
             if 'set_grip' in updates:
                 if self.gripper_client is not None:
                     asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
@@ -351,18 +355,90 @@ class AsyncObserver:
                 self.datastore.anchor_line_record[i].insert(np.array([t, dist, 1.0]))
             await asyncio.sleep(0.25)
 
+    def collect_gant_frame_positions(self):
+        result = np.zeros((4,3))
+        for client in self.anchors:
+            result[client.anchor_num] = client.last_gantry_frame_coords
+        return result
+
+    async def lines_stable(self, threshold=0.05, timeout=10):
+        """return once all lines have stopped moving"""
+        last_lengths = None
+        lengths = np.array([alr.getLast()[1] for alr in enumerate(self.datastore.anchor_line_record)])
+        changes = [1,0,0,0]
+        start = time.time()
+        while sum(changes) > threshold and time.time()-start < timeout:
+            if last_length is not None:
+                changes = lengths - last_lengths
+            last_lengths = lengths
+            asyncio.sleep(0.3)
+
+    async def move_direction_speed(self, uvec, speed, starting_pos=None):
+        """Move in the direction of the given unit vector at the given speed.
+        Any move must be based on some assumed starting position. if none is provided,
+        we will guess based on get_simplified_position
+        """
+        if speed == 0:
+            for client in self.anchors:
+                asyncio.create_task(client.send_commands({'aim_speed': 0}))
+            return
+
+        anchor_positions = np.zeros((4,3))
+        for a in self.anchors
+            anchor_positions[a.anchor_num] = np.array(a.anchor_pose[1])
+
+        # even if the starting position is off slightly, this method should not produce jerky moves.
+        # because it's not commanding any absolute length from the spool motor
+        if starting_pos is None:
+            starting_pos, success = get_simplified_position(self.datastore, anchor_positions)
+            if not success:
+                print(f'cannot run move_direction_speed because get_simplified_position could not determine starting pos')
+                return
+
+        # line lengths at starting pos
+        lengths_a = np.linalg.norm(gantry_position - anchor_positions, axis=1)
+        # line lengths at new pos
+        s = 10 # don't add a whole meter, curvature might matter at that distance.
+        starting_pos += (uvec / s)
+        lengths_b = np.linalg.norm(gantry_position - anchor_positions, axis=1)
+        # length changes needed to travel 0.1 meters in uvec direction from starting_pos
+        deltas = lengths_b - lengths_a
+        line_speeds = deltas * s * speed
+        print(f'computed line speeds {line_speeds}')
+
+        if np.max(np.abs(line_speeds)) > 0.6:
+            print('abort move because it\'s too fast')
+            return
+
+        # send move
+        for client in self.anchors:
+            asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
+
+
     async def run_tension_based_line_calibration(self):
         """
         Tension based line calibration process is as follows
 
         Set the reference length on the lines the original way (aruco observation of gantry)
-            do while disparity in line tension is large,
-                Move to a new position, maybe 20cm away.
-                Measure disparity in line tension
-                Equalize the tension on the lines, as estimated by the motor shaft error.
-                Change reference length by whatever amount of line was spooled or unspooled.
+        Starting with taut lines
+        do while disparity in line tension after a move is large,
+            Record frame position of gantry in each cam
+            Move to a new position, maybe 20cm away.
+            Measure disparity in line tension
+            Equalize the tension on the lines, as estimated by the motor shaft error.
+            Change reference length by whatever amount of line was spooled or unspooled.
+            Record frame position of gantry in each cam. Store frame positions (start and finish) along with line deltas in dataset. 
         """
-        pass
+        for move_n in range(4):
+            starts = collect_gant_frame_positions()
+            vector = np.random.normal(0, 0.1, (3))
+            vector = vector / np.linalg.norm(vector)
+            self.move_direction_speed(vector, 0.1)
+            await asyncio.sleep(2)
+            self.move_direction_speed(None, 0)
+            await self.lines_stable()
+            await self.equalize_tension()
+            finishes = collect_gant_frame_positions()
 
     async def equalize_tension(self):
         """Inner loop of run_tension_based_line_calibration"""
