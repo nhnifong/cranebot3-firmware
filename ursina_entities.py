@@ -487,6 +487,7 @@ class DirectMoveGantryTarget(Entity):
         """
         vector = self.app.direction
         vector = vector / np.linalg.norm(vector)
+        print(f'direct move {vector}')
         self.app.to_ob_q.put({
             'gantry_dir_sp': {
                 'direction':vector,
