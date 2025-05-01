@@ -384,8 +384,9 @@ class AsyncObserver:
             return
 
         anchor_positions = np.zeros((4,3))
-        for a in self.anchors
+        for a in self.anchors:
             anchor_positions[a.anchor_num] = np.array(a.anchor_pose[1])
+        print(f'move direction speed {uvec} {speed}')
 
         # even if the starting position is off slightly, this method should not produce jerky moves.
         # because it's not commanding any absolute length from the spool motor
@@ -396,16 +397,16 @@ class AsyncObserver:
                 return
 
         # line lengths at starting pos
-        lengths_a = np.linalg.norm(gantry_position - anchor_positions, axis=1)
+        lengths_a = np.linalg.norm(starting_pos - anchor_positions, axis=1)
         # line lengths at new pos
         s = 10 # don't add a whole meter, curvature might matter at that distance.
         starting_pos += (uvec / s)
-        lengths_b = np.linalg.norm(gantry_position - anchor_positions, axis=1)
+        lengths_b = np.linalg.norm(starting_pos - anchor_positions, axis=1)
         # length changes needed to travel 0.1 meters in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
         line_speeds = deltas * s * speed
         print(f'computed line speeds {line_speeds}')
-
+        
         if np.max(np.abs(line_speeds)) > 0.6:
             print('abort move because it\'s too fast')
             return

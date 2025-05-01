@@ -472,6 +472,6 @@ class SpoolController:
             if not self.abort_equalize_tension:
                 self.setReferenceLength(startLength)
         except TimeoutError:
-            pass
+            logging.warning('Timed out Waiting for tension_eq result approval from controller')
         self.desired_line = []
         self.resumeTrackingLoop()

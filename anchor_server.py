@@ -256,7 +256,7 @@ default_anchor_conf = {
     # smoothing factor. range: [0,1]. lower values are smoother.
     'TENSION_SMOOTHING_FACTOR': 0.2,
     # kilograms. below this, line is assumed to be slack during tensioning
-    'TENSION_SLACK_THRESH': 0.35,
+    'TENSION_SLACK_THRESH': 0.30,
     # kilograms. above this, line is assumed to be too tight during tensioning.
     'TENSION_TIGHT_THRESH': 0.7,
     # speed to reel in and out lines turing tension equalization. m/s

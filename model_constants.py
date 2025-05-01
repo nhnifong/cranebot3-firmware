@@ -22,8 +22,8 @@ gripper_camera = (np.array([pi/2,0,0], dtype=float), np.array([0,0.004,-0.026], 
 # rotation and translation vectors of the gripper IMU in the gripper reference frame
 gripper_imu = compose_poses([
     (np.array([0,0,0], dtype=float), np.array([0.022,0.030,0.029], dtype=float)),
-    (np.array([pi/2,0,0], dtype=float), np.array([0,0,0], dtype=float)),
-    (np.array([0,pi/2,0], dtype=float), np.array([0,0,0], dtype=float)),
+    (np.array([-pi/2,0,0], dtype=float), np.array([0,0,0], dtype=float)),
+    # (np.array([0,-pi/2,0], dtype=float), np.array([0,0,0], dtype=float)),
     (np.array([0,0,pi], dtype=float), np.array([0,0,0], dtype=float)),
 ])
 
