@@ -22,39 +22,13 @@ from random import random
 from segment import ShapeTracker
 from config import Config
 from position_estimator import get_simplified_position
+from stats import StatCounter
 
 TENSION_SLACK_THRESH = 0.4
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
-
-class StatCounter:
-    def __init__(self, to_ui_q):
-        self.to_ui_q = to_ui_q
-        self.detection_count = 0
-        self.latency = []
-        self.framerate = []
-        self.last_update = time.time()
-        self.run = True
-
-    async def stat_main(self):
-        while self.run:
-            now = time.time()
-            elapsed = now-self.last_update
-            mean_latency = np.mean(np.array(self.latency))
-            mean_framerate = np.mean(np.array(self.framerate))
-            detection_rate = self.detection_count / elapsed
-            self.last_update = now
-            self.latency = []
-            self.framerate = []
-            self.detection_count = 0
-            self.to_ui_q.put({'vid_stats':{
-                'detection_rate':detection_rate,
-                'video_latency':mean_latency,
-                'video_framerate':mean_framerate,
-                }})
-            await asyncio.sleep(0.5)
 
 # Manager of multiple tasks running clients connected to each robot component
 class AsyncObserver:
