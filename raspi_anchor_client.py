@@ -46,19 +46,22 @@ class ComponentClient:
         self.stat = stat
         self.shape_tracker = None
         self.last_gantry_frame_coords = None
+        self.ct = None # task to connect to websocket
 
         # todo: receive a command in observer that will set this value
         self.sendPreviewToUi = False
 
     def receive_video(self):
-        # don't connect too early or you will be rejected
-        time.sleep(7)
         video_uri = f'tcp://{self.address}:{video_port}'
         print(f'Connecting to {video_uri}')
         cap = cv2.VideoCapture(video_uri)
+        if not cap.isOpened():
+            print('no video stream available')
+            self.conn_status['video'] = False
+            self.to_ui_q.put({'connection_status': self.conn_status})
+            return
         # todo implement video connection retry loop
-        print(f'connection successful = {cap.isOpened()}')
-        print(cap)
+        print(f'video connection successful {cap}')
         self.conn_status['video'] = True
         self.notify_video = True
         lastSam = time.time()
@@ -82,7 +85,7 @@ class ComponentClient:
                             preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA), None, fx=0.25, fy=0.25), 0)
                             self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
 
-                # determine timestamp of frame
+                # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
                 fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
                 try:
                     timestamp = self.frame_times[fnum]
@@ -116,7 +119,7 @@ class ComponentClient:
             # we need to know this for when we get frames from the stream
             if len(self.frame_times) > 500:
                 print('How did we miss 500 frames? Video task crashed?')
-                self.shutdown()
+                raise RuntimeError("The websocket connection continued to receive info on frames, but the video thread is not consuming them, and got too far behind.")
             self.frame_times[int(ft['fnum'])] = float(ft['time'])
 
         # do this here because we seemingly can't do it in receive_video
@@ -133,27 +136,29 @@ class ComponentClient:
         print(f"Connecting to {ws_uri}...")
         try:
             # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
+            # It re-raises any error which it would not retry on. Some are expected on normal disconnects.
             async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
-                # try:
                 self.connected = True
                 print(f"Connected to {ws_uri}.")
                 await self.receive_loop(websocket)
         except asyncio.exceptions.CancelledError:
             print("Cancelling connection")
             return
+        except websockets.exceptions.ConnectionClosedOK:
+            print("Client closing connection")
+            return
 
     async def receive_loop(self, websocket):
+        print('receive loop')
         self.conn_status['websocket'] = 2
         self.to_ui_q.put({'connection_status': self.conn_status})
         # loop of a single websocket connection.
         # save a reference to this for send_commands
         self.websocket = websocket
         self.notify_video = False
-        # just could not make asyncio deal with this, so I used threading. hey it works, go figure
-        vid_thread = threading.Thread(target=self.receive_video)
-        vid_thread.start()
         # send configuration to robot component to override default.
         asyncio.create_task(self.send_config())
+        vid_thread = None
         # Loop until disconnected
         while self.connected:
             try:
@@ -162,11 +167,16 @@ class ComponentClient:
                 update = json.loads(message)
                 if 'frames' in update:
                     self.handle_frame_times(update['frames'])
+                if 'video_ready' in update:
+                    # TODO take another shot at making asyncio run this
+                    vid_thread = threading.Thread(target=self.receive_video)
+                    vid_thread.start()
                 self.handle_update_from_ws(update)
 
             except Exception as e:
-                # don't catch websockets.exceptions.ConnectionClosedOK because we want it to trip the infinite generator in websockets.connect
-                # so it will stop retrying.
+                # don't catch websockets.exceptions.ConnectionClosedOK here because we want it to trip the infinite generator in websockets.connect
+                # so it will stop retrying. after it has the intended effect, websockets.connect will raise it again, so we catch it in 
+                # connect_websocket
                 print(f"Connection to {self.address} closed.")
                 self.connected = False
                 self.websocket = None
@@ -175,7 +185,9 @@ class ComponentClient:
                 self.to_ui_q.put({'connection_status': self.conn_status})
                 raise e
                 break
-        vid_thread.join()
+        if vid_thread is not None:
+            # vid_thread should stop because self.connected is False
+            vid_thread.join()
 
     async def send_commands(self, update):
         if self.connected:
@@ -194,14 +206,23 @@ class ComponentClient:
         self.ct = asyncio.create_task(self.connect_websocket())
         await self.ct
 
-    def shutdown(self):
+    async def shutdown(self):
+        print("\nWait for client shutdown")
+        if self.connected:
+            self.connected = False
+            if self.websocket:
+                await self.websocket.close()
+        elif self.ct:
+            await self.ct.cancel()
+
+    def shutdown_sync(self):
         # this might get called twice
         print("\nWait for client shutdown")
         if self.connected:
             self.connected = False
             if self.websocket:
                 asyncio.create_task(self.websocket.close())
-        else:
+        elif self.ct:
             self.ct.cancel()
 
 class RaspiAnchorClient(ComponentClient):
@@ -232,6 +253,7 @@ class RaspiAnchorClient(ComponentClient):
             # the gantry has 4-way symmetry and all four sides have the same sticker.
             ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pose),
         ]
+
     def handle_update_from_ws(self, update):
         if 'line_record' in update and not self.calibration_mode: # specifically referring to pose calibration
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
@@ -296,7 +318,7 @@ class RaspiAnchorClient(ComponentClient):
                         ]))
                         dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
                         # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
-                        
+
                 if detection['n'] == 'gantry_front':
                     self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
 
@@ -320,6 +342,6 @@ if __name__ == "__main__":
     async def main():
         ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, to_pe_q, None)
         loop = asyncio.get_running_loop()
-        loop.add_signal_handler(getattr(signal, 'SIGINT'), ac.shutdown)
+        loop.add_signal_handler(getattr(signal, 'SIGINT'), ac.shutdown_sync)
         await ac.startup()
     asyncio.run(main())

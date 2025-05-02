@@ -296,8 +296,7 @@ class AsyncObserver:
             await self.aiobrowser.async_cancel()
         if self.aiozc is not None:
             await self.aiozc.async_close()
-        for client in self.bot_clients.values():
-            client.shutdown()
+        await asyncio.gather(*[client.shutdown() for client in self.bot_clients.values()])
 
     async def run_shape_tracker(self):
         while self.send_position_updates:

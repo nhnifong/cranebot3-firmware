@@ -109,6 +109,7 @@ class RobotComponentServer:
         spit that down the provided websocket connection, if there is one.
         rpicam-vid has no way of sending timestamps on its own as of Feb 2025
         """
+        start_time = time.time()
         process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
         while True:
@@ -131,6 +132,11 @@ class RobotComponentServer:
                         })
                     else:
                         logging.info(line)
+
+                        # TODO check if line is indicative that we started and are waiting for a connection.
+                        if t - start_time > 7:
+                            self.update['video_ready'] = True
+
                         if line.strip() == "ERROR: *** failed to allocate capture buffers for stream ***":
                             logging.warning(f'rpicam-vid failed to allocate buffers. restarting...')
                             break

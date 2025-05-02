@@ -1,5 +1,5 @@
 """
-Test that starts up greipper server and connects to it with a websocket.
+Test that starts up gripper server and connects to it with a websocket.
 """
 import sys
 import os
