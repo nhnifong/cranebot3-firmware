@@ -526,8 +526,10 @@ class ControlPanelUI:
                 user_status_str = 'Not Detected'
             elif status['websocket'] == 1:
                 user_status_str = 'Connecting...'
-            else:
+            elif  status['websocket'] == 2:
                 user_status_str = 'Online'
+            else:
+                user_status_str = 'Unknown'
 
             if status['video']:
                 vidstatus_tex = 'vid_ok.png'

@@ -5,6 +5,7 @@ from scipy.spatial.transform import Rotation
 from cv_common import compose_poses
 import model_constants
 from config import Config
+import json 
 
 # number of origin detections to average
 video_port = 8888
@@ -19,20 +20,21 @@ class RaspiGripperClient(ComponentClient):
     def handle_update_from_ws(self, update):
         if 'line_record' in update:
             self.datastore.winch_line_record.insertList(update['line_record'])
+
         if 'imu' in update:
             accel = update['imu']['accel'] # timestamp, x, y, z
             self.datastore.imu_accel.insert(np.array(accel, dtype=float))
-
             grip_pose = compose_poses([
                 (Rotation.from_quat(update['imu']['quat']).as_rotvec(), np.array([0,0,0])),
                 model_constants.gripper_imu,
             ])
-
             self.to_ui_q.put({'gripper_rvec': grip_pose[0]})
+
         if 'range' in update:
             # expect a tuple of (time, distance)
             distance_measurement = update['range']
             self.datastore.range_record.insert(distance_measurement)
+            
         if 'holding' in update:
             # expect a bool. Forward it to the position estimator
             holding = update['holding'] is True
