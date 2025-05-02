@@ -20,7 +20,7 @@ import json
 
 from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient
-from observer import StatCounter
+from stats import StatCounter
 from config import Config
 
 class TestAnchorClient(unittest.IsolatedAsyncioTestCase):

@@ -12,7 +12,6 @@ import model_constants
 from functools import partial
 import threading
 from config import Config
-from PIL import Image
 
 # number of origin detections to average
 max_origin_detections = 10
