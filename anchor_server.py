@@ -39,6 +39,9 @@ stream_command = """
   --buffer-count=4
   --autofocus-mode continuous""".split()
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
+ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
+rpicam_ready_re = re.compile(r"\[(.*?)\]\s+\[(.*?)\]\s+INFO\s+RPI\s+pipeline_base\.cpp:\d+\s+Using\s+configuration\s+file\s+'(.*?)'")
+
 
 # values that can be overridden by the controller
 default_conf = {
@@ -112,14 +115,33 @@ class RobotComponentServer:
         start_time = time.time()
         process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
+        cam_ready = False
         while True:
             try:
                 line = await asyncio.wait_for(process.stdout.readline(), line_timeout)
                 t = time.time()
                 if not line: # EOF
                     break
+                line = line.decode()
+                if not cam_ready:
+                    logging.info(line)
+                    try:
+                        # remove color codes
+                        line = ansi_escape.sub('', line)
+                        # check if line is indicative that we started and are waiting for a connection.
+                        match = rpicam_ready_re.match(line)
+                        if match:
+                            logging.debug('rpicam-vid appears to be ready')
+                            # tell the websocket client to connect to the video stream. it will do so in another thread.
+                            self.update['video_ready'] = True
+                            cam_ready = True
+                    except Exception as e:
+                        logging.error(e)
+                    if line.strip() == "ERROR: *** failed to allocate capture buffers for stream ***":
+                        logging.warning(f'rpicam-vid failed to allocate buffers. restarting...')
+                        break
+                    continue
                 else:
-                    line = line.decode()
                     match = frame_line_re.match(line)
                     if match:
                         self.frames.append({
@@ -132,14 +154,6 @@ class RobotComponentServer:
                         })
                     else:
                         logging.info(line)
-
-                        # TODO check if line is indicative that we started and are waiting for a connection.
-                        if t - start_time > 7:
-                            self.update['video_ready'] = True
-
-                        if line.strip() == "ERROR: *** failed to allocate capture buffers for stream ***":
-                            logging.warning(f'rpicam-vid failed to allocate buffers. restarting...')
-                            break
                     continue # nothing wrong keep going
             except asyncio.TimeoutError:
                 logging.warning(f'rpicam-vid wrote no lines for {line_timeout} seconds')

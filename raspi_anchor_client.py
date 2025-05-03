@@ -212,7 +212,7 @@ class ComponentClient:
             if self.websocket:
                 await self.websocket.close()
         elif self.ct:
-            await self.ct.cancel()
+            self.ct.cancel()
 
     def shutdown_sync(self):
         # this might get called twice
