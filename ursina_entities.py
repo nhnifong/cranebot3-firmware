@@ -88,6 +88,14 @@ class Gripper(SplineMovingEntity):
             scale=(-1,1,1),
             color=(0.0, 0.2, 0.0, 1.0),
         )
+        self.remap = {
+            'r down': 'up arrow down',
+            'r up': 'up arrow up',
+            'r hold': 'up arrow hold',
+            'd down': 'down arrow down',
+            'd up': 'down arrow up',
+            'd hold': 'down arrow hold',
+        }
 
 
     def setStatus(self, status):
@@ -132,25 +140,31 @@ class Gripper(SplineMovingEntity):
         )
 
     def input(self, key):
-        if hasattr(self, "manual_spool_wp") and self.manual_spool_wp.enabled:
-            if key == 'up arrow down':
+        canMove = hasattr(self, "manual_spool_wp") and self.manual_spool_wp.enabled
+        mkey = key
+        if key in self.remap:
+            canMove = True
+            mkey = self.remap[key]
+
+        if canMove:
+            if mkey == 'up arrow down':
                 self.reel_manual(-self.jog_speed)
-            elif key == 'up arrow hold':
+            elif mkey == 'up arrow hold':
                 if self.jog_speed < MAX_JOG_SPEED:
                     self.jog_speed += 0.01
                 self.reel_manual(-self.jog_speed)
-            elif key == 'up arrow up':
+            elif mkey == 'up arrow up':
                 self.jog_speed = 0.1
                 self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
 
 
-            elif key == 'down arrow down':
+            elif mkey == 'down arrow down':
                 self.reel_manual(self.jog_speed)
-            elif key == 'down arrow hold':
+            elif mkey == 'down arrow hold':
                 if self.jog_speed < MAX_JOG_SPEED:
                     self.jog_speed += 0.01
                 self.reel_manual(self.jog_speed)
-            elif key == 'down arrow up':
+            elif mkey == 'down arrow up':
                 self.jog_speed = 0.1
                 self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
 
