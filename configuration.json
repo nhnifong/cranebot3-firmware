@@ -98,6 +98,7 @@
     "TENSION_TIGHT_THRESH": 0.3
   },
   "gripper": {
+    "MAX_ACCEL": 1.5,
     "TARGET_HOLDING_PRESSURE": 1.1
   }
 }
