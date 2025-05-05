@@ -5,7 +5,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
-from position_estimator import Positioner2, sphere_intersection, sphere_circle_intersection, find_hang_point
+from position_estimator import *
 import time
 from multiprocessing import Queue
 from data_store import DataStore
@@ -37,6 +37,30 @@ class TestPositionEstimator(unittest.TestCase):
         np.testing.assert_array_almost_equal(normal, [1,0,0])
         self.assertAlmostEqual(radius, 4, 6)
 
+    def test_sphere_intersection2(self):
+        sphere1 = (np.array([0, 0, 0]), 1.1)
+        sphere2 = (np.array([1, 1, 1]), 0.7)
+
+        intersection = sphere_intersection(sphere1, sphere2)
+        self.assertTrue(intersection is not None)
+
+        center, normal, radius = intersection
+        np.testing.assert_array_almost_equal(center, [0.62,0.62,0.62])
+        np.testing.assert_array_almost_equal(normal, [0.57735, 0.57735, 0.57735]) # 1/sqrt(3)
+        self.assertAlmostEqual(radius, 0.238327, 5)
+
+    def test_sphere_intersection3(self):
+        sphere1 = (np.array([0, 0, 10]), 3)
+        sphere2 = (np.array([3, 4, 10]), 4)
+
+        intersection = sphere_intersection(sphere1, sphere2)
+        self.assertTrue(intersection is not None)
+
+        center, normal, radius = intersection
+        np.testing.assert_array_almost_equal(center, [1.08,  1.44, 10])
+        np.testing.assert_array_almost_equal(normal, [0.6, 0.8, 0]) # 1/sqrt(3)
+        self.assertAlmostEqual(radius, 2.4, 5)
+
     def test_sphere_circle_intersection(self):
         sphere_center = np.array([0, 0, 0])
         sphere_radius = 5
@@ -50,24 +74,76 @@ class TestPositionEstimator(unittest.TestCase):
         np.testing.assert_array_almost_equal(pts[0], [3,-4,0])
         np.testing.assert_array_almost_equal(pts[1], [3,4,0])
 
+    def test_lowest_point_on_circle(self):
+        center = np.array([ 1, 1, 2])
+        normal = np.array([-0.57735, -0.57735, -0.57735])
+        radius = 2
+
+        # circles with normals pointing up or down don't have a lowest point
+        result = lowest_point_on_circle(center, normal, radius)
+        self.assertTrue(result is not None)
+        np.testing.assert_array_almost_equal(result, [1.816496, 1.816496, 0.367006]) # 1/sqrt(3)
+
+    def test_lowest_point_on_circle_flat(self):
+        center = np.array([ 2, 3, 4])
+        normal = np.array([ 0.,  0., -1.])
+        radius = 2
+
+        # circles with normals pointing up or down don't have a lowest point
+        result = lowest_point_on_circle(center, normal, radius)
+        self.assertTrue(result is None)
+
+
     def test_find_hang_point(self):
         anchors = np.array([
-            [-3, 2, 3],
-            [ 3, 2, 3],
-            [ 3, 2,-3],
-            [-3, 2,-3],
+            [-3, 3, 2],
+            [ 3, 3, 2],
+            [ 3,-3, 2],
+            [-3,-3, 2],
         ], dtype=float)
-        lengths = np.array([4, 4, 3.5, 8], dtype=float)
+
+        expected_hang_point = np.array([0,1,1])
+        lengths = np.linalg.norm(anchors - expected_hang_point, axis=1)
+        # make one length too long
+        lengths[3] = 6
+
         result = find_hang_point(anchors, lengths)
         self.assertTrue(result is not None)
         point, slack_lines = result
 
-        np.testing.assert_array_almost_equal(point, [0,1,0])
+        np.testing.assert_array_almost_equal(point, expected_hang_point)
 
         self.assertFalse(slack_lines[0])
         self.assertFalse(slack_lines[1])
         self.assertFalse(slack_lines[2])
         self.assertTrue(slack_lines[3])
+
+
+    def test_find_hang_point_2(self):
+        # two lines diagonally across from eachother are tight and two are slack
+
+        anchors = np.array([
+            [-3, 3, 2],
+            [ 3, 3, 2],
+            [ 3,-3, 2],
+            [-3,-3, 2],
+        ], dtype=float)
+
+        expected_hang_point = np.array([0,0,1])
+
+        # make two lengths too long
+        lengths = np.array([6, 4.358, 6, 4.358])
+
+        result = find_hang_point(anchors, lengths)
+        self.assertTrue(result is not None)
+        point, slack_lines = result
+
+        np.testing.assert_array_almost_equal(point, expected_hang_point, 2)
+
+        self.assertTrue(slack_lines[0])
+        self.assertFalse(slack_lines[1])
+        self.assertTrue(slack_lines[2])
+        self.assertFalse(slack_lines[3])
 
     # def test_estimate(self):
     #     ndims = 3

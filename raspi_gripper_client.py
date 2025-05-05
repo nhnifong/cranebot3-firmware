@@ -28,7 +28,6 @@ class RaspiGripperClient(ComponentClient):
                 model_constants.gripper_imu,
             ])
             self.datastore.imu_rotvec.insert(np.concatenate([np.array([timestamp], dtype=float), grip_pose[0]]))
-            self.to_ui_q.put({'gripper_rvec': grip_pose[0]})
 
         if 'range' in update:
             # expect a tuple of (time, distance)
