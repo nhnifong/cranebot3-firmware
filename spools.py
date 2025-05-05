@@ -184,6 +184,7 @@ class SpoolController:
 
         self.last_length = self.get_unspooled_length(angle)
         self.meters_per_rev = self.get_unspool_rate(angle)
+        currentLineSpeed = self.speed * self.meters_per_rev
         # logging.debug(f'current unspooled line = {self.last_length} m. rate = {self.meters_per_rev} m/r')
 
         self.move_allowed = True
@@ -204,16 +205,16 @@ class SpoolController:
                 time.sleep(1)
                 self._commandSpeed(0)
                 self.move_allowed = False
-            row = (time.time(), self.last_length, self.smoothed_tension)
+            row = (time.time(), self.last_length, currentLineSpeed, self.smoothed_tension)
         else:
             # accumulate these so you can send them to the websocket
-            row = (time.time(), self.last_length)
+            row = (time.time(), self.last_length, currentLineSpeed)
 
         if self.rec_loop_counter == self.conf['REC_MOD']:
             self.record.append(row)
             self.rec_loop_counter = 0
         self.rec_loop_counter += 1
-        return row[:2]
+        return time.time(), self.last_length
 
     def currentTension(self):
         """return the line tension in kilograms of force.

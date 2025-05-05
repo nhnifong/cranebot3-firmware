@@ -256,7 +256,7 @@ class RaspiAnchorClient(ComponentClient):
     def handle_update_from_ws(self, update):
         if 'line_record' in update and not self.calibration_mode: # specifically referring to pose calibration
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
-            self.last_tension = update['line_record'][-1][2]
+            self.last_tension = update['line_record'][-1][-1]
 
         # the following updates may be sent from spools.py during tension based calibration
         if 'tension_seek_stopped' in update:
