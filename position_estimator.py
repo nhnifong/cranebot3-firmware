@@ -248,7 +248,7 @@ class Positioner2:
         self.visual_pos = np.zeros(3, dtype=float)
 
         # amount which would have to be added to reported line lengths to make them match visual observation
-        self.avg_line_deltas np.zeros(4)
+        self.avg_line_deltas = np.zeros(4)
         self.sfac = 0.9
 
     def find_swing(self):
@@ -308,8 +308,13 @@ class Positioner2:
         # Look at the last report for each anchor line.
         # time, length, speed, tension
         records = np.array([alr.getLast() for alr in enumerate(datastore.anchor_line_record)])
-        lengths = records[1]
-        speeds = records[2]
+        lengths = np.array(records[1])
+        speeds = np.array(records[2])
+        tensions = np.array(records[3])
+        
+        # nothing has been recorded
+        if sum(lengths) == 0:
+            return z, z, False
 
         # timestamp of the last record used to produce this estimate. used for latency feedback
         self.data_ts = np.max(records[0])
@@ -319,13 +324,11 @@ class Positioner2:
         # elapsed = self.start - records[:,0]
         # offsets = records[:,1] + records[:,2] * elapsed
         # lengths += offsets
-        
-        # nothing has been recorded
-        if sum(lengths) == 0:
-            return z, z, False
 
-        lengths = np.array(lengths)
-        speeds = np.array(speeds)
+        # if any line tension is low enough to appear slack,
+        # make its length effectively infinite so it won't play a part in the hang position
+        feels_slack = tensions < self.config.commmon_anchor_vars['TENSION_SLACK_THRESH']
+        lengths[feels_slack] = 100
 
         # calculate hang point
         result = find_hang_point(self.anchor_points, lengths)
@@ -334,6 +337,7 @@ class Positioner2:
         self.gant_pos, slack_lines = result[0]
 
         # this represents a prediction of which lines are slack, it may not match reality.
+        # if this prediction says a line is tight but measured tension says otherwise, the hang point is probably quite wrong.
         self.slack_lines = result[1]
 
         if sum(speeds) == 0:
@@ -368,7 +372,7 @@ class Positioner2:
         self.time_taken = time() - self.start
         return True
 
-    def send_positions(self)
+    def send_positions(self):
         # update_for_observer = {
         #     'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
         #     'future_winch_line': {'sender':'pe', 'data':future_winch_line},
@@ -382,7 +386,7 @@ class Positioner2:
                 'gantry_vel': self.gantry_vel,
                 'gripper_pose': self.grip_pose,
                 'slack_lines': self.slack_lines,
-                }
+                },
             'minimizer_stats': {
                 # 'errors': softmax(self.errors),
                 'data_ts': self.data_ts,

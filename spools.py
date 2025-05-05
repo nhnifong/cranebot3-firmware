@@ -194,6 +194,8 @@ class SpoolController:
         if self.tension_support:
             success, tension = self.currentTension()
             if success:
+                # because tension is never returned while stopped, this value only gets updated while moving.
+                # clients can always look at it and expected a reasonable, if old, value
                 fac = self.conf['TENSION_SMOOTHING_FACTOR']
                 self.smoothed_tension = (tension * fac + self.smoothed_tension * (1-fac))
 
@@ -220,6 +222,8 @@ class SpoolController:
         Only designed for the MKS42C
         Measurements are basically invalid below speeds of 0.4
         """
+        if self.speed < 0.3:
+            return False, 0 # angle error readings are garbage at low or zero speeds.
         success, angleError = self.motor.getShaftError()
         if not success:
             return False, 0
