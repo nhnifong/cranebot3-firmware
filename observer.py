@@ -315,7 +315,7 @@ class AsyncObserver:
             dp = gant_pose + np.array([0,0,0,0, random()*0.1, random()*0.1, random()*0.1])
             self.datastore.gantry_pose.insert(dp)
             # winch line always 1 meter
-            self.datastore.winch_line_record.insert(np.array([t, 1.0]))
+            self.datastore.winch_line_record.insert(np.array([t, 1.0, 0.0]))
             # gripper always directly below gantry
             grip_pose = gant_pose + np.array([0,0,0,0, 0, 0, -1])
             # range always perfect
@@ -325,7 +325,8 @@ class AsyncObserver:
             # anchor lines always perfectly agree with gripper position
             for i, simanc in enumerate(sim_anchors):
                 dist = np.linalg.norm(simanc - gant_pose[4:])
-                self.datastore.anchor_line_record[i].insert(np.array([t, dist, 1.0]))
+                # TODO speed is not consistent with what the line is doing
+                self.datastore.anchor_line_record[i].insert(np.array([t, dist, 0.0, 1.0]))
             await asyncio.sleep(0.25)
 
     def collect_gant_frame_positions(self):

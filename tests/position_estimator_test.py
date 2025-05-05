@@ -5,7 +5,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
-from position_estimator import CDPR_position_estimator
+from position_estimator import Positioner2, sphere_intersection, sphere_circle_intersection, find_hang_point
 import time
 from multiprocessing import Queue
 from data_store import DataStore
@@ -23,118 +23,61 @@ class TestPositionEstimator(unittest.TestCase):
         to_ui_q.cancel_join_thread()
         to_pe_q.cancel_join_thread()
         to_ob_q.cancel_join_thread()
-        self.pe = CDPR_position_estimator(datastore, to_ui_q, to_pe_q, to_ob_q)
-        self.now = 1739888888.5555555
-        self.pe.time_domain = (self.now - 10, self.now + 10)
+        self.pe = Positioner2(datastore, to_ui_q, to_pe_q, to_ob_q)
 
-    def test_model_time(self):
-        result = self.pe.model_time(self.now)
-        self.assertEqual(result, 0.5)
+    def test_sphere_intersection(self):
+        sphere1 = (np.array([0, 0, 0]), 5)
+        sphere2 = (np.array([6, 0, 0]), 5)
 
-    def test_model_time_numpy_float(self):
-        times = np.array([self.now,self.now,self.now], dtype=float)
-        result = self.pe.model_time(times[0])
-        self.assertEqual(result, 0.5)
+        intersection = sphere_intersection(sphere1, sphere2)
+        self.assertTrue(intersection is not None)
 
-    def test_error_meas(self):
-        def func(times):
-            arr = times*2
-            return arr.reshape(-1, 1) # create column of data, like bspline
-        position_measurements = np.array([
-            [0.1, 0.21],
-            [0.2, 0.41],
-            [0.3, 0.61],
-            [0.4, 0.81],
-        ])
-        error = self.pe.error_meas(func, position_measurements, normalize_time=False)
-        self.assertAlmostEqual(error, 0.01)
+        center, normal, radius = intersection
+        np.testing.assert_array_almost_equal(center, [3,0,0])
+        np.testing.assert_array_almost_equal(normal, [1,0,0])
+        self.assertAlmostEqual(radius, 4, 6)
 
-    def test_forces_stable(self):
-        """If the gripper hangs directly below the gantry, are the forces balanced?"""
-        gant_pos = np.array([[0,0,1]])
-        grip_pos = np.array([[0.,0.,0.1]])
-        self.pe.times = np.array([123.4])
-        result = self.pe.calc_gripper_accel_from_forces(gant_pos, grip_pos)
-        expected = np.array([[123.4, 0, 0, 0]])
-        np.testing.assert_array_almost_equal(result, expected)
+    def test_sphere_circle_intersection(self):
+        sphere_center = np.array([0, 0, 0])
+        sphere_radius = 5
+        circle_center = np.array([3, 0, 0])
+        circle_normal = np.array([0, 0, 1])
+        circle_radius = 4
 
+        pts = sphere_circle_intersection(sphere_center, sphere_radius, circle_center, circle_normal, circle_radius)
+        self.assertEqual(2, len(pts))
 
-    def test_forces_model_swing(self):
-        """If we integrate the forces from calc_gripper_accel_from_forces would the pendulum actually swing?"""
-        gant_pos = np.array([[0,0,2]])
-        p = np.array([0.4,0,0.1])
-        v = np.array([0.,0.,0.])
-        time = 1000
-        tick = 1/50
-        rope_len = np.linalg.norm(gant_pos-p)
-        print(f'rope len = {rope_len}')
-        expected_period = 2*pi*sqrt(rope_len/9.81)
+        np.testing.assert_array_almost_equal(pts[0], [3,-4,0])
+        np.testing.assert_array_almost_equal(pts[1], [3,4,0])
 
-        start = 1000
-        period = []
-        osc = 0
+    def test_find_hang_point(self):
+        anchors = np.array([
+            [-3, 2, 3],
+            [ 3, 2, 3],
+            [ 3, 2,-3],
+            [-3, 2,-3],
+        ], dtype=float)
+        lengths = np.array([4, 4, 3.5, 8], dtype=float)
+        result = find_hang_point(anchors, lengths)
+        self.assertTrue(result is not None)
+        point, slack_lines = result
 
-        for i in range(2000):
-            grip_pos = np.array([p])
-            last_sign = (p[0]>0)
+        np.testing.assert_array_almost_equal(point, [0,1,0])
 
-            self.pe.times = np.array([time])
-            result = self.pe.calc_gripper_accel_from_forces(gant_pos, grip_pos)
-            accel = result[0][1:]
-            v += accel * tick
-            p += v * tick
-            time += tick
+        self.assertFalse(slack_lines[0])
+        self.assertFalse(slack_lines[1])
+        self.assertFalse(slack_lines[2])
+        self.assertTrue(slack_lines[3])
 
-            # measure the period of oscillation.
-            now_sign = (p[0]>0)
-            if last_sign != now_sign:
-                if start != 1000:
-                    period.append((time - start) * 2)
-                start = time
-                osc += 1
+    # def test_estimate(self):
+    #     ndims = 3
+    #     params = np.concatenate([
+    #         np.repeat(np.arange(1, self.pe.n_ctrl_pts+1), ndims),
+    #         np.repeat(np.arange(1, self.pe.n_ctrl_pts+1)+10, ndims)])
+    #     # noise = np.random.normal(0, 1e-6, params.shape)
+    #     # params = params + noise
+    #     self.pe.set_splines_from_params(params)
 
-        mean_period = np.mean(period)
-        print(f'counted {osc} half-swings')
-        print(f'mean period of oscillation = {mean_period} seconds')
-        self.assertTrue(osc>1)
-        self.assertAlmostEqual(expected_period, mean_period, 1)
-
-    def test_set_splines(self):
-        # model consists of two 3D splines.
-        # 2 splines
-        # 3 dimensions
-        # N control points
-        nsplines = 2
-        ndims = 3
-        model_size = nsplines * ndims * self.pe.n_ctrl_pts
-        params = np.concatenate([
-            np.repeat(np.arange(1, self.pe.n_ctrl_pts+1), ndims),
-            np.repeat(np.arange(1, self.pe.n_ctrl_pts+1)+10, ndims)])
-        self.assertEqual(model_size, len(params))
-
-        self.pe.set_splines_from_params(params)
-        
-        np.testing.assert_array_almost_equal(self.pe.gripper_pos_spline(0.5), [6,6,6])
-        np.testing.assert_array_almost_equal(self.pe.gantry_pos_spline(0.5),  [16,16,16])
-        
-        np.testing.assert_array_almost_equal(self.pe.gripper_velocity(0.5), [9,9,9])
-        np.testing.assert_array_almost_equal(self.pe.gantry_velocity(0.5),  [9,9,9])
-        
-        np.testing.assert_array_almost_equal(self.pe.gripper_accel_func(0.5), [0,0,0])
-        np.testing.assert_array_almost_equal(self.pe.gantry_accel_func(0.5),  [0,0,0])
-
-    def test_move_spline_domain_robust(self):
-        self.pe.move_spline_domain_robust(self.pe.gripper_pos_spline, 0.04)
-
-    def test_estimate(self):
-        ndims = 3
-        params = np.concatenate([
-            np.repeat(np.arange(1, self.pe.n_ctrl_pts+1), ndims),
-            np.repeat(np.arange(1, self.pe.n_ctrl_pts+1)+10, ndims)])
-        # noise = np.random.normal(0, 1e-6, params.shape)
-        # params = params + noise
-        self.pe.set_splines_from_params(params)
-
-        now = time.time()-1
-        self.pe.time_domain = (now - self.pe.horizon_s, now + self.pe.horizon_s)
-        self.pe.estimate()
+    #     now = time.time()-1
+    #     self.pe.time_domain = (now - self.pe.horizon_s, now + self.pe.horizon_s)
+    #     self.pe.estimate()

@@ -114,7 +114,6 @@ class RaspiGripperServer(RobotComponentServer):
         i2c = busio.I2C(board.SCL, board.SDA)
         self.imu = BNO08X_I2C(i2c, address=0x4b)
         self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
-        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_LINEAR_ACCELERATION)
 
         self.rangefinder = VL53L1X(i2c)
         model_id, module_type, mask_rev = self.rangefinder.model_info
@@ -155,10 +154,8 @@ class RaspiGripperServer(RobotComponentServer):
                 self.rangefinder.clear_interrupt()
                 self.update['range'] = [time.time(), distance / 100]
 
-        # self.update['IR range'] = self.hat.gpio_pin_value(RANGEFINDER_PIN)*(-11)+33
         self.update['imu'] = {
-            'accel': [time.time(), *self.imu.linear_acceleration],
-            'quat': self.imu.quaternion
+            'quat': [time.time() *self.imu.quaternion]
         }
 
 
