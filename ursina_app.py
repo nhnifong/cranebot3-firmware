@@ -33,13 +33,13 @@ mode_names = {
 }
 mode_descriptions = {
     'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
-    'pause': 'WASD-QE moves the gantry, scroll moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
+    'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
     'pose':  'Place the origin card on the floor in the center of the room. Anchor positions are continuously estimated from this card.',
 }
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
 video_framerate_format_str = 'Avg framerate {val:.2f} fps'
-spline_age_format_str = 'Spline age {val:.2f} s'
+estimate_age_format_str = 'Spline age {val:.2f} s'
 
 ds = 0.1 # direct movement speed in meters per second
 key_behavior = {
@@ -122,11 +122,8 @@ class ControlPanelUI:
         self.anchors.append(Anchor(2, to_ob_q, ( -1,2,-2), rotation=(0,180,0)))
         self.anchors.append(Anchor(3, to_ob_q, ( 2,2,-2), rotation=(0,180,0)))
 
-        self.spline_curves = {}
-
-        self.gantry = SplineMovingEntity(
+        self.gantry = Gantry(
             ui=self,
-            spline_func=None,
             model='gantry',
             color=(0.4, 0.4, 0.0, 1.0),
             scale=0.001,
@@ -137,7 +134,6 @@ class ControlPanelUI:
 
         self.gripper = Gripper(
             ui=self,
-            spline_func=None,
             to_ob_q=self.to_ob_q,
             position=(0,0.3,1),
             shader=lit_with_shadows_shader,
@@ -234,10 +230,10 @@ class ControlPanelUI:
             enabled=True,
         )
 
-        self.spline_age_text = Text(
+        self.estimate_age_text = Text(
             color=(0.9,0.9,0.9,1.0),
             position=(-0.45,self.modePanelLine3y),
-            text=spline_age_format_str.format(val=0),
+            text=estimate_age_format_str.format(val=0),
             scale=0.5,
             enabled=True,
         )
@@ -351,24 +347,6 @@ class ControlPanelUI:
     def clear_error(self):
         self.error.enabled = False
 
-    # renders a function that returns 3D points in a domain from 0 to 1
-    # the y and z coordinates are swapped
-    def render_curve(self, curve_function, name):
-        try:
-            model = Pipe(
-                path=[Vec3(tuple(curve_function(time))) for time in np.linspace(0,1,32)],
-                thicknesses=(0.01, 0.01),
-                cap_ends=False,
-            )
-        except:
-            # Sometimes the verts are very close together and it breaks this constructor, and in that case
-            # it's fine to just not update the model
-            return
-        if name in self.spline_curves:
-            self.spline_curves[name].model = model
-        else:
-            self.spline_curves[name] = Entity(model=model, color=color.lime, shader=unlit_shader)
-
     def set_mode(self, mode):
         self.calibration_mode = mode
         self.mode_text.text = mode_names[mode]
@@ -470,34 +448,15 @@ class ControlPanelUI:
         if 'STOP' in updates:
             application.quit()
 
-        if 'knots' in updates:
-            self.knots = updates['knots']
-
-        if 'spline_degree' in updates:
-            self.spline_degree = updates['spline_degree']
-
         if 'minimizer_stats' in updates:
-            if self.sliders[0].enabled:
-                for i, errval in enumerate(updates['minimizer_stats']['errors']):
-                    self.sliders[i].setErrorBar(errval)
-            spline_age = time.time() - updates['minimizer_stats']['data_ts']
-            self.spline_age_text.text = spline_age_format_str.format(val=time.time()-spline_age)
+            estimate_age = time.time() - updates['minimizer_stats']['data_ts']
+            self.estimate_age_text.text = estimate_age_format_str.format(val=time.time()-estimate_age)
 
-        if 'time_domain' in updates:
-            # the time domain in unix seconds over which the gripper and gantry splines are defined.
-            self.time_domain = updates['time_domain']
-
-        if 'gripper_path' in updates:
-            control_points = np.array(list(map(swap_yz, updates['gripper_path'])))
-            gripper_pos_spline = BSpline(self.knots, control_points, self.spline_degree, True)
-            self.render_curve(gripper_pos_spline, 'gripper_spline')
-            self.gripper.setParams(gripper_pos_spline, self.time_domain)
-
-        if 'gantry_path' in updates:
-            control_points = np.array(list(map(swap_yz, updates['gantry_path'])))
-            gantry_pos_spline = BSpline(self.knots, control_points, self.spline_degree, True)
-            self.render_curve(gantry_pos_spline, 'gantry_spline')
-            self.gantry.setParams(gantry_pos_spline, self.time_domain)
+        if 'pos_estimate' in updates:
+            p = updates['pos_estimate']
+            self.gantry.set_position_velocity(p['gantry_pos'], p['gantry_vel'])
+            self.gripper.setPose(p['gripper_pose'])
+            # p['slack_lines']
 
         if 'anchor_pose' in updates:
             apose = updates['anchor_pose']
@@ -568,8 +527,8 @@ class ControlPanelUI:
         if 'prisms' in updates:
             self.prisms.replace(updates["prisms"], update_from_trimesh)
 
-        if 'gripper_rvec' in updates:
-            self.gripper.rotation = to_ursina_rotation(updates['gripper_rvec'])
+        # if 'gripper_rvec' in updates:
+        #     self.gripper.rotation = to_ursina_rotation(updates['gripper_rvec'])
 
     def start(self):
         self.app.run()

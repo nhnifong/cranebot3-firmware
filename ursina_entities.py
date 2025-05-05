@@ -22,30 +22,31 @@ def to_ursina_rotation(rvec):
 def draw_line(point_a, point_b):
     return Mesh(vertices=[point_a, point_b], mode='line')
 
-class SplineMovingEntity(Entity):
-    """
-    An entity that moves it's position along a spline function
-    """
-    def __init__(self, ui, spline_func, model, **kwargs):
-        super().__init__(
-            model=model,
-            **kwargs
-        )
-        self.is_gantry = (model == 'gantry')
-        self.ui = ui
-        self.spline_func = spline_func
-        self.time_domain = (333,444)
 
-    def setParams(self, func, domain):
-        self.spline_func = func
-        self.time_domain = domain
+MAX_JOG_SPEED = 0.3
 
-    def update(self):
-        if self.spline_func is not None:
-            t = (time.time() - self.time_domain[0]) / (self.time_domain[1] - self.time_domain[0])
-            self.position = self.spline_func(t)
-            if self.is_gantry:
-                self.redraw_wires()
+class Gantry(Entity):
+    def __init__(self, ui, to_ob_q, **kwargs):
+        super().__init__(**kwargs)
+        self.ui = ui,
+        self.to_ob_q = to_ob_q
+        self.last_update_t = time.time()
+
+        # position and velocity in the z up coordinate space, not the ursina space
+        self.zup_pos = np.zeros(3)
+        self.zup_vel = np.zeros(3)
+
+    def set_position_velocity(self, pos, vel):
+        self.zup_pos = pos
+        self.zup_vel = vel
+        self.position = swap_yz(pos)
+
+    # def update(self):
+    #     now = time.time()
+    #     elapsed = now - last_update_t
+    #     self.zup_pos = self.zup_pos + self.zup_vel * elapsed
+    #     self.position = swap_yz(self.zup_pos)
+    #     self.last_update_t = now
 
     def redraw_wires(self):
         # update the lines between the gantry and the other things
@@ -53,22 +54,18 @@ class SplineMovingEntity(Entity):
             self.ui.lines[anchor_num].model = draw_line(self.ui.anchors[anchor_num].position, self.position)
         self.ui.vert_line.model = draw_line(self.ui.gripper.position, self.position)
 
-
-MAX_JOG_SPEED = 0.3
-
-class Gripper(SplineMovingEntity):
-    def __init__(self, ui, spline_func, to_ob_q, **kwargs):
+class Gripper(Entity):
+    def __init__(self, ui, to_ob_q, **kwargs):
         super().__init__(
-            ui=ui,
-            spline_func=spline_func,
             collider='box', # for mouse interaction
             model='gripper_body',
             scale=0.001,
             color=(0.9, 0.9, 0.9, 1.0),
             **kwargs
         )
-        self.closed = False
+        self.ui = ui,
         self.to_ob_q = to_ob_q
+        self.closed = False
         self.label_offset = (0.00, 0.04)
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
@@ -101,9 +98,12 @@ class Gripper(SplineMovingEntity):
     def setStatus(self, status):
         self.label.text = f"Gripper\n{status}"
 
-    def update(self):
-        super().update()
-        self.label.position = world_position_to_screen_position(self.position) + self.label_offset
+    def setPose(self, pose):
+        """
+        Pose is a tuple containing a rotation vector (rodruiges) and a position in the z-up space
+        """
+        self.rotation = to_ursina_rotation(pose[0])
+        self.position = swap_yz(pose[1])
 
     def on_mouse_enter(self):
         self.color = anchor_color_selected

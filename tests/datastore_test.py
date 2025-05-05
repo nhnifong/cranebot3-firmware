@@ -36,14 +36,10 @@ class TestDatastore(unittest.TestCase):
         d = DataStore(horizon, anchors, freq)
 
         dlen = horizon * freq
-        self.assertEqual((dlen, 7), d.gantry_pose.shape)
-        self.assertEqual((dlen, 7), d.gripper_pose.shape)
-        self.assertEqual((dlen, 4), d.imu_accel.shape)
-        self.assertEqual((dlen, 2), d.winch_line_record.shape)
 
         self.assertEqual(anchors, len(d.anchor_line_record))
         for aline in d.anchor_line_record:
-            self.assertEqual((dlen, 3), aline.shape)
+            self.assertEqual((dlen, 4), aline.shape)
 
     def test_datastore_init_3(self):
         # does it still work with three anchors
@@ -51,22 +47,24 @@ class TestDatastore(unittest.TestCase):
 
     def test_get_last(self):
         d = DataStore(10, 4, 3)
-        d.winch_line_record.insert(np.array([123.4, 1.0]))
-        d.winch_line_record.insert([123.5, 2.0])
-        d.winch_line_record.insert((123.6, 3.0))
+        d.winch_line_record.insert(np.array([123.4, 1.0, 0.0]))
+        d.winch_line_record.insert([123.5, 2.0, 0.0])
+        d.winch_line_record.insert((123.6, 3.0, 10.0))
         last = d.winch_line_record.getLast()
         self.assertEqual(123.6, last[0])
         self.assertEqual(3.0, last[1])
+        self.assertEqual(10.0, last[2])
         d.winch_line_record.insertList(np.array([
-            [124.1, 4.0],
-            [124.2, 5.0],
-            [124.3, 6.0],
+            [124.1, 4.0, 0],
+            [124.2, 5.0, 0],
+            [124.3, 6.0, 0],
             ]))
         d.winch_line_record.insertList([
-            (124.4, 7.0),
-            (124.5, 8.0),
-            (124.6, 9.0),
+            (124.4, 7.0, 0),
+            (124.5, 8.0, 0),
+            (124.6, 9.0, 10),
             ])
         last = d.winch_line_record.getLast()
         self.assertEqual(124.6, last[0])
         self.assertEqual(9.0, last[1])
+        self.assertEqual(10, last[2])

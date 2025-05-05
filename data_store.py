@@ -32,9 +32,20 @@ class CircularBuffer:
         """Return as numpy array with original shape"""
         return np.frombuffer(self.arr, dtype=np.dtype(self.arr)).reshape(self.shape)
 
-    def deepCopy(self):
+    def deepCopy(self, cutoff=None, before=False):
+        """
+        Return a deep copy of the array.
+        if cutoff is provided (a float timestamp)
+        then only rows after that time will be returned.
+        if before=True, rows before the cutoff are returned
+        """
         with self.sem:
             arr = self.asNpa().copy()
+            if cutoff is not None:
+                if before:
+                    arr = arr[arr[:,0]<=cutoff]
+                else:
+                    arr = arr[arr[:,0]>cutoff]
         return arr
 
     def insert(self, row):

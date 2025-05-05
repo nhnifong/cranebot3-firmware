@@ -50,20 +50,15 @@ def sphere_intersection(sphere1, sphere2):
 
     d_vec = c2 - c1
     d = np.linalg.norm(d_vec)
-
     # Check for intersection
     if d > r1 + r2 + 1e-9 or d < np.abs(r1 - r2) - 1e-9 or d == 0:
         return None  # No intersection or one sphere inside the other (or same center)
-
     # Normal vector of the intersection plane
     normal_vector = d_vec / d
-
     # Distance from center of sphere 1 to the intersection plane
     a = (r1**2 - r2**2 + d**2) / (2 * d)
-
     # Center of the intersection circle
     center_intersection = c1 + a * normal_vector
-
     # Radius of the intersection circle
     r_intersection_sq = r1**2 - a**2
     if r_intersection_sq < 0:
@@ -133,7 +128,7 @@ def sphere_circle_intersection(sphere_center, sphere_radius, circle_center, circ
 
     point1 = p2_base + offset
     point2 = p2_base - offset
-    return [point1, point2]
+    return np.array([point1, point2])
 
 def lowest_point_on_circle(circle_center, circle_normal, circle_radius):
     """
@@ -147,6 +142,10 @@ def lowest_point_on_circle(circle_center, circle_normal, circle_radius):
     Returns:
         numpy array (3,): The point on the circle with the lowest z-coordinate.
     """
+    # invalid for circles in a horizontal plane
+    if np.sum(circle_normal[:2]) == 0:
+        return None
+
     # The lowest point is in the direction opposite the z-component of the normal vector.
     # We create a vector pointing downwards
     downward_vector = np.array([0, 0, -1])
@@ -166,14 +165,16 @@ def lowest_point_on_circle(circle_center, circle_normal, circle_radius):
 def find_hang_point(positions, lengths):
     """
     Find the lowest point at which a mass could hang from the given anchor positions without
-    the distance to any anchor being longer than the given length of available line
+    the distance to any anchor being longer than the given lengths of available line
 
-    In addition to finding the position, returns an array of bools indicating which lines are slack.
+    In addition to finding the position, we get an array of bools indicating which lines are slack as a side effect
 
     If two spheres intersect, they form a circle.
     The lowest point on the circle may be a hang point if only two lines are taut
     if a circle intersects a sphere, it does so at two points, the lower of which may be a hang point.
-    Any hang point that is outside the radius of any sphere is disqualified.
+    Any hang point below the floor is discarded
+    Any hang point not inside all spheres is discarded
+    take the lowest remaining point
 
     For a four anchor system, there are six possible sphere-sphere crosses.
     For each circle formed this way, it could intersect with either of the two uninvolved spheres.
@@ -187,20 +188,22 @@ def find_hang_point(positions, lengths):
         if circle is None:
             continue
         lp = lowest_point_on_circle(*circle)
-        candidates.append(lp)
-        print(f'lowest circle point {lp} circle = {circle}')
+        if lp is not None:
+            if lp[2] > 0:
+                candidates.append(lp)
         # intersect this circle with the two uninvoled spheres
         for i in range(4):
             if i not in pair:
                 pts = sphere_circle_intersection(positions[i], lengths[i], *circle)
                 if len(pts) == 2:
                     # take the lower point
-                    if pts[0][2] < pts[1][2]:
-                        candidates.append(pts[0])
-                    else:
-                        candidates.append(pts[1])
+                    lower = pts[np.argmin(pts[:, 2])]
+                    if lower[2] > 0:
+                        candidates.append(lower)
+    if len(candidates) == 0:
+        return None
     candidates = np.array(candidates)
-    print(f'pre filtered candidates {candidates}')
+    # print(f'pre filtered candidates {candidates}')
     # filter out candidates that are not inside all spheres
     ex_lengths = lengths + 1e-5
     distances = np.linalg.norm(candidates[:, np.newaxis, :] - positions[np.newaxis, :, :], axis=2)
@@ -226,59 +229,130 @@ class Positioner2:
         self.config = Config()
         self.n_cables = len(self.config.anchors)
         self.anchor_points = np.array([
-            [-2,2, 3],
-            [ 2,2, 3],
-            [ -1,2,-2],
-            [ -2,2,-2],
+            [-2,  3, 2],
+            [ 2,  3, 2],
+            [ -1,-2, 2],
+            [ -2,-2, 2],
         ], dtype=float)
         for i, a in enumerate(self.config.anchors):
             self.anchor_points[i] = np.array(compose_poses([a.pose, model_constants.anchor_grommet])[0])
         self.holding = False
 
+        # the gantry position and velocity estimated from reported line length and speeds.
+        self.gant_pos = np.zeros(3, dtype=float)
+        self.gant_vel = np.zeros(3, dtype=float)
+
+        # the time the gantry stopped moving. If it was moving at the last update, this will be None
+        self.stop_cutoff = time.time()
+        # the position of the gantry estimated visually since it stopped moving.
+        self.visual_pos = np.zeros(3, dtype=float)
+
+        # amount which would have to be added to reported line lengths to make them match visual observation
+        self.avg_line_deltas np.zeros(4)
+        self.sfac = 0.9
+
+    def find_swing(self):
+        """When the gantry is still, the IMU's quaternion readout can be used to estimate the gantry swing params
+
+        "still" means you can use any IMU observation that occured when all anchor lines had speed 0.
+
+        A swing in two dimension is defined by
+        - the natural frequency, from which I could derive the length.
+        - the amplitude in the x dimension
+        - the amplitude in the y dimention
+        - the phase offset between the two dimensions
+        """
+
+    def lengths_at_past_time(self, timestamp):
+        """
+        Find the reported lengths of the anchors lines at the given time
+        """
+        lengths = np.zeros(4)
+        for anum, ap in enumerate(self.anchor_points):
+            # find the latest measurement that is before the timestamp
+            records = datastore.anchor_line_record[i].deepCopy(cutoff=timestamp, before=True)
+            if len(records) == 0:
+                return None
+            time_of_record = records[-1][0]
+            length = records[-1][1]
+            speed = records[-1][2]
+            elapsed = timestamp - time_of_record
+            lengths[i] = length + speed * elapsed
+        return lengths
+
+
+    def line_lengths_from_visual(self):
+        # grab the last visual gantry observation. We should run this function immediately after it is detected.
+        pose = self.datastore.gantry_pose.getLast()
+        timestamp = pose[0]
+        visual_pos = pose[4:]
+        # calculate what taut line lengths should have been for this observation
+        lengths = np.linalg.norm(self.anchor_points - visual_pos, axis=1)
+        # get the lengths reported at the time of the visual observation
+        at_time_lengths = self.lengths_at_past_time(timestamp)
+        if at_time_lengths is None:
+            return
+        # take the difference
+        single_ob_deltas = lengths - at_time_lengths
+        # these are from a single observation and are quite noisy, add them to a running average.
+        self.avg_line_deltas = self.avg_line_deltas * (1-self.sfac) + single_ob_deltas * self.sfac
+
+
     def estimate(self):
         """
         Estimate current gantry and gripper position and velocity
         """
-
         self.start = time()
-
-        # Look at the last reading for each line.
-        # if it is slack, discard it.
-        # extrapolate the current length based on the time elapsed since the measurement and the speed at the time.
-        lengths = []
-        speeds = []
-        for i, alr in enumerate(datastore.anchor_line_record):
-            time, length, speed, tension = alr.getLast()
-            # if tension > self.config.common_anchor_vars['TENSION_TIGHT_THRESH']:
-            lengths.append(length)
-            speeds.append(speed)
-
         z = no.zeros(3, dtype=float)
 
-        # we cannot triangulate with fewer than 3 taught lines.
-        if len(lengths) < 3:
-            return z, z, False
+        # Look at the last report for each anchor line.
+        # time, length, speed, tension
+        records = np.array([alr.getLast() for alr in enumerate(datastore.anchor_line_record)])
+        lengths = records[1]
+        speeds = records[2]
+
+        # timestamp of the last record used to produce this estimate. used for latency feedback
+        self.data_ts = np.max(records[0])
+
+        # extrapolate the current length based on the time elapsed since the measurement and the speed at the time.
+        # TODO account for clock desync before turning this part on.
+        # elapsed = self.start - records[:,0]
+        # offsets = records[:,1] + records[:,2] * elapsed
+        # lengths += offsets
         
-        # nothing has been recorded    
+        # nothing has been recorded
         if sum(lengths) == 0:
             return z, z, False
 
         lengths = np.array(lengths)
         speeds = np.array(speeds)
 
-        # find a position that minimizes the error between what the lengths would be at that position, and what they are now.
+        # calculate hang point
         result = find_hang_point(self.anchor_points, lengths)
         if result is None:
-            return z, z, False
-        gant_position, slack_lines = result
+            return False
+        self.gant_pos, slack_lines = result[0]
 
-        # repeat for a position some small increment in the future to get the gantry velocity
-        increment = 0.1 # seconds
-        lengths += speeds * increment
-        result = find_hang_point(self.anchor_points, lengths)
-        if result is None:
-            return gant_position, z, False
-        gantry_vel = result[0] - gant_position
+        # this represents a prediction of which lines are slack, it may not match reality.
+        self.slack_lines = result[1]
+
+        if sum(speeds) == 0:
+            self.gantry_vel = z
+
+            # if the gantry just now stopped moving, record the time.
+            if self.stop_cutoff is None:
+                self.stop_cutoff = time.time()
+
+        else:
+            # repeat for a position some small increment in the future to get the gantry velocity
+            increment = 0.1 # seconds
+            lengths += speeds * increment
+            result = find_hang_point(self.anchor_points, lengths)
+            if result is None:
+                return False
+            self.gantry_vel = result[0] - self.gant_pos
+            self.stop_cutoff = None
+
 
         # get the last IMU reading from the gripper
         gripper_rotvec = datastore.imu_rotvec.getLast()
@@ -286,13 +360,37 @@ class Positioner2:
         time, length, speed = datastore.winch_line_record.getLast()
         # starting at the gantry, rotate the frame of reference by the gripper rotation
         # and translate along the negative z axis by the rope length
-        swing_vec = compose_poses([
-            (z, gant_position),
+        self.grip_pose = compose_poses([
+            (z, self.gant_pos),
             (gripper_rotvec, np.array([0,0,-length], dtype=float)),
         ])
-        grip_pos = swing_vec[1]
 
         self.time_taken = time() - self.start
+        return True
+
+    def send_positions(self)
+        # update_for_observer = {
+        #     'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
+        #     'future_winch_line': {'sender':'pe', 'data':future_winch_line},
+        # }
+        # self.to_ob_q.put(update_for_observer)
+
+        # send control points of position splines to UI for visualization
+        update_for_ui = {
+            'pos_estimate': {
+                'gantry_pos': self.gant_position,
+                'gantry_vel': self.gantry_vel,
+                'gripper_pose': self.grip_pose,
+                'slack_lines': self.slack_lines,
+                }
+            'minimizer_stats': {
+                # 'errors': softmax(self.errors),
+                'data_ts': self.data_ts,
+                'time_taken': self.time_taken,
+                },
+            # 'goal_points': self.des_grip_locations, # each goal is a time and a position
+        }
+        self.to_ui_q.put(update_for_ui)
 
 
     def read_input_queue(self):
@@ -324,6 +422,7 @@ class Positioner2:
         while self.run:
             try:
                 self.estimate()
+                self.send_positions()
                 # cProfile.runctx('self.estimate()', globals(), locals())
                 # some sleep is necessary or we will not receive updates
                 rem = (0.25 - self.time_taken)

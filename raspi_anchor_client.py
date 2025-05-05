@@ -319,7 +319,9 @@ class RaspiAnchorClient(ComponentClient):
                         # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
 
                 if detection['n'] == 'gantry_front':
+                    # what is this being saved for?
                     self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
+                    
 
     async def send_config(self):
         config = Config()

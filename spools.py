@@ -185,7 +185,6 @@ class SpoolController:
         self.last_length = self.get_unspooled_length(angle)
         self.meters_per_rev = self.get_unspool_rate(angle)
         currentLineSpeed = self.speed * self.meters_per_rev
-        # logging.debug(f'current unspooled line = {self.last_length} m. rate = {self.meters_per_rev} m/r')
 
         self.move_allowed = True
         if self.last_length < 0 or self.last_length > self.full_length:
@@ -317,7 +316,11 @@ class SpoolController:
                 maxspeed = self.motor.getMaxSpeed()
 
                 if self.move_allowed:
-                    self._commandSpeed(constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed))
+                    cspeed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
+                    # in revs per second.
+                    if cspeed < 0.1:
+                        cspeed = 0
+                    self._commandSpeed(cspeed)
                 else:
                     logging.warning(f"would move at speed={self.speed} but length is invalid. calibrate length first.")
 

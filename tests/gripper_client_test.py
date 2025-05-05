@@ -110,7 +110,7 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         When gripper client receives "line_record" it should put it in the winch line array in datastore
         """
         await self.clientSetup()
-        linerecord = [(88.0,2.0), (89.0,2.1)]
+        linerecord = [(88.0,2.0,0.0), (89.0,2.1,0.0)]
         asyncio.create_task(self.server_ws.send(json.dumps({'line_record': linerecord})))
         await asyncio.sleep(0.1)
         np.testing.assert_array_almost_equal(linerecord[-1], self.datastore.winch_line_record.getLast())
@@ -123,13 +123,14 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         and send a rodruiges rotation vector to the ui via it's queue
         """
         await self.clientSetup()
+        timestamp = 1.23
         imu_data = {
-            'accel': [89.0, 1,2,3],
-            'quat': [4,5,6,7],
+            'quat': [timestamp, 4,5,6,7],
         }
         asyncio.create_task(self.server_ws.send(json.dumps({'imu': imu_data})))
         await asyncio.sleep(0.1)
-        np.testing.assert_array_almost_equal(imu_data['accel'], self.datastore.imu_accel.getLast())
+        expected_rotation_vector = np.array([ timestamp, 0.140709, -0.422127, -1.5478])
+        np.testing.assert_array_almost_equal(expected_rotation_vector, self.datastore.imu_rotvec.getLast())
         # throw away two connection status messages
         ui_queue_message = self.to_ui_q.get(timeout=1)
         ui_queue_message = self.to_ui_q.get(timeout=1)
