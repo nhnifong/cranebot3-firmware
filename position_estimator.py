@@ -5,6 +5,7 @@ Uses a more simplified approach based on initial experimentation with a focus on
 """
 import time
 import numpy as np
+import asyncio
 import scipy.optimize as optimize
 from config import Config
 from cv_common import compose_poses
@@ -218,7 +219,6 @@ def find_hang_point(positions, lengths):
     slack_lines = distances[index_of_lowest] <= (ex_lengths - 0.02)
     return candidates[index_of_lowest], slack_lines
 
-
 class Positioner2:
     def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q):
         self.run = True # run main loop
@@ -227,6 +227,10 @@ class Positioner2:
         self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
         self.config = Config()
+        try:
+            self.slack_thresh = self.config.commmon_anchor_vars['TENSION_SLACK_THRESH']
+        except KeyError:
+            self.slack_thresh = 0.3
         self.n_cables = len(self.config.anchors)
         self.anchor_points = np.array([
             [-2,  3, 2],
@@ -302,19 +306,20 @@ class Positioner2:
         """
         Estimate current gantry and gripper position and velocity
         """
-        self.start = time()
-        z = no.zeros(3, dtype=float)
+        self.start = time.time()
+        z = np.zeros(3, dtype=float)
 
         # Look at the last report for each anchor line.
         # time, length, speed, tension
-        records = np.array([alr.getLast() for alr in enumerate(datastore.anchor_line_record)])
+        records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
         lengths = np.array(records[1])
         speeds = np.array(records[2])
         tensions = np.array(records[3])
         
         # nothing has been recorded
         if sum(lengths) == 0:
-            return z, z, False
+            self.time_taken = time.time() - self.start
+            return False
 
         # timestamp of the last record used to produce this estimate. used for latency feedback
         self.data_ts = np.max(records[0])
@@ -327,12 +332,13 @@ class Positioner2:
 
         # if any line tension is low enough to appear slack,
         # make its length effectively infinite so it won't play a part in the hang position
-        feels_slack = tensions < self.config.commmon_anchor_vars['TENSION_SLACK_THRESH']
+        feels_slack = tensions < self.slack_thresh
         lengths[feels_slack] = 100
 
         # calculate hang point
         result = find_hang_point(self.anchor_points, lengths)
         if result is None:
+            self.time_taken = time.time() - self.start
             return False
         self.gant_pos, slack_lines = result[0]
 
@@ -353,6 +359,7 @@ class Positioner2:
             lengths += speeds * increment
             result = find_hang_point(self.anchor_points, lengths)
             if result is None:
+                self.time_taken = time.time() - self.start
                 return False
             self.gantry_vel = result[0] - self.gant_pos
             self.stop_cutoff = None
@@ -361,7 +368,7 @@ class Positioner2:
         # get the last IMU reading from the gripper
         gripper_rotvec = datastore.imu_rotvec.getLast()
         # get the winch line length
-        time, length, speed = datastore.winch_line_record.getLast()
+        timestamp, length, speed = datastore.winch_line_record.getLast()
         # starting at the gantry, rotate the frame of reference by the gripper rotation
         # and translate along the negative z axis by the rope length
         self.grip_pose = compose_poses([
@@ -373,11 +380,12 @@ class Positioner2:
         return True
 
     def send_positions(self):
-        # update_for_observer = {
-        #     'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
-        #     'future_winch_line': {'sender':'pe', 'data':future_winch_line},
-        # }
-        # self.to_ob_q.put(update_for_observer)
+        update_for_observer = {
+            'last_gant_pos': self.gant_pos,
+            # 'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
+            # 'future_winch_line': {'sender':'pe', 'data':future_winch_line},
+        }
+        self.to_ob_q.put(update_for_observer)
 
         # send control points of position splines to UI for visualization
         update_for_ui = {
@@ -425,8 +433,8 @@ class Positioner2:
         print('Starting position estimator')
         while self.run:
             try:
-                self.estimate()
-                self.send_positions()
+                if self.estimate():
+                    self.send_positions()
                 # cProfile.runctx('self.estimate()', globals(), locals())
                 # some sleep is necessary or we will not receive updates
                 rem = (0.25 - self.time_taken)

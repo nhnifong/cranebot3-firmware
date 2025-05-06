@@ -520,7 +520,7 @@ class DirectMoveGantryTarget(Entity):
         goal = np.array(swap_yz(self.position))
 
         if self.last_move_vec is None:
-            self.last_move_start_pos = np.array(swap_yz(self.app.line_pos_sphere.position))
+            self.last_move_start_pos = np.array(swap_yz(self.app.gantry.position))
         else:
             self.last_move_start_pos = self.estimatePosition(expected_rcv_time)
         self.last_move_start_time = expected_rcv_time

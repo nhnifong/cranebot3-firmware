@@ -145,15 +145,8 @@ class TestPositionEstimator(unittest.TestCase):
         self.assertTrue(slack_lines[2])
         self.assertFalse(slack_lines[3])
 
-    # def test_estimate(self):
-    #     ndims = 3
-    #     params = np.concatenate([
-    #         np.repeat(np.arange(1, self.pe.n_ctrl_pts+1), ndims),
-    #         np.repeat(np.arange(1, self.pe.n_ctrl_pts+1)+10, ndims)])
-    #     # noise = np.random.normal(0, 1e-6, params.shape)
-    #     # params = params + noise
-    #     self.pe.set_splines_from_params(params)
-
-    #     now = time.time()-1
-    #     self.pe.time_domain = (now - self.pe.horizon_s, now + self.pe.horizon_s)
-    #     self.pe.estimate()
+    def test_estimate(self):
+        
+        print(time)
+        t = time.time()
+        self.pe.estimate()

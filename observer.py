@@ -21,10 +21,7 @@ from raspi_gripper_client import RaspiGripperClient
 from random import random
 from segment import ShapeTracker
 from config import Config
-from position_estimator import get_simplified_position
 from stats import StatCounter
-
-TENSION_SLACK_THRESH = 0.4
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -62,6 +59,8 @@ class AsyncObserver:
         # FastSAM model
         self.shape_tracker = ShapeTracker()
 
+        self.last_gant_pos = np.zeros(3)
+
     def listen_position_updates(self, loop):
         """
         Receive any updates on our process input queue
@@ -74,6 +73,8 @@ class AsyncObserver:
             if 'STOP' in updates:
                 print('stopping listen_position_updates thread due to STOP message in queue')
                 break
+            if 'last_gant_pos' in updates:
+                self.last_gant_pos = updates['last_gant_pos']
             if 'future_anchor_lines' in updates:
                 fal = updates['future_anchor_lines']
                 if not (fal['sender'] == 'pe' and self.calmode != 'run'):
@@ -350,7 +351,7 @@ class AsyncObserver:
     async def move_direction_speed(self, uvec, speed, starting_pos=None):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
-        we will guess based on get_simplified_position
+        we will use the last one sent from position_estimator
         """
         if speed == 0:
             for client in self.anchors:
@@ -365,10 +366,7 @@ class AsyncObserver:
         # even if the starting position is off slightly, this method should not produce jerky moves.
         # because it's not commanding any absolute length from the spool motor
         if starting_pos is None:
-            starting_pos, success = get_simplified_position(self.datastore, anchor_positions)
-            if not success:
-                print(f'cannot run move_direction_speed because get_simplified_position could not determine starting pos')
-                return
+            starting_pos = self.last_gant_pos
 
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - anchor_positions, axis=1)
