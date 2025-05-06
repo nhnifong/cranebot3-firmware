@@ -95,7 +95,8 @@
   },
   "common_anchor_vars": {
     "MAX_ACCEL": 0.9,
-    "TENSION_SLACK_THRESH": 0.3
+    "TENSION_SLACK_THRESH": 0.3,
+    "DANGEROUS_TENSION": 5.0
   },
   "gripper": {
     "MAX_ACCEL": 1.5,

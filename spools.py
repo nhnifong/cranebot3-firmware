@@ -322,7 +322,7 @@ class SpoolController:
                 if self.move_allowed:
                     cspeed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
                     # in revs per second.
-                    if cspeed < 0.1:
+                    if abs(cspeed) < 0.2:
                         cspeed = 0
                     self._commandSpeed(cspeed)
                 else:

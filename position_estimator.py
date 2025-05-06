@@ -204,7 +204,6 @@ def find_hang_point(positions, lengths):
     if len(candidates) == 0:
         return None
     candidates = np.array(candidates)
-    # print(f'pre filtered candidates {candidates}')
     # filter out candidates that are not inside all spheres
     ex_lengths = lengths + 1e-5
     distances = np.linalg.norm(candidates[:, np.newaxis, :] - positions[np.newaxis, :, :], axis=2)
@@ -239,7 +238,7 @@ class Positioner2:
             [ -2,-2, 2],
         ], dtype=float)
         for i, a in enumerate(self.config.anchors):
-            self.anchor_points[i] = np.array(compose_poses([a.pose, model_constants.anchor_grommet])[0])
+            self.anchor_points[i] = np.array(compose_poses([a.pose, model_constants.anchor_grommet])[1])
         self.holding = False
 
         # the gantry position and velocity estimated from reported line length and speeds.
@@ -312,12 +311,13 @@ class Positioner2:
         # Look at the last report for each anchor line.
         # time, length, speed, tension
         records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
-        lengths = np.array(records[1])
-        speeds = np.array(records[2])
-        tensions = np.array(records[3])
+        lengths = np.array(records[:,1])
+        speeds = np.array(records[:,2])
+        tensions = np.array(records[:,3])
         
         # nothing has been recorded
         if sum(lengths) == 0:
+            print('estimate bailed because lengths are all zero')
             self.time_taken = time.time() - self.start
             return False
 
@@ -332,15 +332,16 @@ class Positioner2:
 
         # if any line tension is low enough to appear slack,
         # make its length effectively infinite so it won't play a part in the hang position
-        feels_slack = tensions < self.slack_thresh
-        lengths[feels_slack] = 100
+        # feels_slack = tensions < self.slack_thresh
+        # lengths[feels_slack] = 100
 
         # calculate hang point
         result = find_hang_point(self.anchor_points, lengths)
         if result is None:
+            print(f'estimate bailed because it failed to calc a hang point with lengths {lengths}')
             self.time_taken = time.time() - self.start
             return False
-        self.gant_pos, slack_lines = result[0]
+        self.gant_pos, slack_lines = result
 
         # this represents a prediction of which lines are slack, it may not match reality.
         # if this prediction says a line is tight but measured tension says otherwise, the hang point is probably quite wrong.
@@ -359,6 +360,7 @@ class Positioner2:
             lengths += speeds * increment
             result = find_hang_point(self.anchor_points, lengths)
             if result is None:
+                print('estimate bailed because it failed to calc a hang point the second time')
                 self.time_taken = time.time() - self.start
                 return False
             self.gantry_vel = result[0] - self.gant_pos
@@ -366,9 +368,9 @@ class Positioner2:
 
 
         # get the last IMU reading from the gripper
-        gripper_rotvec = datastore.imu_rotvec.getLast()
+        gripper_rotvec = self.datastore.imu_rotvec.getLast()[1:]
         # get the winch line length
-        timestamp, length, speed = datastore.winch_line_record.getLast()
+        timestamp, length, speed = self.datastore.winch_line_record.getLast()
         # starting at the gantry, rotate the frame of reference by the gripper rotation
         # and translate along the negative z axis by the rope length
         self.grip_pose = compose_poses([
@@ -376,7 +378,7 @@ class Positioner2:
             (gripper_rotvec, np.array([0,0,-length], dtype=float)),
         ])
 
-        self.time_taken = time() - self.start
+        self.time_taken = time.time() - self.start
         return True
 
     def send_positions(self):
@@ -390,7 +392,7 @@ class Positioner2:
         # send control points of position splines to UI for visualization
         update_for_ui = {
             'pos_estimate': {
-                'gantry_pos': self.gant_position,
+                'gantry_pos': self.gant_pos,
                 'gantry_vel': self.gantry_vel,
                 'gripper_pose': self.grip_pose,
                 'slack_lines': self.slack_lines,
