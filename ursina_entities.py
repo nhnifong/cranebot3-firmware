@@ -28,7 +28,7 @@ MAX_JOG_SPEED = 0.3
 class Gantry(Entity):
     def __init__(self, ui, to_ob_q, **kwargs):
         super().__init__(**kwargs)
-        self.ui = ui,
+        self.ui = ui
         self.to_ob_q = to_ob_q
         self.last_update_t = time.time()
 
@@ -41,12 +41,13 @@ class Gantry(Entity):
         self.zup_vel = vel
         self.position = swap_yz(pos)
 
-    # def update(self):
-    #     now = time.time()
-    #     elapsed = now - last_update_t
-    #     self.zup_pos = self.zup_pos + self.zup_vel * elapsed
-    #     self.position = swap_yz(self.zup_pos)
-    #     self.last_update_t = now
+    def update(self):
+        now = time.time()
+        elapsed = now - self.last_update_t
+        self.zup_pos = self.zup_pos + self.zup_vel * elapsed
+        self.position = swap_yz(self.zup_pos)
+        self.last_update_t = now
+        self.redraw_wires()
 
     def redraw_wires(self):
         # update the lines between the gantry and the other things

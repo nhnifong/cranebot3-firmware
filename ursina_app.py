@@ -386,8 +386,6 @@ class ControlPanelUI:
 
             if sum(self.direction) == 0:
                 self.dmgt.position = self.gantry.position
-            elif not success:
-                invoke(self.app.show_error, "Must be connected and perform line calibration before using direct movement", delay=0.0001)
             else:
                 # self.dmgt.position will be updated in it's own update function at the framerate.
                 # at this slightly lower rate, command the bot to move towards the goal point.
