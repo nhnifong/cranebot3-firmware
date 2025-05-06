@@ -3,13 +3,11 @@ from scipy.interpolate import BSpline
 import sys
 from direct.stdpy import threading # panda3d drop in replacement that is compatible with it's event loop
 import time
-from position_estimator import CDPR_position_estimator
 from functools import partial
 from cv_common import invert_pose, compose_poses
 from math import pi
 import atexit
 from panda3d.core import LQuaternionf
-from position_estimator import default_weights, weight_names, get_simplified_position
 from cv_common import average_pose, compose_poses
 import model_constants
 from PIL import Image
@@ -99,8 +97,6 @@ class ControlPanelUI:
         # when a charuco board is located, it's origin is it's top left corner.
         square = Entity(model='quad', position=(0.03, 0, -0.03), rotation=(90,0,0), color=color.white, scale=(0.06, 0.06))  # Scale in meters
         square.texture = 'origin.jpg'
-        # add a 1cm orange sphere as an indicator of where the gantry is based only on the last line length from each anchor
-        self.line_pos_sphere = Entity(model='sphere', position=(0,0,0), color=color.orange, scale=(0.1), shader=unlit_shader)  # Scale in meters
 
         # an indicator of where the user wants the gantry to be during direct moves.
         self.dmgt = DirectMoveGantryTarget(self)
@@ -124,6 +120,7 @@ class ControlPanelUI:
 
         self.gantry = Gantry(
             ui=self,
+            to_ob_q=self.to_ob_q,
             model='gantry',
             color=(0.4, 0.4, 0.0, 1.0),
             scale=0.001,
@@ -250,23 +247,6 @@ class ControlPanelUI:
             scale=(0.01998,0.01498),
         ) for position in [(x,y), (x+offx,y), (x,y+offy), (x+offx,y+offy), ((x+offx/2,y+offy/2))]]
 
-        # position estimator controls
-        slider_row_h = 0.025
-        self.sliders = [ThinSliderLog2(
-            text=weight_names[i],
-            dynamic=True,
-            scale=0.5,
-            position=(0.62, -0.05 - slider_row_h*i),
-            max=10,
-            value=default_weights[i],
-            on_value_changed=partial(self.change_weight, i),
-        ) for i in range(len(default_weights))]
-        for thing in self.sliders:
-            thing.bg.color = color.black
-            thing.knob.color = color.black
-            thing.label.color = color.black
-            thing.knob.text_color = color.black
-
         self.prisms = EntityPool(80, lambda: Entity(
             color=(1.0, 1.0, 1.0, 0.1),
             shader=lit_with_shadows_shader))
@@ -283,7 +263,6 @@ class ControlPanelUI:
                 )),
             DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Equalize line tension', on_click=self.equalize_lines),
-            DropdownMenuButton('Show/Hide weight sliders', on_click=self.toggle_weight_sliders),
             ))
 
         Sky(color=color.light_gray)
@@ -291,10 +270,6 @@ class ControlPanelUI:
 
     def equalize_lines(self):
         self.to_ob_q.put({'equalize_line_tension': None})
-
-    def toggle_weight_sliders(self):
-        for s in self.sliders:
-            s.enabled = not s.enabled
 
     def redraw_walls(self):
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
@@ -336,9 +311,6 @@ class ControlPanelUI:
                 # immediately cancel whatever remains of the movement
                 self.to_ob_q.put({'slow_stop_all': None})
                 self.dmgt.reset()
-
-    def change_weight(self, index):
-        self.to_pe_q.put({'weight_change': (index, self.sliders[index].finalValue())})
 
     def show_error(self, error):
         self.error.text = error
@@ -411,12 +383,9 @@ class ControlPanelUI:
             gripper_pose = self.datastore.gripper_pose.deepCopy()
             for row in gripper_pose:
                 invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
-            
-            current_pos, success = get_simplified_position(
-                self.datastore, [swap_yz(a.position) for a in self.anchors])
-            self.line_pos_sphere.position = swap_yz(current_pos)
+
             if sum(self.direction) == 0:
-                self.dmgt.position = self.line_pos_sphere.position
+                self.dmgt.position = self.gantry.position
             elif not success:
                 invoke(self.app.show_error, "Must be connected and perform line calibration before using direct movement", delay=0.0001)
             else:
@@ -439,7 +408,7 @@ class ControlPanelUI:
                 updates = min_to_ui_q.get()
                 # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
                 invoke(self.process_update, updates, delay=0.0001)
-            except (OSError, EOFError):
+            except (OSError, EOFError, TypeError):
                 # sometimes when closing the app, this thread gets left hanging because that queue is gone
                 return
 
