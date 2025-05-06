@@ -46,11 +46,12 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
 
         self.got_connection = asyncio.Event()
         self.close_test_server = asyncio.Event()
-        asyncio.create_task(self.runTestServer())
+        self.server_task = asyncio.create_task(self.runTestServer())
         await asyncio.sleep(0.5)
 
     async def asyncTearDown(self):
         self.close_test_server.set()
+        await self.server_task
 
     async def runTestServer(self):
         async with websockets.serve(self.serverHandler, "127.0.0.1", 8765):

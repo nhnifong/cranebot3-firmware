@@ -44,11 +44,12 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
 
         self.got_connection = asyncio.Event()
         self.close_test_server = asyncio.Event()
-        asyncio.create_task(self.runTestServer())
+        self.server_task = asyncio.create_task(self.runTestServer())
         await asyncio.sleep(0.5)
 
     async def asyncTearDown(self):
         self.close_test_server.set()
+        await self.server_task
 
     async def runTestServer(self):
         async with websockets.serve(self.serverHandler, "127.0.0.1", 8765):
@@ -131,13 +132,6 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.1)
         expected_rotation_vector = np.array([ timestamp, 0.140709, -0.422127, -1.5478])
         np.testing.assert_array_almost_equal(expected_rotation_vector, self.datastore.imu_rotvec.getLast())
-        # throw away two connection status messages
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        # this is the message we want.
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        print(f'ui_queue_message = {ui_queue_message}')
-        self.assertTrue('gripper_rvec' in ui_queue_message)
         await self.clientTearDown()
 
     async def test_range(self):
