@@ -7,6 +7,7 @@ import time
 import numpy as np
 import asyncio
 import scipy.optimize as optimize
+from math import pi
 from config import Config
 from cv_common import compose_poses
 import model_constants
@@ -218,6 +219,23 @@ def find_hang_point(positions, lengths):
     slack_lines = distances[index_of_lowest] <= (ex_lengths - 0.02)
     return candidates[index_of_lowest], slack_lines
 
+
+def swing_angle_from_params(t, freq, xamp, yamp, xphase, yphase):
+    """
+    t numpy array of timestamps
+    freq in hertz
+    amplitude of x andy y waves in meters
+    phase offset of waves, -pi to pi
+    """
+    xangles = np.cos((t * 2 * pi + xphase) * freq) * xamp
+    yangles = np.sin((t * 2 * pi + yphase) * freq) * yamp
+    return np.array([xangle, yangle])
+
+def swing_cost_fn(model_params, times, measured_angles):
+    predicted_angles = swing_angle_from_params(t, *model_params)
+    distances = np.linalg.norm(measured_angles - predicted_angles, axis=1)
+    return np.mean(distances**2)
+
 class Positioner2:
     def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q):
         self.run = True # run main loop
@@ -254,6 +272,14 @@ class Positioner2:
         self.avg_line_deltas = np.zeros(4)
         self.sfac = 0.9
 
+        self.swing_params = np.array([
+            1, # frequency
+            0.01, # x amplitude
+            0.01, # y amplitude
+            0.0, # x phase
+            0.0, # y phase
+        ], dtype=float)
+
     def find_swing(self):
         """When the gantry is still, the IMU's quaternion readout can be used to estimate the gantry swing params
 
@@ -263,8 +289,42 @@ class Positioner2:
         - the natural frequency, from which I could derive the length.
         - the amplitude in the x dimension
         - the amplitude in the y dimention
-        - the phase offset between the two dimensions
+        - the phase offset of the x swing
+        - the phase offset of the y swing
         """
+        imu_readings = self.datastore.imu_rotvec.deepCopy(cutoff=self.stop_cutoff)
+        if len(imu_readings) < 3:
+            return
+        # convert to x and y angle offsets from vertical.
+        timestamps = imu_readings[:,0]
+        angles = Rotation.from_rotvec(imu_readings[:,1:]).as_euler('xyz')[:,:2]
+        bounds = [
+            (0.2, 4), # frequency
+            (0, 1), # x amplitude
+            (0, 1), # y amplitude
+            (-pi, pi), # x phase
+            (-pi, pi), # y phase
+        ]
+        # given this array of timed x and y angles, compute what the expected angles should have been, and total up the error.
+        # then use SLSQP to find the parameters.
+        result = optimize.minimize(
+            swing_cost_fn,
+            self.swing_params, # initial guess
+            args=(timestamps, angles),
+            method='SLSQP',
+            bounds=bounds,
+            options={
+                'disp': False,
+                'maxiter': 300,
+            },
+        )
+        try:
+            if not result.message.startswith("Iteration limit reached"):
+                assert result.success
+        except AssertionError:
+            print(result)
+            return
+        self.swing_params = result.x
 
     def lengths_at_past_time(self, timestamp):
         """
@@ -284,7 +344,8 @@ class Positioner2:
         return lengths
 
 
-    def line_lengths_from_visual(self):
+    def line_lengths_from_visual_single(self):
+        # currently unused
         # grab the last visual gantry observation. We should run this function immediately after it is detected.
         pose = self.datastore.gantry_pose.getLast()
         timestamp = pose[0]
@@ -300,10 +361,37 @@ class Positioner2:
         # these are from a single observation and are quite noisy, add them to a running average.
         self.avg_line_deltas = self.avg_line_deltas * (1-self.sfac) + single_ob_deltas * self.sfac
 
+    def line_lengths_from_visual_multi(self):
+        """
+        Average any visual gantry position observations since we stopped moving
+        """
+        poses = self.datastore.gantry_pose.deepCopy(cutoff=self.stop_cutoff)
+        if len(poses) == 0:
+            return
+        positions = poses[:,4:] # positions only
+        self.visual_pos = np.mean(positions)
+        self.visual_lengths = np.linalg.norm(self.anchor_points - visual_pos, axis=1)
+        # now that you have these lengths, you could recalibrate all lines which are not slack.
+        # or you could just hold onto them and apply a local offset.
+
+    async def restimate(self):
+        """
+        Perform estimations that are meant to occur only while at rest.
+        """
+        while self.run:
+            try:
+                now = time.time()
+                if self.stop_cutoff is not None and self.stop_cutoff - now >= 2:
+                    self.line_lengths_from_visual_multi()
+                    self.find_swing()
+                await asyncio.sleep(0.2)
+            except Exception as e:
+                self.run = False
+                raise e
 
     def estimate(self):
         """
-        Estimate current gantry and gripper position and velocity
+        Estimate current gantry and gripper position and velocity from lines
         """
         self.start = time.time()
         z = np.zeros(3, dtype=float)
@@ -439,8 +527,8 @@ class Positioner2:
                     self.send_positions()
                 # cProfile.runctx('self.estimate()', globals(), locals())
                 # some sleep is necessary or we will not receive updates
-                rem = (0.25 - self.time_taken)
-                await asyncio.sleep(max(0.02, rem))
+                rem = (1/30 - self.time_taken)
+                await asyncio.sleep(max(0.005, rem))
             except KeyboardInterrupt:
                 print('Exiting')
                 return
