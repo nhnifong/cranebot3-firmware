@@ -254,7 +254,7 @@ class AsyncObserver:
             asyncio.create_task(self.stat.stat_main())
             # asyncio.create_task(self.monitor_tension())
             # asyncio.create_task(self.run_shape_tracker())
-            # asyncio.create_task(self.add_simulated_data())
+            asyncio.create_task(self.add_simulated_data())
             
 
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
@@ -305,10 +305,10 @@ class AsyncObserver:
 
     async def add_simulated_data(self):
         sim_anchors = np.array([
-            [-2, 3, 2.6],
-            [ 2, 3, 2.6],
-            [-1,-2, 2.6],
-            [-2,-2, 2.6]])
+            [2.667, 2.667, 2.4384],
+            [2.667, -2.667, 2.4384],
+            [-2.667, 2.667, 2.4384],
+            [-2.667, -2.667, 2.4384]])
         while self.send_position_updates:
             t = time.time()
             # move the gantry in a circle
@@ -328,6 +328,9 @@ class AsyncObserver:
                 dist = np.linalg.norm(simanc - gant_pose[4:])
                 # TODO speed is not consistent with what the line is doing
                 self.datastore.anchor_line_record[i].insert(np.array([t, dist, 0.0, 1.0]))
+
+            tt = self.datastore.anchor_line_record[0].getLast()[0]
+            print(f'just inserted using datastore {self.datastore}')
             await asyncio.sleep(0.25)
 
     def collect_gant_frame_positions(self):
