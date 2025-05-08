@@ -230,14 +230,14 @@ def swing_angle_from_params(t, freq, xamp, yamp, xphase, yphase):
     amplitude of x andy y waves in meters
     phase offset of waves, -pi to pi
     """
-    xangles = np.cos((t * 2 * pi + xphase) * freq) * xamp
-    yangles = np.sin((t * 2 * pi + yphase) * freq) * yamp
+    xangles = np.cos(freq * t * 2 * pi + xphase) * xamp
+    yangles = np.sin(freq * t * 2 * pi + yphase) * yamp
     if type(t) is float:
         return xangles, yangles
     return np.column_stack([xangles, yangles])
 
 def swing_cost_fn(model_params, times, measured_angles):
-    predicted_angles = swing_angle_from_params(t, *model_params)
+    predicted_angles = swing_angle_from_params(times, *model_params)
     distances = np.linalg.norm(measured_angles - predicted_angles, axis=1)
     return np.mean(distances**2)
 
@@ -294,7 +294,7 @@ class Positioner2:
         self.gant_vel = np.zeros(3, dtype=float)
 
         # the time the gantry stopped moving. If it was moving at the last update, this will be None
-        self.stop_cutoff = time.time()
+        # self.stop_cutoff = time.time()
 
         self.swing_params = np.array([
             1, # frequency
@@ -326,7 +326,7 @@ class Positioner2:
         angles = Rotation.from_rotvec(imu_readings[:,1:]).as_euler('xyz')[:,:2]
         bounds = [
             (0.1, 6), # frequency
-            (0, 1), # x amplitude
+            (0, 1), # x amplitude. max possible swing angle in radians
             (0, 1), # y amplitude
             (-pi, pi), # x phase
             (-pi, pi), # y phase
@@ -559,6 +559,7 @@ class Positioner2:
         read_queue_task = asyncio.create_task(asyncio.to_thread(self.read_input_queue))
         await asyncio.sleep(5)
         print('Starting position estimator')
+        rest_task = asyncio.create_task(self.restimate())
         while self.run:
             try:
                 if self.estimate():
@@ -571,6 +572,7 @@ class Positioner2:
                 print('Exiting')
                 return
         result = await read_queue_task
+        await rest_task
 
 def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
     """

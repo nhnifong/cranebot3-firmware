@@ -16,14 +16,14 @@ import time
 class TestPositionEstimator(unittest.TestCase):
 
     def setUp(self):
-        datastore = DataStore(horizon_s=10, n_cables=4)
+        self.datastore = DataStore(horizon_s=10, n_cables=4)
         to_ui_q = Queue()
         to_pe_q = Queue()
         to_ob_q = Queue()
         to_ui_q.cancel_join_thread()
         to_pe_q.cancel_join_thread()
         to_ob_q.cancel_join_thread()
-        self.pe = Positioner2(datastore, to_ui_q, to_pe_q, to_ob_q)
+        self.pe = Positioner2(self.datastore, to_ui_q, to_pe_q, to_ob_q)
 
     def test_sphere_intersection(self):
         sphere1 = (np.array([0, 0, 0]), 5)
@@ -146,7 +146,40 @@ class TestPositionEstimator(unittest.TestCase):
         self.assertFalse(slack_lines[3])
 
     def test_estimate(self):
-        
-        print(time)
-        t = time.time()
         self.pe.estimate()
+
+    def test_swing_angle_from_params(self):
+        expected_angles = np.array([
+            [1, -2],
+            [0,  0],
+            [-1,  2]
+        ], dtype=float)
+        times = np.array([100,101,102], dtype=float)
+        freq = 1/4
+        xamp = 1
+        yamp = 2
+        xphase = 0
+        yphase = -pi/2
+
+        angles = swing_angle_from_params(times, freq, xamp, yamp, xphase, yphase)
+        np.testing.assert_array_almost_equal(angles, expected_angles)
+
+        # add full circle to both phases, nothing should change
+        xphase += 2*pi
+        yphase += 2*pi
+        angles = swing_angle_from_params(times, freq, xamp, yamp, xphase, yphase)
+        np.testing.assert_array_almost_equal(angles, expected_angles)
+
+    def test_find_swing(self):
+        self.pe.stop_cutoff = 100
+
+        self.datastore.imu_rotvec.insertList([np.array([98, 0,0,0], dtype=np.float64) for i in range(30)])
+        self.datastore.imu_rotvec.insertList(np.array([
+            [99,1,1,1],
+            [101,0.1,0.2,0.3],
+            [102,-0.4,0.5,-0.6],
+            [103,-0.2,-0.1,0.1],
+        ]))
+        self.pe.find_swing()
+        expected_params = np.array([ 1.017484, 1, 1, -pi, -1.922795])
+        np.testing.assert_array_almost_equal(self.pe.swing_params, expected_params)
