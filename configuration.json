@@ -96,7 +96,9 @@
   "common_anchor_vars": {
     "MAX_ACCEL": 0.9,
     "TENSION_SLACK_THRESH": 0.3,
-    "DANGEROUS_TENSION": 5.0
+    "DANGEROUS_TENSION": 5.0,
+    "REC_MOD": 1,
+    "RUNNING_WS_DELAY": 0.03
   },
   "gripper": {
     "MAX_ACCEL": 1.5,

@@ -422,6 +422,7 @@ class ControlPanelUI:
         if 'pos_estimate' in updates:
             p = updates['pos_estimate']
             self.gantry.set_position_velocity(p['gantry_pos'], p['gantry_vel'])
+            self.set_slack_vis(p['slack_lines'])
             self.gripper.setPose(p['gripper_pose'])
             # p['slack_lines']
 

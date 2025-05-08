@@ -19,9 +19,17 @@ def to_ursina_rotation(rvec):
     euler = Rotation.from_rotvec(rvec).as_euler('xyz', degrees=True)
     return (-euler[0], -euler[2], euler[1])
 
-def draw_line(point_a, point_b):
-    return Mesh(vertices=[point_a, point_b], mode='line')
+droop = (np.linspace(-1,1,20)**2-1)*0.2 # droop of 0.2 meters
+def draw_line_slack(point_a, point_b):
+    verts = np.linspace(point_a, point_b, 20)
+    verts[:,1] += droop
+    return Mesh(vertices=verts, mode='line')
 
+def draw_line(point_a, point_b, slack=False):
+    if slack:
+        return draw_line_slack(point_a, point_b)
+    else:
+        return Mesh(vertices=[point_a, point_b], mode='line')
 
 MAX_JOG_SPEED = 0.3
 
@@ -36,10 +44,16 @@ class Gantry(Entity):
         self.zup_pos = np.zeros(3)
         self.zup_vel = np.zeros(3)
 
+        self.slack = [False, False, False, False]
+
     def set_position_velocity(self, pos, vel):
         self.zup_pos = pos
         self.zup_vel = vel
         self.position = swap_yz(pos)
+
+    def set_slack_vis(self, slack):
+        """slack is an array of bools for each anchor. true meaning the line should be drawn with a droop"""
+        self.slack = slack
 
     def update(self):
         now = time.time()
@@ -52,7 +66,7 @@ class Gantry(Entity):
     def redraw_wires(self):
         # update the lines between the gantry and the other things
         for anchor_num in range(self.ui.n_anchors):
-            self.ui.lines[anchor_num].model = draw_line(self.ui.anchors[anchor_num].position, self.position)
+            self.ui.lines[anchor_num].model = draw_line(self.ui.anchors[anchor_num].position, self.position, slack=self.slack[anchor_num])
         self.ui.vert_line.model = draw_line(self.ui.gripper.position, self.position)
 
 class Gripper(Entity):
