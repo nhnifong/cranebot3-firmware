@@ -101,6 +101,10 @@ class ControlPanelUI:
         # an indicator of where the user wants the gantry to be during direct moves.
         self.dmgt = DirectMoveGantryTarget(self)
 
+        # debug indicators of the visual and hang based position and velocity estimates
+        self.debug_indicator_visual = IndicatorSphere(color=color.red)
+        self.debug_indicator_hang = IndicatorSphere(color=color.blue)
+
         # sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
         # sphereY = Entity(model='sphere', position=(0,1,0), color=color.green, scale=(0.1), shader=unlit_shader)
         # sphereZ = Entity(model='sphere', position=(0,0,1), color=color.blue, scale=(0.1), shader=unlit_shader)
@@ -422,9 +426,14 @@ class ControlPanelUI:
         if 'pos_estimate' in updates:
             p = updates['pos_estimate']
             self.gantry.set_position_velocity(p['gantry_pos'], p['gantry_vel'])
-            self.set_slack_vis(p['slack_lines'])
+            self.gantry.set_slack_vis(p['slack_lines'])
             self.gripper.setPose(p['gripper_pose'])
             # p['slack_lines']
+
+        if 'pos_factors_debug' in updates:
+            p = updates['pos_factors_debug']
+            self.debug_indicator_visual.set_position_velocity(p['visual_pos'], p['visual_vel'])
+            self.debug_indicator_hang.set_position_velocity(p['hang_pos'], p['hang_vel'])
 
         if 'anchor_pose' in updates:
             apose = updates['anchor_pose']

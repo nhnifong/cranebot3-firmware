@@ -470,6 +470,30 @@ class ThinSliderLog2(ThinSlider):
     def _update_text(self):
         self.knob.text_entity.text = str(round(self.finalValue(), 3))
 
+class IndicatorSphere(Entity):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs, 
+            model='sphere',
+            position=(0,0,0),
+            scale=(0.06),
+            shader=unlit_shader)
+        self.zup_pos = np.zeros(3)
+        self.zup_vel = np.zeros(3)
+        self.last_update_t = time.time()
+
+    def set_position_velocity(self, pos, vel):
+        """set position and velocity in the z-up space"""
+        self.zup_pos = pos
+        self.zup_vel = vel
+        self.position = swap_yz(self.zup_pos)
+
+    def update(self):
+        now = time.time()
+        elapsed = now - self.last_update_t
+        self.zup_pos = self.zup_pos + self.zup_vel * elapsed
+        self.position = swap_yz(self.zup_pos)
+        self.last_update_t = now
+
 class DirectMoveGantryTarget(Entity):
     """A visual indicator and manager of gantry direct movement commands"""
 
