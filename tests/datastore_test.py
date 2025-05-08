@@ -107,7 +107,8 @@ class TestDatastore(unittest.TestCase):
         echo_process.start()
 
         for i in range(4):
-            circ.insert(np.array([i,0,0]))
+            circ.insert(np.array([i,9,9]))
+        print(f'(test process) before starting, last item is {circ.getLast()}')
         signal_q.put('TICK')
         time.sleep(0.1)
         print(f'(test process) last item is {circ.getLast()}')
