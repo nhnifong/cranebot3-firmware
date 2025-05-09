@@ -26,18 +26,17 @@ from config import Config
 class TestGripperClient(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        self.datastore = DataStore(horizon_s=10, n_cables=4)
+        self.datastore = DataStore()
         self.to_ui_q = Queue()
-        self.to_pe_q = Queue()
         self.to_ob_q = Queue()
         self.to_ui_q.cancel_join_thread()
-        self.to_pe_q.cancel_join_thread()
         self.to_ob_q.cancel_join_thread()
 
         self.mock_pool_class = Mock(spec=Pool)
         self.pool = self.mock_pool_class.return_value
 
         self.stat = StatCounter(self.to_ui_q)
+        self.pe = MagicMock()
 
         self.server_ws = None
         self.receiver = MagicMock()
@@ -73,12 +72,12 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
                 break
 
     async def test_shutdown_before_connect(self):
-        gc = RaspiGripperClient("127.0.0.1", self.datastore, self.to_ui_q, self.to_pe_q, self.to_ob_q, self.pool, self.stat)
+        gc = RaspiGripperClient("127.0.0.1", self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe )
         self.assertFalse(gc.connected)
         await gc.shutdown()
 
     async def clientSetup(self):
-        self.gc = RaspiGripperClient("127.0.0.1", self.datastore, self.to_ui_q, self.to_pe_q, self.to_ob_q, self.pool, self.stat)
+        self.gc = RaspiGripperClient("127.0.0.1", self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe )
         self.client_task = asyncio.create_task(self.gc.startup())
         result = await asyncio.wait_for(self.got_connection.wait(), 2)
         await asyncio.sleep(0.1) # client_task needs a chance to act
@@ -147,12 +146,11 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_holding(self):
         """
-        When gripper client receives "holding" it should forward the update to the pe queue
+        When gripper client receives "holding" it should call notify_update on the position estimator
         """
         await self.clientSetup()
         asyncio.create_task(self.server_ws.send(json.dumps({'holding': True})))
         await asyncio.sleep(0.1)
-        pe_queue_message = self.to_pe_q.get(timeout=1)
-        self.assertEqual({'holding': True}, pe_queue_message)
+        self.pe.notify_update.assert_called_with({'holding': True})
         await self.clientTearDown()
 

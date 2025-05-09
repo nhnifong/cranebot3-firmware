@@ -29,12 +29,11 @@ def pose_from_det(det):
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
-    def __init__(self, address, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat):
+    def __init__(self, address, datastore, to_ui_q, to_ob_q, pool, stat):
         self.address = address
         self.origin_poses = []
         self.datastore = datastore
         self.to_ui_q = to_ui_q
-        self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
         self.websocket = None
         self.connected = False  # status of connection to websocket
@@ -225,8 +224,8 @@ class ComponentClient:
             self.ct.cancel()
 
 class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, anchor_num, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat, shape_tracker):
-        super().__init__(address, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat)
+    def __init__(self, address, anchor_num, datastore, to_ui_q, to_ob_q, pool, stat, shape_tracker):
+        super().__init__(address, datastore, to_ui_q, to_ob_q, pool, stat)
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = {'anchor_num': self.anchor_num}
         self.calibration_mode = False # true is pose calibration mode.
@@ -244,13 +243,8 @@ class RaspiAnchorClient(ComponentClient):
         # to help with a loop that does the same thing four times in handle_detections
         # name, offset, datastore
         self.arucos = [
-            ('gripper_front', invert_pose(model_constants.gripper_aruco_front), datastore.gripper_pose),
-            ('gripper_back', invert_pose(model_constants.gripper_aruco_back), datastore.gripper_pose),
-            ('gripper_left', invert_pose(model_constants.gripper_aruco_left), datastore.gripper_pose),
-            ('gripper_right', invert_pose(model_constants.gripper_aruco_right), datastore.gripper_pose),
-
             # the gantry has 4-way symmetry and all four sides have the same sticker.
-            ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pose),
+            ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pos),
         ]
 
     def handle_update_from_ws(self, update):
@@ -300,22 +294,17 @@ class RaspiAnchorClient(ComponentClient):
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
-                # print(f'detection {detection}')
                 for name, offset, dest  in self.arucos:
                     if detection['n'] == name:
-                        # you have the pose of gripper_front relative to a particular anchor camera
-                        # Anchor is relative to the origin
-                        # anchor camera is relative to anchor
-                        # gripper_front is relative to anchor camera
-                        # gripper is relative to gripper_front
-                        # gripper_grommet is relative to gripper
+                        # you have the pose of gantry_front relative to a particular anchor camera
+                        # convert it to a pose relative to the origin
                         pose = np.array(compose_poses([
                             self.anchor_pose, # obtained from calibration
                             model_constants.anchor_camera, # constant
                             pose_from_det(detection), # the pose obtained just now
                             offset, # constant
                         ]))
-                        dest.insert(np.concatenate([[timestamp], pose.reshape(6)]))
+                        dest.insert(np.concatenate([[timestamp], pose.reshape(6)[3:]])) # take only the position
                         # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
 
                 if detection['n'] == 'gantry_front':
@@ -334,14 +323,12 @@ if __name__ == "__main__":
     from data_store import DataStore
     datastore = DataStore(horizon_s=10, n_cables=4)
     to_ui_q = Queue()
-    to_pe_q = Queue()
     to_ob_q = Queue()
     to_ui_q.cancel_join_thread()
-    to_pe_q.cancel_join_thread()
     to_ob_q.cancel_join_thread()
 
     async def main():
-        ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, to_pe_q, None)
+        ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, None)
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), ac.shutdown_sync)
         await ac.startup()

@@ -26,12 +26,10 @@ from config import Config
 class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        self.datastore = DataStore(horizon_s=10, n_cables=4)
+        self.datastore = DataStore()
         self.to_ui_q = Queue()
-        self.to_pe_q = Queue()
         self.to_ob_q = Queue()
         self.to_ui_q.cancel_join_thread()
-        self.to_pe_q.cancel_join_thread()
         self.to_ob_q.cancel_join_thread()
 
         self.mock_pool_class = Mock(spec=Pool)
@@ -75,12 +73,12 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
                 break
 
     async def test_shutdown_before_connect(self):
-        ac = RaspiAnchorClient("127.0.0.1", 1, self.datastore, self.to_ui_q, self.to_pe_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
+        ac = RaspiAnchorClient("127.0.0.1", 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
         self.assertFalse(ac.connected)
         await ac.shutdown()
 
     async def clientSetup(self):
-        self.ac = RaspiAnchorClient("127.0.0.1", 1, self.datastore, self.to_ui_q, self.to_pe_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
+        self.ac = RaspiAnchorClient("127.0.0.1", 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
         self.client_task = asyncio.create_task(self.ac.startup())
         result = await asyncio.wait_for(self.got_connection.wait(), 2)
         await asyncio.sleep(0.1) # client_task needs a chance to act
@@ -145,6 +143,6 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         timestamp = 123456789.0
         await self.clientSetup()
         self.ac.handle_detections(detection_list, timestamp)
-        last_pose = self.datastore.gantry_pose.getLast()
-        self.assertEqual(timestamp, last_pose[0])
+        last_position = self.datastore.gantry_pos.getLast()
+        self.assertEqual(timestamp, last_position[0])
         await self.clientTearDown()

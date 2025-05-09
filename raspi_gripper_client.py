@@ -12,10 +12,11 @@ video_port = 8888
 websocket_port = 8765
 
 class RaspiGripperClient(ComponentClient):
-    def __init__(self, address, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat):
-        super().__init__(address, datastore, to_ui_q, to_pe_q, to_ob_q, pool, stat)
+    def __init__(self, address, datastore, to_ui_q, to_ob_q, pool, stat, pe):
+        super().__init__(address, datastore, to_ui_q, to_ob_q, pool, stat)
         self.conn_status = {'gripper': True}
         self.anchor_num = None
+        self.pe = pe
 
     def handle_update_from_ws(self, update):
         if 'line_record' in update:
@@ -37,7 +38,7 @@ class RaspiGripperClient(ComponentClient):
         if 'holding' in update:
             # expect a bool. Forward it to the position estimator
             holding = update['holding'] is True
-            self.to_pe_q.put({'holding': holding})
+            self.pe.notify_update({'holding': holding})
 
     def handle_detections(self, detections, timestamp):
         """
