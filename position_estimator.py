@@ -241,6 +241,12 @@ def swing_cost_fn(model_params, times, measured_angles):
     distances = np.linalg.norm(measured_angles - predicted_angles, axis=1)
     return np.mean(distances**2)
 
+def normalize_phase(phase):
+    normalized = phase % (2*pi)
+    if normalized < 0:
+        normalized += 2 * pi
+    return normalized
+
 def eval_linear_pos(t, starting_time, starting_pos, velocity_vec):
     """
     Evaluate positions on a line at an array of times.
@@ -318,34 +324,37 @@ class Positioner2:
         - the phase offset of the x swing
         - the phase offset of the y swing
         """
-        imu_readings = self.datastore.imu_rotvec.deepCopy(cutoff=self.stop_cutoff)
+        imu_readings = self.datastore.imu_rotvec.deepCopy()
         if len(imu_readings) < 3:
             return
         # convert to x and y angle offsets from vertical.
         timestamps = imu_readings[:,0]
         angles = Rotation.from_rotvec(imu_readings[:,1:]).as_euler('xyz')[:,:2]
+
+        # get the winch line length and use it to bound the swing frequency
+        _, length, _ = self.datastore.winch_line_record.getLast()
+        swing_freq = 1/(2*pi*sqrt(length/9.81))
+
         bounds = [
-            (0.1, 6), # frequency
+            (swing_freq*0.8, swing_freq*1.2), # frequency +- 20%
             (0, 1), # x amplitude. max possible swing angle in radians
             (0, 1), # y amplitude
-            (-pi, pi), # x phase
-            (-pi, pi), # y phase
+            (0, 2*pi), # x phase
+            (0, 2*pi), # y phase
         ]
         initial_guess = self.swing_params.copy()
-        # get the winch line length and use it for initial guess of swing frequency
-        _, length, _ = self.datastore.winch_line_record.getLast()
-        initial_guess[0] = 2*pi*sqrt(length/9.81)
+        initial_guess[0] = swing_freq
         # given this array of timed x and y angles, compute what the expected angles should have been, and total up the error.
         # then use SLSQP to find the parameters.
         result = optimize.minimize(
             swing_cost_fn,
             initial_guess,
             args=(timestamps, angles),
-            method='SLSQP',
+            method='Powell',#SLSQP
             bounds=bounds,
             options={
-                'disp': False,
-                'maxiter': 300,
+                'disp': True,
+                'maxiter': 50,
             },
         )
         try:
@@ -355,6 +364,8 @@ class Positioner2:
             print(result)
             return
         self.swing_params = result.x
+        self.swing_params[3] = normalize_phase(self.swing_params[3])
+        self.swing_params[4] = normalize_phase(self.swing_params[4])
 
     def find_visual_move(self):
         """
