@@ -10,8 +10,9 @@ import time
 from multiprocessing import Queue
 from data_store import DataStore
 import numpy as np
-from math import pi, sqrt
+from math import pi, sqrt, sin, cos
 import time
+from random import random
 
 class TestPositionEstimator(unittest.TestCase):
 
@@ -168,17 +169,27 @@ class TestPositionEstimator(unittest.TestCase):
         angles = swing_angle_from_params(times, freq, xamp, yamp, xphase, yphase)
         np.testing.assert_array_almost_equal(angles, expected_angles)
 
-    def test_find_swing(self):
-        self.pe.stop_cutoff = 100
+    def test_swing_cost_fn_zero(self):
+        model_params = np.array([1,1,1,0,0])
+        times = np.array([1, 2, 3])
+        measured_angles =  np.array([[1,0],[1,0],[1,0]])
+        expected_cost = 0.0
+        cost = swing_cost_fn(model_params, times, measured_angles)
+        self.assertAlmostEqual(expected_cost, cost, 8)
 
-        self.datastore.imu_rotvec.insertList([np.array([98, 0,0,0], dtype=np.float64) for i in range(30)])
-        self.datastore.imu_rotvec.insertList(np.array([
-            [99,1,1,1],
-            [101,0.1,0.2,0.3],
-            [102,-0.4,0.5,-0.6],
-            [103,-0.2,-0.1,0.1],
-        ]))
+    def test_find_swing(self):
+        freq = 0.5
+        xamp = 0.1
+        yamp = 0.5
+        xphase = pi/3
+        yphase = 0
+        expected_params = np.array([freq, xamp, yamp, xphase, yphase])
+        for t in np.linspace(100,103,30):
+            xangle = cos(freq * t * 2 * pi + xphase) * xamp
+            yangle = sin(freq * t * 2 * pi + yphase) * yamp
+            zangle = random() # test should be insensitive to z
+            rotvec = Rotation.from_euler('xyz', [xangle, yangle, zangle]).as_rotvec()
+            self.datastore.imu_rotvec.insert(np.concatenate([[t], rotvec]))
+        self.datastore.winch_line_record.insert([100,1,0])
         self.pe.find_swing()
-        expected_params = np.array([ 1.017484, 1, 1, -pi, -1.922795])
-        # TODO seems broken
-        # np.testing.assert_array_almost_equal(self.pe.swing_params, expected_params)
+        np.testing.assert_array_almost_equal(self.pe.swing_params, expected_params, 3)
