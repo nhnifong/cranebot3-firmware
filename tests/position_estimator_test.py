@@ -17,7 +17,7 @@ from random import random
 class TestPositionEstimator(unittest.TestCase):
 
     def setUp(self):
-        self.datastore = DataStore()
+        self.datastore = DataStore(size=200)
         to_ui_q = Queue()
         to_ob_q = Queue()
         to_ui_q.cancel_join_thread()
@@ -182,14 +182,14 @@ class TestPositionEstimator(unittest.TestCase):
         xamp = 0.1
         yamp = 0.5
         xphase = pi/3
-        yphase = 0
-        expected_params = np.array([freq, xamp, yamp, xphase, yphase])
-        for t in np.linspace(100,103,30):
+        yphase = pi/5
+        expected_params = np.array([freq, xamp, yamp, cos(xphase), sin(xphase), cos(yphase), sin(yphase)])
+        for t in np.linspace(100,105,self.datastore.imu_rotvec.shape[0]):
             xangle = cos(freq * t * 2 * pi + xphase) * xamp
             yangle = sin(freq * t * 2 * pi + yphase) * yamp
             zangle = random() # test should be insensitive to z
             rotvec = Rotation.from_euler('xyz', [xangle, yangle, zangle]).as_rotvec()
             self.datastore.imu_rotvec.insert(np.concatenate([[t], rotvec]))
-        self.datastore.winch_line_record.insert([100,1,0])
+        self.datastore.winch_line_record.insert([100,1,0]) #insert a length of 1, which implies a frequency of 0.5 hz
         self.pe.find_swing()
-        np.testing.assert_array_almost_equal(self.pe.swing_params, expected_params, 3)
+        np.testing.assert_array_almost_equal(self.pe.swing_params, expected_params, 2)

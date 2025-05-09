@@ -7,7 +7,7 @@ import time
 import numpy as np
 import asyncio
 import scipy.optimize as optimize
-from math import pi, sqrt
+from math import pi, sqrt, sin, cos
 from config import Config
 from cv_common import compose_poses
 import model_constants
@@ -232,20 +232,34 @@ def swing_angle_from_params(t, freq, xamp, yamp, xphase, yphase):
     """
     xangles = np.cos(freq * t * 2 * pi + xphase) * xamp
     yangles = np.sin(freq * t * 2 * pi + yphase) * yamp
-    if type(t) is float:
+    if np.isscalar(t):
         return xangles, yangles
     return np.column_stack([xangles, yangles])
+
+def swing_angle_from_params_transformed(t, freq, xamp, yamp, cos_xph, sin_xph, cos_yph, sin_yph):
+    omega_t = freq * t * 2 * np.pi
+    cos_omega_t = np.cos(omega_t)
+    sin_omega_t = np.sin(omega_t)
+
+    # For x-angle: xamp * cos(omega_t + xphase)
+    x_angles = xamp * (cos_omega_t * cos_xph - sin_omega_t * sin_xph)
+    # For y-angle: yamp * sin(omega_t + yphase)
+    y_angles = yamp * (sin_omega_t * cos_yph + cos_omega_t * sin_yph)
+
+    if np.isscalar(t):
+        return x_angles, y_angles
+    return np.column_stack([x_angles, y_angles])
 
 def swing_cost_fn(model_params, times, measured_angles):
     predicted_angles = swing_angle_from_params(times, *model_params)
     distances = np.linalg.norm(measured_angles - predicted_angles, axis=1)
     return np.mean(distances**2)
 
-def normalize_phase(phase):
-    normalized = phase % (2*pi)
-    if normalized < 0:
-        normalized += 2 * pi
-    return normalized
+def swing_cost_fn_transformed(model_params_transformed, times, measured_angles):
+    predicted_angles = swing_angle_from_params_transformed(times, *model_params_transformed)
+    distances = np.linalg.norm(measured_angles - predicted_angles, axis=1)
+    return np.mean(distances**2)
+
 
 def eval_linear_pos(t, starting_time, starting_pos, velocity_vec):
     """
@@ -306,8 +320,10 @@ class Positioner2:
             1, # frequency
             0.01, # x amplitude
             0.01, # y amplitude
-            0.0, # x phase
-            0.0, # y phase
+            cos(1.5), # cos x phase
+            sin(1.5), # sin x phase
+            cos(1.5), # cos y phase
+            sin(1.5), # sin y phase
         ], dtype=float)
 
         self.visual_move_line_params = np.concatenate([[time.time()], self.hang_gant_pos, self.hang_gant_vel])
@@ -339,23 +355,37 @@ class Positioner2:
             (swing_freq*0.8, swing_freq*1.2), # frequency +- 20%
             (0, 1), # x amplitude. max possible swing angle in radians
             (0, 1), # y amplitude
-            (0, 2*pi), # x phase
-            (0, 2*pi), # y phase
+            (-1, 1), # cos_xphase
+            (-1, 1), # sin_xphase
+            (-1, 1), # cos_yphase
+            (-1, 1), # sin_yphase
         ]
         initial_guess = self.swing_params.copy()
         initial_guess[0] = swing_freq
+
+        constraints = [
+            {'type': 'eq', 'fun': lambda p: p[3]**2 + p[4]**2 - 1.0},  # cos_xph^2 + sin_xph^2 = 1
+            {'type': 'eq', 'fun': lambda p: p[5]**2 + p[6]**2 - 1.0}   # cos_yph^2 + sin_yph^2 = 1
+        ]
+
+        print(f'initial_guess = {initial_guess}')
+
         # given this array of timed x and y angles, compute what the expected angles should have been, and total up the error.
         # then use SLSQP to find the parameters.
         result = optimize.minimize(
-            swing_cost_fn,
+            swing_cost_fn_transformed,
             initial_guess,
             args=(timestamps, angles),
-            method='Powell',#SLSQP
+            method='SLSQP',
             bounds=bounds,
+            constraints=constraints,
             options={
                 'disp': True,
-                'maxiter': 50,
+                'maxiter': 100,
+                # 'ftol': 1e-6,
+                # 'gtol': 1e-9,
             },
+
         )
         try:
             if not result.message.startswith("Iteration limit reached"):
@@ -364,8 +394,8 @@ class Positioner2:
             print(result)
             return
         self.swing_params = result.x
-        self.swing_params[3] = normalize_phase(self.swing_params[3])
-        self.swing_params[4] = normalize_phase(self.swing_params[4])
+        self.swing_params[3] = self.swing_params[3] % (2*pi)
+        self.swing_params[4] = self.swing_params[4] % (2*pi)
 
     def find_visual_move(self):
         """
@@ -505,7 +535,7 @@ class Positioner2:
         last_z = Rotation.from_rotvec(last_rotvec).as_euler('xyz')[2] 
 
         # predict the x and y based on swing parameters
-        pre_x, pre_y = swing_angle_from_params(time.time(), *self.swing_params)
+        pre_x, pre_y = swing_angle_from_params_transformed(time.time(), *self.swing_params)
         current_rotation = Rotation.from_euler('xyz', (pre_x, pre_y, last_z)).as_rotvec()
 
         # get the winch line length
