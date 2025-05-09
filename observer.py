@@ -16,12 +16,14 @@ from zeroconf.asyncio import (
 from multiprocessing import Pool
 from math import sin,cos
 import numpy as np
+from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient
 from raspi_gripper_client import RaspiGripperClient
 from random import random
 from segment import ShapeTracker
 from config import Config
 from stats import StatCounter
+from position_estimator import Positioner2
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -29,7 +31,7 @@ cranebot_gripper_service_name = 'cranebot-gripper-service'
 
 # Manager of multiple tasks running clients connected to each robot component
 class AsyncObserver:
-    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q) -> None:
+    def __init__(self, to_ui_q, to_ob_q) -> None:
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
@@ -37,9 +39,8 @@ class AsyncObserver:
         self.calmode = "pause"
         self.detection_count = 0
 
-        self.datastore = datastore
+        self.datastore = DataStore()
         self.to_ui_q = to_ui_q
-        self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
         self.pool = None
 
@@ -59,9 +60,12 @@ class AsyncObserver:
         # FastSAM model
         self.shape_tracker = ShapeTracker()
 
+        # Position Estimator. this used to be a seperate process so it's still somewhat independent.
+        self.pe = Positioner2(self.datastore, self.to_ui_q, self.to_ob_q)
+
         self.last_gant_pos = np.zeros(3)
 
-    def listen_position_updates(self, loop):
+    def listen_queue_updates(self, loop):
         """
         Receive any updates on our process input queue
 
@@ -71,7 +75,7 @@ class AsyncObserver:
         while self.send_position_updates:
             updates = self.to_ob_q.get()
             if 'STOP' in updates:
-                print('stopping listen_position_updates thread due to STOP message in queue')
+                print('Observer shutdown')
                 break
             if 'last_gant_pos' in updates:
                 self.last_gant_pos = updates['last_gant_pos']
@@ -219,12 +223,12 @@ class AsyncObserver:
                     self.config.anchors[anchor_num].service_name = info.server
                     self.config.write()
 
-                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_pe_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
+                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
                 self.bot_clients[info.server] = ac
                 self.anchors.append(ac)
                 await ac.startup()
             elif name_component == cranebot_gripper_service_name:
-                gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_pe_q, self.to_ob_q, self.pool, self.stat)
+                gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
                 self.bot_clients[info.server] = gc
                 self.gripper_client = gc
                 await gc.startup()
@@ -248,18 +252,20 @@ class AsyncObserver:
                 await self.aiozc.async_close()
                 return
 
-            print("start position listener")
-            self.position_update_task = asyncio.create_task(asyncio.to_thread(self.listen_position_updates, loop=asyncio.get_running_loop()))
+            # this task is blocking an runs in it's own thread, but needs a reference to the running loop to start tasks.
+            print("start observer's queue listener task")
+            self.ob_queue_task = asyncio.create_task(asyncio.to_thread(self.listen_queue_updates, loop=asyncio.get_running_loop()))
 
             asyncio.create_task(self.stat.stat_main())
             # asyncio.create_task(self.monitor_tension())
             # asyncio.create_task(self.run_shape_tracker())
             asyncio.create_task(self.add_simulated_data())
+            asyncio.create_task(self.pe.main())
             
-
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
-                result = await self.position_update_task
+                # tasks started with to_thread must used result = await or exceptions that occur within them are silenced.
+                result = await self.ob_queue_task
             except asyncio.exceptions.CancelledError:
                 pass
             await self.async_close()
@@ -267,6 +273,7 @@ class AsyncObserver:
     async def async_close(self) -> None:
         self.send_position_updates = False
         self.stat.run = False
+        self.pe.run = False
         if self.aiobrowser is not None:
             await self.aiobrowser.async_cancel()
         if self.aiozc is not None:
@@ -312,20 +319,16 @@ class AsyncObserver:
         while self.send_position_updates:
             t = time.time()
             # move the gantry in a circle
-            gant_pose = np.array([t, 0,0,0, sin(t/8), cos(t/8), 1.3])
-            dp = gant_pose + np.array([0,0,0,0, random()*0.1, random()*0.1, random()*0.1])
-            self.datastore.gantry_pose.insert(dp)
+            gant_position_no_err = np.array([t, sin(t/8), cos(t/8), 1.3])
+            dp = gant_position_no_err + np.array([0, random()*0.1, random()*0.1, random()*0.1])
+            self.datastore.gantry_pos.insert(dp)
             # winch line always 1 meter
             self.datastore.winch_line_record.insert(np.array([t, 1.0, 0.0]))
-            # gripper always directly below gantry
-            grip_pose = gant_pose + np.array([0,0,0,0, 0, 0, -1])
             # range always perfect
-            self.datastore.range_record.insert(np.array([t, grip_pose[6]]))
-            dp = grip_pose + np.array([0,0,0,0, random()*0.1, random()*0.1, random()*0.1])
-            self.datastore.gripper_pose.insert(dp)
+            self.datastore.range_record.insert(np.array([t, gant_position_no_err[3]-1]))
             # anchor lines always perfectly agree with gripper position
             for i, simanc in enumerate(sim_anchors):
-                dist = np.linalg.norm(simanc - gant_pose[4:])
+                dist = np.linalg.norm(simanc - gant_position_no_err[1:])
                 # TODO speed is not consistent with what the line is doing
                 self.datastore.anchor_line_record[i].insert(np.array([t, dist, 0.0, 1.0]))
 
@@ -434,22 +437,18 @@ class AsyncObserver:
         print('tension equalization finished.')
 
 
-def start_observation(datastore, to_ui_q, to_pe_q, to_ob_q):
+def start_observation(to_ui_q, to_ob_q):
     """
     Entry point to be used when starting this from main.py with multiprocessing
     """
-    ob = AsyncObserver(datastore, to_ui_q, to_pe_q, to_ob_q)
+    ob = AsyncObserver(to_ui_q, to_ob_q)
     asyncio.run(ob.main())
 
 if __name__ == "__main__":
     from multiprocessing import Queue
-    from data_store import DataStore
-    datastore = DataStore(horizon_s=10, n_cables=4)
     to_ui_q = Queue()
-    to_pe_q = Queue()
     to_ob_q = Queue()
     to_ui_q.cancel_join_thread()
-    to_pe_q.cancel_join_thread()
     to_ob_q.cancel_join_thread()
 
     # when running as a standalone process (debug only, linux only), register signal handler
@@ -457,7 +456,7 @@ if __name__ == "__main__":
         print("\nwait for clean observer shutdown")
         to_ob_q.put({'STOP':None})
     async def main():
-        runner = AsyncObserver(datastore, to_ui_q, to_pe_q, to_ob_q)
+        runner = AsyncObserver(datastore, to_ui_q, to_ob_q)
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
         await runner.main()

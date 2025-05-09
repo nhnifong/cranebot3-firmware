@@ -79,12 +79,10 @@ def update_go_quad(row, color, e):
     e.color = color
 
 class ControlPanelUI:
-    def __init__(self, datastore, to_pe_q, to_ob_q):
+    def __init__(self, to_ob_q):
         self.app = Ursina()
-        self.datastore = datastore
-        self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
-        self.n_anchors = datastore.n_cables
+        self.n_anchors = 4 # todo grab from config
         self.time_domain = (1,2)
         self.direction = np.array([0,0,0], dtype=float)
         self.run_periodic_actions = True
@@ -337,13 +335,12 @@ class ControlPanelUI:
             self.error.enabled = True
             return
         print('Do line calibration')
-        # average recent gantry poses.
-        poses = self.datastore.gantry_pose.deepCopy()
-        gantry_pose = average_pose(poses[:,1:].reshape(-1,2,3))
+        # use visual gantry position.
+        gantry_position = self.debug_indicator_visual.zup_pos
         lengths = [3.79,4.94,2.95,4.08] 
         for i, anchor in enumerate(self.anchors):
             # index 1 in a pose tuple is the position.
-            lengths[i] = np.linalg.norm(anchor.pose[1] - gantry_pose[1])
+            lengths[i] = np.linalg.norm(anchor.pose[1] - gantry_position)
         # display a confirmation dialog
         fmt = '{:.3f}'
         self.line_cal_confirm = WindowPanel(
@@ -378,15 +375,15 @@ class ControlPanelUI:
         """
         Run certain actions at a rate slightly less than, and independent of the framerate.
         """
-        # Display a visual indication of aruco based gripper observations
         time.sleep(8)
         while self.run_periodic_actions:
-            gantry_pose = self.datastore.gantry_pose.deepCopy()
-            for row in gantry_pose:
-                invoke(self.render_gripper_ob, row, color.white, delay=0.0001)
-            gripper_pose = self.datastore.gripper_pose.deepCopy()
-            for row in gripper_pose:
-                invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
+            # Display a visual indication of aruco based gripper observations
+            # gantry_pose = self.datastore.gantry_pose.deepCopy()
+            # for row in gantry_pose:
+            #     invoke(self.render_gripper_ob, row, color.white, delay=0.0001)
+            # gripper_pose = self.datastore.gripper_pose.deepCopy()
+            # for row in gripper_pose:
+            #     invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
 
             if sum(self.direction) == 0:
                 self.dmgt.position = self.gantry.position
@@ -510,11 +507,11 @@ class ControlPanelUI:
     def start(self):
         self.app.run()
 
-def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q, register_input):
+def start_ui(to_ui_q, to_ob_q, register_input):
     """
     Entry point to be used when starting this from main.py with multiprocessing
     """
-    cpui = ControlPanelUI(datastore, to_pe_q, to_ob_q)
+    cpui = ControlPanelUI(to_ob_q)
     register_input(cpui)
 
     # use simple threading here. ursina has it's own loop that conflicts with asyncio
@@ -528,7 +525,6 @@ def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q, register_input):
         print("UI window closed. stopping other processes")
         cpui.run_periodic_actions = False
         to_ui_q.put({'STOP':None}) # stop our own listening thread too
-        to_pe_q.put({'STOP':None})
         to_ob_q.put({'STOP':None})
 
     # ursina has no way to tell us when the window is closed. but this python module can do it.
@@ -538,12 +534,9 @@ def start_ui(datastore, to_ui_q, to_pe_q, to_ob_q, register_input):
 
 if __name__ == "__main__":
     from multiprocessing import Queue
-    from data_store import DataStore
-    datastore = DataStore(horizon_s=10, n_cables=4)
     to_ui_q = Queue()
-    to_pe_q = Queue()
     to_ob_q = Queue()
     def register_input_2(cpui):
         global input
         input = cpui.input
-    start_ui(datastore, to_ui_q, to_pe_q, to_ob_q, register_input_2)
+    start_ui(to_ui_q, to_ob_q, register_input_2)

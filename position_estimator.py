@@ -250,7 +250,8 @@ def eval_linear_pos(t, starting_time, starting_pos, velocity_vec):
     starting_pos - position where movement started
     velocity_vec - velocity of object in units(meters) per second
     """
-    return starting_pos + velocity_vec * (t - starting_time)
+    elapsed = (t - starting_time).reshape((-1,1))
+    return starting_pos + velocity_vec * elapsed
 
 def linear_move_cost_fn(model_params, times, observed_positions):
     starting_time = model_params[0]
@@ -262,11 +263,10 @@ def linear_move_cost_fn(model_params, times, observed_positions):
 
 
 class Positioner2:
-    def __init__(self, datastore, to_ui_q, to_pe_q, to_ob_q):
+    def __init__(self, datastore, to_ui_q, to_ob_q):
         self.run = True # run main loop
         self.datastore = datastore
         self.to_ui_q = to_ui_q
-        self.to_pe_q = to_pe_q
         self.to_ob_q = to_ob_q
         self.config = Config()
         try:
@@ -294,7 +294,7 @@ class Positioner2:
         self.gant_vel = np.zeros(3, dtype=float)
 
         # the time the gantry stopped moving. If it was moving at the last update, this will be None
-        # self.stop_cutoff = time.time()
+        self.stop_cutoff = time.time()
 
         self.swing_params = np.array([
             1, # frequency
@@ -365,16 +365,19 @@ class Positioner2:
           * a velocity vector
         """
         back3 = time.time()-3
-        poses = self.datastore.gantry_pose.deepCopy(cutoff=back3)
-        if len(poses) == 0:
+        data = self.datastore.gantry_pos.deepCopy(cutoff=back3)
+        if len(data) == 0:
             return
-        times = pose[:,0]
-        positions = pose[:,4:]
+        times = data[:,0]
+        positions = data[:,1:]
         # Initial guess for the parameters that define the line
         initial_guess = np.concatenate([[back3], self.hang_gant_pos, self.hang_gant_vel])
-        self.visual_move_line_params = optimize.least_squares(linear_move_cost_fn, initial_guess, args=(times, positions))
+        result = optimize.least_squares(linear_move_cost_fn, initial_guess, args=(times, positions))
+        if result.success:
+            self.visual_move_line_params = result.x
 
     def send_debugging_indicators(self):
+        print(f'visual_move_line_params = {self.visual_move_line_params}')
         velocity = self.visual_move_line_params[4:7]
         visual_pos = eval_linear_pos(
             time.time(),
@@ -532,32 +535,16 @@ class Positioner2:
         }
         self.to_ui_q.put(update_for_ui)
 
-
-    def read_input_queue(self):
-        while self.run:
-            try:
-                update = self.to_pe_q.get()
-                if 'anchor_pose' in update:
-                    apose = update['anchor_pose']
-                    anchor_num = apose[0]
-                    print(f'updating the position of anchor {anchor_num} to {apose[1][1]}')
-                    self.anchor_points[anchor_num] = np.array(apose[1][1])
-                if 'STOP' in update:
-                    print("stop running")
-                    self.run = False
-                    break
-                # if 'weight_change' in update:
-                #     idx, val = update['weight_change']
-                #     self.weights[idx] = 2**(val-5)
-                if 'holding' in update:
-                    self.holding = update['holding']
-            except Exception as e:
-                self.run = False
-                raise e
+    def notify_update(self, update):
+        if 'anchor_pose' in update:
+            apose = update['anchor_pose']
+            anchor_num = apose[0]
+            print(f'updating the position of anchor {anchor_num} to {apose[1][1]}')
+            self.anchor_points[anchor_num] = np.array(apose[1][1])
+        if 'holding' in update:
+            self.holding = update['holding']
 
     async def main(self):
-        read_queue_task = asyncio.create_task(asyncio.to_thread(self.read_input_queue))
-        await asyncio.sleep(5)
         print('Starting position estimator')
         rest_task = asyncio.create_task(self.restimate())
         while self.run:
@@ -566,43 +553,9 @@ class Positioner2:
                     self.send_positions()
                 # cProfile.runctx('self.estimate()', globals(), locals())
                 # some sleep is necessary or we will not receive updates
-                rem = (1/30 - self.time_taken)
+                rem = (1/20 - self.time_taken)
                 await asyncio.sleep(max(0.005, rem))
             except KeyboardInterrupt:
                 print('Exiting')
                 return
-        result = await read_queue_task
         await rest_task
-
-def start_estimator(shared_datastore, to_ui_q, to_pe_q, to_ob_q):
-    """
-    Entry point to be used when starting this from main.py with multiprocessing
-    """
-    pe = Positioner2(shared_datastore, to_ui_q, to_pe_q, to_ob_q)
-    asyncio.run(pe.main())
-
-
-if __name__ == "__main__":
-    from multiprocessing import Queue
-    from data_store import DataStore
-    datastore = DataStore(horizon_s=10, n_cables=4)
-    to_ui_q = Queue()
-    to_pe_q = Queue()
-    to_ob_q = Queue()
-
-    # without this the program has a chance of blocking on exit
-    # https://docs.python.org/3/library/multiprocessing.html#multiprocessing.Queue.cancel_join_thread
-    to_ui_q.cancel_join_thread()
-    to_pe_q.cancel_join_thread()
-    to_ob_q.cancel_join_thread()
-
-    # when running as a standalone process (debug only, linux only), register signal handler
-    def stop():
-        print("\nWait for clean shutdown")
-        to_pe_q.put({'STOP':None})
-    async def main():
-        pe = Positioner2(datastore, to_ui_q, to_pe_q, to_ob_q)
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
-        await pe.main()
-    asyncio.run(main())
