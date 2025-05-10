@@ -217,7 +217,7 @@ def find_hang_point(positions, lengths):
     # take the lowest point
     index_of_lowest = np.argmin(candidates[:, 2])
     # line length must exceed distance to point by this much to be considered slack
-    slack_lines = distances[index_of_lowest] <= (ex_lengths - 0.02)
+    slack_lines = distances[index_of_lowest] <= (ex_lengths - 0.04)
     return candidates[index_of_lowest], slack_lines
 
 
@@ -341,13 +341,15 @@ class Positioner2:
         - the phase offset of the y swing
         """
         imu_readings = self.datastore.imu_rotvec.deepCopy()
-        if len(imu_readings) < 3:
+        if len(imu_readings) < 20:
             return
         # convert to x and y angle offsets from vertical.
         timestamps = imu_readings[:,0]
 
         angles = Rotation.from_rotvec(imu_readings[:,1:]).as_euler('xyz')[:,:2]
-        print(f'angles = {angles[-1]}')
+        if np.sum(angles[-1]) == 0:
+            return
+        # print(f'angles = {angles[-1]}')
 
         # get the winch line length and use it to bound the swing frequency
         _, length, _ = self.datastore.winch_line_record.getLast()
@@ -372,7 +374,7 @@ class Positioner2:
             {'type': 'eq', 'fun': lambda p: p[5]**2 + p[6]**2 - 1.0}   # cos_yph^2 + sin_yph^2 = 1
         ]
 
-        print(f'initial_guess = {initial_guess}')
+        # print(f'initial_guess = {initial_guess}')
 
         # given this array of timed x and y angles, compute what the expected angles should have been, and total up the error.
         # then use SLSQP to find the parameters.
@@ -411,15 +413,17 @@ class Positioner2:
         """
         back3 = time.time()-3
         data = self.datastore.gantry_pos.deepCopy(cutoff=back3)
-        if len(data) == 0:
+        if len(data) < 2:
             return
         times = data[:,0]
         positions = data[:,1:]
         # Initial guess for the parameters that define the line
-        initial_guess = np.concatenate([[back3], self.hang_gant_pos, self.hang_gant_vel])
+        initial_guess = np.concatenate([[back3], self.hang_gant_pos, positions[-1]-positions[-2] ])
+        print(f'ig {initial_guess}')
         result = optimize.least_squares(linear_move_cost_fn, initial_guess, args=(times, positions))
         if result.success:
             self.visual_move_line_params = result.x
+            print(f'vmlp {self.visual_move_line_params} last pos {positions[-1]}')
 
     def send_debugging_indicators(self):
         velocity = self.visual_move_line_params[4:7]
@@ -522,11 +526,11 @@ class Positioner2:
                 self.hang_gant_vel = result[0] - self.hang_gant_pos
                 self.stop_cutoff = None
 
-                # use information both from hang position and visual observation
-                visual_pos = self.visual_move_line_params[1:4]
-                visual_vel = self.visual_move_line_params[4:7]
-                self.gant_pos = self.hang_gant_pos * 0.5 + visual_pos * 0.5
-                self.gant_vel = self.hang_gant_vel * 0.5 + visual_vel * 0.5
+            # use information both from hang position and visual observation
+            visual_pos = self.visual_move_line_params[1:4]
+            visual_vel = self.visual_move_line_params[4:7]
+            self.gant_pos = self.hang_gant_pos * 0.5 + visual_pos * 0.5
+            self.gant_vel = self.hang_gant_vel * 0.5 + visual_vel * 0.5
 
         # figure out gripper position.
 
@@ -535,8 +539,8 @@ class Positioner2:
         grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
         last_z = grv[2]
 
-        print(f'gripper tilt {grv[0:2]}')
-        print(f'self.swing_params = {self.swing_params}')
+        # print(f'gripper tilt {grv[0:2]}')
+        # print(f'self.swing_params = {self.swing_params}')
 
         # predict the x and y based on swing parameters
         pre_x, pre_y = swing_angle_from_params_transformed(time.time(), *self.swing_params)
@@ -594,8 +598,8 @@ class Positioner2:
         rest_task = asyncio.create_task(self.restimate())
         while self.run:
             try:
-                if self.estimate():
-                    self.send_positions()
+                self.estimate()
+                self.send_positions()
                 # cProfile.runctx('self.estimate()', globals(), locals())
                 # some sleep is necessary or we will not receive updates
                 rem = (1/20 - self.time_taken)
