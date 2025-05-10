@@ -297,7 +297,7 @@ class RaspiAnchorClient(ComponentClient):
                         model_constants.gantry_aruco_front_inv, # constant
                     ]))
                     position = pose.reshape(6)[3:]
-                    datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
+                    self.datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
                     # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
 
                     self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)

@@ -64,6 +64,7 @@ class AsyncObserver:
         self.pe = Positioner2(self.datastore, self.to_ui_q, self.to_ob_q)
 
         self.last_gant_pos = np.zeros(3)
+        self.sim_task = None
 
     def listen_queue_updates(self, loop):
         """
@@ -148,6 +149,18 @@ class AsyncObserver:
                         asyncio.run_coroutine_threadsafe(client.send_commands({
                             'measure_ref_load': updates['measure_ref_load']['load']
                             }), loop)
+            if 'set_simulated_data_mode' in updates:
+                m = updates['set_simulated_data_mode']
+                asyncio.run_coroutine_threadsafe(self.set_simulated_data_mode(m), loop)
+
+    async def set_simulated_data_mode(self, mode):
+        if self.sim_task is not None:
+            self.sim_task.cancel()
+            result = await self.sim_task
+        if mode == 'circle':
+            self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
+        elif mode == 'point2point':
+            self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
     def slow_stop_all_spools(self, loop):
         for name, client in self.bot_clients.items():
@@ -259,7 +272,7 @@ class AsyncObserver:
             asyncio.create_task(self.stat.stat_main())
             # asyncio.create_task(self.monitor_tension())
             # asyncio.create_task(self.run_shape_tracker())
-            asyncio.create_task(self.add_simulated_data())
+            # self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
             asyncio.create_task(self.pe.main())
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
@@ -278,6 +291,8 @@ class AsyncObserver:
             await self.aiobrowser.async_cancel()
         if self.aiozc is not None:
             await self.aiozc.async_close()
+        if self.sim_task is not None:
+            result = await self.sim_task
         await asyncio.gather(*[client.shutdown() for client in self.bot_clients.values()])
 
     async def run_shape_tracker(self):
@@ -310,32 +325,82 @@ class AsyncObserver:
 
             await asyncio.sleep(max(0.05, self.shape_tracker.preferred_delay - elapsed))
 
-    async def add_simulated_data(self):
-        sim_anchors = np.array([
-            [2.667, 2.667, 2.4384],
-            [2.667, -2.667, 2.4384],
-            [-2.667, 2.667, 2.4384],
-            [-2.667, -2.667, 2.4384]])
+    async def add_simulated_data_circle(self):
+        """ Simulate the gantry moving in a circle"""
         while self.send_position_updates:
-            t = time.time()
-            # move the gantry in a circle
-            gant_position_no_err = np.array([t, sin(t/8), cos(t/8), 1.3])
-            if random()>0.5:
-                dp = gant_position_no_err + np.array([0, random()*0.1, random()*0.1, random()*0.1])
-                self.datastore.gantry_pos.insert(dp)
-                self.to_ui_q.put({'gantry_observation': dp[1:]})
-            # winch line always 1 meter
-            self.datastore.winch_line_record.insert(np.array([t, 1.0, 0.0]))
-            # range always perfect
-            self.datastore.range_record.insert(np.array([t, gant_position_no_err[3]-1]))
-            # anchor lines always perfectly agree with gripper position
-            for i, simanc in enumerate(sim_anchors):
-                dist = np.linalg.norm(simanc - gant_position_no_err[1:])
-                # TODO speed is not consistent with what the line is doing
-                self.datastore.anchor_line_record[i].insert(np.array([t, dist, 0.0, 1.0]))
+            try:
+                t = time.time()
+                gantry_real_pos = np.array([t, sin(t/8), cos(t/8), 1.3])
+                if random()>0.5:
+                    dp = gantry_real_pos + np.array([0, random()*0.1, random()*0.1, random()*0.1])
+                    self.datastore.gantry_pos.insert(dp)
+                    self.to_ui_q.put({'gantry_observation': dp[1:]})
+                # winch line always 1 meter
+                self.datastore.winch_line_record.insert(np.array([t, 1.0, 0.0]))
+                # range always perfect
+                self.datastore.range_record.insert(np.array([t, gantry_real_pos[3]-1]))
+                # anchor lines always perfectly agree with gripper position
+                for i, simanc in enumerate(self.pe.anchor_points):
+                    dist = np.linalg.norm(simanc - gantry_real_pos[1:])
+                    last = self.datastore.anchor_line_record[i].getLast()
+                    timesince = t-last[0]
+                    travel = dist-last[1]
+                    speed = travel/timesince
+                    self.datastore.anchor_line_record[i].insert(np.array([t, dist, speed, 1.0]))
+                tt = self.datastore.anchor_line_record[0].getLast()[0]
+                await asyncio.sleep(0.05)
+            except asyncio.exceptions.CancelledError:
+                break
 
-            tt = self.datastore.anchor_line_record[0].getLast()[0]
-            await asyncio.sleep(0.05)
+    async def add_simulated_data_point2point(self):
+        """ Simulate the gantry moving from random point to random point"""
+        lower = np.min(self.pe.anchor_points, axis=0)
+        upper = np.max(self.pe.anchor_points, axis=0)
+        lower[2]=1
+        upper[2] = upper[2]-0.3
+        # starting position
+        gantry_real_pos = np.random.uniform(lower, upper)
+        # initial goal
+        travel_goal = np.random.uniform(lower, upper)
+        max_speed = 0.2 # m/s
+        t = time.time()
+        while self.send_position_updates:
+            try:
+                now = time.time()
+                elapsed_time = now - t
+                t = now
+                # move the gantry towards the goal
+                to_goal_vec = travel_goal - gantry_real_pos
+                dist_to_goal = np.linalg.norm(to_goal_vec)
+                if dist_to_goal < 0.03:
+                    # choose new goal
+                    travel_goal = np.random.uniform(lower, upper)
+                else:
+                    soft_speed = dist_to_goal * 0.25
+                    # normalize
+                    to_goal_vec = to_goal_vec / dist_to_goal
+                    velocity = to_goal_vec * min(soft_speed, max_speed)
+                    gantry_real_pos = gantry_real_pos + velocity * elapsed_time
+                if random()>0.5:
+                    dp = np.concatenate([[t], gantry_real_pos + np.random.normal(0, 0.05, (3,))])
+                    self.datastore.gantry_pos.insert(dp)
+                    self.to_ui_q.put({'gantry_observation': dp[1:]})
+                # winch line always 1 meter
+                self.datastore.winch_line_record.insert(np.array([t, 1.0, 0.0]))
+                # range always perfect
+                self.datastore.range_record.insert(np.array([t, gantry_real_pos[2]-1]))
+                # anchor lines always perfectly agree with gripper position
+                for i, simanc in enumerate(self.pe.anchor_points):
+                    dist = np.linalg.norm(simanc - gantry_real_pos)
+                    last = self.datastore.anchor_line_record[i].getLast()
+                    timesince = t-last[0]
+                    travel = dist-last[1]
+                    speed = travel/timesince # referring to the specific speed of this line, not the gantry
+                    self.datastore.anchor_line_record[i].insert(np.array([t, dist, speed, 1.0]))
+                tt = self.datastore.anchor_line_record[0].getLast()[0]
+                await asyncio.sleep(0.05)
+            except asyncio.exceptions.CancelledError:
+                break
 
     def collect_gant_frame_positions(self):
         result = np.zeros((4,3))

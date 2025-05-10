@@ -11,6 +11,7 @@ from panda3d.core import LQuaternionf
 from cv_common import average_pose, compose_poses
 import model_constants
 from PIL import Image
+from config import Config
 
 from ursina import *
 from ursina.shaders import (
@@ -110,15 +111,12 @@ class ControlPanelUI:
         #show a very large floor
         floor = Floor(model='quad', position=(0, -0.05, 0), rotation=(90,0,0), color=(0.35,0.22,0.18,1.0), scale=(10, 10), shader=lit_with_shadows_shader)  # Scale in meters
 
-        # anchor_color = (0.9, 0.9, 0.9, 1.0)
-        # def add_anchor(pos, rot=(0,  0,0)):
-        #     # this models units are in mm, but the game units are meters
-        #     return Entity(model='anchor', color=anchor_color, scale=0.001, position=pos, rotation=(0,  0,0), shader=lit_with_shadows_shader)
+        self.config = Config()
         self.anchors = []
-        self.anchors.append(Anchor(0, to_ob_q, (-2,2, 3)))
-        self.anchors.append(Anchor(1, to_ob_q, ( 2,2, 3)))
-        self.anchors.append(Anchor(2, to_ob_q, ( -1,2,-2), rotation=(0,180,0)))
-        self.anchors.append(Anchor(3, to_ob_q, ( 2,2,-2), rotation=(0,180,0)))
+        for i, a in enumerate(self.config.anchors):
+            anch = Anchor(i, to_ob_q, position=swap_yz(a.pose[1]), rotation=to_ursina_rotation(a.pose[0]))
+            anch.pose = a.pose
+            self.anchors.append(anch)
 
         self.gantry = Gantry(
             ui=self,
@@ -167,7 +165,7 @@ class ControlPanelUI:
             ) for i in range(4)]
         self.redraw_walls()
 
-        self.go_quads = EntityPool(400, lambda: Entity(
+        self.go_quads = EntityPool(100, lambda: Entity(
                 model='cube',
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
@@ -265,10 +263,18 @@ class ControlPanelUI:
                 )),
             DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Equalize line tension', on_click=self.equalize_lines),
+            DropdownMenu('Simulated Data', buttons=(
+                DropdownMenuButton('Disable', on_click=partial(self.set_simulated_data_mode, 'disable')),
+                DropdownMenuButton('Circle', on_click=partial(self.set_simulated_data_mode, 'circle')),
+                DropdownMenuButton('Point to Point', on_click=partial(self.set_simulated_data_mode, 'point2point')),
+                )),
             ))
 
         Sky(color=color.light_gray)
         EditorCamera()
+
+    def set_simulated_data_mode(self, mode):
+        self.to_ob_q.put({'set_simulated_data_mode': mode})
 
     def equalize_lines(self):
         self.to_ob_q.put({'equalize_line_tension': None})
