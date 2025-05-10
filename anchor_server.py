@@ -104,7 +104,7 @@ class RobotComponentServer:
 
     async def stream_mjpeg(self):
         while self.ws_client_connected:
-            await self.run_rpicam_vid()
+            result = await self.run_rpicam_vid()
             await asyncio.sleep(0.5)
 
     async def run_rpicam_vid(self, line_timeout=60):
@@ -200,7 +200,7 @@ class RobotComponentServer:
                     pass
 
                 # defer to specific server subclass
-                await self.processOtherUpdates(update)
+                result = await self.processOtherUpdates(update)
 
             except ConnectionClosedOK:
                 logging.info("Client disconnected")

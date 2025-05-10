@@ -239,12 +239,12 @@ class AsyncObserver:
                 ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
                 self.bot_clients[info.server] = ac
                 self.anchors.append(ac)
-                await ac.startup()
+                result = await ac.startup()
             elif name_component == cranebot_gripper_service_name:
                 gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
                 self.bot_clients[info.server] = gc
                 self.gripper_client = gc
-                await gc.startup()
+                result = await gc.startup()
 
     async def main(self) -> None:
         # main process loop
@@ -293,7 +293,7 @@ class AsyncObserver:
             await self.aiozc.async_close()
         if self.sim_task is not None:
             result = await self.sim_task
-        await asyncio.gather(*[client.shutdown() for client in self.bot_clients.values()])
+        result = await asyncio.gather(*[client.shutdown() for client in self.bot_clients.values()])
 
     async def run_shape_tracker(self):
         while self.send_position_updates:
@@ -525,5 +525,5 @@ if __name__ == "__main__":
         runner = AsyncObserver(datastore, to_ui_q, to_ob_q)
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
-        await runner.main()
+        result = await runner.main()
     asyncio.run(main())

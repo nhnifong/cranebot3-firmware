@@ -328,6 +328,8 @@ class Positioner2:
 
         self.visual_move_start_time = time.time()
         self.visual_move_line_params = np.concatenate([self.hang_gant_pos, self.hang_gant_vel])
+        self.grip_pose = np.zeros(6)
+        self.slack_lines = [False, False, False, False]
 
     def find_swing(self):
         """When the gantry is still, the IMU's quaternion readout can be used to estimate the gantry swing params
@@ -422,7 +424,6 @@ class Positioner2:
         initial_guess = np.concatenate([ self.hang_gant_pos, positions[-1]-positions[-2] ])
 
         # result = optimize.least_squares(linear_move_cost_fn, initial_guess, args=(times, positions))
-
         result = optimize.minimize(
             linear_move_cost_fn,
             initial_guess,
@@ -621,8 +622,8 @@ class Positioner2:
         rest_task = asyncio.create_task(self.restimate())
         while self.run:
             try:
-                self.estimate()
-                self.send_positions()
+                if self.estimate():
+                    self.send_positions()
                 # cProfile.runctx('self.estimate()', globals(), locals())
                 # some sleep is necessary or we will not receive updates
                 rem = (1/20 - self.time_taken)
@@ -630,4 +631,4 @@ class Positioner2:
             except KeyboardInterrupt:
                 print('Exiting')
                 return
-        await rest_task
+        result = await rest_task
