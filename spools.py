@@ -138,6 +138,7 @@ class SpoolController:
     def _commandSpeed(self, speed):
         """command a specific speed from the motor."""
         self.speed = speed
+        logging.debug(f'_commandSpeed {speed}')
         self.motor.runConstantSpeed(self.speed)
 
     def setPlan(self, plan):

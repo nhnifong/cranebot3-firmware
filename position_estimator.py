@@ -184,6 +184,7 @@ def find_hang_point(positions, lengths):
     """
     if len(positions) != 4 or len(lengths) != 4:
         raise ValueError
+    lengths = lengths + np.repeat(1e-8, 4)
     candidates = []
     for pair in [[0,1], [1,2], [2,3], [3,0], [0,2], [1,3]]:
         # find the intersection of the two spheres in this pair
@@ -273,10 +274,9 @@ def eval_linear_pos(t, starting_time, starting_pos, velocity_vec):
     elapsed = (t - starting_time).reshape((-1,1))
     return starting_pos + velocity_vec * elapsed
 
-def linear_move_cost_fn(model_params, times, observed_positions):
-    starting_time = model_params[0]
-    starting_pos = model_params[1:4]
-    velocity_vec = model_params[4:7]
+def linear_move_cost_fn(model_params, starting_time, times, observed_positions):
+    starting_pos = model_params[0:3]
+    velocity_vec = model_params[3:6]
     predicted_positions = eval_linear_pos(times, starting_time, starting_pos, velocity_vec)
     distances = np.linalg.norm(observed_positions - predicted_positions, axis=1)
     return np.mean(distances**2)
@@ -326,7 +326,8 @@ class Positioner2:
             sin(1.5), # sin y phase
         ], dtype=float)
 
-        self.visual_move_line_params = np.concatenate([[time.time()], self.hang_gant_pos, self.hang_gant_vel])
+        self.visual_move_start_time = time.time()
+        self.visual_move_line_params = np.concatenate([self.hang_gant_pos, self.hang_gant_vel])
 
     def find_swing(self):
         """When the gantry is still, the IMU's quaternion readout can be used to estimate the gantry swing params
@@ -411,26 +412,43 @@ class Positioner2:
           * a starting position
           * a velocity vector
         """
-        back3 = time.time()-3
-        data = self.datastore.gantry_pos.deepCopy(cutoff=back3)
+        backtime = time.time()-2
+        data = self.datastore.gantry_pos.deepCopy(cutoff=backtime)
         if len(data) < 2:
             return
         times = data[:,0]
         positions = data[:,1:]
         # Initial guess for the parameters that define the line
-        initial_guess = np.concatenate([[back3], self.hang_gant_pos, positions[-1]-positions[-2] ])
-        print(f'ig {initial_guess}')
-        result = optimize.least_squares(linear_move_cost_fn, initial_guess, args=(times, positions))
-        if result.success:
-            self.visual_move_line_params = result.x
-            print(f'vmlp {self.visual_move_line_params} last pos {positions[-1]}')
+        initial_guess = np.concatenate([ self.hang_gant_pos, positions[-1]-positions[-2] ])
+
+        # result = optimize.least_squares(linear_move_cost_fn, initial_guess, args=(times, positions))
+
+        result = optimize.minimize(
+            linear_move_cost_fn,
+            initial_guess,
+            args=(backtime, times, positions),
+            method='SLSQP',
+            options={
+                'disp': False,
+                'maxiter': 100,
+            },
+        )
+        try:
+            if not result.message.startswith("Iteration limit reached"):
+                assert result.success
+        except AssertionError:
+            print(result)
+            return
+
+        self.visual_move_start_time = backtime
+        self.visual_move_line_params = result.x
 
     def send_debugging_indicators(self):
-        velocity = self.visual_move_line_params[4:7]
+        velocity = self.visual_move_line_params[3:6]
         visual_pos = eval_linear_pos(
-            time.time(),
-            self.visual_move_line_params[0],
-            self.visual_move_line_params[1:4],
+            np.array([time.time()]),
+            self.visual_move_start_time,
+            self.visual_move_line_params[0:3],
             velocity,
         )[0]
         update_for_ui = {
@@ -509,28 +527,33 @@ class Positioner2:
 
             if sum(speeds) == 0:
                 self.hang_gant_vel = z
-
                 # if the gantry just now stopped moving, record the time.
                 if self.stop_cutoff is None:
                     self.stop_cutoff = time.time()
-
             else:
                 # repeat for a position some small increment in the future to get the gantry velocity
                 increment = 0.1 # seconds
                 lengths += speeds * increment
                 result = find_hang_point(self.anchor_points, lengths)
                 if result is None:
-                    print('estimate bailed because it failed to calc a hang point the second time')
+                    print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
                     self.time_taken = time.time() - self.start
-                    return False
-                self.hang_gant_vel = result[0] - self.hang_gant_pos
-                self.stop_cutoff = None
+                    self.hang_gant_vel = np.zeros((3,))
+                else:
+                    self.hang_gant_vel = result[0] - self.hang_gant_pos
+                    self.hang_gant_vel = self.hang_gant_vel / increment
+                    self.stop_cutoff = None
 
             # use information both from hang position and visual observation
-            visual_pos = self.visual_move_line_params[1:4]
-            visual_vel = self.visual_move_line_params[4:7]
-            self.gant_pos = self.hang_gant_pos * 0.5 + visual_pos * 0.5
-            self.gant_vel = self.hang_gant_vel * 0.5 + visual_vel * 0.5
+            visual_vel = self.visual_move_line_params[3:6]
+            visual_pos = eval_linear_pos(
+                np.array([time.time()]),
+                self.visual_move_start_time,
+                self.visual_move_line_params[0:3],
+                visual_vel,
+            )[0]
+            self.gant_pos = self.hang_gant_pos * 0.7 + visual_pos * 0.3
+            self.gant_vel = self.hang_gant_vel * 0.7 + visual_vel * 0.3
 
         # figure out gripper position.
 
