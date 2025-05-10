@@ -155,8 +155,10 @@ class RaspiGripperServer(RobotComponentServer):
                 self.update['range'] = [time.time(), distance / 100]
 
         self.update['imu'] = {
-            'quat': [time.time() *self.imu.quaternion]
+            'time': time.time(),
+            'quat': self.imu.quaternion,
         }
+        logging.debug(f"imu {self.update['imu']}")
 
 
     def startOtherTasks(self):
@@ -294,7 +296,7 @@ class RaspiGripperServer(RobotComponentServer):
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     gs = RaspiGripperServer()

@@ -18,7 +18,7 @@ class TestDatastore(unittest.TestCase):
         cb = CircularBuffer((3,1))
         cb.insert(0.1)
         out = cb.deepCopy()
-        self.assertEqual(out[0], 0.1)
+        self.assertEqual(out[-1], 0.1)
 
     def test_circularity(self):
         cb = CircularBuffer((3,1))
@@ -26,10 +26,9 @@ class TestDatastore(unittest.TestCase):
         cb.insert(0.2)
         cb.insert(0.3)
         cb.insert(0.4)
-        out = cb.deepCopy()
-        self.assertEqual(out[0], 0.4)
-        self.assertEqual(out[1], 0.2)
-        self.assertEqual(out[2], 0.3)
+        self.assertEqual(cb.arr[0], 0.4)
+        self.assertEqual(cb.arr[1], 0.2)
+        self.assertEqual(cb.arr[2], 0.3)
 
     def test_datastore_init(self):
         dlen = 30
@@ -77,3 +76,12 @@ class TestDatastore(unittest.TestCase):
             d.anchor_line_record[0].insert(np.array([i, 0, 0, 0]))
             last = d.anchor_line_record[0].getLast()
             self.assertEqual(i, last[0])
+
+    def test_deepcopy(self):
+        """Assert that when you deep copy the array, your copy ends at the last inserted element"""
+        c = CircularBuffer((30, 2))
+        c.insert([7,7])
+        c.insert([8,8])
+        c.insert([9,9])
+        a = c.deepCopy()
+        np.testing.assert_array_almost_equal(a[-1], [9,9])

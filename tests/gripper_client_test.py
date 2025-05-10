@@ -125,7 +125,8 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         await self.clientSetup()
         timestamp = 1.23
         imu_data = {
-            'quat': [timestamp, 4,5,6,7],
+            'time': timestamp,
+            'quat': [4,5,6,7],
         }
         asyncio.create_task(self.server_ws.send(json.dumps({'imu': imu_data})))
         await asyncio.sleep(0.1)

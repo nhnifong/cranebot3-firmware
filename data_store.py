@@ -24,7 +24,7 @@ class CircularBuffer:
         then only rows after that time will be returned.
         if before=True, rows before the cutoff are returned
         """
-        arr = self.arr.copy()
+        arr = np.roll(self.arr, -1*(self.idx+1), axis=0)
         if cutoff is not None:
             if before:
                 arr = arr[arr[:,0]<=cutoff]

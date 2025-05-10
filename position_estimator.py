@@ -345,10 +345,14 @@ class Positioner2:
             return
         # convert to x and y angle offsets from vertical.
         timestamps = imu_readings[:,0]
+
         angles = Rotation.from_rotvec(imu_readings[:,1:]).as_euler('xyz')[:,:2]
+        print(f'angles = {angles[-1]}')
 
         # get the winch line length and use it to bound the swing frequency
         _, length, _ = self.datastore.winch_line_record.getLast()
+        if length == 0:
+            return
         swing_freq = 1/(2*pi*sqrt(length/9.81))
 
         bounds = [
@@ -380,7 +384,7 @@ class Positioner2:
             bounds=bounds,
             constraints=constraints,
             options={
-                'disp': True,
+                'disp': False,
                 'maxiter': 100,
                 # 'ftol': 1e-6,
                 # 'gtol': 1e-9,
@@ -418,14 +422,13 @@ class Positioner2:
             self.visual_move_line_params = result.x
 
     def send_debugging_indicators(self):
-        print(f'visual_move_line_params = {self.visual_move_line_params}')
         velocity = self.visual_move_line_params[4:7]
         visual_pos = eval_linear_pos(
             time.time(),
             self.visual_move_line_params[0],
             self.visual_move_line_params[1:4],
             velocity,
-        )
+        )[0]
         update_for_ui = {
             'pos_factors_debug': {
                 # position as esimated by visual observations
@@ -471,14 +474,11 @@ class Positioner2:
             self.time_taken = time.time() - self.start
             return False
 
-        print(self.datastore.anchor_line_record[0].getLast())
-
         # timestamp of the last record used to produce this estimate. used for latency feedback
         data_ts = np.max(records[0])
         # only perform work in this block when line records actually change
         if data_ts > self.data_ts:
             self.data_ts = data_ts
-            print(f'data_ts = {self.data_ts} datastore={self.datastore}')
 
             # extrapolate the current length based on the time elapsed since the measurement and the speed at the time.
             # TODO account for clock desync before turning this part on.
@@ -532,7 +532,11 @@ class Positioner2:
 
         # get the last IMU reading from the gripper, take only the z axis
         last_rotvec = self.datastore.imu_rotvec.getLast()[1:]
-        last_z = Rotation.from_rotvec(last_rotvec).as_euler('xyz')[2] 
+        grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
+        last_z = grv[2]
+
+        print(f'gripper tilt {grv[0:2]}')
+        print(f'self.swing_params = {self.swing_params}')
 
         # predict the x and y based on swing parameters
         pre_x, pre_y = swing_angle_from_params_transformed(time.time(), *self.swing_params)
