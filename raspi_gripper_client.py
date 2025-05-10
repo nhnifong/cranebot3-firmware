@@ -23,9 +23,9 @@ class RaspiGripperClient(ComponentClient):
             self.datastore.winch_line_record.insertList(update['line_record'])
 
         if 'imu' in update:
-            timestamp = update['imu']['quat'][0]
+            timestamp = update['imu']['time']
             grip_pose = compose_poses([
-                (Rotation.from_quat(update['imu']['quat'][1:]).as_rotvec(), np.array([0,0,0])),
+                (Rotation.from_quat(update['imu']['quat']).as_rotvec(), np.array([0,0,0])),
                 model_constants.gripper_imu,
             ])
             self.datastore.imu_rotvec.insert(np.concatenate([np.array([timestamp], dtype=float), grip_pose[0]]))

@@ -94,7 +94,11 @@ class RobotComponentServer:
                 logging.info("stopped streaming measurements")
                 break
             except Exception as e:
-                logging.error(f'stream_measurements encountered {e}')
+                # any other exceptions require us to stop this task and close the connection to our client.
+                # the server will continue running, but it will print the exception in the console.
+                # TODO figure out how to close all the tasks and subprocesses gracefully on internal error.
+                # await ws.close(code=1011, reason=f'Exception in stream_measurements task: {e}')
+                # self.ws_client_connected = False
                 raise e
         logging.info('stop streaming measurements because websocket is {ws}')
 
@@ -205,8 +209,11 @@ class RobotComponentServer:
                 logging.info(f"Client disconnected with {e}")
                 break
         self.ws_client_connected = False
+        # cause any exceptions raised by these tasks to be printed.
         stream.cancel()
+        result = await stream
         mjpeg.cancel()
+        result = await mjpeg
 
 
     async def main(self, port=8765):
@@ -360,7 +367,7 @@ class RaspiAnchorServer(RobotComponentServer):
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
