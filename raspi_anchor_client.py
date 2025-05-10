@@ -240,13 +240,6 @@ class RaspiAnchorClient(ComponentClient):
         self.tension_seek_running = False
         self.tension_seek_result = None
 
-        # to help with a loop that does the same thing four times in handle_detections
-        # name, offset, datastore
-        self.arucos = [
-            # the gantry has 4-way symmetry and all four sides have the same sticker.
-            ('gantry_front', model_constants.gantry_aruco_front_inv, datastore.gantry_pos),
-        ]
-
     def handle_update_from_ws(self, update):
         if 'line_record' in update and not self.calibration_mode: # specifically referring to pose calibration
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
@@ -294,22 +287,21 @@ class RaspiAnchorClient(ComponentClient):
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
-                for name, offset, dest  in self.arucos:
-                    if detection['n'] == name:
-                        # you have the pose of gantry_front relative to a particular anchor camera
-                        # convert it to a pose relative to the origin
-                        pose = np.array(compose_poses([
-                            self.anchor_pose, # obtained from calibration
-                            model_constants.anchor_camera, # constant
-                            pose_from_det(detection), # the pose obtained just now
-                            offset, # constant
-                        ]))
-                        dest.insert(np.concatenate([[timestamp], pose.reshape(6)[3:]])) # take only the position
-                        # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
-
                 if detection['n'] == 'gantry_front':
-                    # what is this being saved for?
+                    # you have the pose of gantry_front relative to a particular anchor camera
+                    # convert it to a pose relative to the origin
+                    pose = np.array(compose_poses([
+                        self.anchor_pose, # obtained from calibration
+                        model_constants.anchor_camera, # constant
+                        pose_from_det(detection), # the pose obtained just now
+                        model_constants.gantry_aruco_front_inv, # constant
+                    ]))
+                    position = pose.reshape(6)[3:]
+                    datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
+                    # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
+
                     self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
+                    self.to_ui_q.put({'gantry_observation': position})
                     
 
     async def send_config(self):

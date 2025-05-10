@@ -108,7 +108,8 @@ class Gripper(Entity):
             'd up': 'down arrow up',
             'd hold': 'down arrow hold',
         }
-
+        # winch line jog speed
+        self.jog_speed = 0
 
     def setStatus(self, status):
         self.label.text = f"Gripper\n{status}"
@@ -600,5 +601,6 @@ class DirectMoveGantryTarget(Entity):
             self.app.direction[1] * self.speed,
         )
         self.position = p
+        self.enabled = (sum(self.app.direction) > 0)
 
         

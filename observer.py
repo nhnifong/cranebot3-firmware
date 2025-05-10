@@ -259,7 +259,7 @@ class AsyncObserver:
             asyncio.create_task(self.stat.stat_main())
             # asyncio.create_task(self.monitor_tension())
             # asyncio.create_task(self.run_shape_tracker())
-            # asyncio.create_task(self.add_simulated_data())
+            asyncio.create_task(self.add_simulated_data())
             asyncio.create_task(self.pe.main())
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
@@ -320,8 +320,10 @@ class AsyncObserver:
             t = time.time()
             # move the gantry in a circle
             gant_position_no_err = np.array([t, sin(t/8), cos(t/8), 1.3])
-            dp = gant_position_no_err + np.array([0, random()*0.1, random()*0.1, random()*0.1])
-            self.datastore.gantry_pos.insert(dp)
+            if random()>0.5:
+                dp = gant_position_no_err + np.array([0, random()*0.1, random()*0.1, random()*0.1])
+                self.datastore.gantry_pos.insert(dp)
+                self.to_ui_q.put({'gantry_observation': dp[1:]})
             # winch line always 1 meter
             self.datastore.winch_line_record.insert(np.array([t, 1.0, 0.0]))
             # range always perfect
@@ -333,8 +335,7 @@ class AsyncObserver:
                 self.datastore.anchor_line_record[i].insert(np.array([t, dist, 0.0, 1.0]))
 
             tt = self.datastore.anchor_line_record[0].getLast()[0]
-            print(f'just inserted using datastore {self.datastore}')
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.05)
 
     def collect_gant_frame_positions(self):
         result = np.zeros((4,3))

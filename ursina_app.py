@@ -74,8 +74,8 @@ solid_colors = {
     4: (1.0, 0.417, 0.71, 1.0),
 }
 
-def update_go_quad(row, color, e):
-    e.position = (row[4],row[6],row[5])
+def update_go_quad(position, color, e):
+    e.position = position
     e.color = color
 
 class ControlPanelUI:
@@ -368,7 +368,7 @@ class ControlPanelUI:
     def on_stop_button(self):
         self.to_ob_q.put({'slow_stop_all':None})
 
-    def render_gripper_ob(self, row, color):
+    def render_gantry_ob(self, row, color):
         self.go_quads.add(partial(update_go_quad, row, color))
 
     def periodic_actions(self):
@@ -377,13 +377,6 @@ class ControlPanelUI:
         """
         time.sleep(8)
         while self.run_periodic_actions:
-            # Display a visual indication of aruco based gripper observations
-            # gantry_pose = self.datastore.gantry_pose.deepCopy()
-            # for row in gantry_pose:
-            #     invoke(self.render_gripper_ob, row, color.white, delay=0.0001)
-            # gripper_pose = self.datastore.gripper_pose.deepCopy()
-            # for row in gripper_pose:
-            #     invoke(self.render_gripper_ob, row, color.light_gray, delay=0.0001)
 
             if sum(self.direction) == 0:
                 self.dmgt.position = self.gantry.position
@@ -392,7 +385,7 @@ class ControlPanelUI:
                 # at this slightly lower rate, command the bot to move towards the goal point.
                 self.dmgt.direct_move()
 
-            time.sleep(1/5)
+            time.sleep(1/10)
 
     def notify_connected_bots_change(self, available_bots={}):
         offs = 0
@@ -431,6 +424,9 @@ class ControlPanelUI:
             p = updates['pos_factors_debug']
             self.debug_indicator_visual.set_position_velocity(p['visual_pos'], p['visual_vel'])
             self.debug_indicator_hang.set_position_velocity(p['hang_pos'], p['hang_vel'])
+
+        if 'gantry_observation' in updates:
+            invoke(self.render_gantry_ob, swap_yz(updates['gantry_observation']), color.white, delay=0.0001)
 
         if 'anchor_pose' in updates:
             apose = updates['anchor_pose']
