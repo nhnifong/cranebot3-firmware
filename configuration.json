@@ -101,7 +101,7 @@
     "RUNNING_WS_DELAY": 0.03
   },
   "gripper": {
-    "MAX_ACCEL": 1.5,
+    "MAX_ACCEL": 0.9,
     "TARGET_HOLDING_PRESSURE": 1.1
   }
 }

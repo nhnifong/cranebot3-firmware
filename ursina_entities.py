@@ -185,6 +185,7 @@ class Gripper(Entity):
                 self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
 
     def reel_manual(self, metersPerSecond):
+        print(f'jog speed {metersPerSecond}')
         self.to_ob_q.put({'jog_spool':{'gripper':None, 'speed':metersPerSecond}})
 
 
@@ -318,7 +319,7 @@ class Anchor(Entity):
     def reel_manual(self, metersPerSecond):
         self.wp.enabled = False
         print(f'jog speed {metersPerSecond}')
-        # self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'speed':metersPerSecond}})
+        self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'speed':metersPerSecond}})
 
     def open_ref_load_dialog(self):
         self.ref_load_wp = WindowPanel(
