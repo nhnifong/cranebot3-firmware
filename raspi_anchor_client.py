@@ -242,6 +242,7 @@ class RaspiAnchorClient(ComponentClient):
 
     def handle_update_from_ws(self, update):
         if 'line_record' in update and not self.calibration_mode: # specifically referring to pose calibration
+            print(f'anchor {self.anchor_num} line record {update['line_record']}')
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
             self.last_tension = update['line_record'][-1][-1]
 
@@ -298,7 +299,7 @@ class RaspiAnchorClient(ComponentClient):
                     ]))
                     position = pose.reshape(6)[3:]
                     self.datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
-                    # print(f'Inserted pose in datastore name={name} t={timestamp}, pose={pose}')
+                    # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
 
                     self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
                     self.to_ui_q.put({'gantry_observation': position})

@@ -97,8 +97,8 @@ class RobotComponentServer:
                 # any other exceptions require us to stop this task and close the connection to our client.
                 # the server will continue running, but it will print the exception in the console.
                 # TODO figure out how to close all the tasks and subprocesses gracefully on internal error.
-                # await ws.close(code=1011, reason=f'Exception in stream_measurements task: {e}')
-                # self.ws_client_connected = False
+                await ws.close(code=1011, reason=f'Exception in stream_measurements task: {e}')
+                self.ws_client_connected = False
                 raise e
         logging.info('stop streaming measurements because websocket is {ws}')
 
@@ -210,9 +210,11 @@ class RobotComponentServer:
                 break
         self.ws_client_connected = False
         # cause any exceptions raised by these tasks to be printed.
-        stream.cancel()
+        if not stream.done():
+            stream.cancel()
         result = await stream
-        mjpeg.cancel()
+        if not mjpeg.done():
+            mjpeg.cancel()
         result = await mjpeg
 
 
@@ -241,6 +243,7 @@ class RobotComponentServer:
 
         await self.zc.async_unregister_all_services()
         logging.info("Service unregistered")
+        result = await spool_task
 
 
     def shutdown(self):
@@ -367,7 +370,7 @@ class RaspiAnchorServer(RobotComponentServer):
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 

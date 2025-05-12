@@ -328,7 +328,7 @@ class Positioner2:
 
         self.visual_move_start_time = time.time()
         self.visual_move_line_params = np.concatenate([self.hang_gant_pos, self.hang_gant_vel])
-        self.grip_pose = np.zeros(6)
+        self.grip_pose = (np.zeros(3), np.zeros(3))
         self.slack_lines = [False, False, False, False]
 
     def find_swing(self):
@@ -415,7 +415,10 @@ class Positioner2:
           * a velocity vector
         """
         backtime = time.time()-2
-        data = self.datastore.gantry_pos.deepCopy(cutoff=backtime)
+        cutoff = backtime
+        if self.stop_cutoff is not None:
+            cutoff = self.stop_cutoff
+        data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
         if len(data) < 2:
             return
         times = data[:,0]
@@ -494,11 +497,13 @@ class Positioner2:
         
         # nothing has been recorded
         if sum(lengths) == 0:
+            print('no lengths recorded')
             self.time_taken = time.time() - self.start
             return False
 
         # timestamp of the last record used to produce this estimate. used for latency feedback
         data_ts = np.max(records[0])
+        # print(f'find hang point with lens {lengths}, data_ts > self.data_ts: {data_ts > self.data_ts}')
         # only perform work in this block when line records actually change
         if data_ts > self.data_ts:
             self.data_ts = data_ts
@@ -622,8 +627,8 @@ class Positioner2:
         rest_task = asyncio.create_task(self.restimate())
         while self.run:
             try:
-                if self.estimate():
-                    self.send_positions()
+                self.estimate()
+                self.send_positions()
                 # cProfile.runctx('self.estimate()', globals(), locals())
                 # some sleep is necessary or we will not receive updates
                 rem = (1/20 - self.time_taken)
