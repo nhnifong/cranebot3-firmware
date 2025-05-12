@@ -212,7 +212,7 @@ class SpoolController:
             # accumulate these so you can send them to the websocket
             row = (time.time(), self.last_length, currentLineSpeed)
 
-        if self.rec_loop_counter == self.conf['REC_MOD']:
+        if self.rec_loop_counter >= self.conf['REC_MOD']:
             self.record.append(row)
             self.rec_loop_counter = 0
         self.rec_loop_counter += 1
@@ -308,7 +308,6 @@ class SpoolController:
                     aimSpeed = self.aim_line_speed
                 else:
                     aimSpeed = 0
-                print(f'aimSpeed {aimSpeed}')
 
                 # limit the acceleration of the line
                 currentSpeed = self.speed * self.meters_per_rev
@@ -333,6 +332,7 @@ class SpoolController:
             except serial.serialutil.SerialTimeoutException:
                 logging.error('Lost serial contact with motor')
                 break
+        logging.info(f'Spool tracking loop stopped')
 
     async def measureRefLoad(self, load=0, freq=5):
         """
