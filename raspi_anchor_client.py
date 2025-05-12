@@ -100,6 +100,7 @@ class ComponentClient:
                 try:
                     if not self.connected:
                         return
+                    print(f'sent frame to pool {timestamp}')
                     self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                 except ValueError:
                     return # the pool is not running
@@ -286,6 +287,7 @@ class RaspiAnchorClient(ComponentClient):
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
+                print(f'detection name {detection["n"]}')
                 if detection['n'] == 'gantry_front':
                     # you have the pose of gantry_front relative to a particular anchor camera
                     # convert it to a pose relative to the origin
