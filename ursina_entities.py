@@ -142,15 +142,15 @@ class Gripper(Entity):
 
     def open_manual_spool_control(self):
         self.wp.enabled = False
-        self.jog_speed = 0.01
+        self.jog_speed = 0.1
         self.manual_spool_wp = WindowPanel(
             title="Manual Spool Control",
             content=(
                 Text(text="Use buttons or Up/Down arrow keys to control spool."),
-                Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
-                    on_click=partial(self.reel_manual, -0.05)),
-                Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                    on_click=partial(self.reel_manual, 0.05)),
+                # Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
+                #     on_click=partial(self.reel_manual, -0.05)),
+                # Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
+                #     on_click=partial(self.reel_manual, 0.05)),
             ),
             popup=True,
         )
@@ -163,29 +163,29 @@ class Gripper(Entity):
             mkey = self.remap[key]
 
         if canMove:
-            if mkey == 'up arrow down':
+            if mkey == 'up arrow':
                 self.reel_manual(-self.jog_speed)
             elif mkey == 'up arrow hold':
                 if self.jog_speed < MAX_JOG_SPEED:
-                    self.jog_speed += 0.01
+                    self.jog_speed += 0.005
                 self.reel_manual(-self.jog_speed)
             elif mkey == 'up arrow up':
                 self.jog_speed = 0.1
                 self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
 
 
-            elif mkey == 'down arrow down':
+            elif mkey == 'down arrow':
                 self.reel_manual(self.jog_speed)
             elif mkey == 'down arrow hold':
                 if self.jog_speed < MAX_JOG_SPEED:
-                    self.jog_speed += 0.01
+                    self.jog_speed += 0.005
                 self.reel_manual(self.jog_speed)
             elif mkey == 'down arrow up':
                 self.jog_speed = 0.1
                 self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
 
-    def reel_manual(self, delta_meters):
-        self.to_ob_q.put({'jog_spool':{'gripper':None, 'rel':delta_meters}})
+    def reel_manual(self, metersPerSecond):
+        self.to_ob_q.put({'jog_spool':{'gripper':None, 'speed':metersPerSecond}})
 
 
     def toggleClosed(self):
@@ -276,45 +276,49 @@ class Anchor(Entity):
 
     def open_manual_spool_control(self):
         self.wp.enabled = False
-        self.jog_speed = 0.01
+        self.jog_speed = 0.1
         self.manual_spool_wp = WindowPanel(
             title="Manual Spool Control",
             content=(
                 Text(text="Use buttons or Up/Down arrow keys to control spool."),
-                Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
-                    on_click=partial(self.reel_manual, -0.05)),
-                Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                    on_click=partial(self.reel_manual, 0.05)),
+                # Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
+                #     on_click=partial(self.reel_manual, -0.05)),
+                # Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
+                #     on_click=partial(self.reel_manual, 0.05)),
             ),
             popup=True,
         )
 
     def input(self, key):
         if hasattr(self, "manual_spool_wp") and self.manual_spool_wp.enabled:
-            if key == 'up arrow down':
+            print(key)
+            if key == 'up arrow':
                 self.reel_manual(-self.jog_speed)
             elif key == 'up arrow hold':
                 if self.jog_speed < MAX_JOG_SPEED:
-                    self.jog_speed += 0.01
+                    self.jog_speed += 0.005
                 self.reel_manual(-self.jog_speed)
             elif key == 'up arrow up':
                 self.jog_speed = 0.1
                 self.to_ob_q.put({'slow_stop_one':{'id':self.num}})
 
 
-            elif key == 'down arrow down':
+            elif key == 'down arrow':
                 self.reel_manual(self.jog_speed)
             elif key == 'down arrow hold':
                 if self.jog_speed < MAX_JOG_SPEED:
-                    self.jog_speed += 0.01
+                    self.jog_speed += 0.005
                 self.reel_manual(self.jog_speed)
             elif key == 'down arrow up':
                 self.jog_speed = 0.1
                 self.to_ob_q.put({'slow_stop_one':{'id':self.num}})
 
-    def reel_manual(self, delta_meters):
+
+
+    def reel_manual(self, metersPerSecond):
         self.wp.enabled = False
-        self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'rel':delta_meters}})
+        print(f'jog speed {metersPerSecond}')
+        # self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'speed':metersPerSecond}})
 
     def open_ref_load_dialog(self):
         self.ref_load_wp = WindowPanel(

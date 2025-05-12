@@ -195,10 +195,9 @@ class ComponentClient:
         # just discard the update if not connected.
 
     async def slow_stop_spool(self):
-        await self.send_commands({
-            'length_plan' : [],
-            'equalize_tension': {'action': 'abort'}
-        })
+        # spool will decelerate at the rate allowed by the config file.
+        # tracking mode will switch to 'speed'
+        await self.send_commands({'aim_speed': 0})
 
     async def startup(self):
         self.ct = asyncio.create_task(self.connect_websocket())
@@ -242,7 +241,6 @@ class RaspiAnchorClient(ComponentClient):
 
     def handle_update_from_ws(self, update):
         if 'line_record' in update and not self.calibration_mode: # specifically referring to pose calibration
-            print(f'anchor {self.anchor_num} line record {update['line_record']}')
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
             self.last_tension = update['line_record'][-1][-1]
 

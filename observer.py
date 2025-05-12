@@ -110,16 +110,14 @@ class AsyncObserver:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
                         if client.anchor_num == updates['jog_spool']['anchor']:
-                            # send an anchor the command 'jog' with a relative length change in meters.
                             asyncio.run_coroutine_threadsafe(client.send_commands({
-                                'jog' : updates['jog_spool']['rel']
+                                'aim_speed': updates['jog_spool']['speed']
                             }), loop)
                 elif 'gripper' in updates['jog_spool']:
-                    print(f"jog gripper spool {updates['jog_spool']['rel']}")
                     # we can also jog the gripper spool
                     if self.gripper_client is not None:
                         asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
-                            'jog' : updates['jog_spool']['rel']
+                            'aim_speed': updates['jog_spool']['speed']
                         }), loop)
             if 'gantry_dir_sp' in updates:
                 dir_sp = updates['gantry_dir_sp']

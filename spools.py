@@ -138,7 +138,6 @@ class SpoolController:
     def _commandSpeed(self, speed):
         """command a specific speed from the motor."""
         self.speed = speed
-        logging.debug(f'_commandSpeed {speed}')
         self.motor.runConstantSpeed(self.speed)
 
     def setPlan(self, plan):
@@ -308,6 +307,10 @@ class SpoolController:
                     aimSpeed = self.aim_line_speed
                 else:
                     aimSpeed = 0
+
+                if self.speed == aimSpeed:
+                    time.sleep(self.conf['LOOP_DELAY_S'])
+                    continue
 
                 # limit the acceleration of the line
                 currentSpeed = self.speed * self.meters_per_rev
