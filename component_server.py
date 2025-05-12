@@ -1,13 +1,24 @@
-from anchor_server import RaspiAnchorServer
-from gripper_server import RaspiGripperServer
-import asyncio
+import sys
 import logging
 
+logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     filename='cranebot.log'
 )
+
+handler = logging.StreamHandler(stream=sys.stdout)
+logger.addHandler(handler)
+
+def handle_exception(exc_type, exc_value, exc_traceback):
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = handle_exception
+
+import asyncio
+from anchor_server import RaspiAnchorServer
+from gripper_server import RaspiGripperServer
 
 with open('server.conf', 'r') as file:
     for line in file:

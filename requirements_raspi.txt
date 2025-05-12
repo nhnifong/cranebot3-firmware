@@ -4,5 +4,6 @@ pyserial
 getmac
 inventorhatmini
 gpiodevice
+adafruit-blinka
 adafruit-circuitpython-bno08x
 adafruit-circuitpython-vl53l1x
