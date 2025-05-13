@@ -100,7 +100,7 @@ class ComponentClient:
                 try:
                     if not self.connected:
                         return
-                    print(f'sent frame to pool {timestamp}')
+                    self.stat.pending_frames_in_pool += 1
                     self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                 except ValueError:
                     return # the pool is not running
@@ -241,6 +241,7 @@ class RaspiAnchorClient(ComponentClient):
         self.tension_seek_result = None
 
     def handle_update_from_ws(self, update):
+        # TODO if we are not regularly receiving line_record, display this as a server problem status
         if 'line_record' in update and not self.calibration_mode: # specifically referring to pose calibration
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
             self.last_tension = update['line_record'][-1][-1]
@@ -258,6 +259,7 @@ class RaspiAnchorClient(ComponentClient):
         """
         handle a list of aruco detections from the pool
         """
+        self.stat.pending_frames_in_pool -= 1
         self.stat.detection_count += len(detections)
         if self.calibration_mode:
             for detection in detections:
@@ -287,7 +289,6 @@ class RaspiAnchorClient(ComponentClient):
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
-                print(f'detection name {detection["n"]}')
                 if detection['n'] == 'gantry_front':
                     # you have the pose of gantry_front relative to a particular anchor camera
                     # convert it to a pose relative to the origin

@@ -110,6 +110,7 @@ class Gripper(Entity):
         }
         # winch line jog speed
         self.jog_speed = 0
+        self.vid_visible = False
 
     def setStatus(self, status):
         self.label.text = f"Gripper\n{status}"
@@ -132,10 +133,11 @@ class Gripper(Entity):
         title=f"Gripper Controls",
         content=(
             Button(text='Open (Space)', color=color.gold, text_color=color.black),
-            Button(text='Show video feed', color=color.gold, text_color=color.black),
+            Button(text='Show video feed', color=color.gold, text_color=color.black,
+                on_click=self.toggle_vid_feed),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
             Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
-                       on_click=self.open_manual_spool_control),
+                on_click=self.open_manual_spool_control),
             ),
         popup=True,
         )
@@ -202,6 +204,10 @@ class Gripper(Entity):
             self.left_finger.rotation = (0,0,60)
             self.right_finger.rotation = (0,0,-60)
 
+    def toggle_vid_feed(self):
+        self.vid_visible = not self.vid_visible
+        self.to_ob_q.put({'toggle_previews':{'gripper':None, 'status':self.vid_visible}})
+
 
 anchor_color = (0.8, 0.8, 0.8, 1.0)
 anchor_color_selected = (0.9, 0.9, 1.0, 1.0)
@@ -264,7 +270,8 @@ class Anchor(Entity):
         self.wp = WindowPanel(
         title=f"Anchor {self.num}",
         content=(
-            Button(text='Show video feed', color=color.gold, text_color=color.black),
+            Button(text='Show video feed', color=color.gold, text_color=color.black,
+                on_click=self.toggle_vid_feed),
             Button(text='Autofocus', color=color.gold, text_color=color.black),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
             Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
@@ -342,6 +349,10 @@ Enter the actual weight in kg."""),
             'anchor_num': self.num,
             'load': load
             }})
+
+    def toggle_vid_feed(self):
+        self.camview.enabled = not self.camview.enabled
+        self.to_ob_q.put({'toggle_previews':{'anchor':self.num, 'status':self.camview.enabled}})
 
 
 class Floor(Entity):

@@ -85,7 +85,7 @@ class ControlPanelUI:
         self.to_ob_q = to_ob_q
         self.n_anchors = 4 # todo grab from config
         self.time_domain = (1,2)
-        self.direction = np.array([0,0,0], dtype=float)
+        self.direction = np.zeros(3, dtype=float)
         self.run_periodic_actions = True
 
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
@@ -315,10 +315,23 @@ class ControlPanelUI:
             self.direction[axis] = speed
             
             # the key change results in no commanded movement of the goal point
+            print(f'key = "{key}" direction = {self.direction}')
             if sum(self.direction) == 0:
                 # immediately cancel whatever remains of the movement
                 self.to_ob_q.put({'slow_stop_all': None})
                 self.dmgt.reset()
+            else:
+                # a move will be initiated. but sometimes ursina doesn't get the up key that would end the move.
+                # this can be destructive for a CDPR, so we must ensure every move stops eventually.
+                self.last_positive_input_time = time.time()
+                invoke(self.maybe_end_move, delay=2)
+
+    def maybe_end_move(self):
+        if time.time()-2 > self.last_positive_input_time:
+            print('Ending direct move with a timeout because ursina missed a key-up')
+            self.direction = np.zeros(3, dtype=float)
+            self.to_ob_q.put({'slow_stop_all': None})
+            self.dmgt.reset()
 
     def show_error(self, error):
         self.error.text = error

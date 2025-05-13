@@ -202,10 +202,11 @@ class SpoolController:
             if self.smoothed_tension > self.conf['DANGEROUS_TENSION']:
                 logging.warning(f"Tension of {self.smoothed_tension} is too high!")
                 # try to loosen up right away to avoid breaking something
-                self._commandSpeed(1)
-                time.sleep(1)
-                self._commandSpeed(0)
-                self.move_allowed = False
+                # self._commandSpeed(1)
+                # time.sleep(1)
+                # self._commandSpeed(0)
+                # time.sleep(1)
+                # self.move_allowed = False
             row = (time.time(), self.last_length, currentLineSpeed, self.smoothed_tension)
         else:
             # accumulate these so you can send them to the websocket
