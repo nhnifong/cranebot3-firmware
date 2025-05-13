@@ -71,6 +71,7 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         self.mock_imu_class = Mock(spec=BNO08X_I2C)
         self.patchers.append(patch('gripper_server.BNO08X_I2C', self.mock_imu_class))
         self.mock_imu = self.mock_imu_class.return_value
+        self.mock_imu.quaternion = (1,2,3,4)
 
         # mock Rangefinder
         self.mock_range_class = Mock(spec=VL53L1X)
@@ -120,36 +121,30 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         run check(resp), which can assert anything about self.server or the resp.
         resp contains anything the websocket sent within timeout seconds.
         """
-        try:
-            async with websockets.connect("ws://127.0.0.1:8765") as ws:
-                await ws.send(json.dumps(command))
-                await asyncio.sleep(sleep)
-                self.assertFalse(self.server_task.done(), "Server should still be running")
-                try:
-                    resp = await asyncio.wait_for(ws.recv(), timeout)
-                    check(resp)
-                except asyncio.TimeoutError:
-                    check(None) # Allow check function to handle timeouts if needed
-                await ws.close()
-        except Exception as e:
-            self.fail(f"Command execution failed: {e}")
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await ws.send(json.dumps(command))
+            await asyncio.sleep(sleep)
+            self.assertFalse(self.server_task.done(), "Server should still be running")
+            try:
+                resp = await asyncio.wait_for(ws.recv(), timeout)
+                check(resp)
+            except asyncio.TimeoutError:
+                check(None) # Allow check function to handle timeouts if needed
+            await ws.close()
 
     async def test_send_zero_winch_line(self):
         self.mock_spooler.setReferenceLength.reset_mock()
         self.mock_hat.gpio_pin_value.return_value = 0
-        try:
-            async with websockets.connect("ws://127.0.0.1:8765") as ws:
-                await ws.send(json.dumps({'zero_winch_line': None}))
-                await asyncio.sleep(0.1)
-                self.assertFalse(self.server_task.done(), "Server should still be running")
-                self.assertEqual(-1, self.debug_motor.speed)
-                self.mock_hat.gpio_pin_value.return_value = 1
-                await asyncio.sleep(0.1)
-                self.assertEqual(0, self.debug_motor.speed)
-                self.mock_spooler.setReferenceLength.assert_called_once_with(0.01)
-                await ws.close()
-        except Exception as e:
-            self.fail(f"Command execution failed: {e}")
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await ws.send(json.dumps({'zero_winch_line': None}))
+            await asyncio.sleep(0.1)
+            self.assertFalse(self.server_task.done(), "Server should still be running")
+            self.assertEqual(-1, self.debug_motor.speed)
+            self.mock_hat.gpio_pin_value.return_value = 1
+            await asyncio.sleep(0.1)
+            self.assertEqual(0, self.debug_motor.speed)
+            self.mock_spooler.setReferenceLength.assert_called_once_with(0.01)
+            await ws.close()
 
     async def test_send_grip(self):
         # There is actually a lot of complex behavior that happens as a result of setting this,

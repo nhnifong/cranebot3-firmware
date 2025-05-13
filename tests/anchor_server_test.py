@@ -77,25 +77,34 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         except Exception as e:
             self.fail(f"Connection failed: {e}")
 
+    async def test_abnormal(self):
+        """
+        Assert that the server is still running after a client connects and then the client crashes and sends code 1011.
+        """
+        try:
+            async with websockets.connect("ws://127.0.0.1:8765") as ws:
+                await asyncio.sleep(0.1)
+                self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
+                await ws.close(code=1011, reason=f'Test client pretends to crash')
+        except Exception as e:
+            self.fail(f"Connection failed: {e}")
+
     async def command_and_check(self, command, check, timeout, sleep=0.1):
         """
         Send a command dict to the server, assert it is still running.
         run check(resp), which can assert anything about self.server or the resp.
         resp contains anything the websocket sent within timeout seconds.
         """
-        try:
-            async with websockets.connect("ws://127.0.0.1:8765") as ws:
-                await ws.send(json.dumps(command))
-                await asyncio.sleep(sleep)
-                self.assertFalse(self.server_task.done(), "Server should still be running")
-                try:
-                    resp = await asyncio.wait_for(ws.recv(), timeout)
-                    check(resp)
-                except asyncio.TimeoutError:
-                    check(None) # Allow check function to handle timeouts if needed
-                await ws.close()
-        except Exception as e:
-            self.fail(f"Command execution failed: {e}")
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await ws.send(json.dumps(command))
+            await asyncio.sleep(sleep)
+            self.assertFalse(self.server_task.done(), "Server should still be running")
+            try:
+                resp = await asyncio.wait_for(ws.recv(), timeout)
+                check(resp)
+            except asyncio.TimeoutError:
+                check(None) # Allow check function to handle timeouts if needed
+            await ws.close()
 
     async def test_send_config(self):
         config = Config()

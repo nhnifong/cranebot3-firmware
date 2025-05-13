@@ -334,7 +334,7 @@ class SpoolController:
 
                 time.sleep(self.conf['LOOP_DELAY_S'])
             except serial.serialutil.SerialTimeoutException:
-                logging.error('Lost serial contact with motor')
+                logging.critical('Lost serial contact with motor. This may require power cycling the motor controller.')
                 break
         logging.info(f'Spool tracking loop stopped')
 
