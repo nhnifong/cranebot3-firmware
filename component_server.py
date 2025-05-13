@@ -17,8 +17,6 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 sys.excepthook = handle_exception
 
 import asyncio
-from anchor_server import RaspiAnchorServer
-from gripper_server import RaspiGripperServer
 
 with open('server.conf', 'r') as file:
     for line in file:
@@ -29,11 +27,16 @@ with open('server.conf', 'r') as file:
             break
 
 if component_type == 'anchor':
+    from anchor_server import RaspiAnchorServer
     ras = RaspiAnchorServer(False)
     asyncio.run(ras.main())
+
 elif component_type == 'power anchor':
+    from anchor_server import RaspiAnchorServer
     ras = RaspiAnchorServer(True)
     asyncio.run(ras.main())
+
 elif component_type == 'gripper':
+    from gripper_server import RaspiGripperServer
     gs = RaspiGripperServer()
     asyncio.run(gs.main())

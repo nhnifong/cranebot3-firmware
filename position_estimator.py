@@ -410,30 +410,53 @@ class Positioner2:
         """
         fit a line to the last few visual gantry position observations
         The parameters of the line are
-          * a starting timestamp
           * a starting position
           * a velocity vector
         """
         backtime = time.time()-2
         cutoff = backtime
+        moving = True
         if self.stop_cutoff is not None:
+            moving = False
             cutoff = self.stop_cutoff
         data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
+        print(data)
         if len(data) < 2:
             return
         times = data[:,0]
         positions = data[:,1:]
-        # Initial guess for the parameters that define the line
-        initial_guess = np.concatenate([ self.hang_gant_pos, positions[-1]-positions[-2] ])
 
-        # result = optimize.least_squares(linear_move_cost_fn, initial_guess, args=(times, positions))
+        lower = np.min(self.anchor_points, axis=0)
+        lower[2] = 0 # lowest possible gantry position is the floor, not the lowest anchor
+        upper = np.max(self.anchor_points, axis=0)
+        position_bounds = np.column_stack([lower, upper])
+
+        velocity_guess = positions[-1]-positions[-2]
+        speed = 100
+        if not moving:
+            speed = 0.0
+            velocity_guess = np.zeros(3)
+        velocity_bounds = np.column_stack([np.repeat(-speed, 3), np.repeat(speed, 3)])
+
+        initial_guess = np.concatenate([ positions[-1], velocity_guess ])
+        bounds = np.concatenate([position_bounds, velocity_bounds])
+
+        
+        # result = optimize.least_squares(
+        #     linear_move_cost_fn,
+        #     initial_guess,
+        #     args=(backtime, times, positions),
+        #     bounds=(bounds[:,0], bounds[:,1]),
+        # )
+
         result = optimize.minimize(
             linear_move_cost_fn,
             initial_guess,
             args=(backtime, times, positions),
+            bounds=bounds,
             method='SLSQP',
             options={
-                'disp': False,
+                'disp': True,
                 'maxiter': 100,
             },
         )
