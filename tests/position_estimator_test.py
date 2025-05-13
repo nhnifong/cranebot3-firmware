@@ -193,3 +193,27 @@ class TestPositionEstimator(unittest.TestCase):
         self.datastore.winch_line_record.insert([100,1,0]) #insert a length of 1, which implies a frequency of 0.5 hz
         self.pe.find_swing()
         # np.testing.assert_array_almost_equal(self.pe.swing_params, expected_params, 2)
+
+    def test_find_visual_move(self):
+        actual_move_start_time = time.time()-2
+        actual_move_start_pos = np.array([1.0, 2.0, 1.2])
+        actual_move_velocity = np.array([0.2, -0.2, 0.01])
+
+        # generate simulated observations
+        offset = 0
+        for i in range(20):
+            x, y, z = actual_move_start_pos + actual_move_velocity * offset
+            self.datastore.gantry_pos.insert([actual_move_start_time+offset, x, y, z])
+            offset += 0.1
+
+        # set position estimator's internal state to indicate that line speeds are nonzero.
+        # specifically the time that they all became zero is undefined.
+        self.pe.stop_cutoff = None
+
+        # run the code under test
+        self.pe.find_visual_move()
+
+        np.testing.assert_array_almost_equal(
+            self.pe.visual_move_line_params,
+            np.concatenate([actual_move_start_pos, actual_move_velocity]),
+            4)
