@@ -22,9 +22,11 @@ class StatCounter:
             self.latency = []
             self.framerate = []
             self.detection_count = 0
+            self.pending_frames_in_pool = 0
             self.to_ui_q.put({'vid_stats':{
                 'detection_rate':detection_rate,
                 'video_latency':mean_latency,
                 'video_framerate':mean_framerate,
+                'pending_frames': self.pending_frames_in_pool,
                 }})
             await asyncio.sleep(0.5)

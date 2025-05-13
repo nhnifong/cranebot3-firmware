@@ -44,7 +44,7 @@ class RaspiGripperClient(ComponentClient):
         """
         handle a list of aruco detections from the pool
         """
-        pass
+        self.stat.pending_frames_in_pool -= 1
 
     async def send_config(self):
         config = Config()

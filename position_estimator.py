@@ -521,7 +521,7 @@ class Positioner2:
             # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)
             if result is None:
-                # print(f'estimate bailed because it failed to calc a hang point with lengths {lengths}')
+                print(f'estimate bailed because it failed to calc a hang point with lengths {lengths}')
                 self.time_taken = time.time() - self.start
                 return False
             self.hang_gant_pos, slack_lines = result
@@ -541,7 +541,7 @@ class Positioner2:
                 lengths += speeds * increment
                 result = find_hang_point(self.anchor_points, lengths)
                 if result is None:
-                    # print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
+                    print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
                     self.time_taken = time.time() - self.start
                     self.hang_gant_vel = np.zeros((3,))
                 else:

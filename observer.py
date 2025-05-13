@@ -119,6 +119,15 @@ class AsyncObserver:
                         asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
                             'aim_speed': updates['jog_spool']['speed']
                         }), loop)
+            if 'toggle_previews' in updates:
+                tp = updates['toggle_previews']
+                if 'anchor' in tp:
+                    for client in self.anchors:
+                        if client.anchor_num == tp['anchor']:
+                            client.sendPreviewToUi = tp['status']
+                elif 'gripper' in tp:
+                    if self.gripper_client is not None:
+                        self.gripper_client.sendPreviewToUi = tp['status']
             if 'gantry_dir_sp' in updates:
                 dir_sp = updates['gantry_dir_sp']
                 asyncio.run_coroutine_threadsafe(self.move_direction_speed(dir_sp['direction'], dir_sp['speed']), loop)
