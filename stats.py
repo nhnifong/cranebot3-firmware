@@ -6,6 +6,7 @@ class StatCounter:
     def __init__(self, to_ui_q):
         self.to_ui_q = to_ui_q
         self.detection_count = 0
+        self.pending_frames_in_pool = 0
         self.latency = []
         self.framerate = []
         self.last_update = time.time()
@@ -22,7 +23,6 @@ class StatCounter:
             self.latency = []
             self.framerate = []
             self.detection_count = 0
-            self.pending_frames_in_pool = 0
             self.to_ui_q.put({'vid_stats':{
                 'detection_rate':detection_rate,
                 'video_latency':mean_latency,

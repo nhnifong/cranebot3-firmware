@@ -68,43 +68,38 @@ class RobotComponentServer:
         as long as it exists
         """
         logging.info('start streaming measurements')
-        while ws:
-            try:
-                # add line lengths
-                meas = self.spooler.popMeasurements()
-                if len(meas) > 0:
-                    if len(meas) > 50:
-                        meas = meas[:50]
-                    self.update['line_record'] = meas
+        while True:
+            # add line lengths
+            meas = self.spooler.popMeasurements()
+            if len(meas) > 0:
+                if len(meas) > 50:
+                    meas = meas[:50]
+                self.update['line_record'] = meas
 
-                self.readOtherSensors()
+            self.readOtherSensors()
 
-                if len(self.frames) > 0:
-                    self.update['frames'] = self.frames
-                    self.frames = []
+            if len(self.frames) > 0:
+                self.update['frames'] = self.frames
+                self.frames = []
 
-                # send on websocket
-                if self.update != {}:
-                    await ws.send(json.dumps(self.update))
-                self.update = {}
+            # send on websocket
+            if self.update != {}:
+                await ws.send(json.dumps(self.update))
+            self.update = {}
 
-                # chill
-                await asyncio.sleep(self.ws_delay)
-            except (ConnectionClosedOK, ConnectionClosedError):
-                logging.info("stopped streaming measurements")
-                break
-            except Exception as e:
-                # any other exceptions require us to stop this task and close the connection to our client.
-                # the server will continue running, but it will print the exception in the console.
-                # TODO figure out how to close all the tasks and subprocesses gracefully on internal error.
-                await ws.close(code=1011, reason=f'Exception in stream_measurements task: {e}')
-                self.ws_client_connected = False
-                raise e
-        logging.info('stop streaming measurements because websocket is {ws}')
+            # chill
+            await asyncio.sleep(self.ws_delay)
 
     async def stream_mjpeg(self):
-        while self.ws_client_connected:
-            result = await self.run_rpicam_vid()
+        # keep rpicam-vid running as long as the client is connected
+        while True:
+            try:
+                result = await self.run_rpicam_vid()
+            except FileNotFoundError:
+                # we may be running in a test. In this case stop attempting to run rpicam-vid.
+                # the client will never receive the message indicating it should connect to video.
+                logging.warning('/usr/bin/rpicam-vid does not exist on this system')
+                return
             await asyncio.sleep(0.5)
 
     async def run_rpicam_vid(self, line_timeout=60):
@@ -175,48 +170,47 @@ class RobotComponentServer:
         # or because we just killed it.
         return await process.wait()
 
+    async def read_updates_from_client(self,websocket):
+        while True:
+            message = await websocket.recv()
+            update = json.loads(message)
+
+            if 'length_plan' in update:
+                self.spooler.setPlan(update['length_plan'])
+            if 'aim_speed' in update:
+                self.spooler.setAimSpeed(update['aim_speed'])
+            if 'host_time' in update:
+                logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
+            if 'jog' in update:
+                self.spooler.jogRelativeLen(float(update['jog']))
+            if 'reference_length' in update:
+                self.spooler.setReferenceLength(float(update['reference_length']))
+            if 'set_config_vars' in update:
+                self.conf.update(update['set_config_vars'])
+                pass
+
+            # defer to specific server subclass
+            result = await self.processOtherUpdates(update)
+
     async def handler(self,websocket):
         logging.info('Websocket connected')
-        self.ws_client_connected = True
-        stream = asyncio.create_task(self.stream_measurements(websocket))
-        mjpeg = asyncio.create_task(self.stream_mjpeg())
-        while True:
-            try:
-                message = await websocket.recv()
-                update = json.loads(message)
 
-                if 'length_plan' in update:
-                    self.spooler.setPlan(update['length_plan'])
-                if 'aim_speed' in update:
-                    self.spooler.setAimSpeed(update['aim_speed'])
-                if 'host_time' in update:
-                    logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
-                if 'jog' in update:
-                    self.spooler.jogRelativeLen(float(update['jog']))
-                if 'reference_length' in update:
-                    self.spooler.setReferenceLength(float(update['reference_length']))
-                if 'set_config_vars' in update:
-                    self.conf.update(update['set_config_vars'])
-                    pass
-
-                # defer to specific server subclass
-                result = await self.processOtherUpdates(update)
-
-            except ConnectionClosedOK:
-                logging.info("Client disconnected")
-                break
-            except ConnectionClosedError as e:
-                logging.info(f"Client disconnected with {e}")
-                break
-        self.ws_client_connected = False
-        # cause any exceptions raised by these tasks to be printed.
-        if not stream.done():
-            stream.cancel()
-        result = await stream
-        if not mjpeg.done():
-            mjpeg.cancel()
-        result = await mjpeg
-
+        # This features requires Python3.11
+        # The first time any of the tasks belonging to the group fails with an exception other than asyncio.CancelledError,
+        # the remaining tasks in the group are cancelled.
+        # For normal client disconnects either the streaming or reading task will throw a ConnectionClosedOK
+        # and the taskgroup context manager will cancel the other tasks, and reraise it in an ExceptionGroup
+        # except* matches errors within an ExceptionGroup
+        # If the thrown exception is not one of the type caught here, the server stops.
+        try:
+            async with asyncio.TaskGroup() as tg:
+                read_updates = tg.create_task(self.read_updates_from_client(websocket))
+                stream = tg.create_task(self.stream_measurements(websocket))
+                mjpeg = tg.create_task(self.stream_mjpeg())
+        except* ConnectionClosedOK:
+            logging.info("Client disconnected")
+        except* ConnectionClosedError as e:
+            logging.info(f"Client disconnected with {e}")
 
     async def main(self, port=8765):
         logging.info('Starting cranebot server')

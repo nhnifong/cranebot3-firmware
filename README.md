@@ -7,14 +7,16 @@ attached to spools in AI-camera equipped anchor points on the walls of a room.
 
 ## Desktop setup
 
-    sudo apt install python3-pip python3-virtualenv
-    python3 -m virtualenv venv
+    sudo add-apt-repository ppa:deadsnakes/ppa
+    sudp apt update
+    sudo apt install python3.11 python3.11-dev
+    python3.11 -m virtualenv venv
     source venv/bin/activate
     pip3 install -r requirements_desktop.txt
 
 Start control panel with UI
 
-    python3 host/main.py
+    python host/main.py
 
 
 requirements_desktop.txt includes the game engine, while requirements_raspi.txt is more lightweight and includes only the dependencies of the headless servers that run on the raspberry pi zeros
@@ -28,6 +30,7 @@ in it's current form, it requires a blender installation in order to load assets
 
 After booting any raspberry pi from a fresh image, perform an update
 
+    sudo add-apt-repository ppa:deadsnakes/ppa
     sudo apt update
     sudo apt full-upgrade
 
@@ -35,7 +38,7 @@ you may have to hit enter a few times during full-upgrade.
 
 When starting with the lite raspi image, you will be missing the following, so install those.
 
-    sudo apt install git python3-dev
+    sudo apt install git python3.11-dev python3.11-dev
 
 ### Anchors
 
