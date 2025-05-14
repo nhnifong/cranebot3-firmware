@@ -420,7 +420,6 @@ class Positioner2:
             moving = False
             cutoff = self.stop_cutoff
         data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
-        print(data)
         if len(data) < 2:
             return
         times = data[:,0]
