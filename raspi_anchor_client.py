@@ -14,7 +14,7 @@ import threading
 from config import Config
 
 # number of origin detections to average
-max_origin_detections = 10
+max_origin_detections = 100
 video_port = 8888
 websocket_port = 8765
 
@@ -228,7 +228,6 @@ class RaspiAnchorClient(ComponentClient):
         super().__init__(address, datastore, to_ui_q, to_ob_q, pool, stat)
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = {'anchor_num': self.anchor_num}
-        self.calibration_mode = False # true is pose calibration mode.
         self.shape_tracker = shape_tracker
 
         config = Config()
@@ -243,7 +242,7 @@ class RaspiAnchorClient(ComponentClient):
 
     def handle_update_from_ws(self, update):
         # TODO if we are not regularly receiving line_record, display this as a server problem status
-        if 'line_record' in update and not self.calibration_mode: # specifically referring to pose calibration
+        if 'line_record' in update:
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
             self.last_tension = update['line_record'][-1][-1]
 
@@ -262,50 +261,34 @@ class RaspiAnchorClient(ComponentClient):
         """
         self.stat.pending_frames_in_pool -= 1
         self.stat.detection_count += len(detections)
-        if self.calibration_mode:
-            for detection in detections:
-                # print(f"Name: {detection['n']}")
-                # print(f"Timestamp: {detection['s']}")
-                # print(f"Rotation Vector: {detection['r']}")
-                # print(f"Translation Vector: {detection['t']}")
-                # sys.stdout.flush()
 
-                if detection['n'] == "origin":
-                    print(f'detected origin {detection}')
-                    self.origin_poses.append(pose_from_det(detection))
-                    if len(self.origin_poses) > max_origin_detections:
-                        self.origin_poses.pop(0)
+        for detection in detections:
 
-                    # recalculate the pose of the connected anchor from recent origin detections
-                    # anchor_cam_pose = invert_pose(average_pose(self.origin_poses))
-                    # self.anchor_pose = compose_poses([anchor_cam_pose, model_constants.anchor_cam_inv])
+            if detection['n'] == "origin":
+                # save all the detections of the origin for later analysis
+                print(f'detected origin {detection}')
+                self.origin_poses.append(pose_from_det(detection))
+                if len(self.origin_poses) > max_origin_detections:
+                    self.origin_poses.pop(0)
 
-                    self.anchor_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(self.origin_poses)]))
-                    if self.shape_tracker is not None:
-                        self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
-
-                    # show real time updates of this process on the UI
-                    self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
-        else:
-            for detection in detections:
+            if detection['n'] == 'gantry_front':
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
-                if detection['n'] == 'gantry_front':
-                    # you have the pose of gantry_front relative to a particular anchor camera
-                    # convert it to a pose relative to the origin
-                    pose = np.array(compose_poses([
-                        self.anchor_pose, # obtained from calibration
-                        model_constants.anchor_camera, # constant
-                        pose_from_det(detection), # the pose obtained just now
-                        model_constants.gantry_aruco_front_inv, # constant
-                    ]))
-                    position = pose.reshape(6)[3:]
-                    self.datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
-                    # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
+                # you have the pose of gantry_front relative to a particular anchor camera
+                # convert it to a pose relative to the origin
+                pose = np.array(compose_poses([
+                    self.anchor_pose, # obtained from calibration
+                    model_constants.anchor_camera, # constant
+                    pose_from_det(detection), # the pose obtained just now
+                    model_constants.gantry_aruco_front_inv, # constant
+                ]))
+                position = pose.reshape(6)[3:]
+                self.datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
+                # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
 
-                    self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
-                    self.to_ui_q.put({'gantry_observation': position})
+                self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
+                self.to_ui_q.put({'gantry_observation': position})
                     
 
     async def send_config(self):

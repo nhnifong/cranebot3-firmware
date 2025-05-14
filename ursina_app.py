@@ -28,7 +28,6 @@ line_color = color.black
 mode_names = {
     'run':   'Run Normally',
     'pause': 'Pause/Observe',
-    'pose':  'Find Anchor Postions',
 }
 mode_descriptions = {
     'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
@@ -259,8 +258,8 @@ class ControlPanelUI:
             DropdownMenu('Mode', buttons=(
                 DropdownMenuButton(mode_names['run'], on_click=partial(self.set_mode, 'run')),
                 DropdownMenuButton(mode_names['pause'], on_click=partial(self.set_mode, 'pause')),
-                DropdownMenuButton(mode_names['pose'], on_click=partial(self.set_mode, 'pose')),
                 )),
+            DropdownMenuButton('Locate anchors', on_click=self.locate_anchors),
             DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Equalize line tension', on_click=self.equalize_lines),
             DropdownMenu('Simulated Data', buttons=(
@@ -272,6 +271,9 @@ class ControlPanelUI:
 
         Sky(color=color.light_gray)
         EditorCamera()
+
+    def locate_anchors(self)
+        self.to_ob_q.put({'locate_anchors': None})
 
     def set_simulated_data_mode(self, mode):
         self.to_ob_q.put({'set_simulated_data_mode': mode})

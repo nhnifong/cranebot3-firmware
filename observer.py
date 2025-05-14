@@ -29,6 +29,16 @@ fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec
 cranebot_anchor_service_name = 'cranebot-anchor-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
 
+def anchor_pose_cost_fn(params, observations):
+    """mean squared error between expected and actual observations given pose
+    params = [rx,ry,rz,x,y,z]
+    """
+    # what is the expected observed origin pose given these parameters
+    anchor_pose = params.reshape((2,3))
+    expected_origin_pose = invert_pose(compose_poses([anchor_pose, model_constants.anchor_camera]))
+    distances = np.linalg.norm(observations.reshape(-1,6) - expected_origin_pose.reshape(6), axis=1)
+    return np.mean(distances**2)
+
 # Manager of multiple tasks running clients connected to each robot component
 # The job of this class in a nutshell is to discover four anchors and a gripper on the network,
 # connect to them, and forward data between them and the position estimate, shape tracker, and UI.
@@ -96,7 +106,9 @@ class AsyncObserver:
                 if not (fal['sender'] == 'pe' and self.calmode != 'run'):
                     if self.gripper_client is not None:
                         message = {'length_plan' : fal['data']}
-                        asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands(message, loop))
+                        asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands(message), loop)
+            if 'locate_anchors' in updates:
+                asyncio.run_coroutine_threadsafe(self.locate_anchors(), loop)
             if 'set_run_mode' in updates:
                 print("set_run_mode") 
                 self.set_run_mode(updates['set_run_mode'], loop)
@@ -179,33 +191,52 @@ class AsyncObserver:
     def set_run_mode(self, mode, loop):
         """
         Sets the calibration mode of connected bots
-        "run" - not in a calibration mode
-        "pose" - observe the origin board
+        "run" - move autonomously to pick up objects
         "pause" - hold all motors at current position, but continue to make observations
         """
         if mode == "run":
-            if self.calmode == "pose":
-                config = Config()
-                for client in self.anchors:
-                    client.calibration_mode = False
-                    config.anchors[client.anchor_num].pose = client.anchor_pose
-                config.write()
-                print('Wrote new anchor poses to configuration.json')
             self.calmode = mode
             print("run mode")
-        elif mode == "pose":
-            self.calmode = mode
-            for name, client in self.bot_clients.items():
-                client.calibration_mode = True
-                print(f'setting {name} to pose calibration mode')
         elif mode == "pause":
-            if self.calmode == "pose":
-                # call calibrate_pose on all anchors when exiting pose calibration mode
-                for client in self.anchors:
-                    client.calibrate_pose()
-                    client.calibration_mode = False
             self.calmode = mode
             self.slow_stop_all_spools(loop)
+
+    async def locate_anchors(self):
+        # using the record of recent origin detections, estimate the actual pose of each anchor.
+        if len(self.anchors) != 4:
+            logging.error('anchor pose calibration should not be performed until all anchors are connected')
+
+        for client in self.anchors:
+            observations = np.array(client.origin_poses)
+            if len(observations) < 6:
+                print(f'Too few origin observations ({len(observations)}) from anchor {client.anchor_num}')
+                continue
+            average_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(client.origin_poses)]))
+            # depending on which quadrant the average anchor pose falls in, constrain the XY rotation,
+            # while still allowing very minor deviation because of crooked mounting and misalignment of the foam shock absorber on the camera.
+            xsign = average_pose[3] / average_pose[3]
+            ysign = average_pose[4] / average_pose[4]
+
+            initial_guess = np.array(average_pose).reshape(6)
+            initial_guess[0] = 0 # no x component in rotation axis
+            initial_guess[1] = 0 # no x component in rotation axis
+            initial_guess[2] = -xsign*(2-ysign)*pi/4 # discrete rotation around z axis based on quadrant so -Y points towards origin.
+
+            bounds = np.array([
+                (initial_guess[0] - 0.2, initial_guess[0] + 0.2), # x component of rotation vector
+                (initial_guess[1] - 0.2, initial_guess[1] + 0.2), # y component of rotation vector
+                (initial_guess[2] - 0.2, initial_guess[2] + 0.2), # z component of rotation vector
+                (-8, 8), # x component of position
+                (-8, 8), # y component of position
+                ( 1, 6), # z component of position
+            ])
+            result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds)
+            if result.success:
+                client.anchor_pose = result.x.reshape(2,3)
+                self.config.anchors[client.anchor_num].pose = client.anchor_pose
+                self.to_ui_q.put({'anchor_pose': (client.anchor_num, client.anchor_pose)})
+                self.pe.anchor_points[client.anchor_num] = client.anchor_pose[1]
+        self.config.write()
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
