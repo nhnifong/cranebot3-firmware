@@ -299,6 +299,8 @@ default_anchor_conf = {
     'DANGEROUS_TENSION': 3.5,
 }
 
+SWITCH_PIN = 18
+
 class RaspiAnchorServer(RobotComponentServer):
     def __init__(self, power_anchor=False, flat=False, mock_motor=None):
         super().__init__()
@@ -317,6 +319,16 @@ class RaspiAnchorServer(RobotComponentServer):
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
         self.eq_tension_stop_event = asyncio.Event()
+
+        try:
+            import RPi.GPIO as GPIO
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            self.gpio_ready = True
+        except RuntimeError:
+            # we can only run that on an actual pi, not in a unit test.
+            self.gpio_ready = False
+
 
     def sendData(self, update):
         # add key value pairs to the dict that gets periodically sent on the websocket
@@ -356,7 +368,11 @@ class RaspiAnchorServer(RobotComponentServer):
             asyncio.create_task(self.spooler.measureRefLoad(updates['measure_ref_load']))
 
     def readOtherSensors(self):
-        pass
+        if self.gpio_ready:
+            state = GPIO.input(SWITCH_PIN)
+            print(state)
+            # 0 closed (line is tight)
+            # 1 open (line is loose)
 
     def startOtherTasks(self):
         pass

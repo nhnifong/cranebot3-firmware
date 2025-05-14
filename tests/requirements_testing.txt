@@ -2,11 +2,10 @@ pytest
 
 -r ../requirements_raspi.txt
 
-numpy==2.2.1
+numpy==2.2.5
 opencv-contrib-python==4.11.0.86
 opencv-python==4.11.0.86
-requests==2.32.3
-scipy==1.15.1
-zeroconf==0.141.0
-asyncio
-websockets
+scipy==1.15.3
+zeroconf==0.147.0
+asyncio==3.4.3
+websockets==15.0.1

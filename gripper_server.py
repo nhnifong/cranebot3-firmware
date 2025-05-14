@@ -103,7 +103,6 @@ class RaspiGripperServer(RobotComponentServer):
     def __init__(self, mock_motor=None):
         super().__init__()
         self.conf.update(default_gripper_conf)
-        self.name_prefix = 'raspi-gripper-'
         self.service_type = 'cranebot-gripper-service'
 
         self.hat = InventorHATMini(init_leds=False)
