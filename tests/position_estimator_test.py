@@ -217,3 +217,27 @@ class TestPositionEstimator(unittest.TestCase):
             self.pe.visual_move_line_params,
             np.concatenate([actual_move_start_pos, actual_move_velocity]),
             4)
+
+    def test_find_visual_move_while_stopped(self):
+        stop_time = time.time()-2
+        rest_position = np.array([1.0, 2.0, 1.2])
+        pre_stop_velocity = np.array([0.2, -0.2, 0.01])
+        self.pe.stop_cutoff = stop_time
+
+        # generate simulated observations
+        t = stop_time - 1
+        for i in range(30):
+            if t < stop_time:
+                x, y, z = rest_position + pre_stop_velocity * (t - stop_time)
+            else:
+                x, y, z = rest_position + np.random.uniform(0,1e-4,3)
+            self.datastore.gantry_pos.insert([t, x, y, z])
+            t += 0.1
+
+        # run the code under test
+        self.pe.find_visual_move()
+
+        np.testing.assert_array_almost_equal(
+            self.pe.visual_move_line_params,
+            np.concatenate([rest_position, np.zeros(3)]),
+            3)

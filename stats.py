@@ -16,8 +16,12 @@ class StatCounter:
         while self.run:
             now = time.time()
             elapsed = now-self.last_update
-            mean_latency = np.mean(np.array(self.latency))
-            mean_framerate = np.mean(np.array(self.framerate))
+            mean_latency = 0
+            if len(self.latency) > 0:
+                mean_latency = np.mean(np.array(self.latency))
+            mean_framerate = 0
+            if len(self.framerate) > 0:
+                mean_framerate = np.mean(np.array(self.framerate))
             detection_rate = self.detection_count / elapsed
             self.last_update = now
             self.latency = []

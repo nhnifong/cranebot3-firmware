@@ -12,6 +12,7 @@ from zeroconf.asyncio import (
     AsyncServiceInfo,
     AsyncZeroconf,
     AsyncZeroconfServiceTypes,
+    InterfaceChoice,
 )
 from multiprocessing import Pool
 from math import sin,cos
@@ -20,7 +21,6 @@ from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient
 from raspi_gripper_client import RaspiGripperClient
 from random import random
-from segment import ShapeTracker
 from config import Config
 from stats import StatCounter
 from position_estimator import Positioner2
@@ -30,6 +30,8 @@ cranebot_anchor_service_name = 'cranebot-anchor-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
 
 # Manager of multiple tasks running clients connected to each robot component
+# The job of this class in a nutshell is to discover four anchors and a gripper on the network,
+# connect to them, and forward data between them and the position estimate, shape tracker, and UI.
 class AsyncObserver:
     def __init__(self, to_ui_q, to_ob_q) -> None:
         self.position_update_task = None
@@ -57,8 +59,8 @@ class AsyncObserver:
 
         self.stat = StatCounter(to_ui_q)
 
-        # FastSAM model
-        self.shape_tracker = ShapeTracker()
+        self.enable_shape_tracking = False
+        self.shape_tracker = None
 
         # Position Estimator. this used to be a seperate process so it's still somewhat independent.
         self.pe = Positioner2(self.datastore, self.to_ui_q, self.to_ob_q)
@@ -253,11 +255,11 @@ class AsyncObserver:
                 self.gripper_client = gc
                 result = await gc.startup()
 
-    async def main(self) -> None:
+    async def main(self, interfaces=InterfaceChoice.All) -> None:
         # main process loop
         with Pool(processes=6) as pool:
             self.pool = pool
-            self.aiozc = AsyncZeroconf(ip_version=IPVersion.All)
+            self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=interfaces)
 
             try:
                 print("get services list")
@@ -278,7 +280,13 @@ class AsyncObserver:
 
             asyncio.create_task(self.stat.stat_main())
             # asyncio.create_task(self.monitor_tension())
-            # asyncio.create_task(self.run_shape_tracker())
+
+            if self.enable_shape_tracking:
+                # FastSAM model
+                from segment import ShapeTracker
+                self.shape_tracker = ShapeTracker()
+                asyncio.create_task(self.run_shape_tracker())
+
             # self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
             asyncio.create_task(self.pe.main())
             

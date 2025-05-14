@@ -233,7 +233,8 @@ class RaspiAnchorClient(ComponentClient):
 
         config = Config()
         self.anchor_pose = config.anchors[anchor_num].pose
-        self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
+        if self.shape_tracker is not None:
+            self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
         self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
         # angle error received during tension based calibration
         self.last_tension = 0;
@@ -280,7 +281,8 @@ class RaspiAnchorClient(ComponentClient):
                     # self.anchor_pose = compose_poses([anchor_cam_pose, model_constants.anchor_cam_inv])
 
                     self.anchor_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(self.origin_poses)]))
-                    self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
+                    if self.shape_tracker is not None:
+                        self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
 
                     # show real time updates of this process on the UI
                     self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
