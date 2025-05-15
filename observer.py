@@ -107,8 +107,6 @@ class AsyncObserver:
                     if self.gripper_client is not None:
                         message = {'length_plan' : fal['data']}
                         asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands(message), loop)
-            if 'locate_anchors' in updates:
-                asyncio.run_coroutine_threadsafe(self.locate_anchors(), loop)
             if 'set_run_mode' in updates:
                 print("set_run_mode") 
                 self.set_run_mode(updates['set_run_mode'], loop)
@@ -173,6 +171,15 @@ class AsyncObserver:
             if 'set_simulated_data_mode' in updates:
                 m = updates['set_simulated_data_mode']
                 asyncio.run_coroutine_threadsafe(self.set_simulated_data_mode(m), loop)
+            if 'confirm_anchors' in updates:
+                poses = updates['confirm_anchors']
+                for client in self.anchors:
+                    if client.anchor_num in poses:
+                        client.anchor_pose = poses[client.anchor_num]
+                        self.config.anchors[client.anchor_num].pose = pose
+                        self.pe.anchor_points[client.anchor_num] = client.anchor_pose[1]
+                self.config.write()
+
 
     async def set_simulated_data_mode(self, mode):
         if self.sim_task is not None:
@@ -200,43 +207,46 @@ class AsyncObserver:
         elif mode == "pause":
             self.calmode = mode
             self.slow_stop_all_spools(loop)
+        elif mode == 'pose':
+            self.locate_anchor_task = asyncio.run_coroutine_threadsafe(self.locate_anchors(), loop)
 
     async def locate_anchors(self):
-        # using the record of recent origin detections, estimate the actual pose of each anchor.
-        if len(self.anchors) != 4:
-            logging.error('anchor pose calibration should not be performed until all anchors are connected')
+        """ find location of all anchors every half second until mode changes. """
+        while self.calmode == 'pose':
+            await asyncio.sleep(0.5)
+            # using the record of recent origin detections, estimate the actual pose of each anchor.
+            if len(self.anchors) != 4:
+                logging.error('anchor pose calibration should not be performed until all anchors are connected')
 
-        for client in self.anchors:
-            observations = np.array(client.origin_poses)
-            if len(observations) < 6:
-                print(f'Too few origin observations ({len(observations)}) from anchor {client.anchor_num}')
-                continue
-            average_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(client.origin_poses)]))
-            # depending on which quadrant the average anchor pose falls in, constrain the XY rotation,
-            # while still allowing very minor deviation because of crooked mounting and misalignment of the foam shock absorber on the camera.
-            xsign = average_pose[3] / average_pose[3]
-            ysign = average_pose[4] / average_pose[4]
+            for client in self.anchors:
+                observations = np.array(client.origin_poses)
+                if len(observations) < 6:
+                    print(f'Too few origin observations ({len(observations)}) from anchor {client.anchor_num}')
+                    continue
+                average_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(client.origin_poses)]))
+                # depending on which quadrant the average anchor pose falls in, constrain the XY rotation,
+                # while still allowing very minor deviation because of crooked mounting and misalignment of the foam shock absorber on the camera.
+                xsign = average_pose[3] / average_pose[3]
+                ysign = average_pose[4] / average_pose[4]
 
-            initial_guess = np.array(average_pose).reshape(6)
-            initial_guess[0] = 0 # no x component in rotation axis
-            initial_guess[1] = 0 # no x component in rotation axis
-            initial_guess[2] = -xsign*(2-ysign)*pi/4 # discrete rotation around z axis based on quadrant so -Y points towards origin.
+                initial_guess = np.array(average_pose).reshape(6)
+                initial_guess[0] = 0 # no x component in rotation axis
+                initial_guess[1] = 0 # no x component in rotation axis
+                initial_guess[2] = -xsign*(2-ysign)*pi/4 # one of four diagonals. points -Y towards middle of work area
 
-            bounds = np.array([
-                (initial_guess[0] - 0.2, initial_guess[0] + 0.2), # x component of rotation vector
-                (initial_guess[1] - 0.2, initial_guess[1] + 0.2), # y component of rotation vector
-                (initial_guess[2] - 0.2, initial_guess[2] + 0.2), # z component of rotation vector
-                (-8, 8), # x component of position
-                (-8, 8), # y component of position
-                ( 1, 6), # z component of position
-            ])
-            result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds)
-            if result.success:
-                client.anchor_pose = result.x.reshape(2,3)
-                self.config.anchors[client.anchor_num].pose = client.anchor_pose
-                self.to_ui_q.put({'anchor_pose': (client.anchor_num, client.anchor_pose)})
-                self.pe.anchor_points[client.anchor_num] = client.anchor_pose[1]
-        self.config.write()
+                bounds = np.array([
+                    (initial_guess[0] - 0.2, initial_guess[0] + 0.2), # x component of rotation vector
+                    (initial_guess[1] - 0.2, initial_guess[1] + 0.2), # y component of rotation vector
+                    (initial_guess[2] - 0.2, initial_guess[2] + 0.2), # z component of rotation vector
+                    (-8, 8), # x component of position
+                    (-8, 8), # y component of position
+                    ( 1, 6), # z component of position
+                ])
+                result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds)
+                if result.success:
+                    pose = result.x.reshape(2,3)
+                    client.anchor_pose = pose
+                    self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange

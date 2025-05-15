@@ -28,11 +28,12 @@ line_color = color.black
 mode_names = {
     'run':   'Run Normally',
     'pause': 'Pause/Observe',
+    'pose':  'Locate Anchors',
 }
 mode_descriptions = {
     'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
     'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
-    'pose':  'Place the origin card on the floor in the center of the room. Anchor positions are continuously estimated from this card.',
+    'pose':  'Place the origin card on the floor in the center of the room. Anchor positions are estimated from this card.',
 }
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
@@ -67,6 +68,13 @@ def update_from_trimesh_with_color(color, tm, entity):
     entity.color = color
     update_from_trimesh(tm, entity)
 
+origin_color_map = [color.red, color.yellow, color.green, color.azure]
+
+def update_origin_card(anchor_num, pose, entity):
+    entity.position = swap_yz(pose[1])
+    entity.rotation = to_ursina_rotation(pose[0])
+    entity.color = origin_color_map[anchor_num]
+
 # what color to show a solid depending on how many cameras it was seen by
 solid_colors = {
     2: (1.0, 0.951, 0.71, 1.0),
@@ -90,11 +98,6 @@ class ControlPanelUI:
         # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
         # maybe you shouldn't read those files in the clients
         self.calibration_mode = 'pause'
-
-        # add the charuco board that represents the room origin
-        # when a charuco board is located, it's origin is it's top left corner.
-        square = Entity(model='quad', position=(0.03, 0, -0.03), rotation=(90,0,0), color=color.white, scale=(0.06, 0.06))  # Scale in meters
-        square.texture = 'origin.jpg'
 
         # an indicator of where the user wants the gantry to be during direct moves.
         self.dmgt = DirectMoveGantryTarget(self)
@@ -168,6 +171,14 @@ class ControlPanelUI:
                 model='cube',
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
+
+        self.hypo_anchors = [
+            Entity(
+                model='anchor',
+                color=(0.6,0.6,1.0,0.5),
+                shader=unlit_shader,
+                enabled=False,
+            ) for i in range(4)]
 
         self.modePanel = Panel(model='quad', z=99, 
             color=(0.1,0.1,0.1,1.0),
@@ -258,8 +269,8 @@ class ControlPanelUI:
             DropdownMenu('Mode', buttons=(
                 DropdownMenuButton(mode_names['run'], on_click=partial(self.set_mode, 'run')),
                 DropdownMenuButton(mode_names['pause'], on_click=partial(self.set_mode, 'pause')),
+                DropdownMenuButton(mode_names['pose'], on_click=partial(self.set_mode, 'pose')),
                 )),
-            DropdownMenuButton('Locate anchors', on_click=self.locate_anchors),
             DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Equalize line tension', on_click=self.equalize_lines),
             DropdownMenu('Simulated Data', buttons=(
@@ -271,9 +282,6 @@ class ControlPanelUI:
 
         Sky(color=color.light_gray)
         EditorCamera()
-
-    def locate_anchors(self)
-        self.to_ob_q.put({'locate_anchors': None})
 
     def set_simulated_data_mode(self, mode):
         self.to_ob_q.put({'set_simulated_data_mode': mode})
@@ -347,6 +355,40 @@ class ControlPanelUI:
         self.mode_text.text = mode_names[mode]
         self.mode_descrip_text.text = mode_descriptions[mode]
         self.to_ob_q.put({'set_run_mode': self.calibration_mode})
+        if mode=='pose':
+            self.confirm_poses_bt = Button(
+                text='Confirm',
+                color=color.green,
+                text_color=color.black,
+                on_click=self.finish_locate_anchors,
+                position=(0.5,-0.45),
+                scale=(.10, .033))
+            for h in self.hypo_anchors:
+                h.pose = None
+
+    def finish_locate_anchors(self):
+        self.calibration_mode = 'pause'
+        aposes = {}
+        # copy the positions of the hypothetical anchors to the real anchors
+        for i in range(4):
+            if self.hypo_anchors[i].pose is None:
+                print(f'Anchor Camera {i} did not obtain enough observations of the origin card to determine its location')
+                continue
+            aposes[i] = self.hypo_anchors[i].pose
+            self.hypo_anchors[i].enabled = False
+            self.anchors[i].pose = self.hypo_anchors[i].pose
+            self.anchors[i].position = self.hypo_anchors[i].position
+            self.anchors[i].rotation = self.hypo_anchors[i].rotation
+        self.gantry.redraw_wires()
+        self.redraw_walls()
+        # observer will write the config for us
+        self.to_ob_q.put({
+            'confirm_anchors': aposes,
+            'set_run_mode': self.calibration_mode
+            })
+        # hide button
+        self.confirm_poses_bt.enabled = False
+
 
     def calibrate_lines(self):
         # calibrate line lengths
@@ -396,7 +438,7 @@ class ControlPanelUI:
         """
         Run certain actions at a rate slightly less than, and independent of the framerate.
         """
-        time.sleep(8)
+        time.sleep(2)
         while self.run_periodic_actions:
 
             if sum(self.direction) == 0:
@@ -450,13 +492,16 @@ class ControlPanelUI:
             invoke(self.render_gantry_ob, swap_yz(updates['gantry_observation']), color.white, delay=0.0001)
 
         if 'anchor_pose' in updates:
-            apose = updates['anchor_pose']
-            anchor_num = apose[0]
-            self.anchors[anchor_num].pose = apose[1]
-            self.anchors[anchor_num].position = swap_yz(apose[1][1])
-            self.anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
-            self.gantry.redraw_wires()
-            self.redraw_walls()
+            # if you get this message while in pose mode, it's a hypothetical pose not yet confirmed by the user.
+            if self.mode == 'pose':
+                apose = updates['anchor_pose']
+                anchor_num = apose[0]
+                self.hypo_anchors[anchor_num].enabled = True
+                self.hypo_anchors[anchor_num].pose = apose[1]
+                self.hypo_anchors[anchor_num].position = swap_yz(apose[1][1])
+                self.hypo_anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
+                # self.gantry.redraw_wires()
+                # self.redraw_walls()
 
         if 'preview_image' in updates:
             pili = updates['preview_image']
@@ -520,6 +565,13 @@ class ControlPanelUI:
 
         # if 'gripper_rvec' in updates:
         #     self.gripper.rotation = to_ursina_rotation(updates['gripper_rvec'])
+
+        if 'origin_poses' in updates:
+            o_poses = updates['origin_poses']
+            # list of poses of detected origin cards from all anchors
+            # (anchor_num, (rvec, tvec))
+            for anum, pose in o_poses:
+                self.origin_cards.add(partial(update_origin_card, anum, pose))
 
     def start(self):
         self.app.run()

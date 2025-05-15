@@ -14,7 +14,7 @@ import threading
 from config import Config
 
 # number of origin detections to average
-max_origin_detections = 100
+max_origin_detections = 25
 video_port = 8888
 websocket_port = 8765
 
