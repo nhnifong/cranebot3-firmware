@@ -7,6 +7,8 @@ attached to spools in AI-camera equipped anchor points on the walls of a room.
 
 ## Desktop setup
 
+These instructions explicitly install python 3.11. if you already have it or a subsequent version, you could use skip that and use the builtin python.
+
     sudo add-apt-repository ppa:deadsnakes/ppa
     sudp apt update
     sudo apt install python3.11 python3.11-dev
