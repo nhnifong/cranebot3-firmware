@@ -27,6 +27,7 @@ from stats import StatCounter
 from position_estimator import Positioner2
 from cv_common import invert_pose, compose_poses, average_pose
 import model_constants
+import traceback
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -97,7 +98,8 @@ class AsyncObserver:
             else:
                 asyncio.run_coroutine_threadsafe(self.process_update(updates), loop)
 
-    async def process_update(self, u):
+    async def process_update(self, updates):
+        try:
             if 'last_gant_pos' in updates:
                 self.last_gant_pos = updates['last_gant_pos']
             if 'future_anchor_lines' in updates:
@@ -187,6 +189,9 @@ class AsyncObserver:
                         self.config.anchors[client.anchor_num].pose = pose
                         self.pe.anchor_points[client.anchor_num] = client.anchor_pose[1]
                 self.config.write()
+        except Exception as e:
+            traceback.print_exc(file=sys.stderr)
+
 
 
     async def set_simulated_data_mode(self, mode):
@@ -217,17 +222,12 @@ class AsyncObserver:
             self.slow_stop_all_spools()
         elif mode == 'pose':
             self.calmode = mode
-            asyncio.create_task(self.start_locate_anchors_task())
-
-    async def start_locate_anchors_task(self):
-        # the reason for this level of indirection was to obtain a reference to the task so it can be awaited in
-        # async close and any exceptions that occur shown.
-        self.locate_anchor_task = asyncio.create_task(self.locate_anchors())
+            self.locate_anchor_task = asyncio.create_task(self.locate_anchors())
 
     async def locate_anchors(self):
         """ find location of all anchors every half second until mode changes. """
         print('locate anchor task running')
-        while self.calmode == 'pose':
+        while self.calmode == 'pose' and self.send_position_updates:
             await asyncio.sleep(0.5)
             # using the record of recent origin detections, estimate the actual pose of each anchor.
             if len(self.anchors) != 4:
@@ -237,7 +237,7 @@ class AsyncObserver:
                 if len(client.origin_poses) < 6:
                     print(f'Too few origin observations ({len(client.origin_poses)}) from anchor {client.anchor_num}')
                     continue
-                print(f'locating anchor {client.anchor_num} from {len(observations)} detections')
+                print(f'locating anchor {client.anchor_num} from {len(client.origin_poses)} detections')
                 pose = self.optimize_single_anchor_pose(np.array(client.origin_poses))
                 if pose is not None:
                     client.anchor_pose = pose
@@ -265,7 +265,7 @@ class AsyncObserver:
             ( 1, 6), # z component of position
         ])
         result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds,
-            options={'disp': True,'maxiter': 10}) # if it's not really fast we're not interested
+            options={'disp': True,'maxiter': 100}) # if it's not really fast we're not interested
         if result.success:
             pose = result.x.reshape(2,3)
             return pose
@@ -374,6 +374,7 @@ class AsyncObserver:
         if self.sim_task is not None:
             tasks.append(self.sim_task)
         if self.locate_anchor_task is not None:
+
             tasks.append(self.locate_anchor_task)
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         result = await asyncio.gather(*tasks)

@@ -62,6 +62,7 @@ class RobotComponentServer:
         self.ws_delay = self.conf['RUNNING_WS_DELAY']
         self.stream_command = stream_command
         self.rpicam_process = None
+        self.line_timeout = 60
 
     async def stream_measurements(self, ws):
         """
@@ -69,7 +70,7 @@ class RobotComponentServer:
         as long as it exists
         """
         logging.info('start streaming measurements')
-        while True:
+        while self.ws_client_connected:
             # add line lengths
             meas = self.spooler.popMeasurements()
             if len(meas) > 0:
@@ -93,8 +94,9 @@ class RobotComponentServer:
 
     async def stream_mjpeg(self):
         # keep rpicam-vid running as long as the client is connected
-        while True:
+        while self.ws_client_connected:
             try:
+                
                 logging.info('Restarting rpi-cam_vid')
                 result = await self.run_rpicam_vid()
                 # if it stops, we'll have to wait a second or two for the OS to free the port it listens on
@@ -105,7 +107,7 @@ class RobotComponentServer:
                 logging.warning('/usr/bin/rpicam-vid does not exist on this system')
                 return
 
-    async def run_rpicam_vid(self, line_timeout=60):
+    async def run_rpicam_vid(self):
         """
         Start the rpicam-vid stream process with a timeout.
         If no line is printed for timeout seconds, kill the process.
@@ -114,15 +116,13 @@ class RobotComponentServer:
         spit that down the provided websocket connection, if there is one.
         rpicam-vid has no way of sending timestamps on its own as of Feb 2025
         """
-        if self.rpicam_process is not None:
-            assert self.rpicam_process.returncode is not None, 'rpicam-vid appears to be running already'
 
         start_time = time.time()
         self.rpicam_process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
-        while True:
+        while self.ws_client_connected:
             try:
-                line = await asyncio.wait_for(self.rpicam_process.stdout.readline(), line_timeout)
+                line = await asyncio.wait_for(self.rpicam_process.stdout.readline(), self.line_timeout)
                 t = time.time()
                 if not line: # EOF
                     break
@@ -161,7 +161,7 @@ class RobotComponentServer:
                 continue # nothing wrong keep going
 
             except asyncio.TimeoutError:
-                logging.warning(f'rpicam-vid wrote no lines for {line_timeout} seconds')
+                logging.warning(f'rpicam-vid wrote no lines for {self.line_timeout} seconds')
                 break
             except asyncio.CancelledError as e:
                 # In this task group, when the client disconnects, the whole group is cancelled.
@@ -186,8 +186,9 @@ class RobotComponentServer:
         return await self.rpicam_process.wait()
 
     async def read_updates_from_client(self,websocket):
-        while True:
+        while self.ws_client_connected:
             message = await websocket.recv()
+
             update = json.loads(message)
 
             if 'length_plan' in update:
@@ -214,18 +215,21 @@ class RobotComponentServer:
         # The first time any of the tasks belonging to the group fails with an exception other than asyncio.CancelledError,
         # the remaining tasks in the group are cancelled.
         # For normal client disconnects either the streaming or reading task will throw a ConnectionClosedOK
-        # and the taskgroup context manager will cancel the other tasks, and reraise it in an ExceptionGroup
+        # and the taskgroup context manager will cancel the other tasks, and re-raise it in an ExceptionGroup
         # except* matches errors within an ExceptionGroup
         # If the thrown exception is not one of the type caught here, the server stops.
+        self.ws_client_connected = True
         try:
             async with asyncio.TaskGroup() as tg:
                 read_updates = tg.create_task(self.read_updates_from_client(websocket))
                 stream = tg.create_task(self.stream_measurements(websocket))
                 mjpeg = tg.create_task(self.stream_mjpeg())
-        except* ConnectionClosedOK:
-            logging.info("Client disconnected")
-        except* ConnectionClosedError as e:
-            logging.info(f"Client disconnected with {e}")
+        except* (ConnectionClosedOK, ConnectionClosedError):
+                logging.info("Client disconnected")
+                self.ws_client_connected = False
+        self.ws_client_connected = False
+        logging.info("All tasks in handler task group completed")
+
 
     async def main(self, port=8765):
         logging.info('Starting cranebot server')

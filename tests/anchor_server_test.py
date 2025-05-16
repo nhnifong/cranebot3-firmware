@@ -99,6 +99,52 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.server.rpicam_process.returncode)
         self.assertLess(self.server.rpicam_process.returncode, 0) # Should have a negative return code if killed by signal
 
+    async def test_subprocess_cleanup_client_has_error(self):
+        """
+        Assert that the rpicam-vid subprocess is killed when the client disconnects with an internal error
+        """
+        self.server.stream_command = ["sleep", "infinity"]
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            await ws.close(1011)
+        await asyncio.sleep(1)
+
+        self.assertIsNotNone(self.server.rpicam_process.returncode)
+        self.assertLess(self.server.rpicam_process.returncode, 0)
+
+    async def test_subprocess_cleanup_server_stopped(self):
+        """
+        Assert that the rpicam-vid subprocess is killed when the server is stopped while a client is connected
+        """
+        self.server.stream_command = ["sleep", "infinity"]
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            # crash spool tracking loop
+            self.runLoop = False
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
+
+        self.assertIsNotNone(self.server.rpicam_process.returncode)
+        self.assertLess(self.server.rpicam_process.returncode, 0)
+
+    async def test_subprocess_cleanup_line_timeout(self):
+        """
+        Assert that the rpicam-vid subprocess is killed when it has been allowed to time out at least once and be restarted,
+        before a normal client disconnect.
+        """
+        self.server.stream_command = ["sleep", "infinity"]
+        self.server.line_timeout = 1
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            print(dir(ws))
+            await asyncio.sleep(3.1) # one second for it to timeout, two more for it to wait before restarting 
+            await ws.close()
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
+
+        self.assertIsNotNone(self.server.rpicam_process.returncode)
+        self.assertLess(self.server.rpicam_process.returncode, 0)
+        self.assertFalse(True)
+
 
     async def command_and_check(self, command, check, timeout, sleep=0.1):
         """
