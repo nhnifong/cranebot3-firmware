@@ -368,6 +368,8 @@ class ControlPanelUI:
 
     def finish_locate_anchors(self):
         self.calibration_mode = 'pause'
+        self.mode_text.text = mode_names['pause']
+        self.mode_descrip_text.text = mode_descriptions['pause']
         aposes = {}
         # copy the positions of the hypothetical anchors to the real anchors
         for i in range(4):
