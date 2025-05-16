@@ -100,8 +100,11 @@ class ComponentClient:
                 try:
                     if not self.connected:
                         return
-                    self.stat.pending_frames_in_pool += 1
-                    self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                    if self.stat.pending_frames_in_pool < 20:
+                        self.stat.pending_frames_in_pool += 1
+                        self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                    else:
+                        print(f'Dropping frame because there are already too many pending. This machine is probably insufficiently powerful for this job')
                 except ValueError:
                     return # the pool is not running
                 # self.handle_detections(locate_markers(frame), timestamp=timestamp)
