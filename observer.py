@@ -222,10 +222,10 @@ class AsyncObserver:
         print('locate anchor task running')
         while self.calmode == 'pose':
             await asyncio.sleep(0.5)
-            print('start cycle')
             # using the record of recent origin detections, estimate the actual pose of each anchor.
             if len(self.anchors) != 4:
-                logging.error('anchor pose calibration should not be performed until all anchors are connected')
+                print('anchor pose calibration should not be performed until all anchors are connected')
+                return
 
             for client in self.anchors:
                 observations = np.array(client.origin_poses)
@@ -252,7 +252,8 @@ class AsyncObserver:
                     (-8, 8), # y component of position
                     ( 1, 6), # z component of position
                 ])
-                result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds)
+                result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds,
+                    options={'disp': True,'maxiter': 50})
                 if result.success:
                     pose = result.x.reshape(2,3)
                     client.anchor_pose = pose

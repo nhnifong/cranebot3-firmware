@@ -177,7 +177,8 @@ class RobotComponentServer:
 
         # Kill subprocess and wait for it to exit.
         self.update['video_ready'] = False
-        self.rpicam_process.kill()
+        if self.rpicam_process.returncode is None:
+            self.rpicam_process.kill()
         return await self.rpicam_process.wait()
 
     async def read_updates_from_client(self,websocket):
