@@ -69,25 +69,36 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         """
         Assert that the server is still running after a client connects and disconnects.
         """
-        try:
-            async with websockets.connect("ws://127.0.0.1:8765") as ws:
-                await asyncio.sleep(0.1)
-                self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
-                await ws.close()
-        except Exception as e:
-            self.fail(f"Connection failed: {e}")
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
+            await ws.close()
 
     async def test_abnormal(self):
         """
         Assert that the server is still running after a client connects and then the client crashes and sends code 1011.
         """
-        try:
-            async with websockets.connect("ws://127.0.0.1:8765") as ws:
-                await asyncio.sleep(0.1)
-                self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
-                await ws.close(code=1011, reason=f'Test client pretends to crash')
-        except Exception as e:
-            self.fail(f"Connection failed: {e}")
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
+            await ws.close(code=1011, reason=f'Test client pretends to crash')
+
+
+    async def test_subprocess_cleanup(self):
+        """
+        Assert that the rpicam-vid subprocess is killed when the client disconnects.
+        """
+        self.server.stream_command = ["sleep", "infinity"]
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            await ws.close()
+
+        # in this test the server is on the same event loop and needs a chance to run
+        await asyncio.sleep(1)
+
+        self.assertIsNotNone(self.server.rpicam_process.returncode)
+        self.assertLess(self.server.rpicam_process.returncode, 0) # Should have a negative return code if killed by signal
+
 
     async def command_and_check(self, command, check, timeout, sleep=0.1):
         """
