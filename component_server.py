@@ -1,5 +1,9 @@
 import sys
 import logging
+import time
+
+# todo maybe there is a better solution to this but systemctl starts us too early and some zeroconf things dont work
+time.sleep(3)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
