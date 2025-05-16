@@ -15,8 +15,9 @@ from zeroconf.asyncio import (
     InterfaceChoice,
 )
 from multiprocessing import Pool
-from math import sin,cos
+from math import sin,cos,pi
 import numpy as np
+import scipy.optimize as optimize
 from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient
 from raspi_gripper_client import RaspiGripperClient
@@ -24,6 +25,8 @@ from random import random
 from config import Config
 from stats import StatCounter
 from position_estimator import Positioner2
+from cv_common import invert_pose, compose_poses, average_pose
+import model_constants
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -35,7 +38,7 @@ def anchor_pose_cost_fn(params, observations):
     """
     # what is the expected observed origin pose given these parameters
     anchor_pose = params.reshape((2,3))
-    expected_origin_pose = invert_pose(compose_poses([anchor_pose, model_constants.anchor_camera]))
+    expected_origin_pose = np.array(invert_pose(compose_poses([anchor_pose, model_constants.anchor_camera])))
     distances = np.linalg.norm(observations.reshape(-1,6) - expected_origin_pose.reshape(6), axis=1)
     return np.mean(distances**2)
 
@@ -91,6 +94,10 @@ class AsyncObserver:
             if 'STOP' in updates:
                 print('Observer shutdown')
                 break
+            else:
+                asyncio.run_coroutine_threadsafe(self.process_update(updates), loop)
+
+    async def process_update(self, u):
             if 'last_gant_pos' in updates:
                 self.last_gant_pos = updates['last_gant_pos']
             if 'future_anchor_lines' in updates:
@@ -100,38 +107,38 @@ class AsyncObserver:
                         message = {'length_plan' : fal['data'][client.anchor_num].tolist()}
                         if 'host_time' in fal:
                             message['host_time'] = fal['host_time']
-                        asyncio.run_coroutine_threadsafe(client.send_commands(message), loop)
+                        asyncio.create_task(client.send_commands(message))
 
             if 'future_winch_line' in updates:
                 fal = updates['future_winch_line']
                 if not (fal['sender'] == 'pe' and self.calmode != 'run'):
                     if self.gripper_client is not None:
                         message = {'length_plan' : fal['data']}
-                        asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands(message), loop)
+                        await self.gripper_client.send_commands(message)
             if 'set_run_mode' in updates:
                 print(f"set_run_mode to '{updates['set_run_mode']}'") 
-                self.set_run_mode(updates['set_run_mode'], loop)
+                self.set_run_mode(updates['set_run_mode'])
             if 'do_line_calibration' in updates:
                 lengths = updates['do_line_calibration']
                 print(f'do_line_calibration lengths={lengths}')
                 for client in self.anchors:
-                    asyncio.run_coroutine_threadsafe(client.send_commands({'reference_length': lengths[client.anchor_num]}), loop)
+                    asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
             if 'equalize_line_tension' in updates:
                 print('equalize line tension')
-                asyncio.run_coroutine_threadsafe(self.equalize_tension(), loop)
+                asyncio.create_task(self.equalize_tension())
             if 'jog_spool' in updates:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
                         if client.anchor_num == updates['jog_spool']['anchor']:
-                            asyncio.run_coroutine_threadsafe(client.send_commands({
+                            asyncio.create_task(client.send_commands({
                                 'aim_speed': updates['jog_spool']['speed']
-                            }), loop)
+                            }))
                 elif 'gripper' in updates['jog_spool']:
                     # we can also jog the gripper spool
                     if self.gripper_client is not None:
-                        asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
+                        asyncio.create_task(self.gripper_client.send_commands({
                             'aim_speed': updates['jog_spool']['speed']
-                        }), loop)
+                        }))
             if 'toggle_previews' in updates:
                 tp = updates['toggle_previews']
                 if 'anchor' in tp:
@@ -143,35 +150,35 @@ class AsyncObserver:
                         self.gripper_client.sendPreviewToUi = tp['status']
             if 'gantry_dir_sp' in updates:
                 dir_sp = updates['gantry_dir_sp']
-                asyncio.run_coroutine_threadsafe(self.move_direction_speed(dir_sp['direction'], dir_sp['speed']), loop)
+                asyncio.create_task(self.move_direction_speed(dir_sp['direction'], dir_sp['speed']))
             if 'set_grip' in updates:
                 if self.gripper_client is not None:
-                    asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands({
+                    asyncio.create_task(self.gripper_client.send_commands({
                         'grip' : 'closed' if updates['set_grip'] else 'open'
-                    }), loop)
+                    }))
             if 'slow_stop_one' in updates:
                 if updates['slow_stop_one']['id'] == 'gripper':
                     if self.gripper_client is not None:
-                        asyncio.run_coroutine_threadsafe(self.gripper_client.slow_stop_spool(), loop)
+                        asyncio.create_task(self.gripper_client.slow_stop_spool())
                 else:
                     for client in self.anchors:
                         if client.anchor_num == updates['slow_stop_one']['id']:
-                            asyncio.run_coroutine_threadsafe(client.slow_stop_spool(), loop)
+                            asyncio.create_task(client.slow_stop_spool())
             if 'slow_stop_all' in updates:
-                self.slow_stop_all_spools(loop)
+                self.slow_stop_all_spools()
             if 'stop_if_not_slack' in updates:
                 # a command to stop any spools that were reeling in during tension equaliztion
                 for client in self.anchors:
-                    asyncio.run_coroutine_threadsafe(client.send_commands({'equalize_tension': {'action': 'stop_if_not_slack'}}), loop)
+                    asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'stop_if_not_slack'}}))
             if 'measure_ref_load' in updates:
                 for client in self.anchors:
                     if client.anchor_num == updates['measure_ref_load']['anchor_num']:
-                        asyncio.run_coroutine_threadsafe(client.send_commands({
+                        asyncio.create_task(client.send_commands({
                             'measure_ref_load': updates['measure_ref_load']['load']
-                            }), loop)
+                            }))
             if 'set_simulated_data_mode' in updates:
                 m = updates['set_simulated_data_mode']
-                asyncio.run_coroutine_threadsafe(self.set_simulated_data_mode(m), loop)
+                await self.set_simulated_data_mode(m)
             if 'confirm_anchors' in updates:
                 poses = updates['confirm_anchors']
                 for client in self.anchors:
@@ -191,12 +198,12 @@ class AsyncObserver:
         elif mode == 'point2point':
             self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
-    def slow_stop_all_spools(self, loop):
+    def slow_stop_all_spools(self):
         for name, client in self.bot_clients.items():
             # Slow stop all spools. gripper too
-            asyncio.run_coroutine_threadsafe(client.slow_stop_spool(), loop)
+            asyncio.create_task(client.slow_stop_spool())
 
-    def set_run_mode(self, mode, loop):
+    def set_run_mode(self, mode):
         """
         Sets the calibration mode of connected bots
         "run" - move autonomously to pick up objects
@@ -207,10 +214,10 @@ class AsyncObserver:
             print("run mode")
         elif mode == "pause":
             self.calmode = mode
-            self.slow_stop_all_spools(loop)
+            self.slow_stop_all_spools()
         elif mode == 'pose':
             self.calmode = mode
-            asyncio.run_coroutine_threadsafe(self.start_locate_anchors_task(), loop)
+            asyncio.create_task(self.start_locate_anchors_task())
 
     async def start_locate_anchors_task(self):
         # the reason for this level of indirection was to obtain a reference to the task so it can be awaited in
@@ -226,39 +233,43 @@ class AsyncObserver:
             if len(self.anchors) != 4:
                 print('anchor pose calibration should not be performed until all anchors are connected')
                 return
-
             for client in self.anchors:
-                observations = np.array(client.origin_poses)
-                if len(observations) < 6:
-                    print(f'Too few origin observations ({len(observations)}) from anchor {client.anchor_num}')
+                if len(client.origin_poses) < 6:
+                    print(f'Too few origin observations ({len(client.origin_poses)}) from anchor {client.anchor_num}')
                     continue
                 print(f'locating anchor {client.anchor_num} from {len(observations)} detections')
-                average_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(client.origin_poses)]))
-                # depending on which quadrant the average anchor pose falls in, constrain the XY rotation,
-                # while still allowing very minor deviation because of crooked mounting and misalignment of the foam shock absorber on the camera.
-                xsign = average_pose[3] / average_pose[3]
-                ysign = average_pose[4] / average_pose[4]
-
-                initial_guess = np.array(average_pose).reshape(6)
-                initial_guess[0] = 0 # no x component in rotation axis
-                initial_guess[1] = 0 # no x component in rotation axis
-                initial_guess[2] = -xsign*(2-ysign)*pi/4 # one of four diagonals. points -Y towards middle of work area
-
-                bounds = np.array([
-                    (initial_guess[0] - 0.2, initial_guess[0] + 0.2), # x component of rotation vector
-                    (initial_guess[1] - 0.2, initial_guess[1] + 0.2), # y component of rotation vector
-                    (initial_guess[2] - 0.2, initial_guess[2] + 0.2), # z component of rotation vector
-                    (-8, 8), # x component of position
-                    (-8, 8), # y component of position
-                    ( 1, 6), # z component of position
-                ])
-                result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds,
-                    options={'disp': True,'maxiter': 50})
-                if result.success:
-                    pose = result.x.reshape(2,3)
+                pose = self.optimize_single_anchor_pose(np.array(client.origin_poses))
+                if pose is not None:
                     client.anchor_pose = pose
                     self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
-            print(f'locate anchor task loop finished self.calmode={self.calmode}')
+        print(f'locate anchor task loop finished self.calmode={self.calmode}')
+
+    def optimize_single_anchor_pose(self, observations):
+        apose = np.array(invert_pose(compose_poses([model_constants.anchor_camera, average_pose(observations)])))
+        # depending on which quadrant the average anchor pose falls in, constrain the XY rotation,
+        # while still allowing very minor deviation because of crooked mounting and misalignment of the foam shock absorber on the camera.
+        xsign = apose[1,0] / apose[1,0]
+        ysign = apose[1,1] / apose[1,1]
+
+        initial_guess = np.array(apose).reshape(6)
+        initial_guess[0] = 0 # no x component in rotation axis
+        initial_guess[1] = 0 # no x component in rotation axis
+        initial_guess[2] = -xsign*(2-ysign)*pi/4 # one of four diagonals. points -Y towards middle of work area
+
+        bounds = np.array([
+            (initial_guess[0] - 0.2, initial_guess[0] + 0.2), # x component of rotation vector
+            (initial_guess[1] - 0.2, initial_guess[1] + 0.2), # y component of rotation vector
+            (initial_guess[2] - 0.2, initial_guess[2] + 0.2), # z component of rotation vector
+            (-8, 8), # x component of position
+            (-8, 8), # y component of position
+            ( 1, 6), # z component of position
+        ])
+        result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds,
+            options={'disp': True,'maxiter': 10}) # if it's not really fast we're not interested
+        if result.success:
+            pose = result.x.reshape(2,3)
+            return pose
+        return None
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
@@ -355,15 +366,17 @@ class AsyncObserver:
         self.send_position_updates = False
         self.stat.run = False
         self.pe.run = False
+        tasks = []
         if self.aiobrowser is not None:
-            await self.aiobrowser.async_cancel()
+            tasks.append(self.aiobrowser.async_cancel())
         if self.aiozc is not None:
-            await self.aiozc.async_close()
+            tasks.append(self.aiozc.async_close())
         if self.sim_task is not None:
-            result = await self.sim_task
+            tasks.append(self.sim_task)
         if self.locate_anchor_task is not None:
-            result = await self.locate_anchor_task
-        result = await asyncio.gather(*[client.shutdown() for client in self.bot_clients.values()])
+            tasks.append(self.locate_anchor_task)
+        tasks.extend([client.shutdown() for client in self.bot_clients.values()])
+        result = await asyncio.gather(*tasks)
 
     async def run_shape_tracker(self):
         while self.send_position_updates:

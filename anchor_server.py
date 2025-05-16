@@ -114,6 +114,9 @@ class RobotComponentServer:
         spit that down the provided websocket connection, if there is one.
         rpicam-vid has no way of sending timestamps on its own as of Feb 2025
         """
+        if self.rpicam_process is not None:
+            assert self.rpicam_process.returncode is not None, 'rpicam-vid appears to be running already'
+
         start_time = time.time()
         self.rpicam_process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
@@ -178,6 +181,7 @@ class RobotComponentServer:
         # Kill subprocess and wait for it to exit.
         self.update['video_ready'] = False
         if self.rpicam_process.returncode is None:
+            logging.info('Killing rpicam-vid subprocess')
             self.rpicam_process.kill()
         return await self.rpicam_process.wait()
 

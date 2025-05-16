@@ -12,6 +12,9 @@ from observer import AsyncObserver
 from position_estimator import Positioner2
 from raspi_gripper_client import RaspiGripperClient
 import zeroconf
+from math import pi
+from cv_common import invert_pose, compose_poses
+import model_constants
 
 class TestObserver(unittest.IsolatedAsyncioTestCase):
 
@@ -98,3 +101,17 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # toggle sendPreviewToUi attribute
         # run sendCommands()
         # run slow_stop_spool()
+
+    async def test_optimize_single_anchor_pose(self):
+        """
+        Run the optimizer once on origin card poses
+        """
+        expected_pose = np.array([[0,0,-pi/4], [2.3,2.4,2.5]])
+        simulated_observations = []
+        for i in range(25):
+            op = invert_pose(compose_poses([expected_pose, model_constants.anchor_camera]))
+            simulated_observations.append(op)
+        simulated_observations = np.array(simulated_observations)
+        simulated_observations += np.random.normal(0,1e-4,simulated_observations.shape)
+        pose = self.ob.optimize_single_anchor_pose(simulated_observations)
+        np.testing.assert_array_almost_equal(expected_pose, pose, 3)
