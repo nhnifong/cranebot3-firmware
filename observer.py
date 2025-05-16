@@ -77,6 +77,7 @@ class AsyncObserver:
 
         self.last_gant_pos = np.zeros(3)
         self.sim_task = None
+        self.locate_anchor_task = None
 
     def listen_queue_updates(self, loop):
         """
@@ -108,7 +109,7 @@ class AsyncObserver:
                         message = {'length_plan' : fal['data']}
                         asyncio.run_coroutine_threadsafe(self.gripper_client.send_commands(message), loop)
             if 'set_run_mode' in updates:
-                print("set_run_mode") 
+                print(f"set_run_mode to '{updates['set_run_mode']}'") 
                 self.set_run_mode(updates['set_run_mode'], loop)
             if 'do_line_calibration' in updates:
                 lengths = updates['do_line_calibration']
@@ -208,12 +209,20 @@ class AsyncObserver:
             self.calmode = mode
             self.slow_stop_all_spools(loop)
         elif mode == 'pose':
-            self.locate_anchor_task = asyncio.run_coroutine_threadsafe(self.locate_anchors(), loop)
+            self.calmode = mode
+            asyncio.run_coroutine_threadsafe(self.start_locate_anchors_task(), loop)
+
+    async def start_locate_anchors_task(self):
+        # the reason for this level of indirection was to obtain a reference to the task so it can be awaited in
+        # async close and any exceptions that occur shown.
+        self.locate_anchor_task = asyncio.create_task(self.locate_anchors())
 
     async def locate_anchors(self):
         """ find location of all anchors every half second until mode changes. """
+        print('locate anchor task running')
         while self.calmode == 'pose':
             await asyncio.sleep(0.5)
+            print('start cycle')
             # using the record of recent origin detections, estimate the actual pose of each anchor.
             if len(self.anchors) != 4:
                 logging.error('anchor pose calibration should not be performed until all anchors are connected')
@@ -223,6 +232,7 @@ class AsyncObserver:
                 if len(observations) < 6:
                     print(f'Too few origin observations ({len(observations)}) from anchor {client.anchor_num}')
                     continue
+                print(f'locating anchor {client.anchor_num} from {len(observations)} detections')
                 average_pose = invert_pose(compose_poses([model_constants.anchor_camera, average_pose(client.origin_poses)]))
                 # depending on which quadrant the average anchor pose falls in, constrain the XY rotation,
                 # while still allowing very minor deviation because of crooked mounting and misalignment of the foam shock absorber on the camera.
@@ -247,6 +257,7 @@ class AsyncObserver:
                     pose = result.x.reshape(2,3)
                     client.anchor_pose = pose
                     self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
+            print(f'locate anchor task loop finished self.calmode={self.calmode}')
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
@@ -349,6 +360,8 @@ class AsyncObserver:
             await self.aiozc.async_close()
         if self.sim_task is not None:
             result = await self.sim_task
+        if self.locate_anchor_task is not None:
+            result = await self.locate_anchor_task
         result = await asyncio.gather(*[client.shutdown() for client in self.bot_clients.values()])
 
     async def run_shape_tracker(self):

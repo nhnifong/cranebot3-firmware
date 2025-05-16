@@ -493,15 +493,22 @@ class ControlPanelUI:
 
         if 'anchor_pose' in updates:
             # if you get this message while in pose mode, it's a hypothetical pose not yet confirmed by the user.
-            if self.mode == 'pose':
+            if self.calibration_mode == 'pose':
                 apose = updates['anchor_pose']
                 anchor_num = apose[0]
                 self.hypo_anchors[anchor_num].enabled = True
                 self.hypo_anchors[anchor_num].pose = apose[1]
                 self.hypo_anchors[anchor_num].position = swap_yz(apose[1][1])
                 self.hypo_anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
-                # self.gantry.redraw_wires()
-                # self.redraw_walls()
+            else:
+                apose = updates['anchor_pose']
+                anchor_num = apose[0]
+                self.anchors[anchor_num].enabled = True
+                self.anchors[anchor_num].pose = apose[1]
+                self.anchors[anchor_num].position = swap_yz(apose[1][1])
+                self.anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
+                self.gantry.redraw_wires()
+                self.redraw_walls()
 
         if 'preview_image' in updates:
             pili = updates['preview_image']

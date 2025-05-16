@@ -94,7 +94,10 @@ class RobotComponentServer:
         # keep rpicam-vid running as long as the client is connected
         while True:
             try:
+                logging.info('Restarting rpi-cam_vid')
                 result = await self.run_rpicam_vid()
+                # if it stops, we'll have to wait a second or two for the OS to free the port it listens on
+                await asyncio.sleep(2)
             except FileNotFoundError:
                 # we may be running in a test. In this case stop attempting to run rpicam-vid.
                 # the client will never receive the message indicating it should connect to video.
@@ -123,22 +126,23 @@ class RobotComponentServer:
                     break
                 line = line.decode()
                 if not cam_ready:
-                    logging.info(line)
+                    logging.info(line[:-1])
                     try:
                         # remove color codes
                         line = ansi_escape.sub('', line)
                         # check if line is indicative that we started and are waiting for a connection.
                         match = rpicam_ready_re.match(line)
                         if match:
-                            logging.debug('rpicam-vid appears to be ready')
+                            logging.info('rpicam-vid appears to be ready')
                             # tell the websocket client to connect to the video stream. it will do so in another thread.
                             self.update['video_ready'] = True
                             cam_ready = True
                     except Exception as e:
                         logging.error(e)
-                    if line.strip() == "ERROR: *** failed to allocate capture buffers for stream ***":
-                        logging.warning(f'rpicam-vid failed to allocate buffers. restarting...')
+                    if line.startswith("ERROR: ***"):
                         break
+                    # ERROR: *** failed to acquire camera
+                    # ERROR: *** failed to bind listen socket ***
                     continue
                 else:
                     match = frame_line_re.match(line)
@@ -153,6 +157,8 @@ class RobotComponentServer:
                         })
                     else:
                         logging.info(line)
+                        if line.startswith("ERROR: ***"):
+                            break
                     continue # nothing wrong keep going
             except asyncio.TimeoutError:
                 logging.warning(f'rpicam-vid wrote no lines for {line_timeout} seconds')
@@ -256,8 +262,9 @@ class RobotComponentServer:
             ip = s.getsockname()[0]
             s.close()
             return ip
-        except Exception:
+        except Exception as e:
             logging.error(f"Error getting IP address: {e}")
+            # todo just wait 10 seconds and try again
             return None
 
     async def register_mdns_service(self, name, service_type, port, properties={}):
@@ -299,6 +306,13 @@ default_anchor_conf = {
     'DANGEROUS_TENSION': 3.5,
 }
 
+try:
+    import RPi.GPIO as GPIO
+    gpio_ready = True
+except RuntimeError:
+    # we can only run that on an actual pi, not in a unit test.
+    gpio_ready = False
+
 SWITCH_PIN = 18
 
 class RaspiAnchorServer(RobotComponentServer):
@@ -320,14 +334,9 @@ class RaspiAnchorServer(RobotComponentServer):
         self.service_name = 'cranebot-anchor-service.' + unique
         self.eq_tension_stop_event = asyncio.Event()
 
-        try:
-            import RPi.GPIO as GPIO
+        if gpio_ready:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            self.gpio_ready = True
-        except RuntimeError:
-            # we can only run that on an actual pi, not in a unit test.
-            self.gpio_ready = False
 
 
     def sendData(self, update):
@@ -368,7 +377,7 @@ class RaspiAnchorServer(RobotComponentServer):
             asyncio.create_task(self.spooler.measureRefLoad(updates['measure_ref_load']))
 
     def readOtherSensors(self):
-        if self.gpio_ready:
+        if gpio_ready:
             state = GPIO.input(SWITCH_PIN)
             print(state)
             # 0 closed (line is tight)
