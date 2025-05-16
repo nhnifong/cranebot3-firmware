@@ -61,6 +61,7 @@ class RobotComponentServer:
         self.frames = []
         self.ws_delay = self.conf['RUNNING_WS_DELAY']
         self.stream_command = stream_command
+        self.rpicam_process = None
 
     async def stream_measurements(self, ws):
         """
@@ -103,7 +104,6 @@ class RobotComponentServer:
                 # the client will never receive the message indicating it should connect to video.
                 logging.warning('/usr/bin/rpicam-vid does not exist on this system')
                 return
-            await asyncio.sleep(0.5)
 
     async def run_rpicam_vid(self, line_timeout=60):
         """
@@ -115,66 +115,70 @@ class RobotComponentServer:
         rpicam-vid has no way of sending timestamps on its own as of Feb 2025
         """
         start_time = time.time()
-        process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
+        self.rpicam_process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
-        cam_ready = False
         while True:
             try:
-                line = await asyncio.wait_for(process.stdout.readline(), line_timeout)
+                line = await asyncio.wait_for(self.rpicam_process.stdout.readline(), line_timeout)
                 t = time.time()
                 if not line: # EOF
                     break
                 line = line.decode()
-                if not cam_ready:
+
+                # these are the types of lines we expect under normal operation after a client has started streaming.
+                match = frame_line_re.match(line)
+                if match:
+                    self.frames.append({
+                        'time': t,
+                        'fnum': int(match.group(1)),
+                        # 'fps': match.group(2),
+                        # 'exposure': match.group(3),
+                        # 'analog_gain': match.group(4),
+                        # 'digital_gain': match.group(5),
+                    })
+                else:
+                    # log all other lines
                     logging.info(line[:-1])
-                    try:
-                        # remove color codes
-                        line = ansi_escape.sub('', line)
-                        # check if line is indicative that we started and are waiting for a connection.
-                        match = rpicam_ready_re.match(line)
-                        if match:
-                            logging.info('rpicam-vid appears to be ready')
-                            # tell the websocket client to connect to the video stream. it will do so in another thread.
-                            self.update['video_ready'] = True
-                            cam_ready = True
-                    except Exception as e:
-                        logging.error(e)
+
+                    # remove color codes
+                    line = ansi_escape.sub('', line)
+                    # check if line is indicative that we started and are waiting for a connection.
+                    match = rpicam_ready_re.match(line)
+                    if match:
+                        logging.info('rpicam-vid appears to be ready')
+                        # tell the websocket client to connect to the video stream. it will do so in another thread.
+                        self.update['video_ready'] = True
+
+                    # catch a few different kinds of errors that mean rpi-cam will have to be restarted
+                    # ERROR: *** failed to allocate buffers
+                    # ERROR: *** failed to acquire camera
+                    # ERROR: *** failed to bind listen socket
                     if line.startswith("ERROR: ***"):
                         break
-                    # ERROR: *** failed to acquire camera
-                    # ERROR: *** failed to bind listen socket ***
-                    continue
-                else:
-                    match = frame_line_re.match(line)
-                    if match:
-                        self.frames.append({
-                            'time': t,
-                            'fnum': int(match.group(1)),
-                            # 'fps': match.group(2),
-                            # 'exposure': match.group(3),
-                            # 'analog_gain': match.group(4),
-                            # 'digital_gain': match.group(5),
-                        })
-                    else:
-                        logging.info(line)
-                        if line.startswith("ERROR: ***"):
-                            break
-                    continue # nothing wrong keep going
+                continue # nothing wrong keep going
+
             except asyncio.TimeoutError:
                 logging.warning(f'rpicam-vid wrote no lines for {line_timeout} seconds')
-                process.kill()
                 break
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as e:
+                # In this task group, when the client disconnects, the whole group is cancelled.
+                # if the client is connected to video and streaming normally when the websocket disconnects,
+                # the client would disconnect from video and rpicam-vid could be expected to close normally.
+                # but if they hadn't successfully connected to video yet, it would never close.
+                # so kill it just to be sure.
                 logging.info("Killing rpicam-vid because the client disconnected")
-                process.kill()
+                self.rpicam_process.kill()
+                await self.rpicam_process.wait()
+                raise e
+            except Exception as e:
+                # if anything else goes wrong, break out of the loop so we kill the process.
+                logging.exception(e)
                 break
 
-            # unless continue is hit above because we got a line of output quick enough, we kill the process.
-            process.kill()
-            break
-        # Wait for the child process to exit. whether normally as when the client disconnects,
-        # or because we just killed it.
-        return await process.wait()
+        # Kill subprocess and wait for it to exit.
+        self.update['video_ready'] = False
+        self.rpicam_process.kill()
+        return await self.rpicam_process.wait()
 
     async def read_updates_from_client(self,websocket):
         while True:
