@@ -68,13 +68,6 @@ def update_from_trimesh_with_color(color, tm, entity):
     entity.color = color
     update_from_trimesh(tm, entity)
 
-origin_color_map = [color.red, color.yellow, color.green, color.azure]
-
-def update_origin_card(anchor_num, pose, entity):
-    entity.position = swap_yz(pose[1])
-    entity.rotation = to_ursina_rotation(pose[0])
-    entity.color = origin_color_map[anchor_num]
-
 # what color to show a solid depending on how many cameras it was seen by
 solid_colors = {
     2: (1.0, 0.951, 0.71, 1.0),
@@ -172,13 +165,19 @@ class ControlPanelUI:
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
 
+
         self.hypo_anchors = [
             Entity(
                 model='anchor',
-                color=(0.6,0.6,1.0,0.5),
+                color=c,
                 shader=unlit_shader,
                 enabled=False,
-            ) for i in range(4)]
+            ) for c in [
+                (1.0, 0.0, 0.0, 0.5),
+                (1.0, 1.0, 0.0, 0.5),
+                (0.0, 1.0, 0.0, 0.5),
+                (0.0, 1.0, 1.0, 0.5),
+            ]]
 
         self.modePanel = Panel(model='quad', z=99, 
             color=(0.1,0.1,0.1,1.0),
@@ -497,6 +496,7 @@ class ControlPanelUI:
             # if you get this message while in pose mode, it's a hypothetical pose not yet confirmed by the user.
             if self.calibration_mode == 'pose':
                 apose = updates['anchor_pose']
+                print(apose)
                 anchor_num = apose[0]
                 self.hypo_anchors[anchor_num].enabled = True
                 self.hypo_anchors[anchor_num].pose = apose[1]

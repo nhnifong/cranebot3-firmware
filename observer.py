@@ -186,7 +186,7 @@ class AsyncObserver:
                 for client in self.anchors:
                     if client.anchor_num in poses:
                         client.anchor_pose = poses[client.anchor_num]
-                        self.config.anchors[client.anchor_num].pose = pose
+                        self.config.anchors[client.anchor_num].pose = client.anchor_pose
                         self.pe.anchor_points[client.anchor_num] = client.anchor_pose[1]
                 self.config.write()
         except Exception as e:
@@ -231,7 +231,7 @@ class AsyncObserver:
             await asyncio.sleep(0.5)
             # using the record of recent origin detections, estimate the actual pose of each anchor.
             if len(self.anchors) != 4:
-                print('anchor pose calibration should not be performed until all anchors are connected')
+                print(f'anchor pose calibration should not be performed until all anchors are connected. len(anchors)={len(self.anchors)}')
                 return
             for client in self.anchors:
                 if len(client.origin_poses) < 6:
@@ -240,7 +240,6 @@ class AsyncObserver:
                 print(f'locating anchor {client.anchor_num} from {len(client.origin_poses)} detections')
                 pose = self.optimize_single_anchor_pose(np.array(client.origin_poses))
                 if pose is not None:
-                    client.anchor_pose = pose
                     self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
         print(f'locate anchor task loop finished self.calmode={self.calmode}')
 
@@ -248,13 +247,14 @@ class AsyncObserver:
         apose = np.array(invert_pose(compose_poses([model_constants.anchor_camera, average_pose(observations)])))
         # depending on which quadrant the average anchor pose falls in, constrain the XY rotation,
         # while still allowing very minor deviation because of crooked mounting and misalignment of the foam shock absorber on the camera.
-        xsign = apose[1,0] / apose[1,0]
-        ysign = apose[1,1] / apose[1,1]
+        xsign = 1 if apose[1,0]>0 else -1
+        ysign = 1 if apose[1,1]>0 else -1
 
         initial_guess = np.array(apose).reshape(6)
         initial_guess[0] = 0 # no x component in rotation axis
         initial_guess[1] = 0 # no x component in rotation axis
         initial_guess[2] = -xsign*(2-ysign)*pi/4 # one of four diagonals. points -Y towards middle of work area
+        print(f'signs = ({xsign},{ysign}) initial guess {initial_guess}')
 
         bounds = np.array([
             (initial_guess[0] - 0.2, initial_guess[0] + 0.2), # x component of rotation vector
@@ -265,7 +265,7 @@ class AsyncObserver:
             ( 1, 6), # z component of position
         ])
         result = optimize.minimize(anchor_pose_cost_fn, initial_guess, args=(observations), method='SLSQP', bounds=bounds,
-            options={'disp': True,'maxiter': 100}) # if it's not really fast we're not interested
+            options={'disp': False,'maxiter': 100}) # if it's not really fast we're not interested
         if result.success:
             pose = result.x.reshape(2,3)
             return pose
@@ -321,7 +321,7 @@ class AsyncObserver:
 
     async def main(self, interfaces=InterfaceChoice.All) -> None:
         # main process loop
-        with Pool(processes=6) as pool:
+        with Pool(processes=10) as pool:
             self.pool = pool
             self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=interfaces)
 
