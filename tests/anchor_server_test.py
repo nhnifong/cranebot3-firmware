@@ -131,19 +131,20 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         """
         Assert that the rpicam-vid subprocess is killed when it has been allowed to time out at least once and be restarted,
         before a normal client disconnect.
+
+        TODO find a way to check for orphaned process after server closes
         """
         self.server.stream_command = ["sleep", "infinity"]
         self.server.line_timeout = 1
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
             print(dir(ws))
-            await asyncio.sleep(3.1) # one second for it to timeout, two more for it to wait before restarting 
+            await asyncio.sleep(6.1) # one second for it to timeout, 5 more for it to wait before restarting 
             await ws.close()
             await asyncio.sleep(0.1)
         await asyncio.sleep(1)
 
         self.assertIsNotNone(self.server.rpicam_process.returncode)
         self.assertLess(self.server.rpicam_process.returncode, 0)
-        self.assertFalse(True)
 
 
     async def command_and_check(self, command, check, timeout, sleep=0.1):

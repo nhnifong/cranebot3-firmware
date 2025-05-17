@@ -41,6 +41,7 @@ stream_command = """
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
 rpicam_ready_re = re.compile(r"\[(.*?)\]\s+\[(.*?)\]\s+INFO\s+RPI\s+pipeline_base\.cpp:\d+\s+Using\s+configuration\s+file\s+'(.*?)'")
+busy_re = re.compile(r"\[\d+:\d+:\d+\.\d+\] \[\d+\] ERROR V4L2 v4l2_device\.cpp:\d+ '[\w-]+': Unable to set controls: Device or resource busy")
 
 
 # values that can be overridden by the controller
@@ -55,7 +56,6 @@ class RobotComponentServer:
     def __init__(self):
         self.conf = default_conf.copy()
         self.run_server = True
-        self.ws_client_connected = False
         # a dict of update to be flushed periodically to the websocket
         self.update = {}
         self.frames = []
@@ -70,7 +70,7 @@ class RobotComponentServer:
         as long as it exists
         """
         logging.info('start streaming measurements')
-        while self.ws_client_connected:
+        while True:
             # add line lengths
             meas = self.spooler.popMeasurements()
             if len(meas) > 0:
@@ -92,20 +92,29 @@ class RobotComponentServer:
             # chill
             await asyncio.sleep(self.ws_delay)
 
-    async def stream_mjpeg(self):
-        # keep rpicam-vid running as long as the client is connected
-        while self.ws_client_connected:
+    async def stream_mjpeg(self, websocket):
+        # keep rpicam-vid running until this task is cancelled by the client disconnecting
+        while True:
+
+            # if connected, this returns the connection latency.
+            # of not connected, trying to get the result of the future throws a connection closed exception
+            if not await websocket.ping():
+                return
+
             try:
-                
                 logging.info('Restarting rpi-cam_vid')
                 result = await self.run_rpicam_vid()
                 # if it stops, we'll have to wait a second or two for the OS to free the port it listens on
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
             except FileNotFoundError:
                 # we may be running in a test. In this case stop attempting to run rpicam-vid.
                 # the client will never receive the message indicating it should connect to video.
                 logging.warning('/usr/bin/rpicam-vid does not exist on this system')
                 return
+            except asyncio.CancelledError as e:
+                logging.info("Killing rpicam-vid subprocess the task is being cancelled")
+                self.rpicam_process.kill()
+                return await self.rpicam_process.wait()
 
     async def run_rpicam_vid(self):
         """
@@ -120,75 +129,65 @@ class RobotComponentServer:
         start_time = time.time()
         self.rpicam_process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
-        while self.ws_client_connected:
+        while True:
             try:
                 line = await asyncio.wait_for(self.rpicam_process.stdout.readline(), self.line_timeout)
-                t = time.time()
-                if not line: # EOF
-                    break
-                line = line.decode()
-
-                # these are the types of lines we expect under normal operation after a client has started streaming.
-                match = frame_line_re.match(line)
-                if match:
-                    self.frames.append({
-                        'time': t,
-                        'fnum': int(match.group(1)),
-                        # 'fps': match.group(2),
-                        # 'exposure': match.group(3),
-                        # 'analog_gain': match.group(4),
-                        # 'digital_gain': match.group(5),
-                    })
-                else:
-                    # log all other lines
-                    logging.info(line[:-1])
-
-                    # remove color codes
-                    line = ansi_escape.sub('', line)
-                    # check if line is indicative that we started and are waiting for a connection.
-                    match = rpicam_ready_re.match(line)
-                    if match:
-                        logging.info('rpicam-vid appears to be ready')
-                        # tell the websocket client to connect to the video stream. it will do so in another thread.
-                        self.update['video_ready'] = True
-
-                    # catch a few different kinds of errors that mean rpi-cam will have to be restarted
-                    # ERROR: *** failed to allocate buffers
-                    # ERROR: *** failed to acquire camera
-                    # ERROR: *** failed to bind listen socket
-                    if line.startswith("ERROR: ***"):
-                        break
-                continue # nothing wrong keep going
-
             except asyncio.TimeoutError:
                 logging.warning(f'rpicam-vid wrote no lines for {self.line_timeout} seconds')
-                break
-            except asyncio.CancelledError as e:
-                # In this task group, when the client disconnects, the whole group is cancelled.
-                # if the client is connected to video and streaming normally when the websocket disconnects,
-                # the client would disconnect from video and rpicam-vid could be expected to close normally.
-                # but if they hadn't successfully connected to video yet, it would never close.
-                # so kill it just to be sure.
-                logging.info("Killing rpicam-vid because the client disconnected")
                 self.rpicam_process.kill()
-                await self.rpicam_process.wait()
-                raise e
-            except Exception as e:
-                # if anything else goes wrong, break out of the loop so we kill the process.
-                logging.exception(e)
                 break
+            t = time.time()
+            if not line: # EOF.
+                break
+            line = line.decode()
 
-        # Kill subprocess and wait for it to exit.
-        self.update['video_ready'] = False
-        if self.rpicam_process.returncode is None:
-            logging.info('Killing rpicam-vid subprocess')
-            self.rpicam_process.kill()
+            # these are the types of lines we expect under normal operation after a client has started streaming.
+            match = frame_line_re.match(line)
+            if match:
+                self.frames.append({
+                    'time': t,
+                    'fnum': int(match.group(1)),
+                    # 'fps': match.group(2),
+                    # 'exposure': match.group(3),
+                    # 'analog_gain': match.group(4),
+                    # 'digital_gain': match.group(5),
+                })
+            else:
+                # log all other lines
+                logging.info(line[:-1])
+                # remove color codes
+                line = ansi_escape.sub('', line)
+
+                # check for "Unable to set controls: Device or resource busy
+                if busy_re.match(line):
+                    logging.info('Killing rpicam-vid subprocess because it cannot communicate with the device.')
+                    self.rpicam_process.kill()
+                    break
+
+                # check if line is indicative that we started and are waiting for a connection.
+                match = rpicam_ready_re.match(line)
+                if match:
+                    logging.info('rpicam-vid appears to be ready')
+                    # tell the websocket client to connect to the video stream. it will do so in another thread.
+                    self.update['video_ready'] = True
+
+                # catch a few different kinds of errors that mean rpi-cam will have to be restarted
+                # some of these can only happen after we have asked the client to try connecting to video.
+                # ERROR: *** failed to allocate buffers
+                # ERROR: *** failed to acquire camera
+                # ERROR: *** failed to bind listen socket
+                if line.startswith("ERROR: ***"):
+                    logging.info('Killing rpicam-vid subprocess')
+                    self.rpicam_process.kill()
+                    break    
+            # nothing wrong keep going
+
+        # wait for the subprocess to exit, whether because we killed it, or it stopped normally
         return await self.rpicam_process.wait()
 
     async def read_updates_from_client(self,websocket):
-        while self.ws_client_connected:
+        while True:
             message = await websocket.recv()
-
             update = json.loads(message)
 
             if 'length_plan' in update:
@@ -218,16 +217,13 @@ class RobotComponentServer:
         # and the taskgroup context manager will cancel the other tasks, and re-raise it in an ExceptionGroup
         # except* matches errors within an ExceptionGroup
         # If the thrown exception is not one of the type caught here, the server stops.
-        self.ws_client_connected = True
         try:
             async with asyncio.TaskGroup() as tg:
                 read_updates = tg.create_task(self.read_updates_from_client(websocket))
                 stream = tg.create_task(self.stream_measurements(websocket))
-                mjpeg = tg.create_task(self.stream_mjpeg())
+                mjpeg = tg.create_task(self.stream_mjpeg(websocket))
         except* (ConnectionClosedOK, ConnectionClosedError):
-                logging.info("Client disconnected")
-                self.ws_client_connected = False
-        self.ws_client_connected = False
+            logging.info("Client disconnected")
         logging.info("All tasks in handler task group completed")
 
 
