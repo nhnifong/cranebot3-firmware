@@ -21,6 +21,8 @@ from ursina.shaders import (
 from ursina.prefabs.dropdown_menu import DropdownMenu, DropdownMenuButton
 from ursina_entities import * # my ursina objects
 
+window.borderless = False
+
 # the color for the lines that connect the anchors, gantry, and gripper
 line_color = color.black
 
@@ -81,7 +83,8 @@ def update_go_quad(position, color, e):
 
 class ControlPanelUI:
     def __init__(self, to_ob_q):
-        self.app = Ursina()
+        self.app = Ursina(fullscreen=False, borderless=False)
+
         self.to_ob_q = to_ob_q
         self.n_anchors = 4 # todo grab from config
         self.time_domain = (1,2)
