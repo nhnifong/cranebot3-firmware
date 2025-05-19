@@ -343,7 +343,6 @@ class AsyncObserver:
             self.ob_queue_task = asyncio.create_task(asyncio.to_thread(self.listen_queue_updates, loop=asyncio.get_running_loop()))
 
             asyncio.create_task(self.stat.stat_main())
-            # asyncio.create_task(self.monitor_tension())
 
             if self.enable_shape_tracking:
                 # FastSAM model
@@ -544,47 +543,47 @@ class AsyncObserver:
             asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
 
 
-    async def run_tension_based_line_calibration(self):
-        """
-        Tension based line calibration process is as follows
+    # async def run_tension_based_line_calibration(self):
+    #     """
+    #     Tension based line calibration process is as follows
 
-        Set the reference length on the lines the original way (aruco observation of gantry)
-        Starting with taut lines
-        do while disparity in line tension after a move is large,
-            Record frame position of gantry in each cam
-            Move to a new position, maybe 20cm away.
-            Measure disparity in line tension
-            Equalize the tension on the lines, as estimated by the motor shaft error.
-            Change reference length by whatever amount of line was spooled or unspooled.
-            Record frame position of gantry in each cam. Store frame positions (start and finish) along with line deltas in dataset. 
-        """
-        for move_n in range(4):
-            starts = collect_gant_frame_positions()
-            vector = np.random.normal(0, 0.1, (3))
-            vector = vector / np.linalg.norm(vector)
-            self.move_direction_speed(vector, 0.1)
-            await asyncio.sleep(2)
-            self.move_direction_speed(None, 0)
-            await self.lines_stable()
-            await self.equalize_tension()
-            finishes = collect_gant_frame_positions()
+    #     Set the reference length on the lines the original way (aruco observation of gantry)
+    #     Starting with taut lines
+    #     do while disparity in line tension after a move is large,
+    #         Record frame position of gantry in each cam
+    #         Move to a new position, maybe 20cm away.
+    #         Measure disparity in line tension
+    #         Equalize the tension on the lines, as estimated by the motor shaft error.
+    #         Change reference length by whatever amount of line was spooled or unspooled.
+    #         Record frame position of gantry in each cam. Store frame positions (start and finish) along with line deltas in dataset. 
+    #     """
+    #     for move_n in range(4):
+    #         starts = collect_gant_frame_positions()
+    #         vector = np.random.normal(0, 0.1, (3))
+    #         vector = vector / np.linalg.norm(vector)
+    #         self.move_direction_speed(vector, 0.1)
+    #         await asyncio.sleep(2)
+    #         self.move_direction_speed(None, 0)
+    #         await self.lines_stable()
+    #         await self.equalize_tension()
+    #         finishes = collect_gant_frame_positions()
 
-    async def equalize_tension(self):
-        """Inner loop of run_tension_based_line_calibration"""
-        print('equalize_tension 1')
-        for client in self.anchors:
-            client.tension_seek_running = True
-            print('send_commands 1')
-            asyncio.create_task(client.send_commands({'equalize_tension': {
-                'action': 'start',
-            }}))
+    # async def equalize_tension(self):
+    #     """Inner loop of run_tension_based_line_calibration"""
+    #     print('equalize_tension 1')
+    #     for client in self.anchors:
+    #         client.tension_seek_running = True
+    #         print('send_commands 1')
+    #         asyncio.create_task(client.send_commands({'equalize_tension': {
+    #             'action': 'start',
+    #         }}))
 
-        print('equalize_tension 2')
-        # wait for all clients to finish
-        while any([a.tension_seek_running for a in self.anchors]):
-            await asyncio.sleep(1/10)
-        asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'complete'}}))
-        print('tension equalization finished.')
+    #     print('equalize_tension 2')
+    #     # wait for all clients to finish
+    #     while any([a.tension_seek_running for a in self.anchors]):
+    #         await asyncio.sleep(1/10)
+    #     asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'complete'}}))
+    #     print('tension equalization finished.')
 
 
 def start_observation(to_ui_q, to_ob_q):

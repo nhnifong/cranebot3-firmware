@@ -292,28 +292,7 @@ class RobotComponentServer:
         await self.zc.async_register_service(info)
         logging.info(f"Registered service: {name} ({service_type}) on port {port}")
 
-default_anchor_conf = {    
-    # smoothing factor. range: [0,1]. lower values are smoother.
-    'TENSION_SMOOTHING_FACTOR': 0.2,
-    # kilograms. below this, line is assumed to be slack during tensioning
-    'TENSION_SLACK_THRESH': 0.30,
-    # kilograms. above this, line is assumed to be too tight during tensioning.
-    'TENSION_TIGHT_THRESH': 0.7,
-    # speed to reel in and out lines turing tension equalization. m/s
-    'MOTOR_SPEED_DURING_TEQ': 1,
-    # maximum change in line length allowed during tension equalization. meters
-    'MAX_LINE_CHANGE_DURING_TEQ': 0.3,
-    # degrees of expected angle error with no load per commanded rev/sec
-    'MKS42C_EXPECTED_ERR': 1.0,
-    # kg-meters per degree of error. Factor for computing torque from the risidual angle error
-    'MKS42C_TORQUE_FACTOR': 0.172,
-    # speed at which to measure initial tension. slowest possible motor speed. reeling in, which seems to work better than out.
-    'MEASUREMENT_SPEED': -0.4,
-    # number of 1/30 second ticks to measure to obtain a stable value.
-    'MEASUREMENT_TICKS': 18,
-    # if this tension is exceeded, motion will stop.
-    'DANGEROUS_TENSION': 3.5,
-}
+default_anchor_conf = {}
 
 try:
     import RPi.GPIO as GPIO
@@ -335,10 +314,10 @@ class RaspiAnchorServer(RobotComponentServer):
             motor = MKSSERVO42C()
         if power_anchor:
             # A power anchor spool has a thicker line
-            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=43.7, full_length=10, conf=self.conf, gear_ratio=ratio)
+            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=43.7, full_length=10, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
         else:
             # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
-            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=27, full_length=10, conf=self.conf, gear_ratio=ratio)
+            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=27, full_length=10, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
         self.eq_tension_stop_event = asyncio.Event()
@@ -347,43 +326,16 @@ class RaspiAnchorServer(RobotComponentServer):
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-
-    def sendData(self, update):
-        # add key value pairs to the dict that gets periodically sent on the websocket
-        # added for use by equalizeSpoolTension where the spooler needed to communicate with the controller directly.
-        self.update.update(update)
+    def tight_check(self):
+        """Return whether the line is tight according to the lever switch"""
+        if not gpio_ready:
+            return True
+        return GPIO.input(SWITCH_PIN) == 1
 
     async def processOtherUpdates(self, updates):
-
-        # the observer is expected to start tension based calibration by sending {'equalize_tension': {'action': 'start'}}
-        # then periodically send higher thresholds, then send either complete or abort.
-        if 'equalize_tension' in updates:
-            action = updates['equalize_tension']['action']
-            if action == 'start':
-                self.ws_delay = self.conf['CALIBRATING_WS_DELAY'] # send updates faster
-                self.eq_tension_stop_event.clear()
-                maxLineChange = 0.3 # max meters of line that is allowed to reel in
-                if 'max_line_change' in updates['equalize_tension']:
-                    maxLineChange = updates['equalize_tension']['max_line_change']
-                allowOutSpooling = True
-                if 'allow_outspooling' in updates['equalize_tension']:
-                    allowOutSpooling = updates['equalize_tension']['allow_outspooling']
-                asyncio.create_task(self.spooler.equalizeSpoolTension(self.eq_tension_stop_event, self.sendData, maxLineChange, allowOutSpooling))
-            elif action == 'complete':
-                # set the event, without setting abort_equalize_tension to indicate approval and commit the line length change
-                self.eq_tension_stop_event.set()
-                self.ws_delay = self.conf['RUNNING_WS_DELAY']
-            elif action == 'abort':
-                self.spooler.abort_equalize_tension = True
-                self.eq_tension_stop_event.set()
-                self.ws_delay = self.conf['RUNNING_WS_DELAY']
-            elif action == 'stop_if_not_slack':
-                self.spooler.tensioneq_outspooling_allowed = False
-            elif action == 'thresholds':
-                self.spooler.live_tension_low_thresh = updates['equalize_tension']['th'][0]
-                self.spooler.live_tension_high_thresh = updates['equalize_tension']['th'][1]
-        if 'measure_ref_load' in updates:
-            asyncio.create_task(self.spooler.measureRefLoad(updates['measure_ref_load']))
+        if 'tighten' in updates:
+            # pull in the line slowly until the lever switch clicks.
+            asyncio.create_task(self.tighten())
 
     def readOtherSensors(self):
         if gpio_ready:
@@ -395,6 +347,11 @@ class RaspiAnchorServer(RobotComponentServer):
     def startOtherTasks(self):
         pass
 
+    async def tighten(self):
+        while GPIO.input(SWITCH_PIN) != 0:
+            self.spooler.setAimSpeed(-0.12) # meters of line per second
+            await asyncio.sleep(0.05)
+        self.spooler.setAimSpeed(0)
 
 if __name__ == "__main__":
     logging.basicConfig(

@@ -26,21 +26,19 @@ class TestSpoolControllerInit(unittest.TestCase):
 
     def test_init_for_anchor(self):
         conf = default_anchor_conf.copy()
-        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf, tension_support=True)
-        self.assertEqual(True, spooler.tension_support)
+        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf)
         self.assertEqual(False, spooler.spoolPause)
         self.assertLessEqual(0.02*pi, spooler.meters_per_rev)
         self.assertGreaterEqual(0.03*pi, spooler.meters_per_rev)
 
     def test_init_for_gripper(self):
         conf = default_gripper_conf.copy()
-        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf, tension_support=False)
-        self.assertEqual(False, spooler.tension_support)
+        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf)
         self.assertEqual(False, spooler.spoolPause)
 
     def test_set_ref_length(self):
         conf = default_anchor_conf.copy()
-        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf, tension_support=True)
+        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf)
         self.debug_motor.position = 100
         cir_before = spooler.meters_per_rev
         za_before = spooler.zero_angle
@@ -54,7 +52,7 @@ class TestSpoolControllerInit(unittest.TestCase):
 
     def test_command_speed(self):
         conf = default_anchor_conf.copy()
-        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf, tension_support=True)
+        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf)
         self.debug_motor.position = 100
         self.debug_motor.speed = 0
         spooler._commandSpeed(9)
@@ -67,7 +65,7 @@ class TestSpoolControllerTracking(unittest.IsolatedAsyncioTestCase):
         self.debug_motor = DebugMotor()
         self.debug_motor.position = 0
         self.conf = default_anchor_conf.copy()
-        self.spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=20, full_length=10, conf=self.conf, tension_support=False)
+        self.spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=20, full_length=10, conf=self.conf)
 
         # start tracking loop
         self.spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))

@@ -57,7 +57,7 @@ class DataStore:
         gantry_pos: shape (size, 4) T XYZ
         imu_rotvec: shape (size, 5) each row TXYZ
         winch_line_record: shape (size, 3) TSL
-        anchor_line_record: shape (size, 3) TSLT  time, length, speed, tension. one for each line
+        anchor_line_record: shape (size, 3) TSL  time, length, speed. one for each line
         range_record: shape (size, 3) TL
         """
         self.n_anchors = n_anchors
@@ -65,5 +65,5 @@ class DataStore:
         self.gantry_pos = CircularBuffer((size, 4))
         self.imu_rotvec = CircularBuffer((size, 4))
         self.winch_line_record = CircularBuffer((size, 3))
-        self.anchor_line_record = [CircularBuffer((size, 4)) for n in range(n_anchors)]
+        self.anchor_line_record = [CircularBuffer((size, 3)) for n in range(n_anchors)]
         self.range_record = CircularBuffer((size, 2))
