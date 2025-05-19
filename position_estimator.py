@@ -289,10 +289,6 @@ class Positioner2:
         self.to_ui_q = to_ui_q
         self.to_ob_q = to_ob_q
         self.config = Config()
-        try:
-            self.slack_thresh = self.config.commmon_anchor_vars['TENSION_SLACK_THRESH']
-        except KeyError:
-            self.slack_thresh = 0.3
         self.n_cables = len(self.config.anchors)
         self.anchor_points = np.array([
             [-2,  3, 2],
@@ -511,11 +507,10 @@ class Positioner2:
         z = np.zeros(3, dtype=float)
 
         # Look at the last report for each anchor line.
-        # time, length, speed, tension
+        # time, length, speed
         records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
         lengths = np.array(records[:,1])
         speeds = np.array(records[:,2])
-        tensions = np.array(records[:,3])
         
         # nothing has been recorded
         if sum(lengths) == 0:
@@ -549,7 +544,7 @@ class Positioner2:
             self.hang_gant_pos, slack_lines = result
 
             # this represents a prediction of which lines are slack, it may not match reality.
-            # if this prediction says a line is tight but measured tension says otherwise, the hang point is probably quite wrong.
+            # if this prediction says a line is tight but measured slackness says otherwise, the hang point is probably quite wrong.
             self.slack_lines = result[1]
 
             if sum(speeds) == 0:

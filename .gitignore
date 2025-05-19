@@ -10,3 +10,4 @@ images/cal
 *.pt
 cranebot.log
 mks42c_expected_err.cal
+zero-angles.txt

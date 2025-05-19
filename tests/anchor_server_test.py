@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, ANY
 import asyncio
 from anchor_server import RaspiAnchorServer
 import websockets
@@ -61,7 +61,15 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_startup_shutdown(self):
         # Startup and shutdown are handled in setUp and tearDown
-        self.mock_spool_class.assert_called_once_with(self.debug_motor, empty_diameter=25, full_diameter=27, full_length=10, conf=self.server.conf, gear_ratio=20/51)
+        self.mock_spool_class.assert_called_once_with(
+            self.debug_motor,
+            empty_diameter=25,
+            full_diameter=27,
+            full_length=10,
+            conf=self.server.conf,
+            gear_ratio=20/51,
+            tight_check_fn=ANY
+        )
         self.assertTrue(self.server_task.done() is False, "Server should be running")
 
 
@@ -196,15 +204,3 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
             pass
             self.mock_spooler.setPlan.assert_called_once_with(length_plan)
         await self.command_and_check({'length_plan': length_plan}, check, 0.1)
-
-    async def test_send_measure_ref_load(self):
-        load = 0.3
-        def check(resp):
-            self.assertEqual(self.lastRefLoad, load)
-        await self.command_and_check({'measure_ref_load': load}, check, 0.1)
-
-    async def test_send_measure_ref_load_0(self):
-        load = 0
-        def check(resp):
-            self.assertEqual(self.lastRefLoad, load)
-        await self.command_and_check({'measure_ref_load': load}, check, 0.1)

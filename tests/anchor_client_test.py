@@ -120,8 +120,8 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         When an achor client receives "line_record" it should put it in the anchor line array in datastore corresponding to it's anchor number
         """
         await self.clientSetup()
-        # expect time, length, tension
-        linerecord = [(88.0,2.0,1,0), (89.0,2.1,1,0)]
+        # expected (time, length, speed)
+        linerecord = [(88.0, 2.0, 0.0), (89.0, 2.1, 0.1)]
         asyncio.create_task(self.server_ws.send(json.dumps({'line_record': linerecord})))
         await asyncio.sleep(0.1)
         np.testing.assert_array_almost_equal(linerecord[-1], self.datastore.anchor_line_record[1].getLast())
