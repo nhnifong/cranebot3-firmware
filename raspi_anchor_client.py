@@ -238,25 +238,11 @@ class RaspiAnchorClient(ComponentClient):
         if self.shape_tracker is not None:
             self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
         self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
-        # angle error received during tension based calibration
-        self.last_tension = 0;
-        self.tension_seek_running = False
-        self.tension_seek_result = None
 
     def handle_update_from_ws(self, update):
         # TODO if we are not regularly receiving line_record, display this as a server problem status
         if 'line_record' in update:
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
-            self.last_tension = update['line_record'][-1][-1]
-
-        # the following updates may be sent from spools.py during tension based calibration
-        if 'tension_seek_stopped' in update:
-            # observer needs to know when all anchors have received this message.
-            self.tension_seek_running = False
-            self.tension_seek_result = update['tension_seek_stopped']
-            if self.tension_seek_result['started_slack']:
-                # if any spool that started slack becomes tight, get the observer to stop any spools that started tight from spooling out. 
-                self.to_ob_q.put({'stop_if_not_slack': None})
 
     def handle_detections(self, detections, timestamp):
         """
