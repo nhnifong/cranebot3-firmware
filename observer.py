@@ -125,9 +125,6 @@ class AsyncObserver:
                 print(f'do_line_calibration lengths={lengths}')
                 for client in self.anchors:
                     asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
-            if 'equalize_line_tension' in updates:
-                print('equalize line tension')
-                asyncio.create_task(self.equalize_tension())
             if 'jog_spool' in updates:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
@@ -168,16 +165,6 @@ class AsyncObserver:
                             asyncio.create_task(client.slow_stop_spool())
             if 'slow_stop_all' in updates:
                 self.slow_stop_all_spools()
-            if 'stop_if_not_slack' in updates:
-                # a command to stop any spools that were reeling in during tension equaliztion
-                for client in self.anchors:
-                    asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'stop_if_not_slack'}}))
-            if 'measure_ref_load' in updates:
-                for client in self.anchors:
-                    if client.anchor_num == updates['measure_ref_load']['anchor_num']:
-                        asyncio.create_task(client.send_commands({
-                            'measure_ref_load': updates['measure_ref_load']['load']
-                            }))
             if 'set_simulated_data_mode' in updates:
                 m = updates['set_simulated_data_mode']
                 await self.set_simulated_data_mode(m)
@@ -191,7 +178,6 @@ class AsyncObserver:
                 self.config.write()
         except Exception as e:
             traceback.print_exc(file=sys.stderr)
-
 
 
     async def set_simulated_data_mode(self, mode):
@@ -541,50 +527,6 @@ class AsyncObserver:
         # send move
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
-
-
-    # async def run_tension_based_line_calibration(self):
-    #     """
-    #     Tension based line calibration process is as follows
-
-    #     Set the reference length on the lines the original way (aruco observation of gantry)
-    #     Starting with taut lines
-    #     do while disparity in line tension after a move is large,
-    #         Record frame position of gantry in each cam
-    #         Move to a new position, maybe 20cm away.
-    #         Measure disparity in line tension
-    #         Equalize the tension on the lines, as estimated by the motor shaft error.
-    #         Change reference length by whatever amount of line was spooled or unspooled.
-    #         Record frame position of gantry in each cam. Store frame positions (start and finish) along with line deltas in dataset. 
-    #     """
-    #     for move_n in range(4):
-    #         starts = collect_gant_frame_positions()
-    #         vector = np.random.normal(0, 0.1, (3))
-    #         vector = vector / np.linalg.norm(vector)
-    #         self.move_direction_speed(vector, 0.1)
-    #         await asyncio.sleep(2)
-    #         self.move_direction_speed(None, 0)
-    #         await self.lines_stable()
-    #         await self.equalize_tension()
-    #         finishes = collect_gant_frame_positions()
-
-    # async def equalize_tension(self):
-    #     """Inner loop of run_tension_based_line_calibration"""
-    #     print('equalize_tension 1')
-    #     for client in self.anchors:
-    #         client.tension_seek_running = True
-    #         print('send_commands 1')
-    #         asyncio.create_task(client.send_commands({'equalize_tension': {
-    #             'action': 'start',
-    #         }}))
-
-    #     print('equalize_tension 2')
-    #     # wait for all clients to finish
-    #     while any([a.tension_seek_running for a in self.anchors]):
-    #         await asyncio.sleep(1/10)
-    #     asyncio.create_task(client.send_commands({'equalize_tension': {'action': 'complete'}}))
-    #     print('tension equalization finished.')
-
 
 def start_observation(to_ui_q, to_ob_q):
     """

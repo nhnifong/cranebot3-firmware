@@ -320,7 +320,6 @@ class RaspiAnchorServer(RobotComponentServer):
             self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=27, full_length=10, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
-        self.eq_tension_stop_event = asyncio.Event()
 
         if gpio_ready:
             GPIO.setmode(GPIO.BCM)
