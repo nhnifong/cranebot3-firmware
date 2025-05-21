@@ -488,6 +488,10 @@ class Positioner2:
     async def restimate(self):
         """
         Perform estimations that are meant to occur at a slower rate.
+        
+        TODO
+        If the gantry does not visually appear to be moving and no move command has been sent in a while
+        send the distance between the visual position and the anchor as a reference length to any anchor which is tight.
         """
         while self.run:
             try:
