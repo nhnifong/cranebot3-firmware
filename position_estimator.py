@@ -451,7 +451,7 @@ class Positioner2:
             bounds=bounds,
             method='SLSQP',
             options={
-                'disp': True,
+                'disp': False,
                 'maxiter': 100,
             },
         )
