@@ -37,7 +37,7 @@ class TestDatastore(unittest.TestCase):
 
         self.assertEqual(anchors, len(d.anchor_line_record))
         for aline in d.anchor_line_record:
-            self.assertEqual((dlen, 3), aline.shape)
+            self.assertEqual((dlen, 4), aline.shape)
 
     def test_datastore_init_3(self):
         # does it still work with three anchors
@@ -73,7 +73,7 @@ class TestDatastore(unittest.TestCase):
     def test_overflow(self):
         d = DataStore(30, 4)
         for i in range(200):
-            d.anchor_line_record[0].insert(np.array([i, 0, 0]))
+            d.anchor_line_record[0].insert(np.array([i, 0, 0, 1]))
             last = d.anchor_line_record[0].getLast()
             self.assertEqual(i, last[0])
 

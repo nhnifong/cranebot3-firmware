@@ -307,7 +307,7 @@ class AsyncObserver:
 
     async def main(self, interfaces=InterfaceChoice.All) -> None:
         # main process loop
-        with Pool(processes=10) as pool:
+        with Pool(processes=8) as pool:
             self.pool = pool
             self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=interfaces)
 
