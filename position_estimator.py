@@ -511,6 +511,7 @@ class Positioner2:
         records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
         lengths = np.array(records[:,1])
         speeds = np.array(records[:,2])
+        tight = np.array(records[:,3])
         
         # nothing has been recorded
         if sum(lengths) == 0:
@@ -530,10 +531,9 @@ class Positioner2:
             # offsets = records[:,1] + records[:,2] * elapsed
             # lengths += offsets
 
-            # if any line tension is low enough to appear slack,
+            # if any line is measured to be slack,
             # make its length effectively infinite so it won't play a part in the hang position
-            # feels_slack = tensions < self.slack_thresh
-            # lengths[feels_slack] = 100
+            lengths[tight < 0.5] = 100
 
             # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)
