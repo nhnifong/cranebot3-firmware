@@ -107,7 +107,14 @@ class ControlPanelUI:
         # sphereZ = Entity(model='sphere', position=(0,0,1), color=color.blue, scale=(0.1), shader=unlit_shader)
 
         #show a very large floor
-        floor = Floor(model='quad', position=(0, -0.05, 0), rotation=(90,0,0), color=(0.35,0.22,0.18,1.0), scale=(10, 10), shader=lit_with_shadows_shader)  # Scale in meters
+        self.floor = Floor(
+            model='quad',
+            position=(0, -0.05, 0),
+            rotation=(90,0,0),
+            color=(0.35,0.22,0.18,1.0),
+            scale=(10, 10), # Scale in meters
+            shader=lit_with_shadows_shader
+        ) 
 
         self.config = Config()
         self.anchors = []

@@ -62,6 +62,8 @@ class Gantry(Entity):
         self.position = swap_yz(self.zup_pos)
         self.last_update_t = now
         self.redraw_wires()
+        # height of the mouse target reticule, not the height of the flor
+        self.ui.floor.set_reticule_height(self.zup_pos[2])
 
     def redraw_wires(self):
         # update the lines between the gantry and the other things
@@ -388,9 +390,18 @@ class Floor(Entity):
             texture='blue_circle.png',
         )
 
+    def set_reticule_height(self, height):
+        self.alt = height
+        self.circle.position[2] = -self.alt*2
+        self.pipe.model=Pipe(
+                path=[(0,0,0), (0,self.alt*2,0)],
+                thicknesses=(0.01, 0.01),
+                cap_ends=True)
+
     def on_click(self,):
         print(mouse.world_point)
         # send message to position estimator with desired future position
+        gantry_goal = swap_yz(self.circle.world_position)
 
     def update(self,):
         if mouse.hovered_entity == self:
