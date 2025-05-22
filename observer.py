@@ -149,7 +149,11 @@ class AsyncObserver:
                         self.gripper_client.sendPreviewToUi = tp['status']
             if 'gantry_dir_sp' in updates:
                 dir_sp = updates['gantry_dir_sp']
+                self.gantry_goal_pos = None
                 asyncio.create_task(self.move_direction_speed(dir_sp['direction'], dir_sp['speed']))
+            if 'gantry_goal_pos' in updates:
+                self.gantry_goal_pos = updates['gantry_goal_pos']
+                asyncio.create_task(self.seek_gantry_goal())
             if 'set_grip' in updates:
                 if self.gripper_client is not None:
                     asyncio.create_task(self.gripper_client.send_commands({
@@ -489,15 +493,41 @@ class AsyncObserver:
             last_lengths = lengths
             asyncio.sleep(0.3)
 
+    async def seek_gantry_goal(self):
+        while self.gantry_goal_pos is not None:
+            vector = self.gantry_goal_pos - self.pe.gant_pos
+            dist = np.linalg.norm(vector)
+            if dist < 0.05:
+                break
+            vector = vector / dist
+            self.move_direction_speed(vector, 0.2, self.pe.gant_pos)
+            await asyncio.sleep(0.2)
+        self.slow_stop_all_spools()
+        self.gantry_goal_pos = None
+
     async def move_direction_speed(self, uvec, speed, starting_pos=None):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
         we will use the last one sent from position_estimator
+
+        Due to inaccuaracy in the positions of the anchors and lengths of the lines,
+        the speeds we command from the spools will not be perfect.
+        On average, half will be too high, and half will be too low.
+        Because there are four lines and the gantry only hangs stably from three,
+        the actual point where the gantry ends up hanging after any move will always be higher than intended
+        So a small downward bias is introduced into the requested direction to account for this.
+        The size of the bias should theoretically be a function of the the magnitude of position and line errors,
+        but we don't have that info. alternatively we could calibrate the bias to make horizontal movements level
+        according to the laser rangefinder.
         """
         if speed == 0:
             for client in self.anchors:
                 asyncio.create_task(client.send_commands({'aim_speed': 0}))
             return
+
+        # apply downward bias and renormalize
+        uvec = uvec - np.array(0,0,-0.08)
+        uvec  = uvec / np.linalg.norm(uvec)
 
         anchor_positions = np.zeros((4,3))
         for a in self.anchors:

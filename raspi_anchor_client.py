@@ -65,7 +65,7 @@ class ComponentClient:
         lastSam = time.time()
         while self.connected:
             last_time = time.time()
-            ret, frame = cap.read()
+            ret, frame = cap.read() # blocking call, that's why we're in a thread.
             if ret:
 
                 # send frame to shape tracker and ui

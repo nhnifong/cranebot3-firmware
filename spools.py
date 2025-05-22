@@ -260,6 +260,10 @@ class SpoolController:
                 else:
                     aimSpeed = 0
 
+                # stop outspooling of line when not tight and switch is available (anchors hardware 4.5.5 and later)
+                if aimSpeed > 0 and (self.tight_check_fn is not None) and (not self.tight_check_fn()):
+                    aimSpeed = 0
+
                 if self.speed == aimSpeed:
                     time.sleep(self.conf['LOOP_DELAY_S'])
                     continue
@@ -278,10 +282,6 @@ class SpoolController:
                     cspeed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
                     # in revs per second.
                     if abs(cspeed) < 0.2:
-                        cspeed = 0
-                    # stop outspooling of line when not tight and switch is available (anchors hardware 4.5.5 and later)
-                    if cspeed > 0 and (self.tight_check_fn is not None) and (not self.tight_check_fn()):
-                        logging.warning(f"would let out line at at {self.speed} m/s but switch indicates line is loose, so holding position to avoid birds nest")
                         cspeed = 0
                     self._commandSpeed(cspeed)
                 else:

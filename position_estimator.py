@@ -610,7 +610,7 @@ class Positioner2:
 
     def send_positions(self):
         update_for_observer = {
-            'last_gant_pos': self.hang_gant_pos,
+            'last_gant_pos': self.gant_pos,
             # 'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
             # 'future_winch_line': {'sender':'pe', 'data':future_winch_line},
         }
