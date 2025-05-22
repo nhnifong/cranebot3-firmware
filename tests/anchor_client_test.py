@@ -121,10 +121,10 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         """
         await self.clientSetup()
         # expected (time, length, speed)
-        linerecord = [(88.0, 2.0, 0.0), (89.0, 2.1, 0.1)]
+        linerecord = [(88.0, 2.0, 0.0, True), (89.0, 2.1, 0.1, True)]
         asyncio.create_task(self.server_ws.send(json.dumps({'line_record': linerecord})))
         await asyncio.sleep(0.1)
-        np.testing.assert_array_almost_equal(linerecord[-1], self.datastore.anchor_line_record[1].getLast())
+        np.testing.assert_array_almost_equal(self.datastore.anchor_line_record[1].getLast(), linerecord[-1])
         await self.clientTearDown()
 
     async def test_handle_detections_gantry(self):
