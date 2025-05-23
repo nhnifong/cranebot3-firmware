@@ -77,9 +77,8 @@ class AsyncObserver:
         self.shape_tracker = None
 
         # Position Estimator. this used to be a seperate process so it's still somewhat independent.
-        self.pe = Positioner2(self.datastore, self.to_ui_q, self.to_ob_q)
+        self.pe = Positioner2(self.datastore, self.to_ui_q, self)
 
-        self.last_gant_pos = np.zeros(3)
         self.sim_task = None
         self.locate_anchor_task = None
 
@@ -100,8 +99,6 @@ class AsyncObserver:
 
     async def process_update(self, updates):
         try:
-            if 'last_gant_pos' in updates:
-                self.last_gant_pos = updates['last_gant_pos']
             if 'future_anchor_lines' in updates:
                 fal = updates['future_anchor_lines']
                 if not (fal['sender'] == 'pe' and self.calmode != 'run'):
@@ -121,10 +118,7 @@ class AsyncObserver:
                 print(f"set_run_mode to '{updates['set_run_mode']}'") 
                 self.set_run_mode(updates['set_run_mode'])
             if 'do_line_calibration' in updates:
-                lengths = updates['do_line_calibration']
-                print(f'do_line_calibration lengths={lengths}')
-                for client in self.anchors:
-                    asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
+                self.sendReferenceLengths(updates['do_line_calibration'])
             if 'jog_spool' in updates:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
@@ -183,6 +177,14 @@ class AsyncObserver:
         except Exception as e:
             traceback.print_exc(file=sys.stderr)
 
+    async def sendReferenceLengths(self, lengths):
+        if len(lengths) != 4:
+            raise ValueError
+        # any anchor that receives this and is slack would ignore it
+        # any anchor which is tight would calculate a zero angle and average it in
+        # If only some anchors are connected, this would still send reference lengths to those
+        for client in self.anchors:
+            asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
 
     async def set_simulated_data_mode(self, mode):
         if self.sim_task is not None:
@@ -481,18 +483,6 @@ class AsyncObserver:
             result[client.anchor_num] = client.last_gantry_frame_coords
         return result
 
-    async def lines_stable(self, threshold=0.05, timeout=10):
-        """return once all lines have stopped moving"""
-        last_lengths = None
-        lengths = np.array([alr.getLast()[1] for alr in enumerate(self.datastore.anchor_line_record)])
-        changes = [1,0,0,0]
-        start = time.time()
-        while sum(changes) > threshold and time.time()-start < timeout:
-            if last_length is not None:
-                changes = lengths - last_lengths
-            last_lengths = lengths
-            asyncio.sleep(0.3)
-
     async def seek_gantry_goal(self):
         while self.gantry_goal_pos is not None:
             vector = self.gantry_goal_pos - self.pe.gant_pos
@@ -537,7 +527,7 @@ class AsyncObserver:
         # even if the starting position is off slightly, this method should not produce jerky moves.
         # because it's not commanding any absolute length from the spool motor
         if starting_pos is None:
-            starting_pos = self.last_gant_pos
+            starting_pos = self.pe.gant_pos
 
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - anchor_positions, axis=1)

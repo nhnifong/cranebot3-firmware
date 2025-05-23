@@ -38,17 +38,52 @@ class TestSpoolControllerInit(unittest.TestCase):
 
     def test_set_ref_length(self):
         conf = default_anchor_conf.copy()
-        spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=30, full_length=10, conf=conf)
+        diameter_mm = 20
+        spooler = SpoolController(self.debug_motor, empty_diameter=diameter_mm, full_diameter=diameter_mm, full_length=10, conf=conf)
         self.debug_motor.position = 100
         cir_before = spooler.meters_per_rev
         za_before = spooler.zero_angle
+
+        # there are 4 meters of line unspooled, and 6 meters of line spooled.
+        expected_zero_angle = self.debug_motor.position * -1 - 6/(diameter_mm*0.001*pi)
         spooler.setReferenceLength(4)
-        cir_after = spooler.meters_per_rev
-        za_after = spooler.zero_angle
-        self.assertEqual(cir_before, cir_after)
-        self.assertNotEqual(za_before, za_after)
+
+        # Although averaging of zero angles always occurs, when there is only one measurement, we should expect it to be the one calculated
+        # from the reference length we just profided
+        self.assertAlmostEqual(expected_zero_angle, spooler.zero_angle, 5)
+
+        # expect the current length to be what we just set the current reference length to be
         length = spooler.get_unspooled_length(self.debug_motor.position)
-        self.assertAlmostEqual(4, length,9)
+        self.assertAlmostEqual(4, length, 5)
+
+    def test_set_ref_length_averaging(self):
+        conf = default_anchor_conf.copy()
+        diameter_mm = 20
+        spooler = SpoolController(self.debug_motor, empty_diameter=diameter_mm, full_diameter=diameter_mm, full_length=10, conf=conf)
+        self.debug_motor.position = 100
+        cir_before = spooler.meters_per_rev
+        za_before = spooler.zero_angle
+
+        # since 7.01 and 7.0 will fall into the same bin, and only the last measuremnt from a bin should factor into the final result,
+        # we should be using an average o 1,4,7 which is 4
+        lengths = [1,4,7.01,7]
+        expected_za = []
+        for length in lengths:
+            if length != 7.01:
+                expected_za.append(self.debug_motor.position * -1 - (10-length)/(diameter_mm*0.001*pi))
+            spooler.setReferenceLength(length)
+        print(spooler.za_collection)
+
+        # Although averaging of zero angles always occurs, when there is only one measurement, we should expect it to be the one calculated
+        # from the reference length we just profided
+        self.assertAlmostEqual(np.mean(np.array(expected_za)), spooler.zero_angle, 5)
+
+        # expect the current length to be the the average reference length that we provided.
+        length = spooler.get_unspooled_length(self.debug_motor.position)
+        self.assertAlmostEqual(4, length, 5)
+
+        # TODO we could also test the spiral aspect of setReferenceLength
+        # that there should be no effect when the line is slack
 
     def test_command_speed(self):
         conf = default_anchor_conf.copy()
