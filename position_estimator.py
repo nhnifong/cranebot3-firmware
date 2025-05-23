@@ -283,11 +283,11 @@ def linear_move_cost_fn(model_params, starting_time, times, observed_positions):
 
 
 class Positioner2:
-    def __init__(self, datastore, to_ui_q, to_ob_q):
+    def __init__(self, datastore, to_ui_q, observer):
         self.run = True # run main loop
         self.datastore = datastore
         self.to_ui_q = to_ui_q
-        self.to_ob_q = to_ob_q
+        self.ob = observer
         self.config = Config()
         self.n_cables = len(self.config.anchors)
         self.anchor_points = np.array([
@@ -309,7 +309,8 @@ class Positioner2:
         self.gant_pos = np.zeros(3, dtype=float)
         self.gant_vel = np.zeros(3, dtype=float)
 
-        # the time the gantry stopped moving. If it was moving at the last update, this will be None
+        # the time at which all reported line speeds became zero.
+        # If some nonzero speed was occuring on any line at the last update, this will be None
         self.stop_cutoff = time.time()
 
         self.swing_params = np.array([
@@ -417,7 +418,7 @@ class Positioner2:
             cutoff = self.stop_cutoff
         data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
         if len(data) < 2:
-            return
+            return False
         times = data[:,0]
         positions = data[:,1:]
 
@@ -460,10 +461,11 @@ class Positioner2:
                 assert result.success
         except AssertionError:
             print(result)
-            return
+            return False
 
         self.visual_move_start_time = backtime
         self.visual_move_line_params = result.x
+        return True
 
     def send_debugging_indicators(self):
         velocity = self.visual_move_line_params[3:6]
@@ -483,19 +485,40 @@ class Positioner2:
                 'hang_vel': self.hang_gant_vel,
                 },
         }
-        self.to_ui_q.put(update_for_ui)   
+        self.to_ui_q.put(update_for_ui)
+
+    async def check_and_recal(self):
+        """
+        Automatically send line reference length based on visual observation under certain conditions.
+
+        Conditions:
+        1. no move command has been sent in the last n seconds
+        2. the visually estimated gantry velocity is near zero
+        """
+        if self.stop_cutoff is None:
+            return # currently moving
+        if time.time() - self.stop_cutoff < 2:
+            return # hasn't been long enough since we stopped
+        position = self.visual_move_line_params[0:3]
+        velocity = self.visual_move_line_params[3:6]
+        if np.linalg.norm(velocity) > 0.005: # meters per second
+            return # looks like it's moving visually, probably just video latency.
+
+        lengths = np.linalg.norm(self.anchor_points - position, axis=0)
+        print(f'auto line calibration lengths={lengths}')
+        self.ob.sendReferenceLengths(lengths)
+
 
     async def restimate(self):
         """
         Perform estimations that are meant to occur at a slower rate.
-        
-        TODO
-        If the gantry does not visually appear to be moving and no move command has been sent in a while
-        send the distance between the visual position and the anchor as a reference length to any anchor which is tight.
         """
         while self.run:
             try:
-                self.find_visual_move()
+                visual_found = self.find_visual_move()
+                if visual_found:
+                    # if visual move was estimated successfully, we may be able to use it to automatically update reference lengths
+                    asyncio.create_task(self.check_and_recal())
                 self.find_swing()
                 self.send_debugging_indicators()
                 await asyncio.sleep(0.2)
@@ -609,13 +632,6 @@ class Positioner2:
         return True
 
     def send_positions(self):
-        update_for_observer = {
-            'last_gant_pos': self.gant_pos,
-            # 'future_anchor_lines': {'sender':'pe', 'data':future_anchor_lines},
-            # 'future_winch_line': {'sender':'pe', 'data':future_winch_line},
-        }
-        self.to_ob_q.put(update_for_observer)
-
         # send control points of position splines to UI for visualization
         update_for_ui = {
             'pos_estimate': {

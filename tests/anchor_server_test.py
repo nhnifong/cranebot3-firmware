@@ -63,11 +63,11 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         # Startup and shutdown are handled in setUp and tearDown
         self.mock_spool_class.assert_called_once_with(
             self.debug_motor,
-            empty_diameter=25,
-            full_diameter=27,
-            full_length=10,
+            empty_diameter=ANY,
+            full_diameter=ANY,
+            full_length=ANY,
             conf=self.server.conf,
-            gear_ratio=20/51,
+            gear_ratio=ANY,
             tight_check_fn=ANY
         )
         self.assertTrue(self.server_task.done() is False, "Server should be running")

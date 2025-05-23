@@ -4,6 +4,7 @@ import time
 import serial
 import logging
 import asyncio
+import numpy as np
 
 # values that can be overridden by the controller
 default_conf = {
@@ -54,8 +55,11 @@ class SpoolController:
             self.k1_over_k2 = self.empty_diameter * self.full_length / 1e-9 # Avoid division by zero
             self.k2 = (math.pi * self.gear_ratio * 1e-9) / self.full_length
 
-        # The motor shaft angle if the spool were empty, based on the last received reference length.
+        # The motor shaft angle if the spool were empty
         self.zero_angle = 0
+        # collected estimates of zero angle, binned by length where collected
+        self.za_collection = np.zeros(16, dtype=float) # units, revolutions
+        self.za_has_data_mask = np.zeros(len(self.za_collection), dtype=bool)
         
         # last commanded motor speed in revs/sec
         self.speed = 0
@@ -82,6 +86,8 @@ class SpoolController:
         """
         Provide an external observation of the current unspooled line length
         """
+        if self.tight_check_fn is not None and not self.tight_check_fn():
+            return # gantry position has no relationship to spool zero angle if the line is slack.
         success = False
         attempts = 0
         while not success and attempts < 10:
@@ -92,11 +98,18 @@ class SpoolController:
             spooled_length = self.full_length - length
             relative_angle = math.log(spooled_length / self.k1_over_k2 + 1) / self.k2
             angle *= self.motor_orientation
-            self.zero_angle = angle - relative_angle
-            logging.info(f'Reference length {length} m')
-            logging.info(f'Set zero angle to be {self.zero_angle} revs. {relative_angle} revs from the current value of {angle}')
-            with open('zero-angles.txt', 'a') as zaf:
-                zaf.write(f'{self.zero_angle}\n')
+            za = angle - relative_angle
+
+            # add this estimate of zero_angle to a collection
+            # take an average of the values in the collection that evenly weights samples collected at each binned length
+            index = constrain(int((length / self.full_length) * len(self.za_collection)), 0, len(self.za_collection))
+            self.za_collection[index] = za
+            self.za_has_data_mask[index] = True
+            if np.any(self.za_has_data_mask):
+                self.zero_angle = np.mean(self.za_collection[self.za_has_data_mask])
+                logging.info(f'Zero angle estimate={self.zero_angle} revs. {relative_angle} revs from the current value of {angle}, using reference length {length} m')
+                # this affects the estimated current amount of wrapped wire
+                self.meters_per_rev = self.get_unspool_rate(angle)
 
     def _get_spooled_length(self, motor_angle_revs):
         relative_angle = self.motor_orientation* motor_angle_revs - self.zero_angle # shaft angle relative to zero_angle

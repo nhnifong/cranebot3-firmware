@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import unittest
 from position_estimator import *
+from unittest.mock import MagicMock
 import time
 from multiprocessing import Queue
 from data_store import DataStore
@@ -19,10 +20,9 @@ class TestPositionEstimator(unittest.TestCase):
     def setUp(self):
         self.datastore = DataStore(size=200)
         to_ui_q = Queue()
-        to_ob_q = Queue()
         to_ui_q.cancel_join_thread()
-        to_ob_q.cancel_join_thread()
-        self.pe = Positioner2(self.datastore, to_ui_q, to_ob_q)
+        self.mock_observer = MagicMock()
+        self.pe = Positioner2(self.datastore, to_ui_q, self.mock_observer)
 
     def test_sphere_intersection(self):
         sphere1 = (np.array([0, 0, 0]), 5)
@@ -241,3 +241,15 @@ class TestPositionEstimator(unittest.TestCase):
             self.pe.visual_move_line_params,
             np.concatenate([rest_position, np.zeros(3)]),
             3)
+
+# class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
+
+#     async def asyncSetUp(self):
+#         self.datastore = DataStore(size=200)
+#         to_ui_q = Queue()
+#         to_ui_q.cancel_join_thread()
+#         self.mock_observer = MagicMock()
+#         self.pe = Positioner2(self.datastore, to_ui_q, self.mock_observer)
+
+#     async def test_restimate(self):
+#         await self.pe.restimate()
