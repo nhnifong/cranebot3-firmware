@@ -292,7 +292,9 @@ class RobotComponentServer:
         await self.zc.async_register_service(info)
         logging.info(f"Registered service: {name} ({service_type}) on port {port}")
 
-default_anchor_conf = {}
+default_anchor_conf = {
+    'switch_tight_val': 1, # 0 or 1. provides a method of configuring that the switch is wired up backwards.
+}
 
 try:
     import RPi.GPIO as GPIO
@@ -314,10 +316,10 @@ class RaspiAnchorServer(RobotComponentServer):
             motor = MKSSERVO42C()
         if power_anchor:
             # A power anchor spool has a thicker line
-            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=43.7, full_length=10, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
+            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=43.7, full_length=7.5, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
         else:
             # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
-            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=27, full_length=10, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
+            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=27, full_length=7.5, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
 
@@ -329,7 +331,7 @@ class RaspiAnchorServer(RobotComponentServer):
         """Return whether the line is tight according to the lever switch"""
         if not gpio_ready:
             return True
-        return GPIO.input(SWITCH_PIN) == 1
+        return GPIO.input(SWITCH_PIN) == self.conf['switch_tight_val']
 
     async def processOtherUpdates(self, updates):
         if 'tighten' in updates:
