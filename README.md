@@ -7,12 +7,10 @@ attached to spools in AI-camera equipped anchor points on the walls of a room.
 
 ## Desktop setup
 
-These instructions explicitly install python 3.11. if you already have it or a subsequent version, you could use skip that and use the builtin python.
+These instructions require python 3.11 or later.
 
-    sudo add-apt-repository ppa:deadsnakes/ppa
-    sudp apt update
-    sudo apt install python3.11 python3.11-dev
-    python3.11 -m virtualenv venv
+    sudo apt install python3-dev python3-virtualenv
+    python -m virtualenv venv
     source venv/bin/activate
     pip3 install -r requirements_desktop.txt
 
@@ -32,7 +30,6 @@ in it's current form, it requires a blender installation in order to load assets
 
 After booting any raspberry pi from a fresh image, perform an update
 
-    sudo add-apt-repository ppa:deadsnakes/ppa
     sudo apt update
     sudo apt full-upgrade
 
@@ -40,7 +37,7 @@ you may have to hit enter a few times during full-upgrade.
 
 When starting with the lite raspi image, you will be missing the following, so install those.
 
-    sudo apt install git python3.11-dev python3.11-dev
+    sudo apt install git python3-dev python3-virtualenv
 
 ### Anchors
 
