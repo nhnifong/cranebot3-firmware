@@ -57,7 +57,7 @@ class DataStore:
         gantry_pos: shape (size, 4) T XYZ
         imu_rotvec: shape (size, 5) each row TXYZ
         winch_line_record: shape (size, 3) TLS
-        anchor_line_record: shape (size, 3) TLST  time, length, speed, tight.  one for each line
+        anchor_line_record: shape (size, 4) TLST  time, length, speed, tight.  one for each line
         range_record: shape (size, 3) TL
         """
         self.n_anchors = n_anchors

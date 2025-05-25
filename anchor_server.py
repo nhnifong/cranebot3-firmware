@@ -293,7 +293,9 @@ class RobotComponentServer:
         logging.info(f"Registered service: {name} ({service_type}) on port {port}")
 
 default_anchor_conf = {
-    'switch_tight_val': 1, # 0 or 1. provides a method of configuring that the switch is wired up backwards.
+    # 0 or 1. provides a method of configuring that the switch is wired up backwards.
+    # should be set to the value the pin will read when the line is pulled tight and the switch closes.
+    'switch_tight_val': 0,
 }
 
 try:
