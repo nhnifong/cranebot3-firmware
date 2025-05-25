@@ -275,6 +275,7 @@ class SpoolController:
 
                 # stop outspooling of line when not tight and switch is available (anchors hardware 4.5.5 and later)
                 if aimSpeed > 0 and (self.tight_check_fn is not None) and (not self.tight_check_fn()):
+                    logging.warning(f"would unspool at speed={aimSpeed} but switch shows line is not tight, and unspooling could slacken or tangle line.")
                     aimSpeed = 0
 
                 if self.speed == aimSpeed:
