@@ -337,7 +337,6 @@ class RaspiAnchorServer(RobotComponentServer):
 
     async def processOtherUpdates(self, updates):
         if 'tighten' in updates:
-            # pull in the line slowly until the lever switch clicks.
             asyncio.create_task(self.tighten())
 
     def readOtherSensors(self):
@@ -351,7 +350,11 @@ class RaspiAnchorServer(RobotComponentServer):
         pass
 
     async def tighten(self):
-        while GPIO.input(SWITCH_PIN) != 0:
+        """
+        Pull in the line slowly until the lever switch clicks.
+        In the future, the client might need a notification that this has completed, but not at the moment
+        """
+        while GPIO.input(SWITCH_PIN) != self.conf['switch_tight_val']:
             self.spooler.setAimSpeed(-0.12) # meters of line per second
             await asyncio.sleep(0.05)
         self.spooler.setAimSpeed(0)
