@@ -281,7 +281,7 @@ class ControlPanelUI:
                 DropdownMenuButton(mode_names['pose'], on_click=partial(self.set_mode, 'pose')),
                 )),
             DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
-            DropdownMenuButton('Equalize line tension', on_click=self.equalize_lines),
+            DropdownMenuButton('Tension all lines', on_click=self.tension_lines),
             DropdownMenu('Simulated Data', buttons=(
                 DropdownMenuButton('Disable', on_click=partial(self.set_simulated_data_mode, 'disable')),
                 DropdownMenuButton('Circle', on_click=partial(self.set_simulated_data_mode, 'circle')),
@@ -295,8 +295,8 @@ class ControlPanelUI:
     def set_simulated_data_mode(self, mode):
         self.to_ob_q.put({'set_simulated_data_mode': mode})
 
-    def equalize_lines(self):
-        self.to_ob_q.put({'equalize_line_tension': None})
+    def tension_lines(self):
+        self.to_ob_q.put({'tension_lines': None})
 
     def redraw_walls(self):
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.

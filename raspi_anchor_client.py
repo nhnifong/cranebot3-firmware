@@ -58,7 +58,6 @@ class ComponentClient:
             self.conn_status['video'] = False
             self.to_ui_q.put({'connection_status': self.conn_status})
             return
-        # todo implement video connection retry loop
         print(f'video connection successful {cap}')
         self.conn_status['video'] = True
         self.notify_video = True
@@ -104,7 +103,7 @@ class ComponentClient:
                         self.stat.pending_frames_in_pool += 1
                         self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                     else:
-                        print(f'Dropping frame because there are already too many pending. This machine is probably insufficiently powerful for this job')
+                        print(f'Dropping frame because there are already too many pending.')
                 except ValueError:
                     return # the pool is not running
                 # self.handle_detections(locate_markers(frame), timestamp=timestamp)

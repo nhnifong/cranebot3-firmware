@@ -119,6 +119,8 @@ class AsyncObserver:
                 self.set_run_mode(updates['set_run_mode'])
             if 'do_line_calibration' in updates:
                 self.sendReferenceLengths(updates['do_line_calibration'])
+            if 'tension_lines' in updates:
+                self.tension_lines()
             if 'jog_spool' in updates:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
@@ -176,6 +178,14 @@ class AsyncObserver:
                 self.config.write()
         except Exception as e:
             traceback.print_exc(file=sys.stderr)
+
+    async def tension_lines(self):
+        """Reel in all lines until tight"""
+        for client in self.anchors:
+            asyncio.create_task(client.send_commands({'tighten':None}))
+        # There's no use in waiting for confirmation from every anchor, as it would just hold up the processing of the ob_q
+        # this is not much different from sending a manual move command. it can be overridden by any subsequent command.
+        # thus, it should be done while paused.
 
     async def sendReferenceLengths(self, lengths):
         if len(lengths) != 4:
