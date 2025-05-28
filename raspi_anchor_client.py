@@ -53,6 +53,12 @@ class ComponentClient:
         video_uri = f'tcp://{self.address}:{video_port}'
         print(f'Connecting to {video_uri}')
         cap = cv2.VideoCapture(video_uri)
+        # cap = cv2.VideoCapture(video_uri, cv2.CAP_FFMPEG) # this is probably the default anyways
+        # cap = cv2.VideoCapture(video_uri, cv2.CAP_OPENCV_MJPEG) # would this be any faster?
+        # if the stream were UDP would it be faster? https://mpolinowski.github.io/docs/IoT-and-Machine-Learning/ML/2021-12-02--opencv-with-videos/2021-12-02/
+        # cap.read() is a combination of cap.grab() and cap.receive(). receive starts the decoding. are these any different for web streams vs local cameras?
+        # if we just did cap.grab() as fast as possible would the framerate still be limited by the ram on the RPI zero 2W?
+        
         if not cap.isOpened():
             print('no video stream available')
             self.conn_status['video'] = False
@@ -63,8 +69,9 @@ class ComponentClient:
         self.notify_video = True
         lastSam = time.time()
         while self.connected:
+            # blocks until a frame can be read, then decodes it. 
+            ret, frame = cap.read()
             last_time = time.time()
-            ret, frame = cap.read() # blocking call, that's why we're in a thread.
             if ret:
 
                 # send frame to shape tracker and ui
@@ -106,9 +113,10 @@ class ComponentClient:
                         print(f'Dropping frame because there are already too many pending.')
                 except ValueError:
                     return # the pool is not running
-                # self.handle_detections(locate_markers(frame), timestamp=timestamp)
-            else:
-                time.sleep(0.1)
+
+            # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
+            # handle_detections runs in this process, but in a thread managed by the pool.
+            time.sleep(0.1)
 
     def handle_frame_times(self, frame_time_list):
         """
@@ -169,7 +177,6 @@ class ComponentClient:
                 if 'frames' in update:
                     self.handle_frame_times(update['frames'])
                 if 'video_ready' in update:
-                    # TODO take another shot at making asyncio run this
                     vid_thread = threading.Thread(target=self.receive_video)
                     vid_thread.start()
                 self.handle_update_from_ws(update)
