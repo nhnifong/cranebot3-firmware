@@ -9,7 +9,7 @@ attached to spools in AI-camera equipped anchor points on the walls of a room.
 
 These instructions require python 3.11 or later.
 
-    sudo apt install python3-dev python3-virtualenv
+    sudo apt install python3-dev python3-virtualenv python3-pip
     python -m virtualenv venv
     source venv/bin/activate
     pip3 install -r requirements_desktop.txt

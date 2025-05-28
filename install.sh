@@ -11,11 +11,10 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-apt install python3-picamera2 --no-install-recommends
-# apt install imx500-all
+apt install python3-dev python3-virtualenv
 
 if [[ ! -d "venv" ]]; then
-  python3.11 -m venv --system-site-packages venv
+  python3 -m venv --system-site-packages venv
 fi
 source venv/bin/activate
 pip3 install -r requirements_raspi.txt
