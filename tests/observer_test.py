@@ -10,6 +10,7 @@ from multiprocessing import Pool, Queue
 import numpy as np
 from observer import AsyncObserver
 from position_estimator import Positioner2
+from raspi_anchor_client import RaspiAnchorClient
 from raspi_gripper_client import RaspiGripperClient
 import zeroconf
 from math import pi
@@ -48,6 +49,12 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client.shutdown = self.watchable_routine
         self.patchers.append(patch('observer.RaspiGripperClient', self.mock_gripper_client_class))
 
+        self.mock_anchor_client_class = Mock(spec=RaspiAnchorClient)
+        self.mock_anchor_client = self.mock_anchor_client_class.return_value
+        self.mock_anchor_client.startup = self.watchable_routine
+        self.mock_anchor_client.shutdown = self.watchable_routine
+        self.patchers.append(patch('observer.RaspiAnchorClient', self.mock_anchor_client_class))
+
         for p in self.patchers:
             p.start()
 
@@ -84,6 +91,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # i'm pretty sure it doesn't matter whether we use the observer's instance of AsyncZeroConf or make another one
         # use it to advertize the existence of our test gripper server
         await self.ob.aiozc.async_register_service(info)
+        return info
 
     async def test_discover_gripper(self):
         # advertise a service on localhost that matches a gripper.
@@ -115,3 +123,30 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         simulated_observations += np.random.normal(0,1e-4,simulated_observations.shape)
         pose = self.ob.optimize_single_anchor_pose(simulated_observations)
         np.testing.assert_array_almost_equal(expected_pose, pose, 3)
+
+    async def test_anchor_connect_familiar(self):
+        """Confirm that we can connnect to an anchor that advertises a name we recognizes from our configuration"""
+        await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
+        await asyncio.wait_for(self.watchable_event.wait(), 10)
+        self.assertFalse(self.ob_task.done())
+        self.assertEqual(len(self.ob.anchors), 1)
+
+    # TODO: this fails because the observer currently makes no attempt to clean up disconnected/removed servers
+    # async def test_anchor_reconnect(self):
+    #     """Confirm that if an anchor server goes down and restarts, that we reconnect to it.
+    #     In this test, we are neither running a real websocket server, or client. the client is a mock and the server doesn't exist.
+    #     all we are confirming here is that if the MDNS advertisement for the services goes down and back up, that we start the client task again.
+    #     """
+    #     info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
+    #     await asyncio.wait_for(self.watchable_event.wait(), 10)
+    #     self.assertFalse(self.ob_task.done())
+    #     self.assertEqual(len(self.ob.anchors), 1)
+
+    #     await self.ob.aiozc.async_unregister_service(info)
+    #     self.watchable_event.clear()
+    #     await asyncio.sleep(0.1)
+    #     self.assertEqual(len(self.ob.anchors), 0)
+
+    #     info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
+    #     await asyncio.wait_for(self.watchable_event.wait(), 10)
+    #     self.assertEqual(len(self.ob.anchors), 1)
