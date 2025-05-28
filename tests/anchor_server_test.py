@@ -59,6 +59,10 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.server_task, 1)
         self.patcher.stop()
 
+    def assertLastAimSpeed(self, speed):
+        # Assert that the last call to setAimSpeed had the argument speed
+        self.assertEqual(self.mock_spooler.setAimSpeed.call_args[0][0], speed)
+
     async def test_startup_shutdown(self):
         # Startup and shutdown are handled in setUp and tearDown
         self.mock_spool_class.assert_called_once_with(
@@ -204,3 +208,54 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
             pass
             self.mock_spooler.setPlan.assert_called_once_with(length_plan)
         await self.command_and_check({'length_plan': length_plan}, check, 0.1)
+
+    async def test_tighten(self):
+        # make a local variable to contain a tight or not tight bool
+        local_var = {'tight': False}
+        # make a function that captures it
+        def local_t():
+            return local_var['tight']
+        # set this function to be the server's way of checking whether the line is tight, so we can alter it at will
+        self.server.tight_check = local_t
+        
+        # connect to the server
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            # send command under test
+            await ws.send(json.dumps({'tighten':None}))
+            # sleep at least one ws_delay (0.03) and at least 0.05
+            await asyncio.sleep(0.1)
+            # spool should still be reeling in
+            self.assertLastAimSpeed(self.server.conf['tightening_speed'])
+            # click the switch
+            local_var['tight'] = True
+            print('set tight var')
+            await asyncio.sleep(0.1)
+            self.assertLastAimSpeed(0)
+            self.assertFalse(self.server_task.done(), "Server should still be running")
+            # close websocket. tighten command should not prevent this.
+            await asyncio.wait_for(ws.close(), 2)
+
+    async def test_tighten_disconnect(self):
+        """ Confirm disconnecting while the tighten command is running doesn't leave the spool reeling in."""
+        # make a local variable to contain a tight or not tight bool
+        local_var = {'tight': False}
+        # make a function that captures it
+        def local_t():
+            return local_var['tight']
+        # set this function to be the server's way of checking whether the line is tight, so we can alter it at will
+        self.server.tight_check = local_t
+        
+        # connect to the server
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            # send command under test
+            await ws.send(json.dumps({'tighten':None}))
+            # sleep at least one ws_delay (0.03) and at least 0.05
+            await asyncio.sleep(0.1)
+            # spool should still be reeling in
+            self.assertLastAimSpeed(self.server.conf['tightening_speed'])
+            # close websocket. tighten command should not prevent this.
+            await asyncio.wait_for(ws.close(), 2)
+
+        await asyncio.sleep(0.1)
+        self.assertLastAimSpeed(0)
+        self.assertFalse(self.server_task.done(), "Server should still be running")

@@ -185,7 +185,7 @@ class RobotComponentServer:
         # wait for the subprocess to exit, whether because we killed it, or it stopped normally
         return await self.rpicam_process.wait()
 
-    async def read_updates_from_client(self,websocket):
+    async def read_updates_from_client(self,websocket,tg):
         while True:
             message = await websocket.recv()
             update = json.loads(message)
@@ -205,7 +205,7 @@ class RobotComponentServer:
                 pass
 
             # defer to specific server subclass
-            result = await self.processOtherUpdates(update)
+            result = await self.processOtherUpdates(update,tg)
 
     async def handler(self,websocket):
         logging.info('Websocket connected')
@@ -219,12 +219,14 @@ class RobotComponentServer:
         # If the thrown exception is not one of the type caught here, the server stops.
         try:
             async with asyncio.TaskGroup() as tg:
-                read_updates = tg.create_task(self.read_updates_from_client(websocket))
+                read_updates = tg.create_task(self.read_updates_from_client(websocket, tg))
                 stream = tg.create_task(self.stream_measurements(websocket))
                 mjpeg = tg.create_task(self.stream_mjpeg(websocket))
         except* (ConnectionClosedOK, ConnectionClosedError):
             logging.info("Client disconnected")
         logging.info("All tasks in handler task group completed")
+        # stop motor just in case some task left it running
+        self.spooler.setAimSpeed(0)
 
 
     async def main(self, port=8765):
@@ -296,6 +298,9 @@ default_anchor_conf = {
     # 0 or 1. provides a method of configuring that the switch is wired up backwards.
     # should be set to the value the pin will read when the line is pulled tight and the switch closes.
     'switch_tight_val': 0,
+
+    # speed to reel in when the 'tighten' command is received. Meters of line per second
+    'tightening_speed': -0.12
 }
 
 try:
@@ -335,16 +340,12 @@ class RaspiAnchorServer(RobotComponentServer):
             return True
         return GPIO.input(SWITCH_PIN) == self.conf['switch_tight_val']
 
-    async def processOtherUpdates(self, updates):
+    async def processOtherUpdates(self, updates, tg):
         if 'tighten' in updates:
-            asyncio.create_task(self.tighten())
+            tg.create_task(self.tighten())
 
     def readOtherSensors(self):
-        if gpio_ready:
-            state = GPIO.input(SWITCH_PIN)
-            print(state)
-            # 0 closed (line is tight)
-            # 1 open (line is loose)
+        pass
 
     def startOtherTasks(self):
         pass
@@ -352,13 +353,13 @@ class RaspiAnchorServer(RobotComponentServer):
     async def tighten(self):
         """
         Pull in the line slowly until the lever switch clicks.
-        In the future, the client might need a notification that this has completed, but not at the moment
+        The client may check if this is completed by the tight value in the line_record updates
         """
-        while GPIO.input(SWITCH_PIN) != self.conf['switch_tight_val']:
-            self.spooler.setAimSpeed(-0.12) # meters of line per second
+        while not self.tight_check():
+            self.spooler.setAimSpeed(self.conf['tightening_speed'])
             await asyncio.sleep(0.05)
         self.spooler.setAimSpeed(0)
-
+        
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.DEBUG,
