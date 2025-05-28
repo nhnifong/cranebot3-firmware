@@ -48,15 +48,16 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.5)
 
     async def asyncTearDown(self):
-        self.close_test_server.set()
-        await self.server_task
+        if not self.close_test_server:
+            self.close_test_server.set()
+            await self.server_task
 
     async def runTestServer(self):
         async with websockets.serve(self.serverHandler, "127.0.0.1", 8765):
             result = await self.close_test_server.wait()
 
     async def serverHandler(self, ws):
-        print('connected')
+        print('test serverHandler got a connected and started listening')
         self.got_connection.set()
         self.server_ws = ws
         while True:
@@ -71,6 +72,7 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
             except ConnectionClosedError as e:
                 print(f"Client disconnected with {e}")
                 break
+        print('test serverHandler stopped')
 
     async def test_shutdown_before_connect(self):
         ac = RaspiAnchorClient("127.0.0.1", 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
@@ -114,6 +116,18 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         # if gripper_client is going to use the configs in configuration.json, then so will we.
         config = Config()
         self.receiver.update.assert_called_with({'set_config_vars': config.vars_for_anchor(1)})
+
+    async def test_server_closes(self):
+        """
+        The client task should not attempt to reconnect if the server closes normally.
+        """
+        await self.clientSetup()
+        self.assertTrue(self.ac.connected)
+        # trigger normal shutdown by stopping server task
+        self.close_test_server.set()
+        await asyncio.sleep(0.1)
+        self.assertFalse(self.ac.connected)
+        self.assertTrue(self.client_task.done())
 
     async def test_line_record(self):
         """

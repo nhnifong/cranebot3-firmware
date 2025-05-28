@@ -184,7 +184,7 @@ class AsyncObserver:
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'tighten':None}))
         # There's no use in waiting for confirmation from every anchor, as it would just hold up the processing of the ob_q
-        # this is not much different from sending a manual move command. it can be overridden by any subsequent command.
+        # this is similar to sending a manual move command. it can be overridden by any subsequent command.
         # thus, it should be done while paused.
 
     async def sendReferenceLengths(self, lengths):
@@ -280,8 +280,11 @@ class AsyncObserver:
             print(f"Service {name} of type {service_type} state changed: {state_change}")
             if state_change is ServiceStateChange.Added:
                 task = asyncio.create_task(self.add_service(zeroconf, service_type, name))
+            if state_change is ServiceStateChange.Removed:
+                pass
+                # find out whether we have a running task connected to this service.
+                # of so, cancel it, remove the client from the list.
             elif state_change is ServiceStateChange.Updated:
-                # it will already have been disconnectd and be in an exponential backoff retry loop trying to talk to the old address
                 pass
 
     async def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
