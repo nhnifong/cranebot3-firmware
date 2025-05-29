@@ -50,6 +50,8 @@ class Gantry(Entity):
         self.zup_pos = pos
         self.zup_vel = vel
         self.position = swap_yz(pos)
+        # height of the mouse target reticule, not the height of the floor
+        self.ui.floor.set_reticule_height(pos[2])
 
     def set_slack_vis(self, slack):
         """slack is an array of bools for each anchor. true meaning the line should be drawn with a droop"""
@@ -62,8 +64,6 @@ class Gantry(Entity):
         self.position = swap_yz(self.zup_pos)
         self.last_update_t = now
         self.redraw_wires()
-        # height of the mouse target reticule, not the height of the flor
-        self.ui.floor.set_reticule_height(self.zup_pos[2])
 
     def redraw_wires(self):
         # update the lines between the gantry and the other things

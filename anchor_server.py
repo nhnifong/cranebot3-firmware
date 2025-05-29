@@ -300,7 +300,10 @@ default_anchor_conf = {
     'switch_tight_val': 0,
 
     # speed to reel in when the 'tighten' command is received. Meters of line per second
-    'tightening_speed': -0.12
+    'tightening_speed': -0.12,
+
+    # if set, the switch is disabled and the line is always assumed to be tight
+    'disable_switch': False,
 }
 
 try:
@@ -336,7 +339,7 @@ class RaspiAnchorServer(RobotComponentServer):
 
     def tight_check(self):
         """Return whether the line is tight according to the lever switch"""
-        if not gpio_ready:
+        if (not gpio_ready) or (self.conf['disable_switch']):
             return True
         return GPIO.input(SWITCH_PIN) == self.conf['switch_tight_val']
 
