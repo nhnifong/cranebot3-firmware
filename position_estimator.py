@@ -504,9 +504,9 @@ class Positioner2:
         if np.linalg.norm(velocity) > 0.005: # meters per second
             return # looks like it's moving visually, probably just video latency.
 
-        lengths = np.linalg.norm(self.anchor_points - position, axis=0)
+        lengths = np.linalg.norm(self.anchor_points - position, axis=1)
         print(f'auto line calibration lengths={lengths}')
-        self.ob.sendReferenceLengths(lengths)
+        await self.ob.sendReferenceLengths(lengths)
 
 
     async def restimate(self):
@@ -580,6 +580,7 @@ class Positioner2:
                 if self.stop_cutoff is None:
                     self.stop_cutoff = time.time()
             else:
+                self.stop_cutoff = None
                 # repeat for a position some small increment in the future to get the gantry velocity
                 increment = 0.1 # seconds
                 lengths += speeds * increment
@@ -591,7 +592,6 @@ class Positioner2:
                 else:
                     self.hang_gant_vel = result[0] - self.hang_gant_pos
                     self.hang_gant_vel = self.hang_gant_vel / increment
-                    self.stop_cutoff = None
 
             # use information both from hang position and visual observation
             visual_vel = self.visual_move_line_params[3:6]

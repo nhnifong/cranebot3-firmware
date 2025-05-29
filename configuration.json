@@ -60,7 +60,9 @@
       ],
       "service_name": "123.cranebot-anchor-service.2ccf67bf171a.",
       "num": 3,
-      "vars": {}
+      "vars": {
+        "disable_switch": true
+      }
     }
   ],
   "camera_cal": {

@@ -118,7 +118,7 @@ class AsyncObserver:
                 print(f"set_run_mode to '{updates['set_run_mode']}'") 
                 self.set_run_mode(updates['set_run_mode'])
             if 'do_line_calibration' in updates:
-                self.sendReferenceLengths(updates['do_line_calibration'])
+                await self.sendReferenceLengths(updates['do_line_calibration'])
             if 'tension_lines' in updates:
                 self.tension_lines()
             if 'jog_spool' in updates:
@@ -189,7 +189,8 @@ class AsyncObserver:
 
     async def sendReferenceLengths(self, lengths):
         if len(lengths) != 4:
-            raise ValueError
+            print(f'Cannot send {len(lengths)} ref lengths to anchors')
+            return
         # any anchor that receives this and is slack would ignore it
         # any anchor which is tight would calculate a zero angle and average it in
         # If only some anchors are connected, this would still send reference lengths to those
@@ -529,7 +530,7 @@ class AsyncObserver:
             return
 
         # apply downward bias and renormalize
-        uvec = uvec - np.array(0,0,-0.08)
+        uvec = uvec - np.array([0,0,-0.08])
         uvec  = uvec / np.linalg.norm(uvec)
 
         anchor_positions = np.zeros((4,3))
