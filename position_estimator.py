@@ -543,6 +543,7 @@ class Positioner2:
         # nothing has been recorded
         if sum(lengths) == 0:
             self.time_taken = time.time() - self.start
+            print('no lengths have been recorded')
             return False
 
         # timestamp of the last record used to produce this estimate. used for latency feedback
@@ -565,7 +566,7 @@ class Positioner2:
             # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)
             if result is None:
-                # print(f'estimate bailed because it failed to calc a hang point with lengths {lengths}')
+                print(f'estimate bailed because it failed to calc a hang point with lengths {lengths}')
                 self.time_taken = time.time() - self.start
                 return False
             self.hang_gant_pos, slack_lines = result

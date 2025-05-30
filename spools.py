@@ -107,7 +107,7 @@ class SpoolController:
             self.za_has_data_mask[index] = True
             if np.any(self.za_has_data_mask):
                 self.zero_angle = np.mean(self.za_collection[self.za_has_data_mask])
-                logging.info(f'Zero angle estimate={self.zero_angle} revs. {relative_angle} revs from the current value of {angle}, using reference length {length} m')
+                logging.debug(f'Zero angle estimate={self.zero_angle} revs. {relative_angle} revs from the current value of {angle}, using reference length {length} m')
                 # this affects the estimated current amount of wrapped wire
                 self.meters_per_rev = self.get_unspool_rate(angle)
 
