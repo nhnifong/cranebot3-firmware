@@ -3,7 +3,7 @@
 Control code for a crane mounted household robotic crane consisting of a gripper than hangs from multiple lines
 attached to spools in AI-camera equipped anchor points on the walls of a room.
 
-## [Build Guides and Documentation](https://nhnifong.github.io/neufangled-site/)
+## [Build Guides and Documentation](https://nhnifong.github.io/neufangled-site-2/)
 
 ## Desktop setup
 
