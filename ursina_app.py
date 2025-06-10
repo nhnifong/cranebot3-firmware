@@ -265,6 +265,13 @@ class ControlPanelUI:
             position=position,
             scale=(0.01998,0.01498),
         ) for position in [(x,y), (x+offx,y), (x,y+offy), (x+offx,y+offy), ((x+offx/2,y+offy/2))]]
+        for i,vs_panel in enumerate(self.vid_status):
+            vs_panel.numbertext = Text(
+                color=color.white,
+                position=vs_panel.position + (-0.005, 0.005),
+                text=str(i),
+                scale=0.5,
+            )
 
         self.prisms = EntityPool(80, lambda: Entity(
             color=(1.0, 1.0, 1.0, 0.1),
@@ -547,15 +554,19 @@ class ControlPanelUI:
 
             if status['video']:
                 vidstatus_tex = 'vid_ok.png'
+                number_color = color.black
             else:
                 vidstatus_tex = 'vid_out.png'
+                number_color = color.white
 
             if 'anchor_num' in status:
                 self.anchors[status['anchor_num']].setStatus(user_status_str)
                 self.vid_status[status['anchor_num']].texture = vidstatus_tex
+                self.vid_status[status['anchor_num']].numbertext.color = number_color
             elif 'gripper' in status:
                 self.gripper.setStatus(user_status_str)
                 self.vid_status[4].texture = vidstatus_tex
+                self.vid_status[4].numbertext.color = number_color
 
         if 'vid_stats' in updates:
             stats = updates['vid_stats']
