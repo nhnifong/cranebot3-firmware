@@ -43,6 +43,19 @@ def anchor_pose_cost_fn(params, observations):
     distances = np.linalg.norm(observations.reshape(-1,6) - expected_origin_pose.reshape(6), axis=1)
     return np.mean(distances**2)
 
+def figure_8_coords(t):
+    """
+    Calculates the (x, y) coordinates for a figure-8.
+    figure fits within a box from -2 to +2
+    Args:
+        t: The input parameter (angle in radians, typically from 0 to 2*pi).
+    Returns:
+        A tuple (x, y) representing the position on the figure-8.
+    """
+    x = 2 * math.sin(t)
+    y = 2 * math.sin(2 * t)
+    return (x, y)
+
 # Manager of multiple tasks running clients connected to each robot component
 # The job of this class in a nutshell is to discover four anchors and a gripper on the network,
 # connect to them, and forward data between them and the position estimate, shape tracker, and UI.
@@ -561,6 +574,41 @@ class AsyncObserver:
         # send move
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
+
+    async def move_in_figure_8(self):
+        """
+        Move in a figure-8 pattern until interrupted by some other input.
+        """
+        # move to starting position (over origin)
+        height = 1.5
+        self.gantry_goal_pos = np.array([0,0,height])
+        await self.seek_gantry_goal()
+        # desired speed in meters per second
+        speed = 0.2
+        circuit_distance = 18.85
+        circuit_time = circuit_distance / speed
+        # multiply time.time by this to get a term that increases by 2pi every circuit_time seconds.
+        slow = 2*math.pi / circuit_time
+        start_time = time.time()
+
+        # every 1 second, send a length plan to every anchor covering the next 1.3 seconds at an interval of 1/30 second
+        send_interval = 1.0
+        plan_duration = 1.3
+        step_interval = 1/30
+        while fig_8:
+            now = time.time()
+            times = [now + step_interval * i for i in range(int(plan_duration / step_interval))]
+            xy_positions = np.array([figure_8_coords((t - start_time) * slow) for t in times])
+            positions = np.column_stack([xy_positions, np.repeat(height,len(xy_positions))])
+            # calculate all line lengths in one statement
+            distances = np.linalg.norm(self.pe.anchor_points[:, np.newaxis, :] - positions[np.newaxis, :, :], axis=2)
+
+            for client in self.anchors:
+                plan = np.column_stack([times, distances[client.anchor_num]])
+                message = {'length_plan' : plan.tolist()}
+                asyncio.create_task(client.send_commands(message))
+
+            await asyncio.sleep(send_interval)
 
 def start_observation(to_ui_q, to_ob_q):
     """

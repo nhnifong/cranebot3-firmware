@@ -543,7 +543,6 @@ class Positioner2:
         # nothing has been recorded
         if sum(lengths) == 0:
             self.time_taken = time.time() - self.start
-            print('no lengths have been recorded')
             return False
 
         # timestamp of the last record used to produce this estimate. used for latency feedback
