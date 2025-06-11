@@ -74,7 +74,7 @@ class ComponentClient:
             last_time = time.time()
             if ret:
 
-                # send frame to shape tracker and ui
+                # send frame to shape tracker
                 if self.shape_tracker is not None and self.anchor_num is not None: # skip gripper for now:
 
                     # send one frame per second to the fastSAM model
@@ -84,10 +84,10 @@ class ComponentClient:
                             return
                         # self.shape_tracker.processFrame(self.anchor_num, frame)
                         
-                        if self.sendPreviewToUi:
-                            # send frame to UI
-                            preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA), None, fx=0.25, fy=0.25), 0)
-                            self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
+                if self.sendPreviewToUi:
+                    # send frame to UI
+                    preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA), None, fx=0.25, fy=0.25), 0)
+                    self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
 
                 # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
                 fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))

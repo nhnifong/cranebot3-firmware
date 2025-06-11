@@ -40,7 +40,7 @@ mode_descriptions = {
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
 video_framerate_format_str = 'Avg framerate {val:.2f} fps'
-estimate_age_format_str = 'Spline age {val:.2f} s'
+estimate_age_format_str = 'Position est. latency {val:.2f} s'
 
 ds = 0.1 # direct movement speed in meters per second
 key_behavior = {
@@ -148,7 +148,7 @@ class ControlPanelUI:
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
 
         # show a visualization of goal positions
-        self.goals = [GoalPoint() for i in range(8)]
+        self.goal_marker = GoalPoint([0,0,0], enabled=False)
 
         # the color is how you control the brightness
         DirectionalLight(position=(2, 20, 1), shadows=True, rotation=(35, -5, 5), color=(0.8,0.8,0.8,1))
@@ -174,7 +174,6 @@ class ControlPanelUI:
                 model='cube',
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
-
 
         self.hypo_anchors = [
             Entity(
@@ -288,7 +287,8 @@ class ControlPanelUI:
                 DropdownMenuButton(mode_names['pose'], on_click=partial(self.set_mode, 'pose')),
                 )),
             DropdownMenuButton('Calibrate line lengths', on_click=self.calibrate_lines),
-            DropdownMenuButton('Tension all lines', on_click=self.tension_lines),
+            DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, 'tension_lines')),
+            DropdownMenuButton('Figure-8 motion test', on_click=partial(self.simple_command, 'fig-8')),
             DropdownMenu('Simulated Data', buttons=(
                 DropdownMenuButton('Disable', on_click=partial(self.set_simulated_data_mode, 'disable')),
                 DropdownMenuButton('Circle', on_click=partial(self.set_simulated_data_mode, 'circle')),
@@ -302,8 +302,8 @@ class ControlPanelUI:
     def set_simulated_data_mode(self, mode):
         self.to_ob_q.put({'set_simulated_data_mode': mode})
 
-    def tension_lines(self):
-        self.to_ob_q.put({'tension_lines': None})
+    def simple_command(self, command):
+        self.to_ob_q.put({command: None})
 
     def redraw_walls(self):
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
@@ -492,7 +492,7 @@ class ControlPanelUI:
 
         if 'minimizer_stats' in updates:
             estimate_age = time.time() - updates['minimizer_stats']['data_ts']
-            self.estimate_age_text.text = estimate_age_format_str.format(val=time.time()-estimate_age)
+            self.estimate_age_text.text = estimate_age_format_str.format(val=estimate_age)
 
         if 'pos_estimate' in updates:
             p = updates['pos_estimate']
@@ -574,16 +574,13 @@ class ControlPanelUI:
             self.video_latency_text.text = video_latency_format_str.format(val=stats['video_latency'])
             self.video_framerate_text.text = video_framerate_format_str.format(val=stats['video_framerate'])
 
-        if 'goal_points' in updates:
-            for i, gp in enumerate(updates['goal_points']):
-                if i == len(self.goals):
-                    break
-                self.goals[i].enabled = True
-                self.goals[i].position = swap_yz(gp[1:])
-                self.goals[i].atime = float(gp[0])
-            # disable the rest
-            for i in range(len(updates['goal_points']), len(self.goals)):
-                self.goals[i].enabled = False
+        if 'gantry_goal_marker' in updates:
+            pos = updates['gantry_goal_marker']
+            if pos is not None:
+                self.goal_marker.position = pos
+                self.goal_marker.enabled = True
+            else:
+                self.goal_marker.enabled = False
 
         if 'solids' in updates:
             for key, val in updates["solids"].items():

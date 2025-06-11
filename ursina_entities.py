@@ -400,8 +400,8 @@ class Floor(Entity):
 
     def on_click(self,):
         print(mouse.world_point)
-        # send message to position estimator with desired future position
         gantry_goal = swap_yz(self.circle.world_position)
+        self.to_ob_q.put({'gantry_goal_pos': gantry_goal})
 
     def update(self,):
         if mouse.hovered_entity == self:
@@ -409,15 +409,14 @@ class Floor(Entity):
             self.target.position = mouse.world_point
 
 class GoalPoint(Entity):
-    def __init__(self, **kwargs):
+    def __init__(self, position, **kwargs):
         super().__init__(
-            position=(0,0,0),
+            position=position,
             rotation=(-90,0,0),
             model='map_marker',
             color=color.azure,
             scale=0.075,
             shader=lit_with_shadows_shader,
-            enabled=True,
             **kwargs
         )
         self.atime = time.time()+10

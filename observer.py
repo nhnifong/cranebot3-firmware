@@ -163,6 +163,9 @@ class AsyncObserver:
             if 'gantry_goal_pos' in updates:
                 self.gantry_goal_pos = updates['gantry_goal_pos']
                 asyncio.create_task(self.seek_gantry_goal())
+            if 'fig_8' in updates:
+                # todo we need to keep track of a single task at a time that is able to send control inputs
+                asyncio.create_task(self.move_in_figure_8())
             if 'set_grip' in updates:
                 if self.gripper_client is not None:
                     asyncio.create_task(self.gripper_client.send_commands({
@@ -220,6 +223,7 @@ class AsyncObserver:
             self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
     def slow_stop_all_spools(self):
+        self.fig_8 = False
         for name, client in self.bot_clients.items():
             # Slow stop all spools. gripper too
             asyncio.create_task(client.slow_stop_spool())
@@ -384,6 +388,7 @@ class AsyncObserver:
         self.send_position_updates = False
         self.stat.run = False
         self.pe.run = False
+        self.fig_8 = False
         tasks = []
         if self.aiobrowser is not None:
             tasks.append(self.aiobrowser.async_cancel())
@@ -511,6 +516,8 @@ class AsyncObserver:
         return result
 
     async def seek_gantry_goal(self):
+        self.fig_8 = False
+        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
         while self.gantry_goal_pos is not None:
             vector = self.gantry_goal_pos - self.pe.gant_pos
             dist = np.linalg.norm(vector)
@@ -521,6 +528,7 @@ class AsyncObserver:
             await asyncio.sleep(0.2)
         self.slow_stop_all_spools()
         self.gantry_goal_pos = None
+        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
     async def move_direction_speed(self, uvec, speed, starting_pos=None):
         """Move in the direction of the given unit vector at the given speed.
@@ -537,6 +545,7 @@ class AsyncObserver:
         but we don't have that info. alternatively we could calibrate the bias to make horizontal movements level
         according to the laser rangefinder.
         """
+        self.fig_8 = False
         if speed == 0:
             for client in self.anchors:
                 asyncio.create_task(client.send_commands({'aim_speed': 0}))
@@ -595,7 +604,8 @@ class AsyncObserver:
         send_interval = 1.0
         plan_duration = 1.3
         step_interval = 1/30
-        while fig_8:
+        self.fig_8 = True
+        while self.fig_8:
             now = time.time()
             times = [now + step_interval * i for i in range(int(plan_duration / step_interval))]
             xy_positions = np.array([figure_8_coords((t - start_time) * slow) for t in times])
