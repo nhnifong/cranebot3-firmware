@@ -88,6 +88,7 @@ class Gripper(Entity):
             color=(0.1,0.1,0.1,1.0),
             text=f"Gripper\nNot Detected",
             scale=0.6,
+            enabled=False,
         )
         self.left_finger = Entity(
             parent=self,
@@ -106,9 +107,9 @@ class Gripper(Entity):
             'r down': 'up arrow down',
             'r up': 'up arrow up',
             'r hold': 'up arrow hold',
-            'd down': 'down arrow down',
-            'd up': 'down arrow up',
-            'd hold': 'down arrow hold',
+            'f down': 'down arrow down',
+            'f up': 'down arrow up',
+            'f hold': 'down arrow hold',
         }
         # winch line jog speed
         self.jog_speed = 0
@@ -166,7 +167,9 @@ class Gripper(Entity):
             canMove = True
             mkey = self.remap[key]
 
+
         if canMove:
+            print(f'Gripper client input key {key} remapped to {mkey} and movement enabled')
             if mkey == 'up arrow':
                 self.reel_manual(-self.jog_speed)
             elif mkey == 'up arrow hold':
@@ -228,6 +231,7 @@ class Anchor(Entity):
         self.label_offset = (0.00, 0.04)
         self.to_ob_q = to_ob_q
         self.pose = np.array((rotation, position))
+        self.ip_address = None
 
         self.label = Text(
             color=(0.1,0.1,0.1,1.0),
@@ -270,7 +274,7 @@ class Anchor(Entity):
 
     def on_click(self):
         self.wp = WindowPanel(
-        title=f"Anchor {self.num}",
+        title=f"Anchor {self.num} at {self.ip_address}",
         content=(
             Button(text='Show video feed', color=color.gold, text_color=color.black,
                 on_click=self.toggle_vid_feed),

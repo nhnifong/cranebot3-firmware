@@ -563,6 +563,8 @@ class ControlPanelUI:
                 self.anchors[status['anchor_num']].setStatus(user_status_str)
                 self.vid_status[status['anchor_num']].texture = vidstatus_tex
                 self.vid_status[status['anchor_num']].numbertext.color = number_color
+                if 'ip_address' in status:
+                    self.anchors[status['anchor_num']].ip_address = status['ip_address']
             elif 'gripper' in status:
                 self.gripper.setStatus(user_status_str)
                 self.vid_status[4].texture = vidstatus_tex

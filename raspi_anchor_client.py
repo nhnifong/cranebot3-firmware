@@ -140,6 +140,7 @@ class ComponentClient:
         # main client loop
         self.conn_status['websocket'] = 1
         self.conn_status['video'] = False
+        self.conn_status['ip_address'] = self.address
         self.to_ui_q.put({'connection_status': self.conn_status})
         ws_uri = f"ws://{self.address}:{websocket_port}"
         print(f"Connecting to {ws_uri}...")
