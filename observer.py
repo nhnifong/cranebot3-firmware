@@ -143,6 +143,7 @@ class AsyncObserver:
                             }))
                 elif 'gripper' in updates['jog_spool']:
                     # we can also jog the gripper spool
+                    print(f'gripper spool moved with update {updates}')
                     if self.gripper_client is not None:
                         asyncio.create_task(self.gripper_client.send_commands({
                             'aim_speed': updates['jog_spool']['speed']
@@ -552,7 +553,7 @@ class AsyncObserver:
             return
 
         # apply downward bias and renormalize
-        uvec = uvec - np.array([0,0,-0.08])
+        uvec = uvec + np.array([0,0,-0.08])
         uvec  = uvec / np.linalg.norm(uvec)
 
         anchor_positions = np.zeros((4,3))

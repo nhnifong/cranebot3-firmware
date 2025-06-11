@@ -215,10 +215,11 @@ def find_hang_point(positions, lengths):
     if len(candidates) == 0:
         return None
 
-    # take the lowest point
-    index_of_lowest = np.argmin(candidates[:, 2])
     # line length must exceed distance to point by this much to be considered slack
+    # this is the estimate of slackness implied by the line lengths.
+    index_of_lowest = np.argmin(candidates[:, 2])
     slack_lines = distances[index_of_lowest] <= (ex_lengths - 0.04)
+
     return candidates[index_of_lowest], slack_lines
 
 
@@ -534,7 +535,7 @@ class Positioner2:
         z = np.zeros(3, dtype=float)
 
         # Look at the last report for each anchor line.
-        # time, length, speed
+        # time, length, speed, tight
         records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
         lengths = np.array(records[:,1])
         speeds = np.array(records[:,2])
@@ -572,7 +573,8 @@ class Positioner2:
 
             # this represents a prediction of which lines are slack, it may not match reality.
             # if this prediction says a line is tight but measured slackness says otherwise, the hang point is probably quite wrong.
-            self.slack_lines = result[1]
+            # self.slack_lines = result[1]
+            self.slack_lines = np.logical_not(tight)
 
             if sum(speeds) == 0:
                 self.hang_gant_vel = z
