@@ -298,50 +298,70 @@ class AsyncObserver:
         if 'cranebot' in name:
             print(f"Service {name} of type {service_type} state changed: {state_change}")
             if state_change is ServiceStateChange.Added:
-                task = asyncio.create_task(self.add_service(zeroconf, service_type, name))
+                asyncio.create_task(self.add_service(zeroconf, service_type, name))
             if state_change is ServiceStateChange.Removed:
-                pass
-                # find out whether we have a running task connected to this service.
-                # of so, cancel it, remove the client from the list.
+                asyncio.create_task(self.remove_service(zeroconf, service_type, name))
             elif state_change is ServiceStateChange.Updated:
                 pass
 
     async def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+        """
+        Starts a client to connect to the indicated service
+        """
         info = AsyncServiceInfo(service_type, name)
         await info.async_request(zc, 3000)
-        if info:
-            if info.server is None or info.server == '':
-                return;
-            print(f"Service {name} added, service info: {info}, type: {service_type}")
-            address = socket.inet_ntoa(info.addresses[0])
+        if not info or info.server is None or info.server == '':
+            return None;
+        print(f"Service {name} added, service info: {info}, type: {service_type}")
+        address = socket.inet_ntoa(info.addresses[0])
+        name_component = name.split('.')[1]
 
-            name_component = name.split('.')[1]
+        if name_component == cranebot_anchor_service_name:
+            # the number of anchors is decided ahead of time (in main.py)
+            # but they are assigned numbers as we find them on the network
+            # and the chosen numbers are persisted on disk
+
+            if info.server in self.config.anchor_num_map:
+                anchor_num = self.config.anchor_num_map[info.server]
+            else:
+                anchor_num = len(self.config.anchor_num_map)
+                if anchor_num >= 4:
+                    # we do not support yet multiple crane bot assemblies on a single network
+                    print(f"Discovered another anchor server on the network, but we already know of 4 {info.server} {address}")
+                    return None
+                self.config.anchor_num_map[info.server] = anchor_num
+                self.config.anchors[anchor_num].service_name = info.server
+                self.config.write()
+
+            ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
+            self.bot_clients[info.server] = ac
+            self.anchors.append(ac)
+            print('appending anchor client to list and starting server')
+            asyncio.create_task(ac.startup())
+
+        elif name_component == cranebot_gripper_service_name:
+            gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
+            self.bot_clients[info.server] = gc
+            self.gripper_client = gc
+            asyncio.create_task(gc.startup())
+
+    async def remove_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+        """
+        Finds if we have a client connected to this service. if so, ends the task if it is running, and deletes the client
+        """
+        namesplit = name.split('.')
+        name_component = namesplit[1]
+        key  = ".".join(namesplit[:3])+'.'
+        print(f'Removing service {key} from {self.bot_clients.keys()}')
+
+        if key in self.bot_clients:
+            client = self.bot_clients[key]
+            await client.shutdown()
             if name_component == cranebot_anchor_service_name:
-                # the number of anchors is decided ahead of time (in main.py)
-                # but they are assigned numbers as we find them on the network
-                # and the chosen numbers are persisted on disk
-
-                if info.server in self.config.anchor_num_map:
-                    anchor_num = self.config.anchor_num_map[info.server]
-                else:
-                    anchor_num = len(self.config.anchor_num_map)
-                    if anchor_num >= 4:
-                        # we do not support yet multiple crane bot assemblies on a single network
-                        print(f"Discovered another anchor server on the network, but we already know of 4 {info.server} {address}")
-                        return
-                    self.config.anchor_num_map[info.server] = anchor_num
-                    self.config.anchors[anchor_num].service_name = info.server
-                    self.config.write()
-
-                ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
-                self.bot_clients[info.server] = ac
-                self.anchors.append(ac)
-                result = await ac.startup()
+                self.anchors.remove(client)
             elif name_component == cranebot_gripper_service_name:
-                gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
-                self.bot_clients[info.server] = gc
-                self.gripper_client = gc
-                result = await gc.startup()
+                self.gripper_client = None
+            del self.bot_clients[key]
 
     async def main(self, interfaces=InterfaceChoice.All) -> None:
         # main process loop
