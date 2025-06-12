@@ -545,7 +545,7 @@ class AsyncObserver:
             if dist < 0.05:
                 break
             vector = vector / dist
-            self.move_direction_speed(vector, 0.2, self.pe.gant_pos)
+            result = await self.move_direction_speed(vector, 0.2, self.pe.gant_pos)
             await asyncio.sleep(0.2)
         self.slow_stop_all_spools()
         self.gantry_goal_pos = None
