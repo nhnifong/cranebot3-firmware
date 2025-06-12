@@ -102,12 +102,9 @@ class ControlPanelUI:
         self.debug_indicator_visual = IndicatorSphere(color=color.red)
         self.debug_indicator_hang = IndicatorSphere(color=color.blue)
 
-        # sphereX = Entity(model='sphere', position=(1,0,0), color=color.red, scale=(0.1), shader=unlit_shader)
-        # sphereY = Entity(model='sphere', position=(0,1,0), color=color.green, scale=(0.1), shader=unlit_shader)
-        # sphereZ = Entity(model='sphere', position=(0,0,1), color=color.blue, scale=(0.1), shader=unlit_shader)
-
         #show a very large floor
         self.floor = Floor(
+            app=self,
             model='quad',
             position=(0, -0.05, 0),
             rotation=(90,0,0),

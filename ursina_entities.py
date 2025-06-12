@@ -362,11 +362,12 @@ Enter the actual weight in kg."""),
 
 
 class Floor(Entity):
-    def __init__(self, **kwargs):
+    def __init__(self, app, **kwargs):
         super().__init__(
             collider='box',
             **kwargs
         )
+        self.app = app
         self.alt = 0.3 # altitude of blue circle in meters
         self.target = Entity(
             model='quad',
@@ -405,7 +406,7 @@ class Floor(Entity):
     def on_click(self,):
         print(mouse.world_point)
         gantry_goal = swap_yz(self.circle.world_position)
-        self.to_ob_q.put({'gantry_goal_pos': gantry_goal})
+        self.app.to_ob_q.put({'gantry_goal_pos': gantry_goal})
 
     def update(self,):
         if mouse.hovered_entity == self:

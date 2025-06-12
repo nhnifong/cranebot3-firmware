@@ -86,7 +86,7 @@ class ComponentClient:
                         
                 if self.sendPreviewToUi:
                     # send frame to UI
-                    preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA), None, fx=0.25, fy=0.25), 0)
+                    preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
                     self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
 
                 # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
