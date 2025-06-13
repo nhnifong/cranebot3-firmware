@@ -321,7 +321,6 @@ class AsyncObserver:
             # but they are assigned numbers as we find them on the network
             # and the chosen numbers are persisted on disk
 
-            print(f'Expect server to be one of {self.config.anchor_num_map.keys()}')
             if info.server in self.config.anchor_num_map:
                 anchor_num = self.config.anchor_num_map[info.server]
             else:
