@@ -31,4 +31,5 @@ jobs:
         pip install -r requirements_testing.txt
     - name: Test with pytest
       run: |
+        cd tests
         pytest
