@@ -132,7 +132,6 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.ob_task.done())
         self.assertEqual(len(self.ob.anchors), 1)
 
-    # TODO: this fails because the observer currently makes no attempt to clean up disconnected/removed servers
     async def test_anchor_reconnect(self):
         """Confirm that if an anchor server goes down and restarts, that we reconnect to it.
         In this test, we are neither running a real websocket server, or client. the client is a mock and the server doesn't exist.
@@ -147,12 +146,10 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(2)
         self.assertEqual(len(self.ob.anchors), 0)
         print('observer removed anchor client correctly, re-advertising service')
-        t = time.time()
 
         self.watchable_event.clear()
         await asyncio.sleep(0.01) # it is necessary to reliquish control of the event loop after calling clear or it may not have the intended effect
 
         info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
         await asyncio.wait_for(self.watchable_event.wait(), 10)
-        print(f'elapsed {time.time()-t}')
         self.assertEqual(len(self.ob.anchors), 1)
