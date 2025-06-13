@@ -124,7 +124,7 @@ class ControlPanelUI:
             ui=self,
             to_ob_q=self.to_ob_q,
             model='gantry',
-            color=(0.4, 0.4, 0.0, 1.0),
+            color=(0.9, 0.9, 0.9, 1.0),
             scale=0.001,
             position=(0,1,1),
             rotation=(0,0,0),
@@ -576,7 +576,7 @@ class ControlPanelUI:
         if 'gantry_goal_marker' in updates:
             pos = updates['gantry_goal_marker']
             if pos is not None:
-                self.goal_marker.position = pos
+                self.goal_marker.position = swap_yz(pos)
                 self.goal_marker.enabled = True
             else:
                 self.goal_marker.enabled = False

@@ -33,6 +33,8 @@ def draw_line(point_a, point_b, slack=False):
 
 MAX_JOG_SPEED = 0.3
 
+gripper_color = (0.9, 0.20, 0.34, 1.0)
+
 class Gantry(Entity):
     def __init__(self, ui, to_ob_q, **kwargs):
         super().__init__(**kwargs)
@@ -77,7 +79,7 @@ class Gripper(Entity):
             collider='box', # for mouse interaction
             model='gripper_body',
             scale=0.001,
-            color=(0.9, 0.9, 0.9, 1.0),
+            color=gripper_color,
             **kwargs
         )
         self.ui = ui,
@@ -129,7 +131,7 @@ class Gripper(Entity):
         self.color = anchor_color_selected
 
     def on_mouse_exit(self):
-        self.color = anchor_color
+        self.color = gripper_color
 
     def on_click(self):
         self.wp = WindowPanel(
@@ -369,6 +371,8 @@ class Floor(Entity):
         )
         self.app = app
         self.alt = 0.3 # altitude of blue circle in meters
+        self.button = None
+        self.button_offset = (0.02, -0.03)
         self.target = Entity(
             model='quad',
             position=(0, 0, 0),
@@ -405,13 +409,32 @@ class Floor(Entity):
 
     def on_click(self,):
         print(mouse.world_point)
-        gantry_goal = swap_yz(self.circle.world_position)
-        self.app.to_ob_q.put({'gantry_goal_pos': gantry_goal})
+        if self.button is None:
+            # put a goal point indicator here and then the user to click it to confirm
+            self.button = Button(
+                color=rgb(0.1,0.8,0.1),
+                text_color=color.black,
+                text="Confirm",
+                scale=(0.05, 0.02),
+                text_size=0.5,
+                on_click=self.button_confirm
+            )
+        else:
+            self.button = None
 
     def update(self,):
-        if mouse.hovered_entity == self:
-            # Get the intersection point in world coordinates
-            self.target.position = mouse.world_point
+        if self.button is None:
+            if mouse.hovered_entity == self:
+                # Get the intersection point in world coordinates
+                self.target.position = mouse.world_point
+        else:
+            self.button.position = world_position_to_screen_position(self.circle.world_position) + self.button_offset
+
+    def button_confirm(self):
+        self.button.enabled = False
+        self.button = None
+        gantry_goal = swap_yz(self.circle.world_position)
+        self.app.to_ob_q.put({'gantry_goal_pos': gantry_goal})
 
 class GoalPoint(Entity):
     def __init__(self, position, **kwargs):

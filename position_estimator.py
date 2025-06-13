@@ -429,7 +429,7 @@ class Positioner2:
         position_bounds = np.column_stack([lower, upper])
 
         velocity_guess = positions[-1]-positions[-2]
-        speed = 100
+        speed = 0.5
         if not moving:
             speed = 0.0
             velocity_guess = np.zeros(3)
@@ -437,14 +437,6 @@ class Positioner2:
 
         initial_guess = np.concatenate([ positions[-1], velocity_guess ])
         bounds = np.concatenate([position_bounds, velocity_bounds])
-
-        
-        # result = optimize.least_squares(
-        #     linear_move_cost_fn,
-        #     initial_guess,
-        #     args=(backtime, times, positions),
-        #     bounds=(bounds[:,0], bounds[:,1]),
-        # )
 
         result = optimize.minimize(
             linear_move_cost_fn,
