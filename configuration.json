@@ -13,7 +13,9 @@
       ],
       "service_name": "123.cranebot-anchor-service.2ccf67bc3fc4.",
       "num": 0,
-      "vars": {}
+      "vars": {
+        "disable_switch": false
+      }
     },
     {
       "position": [
@@ -29,7 +31,8 @@
       "service_name": "123.cranebot-anchor-service.2ccf67befc13.",
       "num": 1,
       "vars": {
-        "switch_tight_val": 0
+        "switch_tight_val": 0,
+        "disable_switch": false
       }
     },
     {
@@ -45,7 +48,9 @@
       ],
       "service_name": "123.cranebot-anchor-service.2ccf67cb3898.",
       "num": 2,
-      "vars": {}
+      "vars": {
+        "disable_switch": false
+      }
     },
     {
       "position": [
@@ -61,7 +66,7 @@
       "service_name": "123.cranebot-anchor-service.2ccf67bf171a.",
       "num": 3,
       "vars": {
-        "disable_switch": true
+        "disable_switch": false
       }
     }
   ],
