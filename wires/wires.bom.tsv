@@ -1,9 +1,0 @@
-Id	Description	Qty	Unit	Designators
-1	Cable, 2 x 28 AWG	31	cm	W4, W5
-2	Cable, 3 x 28 AWG	15	cm	W3
-3	Cable, 4 x 28 AWG	37	cm	W1, W2, W6
-4	Connector, Dupont 2.0, female, 2 pins	1		MKS-Serial
-5	Connector, Dupont 2.54, female, 3 pins	2		Limit-switch-gpio, Pres-gpio
-6	Connector, Dupont 2.54, female, 4 pins	3		Anchor-ras, I2C2, I2C3
-7	Connector, JST SH 1.0, female, 4 pins	1		I2C1
-8	Connector, JST SH 1.0, female, 6 pins	1		EncoderA
