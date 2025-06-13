@@ -91,15 +91,15 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.gc.connected)
         # Connecting
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 1, 'video': False}, ui_queue_message['connection_status'])
+        self.assertEqual({'gripper': True, 'websocket': 1, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
         # Online
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 2, 'video': False}, ui_queue_message['connection_status'])
+        self.assertEqual({'gripper': True, 'websocket': 2, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
         await self.clientTearDown()
         self.assertFalse(self.gc.connected)
         # gone
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 0, 'video': False}, ui_queue_message['connection_status'])
+        self.assertEqual({'gripper': True, 'websocket': 0, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
 
         # if gripper_client is going to use the configs in configuration.json, then so will we.
         config = Config()

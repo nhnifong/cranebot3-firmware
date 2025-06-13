@@ -103,15 +103,15 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(3, len(pose[1]))
         # Connecting
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'anchor_num': 1, 'websocket': 1, 'video': False}, ui_queue_message['connection_status'])
+        self.assertEqual({'anchor_num': 1, 'websocket': 1, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
         # Online
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'anchor_num': 1, 'websocket': 2, 'video': False}, ui_queue_message['connection_status'])
+        self.assertEqual({'anchor_num': 1, 'websocket': 2, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
         await self.clientTearDown()
         self.assertFalse(self.ac.connected)
         # gone
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'anchor_num': 1, 'websocket': 0, 'video': False}, ui_queue_message['connection_status'])
+        self.assertEqual({'anchor_num': 1, 'websocket': 0, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
 
         # if gripper_client is going to use the configs in configuration.json, then so will we.
         config = Config()
