@@ -25,14 +25,20 @@ def constrain(value, minimum, maximum):
 
 class SpiralCalculator:
     def __init__(self, empty_diameter, full_diameter, full_length, gear_ratio, motor_orientation):
-
         self.empty_diameter = empty_diameter * 0.001 # millimeter to meters
-        self.full_diameter = full_diameter * 0.001
-        self.full_length = full_length
         self.gear_ratio = gear_ratio
         self.motor_orientation = motor_orientation
         self.zero_angle = 0
 
+        # since line accumulates on the spool in a spiral, the amount of wrapped line is an exponential function of the spool angle.
+        self.recalc_k_params(full_diameter, full_length)
+
+    def set_zero_angle(self, zero_a):
+        self.zero_angle = zero_a
+
+    def recalc_k_params(self, full_diameter, full_length):
+        self.full_diameter = full_diameter * 0.001
+        self.full_length = full_length
         # since line accumulates on the spool in a spiral, the amount of wrapped line is an exponential function of the spool angle.
         self.diameter_diff = self.full_diameter - self.empty_diameter
         if self.diameter_diff > 0:
@@ -42,8 +48,6 @@ class SpiralCalculator:
             self.k1 = self.empty_diameter * self.full_length / 1e-9 # Avoid division by zero
             self.k2 = (math.pi * self.gear_ratio * 1e-9) / self.full_length
 
-    def set_zero_angle(self, zero_a):
-        self.zero_angle = zero_a
 
     def calc_za_from_length(self, length, angle):
         """ Given an observed length and current angle, what would the zero angle be, all other things being equal?"""
