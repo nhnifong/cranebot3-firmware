@@ -23,6 +23,55 @@ default_conf = {
 def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
+class SpiralCalculator:
+    def __init__(self, empty_diameter, full_diameter, full_length, gear_ratio, motor_orientation):
+
+        self.empty_diameter = empty_diameter * 0.001 # millimeter to meters
+        self.full_diameter = full_diameter * 0.001
+        self.full_length = full_length
+        self.gear_ratio = gear_ratio
+        self.motor_orientation = motor_orientation
+        self.zero_angle = 0
+
+        # since line accumulates on the spool in a spiral, the amount of wrapped line is an exponential function of the spool angle.
+        self.diameter_diff = self.full_diameter - self.empty_diameter
+        if self.diameter_diff > 0:
+            self.k1 = (self.empty_diameter * self.full_length) / self.diameter_diff
+            self.k2 = (math.pi * self.gear_ratio * self.diameter_diff) / self.full_length
+        else:
+            self.k1 = self.empty_diameter * self.full_length / 1e-9 # Avoid division by zero
+            self.k2 = (math.pi * self.gear_ratio * 1e-9) / self.full_length
+
+    def set_zero_angle(self, zero_a):
+        self.zero_angle = zero_a
+
+    def calc_za_from_length(self, length, angle):
+        """ Given an observed length and current angle, what would the zero angle be, all other things being equal?"""
+        # how many revs must the motor have turned since empty be to have this length
+        spooled_length = self.full_length - length
+        relative_angle = math.log(spooled_length / self.k1 + 1) / self.k2
+        angle *= self.motor_orientation
+        return angle - relative_angle
+
+    def get_spooled_length(self, motor_angle_revs):
+        relative_angle = self.motor_orientation * motor_angle_revs - self.zero_angle # shaft angle relative to zero_angle
+        if self.diameter_diff == 0:
+            return relative_angle * self.gear_ratio * math.pi * self.empty_diameter
+        else:
+            return self.k1 * (math.exp(self.k2 * relative_angle) - 1)
+
+    def get_unspooled_length(self, motor_angle_revs):
+        return self.full_length - self.get_spooled_length(motor_angle_revs)
+
+    def get_unspool_rate(self, motor_angle_revs):
+        relative_angle = self.motor_orientation * motor_angle_revs - self.zero_angle
+
+        if self.diameter_diff == 0:
+            return math.pi * self.empty_diameter * self.gear_ratio
+        else:
+            rate_spool_rev_per_spool_rev = math.pi * (self.empty_diameter + self.diameter_diff * (self.get_spooled_length(motor_angle_revs) / self.full_length))
+            return rate_spool_rev_per_spool_rev * self.gear_ratio
+
 class SpoolController:
     def __init__(self, motor, empty_diameter, full_diameter, full_length, conf, gear_ratio=1.0, tight_check_fn=None):
         """
@@ -36,30 +85,11 @@ class SpoolController:
         tight_check_fn a function that can return true when the line is tight and false when it is slack
         """
         self.motor = motor
-        self.empty_diameter = empty_diameter * 0.001 # millimeter to meters
-        self.full_diameter = full_diameter * 0.001
-        self.full_length = full_length
-        self.gear_ratio = gear_ratio
-        self.motor_orientation = -1
         self.tight_check_fn = tight_check_fn
+        self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, gear_ratio, -1)
 
         self.conf = conf
         self.conf.update(default_conf)
-
-        # since line accumulates on the spool in a spiral, the amount of wrapped line is an exponential function of the spool angle.
-        self.diameter_diff = self.full_diameter - self.empty_diameter
-        if self.diameter_diff > 0:
-            self.k1_over_k2 = (self.empty_diameter * self.full_length) / self.diameter_diff
-            self.k2 = (math.pi * self.gear_ratio * self.diameter_diff) / self.full_length
-        else:
-            self.k1_over_k2 = self.empty_diameter * self.full_length / 1e-9 # Avoid division by zero
-            self.k2 = (math.pi * self.gear_ratio * 1e-9) / self.full_length
-
-        # The motor shaft angle if the spool were empty
-        self.zero_angle = 0
-        # collected estimates of zero angle, binned by length where collected
-        self.za_collection = np.zeros(16, dtype=float) # units, revolutions
-        self.za_has_data_mask = np.zeros(len(self.za_collection), dtype=bool)
         
         # last commanded motor speed in revs/sec
         self.speed = 0
@@ -69,7 +99,7 @@ class SpoolController:
         self.tracking_mode = 'plan'
         self.last_length = 3.0
         self.last_angle = 0.0
-        self.meters_per_rev = self.get_unspool_rate(self.last_angle)
+        self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
         # record of line length. tuples of (time, meters)
         self.record = []
         # plan of desired line lengths
@@ -94,41 +124,11 @@ class SpoolController:
             success, angle = self.motor.getShaftAngle()
             attempts += 1
         if success:
-            # how many revs must the motor have turned since empty be to have this length
-            spooled_length = self.full_length - length
-            relative_angle = math.log(spooled_length / self.k1_over_k2 + 1) / self.k2
-            angle *= self.motor_orientation
-            za = angle - relative_angle
-
-            # add this estimate of zero_angle to a collection
-            # take an average of the values in the collection that evenly weights samples collected at each binned length
-            index = constrain(int((length / self.full_length) * len(self.za_collection)), 0, len(self.za_collection))
-            self.za_collection[index] = za
-            self.za_has_data_mask[index] = True
-            if np.any(self.za_has_data_mask):
-                self.zero_angle = np.mean(self.za_collection[self.za_has_data_mask])
-                logging.debug(f'Zero angle estimate={self.zero_angle} revs. {relative_angle} revs from the current value of {angle}, using reference length {length} m')
-                # this affects the estimated current amount of wrapped wire
-                self.meters_per_rev = self.get_unspool_rate(angle)
-
-    def _get_spooled_length(self, motor_angle_revs):
-        relative_angle = self.motor_orientation* motor_angle_revs - self.zero_angle # shaft angle relative to zero_angle
-        if self.diameter_diff == 0:
-            return relative_angle * self.gear_ratio * math.pi * self.empty_diameter
-        else:
-            return self.k1_over_k2 * (math.exp(self.k2 * relative_angle) - 1)
-
-    def get_unspooled_length(self, motor_angle_revs):
-        return self.full_length - self._get_spooled_length(motor_angle_revs)
-
-    def get_unspool_rate(self, motor_angle_revs):
-        relative_angle = self.motor_orientation * motor_angle_revs - self.zero_angle
-
-        if self.diameter_diff == 0:
-            return math.pi * self.empty_diameter * self.gear_ratio
-        else:
-            rate_spool_rev_per_spool_rev = math.pi * (self.empty_diameter + self.diameter_diff * (self._get_spooled_length(motor_angle_revs) / self.full_length))
-            return rate_spool_rev_per_spool_rev * self.gear_ratio
+            za = self.sc.calc_za_from_length(length, angle)
+            self.sc.set_zero_angle(za)
+            logging.debug(f'Zero angle estimate={za} revs. current value of {angle}, using reference length {length} m')
+            # this affects the estimated current amount of wrapped wire
+            self.meters_per_rev = self.sc.get_unspool_rate(angle)
 
     def _commandSpeed(self, speed):
         """command a specific speed from the motor."""
@@ -177,12 +177,12 @@ class SpoolController:
             logging.warning(f'motor moved more than 1 rev since last read, last_angle={self.last_angle} angle={angle} diff={angle - self.last_angle}')
         self.last_angle = angle
 
-        self.last_length = self.get_unspooled_length(angle)
-        self.meters_per_rev = self.get_unspool_rate(angle)
+        self.last_length = self.sc.get_unspooled_length(angle)
+        self.meters_per_rev = self.sc.get_unspool_rate(angle)
         currentLineSpeed = self.speed * self.meters_per_rev
 
         self.move_allowed = True
-        if self.last_length < 0 or self.last_length > self.full_length:
+        if self.last_length < 0 or self.last_length > self.sc.full_length:
             logging.error(f"Bad length calculation! length={self.last_length}, shaftAngle={angle}. Movement disallowed until new reference length received.")
             # self.move_allowed = False
 
