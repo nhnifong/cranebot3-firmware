@@ -5,24 +5,14 @@ from cv_common import compose_poses
 import model_constants
 from spools import SpiralCalculator
 
-def calc_spool_params(empty_diameter, full_diameter, full_length, gear_ratio):
-    # since line accumulates on the spool in a spiral, the amount of wrapped line is an exponential function of the spool angle.\
-    # this function is parameterized by the two terms k1 and k2
-    diameter_diff = full_diameter - empty_diameter
-    assert diameter_diff > 0
-    k1 = (empty_diameter * full_length) / diameter_diff
-    k2 = (math.pi * gear_ratio * diameter_diff) / full_length
-    return k1, k2
-
-def get_spooled_length(motor_angle_revs, k1, k2, zero_angle, motor_orientation):
-    relative_angle = motor_orientation * motor_angle_revs - zero_angle # shaft angle relative to zero_angle
-    return k1 * (math.exp(k2 * relative_angle) - 1)
-
 def calibration_cost_fn(params, observations, spools):
 	"""Return the mean squared difference between line lengths calculated from encoders, and from visual observation
 
-	params - a pose and zero angle for each anchor (3 rot, 3 pos, 1 za) * 4.
+	params - a pose and zero angle, full diameter, and full length for each anchor
+	    (3 rot, 3 pos, za, full_d, full_len) * 4.
 		the zero angle refers to the encoder position in revolutions where the amount of unspooled line would be zero.
+		full diameter refers to the wrapping diameter of the spool when it is full in millimeters
+		full length refers to the length of line in meters that is wrapped on the spool when the gantry is reeled in all the way
 
 	observations - a list with one entry per sample position.
 		At each sample position, the gantry was still, and the lines were tight.
@@ -35,11 +25,12 @@ def calibration_cost_fn(params, observations, spools):
 	"""
 
 	# extract parameters
-	params = params.reshape((4,7))
+	params = params.reshape((4,9))
 	anchor_poses = []
 	for i, ap in enumerate(params):
 		anchor_poses.append(ap[:6].reshape((2,3)))
 		spools[i].set_zero_angle(ap[6])
+		spools[i].recalc_k_params(ap[7], ap[8])
 
     # obtain the position of the anchor grommet relative to the global origin
     anchor_grommets = np.array([compose_poses([      
@@ -81,10 +72,45 @@ def calibration_cost_fn(params, observations, spools):
 
 
 def find_cal_params():
+	spools = []
+	initial_guess = []
+	bounds = []
+	for i in range(4):
+		# initialize a model of the spool to relate zero angle, encoder readinds, and line lengths
+		spools.append(SpiralCalculator(empty_diameter=25, full_diameter=27, full_length=7.5, gear_ratio=20/51, motor_orientation=-1))
 
-	spools = [
-		SpiralCalculator(empty_diameter=25, full_diameter=27, full_length=7.5, gear_ratio=20/51, motor_orientation=-1)
-		for i in range(4)]
+		# initial position guesses are made by taking the average of a few observations of an origin card.
+	    apose = np.array(invert_pose(compose_poses([model_constants.anchor_camera, average_pose(origin_detections)])))
+	    # depending on which quadrant the average anchor pose falls in, constrain the XY rotation,
+	    # while still allowing very minor deviation because of crooked mounting and misalignment of the foam shock absorber on the camera.
+	    xsign = 1 if apose[1,0]>0 else -1
+	    ysign = 1 if apose[1,1]>0 else -1
+
+	    guess = [
+	    	0, 0                                   # no x or y component in rotation axis
+	    	-xsign*(2-ysign)*pi/4,                 # one of four diagonals. points -Y towards middle of work area
+	    	apose[1][0], apose[1][1], apose[1][2], # use position from the averaged pose above
+	    	0,                                     # initial guess of zero angle
+	    	27,                                    # full diameter in millimeters
+	    	7.5,                                   # full length in meters
+	    ]
+	    initial_guess.append(guess)
+
+	    anchor_bounds = [
+	        (guess[0] - 0.2, guess[0] + 0.2), # x component of rotation vector
+	        (guess[1] - 0.2, guess[1] + 0.2), # y component of rotation vector
+	        (guess[2] - 0.2, guess[2] + 0.2), # z component of rotation vector
+	        (-8, 8), # x component of position
+	        (-8, 8), # y component of position
+	        ( 1, 6), # z component of position
+	        (-400, 400), # bounds on zero angle in revs.
+	        (25.1, 55),  # bounds on full diameter in mm.
+	        (4, 10),     # bounds on full length in meters
+	    ]
+	    bounds.append(anchor_bounds)
+
+	initial_guess =  np.array(initial_guess).flatten()
+	bounds =  np.array(bounds).flatten()
 
     result = optimize.minimize(
         calibration_cost_fn,
@@ -93,5 +119,20 @@ def find_cal_params():
         method='SLSQP',
         bounds=bounds,
         options={
-            'disp': False,
+            'disp': True,
         },
+
+
+# TODO overall procedure
+# collect observations of origin card aruco marker to get initial guess of anchor poses.
+# reel in all lines until the switches indicate they are tight
+# use aruco observations of gantry to obtain initial guesses for zero angles
+# use this information to perform rough movements
+# for at least 15 positions:
+#   move to a position.
+#   reel in all lines until they are tight
+#   save encoder angles
+#   collect several visual observations from each camera
+# feed collected data to the optimization process above.
+# Use the optimization output to update anchor poses and spool params
+# move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
