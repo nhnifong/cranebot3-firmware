@@ -26,7 +26,7 @@ from config import Config
 from stats import StatCounter
 from position_estimator import Positioner2
 from cv_common import invert_pose, compose_poses, average_pose
-from new_calibration import order_points_for_low_travel, find_cal_params
+from calibration import order_points_for_low_travel, find_cal_params
 import model_constants
 import traceback
 
@@ -205,7 +205,7 @@ class AsyncObserver:
         # this is similar to sending a manual move command. it can be overridden by any subsequent command.
         # thus, it should be done while paused.
 
-    async def wait_for_tension()
+    async def wait_for_tension():
         # this function returns only once all anchors are reporting tight lines in their regular line record, and are not moving
         complete = False
         while not complete:
@@ -213,7 +213,7 @@ class AsyncObserver:
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
             tight = np.array(records[:,3])
-            complete = np.all(tight) and np.sum(speeds) == 0:
+            complete = np.all(tight) and np.sum(speeds) == 0
         return True
 
 
@@ -270,7 +270,7 @@ class AsyncObserver:
                 continue
             print(f'locating anchor {client.anchor_num} from {len(client.origin_poses)} detections')
             pose = np.array(invert_pose(compose_poses([model_constants.anchor_camera, average_pose(client.origin_poses)])))
-            assert pose is not None:
+            assert pose is not None
             self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
             anchor_poses.append(pose)
         return np.array(anchor_points)
@@ -372,7 +372,7 @@ class AsyncObserver:
 
         print(f'Completed data collection. Performing optimization of calibration parameters.')
 
-        # feed collected data to the optimization process in new_calibration.py
+        # feed collected data to the optimization process in calibration.py
         result_params = find_cal_params(anchor_poses, data)
 
         # Use the optimization output to update anchor poses and spool params
