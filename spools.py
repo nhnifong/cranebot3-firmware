@@ -48,7 +48,6 @@ class SpiralCalculator:
             self.k1 = self.empty_diameter * self.full_length / 1e-9 # Avoid division by zero
             self.k2 = (math.pi * self.gear_ratio * 1e-9) / self.full_length
 
-
     def calc_za_from_length(self, length, angle):
         """ Given an observed length and current angle, what would the zero angle be, all other things being equal?"""
         # how many revs must the motor have turned since empty be to have this length

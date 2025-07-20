@@ -45,6 +45,7 @@ class ComponentClient:
         self.shape_tracker = None
         self.last_gantry_frame_coords = None
         self.ct = None # task to connect to websocket
+        self.save_raw = False
 
         # todo: receive a command in observer that will set this value
         self.sendPreviewToUi = False
