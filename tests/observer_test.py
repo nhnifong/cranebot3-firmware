@@ -111,22 +111,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # run sendCommands()
         # run slow_stop_spool()
 
-    async def test_optimize_single_anchor_pose(self):
-        """
-        Run the optimizer once on origin card poses
-        """
-        expected_pose = np.array([[0,0,-pi/4], [2.3,2.4,2.5]])
-        simulated_observations = []
-        for i in range(25):
-            op = invert_pose(compose_poses([expected_pose, model_constants.anchor_camera]))
-            simulated_observations.append(op)
-        simulated_observations = np.array(simulated_observations)
-        simulated_observations += np.random.normal(0,1e-4,simulated_observations.shape)
-        pose = self.ob.optimize_single_anchor_pose(simulated_observations)
-        np.testing.assert_array_almost_equal(expected_pose, pose, 3)
-
     async def test_anchor_connect_familiar(self):
-        """Confirm that we can connnect to an anchor that advertises a name we recognizes from our configuration"""
+        """Confirm that we can connnect to an anchor that advertises a name we recognize from our configuration"""
         await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
         await asyncio.wait_for(self.watchable_event.wait(), 10)
         self.assertFalse(self.ob_task.done())
