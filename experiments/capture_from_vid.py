@@ -37,7 +37,8 @@ def receive_video_stream(stream_url):
     cap.release()
 
 # Example usage:
-raspberry_pi_ip = "192.168.1.156"  # Replace with your Pi's IP
+# raspberry_pi_ip = "192.168.1.156"  # Replace with your Pi's IP
+raspberry_pi_ip = "127.0.0.1"  # Replace with your Pi's IP
 port_number = 8888  # Replace with your port
 stream_url = f"tcp://{raspberry_pi_ip}:{port_number}"  # Construct the URL
 

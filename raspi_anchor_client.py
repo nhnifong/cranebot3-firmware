@@ -15,8 +15,6 @@ from config import Config
 
 # number of origin detections to average
 max_origin_detections = 25
-video_port = 8888
-websocket_port = 8765
 
 # fastSAM parameters
 # seconds between processing frames with fastSAM. there is no need need to run it on every frame, since 
@@ -29,8 +27,9 @@ def pose_from_det(det):
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
-    def __init__(self, address, datastore, to_ui_q, to_ob_q, pool, stat):
+    def __init__(self, address, port, datastore, to_ui_q, to_ob_q, pool, stat):
         self.address = address
+        self.port = port
         self.origin_poses = []
         self.datastore = datastore
         self.to_ui_q = to_ui_q
@@ -50,8 +49,8 @@ class ComponentClient:
         # todo: receive a command in observer that will set this value
         self.sendPreviewToUi = False
 
-    def receive_video(self):
-        video_uri = f'tcp://{self.address}:{video_port}'
+    def receive_video(self, port):
+        video_uri = f'tcp://{self.address}:{port}'
         print(f'Connecting to {video_uri}')
         cap = cv2.VideoCapture(video_uri)
         # cap = cv2.VideoCapture(video_uri, cv2.CAP_FFMPEG) # this is probably the default anyways
@@ -143,7 +142,7 @@ class ComponentClient:
         self.conn_status['video'] = False
         self.conn_status['ip_address'] = self.address
         self.to_ui_q.put({'connection_status': self.conn_status})
-        ws_uri = f"ws://{self.address}:{websocket_port}"
+        ws_uri = f"ws://{self.address}:{self.port}"
         print(f"Connecting to {ws_uri}...")
         try:
             # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
@@ -179,7 +178,7 @@ class ComponentClient:
                 if 'frames' in update:
                     self.handle_frame_times(update['frames'])
                 if 'video_ready' in update:
-                    vid_thread = threading.Thread(target=self.receive_video)
+                    vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": int(update['video_ready'])})
                     vid_thread.start()
                 self.handle_update_from_ws(update)
 
@@ -221,7 +220,6 @@ class ComponentClient:
             self.connected = False
             if self.websocket:
                 await self.websocket.close()
-                await task
         elif self.ct:
             self.ct.cancel()
         print("Finished client shutdown")
@@ -237,8 +235,8 @@ class ComponentClient:
             self.ct.cancel()
 
 class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, anchor_num, datastore, to_ui_q, to_ob_q, pool, stat, shape_tracker):
-        super().__init__(address, datastore, to_ui_q, to_ob_q, pool, stat)
+    def __init__(self, address, port, anchor_num, datastore, to_ui_q, to_ob_q, pool, stat, shape_tracker):
+        super().__init__(address, port, datastore, to_ui_q, to_ob_q, pool, stat)
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = {'anchor_num': self.anchor_num}
         self.shape_tracker = shape_tracker

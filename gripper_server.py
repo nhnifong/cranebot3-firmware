@@ -100,8 +100,8 @@ class GripperSpoolMotor():
 
 
 class RaspiGripperServer(RobotComponentServer):
-    def __init__(self, mock_motor=None):
-        super().__init__()
+    def __init__(self, mock_motor=None, mock_camera=None):
+        super().__init__(mock_camera=mock_camera)
         self.conf.update(default_gripper_conf)
         self.service_type = 'cranebot-gripper-service'
 
