@@ -221,12 +221,14 @@ class ComponentClient:
             self.connected = False
             if self.websocket:
                 await self.websocket.close()
+                await task
         elif self.ct:
             self.ct.cancel()
+        print("Finished client shutdown")
 
     def shutdown_sync(self):
         # this might get called twice
-        print("\nWait for client shutdown")
+        print("\nWait for client shutdown (sync)")
         if self.connected:
             self.connected = False
             if self.websocket:
