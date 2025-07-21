@@ -17,6 +17,8 @@ from math import pi
 from cv_common import invert_pose, compose_poses
 import model_constants
 import time
+from zeroconf import IPVersion
+from zeroconf.asyncio import AsyncZeroconf
 
 class TestObserver(unittest.IsolatedAsyncioTestCase):
 
@@ -59,9 +61,12 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         for p in self.patchers:
             p.start()
 
-        # Zeroconf will attempt to discover services on localhost only.
+        # Zeroconf will attempt to discover services .
         self.ob = AsyncObserver(self.to_ui_q, self.to_ob_q)
-        self.ob_task = asyncio.create_task(self.ob.main(interfaces=["127.0.0.1"]))
+        # before starting, set it's zeroconf instance to a special version that searches on localhost only
+        self.zc = AsyncZeroconf(ip_version=IPVersion.All)
+        self.ob.aiozc = self.zc
+        self.ob_task = asyncio.create_task(self.ob.main())
         await asyncio.sleep(0.1)
 
     async def asyncTearDown(self):
@@ -89,9 +94,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             addresses=["127.0.0.1"],
             server=name,
         )
-        # i'm pretty sure it doesn't matter whether we use the observer's instance of AsyncZeroConf or make another one
-        # use it to advertize the existence of our test gripper server
-        await self.ob.aiozc.async_register_service(info)
+        # We can't make a second zeroconf instance so we use the observer's isntance to advertize the existence of our test gripper server
+        await self.zc.async_register_service(info)
         return info
 
     async def test_discover_gripper(self):
