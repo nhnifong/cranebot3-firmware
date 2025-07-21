@@ -53,7 +53,7 @@ default_conf = {
 }
 
 class RobotComponentServer:
-    def __init__(self):
+    def __init__(self, mock_camera=None):
         self.conf = default_conf.copy()
         self.run_server = True
         # a dict of update to be flushed periodically to the websocket
@@ -64,6 +64,8 @@ class RobotComponentServer:
         self.rpicam_process = None
         self.line_timeout = 60
         self.zc = None # zerconf instance.
+        if mock_camera is not None:
+            self.mock_camera = mock_camera
 
     async def stream_measurements(self, ws):
         """
@@ -102,20 +104,39 @@ class RobotComponentServer:
             if not await websocket.ping():
                 return
 
-            try:
-                logging.info('Restarting rpi-cam_vid')
-                result = await self.run_rpicam_vid()
-                # if it stops, we'll have to wait a second or two for the OS to free the port it listens on
-                await asyncio.sleep(5)
-            except FileNotFoundError:
-                # we may be running in a test. In this case stop attempting to run rpicam-vid.
-                # the client will never receive the message indicating it should connect to video.
-                logging.warning('/usr/bin/rpicam-vid does not exist on this system')
-                return
-            except asyncio.CancelledError as e:
-                logging.info("Killing rpicam-vid subprocess the task is being cancelled")
-                self.rpicam_process.kill()
-                return await self.rpicam_process.wait()
+            if self.mock_camera is not None:
+                # in a unit test, use mock camera. A class having an async start_server(), and a sync stop_server()
+                fcount = 0
+                def frame_cb():
+                    print('frame cb')
+                    # nonlocal fcount
+                    # self.frames.append({
+                    #     'time': time.time(),
+                    #     'fnum': fcount,
+                    # })
+                    # fcount += 1
+                self.mock_camera.set_frame_cb(frame_cb)
+                logging.info('Starting mock video server')
+                mock_vid_task = asyncio.create_task(self.mock_camera.start_server())
+                await asyncio.sleep(0.01)
+                self.update['video_ready'] = self.mock_camera.port
+                result = await mock_vid_task
+                print('Mock vid task ended')
+            else:
+                try:
+                    logging.info('Restarting rpi-cam_vid')
+                    result = await self.run_rpicam_vid()
+                    # if it stops, we'll have to wait a second or two for the OS to free the port it listens on
+                    await asyncio.sleep(5)
+                except FileNotFoundError:
+                    # we may be running in a test. In this case stop attempting to run rpicam-vid.
+                    # the client will never receive the message indicating it should connect to video.
+                    logging.warning('/usr/bin/rpicam-vid does not exist on this system')
+                    return
+                except asyncio.CancelledError as e:
+                    logging.info("Killing rpicam-vid subprocess the task is being cancelled")
+                    self.rpicam_process.kill()
+                    return await self.rpicam_process.wait()
 
     async def run_rpicam_vid(self):
         """
@@ -170,7 +191,7 @@ class RobotComponentServer:
                 if match:
                     logging.info('rpicam-vid appears to be ready')
                     # tell the websocket client to connect to the video stream. it will do so in another thread.
-                    self.update['video_ready'] = True
+                    self.update['video_ready'] = 8888
 
                 # catch a few different kinds of errors that mean rpi-cam will have to be restarted
                 # some of these can only happen after we have asked the client to try connecting to video.
@@ -325,8 +346,8 @@ except RuntimeError:
 SWITCH_PIN = 18
 
 class RaspiAnchorServer(RobotComponentServer):
-    def __init__(self, power_anchor=False, flat=False, mock_motor=None):
-        super().__init__()
+    def __init__(self, power_anchor=False, flat=False, mock_motor=None, mock_camera=None):
+        super().__init__(mock_camera=mock_camera)
         self.conf.update(default_anchor_conf)
         ratio = 20/51 # 20 drive gear teeth, 51 spool teeth.
         if mock_motor is not None:

@@ -7,13 +7,9 @@ import model_constants
 from config import Config
 import json 
 
-# number of origin detections to average
-video_port = 8888
-websocket_port = 8765
-
 class RaspiGripperClient(ComponentClient):
-    def __init__(self, address, datastore, to_ui_q, to_ob_q, pool, stat, pe):
-        super().__init__(address, datastore, to_ui_q, to_ob_q, pool, stat)
+    def __init__(self, address, port, datastore, to_ui_q, to_ob_q, pool, stat, pe):
+        super().__init__(address, port, datastore, to_ui_q, to_ob_q, pool, stat)
         self.conn_status = {'gripper': True}
         self.anchor_num = None
         self.pe = pe
