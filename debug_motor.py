@@ -24,7 +24,7 @@ class DebugMotor():
         elapsed = now - self.last_check
         self.last_check = now
         self.position += self.speed * elapsed
-        print(f'position={self.position} revs')
+        # print(f'position={self.position} revs')
         return (True, self.position)
 
     def getShaftError(self):

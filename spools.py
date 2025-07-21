@@ -185,8 +185,8 @@ class SpoolController:
         currentLineSpeed = self.speed * self.meters_per_rev
 
         self.move_allowed = True
-        if self.last_length < 0 or self.last_length > self.sc.full_length:
-            logging.error(f"Bad length calculation! length={self.last_length}, shaftAngle={angle}. Movement disallowed until new reference length received.")
+        # if self.last_length < 0 or self.last_length > self.sc.full_length:
+        #     logging.warning(f"Bad length calculation! length={self.last_length}, shaftAngle={angle}. Movement disallowed until new reference length received.")
             # self.move_allowed = False
 
         # accumulate these so you can send them to the websocket

@@ -453,11 +453,12 @@ class AsyncObserver:
                 self.gripper_client = None
             del self.bot_clients[key]
 
-    async def main(self, interfaces=InterfaceChoice.All) -> None:
+    async def main(self) -> None:
         # main process loop
         with Pool(processes=8) as pool:
             self.pool = pool
-            self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=interfaces)
+            if self.aiozc is None:
+                self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=InterfaceChoice.All)
 
             try:
                 print("get services list")

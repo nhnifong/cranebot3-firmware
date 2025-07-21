@@ -63,6 +63,7 @@ class RobotComponentServer:
         self.stream_command = stream_command
         self.rpicam_process = None
         self.line_timeout = 60
+        self.zc = None # zerconf instance.
 
     async def stream_measurements(self, ws):
         """
@@ -229,10 +230,14 @@ class RobotComponentServer:
         self.spooler.setAimSpeed(0)
 
 
-    async def main(self, port=8765):
+    async def main(self, port=8765, name=None):
         logging.info('Starting cranebot server')
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), self.shutdown)
+
+        # used in testing when running multiple servers on the same machine
+        if name is not None:
+            self.service_name = name
 
         self.run_server = True
         asyncio.create_task(self.register_mdns_service(f"123.{self.service_name}", "_http._tcp.local.", port))
@@ -280,13 +285,18 @@ class RobotComponentServer:
     async def register_mdns_service(self, name, service_type, port, properties={}):
         """Registers an mDNS service on the network."""
 
-        self.zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.All)
+        ip = "127.0.0.1" # if ip remains unchanged, we are in a unit test
+        if self.zc is None:
+            self.zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.All)
+            ip = self.get_wifi_ip()
+
+        logging.info(f'zeroconf instance advertising on {ip}')
         info = zeroconf.ServiceInfo(
             service_type,
             name + "." + service_type,
             port=port,
             properties=properties,
-            addresses=[self.get_wifi_ip()],
+            addresses=[ip],
             server=name,
         )
 
