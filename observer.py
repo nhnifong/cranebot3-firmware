@@ -284,6 +284,7 @@ class AsyncObserver:
         while min([len(client.origin_poses) for client in self.anchors]) < max_origin_detections:
             print('Waiting for enough origin card detections from every anchor camera')
             await asyncio.sleep(1)
+        print(f'Origin card detections: {[len(client.origin_poses) for client in self.anchors]}')
         # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
         anchor_poses = await self.locate_anchors()
         anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
@@ -423,14 +424,14 @@ class AsyncObserver:
                 self.config.anchors[anchor_num].service_name = info.server
                 self.config.write()
 
-            ac = RaspiAnchorClient(address, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
+            ac = RaspiAnchorClient(address, info.port, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
             self.bot_clients[info.server] = ac
             self.anchors.append(ac)
             print('appending anchor client to list and starting server')
             asyncio.create_task(ac.startup())
 
         elif name_component == cranebot_gripper_service_name:
-            gc = RaspiGripperClient(address, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
+            gc = RaspiGripperClient(address, info.port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
             self.bot_clients[info.server] = gc
             self.gripper_client = gc
             asyncio.create_task(gc.startup())
