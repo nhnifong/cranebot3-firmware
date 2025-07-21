@@ -48,7 +48,6 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         # must be a list
         self.mock_spooler.popMeasurements.return_value = [123.4, 5.6]
 
-
         self.server = RaspiAnchorServer(power_anchor=False, mock_motor=self.debug_motor)
         self.server_task = asyncio.create_task(self.server.main())
         await asyncio.sleep(0.1)  # Give the server a moment to start
