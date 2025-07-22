@@ -53,7 +53,7 @@ default_conf = {
 }
 
 class RobotComponentServer:
-    def __init__(self, mock_camera=None):
+    def __init__(self):
         self.conf = default_conf.copy()
         self.run_server = True
         # a dict of update to be flushed periodically to the websocket
@@ -64,8 +64,7 @@ class RobotComponentServer:
         self.rpicam_process = None
         self.line_timeout = 60
         self.zc = None # zerconf instance.
-        if mock_camera is not None:
-            self.mock_camera = mock_camera
+        self.mock_camera_port = None
 
     async def stream_measurements(self, ws):
         """
@@ -104,24 +103,13 @@ class RobotComponentServer:
             if not await websocket.ping():
                 return
 
-            if self.mock_camera is not None:
-                # in a unit test, use mock camera. A class having an async start_server(), and a sync stop_server()
-                fcount = 0
-                def frame_cb():
-                    print('frame cb')
-                    # nonlocal fcount
-                    # self.frames.append({
-                    #     'time': time.time(),
-                    #     'fnum': fcount,
-                    # })
-                    # fcount += 1
-                self.mock_camera.set_frame_cb(frame_cb)
-                logging.info('Starting mock video server')
-                mock_vid_task = asyncio.create_task(self.mock_camera.start_server())
-                await asyncio.sleep(0.01)
-                self.update['video_ready'] = self.mock_camera.port
-                result = await mock_vid_task
-                print('Mock vid task ended')
+            if self.mock_camera_port is not None:
+                # in a unit test, use mock camera. it's already running, just tell the client to connect to it
+                self.update['video_ready'] = self.mock_camera_port
+                # normally the only other thing this task needs to do is watch the output of rpicam-vid and apped frame times
+                # to self.frames, and normally it can collect and deliver this to the client before the frame itself.
+                # this behavior is not at part of the test and the client can do without it.
+                result = await asyncio.Future()
             else:
                 try:
                     logging.info('Restarting rpi-cam_vid')
@@ -346,8 +334,8 @@ except RuntimeError:
 SWITCH_PIN = 18
 
 class RaspiAnchorServer(RobotComponentServer):
-    def __init__(self, power_anchor=False, flat=False, mock_motor=None, mock_camera=None):
-        super().__init__(mock_camera=mock_camera)
+    def __init__(self, power_anchor=False, flat=False, mock_motor=None):
+        super().__init__()
         self.conf.update(default_anchor_conf)
         ratio = 20/51 # 20 drive gear teeth, 51 spool teeth.
         if mock_motor is not None:
