@@ -50,12 +50,11 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
 
         self.anchor_servers = []
         self.server_tasks = []
-        self.camera_mocks = []
 
         # before starting any service, set it's zeroconf instance to a special version that searches on localhost only
         self.zc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=["127.0.0.1"])
 
-        # anchor poses to use when rendering simulated camera views
+        # anchor poses to use in simulated enviroment
         anchor_poses = np.array([
             ((0, 0, -pi/4), (3, 3, 3)),
             ((0, 0, -3*pi/4), (3, -3, 3)),
@@ -63,17 +62,24 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
             ((0, 0, 3*pi/4), (-3, -3, 3)),
         ])
 
+        # this class listens on four ports, showing views of the scene from four angles
+        # anchor servers will not need to start rpicam-vid, they only need to inform their
+        # client to connect on the right port.
+        self.mock_camera = RPiCamVidMock(
+            width=4608, height=2592, framerate=5,
+            gantry_initial_pose=(0.5, 0.5, 1, 0, 0, 0) # off center, 1m from floor
+        )
+        self.mock_camera.set_camera_poses(np.array([
+            convert_pose(compose_poses([ap, model_constants.anchor_camera]))
+            for ap in anchor_poses
+        ]))
+
+        self.mock_cam_task = asyncio.create_task(self.mock_camera.start_server())
+
         # Make four of these on different ports
         for i in range(4):
-            mock_camera = RPiCamVidMock(
-                width=4608, height=2592, framerate=15, port=8888+i,
-                initial_image_filepath='../boards/origin.png',
-                # this is the panda3d coordinate space, so +Y is up.
-                camera_pose=convert_pose(compose_poses([anchor_poses[i], model_constants.anchor_camera])),
-                billboard_initial_pose=(0, 0, 0, 0, 0, 0) # Billboard at origin, no rotation (facing up)
-            )
-            self.camera_mocks.append(mock_camera)
-            server = RaspiAnchorServer(power_anchor=False, mock_motor=DebugMotor(), mock_camera=mock_camera)
+            server = RaspiAnchorServer(power_anchor=False, mock_motor=DebugMotor())
+            server.mock_camera_port = i+8888
             server.zc = self.zc
             self.anchor_servers.append(server)
             self.server_tasks.append(asyncio.create_task(server.main(port=i+8765, name=f'cranebot-anchor-service.test_{i}')))
@@ -138,15 +144,16 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         for a in self.anchor_servers:
             a.shutdown()
         self.gripper_server.shutdown()
-        result = await asyncio.wait_for(asyncio.gather(*self.server_tasks), 1)
+        self.mock_camera.stop_server()
+        result = await asyncio.wait_for(asyncio.gather(*self.server_tasks, self.mock_cam_task), 1)
 
         for p in self.patchers:
             p.stop()
 
     async def test_auto_calibration(self):
-        await asyncio.sleep(16)
+        await asyncio.sleep(16) # wait for observer to startup and discover services
         self.assertEqual(len(self.ob.bot_clients), 5)
-        await self.ob.full_auto_calibration()
+        result = await asyncio.wait_for(self.ob.full_auto_calibration(), 60)
         self.assertEqual(len(self.ob.bot_clients), 5)
         self.assertEqual(1, 0)
 

@@ -23,6 +23,8 @@ from raspi_anchor_client import RaspiAnchorClient
 from stats import StatCounter
 from config import Config
 
+ws_port = 8765
+
 class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
@@ -75,12 +77,13 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         print('test serverHandler stopped')
 
     async def test_shutdown_before_connect(self):
-        ac = RaspiAnchorClient("127.0.0.1", 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
+        # 1 is the anchor number
+        ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
         self.assertFalse(ac.connected)
         await ac.shutdown()
 
     async def clientSetup(self):
-        self.ac = RaspiAnchorClient("127.0.0.1", 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
+        self.ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
         self.client_task = asyncio.create_task(self.ac.startup())
         result = await asyncio.wait_for(self.got_connection.wait(), 2)
         await asyncio.sleep(0.1) # client_task needs a chance to act

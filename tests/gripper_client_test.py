@@ -23,6 +23,8 @@ from raspi_gripper_client import RaspiGripperClient
 from stats import StatCounter
 from config import Config
 
+ws_port = 8765
+
 class TestGripperClient(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
@@ -72,12 +74,12 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
                 break
 
     async def test_shutdown_before_connect(self):
-        gc = RaspiGripperClient("127.0.0.1", self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe )
+        gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe )
         self.assertFalse(gc.connected)
         await gc.shutdown()
 
     async def clientSetup(self):
-        self.gc = RaspiGripperClient("127.0.0.1", self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe )
+        self.gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe )
         self.client_task = asyncio.create_task(self.gc.startup())
         result = await asyncio.wait_for(self.got_connection.wait(), 2)
         await asyncio.sleep(0.1) # client_task needs a chance to act

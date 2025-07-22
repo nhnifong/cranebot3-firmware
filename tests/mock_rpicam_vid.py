@@ -76,54 +76,35 @@ class RPiCamVidMock:
         # Load the image texture for the vertical faces
         gantry_face_tex = self.base.loader.loadTexture(image_texture_path)
 
+        faces = []
+        for f in range(5):
+            cm = CardMaker(f'{f}')
+            cm.setFrame(-0.5, 0.5, -0.5, 0.5) # X, Z plane
+            face = NodePath(cm.generate())
+            face.setTwoSided(True)
+            face.setTexture(gantry_face_tex)
+            face.reparentTo(cube_root)
+            faces.append(face)
+
         # Front Face (+Y)
-        cm_front = CardMaker('front_face')
-        cm_front.setFrame(-0.5, 0.5, -0.5, 0.5) # X, Z plane
-        front_face = NodePath(cm_front.generate())
-        front_face.setTwoSided(True)
-        front_face.setPos(0, 0.5, 0) # Move to +Y side
-        front_face.setTexture(gantry_face_tex)
-        front_face.reparentTo(cube_root)
+        faces[0].setPos(0, 0.5, 0) # Move to +Y side
 
         # Back Face (-Y)
-        cm_back = CardMaker('back_face')
-        cm_back.setFrame(-0.5, 0.5, -0.5, 0.5) # X, Z plane
-        back_face = NodePath(cm_back.generate())
-        back_face.setTwoSided(True)
-        back_face.setPos(0, -0.5, 0) # Move to -Y side
-        back_face.setHpr(180, 0, 0) # Rotate 180 degrees around Z to face outwards
-        back_face.setTexture(gantry_face_tex)
-        back_face.reparentTo(cube_root)
+        faces[1].setPos(0, -0.5, 0) # Move to -Y side
+        faces[1].setHpr(180, 0, 0) # Rotate 180 degrees around Z to face outwards
 
         # Right Face (+X)
-        cm_right = CardMaker('right_face')
-        cm_right.setFrame(-0.5, 0.5, -0.5, 0.5) # Y, Z plane
-        right_face = NodePath(cm_right.generate())
-        right_face.setTwoSided(True)
-        right_face.setPos(0.5, 0, 0) # Move to +X side
-        right_face.setHpr(90, 0, 0) # Rotate 90 degrees around Z
-        right_face.setTexture(gantry_face_tex)
-        right_face.reparentTo(cube_root)
+        faces[2].setPos(0.5, 0, 0) # Move to +X side
+        faces[2].setHpr(90, 0, 0) # Rotate 90 degrees around Z
 
         # Left Face (-X)
-        cm_left = CardMaker('left_face')
-        cm_left.setFrame(-0.5, 0.5, -0.5, 0.5) # Y, Z plane
-        left_face = NodePath(cm_left.generate())
-        left_face.setTwoSided(True)
-        left_face.setPos(-0.5, 0, 0) # Move to -X side
-        left_face.setHpr(-90, 0, 0) # Rotate -90 degrees around Z
-        left_face.setTexture(gantry_face_tex)
-        left_face.reparentTo(cube_root)
+        faces[3].setPos(-0.5, 0, 0) # Move to -X side
+        faces[3].setHpr(-90, 0, 0) # Rotate -90 degrees around Z
 
         # Top Face (+Z)
-        cm_top = CardMaker('top_face')
-        cm_top.setFrame(-0.5, 0.5, -0.5, 0.5) # X, Y plane
-        top_face = NodePath(cm_top.generate())
-        top_face.setTwoSided(True)
-        top_face.setPos(0, 0, 0.5) # Move to +Z side
-        top_face.setHpr(0, -90, 0) # Rotate -90 degrees around X to lie flat
-        top_face.setColor(LColor(1.0, 1.0, 1.0, 1.0)) # Set to blank white
-        top_face.reparentTo(cube_root)
+        faces[4].setPos(0, 0, 0.5) # Move to +Z side
+        faces[4].setHpr(0, -90, 0) # Rotate -90 degrees around X to lie flat
+        faces[4].setColor(LColor(1.0, 1.0, 1.0, 1.0)) # Set to blank white
 
         return cube_root
 
@@ -250,11 +231,6 @@ class RPiCamVidMock:
         try:
             while self._running:
                 start_time = time.monotonic()
-
-                print('rotating gantry')
-                x = list(self.gantry_initial_pose)
-                x[5]+=10
-                self.update_gantry_pose(x)
 
                 # Generate frame (thread-safe with the lock)
                 async with self._frame_update_lock:
