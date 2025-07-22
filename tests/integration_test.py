@@ -17,8 +17,7 @@ from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X
 from zeroconf import IPVersion
 from zeroconf.asyncio import AsyncZeroconf
-from mock_rpicam_vid import RPiCamVidMock
-from scipy.spatial.transform import Rotation
+from mock_rpicam_vid import RPiCamVidMock, convert_pose
 from math import pi
 from cv_common import compose_poses
 import model_constants
@@ -27,12 +26,6 @@ import model_constants
 # which is expoected to discover and connect to all of them.
 # and we then test the auto calibration on the system'
 # the UI is left out of this integration test (for now)
-
-def convert_pose(pose):
-    # convert to X Y Z H P R
-    # heading pitch and roll are euler angles in degrees
-    hpr = Rotation.from_rotvec(pose[0]).as_euler('xyz', degrees=True)
-    return (pose[1][0], pose[1][1], pose[1][2], hpr[0], hpr[1], hpr[2])
 
 class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -54,14 +47,6 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         # before starting any service, set it's zeroconf instance to a special version that searches on localhost only
         self.zc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=["127.0.0.1"])
 
-        # anchor poses to use in simulated enviroment
-        anchor_poses = np.array([
-            ((0, 0, -pi/4), (3, 3, 3)),
-            ((0, 0, -3*pi/4), (3, -3, 3)),
-            ((0, 0, pi/4), (-3, 3, 3)),
-            ((0, 0, 3*pi/4), (-3, -3, 3)),
-        ])
-
         # this class listens on four ports, showing views of the scene from four angles
         # anchor servers will not need to start rpicam-vid, they only need to inform their
         # client to connect on the right port.
@@ -69,9 +54,12 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
             width=4608, height=2592, framerate=5,
             gantry_initial_pose=(0.5, 0.5, 1, 0, 0, 0) # off center, 1m from floor
         )
+        # anchor poses to use in simulated enviroment
         self.mock_camera.set_camera_poses(np.array([
-            convert_pose(compose_poses([ap, model_constants.anchor_camera]))
-            for ap in anchor_poses
+            (3, 3, 2.5, 135, -30, 0),
+            (3, -3, 2.5, 45, -30, 0),
+            (-3, 3, 2.5, 225, -30, 0),
+            (-3, -3, 2.5, 315, -30, 0),
         ]))
 
         self.mock_cam_task = asyncio.create_task(self.mock_camera.start_server())
