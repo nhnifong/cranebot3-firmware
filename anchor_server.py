@@ -105,6 +105,7 @@ class RobotComponentServer:
 
             if self.mock_camera_port is not None:
                 # in a unit test, use mock camera. it's already running, just tell the client to connect to it
+                print(f'Anchor server is configured to use mock camera on localhost:{self.mock_camera_port}')
                 self.update['video_ready'] = self.mock_camera_port
                 # normally the only other thing this task needs to do is watch the output of rpicam-vid and apped frame times
                 # to self.frames, and normally it can collect and deliver this to the client before the frame itself.
