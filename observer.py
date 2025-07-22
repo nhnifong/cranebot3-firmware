@@ -281,10 +281,12 @@ class AsyncObserver:
         # collect observations of origin card aruco marker to get initial guess of anchor poses.
         #   origin pose detections are actually always stored by all connected clients,
         #   it is only necessary to ensure enough have been collected from each client and average them.
-        while min([len(client.origin_poses) for client in self.anchors]) < max_origin_detections:
-            print('Waiting for enough origin card detections from every anchor camera')
+        num_o_dets = [len(client.origin_poses) for client in self.anchors]
+        while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
+            assert len(self.anchors) == 4
+            print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
             await asyncio.sleep(1)
-        print(f'Origin card detections: {[len(client.origin_poses) for client in self.anchors]}')
+            num_o_dets = [len(client.origin_poses) for client in self.anchors]
         # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
         anchor_poses = await self.locate_anchors()
         anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
@@ -487,7 +489,7 @@ class AsyncObserver:
                 asyncio.create_task(self.run_shape_tracker())
 
             # self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
-            asyncio.create_task(self.pe.main())
+            # asyncio.create_task(self.pe.main())
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:

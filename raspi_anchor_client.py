@@ -74,6 +74,7 @@ class ComponentClient:
             last_time = time.time()
             if ret:
 
+                print(f'process frame {self.anchor_num}')
                 # send frame to shape tracker
                 if self.shape_tracker is not None and self.anchor_num is not None: # skip gripper for now:
 
@@ -92,6 +93,7 @@ class ComponentClient:
                 # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
                 fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
                 try:
+                    timestamp = time.time() # default to using client clock
                     timestamp = self.frame_times[fnum]
                     del self.frame_times[fnum]
                     now = time.time()
