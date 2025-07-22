@@ -1,13 +1,26 @@
+import sys
+import os
+# This will let us import files and modules located in the parent directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import asyncio
 import socket
 import io
 import time
 import os
-from PIL import Image, ImageDraw, ImageFont # Pillow for creating dummy image files
-
-# Panda3D imports
+import numpy as np
+from functools import partial
 from direct.showbase.ShowBase import ShowBase
-from panda3d.core import Texture, CardMaker, NodePath, PNMImage, WindowProperties, GraphicsPipe, PNMFileTypeRegistry, StringStream
+from panda3d.core import (
+    Texture, CardMaker, NodePath, PNMImage, WindowProperties,
+    GraphicsPipe, PNMFileTypeRegistry, StringStream, LColor
+)
+from cv_common import marker_size, special_sizes
+
+starting_port = 8888
+ratio = 588/500 # marker occupies 500 px of the 588 px image width
+origin_scale = special_sizes['origin'] * ratio
+gantry_scale = marker_size * ratio
 
 class RPiCamVidMock:
     """
@@ -17,10 +30,8 @@ class RPiCamVidMock:
 
     MJPEG_BOUNDARY = b"--frameboundary" # Standard MJPEG stream boundary
 
-    def __init__(self, width: int, height: int, framerate: int, port: int,
-                 initial_image_filepath: str,
-                 camera_pose: tuple[float, float, float, float, float, float],
-                 billboard_initial_pose: tuple[float, float, float, float, float, float]):
+    def __init__(self, width: int, height: int, framerate: int,
+                 gantry_initial_pose: tuple[float, float, float, float, float, float]):
         """
         Initializes the RPiCamVidMock server with Panda3D scene setup.
 
@@ -33,45 +44,100 @@ class RPiCamVidMock:
             camera_pose (tuple): Initial (x, y, z, h, p, r) for the camera in the 3D scene.
             billboard_initial_pose (tuple): Initial (x, y, z, h, p, r) for the billboard in the 3D scene.
         """
-        if not all(isinstance(arg, int) and arg > 0 for arg in [width, height, framerate, port]):
-            raise ValueError("Width, height, framerate, and port must be positive integers.")
-        if not os.path.exists(initial_image_filepath):
-            raise FileNotFoundError(f"Initial image file not found: {initial_image_filepath}")
-        if not (isinstance(camera_pose, tuple) and len(camera_pose) == 6 and
-                all(isinstance(coord, (int, float)) for coord in camera_pose)):
-            raise ValueError("camera_pose must be a tuple of 6 floats (x, y, z, h, p, r).")
-        if not (isinstance(billboard_initial_pose, tuple) and len(billboard_initial_pose) == 6 and
-                all(isinstance(coord, (int, float)) for coord in billboard_initial_pose)):
-            raise ValueError("billboard_initial_pose must be a tuple of 6 floats (x, y, z, h, p, r).")
 
         self.width = width
         self.height = height
         self.framerate = framerate
-        self.port = port
         self.background_color = (128/255, 128/255, 128/255, 1) # Gray background for Panda3D (RGBA 0-1)
 
-        self.initial_image_filepath = initial_image_filepath
-        self.camera_pose = camera_pose
-        self.billboard_initial_pose = billboard_initial_pose
+        self.camera_poses = []
+        self.gantry_initial_pose = gantry_initial_pose
 
         self.base: ShowBase = None # Panda3D ShowBase instance
-        self._billboard_node: NodePath = None # NodePath for the billboard
-        self._current_texture: Texture = None # Current texture applied to billboard
-        self._current_image_filepath: str = initial_image_filepath # Track current image path
+        self._billboard_node: NodePath = None
+        self._gantry_cube_node: NodePath = None
 
         self._frame_update_lock = asyncio.Lock() # Protects billboard pose/texture during updates
         self._frame_cb = None # user callback to run every time a frame is sent
-        self._server: asyncio.Server = None
+        self._servers = []
         self._running: bool = False
 
-        print(f"RPiCamVidMock initialized: {self.width}x{self.height}@{self.framerate}fps on port {self.port}")
+    def set_camera_poses(self, camera_poses):
+        if camera_poses.shape != (4, 6):
+            raise ValueError("Expected 4 camera poses, each being 6 floats representing XYZHPR")
+        self.camera_poses = camera_poses
+
+    def _create_gantry_cube(self, image_texture_path: str) -> NodePath:
+        """
+        Creates a cube node showing the gantry texture on it's vertical faces
+        """
+        cube_root = NodePath("textured_cube_root")
+
+        # Load the image texture for the vertical faces
+        gantry_face_tex = self.base.loader.loadTexture(image_texture_path)
+
+        # Front Face (+Y)
+        cm_front = CardMaker('front_face')
+        cm_front.setFrame(-0.5, 0.5, -0.5, 0.5) # X, Z plane
+        front_face = NodePath(cm_front.generate())
+        front_face.setTwoSided(True)
+        front_face.setPos(0, 0.5, 0) # Move to +Y side
+        front_face.setTexture(gantry_face_tex)
+        front_face.reparentTo(cube_root)
+
+        # Back Face (-Y)
+        cm_back = CardMaker('back_face')
+        cm_back.setFrame(-0.5, 0.5, -0.5, 0.5) # X, Z plane
+        back_face = NodePath(cm_back.generate())
+        back_face.setTwoSided(True)
+        back_face.setPos(0, -0.5, 0) # Move to -Y side
+        back_face.setHpr(180, 0, 0) # Rotate 180 degrees around Z to face outwards
+        back_face.setTexture(gantry_face_tex)
+        back_face.reparentTo(cube_root)
+
+        # Right Face (+X)
+        cm_right = CardMaker('right_face')
+        cm_right.setFrame(-0.5, 0.5, -0.5, 0.5) # Y, Z plane
+        right_face = NodePath(cm_right.generate())
+        right_face.setTwoSided(True)
+        right_face.setPos(0.5, 0, 0) # Move to +X side
+        right_face.setHpr(90, 0, 0) # Rotate 90 degrees around Z
+        right_face.setTexture(gantry_face_tex)
+        right_face.reparentTo(cube_root)
+
+        # Left Face (-X)
+        cm_left = CardMaker('left_face')
+        cm_left.setFrame(-0.5, 0.5, -0.5, 0.5) # Y, Z plane
+        left_face = NodePath(cm_left.generate())
+        left_face.setTwoSided(True)
+        left_face.setPos(-0.5, 0, 0) # Move to -X side
+        left_face.setHpr(-90, 0, 0) # Rotate -90 degrees around Z
+        left_face.setTexture(gantry_face_tex)
+        left_face.reparentTo(cube_root)
+
+        # Top Face (+Z)
+        cm_top = CardMaker('top_face')
+        cm_top.setFrame(-0.5, 0.5, -0.5, 0.5) # X, Y plane
+        top_face = NodePath(cm_top.generate())
+        top_face.setTwoSided(True)
+        top_face.setPos(0, 0, 0.5) # Move to +Z side
+        top_face.setHpr(0, -90, 0) # Rotate -90 degrees around X to lie flat
+        top_face.setColor(LColor(1.0, 1.0, 1.0, 1.0)) # Set to blank white
+        top_face.reparentTo(cube_root)
+
+        return cube_root
 
     def _setup_panda3d_scene(self):
         """
-        Initializes the Panda3D environment, camera, and the billboard.
+        Initializes the Panda3D environment, camera,
+        stationary quad for the aruco board that marks the origin
+        and a four sided object representing the gantry
         This method is called once when the server starts.
         """
         # Configure window properties for the offscreen buffer
+        if len(self.camera_poses) == 0:
+            raise ValueError("Server started before camera poses were set")
+
         props = WindowProperties()
         props.setSize(self.width, self.height)
         props.setCursorHidden(True) # Hide cursor in the window
@@ -82,45 +148,39 @@ class RPiCamVidMock:
         self.base = ShowBase(windowType='offscreen')
         self.base.win.setClearColor(self.background_color) # Set background color
 
-        # Set camera pose
-        cam_x, cam_y, cam_z, cam_h, cam_p, cam_r = self.camera_pose
+        # Set camera pose to 0th camera
+        cam_x, cam_y, cam_z, cam_h, cam_p, cam_r = self.camera_poses[0]
         self.base.camera.setPos(cam_x, cam_y, cam_z)
         self.base.camera.setHpr(cam_h, cam_p, cam_r)
 
-        # Create the billboard geometry (a simple quad)
-        cm = CardMaker('billboard')
+        # Create a quad to show the origin card
+        cm = CardMaker('origin_aruco')
         # Create a unit square from -0.5 to 0.5. The actual size will be controlled by scale.
         cm.setFrame(-0.5, 0.5, -0.5, 0.5)
         self._billboard_node = NodePath(cm.generate())
         self._billboard_node.reparentTo(self.base.render) # Attach to the main scene graph
-
-        # Load initial texture from the provided file path
-        try:
-            self._current_texture = self.base.loader.loadTexture(self.initial_image_filepath)
-            self._billboard_node.setTexture(self._current_texture)
-        except Exception as e:
-            print(f"Error loading initial texture from {self.initial_image_filepath}: {e}")
-            # Fallback: create a simple solid color texture if image loading fails
-            fallback_texture = Texture()
-            fallback_texture.setup2dTexture(1, 1, Texture.T_unsigned_byte, Texture.F_rgba)
-            fallback_texture.setRamImage(b'\xFF\x00\x00\xFF') # Red pixel
-            self._billboard_node.setTexture(fallback_texture)
-            print("Using a red fallback texture for the billboard.")
-
-        # Set initial billboard pose (position and HPR)
-        bill_x, bill_y, bill_z, bill_h, bill_p, bill_r = self.billboard_initial_pose
-        self._billboard_node.setPos(bill_x, bill_y, bill_z)
-        self._billboard_node.setHpr(bill_h, bill_p, bill_r)
-        # Set a default scale for the billboard, adjust as needed for visibility
-        self._billboard_node.setScale(2.0) # Make it 2 units wide/tall
-
-        # Ensure the billboard is not affected by scene lighting or shaders for simplicity
+        self._billboard_node.setTexture(self.base.loader.loadTexture('../boards/origin.png'))
+        self._billboard_node.setPos(0, 0, 0)
+        self._billboard_node.setHpr(0, 0, 0)
+        self._billboard_node.setScale(origin_scale)
         self._billboard_node.setLightOff()
         self._billboard_node.setShaderOff()
 
-    async def _generate_frame(self) -> bytes:
+        # Create the gantry cube model
+        self._gantry_cube_node = self._create_gantry_cube('../boards/gantry_front.png')
+        self._gantry_cube_node.reparentTo(self.base.render) # Attach to the main scene graph
+        
+        # Set initial cube pose
+        cube_x, cube_y, cube_z, cube_h, cube_p, cube_r = self.gantry_initial_pose
+        self._gantry_cube_node.setPos(cube_x, cube_y, cube_z)
+        self._gantry_cube_node.setHpr(cube_h, cube_p, cube_r)
+        self._gantry_cube_node.setScale(gantry_scale)
+        self._gantry_cube_node.setLightOff()
+        self._gantry_cube_node.setShaderOff()
+
+    async def _generate_frame(self, camera_num) -> bytes:
         """
-        Generates a single MJPEG frame by rendering the Panda3D scene.
+        Generates a single MJPEG frame by rendering the Panda3D scene from a particular camera
 
         Returns:
             bytes: The JPEG image data.
@@ -128,6 +188,11 @@ class RPiCamVidMock:
         if not self.base:
             print("Panda3D base not initialized, cannot generate frame.")
             return b''
+
+        # set camera pose to selected cam
+        cam_x, cam_y, cam_z, cam_h, cam_p, cam_r = self.camera_poses[camera_num]
+        self.base.camera.setPos(cam_x, cam_y, cam_z)
+        self.base.camera.setHpr(cam_h, cam_p, cam_r)
 
         # Render a single frame of the Panda3D scene
         self.base.graphicsEngine.renderFrame()
@@ -148,52 +213,24 @@ class RPiCamVidMock:
         jpeg_data = string_stream.getData()
         return jpeg_data
 
-    async def update_image_and_transform(self, image_filepath: str = None, billboard_pose: tuple[float, float, float, float, float, float] = None):
+    def update_gantry_pose(self, pose: tuple[float, float, float, float, float, float]):
         """
-        Updates the test image (texture) and its 3D pose (position and HPR).
-        This function is thread-safe.
+        Updates the gantry 3D pose (position and HPR).
 
         Args:
-            image_filepath (str, optional): New image file path for the billboard texture.
-                                            If None, the current image is retained.
-            billboard_pose (tuple[float, float, float, float, float, float], optional):
-                                            New (x, y, z, h, p, r) for the billboard.
-                                            If None, current pose is retained.
+            pose (tuple[float, float, float, float, float, float], optional):
+                    New (x, y, z, h, p, r) for the billboard.
         """
-        async with self._frame_update_lock:
-            if image_filepath is not None and image_filepath != self._current_image_filepath:
-                if self.base:
-                    try:
-                        if not os.path.exists(image_filepath):
-                            print(f"Warning: New image file not found: {image_filepath}. Keeping current texture.")
-                        else:
-                            new_texture = self.base.loader.loadTexture(image_filepath)
-                            self._billboard_node.setTexture(new_texture)
-                            self._current_texture = new_texture
-                            self._current_image_filepath = image_filepath
-                            print(f"Billboard texture updated to: {image_filepath}")
-                    except Exception as e:
-                        print(f"Error loading new texture from {image_filepath}: {e}. Keeping current texture.")
-                else:
-                    print("Panda3D base not initialized, cannot update texture.")
+        self.gantry_initial_pose = pose
+        x, y, z, h, p, r = pose
+        self._gantry_cube_node.setPos(x, y, z)
+        self._gantry_cube_node.setHpr(h, p, r)
+        print(f"Gantry pose updated to: Pos({x:.2f},{y:.2f},{z:.2f}), Hpr({h:.2f},{p:.2f},{r:.2f})")
 
-            if billboard_pose is not None:
-                if self.base and self._billboard_node:
-                    if not (isinstance(billboard_pose, tuple) and len(billboard_pose) == 6 and
-                            all(isinstance(coord, (int, float)) for coord in billboard_pose)):
-                        print(f"Warning: Invalid billboard_pose format. Expected (float, float, float, float, float, float). Got {billboard_pose}. Keeping current pose.")
-                    else:
-                        x, y, z, h, p, r = billboard_pose
-                        self._billboard_node.setPos(x, y, z)
-                        self._billboard_node.setHpr(h, p, r)
-                        print(f"Billboard pose updated to: Pos({x:.2f},{y:.2f},{z:.2f}), Hpr({h:.2f},{p:.2f},{r:.2f})")
-                else:
-                    print("Panda3D base or billboard node not initialized, cannot update pose.")
-
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    async def _handle_client(self, cam_num, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """
         Handles a single client connection, streaming MJPEG frames.
-        This simplified version assumes only one client is expected.
+        
         """
         peername = writer.get_extra_info('peername')
         print(f"Client connected: {peername}")
@@ -214,12 +251,14 @@ class RPiCamVidMock:
             while self._running:
                 start_time = time.monotonic()
 
+                print('rotating gantry')
+                x = list(self.gantry_initial_pose)
+                x[5]+=10
+                self.update_gantry_pose(x)
+
                 # Generate frame (thread-safe with the lock)
                 async with self._frame_update_lock:
-                    jpeg_frame = await self._generate_frame()
-
-                # call user function
-                self._frame_cb()
+                    jpeg_frame = await self._generate_frame(cam_num)
 
                 # Send MJPEG part headers and data
                 writer.write(self.MJPEG_BOUNDARY + b"\r\n")
@@ -229,7 +268,6 @@ class RPiCamVidMock:
                 writer.write(jpeg_frame)
                 writer.write(b"\r\n") # End of this part
                 await writer.drain()
-                print('sent frame to client')
 
                 # Control framerate by sleeping if necessary
                 elapsed_time = time.monotonic() - start_time
@@ -239,18 +277,13 @@ class RPiCamVidMock:
 
         except (socket.error, ConnectionResetError, BrokenPipeError) as e:
             print(f"Client {peername} disconnected: {e}")
-        # except Exception as e:
-        #     print(f"Error handling client {peername}: {e}")
         finally:
             print(f"Closing connection for client: {peername}")
             writer.close()
 
-    def set_frame_cb(self, frame_cb):
-        self._frame_cb = frame_cb
-
     async def start_server(self):
         """
-        Starts the asynchronous TCP server to stream MJPEG video.
+        Starts an asynchronous TCP server to stream MJPEG video for every camera pose
         This method should be awaited in an asyncio event loop.
         """
         assert not self._running
@@ -260,18 +293,20 @@ class RPiCamVidMock:
             # Initialize Panda3D scene *before* starting the server loop
             self._setup_panda3d_scene()
 
-            self._server = await asyncio.start_server(
-                self._handle_client, '127.0.0.1', self.port
-            )
-            addr = self._server.sockets[0].getsockname()
-            print(f"RPiCamVidMock server listening on {addr}")
+            # start one server for each camera. the one you connect you determines the view you get.
+            for i in range(len(self.camera_poses)):
+                self._servers.append(await asyncio.start_server(
+                    # this handler always renders from camera i
+                    partial(self._handle_client, i), '127.0.0.1', starting_port+i
+                ))
+                addr = self._servers[-1].sockets[0].getsockname()
+                print(f"RPiCamVidMock server listening on {addr} play with ffplay tcp://{addr[0]}:{addr[1]}")
 
-            async with self._server:
-                await self._server.serve_forever()
+            # Wait for all servers to close.
+            await asyncio.gather(*[s.serve_forever() for s in self._servers])
+
         except asyncio.CancelledError:
-            print("Server task cancelled.")
-        except Exception as e:
-            print(f"Error starting or running server: {e}")
+            print("RPiCamVidMock server task cancelled.")
         finally:
             self._running = False
             print("RPiCamVidMock server stopped.")
@@ -280,11 +315,12 @@ class RPiCamVidMock:
 
     def stop_server(self):
         """
-        Stops the MJPEG streaming server and cleans up Panda3D resources.
+        Stops the MJPEG streaming servers and cleans up Panda3D resources.
         """
-        if self._server:
-            print("Stopping RPiCamVidMock server...")
-            self._server.close()
+        if self._servers:
+            print("Stopping RPiCamMultiViewServer...")
+            for server in self._servers:
+                server.close()
             self._running = False
             print("Server stop initiated.")
         if self.base:
@@ -296,73 +332,25 @@ async def main():
     """
     Example async function to demonstrate the RPiCamVidMock usage.
     """
-    # Create a dummy image file for the billboard
-    dummy_image_path = "test_billboard_image.jpg"
-    if not os.path.exists(dummy_image_path):
-        img = Image.new('RGB', (256, 256), color='red')
-        d = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.truetype("arial.ttf", 50)
-        except IOError:
-            font = ImageFont.load_default()
-        d.text((30, 100), "Panda3D", fill=(255, 255, 255), font=font)
-        img.save(dummy_image_path, format='JPEG')
-        print(f"Created dummy image: {dummy_image_path}")
 
     mock_server = RPiCamVidMock(
-        width=800, height=600, framerate=15, port=8888,
-        initial_image_filepath=dummy_image_path,
-        camera_pose=(0, -10, 0, 0, 0, 0), # Camera at (0, -10, 0), looking at origin
-        billboard_initial_pose=(0, 0, 0, 0, 0, 0) # Billboard at origin, no rotation
+        width=800, height=600, framerate=5,
+        gantry_initial_pose=(0.5, 0.5, 1, 0, 0, 0) # off center, 1m from floor
     )
-
-    # Start the server as a background task
-    server_task = asyncio.create_task(mock_server.start_server())
-
-    print(f"RPiCamVidMock server started on port {mock_server.port}")
-    print("You can now connect to tcp://0.0.0.0:8888 (e.g., using VLC or a browser)")
-    print("In a browser, navigate to http://localhost:8888 to see the stream (some browsers might require specific extensions for MJPEG).")
-    print("VLC: Media -> Open Network Stream -> http://localhost:8888")
+    mock_server.set_camera_poses(np.array(
+        # [[ 3.01131371e+00,  2.93494618e+00,  3.01700000e+00,
+        # -1.18000000e+02,  3.81666562e-14,  1.35000000e+02],
+        [(0, -4, 2, 0, -20, 0),
+        [ 2.93494618e+00, -3.01131371e+00,  3.01700000e+00,
+        -1.18000000e+02,  2.54444375e-14,  4.50000000e+01],
+        [-2.93494618e+00,  3.01131371e+00,  3.01700000e+00,
+        -1.18000000e+02,  0.00000000e+00, -1.35000000e+02],
+        [-3.01131371e+00, -2.93494618e+00,  3.01700000e+00,
+        -1.18000000e+02, -1.27222187e-14, -4.50000000e+01]]
+    ))
 
     try:
-        # Let the server run with the default image and pose for a few seconds
-        print("\nRunning with default image and pose for 5 seconds...")
-        await asyncio.sleep(5)
-
-        # --- Scenario 1: Update billboard pose (position) ---
-        print("\nMoving billboard to (5, 0, 0) and rotating 45 degrees around Z...")
-        await mock_server.update_image_and_transform(billboard_pose=(5, 0, 0, 45, 0, 0))
-        await asyncio.sleep(5)
-
-        # --- Scenario 2: Update billboard pose (rotation) ---
-        print("\nRotating billboard to 90 degrees around X...")
-        await mock_server.update_image_and_transform(billboard_pose=(5, 0, 0, 45, 90, 0))
-        await asyncio.sleep(5)
-
-        # --- Scenario 3: Update image content and reset pose ---
-        print("\nUpdating billboard image to a green square with 'NEW' text and resetting pose...")
-        new_dummy_image_path = "new_test_billboard_image.jpg"
-        img = Image.new('RGB', (200, 100), color='green')
-        d = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.truetype("arial.ttf", 30)
-        except IOError:
-            font = ImageFont.load_default()
-        d.text((20, 30), "NEW IMAGE", fill=(255, 255, 255), font=font)
-        img.save(new_dummy_image_path, format='JPEG')
-        print(f"Created new dummy image: {new_dummy_image_path}")
-
-        while True:
-            await mock_server.update_image_and_transform(image_filepath=new_dummy_image_path,
-                                                         billboard_pose=(0, 0, 0, 0, 0, 0)) # Reset pose
-            await asyncio.sleep(5)
-
-            # --- Scenario 4: Move billboard up and rotate ---
-            print("\nMoving billboard up to (0, 0, 2) and rotating 180 degrees around Y...")
-            await mock_server.update_image_and_transform(billboard_pose=(0, 0, 2, 0, 180, 0))
-            await asyncio.sleep(5)
-
-
+        await mock_server.start_server()
     except asyncio.CancelledError:
         print("Main task cancelled.")
     except KeyboardInterrupt:
@@ -370,13 +358,6 @@ async def main():
     finally:
         # Ensure the server is stopped gracefully
         mock_server.stop_server()
-        # Wait for the server task to complete its shutdown
-        await server_task
-        # Clean up dummy image files
-        if os.path.exists(dummy_image_path):
-            os.remove(dummy_image_path)
-        if os.path.exists(new_dummy_image_path):
-            os.remove(new_dummy_image_path)
         print("RPiCamVidMock demonstration finished.")
 
 if __name__ == "__main__":
