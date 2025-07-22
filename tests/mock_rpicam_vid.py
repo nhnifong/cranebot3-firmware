@@ -16,6 +16,13 @@ from panda3d.core import (
     GraphicsPipe, PNMFileTypeRegistry, StringStream, LColor
 )
 from cv_common import marker_size, special_sizes
+from math import pi
+
+def convert_pose(pose):
+    # convert to X Y Z H P R
+    # heading pitch and roll are euler angles in degrees
+    hpr = Rotation.from_rotvec(pose[0]).as_euler('zyx', degrees=True)
+    return (pose[1][0], pose[1][1], pose[1][2], hpr[0], hpr[1], hpr[2])
 
 starting_port = 8888
 ratio = 588/500 # marker occupies 500 px of the 588 px image width
@@ -65,6 +72,7 @@ class RPiCamVidMock:
     def set_camera_poses(self, camera_poses):
         if camera_poses.shape != (4, 6):
             raise ValueError("Expected 4 camera poses, each being 6 floats representing XYZHPR")
+        print(f'Setting camera poses to \n{camera_poses}')
         self.camera_poses = camera_poses
 
     def _create_gantry_cube(self, image_texture_path: str) -> NodePath:
@@ -142,7 +150,7 @@ class RPiCamVidMock:
         self._billboard_node.reparentTo(self.base.render) # Attach to the main scene graph
         self._billboard_node.setTexture(self.base.loader.loadTexture('../boards/origin.png'))
         self._billboard_node.setPos(0, 0, 0)
-        self._billboard_node.setHpr(0, 0, 0)
+        self._billboard_node.setHpr(0, -90, 0) # I think by default this billboard faces +y
         self._billboard_node.setScale(origin_scale)
         self._billboard_node.setLightOff()
         self._billboard_node.setShaderOff()
@@ -171,7 +179,7 @@ class RPiCamVidMock:
             return b''
 
         # set camera pose to selected cam
-        cam_x, cam_y, cam_z, cam_h, cam_p, cam_r = self.camera_poses[camera_num]
+        cam_x, cam_y, cam_z, cam_h, cam_p, cam_r = self.camera_poses[camera_num] + np.random.uniform(-0.01,0.01,(6,))
         self.base.camera.setPos(cam_x, cam_y, cam_z)
         self.base.camera.setHpr(cam_h, cam_p, cam_r)
 
@@ -218,15 +226,15 @@ class RPiCamVidMock:
 
         # Send initial HTTP headers for MJPEG multipart stream.
         # This is common for browser-based MJPEG viewers.
-        try:
-            writer.write(b"HTTP/1.0 200 OK\r\n")
-            writer.write(b"Content-Type: multipart/x-mixed-replace; boundary=" + self.MJPEG_BOUNDARY + b"\r\n")
-            writer.write(b"\r\n")
-            await writer.drain()
-        except Exception as e:
-            print(f"Error sending initial headers to {peername}: {e}")
-            writer.close()
-            return
+        # try:
+        #     writer.write(b"HTTP/1.0 200 OK\r\n")
+        #     writer.write(b"Content-Type: multipart/x-mixed-replace; boundary=" + self.MJPEG_BOUNDARY + b"\r\n")
+        #     writer.write(b"\r\n")
+        #     await writer.drain()
+        # except Exception as e:
+        #     print(f"Error sending initial headers to {peername}: {e}")
+        #     writer.close()
+        #     return
 
         try:
             while self._running:
@@ -237,12 +245,12 @@ class RPiCamVidMock:
                     jpeg_frame = await self._generate_frame(cam_num)
 
                 # Send MJPEG part headers and data
-                writer.write(self.MJPEG_BOUNDARY + b"\r\n")
-                writer.write(b"Content-Type: image/jpeg\r\n")
-                writer.write(b"Content-Length: " + str(len(jpeg_frame)).encode() + b"\r\n")
-                writer.write(b"\r\n") # End of headers for this part
+                # writer.write(self.MJPEG_BOUNDARY + b"\r\n")
+                # writer.write(b"Content-Type: image/jpeg\r\n")
+                # writer.write(b"Content-Length: " + str(len(jpeg_frame)).encode() + b"\r\n")
+                # writer.write(b"\r\n") # End of headers for this part
                 writer.write(jpeg_frame)
-                writer.write(b"\r\n") # End of this part
+                # writer.write(b"\r\n") # End of this part
                 await writer.drain()
 
                 # Control framerate by sleeping if necessary
@@ -309,21 +317,21 @@ async def main():
     Example async function to demonstrate the RPiCamVidMock usage.
     """
 
+    # this class listens on four ports, showing views of the scene from four angles
+    # anchor servers will not need to start rpicam-vid, they only need to inform their
+    # client to connect on the right port.
     mock_server = RPiCamVidMock(
-        width=800, height=600, framerate=5,
+        width=800, height=600, framerate=30,
         gantry_initial_pose=(0.5, 0.5, 1, 0, 0, 0) # off center, 1m from floor
     )
-    mock_server.set_camera_poses(np.array(
-        # [[ 3.01131371e+00,  2.93494618e+00,  3.01700000e+00,
-        # -1.18000000e+02,  3.81666562e-14,  1.35000000e+02],
-        [(0, -4, 2, 0, -20, 0),
-        [ 2.93494618e+00, -3.01131371e+00,  3.01700000e+00,
-        -1.18000000e+02,  2.54444375e-14,  4.50000000e+01],
-        [-2.93494618e+00,  3.01131371e+00,  3.01700000e+00,
-        -1.18000000e+02,  0.00000000e+00, -1.35000000e+02],
-        [-3.01131371e+00, -2.93494618e+00,  3.01700000e+00,
-        -1.18000000e+02, -1.27222187e-14, -4.50000000e+01]]
-    ))
+
+    # anchor poses to use in simulated enviroment
+    mock_server.set_camera_poses(np.array([
+        (3, 3, 2.5, 135, -30, 0),
+        (3, -3, 2.5, 45, -30, 0),
+        (-3, 3, 2.5, 225, -30, 0),
+        (-3, -3, 2.5, 315, -30, 0),
+    ]))
 
     try:
         await mock_server.start_server()
