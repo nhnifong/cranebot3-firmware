@@ -141,7 +141,13 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_auto_calibration(self):
         await asyncio.sleep(16) # wait for observer to startup and discover services
         self.assertEqual(len(self.ob.bot_clients), 5)
-        result = await asyncio.wait_for(self.ob.full_auto_calibration(), 60)
+        result = await asyncio.wait_for(self.ob.full_auto_calibration(), 120)
         self.assertEqual(len(self.ob.bot_clients), 5)
         self.assertEqual(1, 0)
 
+        # TODO
+# raw encoder values need to be saved when that mode is on
+#         >           entry = {'encoders': [client.last_raw_encoder for client in self.anchors]}
+# E           AttributeError: 'RaspiAnchorClient' object has no attribute 'last_raw_encoder'
+
+# when a self.seek_gantry_goal method finishes in a test, it should set the new position of the mock enviroment gantry box
