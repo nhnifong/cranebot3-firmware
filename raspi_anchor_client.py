@@ -14,7 +14,7 @@ import threading
 from config import Config
 
 # number of origin detections to average
-max_origin_detections = 25
+max_origin_detections = 12
 
 # fastSAM parameters
 # seconds between processing frames with fastSAM. there is no need need to run it on every frame, since 
@@ -74,7 +74,6 @@ class ComponentClient:
             last_time = time.time()
             if ret:
 
-                print(f'process frame {self.anchor_num}')
                 # send frame to shape tracker
                 if self.shape_tracker is not None and self.anchor_num is not None: # skip gripper for now:
 
@@ -92,6 +91,8 @@ class ComponentClient:
 
                 # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
                 fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+                print(f'anchor client {self.anchor_num} processing frame {fnum}')
                 try:
                     timestamp = time.time() # default to using client clock
                     timestamp = self.frame_times[fnum]
@@ -101,8 +102,10 @@ class ComponentClient:
                     self.stat.framerate.append(1/(now - last_time))
                     last_time = now
                 except KeyError:
+                    # expected behavior during unit test
                     # print(f'received a frame without knowing when it was captured')
-                    continue
+                    pass 
+                    # continue
 
                 # send frame to aruco detector
                 try:

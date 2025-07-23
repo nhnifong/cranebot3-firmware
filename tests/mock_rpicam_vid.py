@@ -13,7 +13,8 @@ from functools import partial
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
     Texture, CardMaker, NodePath, PNMImage, WindowProperties,
-    GraphicsPipe, PNMFileTypeRegistry, StringStream, LColor
+    GraphicsPipe, PNMFileTypeRegistry, StringStream, LColor,
+    loadPrcFileData
 )
 from cv_common import marker_size, special_sizes
 from math import pi
@@ -31,8 +32,10 @@ gantry_scale = marker_size * ratio
 
 class RPiCamVidMock:
     """
-    A mock class to simulate rpicam-vid for unit testing,
-    rendering a 3D scene with a billboard using Panda3D and streaming MJPEG.
+    A mock class to simulate rpicam-vid for integration_test.py
+    It sets up a scene with an origin card and a gantry box
+    four views of the scene can be accessed by connecting to the server at four different ports
+    the streams are mjpeg designed to mimic rpicam-vid
     """
 
     MJPEG_BOUNDARY = b"--frameboundary" # Standard MJPEG stream boundary
@@ -123,19 +126,18 @@ class RPiCamVidMock:
         and a four sided object representing the gantry
         This method is called once when the server starts.
         """
-        # Configure window properties for the offscreen buffer
         if len(self.camera_poses) == 0:
             raise ValueError("Server started before camera poses were set")
 
-        props = WindowProperties()
-        props.setSize(self.width, self.height)
-        props.setCursorHidden(True) # Hide cursor in the window
-        props.setTitle("RPiCamVidMock Panda3D Scene")
-
-        # Initialize ShowBase in offscreen mode to avoid a visible window.
-        # This is suitable for unit testing where a GUI isn't desired.
+        # Initialize ShowBase first to create a rendering context
+        loadPrcFileData('', f'win-size {self.width} {self.height}')
         self.base = ShowBase(windowType='offscreen')
-        self.base.win.setClearColor(self.background_color) # Set background color
+
+        # It takes a frame for the window properties to be applied.
+        # We must yield control to the Panda3D engine to process the request.
+        self.base.graphicsEngine.renderFrame()
+
+        self.base.win.setClearColor(self.background_color)
 
         # Set camera pose to 0th camera
         cam_x, cam_y, cam_z, cam_h, cam_p, cam_r = self.camera_poses[0]
@@ -167,7 +169,7 @@ class RPiCamVidMock:
         self._gantry_cube_node.setLightOff()
         self._gantry_cube_node.setShaderOff()
 
-    async def _generate_frame(self, camera_num) -> bytes:
+    def _generate_frame(self, camera_num) -> bytes:
         """
         Generates a single MJPEG frame by rendering the Panda3D scene from a particular camera
 
@@ -222,19 +224,7 @@ class RPiCamVidMock:
         
         """
         peername = writer.get_extra_info('peername')
-        print(f"Client connected: {peername}")
-
-        # Send initial HTTP headers for MJPEG multipart stream.
-        # This is common for browser-based MJPEG viewers.
-        # try:
-        #     writer.write(b"HTTP/1.0 200 OK\r\n")
-        #     writer.write(b"Content-Type: multipart/x-mixed-replace; boundary=" + self.MJPEG_BOUNDARY + b"\r\n")
-        #     writer.write(b"\r\n")
-        #     await writer.drain()
-        # except Exception as e:
-        #     print(f"Error sending initial headers to {peername}: {e}")
-        #     writer.close()
-        #     return
+        print(f"Client {peername} connected to mock camera on camera {cam_num}")
 
         try:
             while self._running:
@@ -242,22 +232,16 @@ class RPiCamVidMock:
 
                 # Generate frame (thread-safe with the lock)
                 async with self._frame_update_lock:
-                    jpeg_frame = await self._generate_frame(cam_num)
+                    jpeg_frame = self._generate_frame(cam_num)
 
-                # Send MJPEG part headers and data
-                # writer.write(self.MJPEG_BOUNDARY + b"\r\n")
-                # writer.write(b"Content-Type: image/jpeg\r\n")
-                # writer.write(b"Content-Length: " + str(len(jpeg_frame)).encode() + b"\r\n")
-                # writer.write(b"\r\n") # End of headers for this part
                 writer.write(jpeg_frame)
-                # writer.write(b"\r\n") # End of this part
                 await writer.drain()
 
-                # Control framerate by sleeping if necessary
+                # Control framerate by sleeping.
+                # this is running on the same loop as the clients that are doing the reading so we always have to sleep so they can run.
                 elapsed_time = time.monotonic() - start_time
-                sleep_time = (1.0 / self.framerate) - elapsed_time
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
+                sleep_time = max(0.005, (1.0 / self.framerate) - elapsed_time)
+                await asyncio.sleep(sleep_time)
 
         except (socket.error, ConnectionResetError, BrokenPipeError) as e:
             print(f"Client {peername} disconnected: {e}")
@@ -320,8 +304,9 @@ async def main():
     # this class listens on four ports, showing views of the scene from four angles
     # anchor servers will not need to start rpicam-vid, they only need to inform their
     # client to connect on the right port.
+    print('Sample RPiCamVidMock')
     mock_server = RPiCamVidMock(
-        width=800, height=600, framerate=30,
+        width=2000, height=1600, framerate=10,
         gantry_initial_pose=(0.5, 0.5, 1, 0, 0, 0) # off center, 1m from floor
     )
 
