@@ -29,6 +29,7 @@ from cv_common import invert_pose, compose_poses, average_pose
 from calibration import order_points_for_low_travel, find_cal_params
 import model_constants
 import traceback
+import cv2
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -205,7 +206,7 @@ class AsyncObserver:
         # this is similar to sending a manual move command. it can be overridden by any subsequent command.
         # thus, it should be done while paused.
 
-    async def wait_for_tension():
+    async def wait_for_tension(self):
         # this function returns only once all anchors are reporting tight lines in their regular line record, and are not moving
         complete = False
         while not complete:
@@ -273,7 +274,7 @@ class AsyncObserver:
             assert pose is not None
             self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
             anchor_poses.append(pose)
-        return np.array(anchor_points)
+        return np.array(anchor_poses)
 
 
     async def full_auto_calibration(self):
@@ -302,10 +303,10 @@ class AsyncObserver:
         # use aruco observations of gantry to obtain initial guesses for zero angles
         # use this information to perform rough movements
         gantry_data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
-        position = np.mean(data[:,1:])
+        position = np.mean(gantry_data[:,1:])
         lengths = np.linalg.norm(anchor_points - position, axis=1)
         print(f'Line lengths from coarse calibration ={lengths}')
-        await self.ob.sendReferenceLengths(lengths)
+        await self.sendReferenceLengths(lengths)
 
         # Determine the bounding box of the work are
         min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0)
@@ -314,24 +315,26 @@ class AsyncObserver:
         max_gantry_z = min_anchor_z - 0.7
 
         # make a polygon of the exact work area so we can test if points are inside it
-        polygon_path = mpath.Path(anchor_points[:,0:2])
+        contour = anchor_points[:,0:2].astype(np.float32)
 
         # generate some sample positions within the work area
         n_points = 15
         random_x = np.random.uniform(min_x, max_x, n_points*2)
         random_y = np.random.uniform(min_y, max_y, n_points*2)
         candidate_2d_points = np.column_stack((random_x, random_y))
-        mask = polygon_path.contains_points(candidate_2d_points)
+        mask = np.array([cv2.pointPolygonTest(contour, pt, False) > 0 for pt in candidate_2d_points])
         sample_2d_points = candidate_2d_points[mask] # not every point in the bounding box will be in the polygon.
 
         # truncate to 15 points
         sample_2d_points = sample_2d_points[:n_points]
 
         # Generate random z-coordinates for the valid 2D points
-        sample_points = np.column_stack((sample_2d_points, np.random.uniform(floor_z, max_gantry_z, len(smaple_2d_points))))
+        sample_points = np.column_stack((sample_2d_points, np.random.uniform(floor_z, max_gantry_z, len(sample_2d_points))))
+        print(f'Generated {len(sample_points)} sample positions to visit during calibration')
 
         # choose an ordering of the points that results in a low travel distance
-        sample_points = order_points_for_low_travel(sample_points)
+        sample_points, distance = order_points_for_low_travel(sample_points)
+        print(f'Ordered points for near-optimal travel. total distance = {distance} m')
 
         # prepare to collect final observations
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
@@ -339,7 +342,7 @@ class AsyncObserver:
         for client in self.anchors:
             self.save_raw = True
 
-        # Collect data at each position
+        print('Collect data at each position')
         # data format is described in docstring of calibration_cost_fn
         # [{'encoders':[0, 0, 0, 0], 'visuals':[[pose, pose, ...], x4]}, ...]
         data = []
