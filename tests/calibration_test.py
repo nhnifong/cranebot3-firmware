@@ -25,3 +25,8 @@ class TestPoseFunctions(unittest.TestCase):
             entry['visuals'] = np.random.uniform(-1,1, (4, 10, 2, 3))
             observations.append(entry)
         new_params = find_cal_params(anchor_poses, observations)
+
+    def test_order_points_for_low_travel(self):
+        points, distance = order_points_for_low_travel(np.random.uniform(-3,3,(20,3)))
+        self.assertLess(distance, 40)
+        self.assertEqual(points.shape, (20,3))
