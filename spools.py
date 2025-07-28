@@ -103,7 +103,6 @@ class SpoolController:
         self.last_length = 3.0
         self.last_angle = 0.0
         self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
-        # record of line length. tuples of (time, meters)
         self.record = []
         # plan of desired line lengths
         self.desired_line = []

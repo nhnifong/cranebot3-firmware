@@ -64,11 +64,17 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
 
         self.mock_cam_task = asyncio.create_task(self.mock_camera.start_server())
 
+        # make a local variable to contain a tight or not tight bool and a functiion that captures it.
+        local_tight_var = {'tight': True}
+        def local_t():
+            return local_tight_var['tight']
+
         # Make four of these on different ports
         for i in range(4):
             server = RaspiAnchorServer(power_anchor=False, mock_motor=DebugMotor())
             server.mock_camera_port = i+8888
             server.zc = self.zc
+            server.tight_check = local_t
             self.anchor_servers.append(server)
             self.server_tasks.append(asyncio.create_task(server.main(port=i+8765, name=f'cranebot-anchor-service.test_{i}')))
             await asyncio.sleep(0.1)  # Give the server a moment to start
@@ -138,16 +144,15 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         for p in self.patchers:
             p.stop()
 
+    def move_fake_gantry(self, pos):
+        self.mock_camera.update_gantry_pose((*pos, 0,0,0))
+
     async def test_auto_calibration(self):
+        self.ob.test_gantry_goal_callback = self.move_fake_gantry
         await asyncio.sleep(16) # wait for observer to startup and discover services
         self.assertEqual(len(self.ob.bot_clients), 5)
-        result = await asyncio.wait_for(self.ob.full_auto_calibration(), 120)
+        result = await asyncio.wait_for(self.ob.full_auto_calibration(), 60*10)
         self.assertEqual(len(self.ob.bot_clients), 5)
         self.assertEqual(1, 0)
-
-        # TODO
-# raw encoder values need to be saved when that mode is on
-#         >           entry = {'encoders': [client.last_raw_encoder for client in self.anchors]}
-# E           AttributeError: 'RaspiAnchorClient' object has no attribute 'last_raw_encoder'
 
 # when a self.seek_gantry_goal method finishes in a test, it should set the new position of the mock enviroment gantry box
