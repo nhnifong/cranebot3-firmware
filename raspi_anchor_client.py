@@ -245,6 +245,7 @@ class RaspiAnchorClient(ComponentClient):
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = {'anchor_num': self.anchor_num}
         self.shape_tracker = shape_tracker
+        self.last_raw_encoder = None
 
         config = Config()
         self.anchor_pose = config.anchors[anchor_num].pose
@@ -256,6 +257,8 @@ class RaspiAnchorClient(ComponentClient):
         # TODO if we are not regularly receiving line_record, display this as a server problem status
         if 'line_record' in update:
             self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
+        if 'last_raw_encoder' in update:
+            self.last_raw_encoder = update['last_raw_encoder']
 
     def handle_detections(self, detections, timestamp):
         """

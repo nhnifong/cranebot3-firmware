@@ -17,7 +17,7 @@ class DebugMotor():
         if self.accelLimit is not None and abs(speed - self.speed) > self.accelLimit:
             raise VlueError(f"Tried to change debug motor speed too abruptly from {self.speed} to {speed}")
         self.speed = speed
-        print(f'runConstantSpeed({speed})')
+        # print(f'runConstantSpeed({speed})')
 
     def getShaftAngle(self):
         now = time.time()
