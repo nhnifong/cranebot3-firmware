@@ -30,6 +30,7 @@ from calibration import order_points_for_low_travel, find_cal_params
 import model_constants
 import traceback
 import cv2
+import pickle
 
 fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -375,6 +376,7 @@ class AsyncObserver:
             await asyncio.sleep(6)
 
             v = [client.raw_gant_poses for client in self.anchors]
+            assert(min([len(poses) for poses in v]) >= 3)
             entry['visuals'] = v
             print(f'Collected {len(v[0])}, {len(v[1])}, {len(v[2])}, {len(v[3])} visual observations of gantry pose')
             data.append(entry)
@@ -385,6 +387,8 @@ class AsyncObserver:
         print(f'Completed data collection. Performing optimization of calibration parameters.')
 
         # feed collected data to the optimization process in calibration.py
+        with open('collected_cal_data.pickle', 'wb') as f:
+            f.write(pickle.dumps((anchor_poses, data)))
         result_params = find_cal_params(anchor_poses, data)
 
         # Use the optimization output to update anchor poses and spool params
