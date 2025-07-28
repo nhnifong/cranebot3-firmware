@@ -143,3 +143,6 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
         await asyncio.wait_for(self.watchable_event.wait(), 10)
         self.assertEqual(len(self.ob.anchors), 1)
+
+    async def test_wait_for_tension(self):
+        pass # TODO

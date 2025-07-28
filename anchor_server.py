@@ -356,6 +356,8 @@ class RaspiAnchorServer(RobotComponentServer):
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
+        self.report_raw = False
+
     def tight_check(self):
         """Return whether the line is tight according to the lever switch"""
         if (not gpio_ready) or (self.conf['disable_switch']):
@@ -365,9 +367,13 @@ class RaspiAnchorServer(RobotComponentServer):
     async def processOtherUpdates(self, updates, tg):
         if 'tighten' in updates:
             tg.create_task(self.tighten())
+        if 'report_raw' in updates:
+            self.report_raw = bool(updates['report_raw'])
 
     def readOtherSensors(self):
-        pass
+        # when in calibration mode send a message containing the last raw encoder angle
+        if self.report_raw:
+            self.update['last_raw_encoder'] = self.spooler.last_angle
 
     def startOtherTasks(self):
         pass
@@ -380,6 +386,7 @@ class RaspiAnchorServer(RobotComponentServer):
         while not self.tight_check():
             self.spooler.setAimSpeed(self.conf['tightening_speed'])
             await asyncio.sleep(0.05)
+        print('anchor server sets speed to 0 because finished tight')
         self.spooler.setAimSpeed(0)
         
 if __name__ == "__main__":

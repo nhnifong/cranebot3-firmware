@@ -96,6 +96,7 @@ class AsyncObserver:
 
         self.sim_task = None
         self.locate_anchor_task = None
+        self.test_gantry_goal_callback = None
 
     def listen_queue_updates(self, loop):
         """
@@ -214,7 +215,8 @@ class AsyncObserver:
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
             tight = np.array(records[:,3])
-            complete = np.all(tight) and np.sum(speeds) == 0
+            print(f'wait for tension speeds={speeds} tight={tight}')
+            complete = np.all(tight) and abs(np.sum(speeds)) < 0.02
         return True
 
 
@@ -340,7 +342,7 @@ class AsyncObserver:
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
         # not the poses in self.datastore.gantry_pos so we set a flag in the anchor clients that cause them to save that
         for client in self.anchors:
-            self.save_raw = True
+            asyncio.create_task(client.send_commands({'report_raw': True}))
 
         print('Collect data at each position')
         # data format is described in docstring of calibration_cost_fn
@@ -351,6 +353,10 @@ class AsyncObserver:
             print(f'Moving to point {i+1}/{len(sample_points)} at {point}')
             self.gantry_goal_pos = point
             await self.seek_gantry_goal()
+
+            # integraiton test specific behavior
+            if self.test_gantry_goal_callback is not None:
+                self.test_gantry_goal_callback(point)
 
             # reel in all lines until they are tight
             print('Tightening all lines')
@@ -387,6 +393,10 @@ class AsyncObserver:
             self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
 
         # move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
+
+        # reset some settings only used during calibration
+        for client in self.anchors:
+            asyncio.create_task(client.send_commands({'report_raw': False}))
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
