@@ -246,6 +246,7 @@ class RaspiAnchorClient(ComponentClient):
         self.conn_status = {'anchor_num': self.anchor_num}
         self.shape_tracker = shape_tracker
         self.last_raw_encoder = None
+        self.raw_gant_poses = []
 
         config = Config()
         self.anchor_pose = config.anchors[anchor_num].pose
@@ -293,7 +294,8 @@ class RaspiAnchorClient(ComponentClient):
 
                 self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
                 self.to_ui_q.put({'gantry_observation': position})
-                    
+                if self.save_raw:
+                    self.raw_gant_poses.append(pose_from_det(detection))
 
     async def send_config(self):
         config = Config()
