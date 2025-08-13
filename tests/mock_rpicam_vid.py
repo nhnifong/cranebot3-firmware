@@ -144,6 +144,9 @@ class RPiCamVidMock:
         self.base.camera.setPos(cam_x, cam_y, cam_z)
         self.base.camera.setHpr(cam_h, cam_p, cam_r)
 
+        # Set the camera's FOV to match the Raspberry Pi Camera Module 3.
+        self.base.camLens.setFov(67.56, 41.2)
+
         # Create a quad to show the origin card
         cm = CardMaker('origin_aruco')
         # Create a unit square from -0.5 to 0.5. The actual size will be controlled by scale.

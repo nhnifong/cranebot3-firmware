@@ -14,7 +14,7 @@ from math import pi
 import asyncio
 import time
 
-from spools import SpoolController
+from spools import *
 from debug_motor import DebugMotor
 from anchor_server import default_anchor_conf
 from gripper_server import default_gripper_conf
@@ -121,3 +121,12 @@ class TestSpoolControllerTracking(unittest.IsolatedAsyncioTestCase):
         self.spooler.setAimSpeed(0)
         await asyncio.sleep(1.1)
         self.assertEqual(self.debug_motor.speed, 0)
+
+class TestSpiralCalulator(unittest.TestCase):
+    def testDirection(self):
+        sc = SpiralCalculator(empty_diameter=25, full_diameter=27, full_length=7.5, gear_ratio=20/51, motor_orientation=-1)
+        # the zero angle starts at 0. this is the encoder position (in revs) where we expect the line to be completely unspooled
+
+        self.assertAlmostEqual(sc.get_unspooled_length(0), 7.5)
+        self.assertAlmostEqual(sc.get_unspooled_length(-50), 5.9472, 3)
+        
