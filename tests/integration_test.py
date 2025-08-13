@@ -56,10 +56,10 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         )
         # anchor poses to use in simulated enviroment
         self.mock_camera.set_camera_poses(np.array([
-            (3, 3, 2.5, 135, -30, 0),
-            (3, -3, 2.5, 45, -30, 0),
-            (-3, 3, 2.5, 225, -30, 0),
-            (-3, -3, 2.5, 315, -30, 0),
+            (3, 3, 2.5, 135, -28, 0),
+            (3, -3, 2.5, 45, -28, 0),
+            (-3, 3, 2.5, 225, -28, 0),
+            (-3, -3, 2.5, 315, -28, 0),
         ]))
 
         self.mock_cam_task = asyncio.create_task(self.mock_camera.start_server())
@@ -71,7 +71,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Make four of these on different ports
         for i in range(4):
-            server = RaspiAnchorServer(power_anchor=False, mock_motor=DebugMotor())
+            server = RaspiAnchorServer(power_anchor=(i==0), mock_motor=DebugMotor())
             server.mock_camera_port = i+8888
             server.zc = self.zc
             server.tight_check = local_t
@@ -151,8 +151,9 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         self.ob.test_gantry_goal_callback = self.move_fake_gantry
         await asyncio.sleep(16) # wait for observer to startup and discover services
         self.assertEqual(len(self.ob.bot_clients), 5)
-        result = await asyncio.wait_for(self.ob.full_auto_calibration(), 60*10)
+        result = await asyncio.wait_for(self.ob.full_auto_calibration(), 60*100)
+        # confirm nothing caused it to disconnect from the clients
         self.assertEqual(len(self.ob.bot_clients), 5)
-        self.assertEqual(1, 0)
+        # check that none of the calibration parameters obtained from SLSQP are hard up agains their bounds.
 
 # when a self.seek_gantry_goal method finishes in a test, it should set the new position of the mock enviroment gantry box

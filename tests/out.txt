@@ -1,0 +1,2785 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.3.5, pluggy-1.5.0
+rootdir: /home/nhn/cranebot3-firmware/tests
+collected 1 item
+
+integration_test.py Setting camera poses to 
+[[  3.    3.    2.5 135.  -28.    0. ]
+ [  3.   -3.    2.5  45.  -28.    0. ]
+ [ -3.    3.    2.5 225.  -28.    0. ]
+ [ -3.   -3.    2.5 315.  -28.    0. ]]
+RPiCamVidMock server listening on ('127.0.0.1', 8888) play with ffplay tcp://127.0.0.1:8888
+RPiCamVidMock server listening on ('127.0.0.1', 8889) play with ffplay tcp://127.0.0.1:8889
+RPiCamVidMock server listening on ('127.0.0.1', 8890) play with ffplay tcp://127.0.0.1:8890
+RPiCamVidMock server listening on ('127.0.0.1', 8891) play with ffplay tcp://127.0.0.1:8891
+get services list
+start service browser
+Service 123.cranebot-anchor-service.test_1._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Added
+Service 123.cranebot-anchor-service.test_0._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Added
+Service 123.cranebot-anchor-service.test_2._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Added
+Service 123.cranebot-anchor-service.test_3._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Added
+Service 123.cranebot-gripper-service.test._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Added
+start observer's queue listener task
+Service 123.cranebot-anchor-service.test_1._http._tcp.local. added, service info: AsyncServiceInfo(type='_http._tcp.local.', name='123.cranebot-anchor-service.test_1._http._tcp.local.', addresses=[b'\x7f\x00\x00\x01'], port=8766, weight=0, priority=0, server='123.cranebot-anchor-service.test_1.', properties={}, interface_index=None), type: _http._tcp.local.
+appending anchor client to list and starting server
+Service 123.cranebot-anchor-service.test_0._http._tcp.local. added, service info: AsyncServiceInfo(type='_http._tcp.local.', name='123.cranebot-anchor-service.test_0._http._tcp.local.', addresses=[b'\x7f\x00\x00\x01'], port=8765, weight=0, priority=0, server='123.cranebot-anchor-service.test_0.', properties={}, interface_index=None), type: _http._tcp.local.
+appending anchor client to list and starting server
+Service 123.cranebot-anchor-service.test_2._http._tcp.local. added, service info: AsyncServiceInfo(type='_http._tcp.local.', name='123.cranebot-anchor-service.test_2._http._tcp.local.', addresses=[b'\x7f\x00\x00\x01'], port=8767, weight=0, priority=0, server='123.cranebot-anchor-service.test_2.', properties={}, interface_index=None), type: _http._tcp.local.
+appending anchor client to list and starting server
+Service 123.cranebot-anchor-service.test_3._http._tcp.local. added, service info: AsyncServiceInfo(type='_http._tcp.local.', name='123.cranebot-anchor-service.test_3._http._tcp.local.', addresses=[b'\x7f\x00\x00\x01'], port=8768, weight=0, priority=0, server='123.cranebot-anchor-service.test_3.', properties={}, interface_index=None), type: _http._tcp.local.
+appending anchor client to list and starting server
+Service 123.cranebot-gripper-service.test._http._tcp.local. added, service info: AsyncServiceInfo(type='_http._tcp.local.', name='123.cranebot-gripper-service.test._http._tcp.local.', addresses=[b'\x7f\x00\x00\x01'], port=8764, weight=0, priority=0, server='123.cranebot-gripper-service.test.', properties={}, interface_index=None), type: _http._tcp.local.
+Connecting to ws://127.0.0.1:8766...
+Connecting to ws://127.0.0.1:8765...
+Connecting to ws://127.0.0.1:8767...
+Connecting to ws://127.0.0.1:8768...
+Connecting to ws://127.0.0.1:8764...
+Anchor server is configured to use mock camera on localhost:8889
+Anchor server is configured to use mock camera on localhost:8888
+Anchor server is configured to use mock camera on localhost:8890
+Anchor server is configured to use mock camera on localhost:8891
+Connected to ws://127.0.0.1:8766.
+receive loop
+Connected to ws://127.0.0.1:8765.
+receive loop
+Connected to ws://127.0.0.1:8767.
+receive loop
+Connected to ws://127.0.0.1:8768.
+receive loop
+Connected to ws://127.0.0.1:8764.
+receive loop
+Connecting to tcp://127.0.0.1:8889
+Connecting to tcp://127.0.0.1:8888
+Connecting to tcp://127.0.0.1:8890
+Connecting to tcp://127.0.0.1:8891
+Client ('127.0.0.1', 38354) connected to mock camera on camera 1
+video connection successful < cv2.VideoCapture 0x7efc2abaf7d0>
+Client ('127.0.0.1', 53806) connected to mock camera on camera 0
+anchor client 1 processing frame 1
+anchor client 1 processing frame 2
+anchor client 1 processing frame 3
+anchor client 1 processing frame 4
+anchor client 1 processing frame 5
+anchor client 1 processing frame 6
+anchor client 1 processing frame 7
+anchor client 1 processing frame 8
+anchor client 1 processing frame 9
+anchor client 1 processing frame 10
+anchor client 1 processing frame 11
+anchor client 1 processing frame 12
+anchor client 1 processing frame 13
+anchor client 1 processing frame 14
+anchor client 1 processing frame 15
+anchor client 1 processing frame 16
+anchor client 1 processing frame 17
+anchor client 1 processing frame 18
+anchor client 1 processing frame 19
+anchor client 1 processing frame 20
+anchor client 1 processing frame 21
+anchor client 1 processing frame 22
+anchor client 1 processing frame 23
+anchor client 1 processing frame 24
+anchor client 1 processing frame 25
+anchor client 1 processing frame 26
+anchor client 1 processing frame 27
+anchor client 1 processing frame 28
+anchor client 1 processing frame 29
+anchor client 1 processing frame 30
+anchor client 1 processing frame 31
+anchor client 1 processing frame 32
+anchor client 1 processing frame 33
+anchor client 1 processing frame 34
+Waiting for enough origin card detections from every anchor camera [0, 12, 0, 0]
+anchor client 1 processing frame 35
+anchor client 1 processing frame 36
+anchor client 1 processing frame 37
+Waiting for enough origin card detections from every anchor camera [0, 12, 0, 0]
+anchor client 1 processing frame 38
+anchor client 1 processing frame 39
+anchor client 1 processing frame 40
+Waiting for enough origin card detections from every anchor camera [0, 12, 0, 0]
+anchor client 1 processing frame 41
+anchor client 1 processing frame 42
+anchor client 1 processing frame 43
+Waiting for enough origin card detections from every anchor camera [0, 12, 0, 0]
+anchor client 1 processing frame 44
+anchor client 1 processing frame 45
+anchor client 1 processing frame 46
+Waiting for enough origin card detections from every anchor camera [0, 12, 0, 0]
+anchor client 1 processing frame 47
+anchor client 1 processing frame 48
+anchor client 1 processing frame 49
+video connection successful < cv2.VideoCapture 0x7efc2abadab0>
+Waiting for enough origin card detections from every anchor camera [0, 12, 0, 0]
+anchor client 0 processing frame 1
+anchor client 0 processing frame 2
+Client ('127.0.0.1', 41140) connected to mock camera on camera 3
+anchor client 1 processing frame 50
+anchor client 0 processing frame 3
+anchor client 0 processing frame 4
+anchor client 0 processing frame 5
+anchor client 0 processing frame 6
+anchor client 0 processing frame 7
+anchor client 0 processing frame 8
+anchor client 1 processing frame 51
+anchor client 0 processing frame 9
+anchor client 0 processing frame 10
+anchor client 0 processing frame 11
+anchor client 0 processing frame 12
+Waiting for enough origin card detections from every anchor camera [11, 12, 0, 0]
+anchor client 0 processing frame 13
+anchor client 0 processing frame 14
+anchor client 1 processing frame 52
+anchor client 0 processing frame 15
+anchor client 0 processing frame 16
+anchor client 0 processing frame 17
+anchor client 0 processing frame 18
+anchor client 0 processing frame 19
+anchor client 0 processing frame 20
+anchor client 1 processing frame 53
+anchor client 0 processing frame 21
+anchor client 0 processing frame 22
+anchor client 0 processing frame 23
+anchor client 0 processing frame 24
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 0 processing frame 25
+anchor client 0 processing frame 26
+anchor client 1 processing frame 54
+anchor client 0 processing frame 27
+anchor client 0 processing frame 28
+anchor client 0 processing frame 29
+anchor client 1 processing frame 55
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 0 processing frame 30
+anchor client 1 processing frame 56
+anchor client 0 processing frame 31
+anchor client 1 processing frame 57
+anchor client 0 processing frame 32
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 1 processing frame 58
+anchor client 0 processing frame 33
+anchor client 1 processing frame 59
+anchor client 0 processing frame 34
+anchor client 1 processing frame 60
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 0 processing frame 35
+anchor client 1 processing frame 61
+anchor client 0 processing frame 36
+anchor client 1 processing frame 62
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 0 processing frame 37
+anchor client 1 processing frame 63
+anchor client 0 processing frame 38
+anchor client 1 processing frame 64
+anchor client 0 processing frame 39
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 1 processing frame 65
+anchor client 0 processing frame 40
+anchor client 1 processing frame 66
+anchor client 0 processing frame 41
+anchor client 1 processing frame 67
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 0 processing frame 42
+anchor client 1 processing frame 68
+anchor client 0 processing frame 43
+anchor client 1 processing frame 69
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 0 processing frame 44
+anchor client 1 processing frame 70
+anchor client 0 processing frame 45
+anchor client 1 processing frame 71
+anchor client 0 processing frame 46
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 1 processing frame 72
+anchor client 0 processing frame 47
+anchor client 1 processing frame 73
+anchor client 0 processing frame 48
+anchor client 1 processing frame 74
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 0]
+anchor client 0 processing frame 49
+anchor client 1 processing frame 75
+video connection successful < cv2.VideoCapture 0x7efccf3c9110>
+anchor client 3 processing frame 1
+anchor client 3 processing frame 2
+anchor client 0 processing frame 50
+anchor client 3 processing frame 3
+anchor client 3 processing frame 4
+anchor client 1 processing frame 76
+anchor client 3 processing frame 5
+anchor client 3 processing frame 6
+anchor client 3 processing frame 7
+anchor client 3 processing frame 8
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 7]
+Client ('127.0.0.1', 56046) connected to mock camera on camera 2
+anchor client 0 processing frame 51
+anchor client 3 processing frame 9
+anchor client 3 processing frame 10
+anchor client 3 processing frame 11
+anchor client 3 processing frame 12
+anchor client 1 processing frame 77
+anchor client 3 processing frame 13
+anchor client 3 processing frame 14
+anchor client 3 processing frame 15
+anchor client 3 processing frame 16
+anchor client 0 processing frame 52
+anchor client 3 processing frame 17
+anchor client 3 processing frame 18
+anchor client 3 processing frame 19
+anchor client 3 processing frame 20
+anchor client 1 processing frame 78
+anchor client 3 processing frame 21
+anchor client 3 processing frame 22
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 3 processing frame 23
+anchor client 3 processing frame 24
+anchor client 0 processing frame 53
+anchor client 3 processing frame 25
+anchor client 3 processing frame 26
+anchor client 3 processing frame 27
+anchor client 3 processing frame 28
+anchor client 1 processing frame 79
+anchor client 3 processing frame 29
+anchor client 0 processing frame 54
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 80
+anchor client 3 processing frame 30
+anchor client 0 processing frame 55
+anchor client 1 processing frame 81
+anchor client 3 processing frame 31
+anchor client 0 processing frame 56
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 82
+anchor client 3 processing frame 32
+anchor client 0 processing frame 57
+anchor client 1 processing frame 83
+anchor client 3 processing frame 33
+anchor client 0 processing frame 58
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 84
+anchor client 3 processing frame 34
+anchor client 0 processing frame 59
+anchor client 1 processing frame 85
+anchor client 3 processing frame 35
+anchor client 0 processing frame 60
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 86
+anchor client 3 processing frame 36
+anchor client 0 processing frame 61
+anchor client 1 processing frame 87
+anchor client 3 processing frame 37
+anchor client 0 processing frame 62
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 88
+anchor client 3 processing frame 38
+anchor client 0 processing frame 63
+anchor client 1 processing frame 89
+anchor client 3 processing frame 39
+anchor client 0 processing frame 64
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 90
+anchor client 3 processing frame 40
+anchor client 0 processing frame 65
+anchor client 1 processing frame 91
+anchor client 3 processing frame 41
+anchor client 0 processing frame 66
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 92
+anchor client 3 processing frame 42
+anchor client 0 processing frame 67
+anchor client 1 processing frame 93
+anchor client 3 processing frame 43
+anchor client 0 processing frame 68
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 94
+anchor client 3 processing frame 44
+anchor client 0 processing frame 69
+anchor client 1 processing frame 95
+anchor client 3 processing frame 45
+anchor client 0 processing frame 70
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 96
+anchor client 3 processing frame 46
+anchor client 0 processing frame 71
+anchor client 1 processing frame 97
+anchor client 3 processing frame 47
+anchor client 0 processing frame 72
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 98
+anchor client 3 processing frame 48
+anchor client 0 processing frame 73
+anchor client 1 processing frame 99
+anchor client 3 processing frame 49
+anchor client 0 processing frame 74
+Waiting for enough origin card detections from every anchor camera [12, 12, 0, 12]
+anchor client 1 processing frame 100
+anchor client 3 processing frame 50
+anchor client 0 processing frame 75
+anchor client 1 processing frame 101
+anchor client 3 processing frame 51
+anchor client 0 processing frame 76
+video connection successful < cv2.VideoCapture 0x7efccf3c8070>
+anchor client 2 processing frame 1
+anchor client 2 processing frame 2
+Waiting for enough origin card detections from every anchor camera [12, 12, 1, 12]
+anchor client 1 processing frame 102
+anchor client 2 processing frame 3
+anchor client 2 processing frame 4
+anchor client 3 processing frame 52
+anchor client 2 processing frame 5
+anchor client 2 processing frame 6
+anchor client 0 processing frame 77
+anchor client 2 processing frame 7
+anchor client 2 processing frame 8
+anchor client 2 processing frame 9
+anchor client 2 processing frame 10
+anchor client 1 processing frame 103
+anchor client 2 processing frame 11
+anchor client 2 processing frame 12
+anchor client 3 processing frame 53
+anchor client 2 processing frame 13
+anchor client 2 processing frame 14
+anchor client 0 processing frame 78
+anchor client 2 processing frame 15
+anchor client 2 processing frame 16
+locating anchor 0 from 12 detections
+locating anchor 1 from 12 detections
+locating anchor 2 from 12 detections
+locating anchor 3 from 12 detections
+Tightening all lines
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 17
+anchor client 2 processing frame 18
+anchor client 1 processing frame 104
+anchor client 2 processing frame 19
+anchor client 2 processing frame 20
+anchor client 3 processing frame 54
+anchor client 2 processing frame 21
+anchor client 2 processing frame 22
+anchor client 0 processing frame 79
+anchor client 2 processing frame 23
+anchor client 2 processing frame 24
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry now that its still and lines are tight
+anchor client 2 processing frame 25
+anchor client 2 processing frame 26
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 1 processing frame 105
+anchor client 2 processing frame 27
+anchor client 2 processing frame 28
+anchor client 3 processing frame 55
+anchor client 0 processing frame 80
+anchor client 2 processing frame 29
+anchor client 1 processing frame 106
+anchor client 3 processing frame 56
+anchor client 0 processing frame 81
+anchor client 2 processing frame 30
+anchor client 1 processing frame 107
+anchor client 3 processing frame 57
+anchor client 0 processing frame 82
+anchor client 2 processing frame 31
+anchor client 1 processing frame 108
+anchor client 3 processing frame 58
+anchor client 0 processing frame 83
+anchor client 2 processing frame 32
+anchor client 1 processing frame 109
+anchor client 3 processing frame 59
+anchor client 0 processing frame 84
+anchor client 2 processing frame 33
+anchor client 1 processing frame 110
+anchor client 3 processing frame 60
+anchor client 0 processing frame 85
+anchor client 2 processing frame 34
+anchor client 1 processing frame 111
+anchor client 3 processing frame 61
+anchor client 0 processing frame 86
+Line lengths from coarse calibration =[3.71311934 4.63889778 4.67234637 5.44398076]
+Generated 16 sample positions to visit during calibration
+Ordered points for near-optimal travel. total distance = 11.066962462856424 m
+Collect data at each position
+Moving to point 1/16 at [ 1.49478324 -1.06066558  0.24559495]
+move direction speed [ 0.81439022 -0.57787354  0.05320477] 0.2
+computed line speeds [-0.03169612 -0.17051933  0.16036799  0.02450549]
+send commands {"reference_length": 3.7131193388128527}
+send commands {"reference_length": 4.638897781680005}
+send commands {"reference_length": 4.672346366017966}
+send commands {"reference_length": 5.443980760762933}
+send commands {"report_raw": true}
+send commands {"report_raw": true}
+send commands {"report_raw": true}
+send commands {"report_raw": true}
+send commands {"aim_speed": -0.03169611824444374}
+send commands {"aim_speed": -0.17051932706786488}
+send commands {"aim_speed": 0.16036798717664524}
+send commands {"aim_speed": 0.02450549334169594}
+anchor client 2 processing frame 35
+anchor client 1 processing frame 112
+anchor client 3 processing frame 62
+anchor client 0 processing frame 87
+move direction speed [ 0.81418264 -0.57772625  0.05778418] 0.2
+computed line speeds [-0.0278185  -0.16972844  0.16138225  0.02836537]
+send commands {"aim_speed": -0.027818495071912253}
+send commands {"aim_speed": -0.1697284448244254}
+send commands {"aim_speed": 0.1613822542813672}
+send commands {"aim_speed": 0.028365369019919484}
+anchor client 2 processing frame 36
+anchor client 1 processing frame 113
+anchor client 3 processing frame 63
+anchor client 0 processing frame 88
+move direction speed [ 0.81394379 -0.57755676  0.06263949] 0.2
+computed line speeds [-0.02393382 -0.16891523  0.16231005  0.03215812]
+anchor client 2 processing frame 37
+send commands {"aim_speed": -0.023933816608789016}
+send commands {"aim_speed": -0.16891522929601344}
+send commands {"aim_speed": 0.16231004784406444}
+send commands {"aim_speed": 0.03215811948096636}
+anchor client 1 processing frame 114
+anchor client 3 processing frame 64
+anchor client 0 processing frame 89
+move direction speed [ 0.81366839 -0.57736134  0.06780587] 0.2
+computed line speeds [-0.02005093 -0.16808123  0.16315222  0.0358758 ]
+send commands {"aim_speed": -0.020050928328990025}
+send commands {"aim_speed": -0.16808123247668405}
+send commands {"aim_speed": 0.1631522160339678}
+send commands {"aim_speed": 0.035875803568467646}
+anchor client 2 processing frame 38
+anchor client 1 processing frame 115
+anchor client 3 processing frame 65
+anchor client 0 processing frame 90
+move direction speed [ 0.81334993 -0.57713537  0.0733257 ] 0.2
+computed line speeds [-0.01617958 -0.16722882  0.16390862  0.03951007]
+send commands {"aim_speed": -0.016179583579134516}
+send commands {"aim_speed": -0.16722882164267183}
+send commands {"aim_speed": 0.16390861953859392}
+send commands {"aim_speed": 0.03951007064556045}
+anchor client 2 processing frame 39
+anchor client 1 processing frame 116
+anchor client 3 processing frame 66
+anchor client 0 processing frame 91
+move direction speed [ 0.81298022 -0.57687303  0.07925063] 0.2
+computed line speeds [-0.01233063 -0.16636146  0.16457792  0.04305196]
+anchor client 2 processing frame 40
+send commands {"aim_speed": -0.012330629359702527}
+send commands {"aim_speed": -0.16636146392749218}
+send commands {"aim_speed": 0.16457792320331244}
+send commands {"aim_speed": 0.0430519581261084}
+anchor client 1 processing frame 117
+anchor client 3 processing frame 67
+anchor client 0 processing frame 92
+move direction speed [ 0.81254882 -0.57656692  0.08564457] 0.2
+computed line speeds [-0.00851628 -0.16548412  0.16515729  0.04649159]
+send commands {"aim_speed": -0.008516279939428273}
+send commands {"aim_speed": -0.1654841238619289}
+send commands {"aim_speed": 0.16515729329037043}
+send commands {"aim_speed": 0.04649159457527219}
+anchor client 2 processing frame 41
+anchor client 1 processing frame 118
+anchor client 3 processing frame 68
+anchor client 0 processing frame 93
+move direction speed [ 0.81204218 -0.57620742  0.09258786] 0.2
+computed line speeds [-0.00475053 -0.16460383  0.16564195  0.04981776]
+send commands {"aim_speed": -0.004750526165064883}
+send commands {"aim_speed": -0.16460382995817824}
+send commands {"aim_speed": 0.16564194994433556}
+send commands {"aim_speed": 0.04981776067553412}
+anchor client 2 processing frame 42
+anchor client 1 processing frame 119
+anchor client 3 processing frame 69
+anchor client 0 processing frame 94
+move direction speed [ 0.81144232 -0.57578177  0.10018344] 0.2
+computed line speeds [-0.00104976 -0.1637305   0.16602449  0.05301723]
+anchor client 2 processing frame 43
+send commands {"aim_speed": -0.0010497599454417639}
+send commands {"aim_speed": -0.16373050187887728}
+send commands {"aim_speed": 0.1660244901673913}
+send commands {"aim_speed": 0.053017228288322116}
+anchor client 1 processing frame 120
+anchor client 3 processing frame 70
+anchor client 0 processing frame 95
+move direction speed [ 0.81072483 -0.57527265  0.10856625] 0.2
+computed line speeds [ 0.00256625 -0.16287819  0.16629383  0.05607374]
+send commands {"aim_speed": 0.002566248452181341}
+send commands {"aim_speed": -0.1628781936461463}
+send commands {"aim_speed": 0.16629383291154554}
+send commands {"aim_speed": 0.05607373851637831}
+anchor client 2 processing frame 44
+anchor client 1 processing frame 121
+anchor client 3 processing frame 71
+anchor client 0 processing frame 96
+move direction speed [ 0.80985555 -0.57465584  0.117918  ] 0.2
+computed line speeds [ 0.00607277 -0.16206703  0.16643351  0.05896636]
+send commands {"aim_speed": 0.006072769917402354}
+send commands {"aim_speed": -0.1620670295192932}
+send commands {"aim_speed": 0.1664335132147361}
+send commands {"aim_speed": 0.05896636412564504}
+anchor client 2 processing frame 45
+anchor client 1 processing frame 122
+anchor client 3 processing frame 72
+anchor client 0 processing frame 97
+move direction speed [ 0.80878494 -0.57389615  0.12849175] 0.2
+computed line speeds [ 0.00943745 -0.16132635  0.16641879  0.06166676]
+anchor client 2 processing frame 46
+send commands {"aim_speed": 0.009437449893587413}
+send commands {"aim_speed": -0.1613263531940916}
+send commands {"aim_speed": 0.16641879250545877}
+send commands {"aim_speed": 0.061666762284067644}
+anchor client 1 processing frame 123
+anchor client 3 processing frame 73
+anchor client 0 processing frame 98
+move direction speed [ 0.80743775 -0.57294021  0.14065489] 0.2
+computed line speeds [ 0.01261556 -0.16070014  0.16621147  0.06413429]
+send commands {"aim_speed": 0.012615555391796818}
+send commands {"aim_speed": -0.16070013984678866}
+send commands {"aim_speed": 0.16621146791080044}
+send commands {"aim_speed": 0.06413428860819614}
+anchor client 2 processing frame 47
+anchor client 1 processing frame 124
+anchor client 3 processing frame 74
+anchor client 0 processing frame 99
+move direction speed [ 0.80569281 -0.57170204  0.15497055] 0.2
+computed line speeds [ 0.01554087 -0.16025698  0.16574982  0.06630663]
+send commands {"aim_speed": 0.01554087082108424}
+send commands {"aim_speed": -0.16025697664453808}
+send commands {"aim_speed": 0.1657498178074306}
+send commands {"aim_speed": 0.06630662946686705}
+anchor client 2 processing frame 48
+anchor client 1 processing frame 125
+anchor client 3 processing frame 75
+anchor client 0 processing frame 100
+move direction speed [ 0.80333889 -0.57003175  0.17236715] 0.2
+computed line speeds [ 0.01810649 -0.16011027  0.16492708  0.06807996]
+anchor client 2 processing frame 49
+send commands {"aim_speed": 0.01810648725937547}
+send commands {"aim_speed": -0.1601102739264899}
+send commands {"aim_speed": 0.16492707501062576}
+send commands {"aim_speed": 0.0680799620751138}
+anchor client 1 processing frame 126
+anchor client 3 processing frame 76
+anchor client 0 processing frame 101
+move direction speed [ 0.79996348 -0.56763663  0.19454328] 0.2
+computed line speeds [ 0.02011837 -0.16046488  0.16353844  0.06926071]
+send commands {"aim_speed": 0.020118371833239834}
+send commands {"aim_speed": -0.16046488287450789}
+send commands {"aim_speed": 0.16353843750271935}
+send commands {"aim_speed": 0.06926070526193406}
+anchor client 2 processing frame 50
+anchor client 1 processing frame 127
+anchor client 3 processing frame 77
+anchor client 0 processing frame 102
+move direction speed [ 0.7946052  -0.56383452  0.22515151] 0.2
+computed line speeds [ 0.02115766 -0.16174771  0.16112017  0.06942114]
+send commands {"aim_speed": 0.02115766342618386}
+send commands {"aim_speed": -0.16174770872137412}
+send commands {"aim_speed": 0.1611201742672126}
+send commands {"aim_speed": 0.06942113753976997}
+anchor client 2 processing frame 51
+anchor client 1 processing frame 128
+anchor client 3 processing frame 78
+anchor client 0 processing frame 103
+move direction speed [ 0.78417164 -0.55643109  0.27469852] 0.2
+computed line speeds [ 0.01999958 -0.1651167   0.15624753  0.06728192]
+anchor client 2 processing frame 52
+send commands {"aim_speed": 0.01999958409103364}
+send commands {"aim_speed": -0.16511670282078583}
+send commands {"aim_speed": 0.15624753318255813}
+send commands {"aim_speed": 0.06728191841592057}
+anchor client 1 processing frame 129
+anchor client 3 processing frame 79
+anchor client 0 processing frame 104
+move direction speed [ 0.74494281 -0.52859517  0.40699797] 0.2
+computed line speeds [ 0.00885824 -0.17664721  0.13905172  0.05440855]
+send commands {"aim_speed": 0.008858235045444474}
+send commands {"aim_speed": -0.1766472147804281}
+send commands {"aim_speed": 0.13905171947625838}
+send commands {"aim_speed": 0.0544085487171575}
+anchor client 2 processing frame 53
+anchor client 1 processing frame 130
+anchor client 3 processing frame 80
+anchor client 0 processing frame 105
+Gantry pose updated to: Pos(1.49,-1.06,0.25), Hpr(0.00,0.00,0.00)
+Tightening all lines
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 54
+anchor client 1 processing frame 131
+anchor client 3 processing frame 81
+anchor client 0 processing frame 106
+wait for tension speeds=[ 0.00885806 -0.17665664  0.13904551  0.05440761] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 55
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 1 processing frame 132
+anchor client 3 processing frame 82
+anchor client 0 processing frame 107
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 2 processing frame 56
+anchor client 1 processing frame 133
+anchor client 3 processing frame 83
+anchor client 0 processing frame 108
+anchor client 2 processing frame 57
+anchor client 1 processing frame 134
+anchor client 3 processing frame 84
+anchor client 0 processing frame 109
+anchor client 2 processing frame 58
+anchor client 1 processing frame 135
+anchor client 3 processing frame 85
+anchor client 0 processing frame 110
+anchor client 2 processing frame 59
+anchor client 1 processing frame 136
+anchor client 3 processing frame 86
+anchor client 0 processing frame 111
+anchor client 2 processing frame 60
+anchor client 1 processing frame 137
+anchor client 3 processing frame 87
+anchor client 0 processing frame 112
+anchor client 2 processing frame 61
+anchor client 1 processing frame 138
+anchor client 3 processing frame 88
+anchor client 0 processing frame 113
+anchor client 2 processing frame 62
+anchor client 1 processing frame 139
+anchor client 3 processing frame 89
+anchor client 0 processing frame 114
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 2/16 at [1.51501634 0.98163562 0.795052  ]
+move direction speed [-0.00657179  0.98476802  0.17374912] 0.2
+computed line speeds [-0.1808835   0.0840282  -0.13498594  0.04810275]
+send commands {"aim_speed": -0.1808835000858693}
+send commands {"aim_speed": 0.084028204020143}
+send commands {"aim_speed": -0.13498593951719862}
+send commands {"aim_speed": 0.04810274713453033}
+anchor client 2 processing frame 63
+anchor client 1 processing frame 140
+anchor client 3 processing frame 90
+anchor client 0 processing frame 115
+move direction speed [-0.00656719  0.98407818  0.17761475] 0.2
+computed line speeds [-0.1803091   0.08886967 -0.13333768  0.05146839]
+anchor client 2 processing frame 64
+send commands {"aim_speed": -0.180309097757279}
+send commands {"aim_speed": 0.08886967259953238}
+send commands {"aim_speed": -0.13333768121882805}
+send commands {"aim_speed": 0.05146839028104644}
+anchor client 1 processing frame 141
+anchor client 3 processing frame 91
+anchor client 0 processing frame 116
+move direction speed [-0.00656224  0.98333674  0.18167497] 0.2
+computed line speeds [-0.17970891  0.09346671 -0.13164086  0.05476269]
+send commands {"aim_speed": -0.17970890641585235}
+send commands {"aim_speed": 0.09346671301286502}
+send commands {"aim_speed": -0.13164086309538625}
+send commands {"aim_speed": 0.054762690882567355}
+anchor client 2 processing frame 65
+anchor client 1 processing frame 142
+anchor client 3 processing frame 92
+anchor client 0 processing frame 117
+move direction speed [-0.00655691  0.98253723  0.18595053] 0.2
+computed line speeds [-0.17908194  0.09781974 -0.1298948   0.05798168]
+send commands {"aim_speed": -0.1790819352851365}
+send commands {"aim_speed": 0.09781974302335694}
+send commands {"aim_speed": -0.12989480293590816}
+send commands {"aim_speed": 0.05798168199663145}
+anchor client 2 processing frame 66
+anchor client 1 processing frame 143
+anchor client 3 processing frame 93
+anchor client 0 processing frame 118
+move direction speed [-0.00655113  0.98167199  0.19046569] 0.2
+computed line speeds [-0.17842729  0.10193023 -0.12809898  0.06112135]
+anchor client 2 processing frame 67
+send commands {"aim_speed": -0.1784272901587638}
+send commands {"aim_speed": 0.10193023267853007}
+send commands {"aim_speed": -0.12809898386206164}
+send commands {"aim_speed": 0.06112134517903378}
+anchor client 1 processing frame 144
+anchor client 3 processing frame 94
+anchor client 0 processing frame 119
+move direction speed [-0.00654486  0.98073185  0.19524907] 0.2
+computed line speeds [-0.17774423  0.10580035 -0.1262531   0.06417753]
+send commands {"aim_speed": -0.17774423265080408}
+send commands {"aim_speed": 0.1058003455471841}
+send commands {"aim_speed": -0.126253099625254}
+send commands {"aim_speed": 0.06417752733756465}
+anchor client 2 processing frame 68
+anchor client 1 processing frame 145
+anchor client 3 processing frame 95
+anchor client 0 processing frame 120
+move direction speed [-0.00653801  0.97970569  0.20033478] 0.2
+computed line speeds [-0.17703226  0.10943256 -0.12435711  0.06714583]
+send commands {"aim_speed": -0.17703226286702112}
+send commands {"aim_speed": 0.10943255927424911}
+send commands {"aim_speed": -0.12435711247624148}
+send commands {"aim_speed": 0.06714582863142482}
+anchor client 2 processing frame 69
+anchor client 1 processing frame 146
+anchor client 3 processing frame 96
+anchor client 0 processing frame 121
+move direction speed [-0.0065305   0.97857987  0.20576391] 0.2
+computed line speeds [-0.17629124  0.11282925 -0.12241133  0.07002145]
+anchor client 2 processing frame 70
+send commands {"aim_speed": -0.17629123540498437}
+send commands {"aim_speed": 0.11282925438836244}
+send commands {"aim_speed": -0.12241132829796264}
+send commands {"aim_speed": 0.0700214501665144}
+anchor client 1 processing frame 147
+anchor client 3 processing frame 97
+anchor client 0 processing frame 122
+move direction speed [-0.00652221  0.97733749  0.2115866 ] 0.2
+computed line speeds [-0.17552152  0.11599225 -0.1204165   0.07279898]
+send commands {"aim_speed": -0.1755215235410006}
+send commands {"aim_speed": 0.1159922503357187}
+send commands {"aim_speed": -0.12041649600457838}
+send commands {"aim_speed": 0.07279898415482755}
+anchor client 2 processing frame 71
+anchor client 1 processing frame 148
+anchor client 3 processing frame 98
+anchor client 0 processing frame 123
+move direction speed [-0.006513    0.97595721  0.21786489] 0.2
+computed line speeds [-0.17472425  0.11892225 -0.11837394  0.07547212]
+send commands {"aim_speed": -0.1747242544208092}
+send commands {"aim_speed": 0.11892225264545431}
+send commands {"aim_speed": -0.11837394195125839}
+send commands {"aim_speed": 0.07547211913348839}
+anchor client 2 processing frame 72
+anchor client 1 processing frame 149
+anchor client 3 processing frame 99
+anchor client 0 processing frame 124
+move direction speed [-0.00650268  0.97441164  0.22467683] 0.2
+computed line speeds [-0.17390165  0.12161815 -0.11628576  0.07803322]
+anchor client 2 processing frame 73
+send commands {"aim_speed": -0.17390165128098634}
+send commands {"aim_speed": 0.1216181506339904}
+send commands {"aim_speed": -0.11628575635324445}
+send commands {"aim_speed": 0.07803321559531007}
+anchor client 1 processing frame 150
+anchor client 3 processing frame 100
+anchor client 0 processing frame 125
+move direction speed [-0.00649102  0.97266488  0.23212258] 0.2
+computed line speeds [-0.17305754  0.12407606 -0.11415506  0.08047268]
+send commands {"aim_speed": -0.17305754147050223}
+send commands {"aim_speed": 0.12407606256160175}
+send commands {"aim_speed": -0.11415505956142624}
+send commands {"aim_speed": 0.08047267669999592}
+anchor client 2 processing frame 74
+anchor client 1 processing frame 151
+anchor client 3 processing frame 101
+anchor client 0 processing frame 126
+move direction speed [-0.0064777   0.97066874  0.2403336 ] 0.2
+computed line speeds [-0.17219813  0.12628795 -0.1119864   0.08277798]
+send commands {"aim_speed": -0.17219812990909844}
+send commands {"aim_speed": 0.12628794687695777}
+send commands {"aim_speed": -0.11198639569003888}
+send commands {"aim_speed": 0.08277798161642735}
+anchor client 2 processing frame 75
+anchor client 1 processing frame 152
+anchor client 3 processing frame 102
+anchor client 0 processing frame 127
+move direction speed [-0.00646227  0.9683565   0.24948734] 0.2
+computed line speeds [-0.17133321  0.12823944 -0.10978634  0.08493214]
+anchor client 2 processing frame 76
+send commands {"aim_speed": -0.1713332148671709}
+send commands {"aim_speed": 0.12823944494112816}
+send commands {"aim_speed": -0.10978633852906938}
+send commands {"aim_speed": 0.08493213688364776}
+anchor client 1 processing frame 153
+anchor client 3 processing frame 103
+anchor client 0 processing frame 128
+move direction speed [-0.00644409  0.96563244  0.25983159] 0.2
+computed line speeds [-0.17047818  0.1299063  -0.10756447  0.08691107]
+send commands {"aim_speed": -0.17047817809741428}
+send commands {"aim_speed": 0.12990629972526424}
+send commands {"aim_speed": -0.1075644704624974}
+send commands {"aim_speed": 0.08691106637098933}
+anchor client 2 processing frame 77
+anchor client 1 processing frame 154
+anchor client 3 processing frame 104
+anchor client 0 processing frame 129
+move direction speed [-0.00642221  0.96235277  0.27172763] 0.2
+computed line speeds [-0.16965742  0.13124797 -0.10533506  0.08867893]
+send commands {"aim_speed": -0.16965741689339886}
+send commands {"aim_speed": 0.1312479673810092}
+send commands {"aim_speed": -0.10533506031331896}
+send commands {"aim_speed": 0.08867892885969475}
+anchor client 2 processing frame 78
+anchor client 1 processing frame 155
+anchor client 3 processing frame 105
+anchor client 0 processing frame 130
+move direction speed [-0.00639508  0.9582881   0.28573243] 0.2
+computed line speeds [-0.16891068  0.13219522 -0.10312016  0.09017902]
+anchor client 2 processing frame 79
+send commands {"aim_speed": -0.1689106817630801}
+send commands {"aim_speed": 0.13219521791361455}
+send commands {"aim_speed": -0.10312016097390853}
+send commands {"aim_speed": 0.09017902482818307}
+anchor client 1 processing frame 156
+anchor client 3 processing frame 106
+anchor client 0 processing frame 131
+move direction speed [-0.00636007  0.95304166  0.30277242] 0.2
+computed line speeds [-0.16830591  0.13262335 -0.10095591  0.09131419]
+send commands {"aim_speed": -0.1683059122094015}
+send commands {"aim_speed": 0.13262334510027696}
+send commands {"aim_speed": -0.10095591141305249}
+send commands {"aim_speed": 0.09131418829373494}
+anchor client 2 processing frame 80
+anchor client 1 processing frame 157
+anchor client 3 processing frame 107
+anchor client 0 processing frame 132
+move direction speed [-0.00631202  0.9458418   0.32456656] 0.2
+computed line speeds [-0.16796885  0.13228509 -0.09890719  0.09189785]
+send commands {"aim_speed": -0.16796885424528618}
+send commands {"aim_speed": 0.13228509170016522}
+send commands {"aim_speed": -0.0989071935219421}
+send commands {"aim_speed": 0.09189784580278548}
+anchor client 2 processing frame 81
+anchor client 1 processing frame 158
+anchor client 3 processing frame 108
+anchor client 0 processing frame 133
+move direction speed [-0.00623888  0.93488186  0.35490419] 0.2
+computed line speeds [-0.16816632  0.13060077 -0.09710924  0.09150143]
+anchor client 2 processing frame 82
+send commands {"aim_speed": -0.16816632273272525}
+send commands {"aim_speed": 0.13060077377864765}
+send commands {"aim_speed": -0.0971092401678284}
+send commands {"aim_speed": 0.09150142987855148}
+anchor client 1 processing frame 159
+anchor client 3 processing frame 109
+anchor client 0 processing frame 134
+move direction speed [-0.00610065  0.91416892  0.4052875 ] 0.2
+computed line speeds [-0.16963461  0.12568352 -0.09593324  0.08874844]
+send commands {"aim_speed": -0.16963461448388095}
+send commands {"aim_speed": 0.1256835204050759}
+send commands {"aim_speed": -0.09593324339095943}
+send commands {"aim_speed": 0.08874843852492376}
+anchor client 2 processing frame 83
+anchor client 1 processing frame 160
+anchor client 3 processing frame 110
+anchor client 0 processing frame 135
+Gantry pose updated to: Pos(1.52,0.98,0.80), Hpr(0.00,0.00,0.00)
+Tightening all lines
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 84
+anchor client 1 processing frame 161
+anchor client 3 processing frame 111
+anchor client 0 processing frame 136
+wait for tension speeds=[-0.16968476  0.12567864 -0.09593613  0.08874589] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 85
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 1 processing frame 162
+anchor client 3 processing frame 112
+anchor client 0 processing frame 137
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 2 processing frame 86
+anchor client 1 processing frame 163
+anchor client 3 processing frame 113
+anchor client 0 processing frame 138
+anchor client 2 processing frame 87
+anchor client 1 processing frame 164
+anchor client 3 processing frame 114
+anchor client 0 processing frame 139
+anchor client 2 processing frame 88
+anchor client 1 processing frame 165
+anchor client 3 processing frame 115
+anchor client 0 processing frame 140
+anchor client 2 processing frame 89
+anchor client 1 processing frame 166
+anchor client 3 processing frame 116
+anchor client 0 processing frame 141
+anchor client 2 processing frame 90
+anchor client 1 processing frame 167
+anchor client 3 processing frame 117
+anchor client 0 processing frame 142
+anchor client 2 processing frame 91
+anchor client 1 processing frame 168
+anchor client 3 processing frame 118
+anchor client 0 processing frame 143
+anchor client 2 processing frame 92
+anchor client 1 processing frame 169
+anchor client 3 processing frame 119
+anchor client 0 processing frame 144
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 3/16 at [1.34743081 1.37300345 0.44570241]
+move direction speed [-0.28608433  0.72439381 -0.62722353] 0.2
+computed line speeds [ 0.01363719  0.19294034 -0.055948    0.08693104]
+send commands {"aim_speed": 0.013637193566768069}
+send commands {"aim_speed": 0.19294033950716205}
+send commands {"aim_speed": -0.05594799828476482}
+send commands {"aim_speed": 0.08693104008523989}
+anchor client 2 processing frame 93
+anchor client 1 processing frame 170
+anchor client 3 processing frame 120
+anchor client 0 processing frame 145
+move direction speed [-0.28903412  0.73186296 -0.61711902] 0.2
+computed line speeds [ 0.01911393  0.19388335 -0.05384414  0.0896226 ]
+anchor client 2 processing frame 94
+send commands {"aim_speed": 0.019113926168512485}
+send commands {"aim_speed": 0.1938833537813398}
+send commands {"aim_speed": -0.053844144645298186}
+send commands {"aim_speed": 0.08962260256347143}
+anchor client 1 processing frame 171
+anchor client 3 processing frame 121
+anchor client 0 processing frame 146
+move direction speed [-0.29277205  0.74132776 -0.60391861] 0.2
+computed line speeds [ 0.02395673  0.19489585 -0.05220816  0.09220922]
+send commands {"aim_speed": 0.023956734368545618}
+send commands {"aim_speed": 0.19489585315565172}
+send commands {"aim_speed": -0.05220815913332544}
+send commands {"aim_speed": 0.09220922089489392}
+anchor client 2 processing frame 95
+anchor client 1 processing frame 172
+anchor client 3 processing frame 122
+anchor client 0 processing frame 147
+move direction speed [-0.29787786  0.75425617 -0.58512085] 0.2
+computed line speeds [ 0.02770859  0.19604646 -0.05144284  0.09464561]
+send commands {"aim_speed": 0.027708593637392198}
+send commands {"aim_speed": 0.19604646141015536}
+send commands {"aim_speed": -0.05144283940877514}
+send commands {"aim_speed": 0.09464561006922523}
+anchor client 2 processing frame 96
+anchor client 1 processing frame 173
+anchor client 3 processing frame 123
+anchor client 0 processing frame 148
+move direction speed [-0.30595421  0.77470629 -0.55337346] 0.2
+computed line speeds [ 0.02906985  0.19748821 -0.05269286  0.09677763]
+anchor client 2 processing frame 97
+send commands {"aim_speed": 0.029069845469830824}
+send commands {"aim_speed": 0.19748820819506818}
+send commands {"aim_speed": -0.05269285614503616}
+send commands {"aim_speed": 0.09677762709462634}
+anchor client 1 processing frame 174
+anchor client 3 processing frame 124
+anchor client 0 processing frame 149
+move direction speed [-0.32551871  0.82424555 -0.46331075] 0.2
+computed line speeds [ 0.02022329  0.19952515 -0.06256112  0.09736994]
+send commands {"aim_speed": 0.020223292600857867}
+send commands {"aim_speed": 0.19952515441568153}
+send commands {"aim_speed": -0.06256111842325218}
+send commands {"aim_speed": 0.0973699375205399}
+anchor client 2 processing frame 98
+anchor client 1 processing frame 175
+anchor client 3 processing frame 125
+anchor client 0 processing frame 150
+Gantry pose updated to: Pos(1.35,1.37,0.45), Hpr(0.00,0.00,0.00)
+Tightening all lines
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 99
+anchor client 1 processing frame 176
+anchor client 3 processing frame 126
+anchor client 0 processing frame 151
+wait for tension speeds=[ 0.02022258  0.19951272 -0.06256234  0.09736686] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 100
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 1 processing frame 177
+anchor client 3 processing frame 127
+anchor client 0 processing frame 152
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 2 processing frame 101
+anchor client 1 processing frame 178
+anchor client 3 processing frame 128
+anchor client 0 processing frame 153
+anchor client 2 processing frame 102
+anchor client 1 processing frame 179
+anchor client 3 processing frame 129
+anchor client 0 processing frame 154
+anchor client 2 processing frame 103
+anchor client 1 processing frame 180
+anchor client 3 processing frame 130
+anchor client 0 processing frame 155
+anchor client 2 processing frame 104
+anchor client 1 processing frame 181
+anchor client 3 processing frame 131
+anchor client 0 processing frame 156
+anchor client 2 processing frame 105
+anchor client 1 processing frame 182
+anchor client 3 processing frame 132
+anchor client 0 processing frame 157
+anchor client 2 processing frame 106
+anchor client 1 processing frame 183
+anchor client 3 processing frame 133
+anchor client 0 processing frame 158
+anchor client 2 processing frame 107
+anchor client 1 processing frame 184
+anchor client 3 processing frame 134
+anchor client 0 processing frame 159
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 4/16 at [1.20621038 1.15440552 0.65365142]
+move direction speed [-0.3749501  -0.72135503  0.58228802] 0.2
+computed line speeds [ 0.02108204 -0.15165421 -0.07384208 -0.18510497]
+send commands {"aim_speed": 0.021082040482244935}
+send commands {"aim_speed": -0.15165421226976505}
+send commands {"aim_speed": -0.07384208000629222}
+send commands {"aim_speed": -0.18510496510633168}
+anchor client 2 processing frame 108
+anchor client 1 processing frame 185
+anchor client 3 processing frame 135
+anchor client 0 processing frame 160
+move direction speed [-0.36784596 -0.70768761  0.60321439] 0.2
+computed line speeds [ 0.02326359 -0.14962512 -0.07142687 -0.18318935]
+anchor client 2 processing frame 109
+send commands {"aim_speed": 0.023263593105077973}
+send commands {"aim_speed": -0.14962511817966906}
+send commands {"aim_speed": -0.07142687223007371}
+send commands {"aim_speed": -0.18318935361500444}
+anchor client 1 processing frame 186
+anchor client 3 processing frame 136
+anchor client 0 processing frame 161
+move direction speed [-0.3560849  -0.68506087  0.63552746] 0.2
+computed line speeds [ 0.02246756 -0.14718076 -0.06965239 -0.18007785]
+send commands {"aim_speed": 0.022467560066036008}
+send commands {"aim_speed": -0.14718076107136469}
+send commands {"aim_speed": -0.06965239277342761}
+send commands {"aim_speed": -0.18007784629889656}
+anchor client 2 processing frame 110
+anchor client 1 processing frame 187
+anchor client 3 processing frame 137
+anchor client 0 processing frame 162
+move direction speed [-0.32413347 -0.62359048  0.71138766] 0.2
+computed line speeds [ 0.00967312 -0.14276317 -0.07042556 -0.17159156]
+send commands {"aim_speed": 0.009673119620648762}
+send commands {"aim_speed": -0.14276316973872305}
+send commands {"aim_speed": -0.07042555847646881}
+send commands {"aim_speed": -0.17159156103216056}
+anchor client 2 processing frame 111
+anchor client 1 processing frame 188
+anchor client 3 processing frame 138
+anchor client 0 processing frame 163
+Gantry pose updated to: Pos(1.21,1.15,0.65), Hpr(0.00,0.00,0.00)
+Tightening all lines
+anchor client 2 processing frame 112
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 1 processing frame 189
+anchor client 3 processing frame 139
+anchor client 0 processing frame 164
+wait for tension speeds=[ 0.         -0.14276951 -0.0704271  -0.17160105] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 113
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 1 processing frame 190
+anchor client 3 processing frame 140
+anchor client 0 processing frame 165
+wait for tension speeds=[ 0.         -0.00778956  0.         -0.09063292] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 114
+anchor client 1 processing frame 191
+anchor client 3 processing frame 141
+anchor client 0 processing frame 166
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 2 processing frame 115
+anchor client 1 processing frame 192
+anchor client 3 processing frame 142
+anchor client 0 processing frame 167
+anchor client 2 processing frame 116
+anchor client 1 processing frame 193
+anchor client 3 processing frame 143
+anchor client 0 processing frame 168
+anchor client 2 processing frame 117
+anchor client 1 processing frame 194
+anchor client 3 processing frame 144
+anchor client 0 processing frame 169
+anchor client 2 processing frame 118
+anchor client 1 processing frame 195
+anchor client 3 processing frame 145
+anchor client 0 processing frame 170
+anchor client 2 processing frame 119
+anchor client 1 processing frame 196
+anchor client 3 processing frame 146
+anchor client 0 processing frame 171
+anchor client 2 processing frame 120
+anchor client 1 processing frame 197
+anchor client 3 processing frame 147
+anchor client 0 processing frame 172
+anchor client 2 processing frame 121
+anchor client 1 processing frame 198
+anchor client 3 processing frame 148
+anchor client 0 processing frame 173
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 5/16 at [1.29229943 0.66502575 0.00582528]
+move direction speed [ 0.11301406 -0.52965934 -0.84064785] 0.2
+computed line speeds [ 0.15545962 -0.02919891  0.12242575 -0.00154203]
+send commands {"aim_speed": 0.15545961666741714}
+send commands {"aim_speed": -0.029198914344076954}
+send commands {"aim_speed": 0.12242575014989754}
+send commands {"aim_speed": -0.0015420337905176495}
+anchor client 2 processing frame 122
+anchor client 1 processing frame 199
+anchor client 3 processing frame 149
+anchor client 0 processing frame 174
+move direction speed [ 0.11399823 -0.53427182 -0.83759061] 0.2
+computed line speeds [ 0.15818819 -0.0258636   0.12536067  0.00130007]
+send commands {"aim_speed": 0.15818818914105748}
+send commands {"aim_speed": -0.02586359989755671}
+send commands {"aim_speed": 0.12536067423210717}
+send commands {"aim_speed": 0.0013000666561300278}
+anchor client 2 processing frame 123
+anchor client 1 processing frame 200
+anchor client 3 processing frame 150
+anchor client 0 processing frame 175
+move direction speed [ 0.115146   -0.53965103 -0.83397732] 0.2
+computed line speeds [ 0.16069782 -0.02268702  0.12821328  0.00402654]
+anchor client 2 processing frame 124
+send commands {"aim_speed": 0.16069782008860667}
+send commands {"aim_speed": -0.022687020815464365}
+send commands {"aim_speed": 0.12821328411163435}
+send commands {"aim_speed": 0.004026538233857124}
+anchor client 1 processing frame 201
+anchor client 3 processing frame 151
+anchor client 0 processing frame 176
+move direction speed [ 0.11652072 -0.54609389 -0.82958085] 0.2
+computed line speeds [ 0.16300506 -0.0197487   0.13099762  0.00659017]
+send commands {"aim_speed": 0.16300505841373525}
+send commands {"aim_speed": -0.019748700915458883}
+send commands {"aim_speed": 0.13099761939597165}
+send commands {"aim_speed": 0.006590165809551962}
+anchor client 2 processing frame 125
+anchor client 1 processing frame 202
+anchor client 3 processing frame 152
+anchor client 0 processing frame 177
+move direction speed [ 0.11823091 -0.55410901 -0.82400525] 0.2
+computed line speeds [ 0.16512197 -0.0171822   0.13373489  0.0089113 ]
+send commands {"aim_speed": 0.16512197170341913}
+send commands {"aim_speed": -0.017182202361521348}
+send commands {"aim_speed": 0.13373489006832173}
+send commands {"aim_speed": 0.008911301176061315}
+anchor client 2 processing frame 126
+anchor client 1 processing frame 203
+anchor client 3 processing frame 153
+anchor client 0 processing frame 178
+move direction speed [ 0.12048617 -0.56467864 -0.81646868] 0.2
+computed line speeds [ 0.16705167 -0.01524305  0.13646166  0.0108368 ]
+anchor client 2 processing frame 127
+send commands {"aim_speed": 0.16705167415177335}
+send commands {"aim_speed": -0.015243046670608607}
+send commands {"aim_speed": 0.13646165834017765}
+send commands {"aim_speed": 0.010836799279070775}
+anchor client 1 processing frame 204
+anchor client 3 processing frame 154
+anchor client 0 processing frame 179
+move direction speed [ 0.12377773 -0.58010511 -0.80508207] 0.2
+computed line speeds [ 0.16877087 -0.01453068  0.13925467  0.01200547]
+send commands {"aim_speed": 0.16877086768802219}
+send commands {"aim_speed": -0.014530675058418652}
+send commands {"aim_speed": 0.13925466760575667}
+send commands {"aim_speed": 0.012005467166130046}
+anchor client 2 processing frame 128
+anchor client 1 processing frame 205
+anchor client 3 processing frame 155
+anchor client 0 processing frame 180
+move direction speed [ 0.12978182 -0.60824427 -0.78306806] 0.2
+computed line speeds [ 0.17011785 -0.01711949  0.14233986  0.01115929]
+send commands {"aim_speed": 0.170117851761721}
+send commands {"aim_speed": -0.01711949002888069}
+send commands {"aim_speed": 0.14233985900027335}
+send commands {"aim_speed": 0.01115929231722923}
+anchor client 2 processing frame 129
+anchor client 1 processing frame 206
+anchor client 3 processing frame 156
+anchor client 0 processing frame 181
+Gantry pose updated to: Pos(1.29,0.67,0.01), Hpr(0.00,0.00,0.00)
+Tightening all lines
+anchor client 2 processing frame 130
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 1 processing frame 207
+anchor client 3 processing frame 157
+anchor client 0 processing frame 182
+wait for tension speeds=[ 0.17006357 -0.01711958  0.14233349  0.01115925] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 131
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 1 processing frame 208
+anchor client 3 processing frame 158
+anchor client 0 processing frame 183
+wait for tension speeds=[0.03486425 0.         0.03431262 0.        ] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 132
+anchor client 1 processing frame 209
+anchor client 3 processing frame 159
+anchor client 0 processing frame 184
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 2 processing frame 133
+anchor client 1 processing frame 210
+anchor client 3 processing frame 160
+anchor client 0 processing frame 185
+anchor client 2 processing frame 134
+anchor client 1 processing frame 211
+anchor client 3 processing frame 161
+anchor client 0 processing frame 186
+anchor client 2 processing frame 135
+anchor client 1 processing frame 212
+anchor client 3 processing frame 162
+anchor client 0 processing frame 187
+anchor client 2 processing frame 136
+anchor client 1 processing frame 213
+anchor client 3 processing frame 163
+anchor client 0 processing frame 188
+anchor client 2 processing frame 137
+anchor client 1 processing frame 214
+anchor client 3 processing frame 164
+anchor client 0 processing frame 189
+anchor client 2 processing frame 138
+anchor client 1 processing frame 215
+anchor client 3 processing frame 165
+anchor client 0 processing frame 190
+anchor client 2 processing frame 139
+anchor client 1 processing frame 216
+anchor client 3 processing frame 166
+anchor client 0 processing frame 191
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 6/16 at [1.02025536 0.33230248 0.29289753]
+move direction speed [-0.53734709 -0.70446145  0.46367249] 0.2
+computed line speeds [ 0.06213166 -0.12443383 -0.07163068 -0.19597918]
+send commands {"aim_speed": 0.062131659838653874}
+send commands {"aim_speed": -0.12443382779404111}
+send commands {"aim_speed": -0.07163068205382572}
+send commands {"aim_speed": -0.1959791763157792}
+anchor client 2 processing frame 140
+anchor client 1 processing frame 217
+anchor client 3 processing frame 167
+anchor client 0 processing frame 192
+move direction speed [-0.53232896 -0.69788269  0.47915094] 0.2
+computed line speeds [ 0.06402417 -0.12259235 -0.06935665 -0.19567418]
+send commands {"aim_speed": 0.0640241738864944}
+send commands {"aim_speed": -0.12259235085116416}
+send commands {"aim_speed": -0.06935665038559335}
+send commands {"aim_speed": -0.1956741806585267}
+anchor client 2 processing frame 141
+anchor client 1 processing frame 218
+anchor client 3 processing frame 168
+anchor client 0 processing frame 193
+move direction speed [-0.52555441 -0.68900125  0.49906897] 0.2
+computed line speeds [ 0.0648517  -0.12093428 -0.06737624 -0.19521081]
+anchor client 2 processing frame 142
+send commands {"aim_speed": 0.06485170265207252}
+send commands {"aim_speed": -0.12093428029214337}
+send commands {"aim_speed": -0.06737624104321327}
+send commands {"aim_speed": -0.19521081348728764}
+anchor client 1 processing frame 219
+anchor client 3 processing frame 169
+anchor client 0 processing frame 194
+move direction speed [-0.51534301 -0.67561412  0.52722589] 0.2
+computed line speeds [ 0.06374582 -0.11968172 -0.06598875 -0.19440338]
+send commands {"aim_speed": 0.06374581758440545}
+send commands {"aim_speed": -0.11968171665045091}
+send commands {"aim_speed": -0.06598875150524641}
+send commands {"aim_speed": -0.19440338068179308}
+anchor client 2 processing frame 143
+anchor client 1 processing frame 220
+anchor client 3 processing frame 170
+anchor client 0 processing frame 195
+move direction speed [-0.49562843 -0.64976833  0.57632766] 0.2
+computed line speeds [ 0.05764981 -0.11952265 -0.06617584 -0.19250351]
+send commands {"aim_speed": 0.05764981348387721}
+send commands {"aim_speed": -0.11952264855524852}
+send commands {"aim_speed": -0.06617584025145717}
+send commands {"aim_speed": -0.19250350641064173}
+anchor client 2 processing frame 144
+anchor client 1 processing frame 221
+anchor client 3 processing frame 171
+anchor client 0 processing frame 196
+Gantry pose updated to: Pos(1.02,0.33,0.29), Hpr(0.00,0.00,0.00)
+Tightening all lines
+anchor client 2 processing frame 145
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 1 processing frame 222
+anchor client 3 processing frame 172
+anchor client 0 processing frame 197
+wait for tension speeds=[ 0.05764341 -0.11952706 -0.06617722 -0.19251538] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 146
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 1 processing frame 223
+anchor client 3 processing frame 173
+anchor client 0 processing frame 198
+wait for tension speeds=[ 0.          0.          0.         -0.11155896] tight=[1. 1. 1. 1.]
+anchor client 2 processing frame 147
+anchor client 1 processing frame 224
+anchor client 3 processing frame 174
+anchor client 0 processing frame 199
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 2 processing frame 148
+anchor client 1 processing frame 225
+anchor client 3 processing frame 175
+anchor client 0 processing frame 200
+anchor client 2 processing frame 149
+anchor client 1 processing frame 226
+anchor client 3 processing frame 176
+anchor client 0 processing frame 201
+anchor client 2 processing frame 150
+anchor client 1 processing frame 227
+anchor client 3 processing frame 177
+anchor client 0 processing frame 202
+anchor client 2 processing frame 151
+anchor client 1 processing frame 228
+anchor client 3 processing frame 178
+anchor client 0 processing frame 203
+anchor client 2 processing frame 152
+anchor client 1 processing frame 229
+anchor client 3 processing frame 179
+anchor client 0 processing frame 204
+anchor client 2 processing frame 153
+anchor client 1 processing frame 230
+anchor client 3 processing frame 180
+anchor client 0 processing frame 205
+anchor client 2 processing frame 154
+anchor client 1 processing frame 231
+anchor client 3 processing frame 181
+Collected 12, 14, 14, 14 visual observations of gantry pose
+Moving to point 7/16 at [ 1.07662264 -0.34978779  0.90232867]
+move direction speed [ 0.05516757 -0.77998979  0.62335581] 0.2
+computed line speeds [ 0.02369618 -0.18653492  0.02944693 -0.13238098]
+anchor client 0 processing frame 206
+send commands {"aim_speed": 0.02369618340231394}
+send commands {"aim_speed": -0.18653491965860347}
+send commands {"aim_speed": 0.02944692980120145}
+send commands {"aim_speed": -0.13238097830758377}
+anchor client 2 processing frame 155
+anchor client 1 processing frame 232
+anchor client 3 processing frame 182
+move direction speed [ 0.05481925 -0.775065    0.62949908] 0.2
+computed line speeds [ 0.02783195 -0.18575351  0.0323761  -0.13016889]
+send commands {"aim_speed": 0.02783194522486987}
+send commands {"aim_speed": -0.18575351170009657}
+send commands {"aim_speed": 0.03237610076097397}
+send commands {"aim_speed": -0.13016889468441128}
+anchor client 0 processing frame 207
+anchor client 2 processing frame 156
+anchor client 1 processing frame 233
+anchor client 3 processing frame 183
+move direction speed [ 0.05442189 -0.76944687  0.63638807] 0.2
+computed line speeds [ 0.03174534 -0.18488573  0.03513742 -0.12785998]
+send commands {"aim_speed": 0.03174533645615085}
+send commands {"aim_speed": -0.18488572898927202}
+send commands {"aim_speed": 0.03513741505170209}
+send commands {"aim_speed": -0.12785997642730074}
+anchor client 0 processing frame 208
+anchor client 2 processing frame 157
+anchor client 1 processing frame 234
+anchor client 3 processing frame 184
+move direction speed [ 0.05395992 -0.76291537  0.64424255] 0.2
+computed line speeds [ 0.03537991 -0.18391249  0.03768794 -0.12544623]
+anchor client 0 processing frame 209
+send commands {"aim_speed": 0.03537991065003343}
+send commands {"aim_speed": -0.1839124939617669}
+send commands {"aim_speed": 0.03768793912006707}
+send commands {"aim_speed": -0.12544623450111025}
+anchor client 2 processing frame 158
+anchor client 1 processing frame 235
+anchor client 3 processing frame 185
+move direction speed [ 0.05340905 -0.75512687  0.65339948] 0.2
+computed line speeds [ 0.03865235 -0.18280572  0.03996243 -0.12291642]
+send commands {"aim_speed": 0.038652352527704714}
+send commands {"aim_speed": -0.1828057197560149}
+send commands {"aim_speed": 0.039962433026202504}
+send commands {"aim_speed": -0.12291642198965747}
+anchor client 0 processing frame 210
+anchor client 2 processing frame 159
+anchor client 1 processing frame 236
+anchor client 3 processing frame 186
+move direction speed [ 0.05272819 -0.74550049  0.66441611] 0.2
+computed line speeds [ 0.04142707 -0.18152026  0.04185267 -0.12025276]
+send commands {"aim_speed": 0.04142706759195214}
+send commands {"aim_speed": -0.1815202570674046}
+send commands {"aim_speed": 0.04185267491354594}
+send commands {"aim_speed": -0.12025276203468493}
+anchor client 0 processing frame 211
+anchor client 2 processing frame 160
+anchor client 1 processing frame 237
+anchor client 3 processing frame 187
+move direction speed [ 0.05183946 -0.73293506  0.67832062] 0.2
+computed line speeds [ 0.043453   -0.17997359  0.04315614 -0.11742239]
+anchor client 0 processing frame 212
+send commands {"aim_speed": 0.04345299673074621}
+send commands {"aim_speed": -0.1799735874692283}
+send commands {"aim_speed": 0.04315614449855332}
+send commands {"aim_speed": -0.11742239050158432}
+anchor client 2 processing frame 161
+anchor client 1 processing frame 238
+anchor client 3 processing frame 188
+move direction speed [ 0.05056567 -0.71492556  0.69736974] 0.2
+computed line speeds [ 0.04416728 -0.17798094  0.04341673 -0.11434903]
+send commands {"aim_speed": 0.044167275695371266}
+send commands {"aim_speed": -0.17798094056489067}
+send commands {"aim_speed": 0.04341672991525236}
+send commands {"aim_speed": -0.11434903218645331}
+anchor client 0 processing frame 213
+anchor client 2 processing frame 162
+anchor client 1 processing frame 239
+anchor client 3 processing frame 189
+move direction speed [ 0.04833755 -0.68342306  0.72842049] 0.2
+computed line speeds [ 0.04178507 -0.17493802  0.04118657 -0.11076891]
+send commands {"aim_speed": 0.041785068663134695}
+send commands {"aim_speed": -0.17493801571716272}
+send commands {"aim_speed": 0.04118657361836142}
+send commands {"aim_speed": -0.11076890975117593}
+anchor client 0 processing frame 214
+anchor client 2 processing frame 163
+anchor client 1 processing frame 240
+anchor client 3 processing frame 190
+Gantry pose updated to: Pos(1.08,-0.35,0.90), Hpr(0.00,0.00,0.00)
+Tightening all lines
+anchor client 0 processing frame 215
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 164
+anchor client 1 processing frame 241
+anchor client 3 processing frame 191
+wait for tension speeds=[ 0.04416344 -0.17799061  0.04341614 -0.11435316] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 216
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 2 processing frame 165
+anchor client 1 processing frame 242
+anchor client 3 processing frame 192
+wait for tension speeds=[ 0.04178162 -0.17494735  0.04118604 -0.11077278] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 217
+anchor client 2 processing frame 166
+anchor client 1 processing frame 243
+anchor client 3 processing frame 193
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 218
+anchor client 2 processing frame 167
+anchor client 1 processing frame 244
+anchor client 3 processing frame 194
+anchor client 0 processing frame 219
+anchor client 2 processing frame 168
+anchor client 1 processing frame 245
+anchor client 3 processing frame 195
+anchor client 0 processing frame 220
+anchor client 2 processing frame 169
+anchor client 1 processing frame 246
+anchor client 3 processing frame 196
+anchor client 0 processing frame 221
+anchor client 2 processing frame 170
+anchor client 1 processing frame 247
+anchor client 3 processing frame 197
+anchor client 0 processing frame 222
+anchor client 2 processing frame 171
+anchor client 1 processing frame 248
+anchor client 3 processing frame 198
+anchor client 0 processing frame 223
+anchor client 2 processing frame 172
+anchor client 1 processing frame 249
+anchor client 3 processing frame 199
+anchor client 0 processing frame 224
+anchor client 2 processing frame 173
+anchor client 1 processing frame 250
+anchor client 3 processing frame 200
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 8/16 at [ 1.18278349 -0.7184042   1.08389345]
+move direction speed [ 0.24425913 -0.88222477  0.40251326] 0.2
+computed line speeds [ 0.08902328 -0.1903341   0.11734168 -0.07414484]
+send commands {"aim_speed": 0.08902327958983225}
+send commands {"aim_speed": -0.19033409706976467}
+send commands {"aim_speed": 0.11734167679173169}
+send commands {"aim_speed": -0.07414483522274473}
+anchor client 0 processing frame 225
+anchor client 2 processing frame 174
+anchor client 1 processing frame 251
+anchor client 3 processing frame 201
+move direction speed [ 0.24192329 -0.8737881   0.42186192] 0.2
+computed line speeds [ 0.09049964 -0.1901697   0.11738763 -0.07124334]
+send commands {"aim_speed": 0.09049964463857751}
+send commands {"aim_speed": -0.190169700128358}
+send commands {"aim_speed": 0.11738762599407693}
+send commands {"aim_speed": -0.07124333756738643}
+anchor client 0 processing frame 226
+anchor client 2 processing frame 175
+anchor client 1 processing frame 252
+anchor client 3 processing frame 202
+move direction speed [ 0.2385283  -0.86152592  0.44819342] 0.2
+computed line speeds [ 0.09084755 -0.19001989  0.11641656 -0.06854066]
+anchor client 0 processing frame 227
+send commands {"aim_speed": 0.09084754650650062}
+send commands {"aim_speed": -0.19001988742257403}
+send commands {"aim_speed": 0.1164165617521089}
+send commands {"aim_speed": -0.06854066326820174}
+anchor client 2 processing frame 176
+anchor client 1 processing frame 253
+anchor client 3 processing frame 203
+move direction speed [ 0.23261777 -0.84017803  0.4898876 ] 0.2
+computed line speeds [ 0.0887395  -0.18981425  0.11315442 -0.06634193]
+send commands {"aim_speed": 0.08873949761419642}
+send commands {"aim_speed": -0.1898142485810057}
+send commands {"aim_speed": 0.11315442224116623}
+send commands {"aim_speed": -0.06634192508029102}
+anchor client 0 processing frame 228
+anchor client 2 processing frame 177
+anchor client 1 processing frame 254
+anchor client 3 processing frame 204
+move direction speed [ 0.21437631 -0.77429283  0.59541028] 0.2
+computed line speeds [ 0.07562888 -0.18825369  0.09930183 -0.0661957 ]
+send commands {"aim_speed": 0.07562887560921627}
+send commands {"aim_speed": -0.1882536930010934}
+send commands {"aim_speed": 0.09930182678286137}
+send commands {"aim_speed": -0.06619569931135949}
+anchor client 0 processing frame 229
+anchor client 2 processing frame 178
+anchor client 1 processing frame 255
+anchor client 3 processing frame 205
+Gantry pose updated to: Pos(1.18,-0.72,1.08), Hpr(0.00,0.00,0.00)
+Tightening all lines
+anchor client 0 processing frame 230
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 179
+anchor client 1 processing frame 256
+anchor client 3 processing frame 206
+wait for tension speeds=[ 0.08872358 -0.1898251   0.11315036 -0.06634331] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 231
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 2 processing frame 180
+anchor client 1 processing frame 257
+anchor client 3 processing frame 207
+wait for tension speeds=[ 0.07561718 -0.18826442  0.0992987  -0.06619707] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 232
+anchor client 2 processing frame 181
+anchor client 1 processing frame 258
+anchor client 3 processing frame 208
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 233
+anchor client 2 processing frame 182
+anchor client 1 processing frame 259
+anchor client 3 processing frame 209
+anchor client 0 processing frame 234
+anchor client 2 processing frame 183
+anchor client 1 processing frame 260
+anchor client 3 processing frame 210
+anchor client 0 processing frame 235
+anchor client 2 processing frame 184
+anchor client 1 processing frame 261
+anchor client 3 processing frame 211
+anchor client 0 processing frame 236
+anchor client 2 processing frame 185
+anchor client 1 processing frame 262
+anchor client 3 processing frame 212
+anchor client 0 processing frame 237
+anchor client 2 processing frame 186
+anchor client 1 processing frame 263
+anchor client 3 processing frame 213
+anchor client 0 processing frame 238
+anchor client 2 processing frame 187
+anchor client 1 processing frame 264
+anchor client 3 processing frame 214
+anchor client 0 processing frame 239
+anchor client 2 processing frame 188
+anchor client 1 processing frame 265
+anchor client 3 processing frame 215
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 9/16 at [ 0.70966752 -0.63411152  1.06621577]
+move direction speed [-0.95873476  0.23629443 -0.15809047] 0.2
+computed line speeds [ 0.04367884  0.15205697 -0.16071444 -0.13348069]
+send commands {"aim_speed": 0.0436788388152447}
+send commands {"aim_speed": 0.1520569726373493}
+send commands {"aim_speed": -0.1607144440751025}
+send commands {"aim_speed": -0.13348069289651043}
+anchor client 0 processing frame 240
+anchor client 2 processing frame 189
+anchor client 1 processing frame 266
+anchor client 3 processing frame 216
+move direction speed [-0.96155352  0.23698915 -0.13874787] 0.2
+computed line speeds [ 0.04723957  0.15356061 -0.16085462 -0.13256135]
+send commands {"aim_speed": 0.0472395690440548}
+send commands {"aim_speed": 0.15356060938530725}
+send commands {"aim_speed": -0.16085462307689902}
+send commands {"aim_speed": -0.13256134516499607}
+anchor client 0 processing frame 241
+anchor client 2 processing frame 190
+anchor client 1 processing frame 267
+anchor client 3 processing frame 217
+move direction speed [-0.96475123  0.23777728 -0.11276982] 0.2
+computed line speeds [ 0.05030534  0.15439946 -0.16142328 -0.13207408]
+anchor client 0 processing frame 242
+send commands {"aim_speed": 0.050305337289211494}
+send commands {"aim_speed": 0.1543994554145005}
+send commands {"aim_speed": -0.16142327839997606}
+send commands {"aim_speed": -0.13207408041055224}
+anchor client 2 processing frame 191
+anchor client 1 processing frame 268
+anchor client 3 processing frame 218
+move direction speed [-0.96831931  0.23865668 -0.07348941] 0.2
+computed line speeds [ 0.05243123  0.15404    -0.16281348 -0.13247719]
+send commands {"aim_speed": 0.052431226918946194}
+send commands {"aim_speed": 0.1540400028855533}
+send commands {"aim_speed": -0.16281347568674676}
+send commands {"aim_speed": -0.1324771861624896}
+anchor client 0 processing frame 243
+anchor client 2 processing frame 192
+anchor client 1 processing frame 269
+anchor client 3 processing frame 219
+move direction speed [-0.9709297   0.23930005  0.00556825] 0.2
+computed line speeds [ 0.05177809  0.15007241 -0.16633481 -0.13538904]
+send commands {"aim_speed": 0.0517780876323215}
+send commands {"aim_speed": 0.150072406018392}
+send commands {"aim_speed": -0.16633481311883536}
+send commands {"aim_speed": -0.13538904498989268}
+anchor client 0 processing frame 244
+anchor client 2 processing frame 193
+anchor client 1 processing frame 270
+anchor client 3 processing frame 220
+Gantry pose updated to: Pos(0.71,-0.63,1.07), Hpr(0.00,0.00,0.00)
+Tightening all lines
+anchor client 0 processing frame 245
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 194
+anchor client 1 processing frame 271
+anchor client 3 processing frame 221
+wait for tension speeds=[ 0.05242555  0.15403284 -0.16282183 -0.13248266] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 246
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 2 processing frame 195
+anchor client 1 processing frame 272
+anchor client 3 processing frame 222
+wait for tension speeds=[ 0.05177254  0.1500656  -0.16634352 -0.1353948 ] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 247
+anchor client 2 processing frame 196
+anchor client 1 processing frame 273
+anchor client 3 processing frame 223
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 248
+anchor client 2 processing frame 197
+anchor client 1 processing frame 274
+anchor client 3 processing frame 224
+anchor client 0 processing frame 249
+anchor client 2 processing frame 198
+anchor client 1 processing frame 275
+anchor client 3 processing frame 225
+anchor client 0 processing frame 250
+anchor client 2 processing frame 199
+anchor client 1 processing frame 276
+anchor client 3 processing frame 226
+anchor client 0 processing frame 251
+anchor client 2 processing frame 200
+anchor client 1 processing frame 277
+anchor client 3 processing frame 227
+anchor client 0 processing frame 252
+anchor client 2 processing frame 201
+anchor client 1 processing frame 278
+anchor client 3 processing frame 228
+anchor client 0 processing frame 253
+anchor client 2 processing frame 202
+anchor client 1 processing frame 279
+anchor client 3 processing frame 229
+anchor client 0 processing frame 254
+anchor client 2 processing frame 203
+anchor client 1 processing frame 280
+anchor client 3 processing frame 230
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 10/16 at [ 0.43837742 -0.17096879  0.99598802]
+move direction speed [-0.49630085  0.84650665 -0.19264464] 0.2
+computed line speeds [-0.07425502  0.18868123 -0.17035834  0.01725608]
+send commands {"aim_speed": -0.07425501718967276}
+send commands {"aim_speed": 0.18868122797950182}
+send commands {"aim_speed": -0.17035833820989765}
+send commands {"aim_speed": 0.017256083264088673}
+anchor client 0 processing frame 255
+anchor client 2 processing frame 204
+anchor client 1 processing frame 281
+anchor client 3 processing frame 231
+move direction speed [-0.49793393  0.8492921  -0.17539878] 0.2
+computed line speeds [-0.07143852  0.18844326 -0.17082507  0.02086011]
+send commands {"aim_speed": -0.07143852000880457}
+send commands {"aim_speed": 0.18844326083231255}
+send commands {"aim_speed": -0.17082506969240363}
+send commands {"aim_speed": 0.020860112200251635}
+anchor client 0 processing frame 256
+anchor client 2 processing frame 205
+anchor client 1 processing frame 282
+anchor client 3 processing frame 232
+move direction speed [-0.49982518  0.85251787 -0.15293156] 0.2
+computed line speeds [-0.06896059  0.1878813  -0.1717295   0.02409225]
+anchor client 0 processing frame 257
+send commands {"aim_speed": -0.06896059317960912}
+send commands {"aim_speed": 0.1878813007131539}
+send commands {"aim_speed": -0.1717295043222684}
+send commands {"aim_speed": 0.024092245160925785}
+anchor client 2 processing frame 206
+anchor client 1 processing frame 283
+anchor client 3 processing frame 233
+move direction speed [-0.50206552  0.85633907 -0.12088676] 0.2
+computed line speeds [-0.06716782  0.18670505 -0.17341164  0.02665906]
+send commands {"aim_speed": -0.06716782004904154}
+send commands {"aim_speed": 0.18670505044356211}
+send commands {"aim_speed": -0.17341163647281022}
+send commands {"aim_speed": 0.02665906474162938}
+anchor client 0 processing frame 258
+anchor client 2 processing frame 207
+anchor client 1 processing frame 284
+anchor client 3 processing frame 234
+move direction speed [-0.50468141  0.86080081 -0.06571639] 0.2
+computed line speeds [-0.06709285  0.18390121 -0.17681483  0.02764205]
+send commands {"aim_speed": -0.06709285038958956}
+send commands {"aim_speed": 0.1839012086871481}
+send commands {"aim_speed": -0.17681482954985484}
+send commands {"aim_speed": 0.027642049425322668}
+anchor client 0 processing frame 259
+anchor client 2 processing frame 208
+anchor client 1 processing frame 285
+anchor client 3 processing frame 235
+Gantry pose updated to: Pos(0.44,-0.17,1.00), Hpr(0.00,0.00,0.00)
+Tightening all lines
+anchor client 0 processing frame 260
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 209
+anchor client 1 processing frame 286
+anchor client 3 processing frame 236
+wait for tension speeds=[-0.06717702  0.18669437 -0.17342104  0.02665884] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 261
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 2 processing frame 210
+anchor client 1 processing frame 287
+anchor client 3 processing frame 237
+wait for tension speeds=[-0.067102    0.18389089 -0.17682458  0.02764181] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 262
+anchor client 2 processing frame 211
+anchor client 1 processing frame 288
+anchor client 3 processing frame 238
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 263
+anchor client 2 processing frame 212
+anchor client 1 processing frame 289
+anchor client 3 processing frame 239
+anchor client 0 processing frame 264
+anchor client 2 processing frame 213
+anchor client 1 processing frame 290
+anchor client 3 processing frame 240
+anchor client 0 processing frame 265
+anchor client 2 processing frame 214
+anchor client 1 processing frame 291
+anchor client 3 processing frame 241
+anchor client 0 processing frame 266
+anchor client 2 processing frame 215
+anchor client 1 processing frame 292
+anchor client 3 processing frame 242
+anchor client 0 processing frame 267
+anchor client 2 processing frame 216
+anchor client 1 processing frame 293
+anchor client 3 processing frame 243
+anchor client 0 processing frame 268
+anchor client 2 processing frame 217
+anchor client 1 processing frame 294
+anchor client 3 processing frame 244
+anchor client 0 processing frame 269
+anchor client 2 processing frame 218
+anchor client 1 processing frame 295
+anchor client 3 processing frame 245
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 11/16 at [-0.45811352  0.15509012  0.87577944]
+move direction speed [-0.9130759   0.36078577 -0.1900685 ] 0.2
+computed line speeds [ 0.06651842  0.17673992 -0.16034686 -0.07791052]
+send commands {"aim_speed": 0.06651841994545915}
+send commands {"aim_speed": 0.17673991682239087}
+send commands {"aim_speed": -0.16034685829321482}
+send commands {"aim_speed": -0.07791051706857388}
+anchor client 0 processing frame 270
+anchor client 2 processing frame 219
+anchor client 1 processing frame 296
+anchor client 3 processing frame 246
+move direction speed [-0.91457237  0.36137707 -0.18155987] 0.2
+computed line speeds [ 0.07045617  0.17749612 -0.15956164 -0.07457914]
+send commands {"aim_speed": 0.07045616643869757}
+send commands {"aim_speed": 0.17749612229003287}
+send commands {"aim_speed": -0.1595616382338534}
+send commands {"aim_speed": -0.07457914326742987}
+anchor client 0 processing frame 271
+anchor client 2 processing frame 220
+anchor client 1 processing frame 297
+anchor client 3 processing frame 247
+move direction speed [-0.9161783   0.36201162 -0.17194449] 0.2
+computed line speeds [ 0.07421516  0.17813472 -0.15883041 -0.07124741]
+anchor client 0 processing frame 272
+send commands {"aim_speed": 0.0742151550135155}
+send commands {"aim_speed": 0.17813471626763633}
+send commands {"aim_speed": -0.15883040634716927}
+send commands {"aim_speed": -0.07124741175670479}
+anchor client 2 processing frame 221
+anchor client 1 processing frame 298
+anchor client 3 processing frame 248
+move direction speed [-0.91791182  0.36269659 -0.16090082] 0.2
+computed line speeds [ 0.07777355  0.17864455 -0.15818443 -0.067945  ]
+send commands {"aim_speed": 0.07777354863410402}
+send commands {"aim_speed": 0.17864455032828275}
+send commands {"aim_speed": -0.15818443452621977}
+send commands {"aim_speed": -0.06794500469974452}
+anchor client 0 processing frame 273
+anchor client 2 processing frame 222
+anchor client 1 processing frame 299
+anchor client 3 processing frame 249
+move direction speed [-0.91979517  0.36344077 -0.14794475] 0.2
+computed line speeds [ 0.08109937  0.17900408 -0.15767105 -0.06471557]
+send commands {"aim_speed": 0.0810993652885621}
+send commands {"aim_speed": 0.17900408274808477}
+send commands {"aim_speed": -0.15767105154429295}
+send commands {"aim_speed": -0.06471556700033076}
+anchor client 0 processing frame 274
+anchor client 2 processing frame 223
+anchor client 1 processing frame 300
+anchor client 3 processing frame 250
+move direction speed [-0.92185454  0.36425449 -0.13229844] 0.2
+computed line speeds [ 0.08414122  0.17917276 -0.15736573 -0.06162737]
+anchor client 0 processing frame 275
+send commands {"aim_speed": 0.08414121648943684}
+send commands {"aim_speed": 0.17917276185481512}
+send commands {"aim_speed": -0.15736572864063447}
+send commands {"aim_speed": -0.06162737209884206}
+anchor client 2 processing frame 224
+anchor client 1 processing frame 301
+anchor client 3 processing frame 251
+move direction speed [-0.92411561  0.36514791 -0.11259367] 0.2
+computed line speeds [ 0.08680692  0.17907058 -0.15739835 -0.05879717]
+send commands {"aim_speed": 0.08680691972941545}
+send commands {"aim_speed": 0.17907058168433387}
+send commands {"aim_speed": -0.1573983475396874}
+send commands {"aim_speed": -0.05879717048715438}
+anchor client 0 processing frame 276
+anchor client 2 processing frame 225
+anchor client 1 processing frame 302
+anchor client 3 processing frame 252
+move direction speed [-0.92657782  0.36612081 -0.08607605] 0.2
+computed line speeds [ 0.08890453  0.17852018 -0.15802033 -0.05645332]
+send commands {"aim_speed": 0.08890453029524181}
+send commands {"aim_speed": 0.17852018462752284}
+send commands {"aim_speed": -0.15802032923809062}
+send commands {"aim_speed": -0.056453320642334326}
+anchor client 0 processing frame 277
+anchor client 2 processing frame 226
+anchor client 1 processing frame 303
+anchor client 3 processing frame 253
+move direction speed [-0.92905388  0.36709918 -0.04579388] 0.2
+computed line speeds [ 0.08992628  0.17702796 -0.15982637 -0.05515457]
+anchor client 0 processing frame 278
+send commands {"aim_speed": 0.08992628063700714}
+send commands {"aim_speed": 0.17702795667026727}
+send commands {"aim_speed": -0.15982637309928105}
+send commands {"aim_speed": -0.055154566675818195}
+anchor client 2 processing frame 227
+anchor client 1 processing frame 304
+anchor client 3 processing frame 254
+move direction speed [-0.9294077   0.36723899  0.03656303] 0.2
+computed line speeds [ 0.0876459   0.17229254 -0.16495155 -0.05707937]
+send commands {"aim_speed": 0.08764589722954774}
+send commands {"aim_speed": 0.1722925357656706}
+send commands {"aim_speed": -0.16495154675948243}
+send commands {"aim_speed": -0.05707936660438051}
+anchor client 0 processing frame 279
+anchor client 2 processing frame 228
+anchor client 1 processing frame 305
+anchor client 3 processing frame 255
+Gantry pose updated to: Pos(-0.46,0.16,0.88), Hpr(0.00,0.00,0.00)
+Tightening all lines
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 0 processing frame 280
+anchor client 2 processing frame 229
+anchor client 1 processing frame 306
+anchor client 3 processing frame 256
+wait for tension speeds=[ 0.08762941  0.17228325 -0.1649599  -0.05708038] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 281
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 2 processing frame 230
+anchor client 1 processing frame 307
+anchor client 3 processing frame 257
+wait for tension speeds=[ 0.08762941  0.17228325 -0.1649599  -0.05708038] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 282
+anchor client 2 processing frame 231
+anchor client 1 processing frame 308
+anchor client 3 processing frame 258
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 283
+anchor client 2 processing frame 232
+anchor client 1 processing frame 309
+anchor client 3 processing frame 259
+anchor client 0 processing frame 284
+anchor client 2 processing frame 233
+anchor client 1 processing frame 310
+anchor client 3 processing frame 260
+anchor client 0 processing frame 285
+anchor client 2 processing frame 234
+anchor client 1 processing frame 311
+anchor client 3 processing frame 261
+anchor client 0 processing frame 286
+anchor client 2 processing frame 235
+anchor client 1 processing frame 312
+anchor client 3 processing frame 262
+anchor client 0 processing frame 287
+anchor client 2 processing frame 236
+anchor client 1 processing frame 313
+anchor client 3 processing frame 263
+anchor client 0 processing frame 288
+anchor client 2 processing frame 237
+anchor client 1 processing frame 314
+anchor client 3 processing frame 264
+anchor client 0 processing frame 289
+anchor client 2 processing frame 238
+anchor client 1 processing frame 315
+anchor client 3 processing frame 265
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 12/16 at [-0.25355296 -0.1398412   0.28212047]
+move direction speed [ 0.28229945 -0.40237181 -0.87086391] 0.2
+computed line speeds [ 0.07141604 -0.02679966  0.16341478  0.04608775]
+anchor client 0 processing frame 290
+send commands {"aim_speed": 0.0714160379467117}
+send commands {"aim_speed": -0.026799664849471938}
+send commands {"aim_speed": 0.1634147758593123}
+send commands {"aim_speed": 0.04608774758180978}
+anchor client 2 processing frame 239
+anchor client 1 processing frame 316
+anchor client 3 processing frame 266
+move direction speed [ 0.28541673 -0.40681497 -0.86777812] 0.2
+computed line speeds [ 0.07524275 -0.02362102  0.16582232  0.05034007]
+send commands {"aim_speed": 0.07524274918046281}
+send commands {"aim_speed": -0.023621016425634522}
+send commands {"aim_speed": 0.16582231816426596}
+send commands {"aim_speed": 0.05034007413564989}
+anchor client 0 processing frame 291
+anchor client 2 processing frame 240
+anchor client 1 processing frame 317
+anchor client 3 processing frame 267
+move direction speed [ 0.28919838 -0.4122051  -0.86397411] 0.2
+computed line speeds [ 0.07893387 -0.02068109  0.16821526  0.05439426]
+send commands {"aim_speed": 0.0789338706690561}
+send commands {"aim_speed": -0.020681085316532233}
+send commands {"aim_speed": 0.16821525805151705}
+send commands {"aim_speed": 0.05439426200436692}
+anchor client 0 processing frame 292
+anchor client 2 processing frame 241
+anchor client 1 processing frame 318
+anchor client 3 processing frame 268
+move direction speed [ 0.29399144 -0.41903683 -0.85905597] 0.2
+computed line speeds [ 0.08246794 -0.01812529  0.17066072  0.05818617]
+anchor client 0 processing frame 293
+send commands {"aim_speed": 0.08246793577135314}
+send commands {"aim_speed": -0.01812529259630935}
+send commands {"aim_speed": 0.17066071988281717}
+send commands {"aim_speed": 0.05818616595307091}
+anchor client 2 processing frame 242
+anchor client 1 processing frame 319
+anchor client 3 processing frame 269
+move direction speed [ 0.30050542 -0.42832143 -0.85219554] 0.2
+computed line speeds [ 0.08580094 -0.01624803  0.17328642  0.06158759]
+send commands {"aim_speed": 0.08580094397717275}
+send commands {"aim_speed": -0.016248029638886052}
+send commands {"aim_speed": 0.17328642189901267}
+send commands {"aim_speed": 0.06158759243864864}
+anchor client 0 processing frame 294
+anchor client 2 processing frame 243
+anchor client 1 processing frame 320
+anchor client 3 processing frame 270
+move direction speed [ 0.31057798 -0.44267823 -0.84117614] 0.2
+computed line speeds [ 0.0888133  -0.01581211  0.1764082   0.06426375]
+send commands {"aim_speed": 0.0888133010774581}
+send commands {"aim_speed": -0.015812105191631787}
+send commands {"aim_speed": 0.17640820484293762}
+send commands {"aim_speed": 0.06426375408932472}
+anchor client 0 processing frame 295
+anchor client 2 processing frame 244
+anchor client 1 processing frame 321
+anchor client 3 processing frame 271
+move direction speed [ 0.33216575 -0.47344807 -0.81578971] 0.2
+computed line speeds [ 0.09092821 -0.02016916  0.18133266  0.06470137]
+anchor client 0 processing frame 296
+send commands {"aim_speed": 0.09092820996501416}
+send commands {"aim_speed": -0.02016915525879348}
+send commands {"aim_speed": 0.18133266470847964}
+send commands {"aim_speed": 0.06470137146335553}
+anchor client 2 processing frame 245
+anchor client 1 processing frame 322
+anchor client 3 processing frame 272
+Gantry pose updated to: Pos(-0.25,-0.14,0.28), Hpr(0.00,0.00,0.00)
+Tightening all lines
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 0 processing frame 297
+anchor client 2 processing frame 246
+anchor client 1 processing frame 323
+anchor client 3 processing frame 273
+wait for tension speeds=[ 0.08879593 -0.01581218  0.17639859  0.06426247] tight=[1. 1. 1. 1.]
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 0 processing frame 298
+anchor client 2 processing frame 247
+anchor client 1 processing frame 324
+anchor client 3 processing frame 274
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 299
+anchor client 2 processing frame 248
+anchor client 1 processing frame 325
+anchor client 3 processing frame 275
+anchor client 0 processing frame 300
+anchor client 2 processing frame 249
+anchor client 1 processing frame 326
+anchor client 3 processing frame 276
+anchor client 0 processing frame 301
+anchor client 2 processing frame 250
+anchor client 1 processing frame 327
+anchor client 3 processing frame 277
+anchor client 0 processing frame 302
+anchor client 2 processing frame 251
+anchor client 1 processing frame 328
+anchor client 3 processing frame 278
+anchor client 0 processing frame 303
+anchor client 2 processing frame 252
+anchor client 1 processing frame 329
+anchor client 3 processing frame 279
+anchor client 0 processing frame 304
+anchor client 2 processing frame 253
+anchor client 1 processing frame 330
+anchor client 3 processing frame 280
+anchor client 0 processing frame 305
+anchor client 2 processing frame 254
+anchor client 1 processing frame 331
+anchor client 3 processing frame 281
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 13/16 at [-0.84363309  0.09106471  0.20343412]
+move direction speed [-0.91454335  0.36041373 -0.18360939] 0.2
+computed line speeds [ 0.09118121  0.18014306 -0.13021331 -0.0414859 ]
+send commands {"aim_speed": 0.09118121182543248}
+send commands {"aim_speed": 0.18014306291370552}
+send commands {"aim_speed": -0.13021330903389838}
+send commands {"aim_speed": -0.04148589818651516}
+anchor client 0 processing frame 306
+anchor client 2 processing frame 255
+anchor client 1 processing frame 332
+anchor client 3 processing frame 282
+move direction speed [-0.91690237  0.3613434  -0.1694727 ] 0.2
+computed line speeds [ 0.09343635  0.18003257 -0.12931694 -0.03845466]
+send commands {"aim_speed": 0.09343635375733328}
+send commands {"aim_speed": 0.18003256871913642}
+send commands {"aim_speed": -0.12931694242479175}
+send commands {"aim_speed": -0.03845466160187527}
+anchor client 0 processing frame 307
+anchor client 2 processing frame 256
+anchor client 1 processing frame 333
+anchor client 3 processing frame 283
+move direction speed [-0.91954651  0.36238543 -0.15202306] 0.2
+computed line speeds [ 0.09534129  0.1796682  -0.12877986 -0.03575681]
+anchor client 0 processing frame 308
+send commands {"aim_speed": 0.0953412851924238}
+send commands {"aim_speed": 0.17966819866323114}
+send commands {"aim_speed": -0.12877985866589015}
+send commands {"aim_speed": -0.03575680588549446}
+anchor client 2 processing frame 257
+anchor client 1 processing frame 334
+anchor client 3 processing frame 284
+move direction speed [-0.9225502   0.36356916 -0.12930044] 0.2
+computed line speeds [ 0.09673291  0.17889986 -0.12885328 -0.03362133]
+send commands {"aim_speed": 0.09673291075645096}
+send commands {"aim_speed": 0.17889986452672346}
+send commands {"aim_speed": -0.12885327676331926}
+send commands {"aim_speed": -0.03362133491148711}
+anchor client 0 processing frame 309
+anchor client 2 processing frame 258
+anchor client 1 processing frame 335
+anchor client 3 processing frame 285
+move direction speed [-0.92598158  0.36492144 -0.09690434] 0.2
+computed line speeds [ 0.09723017  0.17736566 -0.13008322 -0.03255232]
+send commands {"aim_speed": 0.09723016723689604}
+send commands {"aim_speed": 0.1773656601646323}
+send commands {"aim_speed": -0.1300832155698668}
+send commands {"aim_speed": -0.03255231857674268}
+anchor client 0 processing frame 310
+anchor client 2 processing frame 259
+anchor client 1 processing frame 336
+anchor client 3 processing frame 286
+move direction speed [-0.92957297  0.36633677 -0.04112734] 0.2
+computed line speeds [ 0.09558309  0.17383305 -0.13408147 -0.03409116]
+anchor client 0 processing frame 311
+send commands {"aim_speed": 0.0955830878031918}
+send commands {"aim_speed": 0.17383304703533753}
+send commands {"aim_speed": -0.1340814705080966}
+send commands {"aim_speed": -0.03409116419965663}
+anchor client 2 processing frame 260
+anchor client 1 processing frame 337
+anchor client 3 processing frame 287
+Gantry pose updated to: Pos(-0.84,0.09,0.20), Hpr(0.00,0.00,0.00)
+Tightening all lines
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 0 processing frame 312
+anchor client 2 processing frame 261
+anchor client 1 processing frame 338
+anchor client 3 processing frame 288
+wait for tension speeds=[ 0.09720839  0.17735577 -0.13008843 -0.03255265] tight=[1. 1. 1. 1.]
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 0 processing frame 313
+anchor client 2 processing frame 262
+anchor client 1 processing frame 339
+anchor client 3 processing frame 289
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 314
+anchor client 2 processing frame 263
+anchor client 1 processing frame 340
+anchor client 3 processing frame 290
+anchor client 0 processing frame 315
+anchor client 2 processing frame 264
+anchor client 1 processing frame 341
+anchor client 3 processing frame 291
+anchor client 0 processing frame 316
+anchor client 2 processing frame 265
+anchor client 1 processing frame 342
+anchor client 3 processing frame 292
+anchor client 0 processing frame 317
+anchor client 2 processing frame 266
+anchor client 1 processing frame 343
+anchor client 3 processing frame 293
+anchor client 0 processing frame 318
+anchor client 2 processing frame 267
+anchor client 1 processing frame 344
+anchor client 3 processing frame 294
+anchor client 0 processing frame 319
+anchor client 2 processing frame 268
+anchor client 1 processing frame 345
+anchor client 3 processing frame 295
+anchor client 0 processing frame 320
+anchor client 2 processing frame 269
+anchor client 1 processing frame 346
+anchor client 3 processing frame 296
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 14/16 at [-1.0859344   0.60564613  0.68166318]
+move direction speed [-0.38204592  0.72023169  0.57905719] 0.2
+computed line speeds [-0.07363437  0.08238214 -0.19874499  0.00071345]
+send commands {"aim_speed": -0.07363436538256529}
+send commands {"aim_speed": 0.08238214060458837}
+send commands {"aim_speed": -0.19874498501373328}
+send commands {"aim_speed": 0.0007134489274225331}
+anchor client 0 processing frame 321
+anchor client 2 processing frame 270
+anchor client 1 processing frame 347
+anchor client 3 processing frame 297
+move direction speed [-0.37926905  0.71499674  0.58731137] 0.2
+computed line speeds [-0.0706451   0.08398802 -0.19866642  0.00432271]
+send commands {"aim_speed": -0.07064510076078712}
+send commands {"aim_speed": 0.08398801690884383}
+send commands {"aim_speed": -0.19866642146830138}
+send commands {"aim_speed": 0.00432271187671418}
+anchor client 0 processing frame 322
+anchor client 2 processing frame 271
+anchor client 1 processing frame 348
+anchor client 3 processing frame 298
+move direction speed [-0.37598109  0.70879829  0.59686112] 0.2
+computed line speeds [-0.06768194  0.08526532 -0.19855253  0.00769572]
+anchor client 0 processing frame 323
+send commands {"aim_speed": -0.0676819357336047}
+send commands {"aim_speed": 0.08526532361644534}
+send commands {"aim_speed": -0.1985525308422682}
+send commands {"aim_speed": 0.007695720356913682}
+anchor client 2 processing frame 272
+anchor client 1 processing frame 349
+anchor client 3 processing frame 299
+move direction speed [-0.37196227  0.70122203  0.60822013] 0.2
+computed line speeds [-0.06478528  0.08610418 -0.19838229  0.0107337 ]
+send commands {"aim_speed": -0.06478528363441782}
+send commands {"aim_speed": 0.08610418430837363}
+send commands {"aim_speed": -0.19838229346464242}
+send commands {"aim_speed": 0.010733702020040425}
+anchor client 0 processing frame 324
+anchor client 2 processing frame 273
+anchor client 1 processing frame 350
+anchor client 3 processing frame 300
+move direction speed [-0.36681451  0.6915175   0.62229467] 0.2
+computed line speeds [-0.06202513  0.08630458 -0.19811495  0.01326464]
+send commands {"aim_speed": -0.06202512653889691}
+send commands {"aim_speed": 0.08630457516847656}
+send commands {"aim_speed": -0.19811494989768885}
+send commands {"aim_speed": 0.013264640380583614}
+anchor client 0 processing frame 325
+anchor client 2 processing frame 274
+anchor client 1 processing frame 351
+anchor client 3 processing frame 301
+move direction speed [-0.35969869  0.67810277  0.64093173] 0.2
+computed line speeds [-0.0595417   0.08544371 -0.19765794  0.01493675]
+anchor client 0 processing frame 326
+send commands {"aim_speed": -0.059541696803757205}
+send commands {"aim_speed": 0.08544370991386252}
+send commands {"aim_speed": -0.19765793929017583}
+send commands {"aim_speed": 0.014936745746144453}
+anchor client 2 processing frame 275
+anchor client 1 processing frame 352
+anchor client 3 processing frame 302
+move direction speed [-0.34830907  0.6566311   0.66896666] 0.2
+computed line speeds [-0.05769692  0.08236193 -0.19673256  0.01480919]
+send commands {"aim_speed": -0.05769691623950379}
+send commands {"aim_speed": 0.08236192777039264}
+send commands {"aim_speed": -0.19673255903774844}
+send commands {"aim_speed": 0.01480918805712328}
+anchor client 0 processing frame 327
+anchor client 2 processing frame 276
+anchor client 1 processing frame 353
+anchor client 3 processing frame 303
+move direction speed [-0.32079454  0.60476081  0.72894117] 0.2
+computed line speeds [-0.05815678  0.0711852  -0.19366545  0.00824071]
+send commands {"aim_speed": -0.05815678439913263}
+send commands {"aim_speed": 0.07118520365434833}
+send commands {"aim_speed": -0.19366545477626218}
+send commands {"aim_speed": 0.008240712655213756}
+anchor client 0 processing frame 328
+anchor client 2 processing frame 277
+anchor client 1 processing frame 354
+anchor client 3 processing frame 304
+Gantry pose updated to: Pos(-1.09,0.61,0.68), Hpr(0.00,0.00,0.00)
+Tightening all lines
+anchor client 0 processing frame 329
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 2 processing frame 278
+anchor client 1 processing frame 355
+anchor client 3 processing frame 305
+wait for tension speeds=[-0.05770444  0.08235977 -0.19674432  0.01480912] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 330
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 2 processing frame 279
+anchor client 1 processing frame 356
+anchor client 3 processing frame 306
+wait for tension speeds=[-0.05816437  0.0711836  -0.19367682  0.00824069] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 331
+anchor client 2 processing frame 280
+anchor client 1 processing frame 357
+anchor client 3 processing frame 307
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 332
+anchor client 2 processing frame 281
+anchor client 1 processing frame 358
+anchor client 3 processing frame 308
+anchor client 0 processing frame 333
+anchor client 2 processing frame 282
+anchor client 1 processing frame 359
+anchor client 3 processing frame 309
+anchor client 0 processing frame 334
+anchor client 2 processing frame 283
+anchor client 1 processing frame 360
+anchor client 3 processing frame 310
+anchor client 0 processing frame 335
+anchor client 2 processing frame 284
+anchor client 1 processing frame 361
+anchor client 3 processing frame 311
+anchor client 0 processing frame 336
+anchor client 2 processing frame 285
+anchor client 1 processing frame 362
+anchor client 3 processing frame 312
+anchor client 0 processing frame 337
+anchor client 2 processing frame 286
+anchor client 1 processing frame 363
+anchor client 3 processing frame 313
+anchor client 0 processing frame 338
+anchor client 2 processing frame 287
+anchor client 1 processing frame 364
+anchor client 3 processing frame 314
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 15/16 at [-1.35133402 -0.29546101  0.82954291]
+move direction speed [-0.26790261 -0.96169789  0.0580118 ] 0.2
+computed line speeds [ 0.12559321 -0.08374383  0.0952676  -0.18203085]
+send commands {"aim_speed": 0.12559321437714388}
+send commands {"aim_speed": -0.08374382762342236}
+send commands {"aim_speed": 0.09526759861223333}
+send commands {"aim_speed": -0.1820308495625902}
+anchor client 0 processing frame 339
+anchor client 2 processing frame 288
+anchor client 1 processing frame 365
+anchor client 3 processing frame 315
+move direction speed [-0.26774629 -0.96113676  0.06729073] 0.2
+computed line speeds [ 0.12739051 -0.0811501   0.09902455 -0.1818706 ]
+send commands {"aim_speed": 0.12739050929992324}
+send commands {"aim_speed": -0.0811500979329427}
+send commands {"aim_speed": 0.09902455135702137}
+send commands {"aim_speed": -0.18187060185326498}
+anchor client 0 processing frame 340
+anchor client 2 processing frame 289
+anchor client 1 processing frame 366
+anchor client 3 processing frame 316
+move direction speed [-0.26754167 -0.96040222  0.07777546] 0.2
+computed line speeds [ 0.12900624 -0.07856212  0.10246336 -0.18177676]
+anchor client 0 processing frame 341
+send commands {"aim_speed": 0.12900623791802523}
+send commands {"aim_speed": -0.07856211982996975}
+send commands {"aim_speed": 0.10246336330020611}
+send commands {"aim_speed": -0.1817767565360402}
+anchor client 2 processing frame 290
+anchor client 1 processing frame 367
+anchor client 3 processing frame 317
+move direction speed [-0.26726975 -0.95942612  0.08982431] 0.2
+computed line speeds [ 0.13041405 -0.07600122  0.10555245 -0.18177716]
+send commands {"aim_speed": 0.13041404593717587}
+send commands {"aim_speed": -0.07600121511630675}
+send commands {"aim_speed": 0.10555244828881083}
+send commands {"aim_speed": -0.18177715874418698}
+anchor client 0 processing frame 342
+anchor client 2 processing frame 291
+anchor client 1 processing frame 368
+anchor client 3 processing frame 318
+move direction speed [-0.2668998  -0.95809808  0.10398348] 0.2
+computed line speeds [ 0.13157039 -0.07349927  0.1082398  -0.18191363]
+send commands {"aim_speed": 0.1315703898925733}
+send commands {"aim_speed": -0.07349927290895941}
+send commands {"aim_speed": 0.10823980374543485}
+send commands {"aim_speed": -0.18191362628182794}
+anchor client 0 processing frame 343
+anchor client 2 processing frame 292
+anchor client 1 processing frame 369
+anchor client 3 processing frame 319
+move direction speed [-0.26637801 -0.95622502  0.12114648] 0.2
+computed line speeds [ 0.13239904 -0.07110727  0.11043382 -0.18225252]
+anchor client 0 processing frame 344
+send commands {"aim_speed": 0.13239903733285452}
+send commands {"aim_speed": -0.07110727155213681}
+send commands {"aim_speed": 0.11043382472400953}
+send commands {"aim_speed": -0.1822525152088934}
+anchor client 2 processing frame 293
+anchor client 1 processing frame 370
+anchor client 3 processing frame 320
+move direction speed [-0.26559934 -0.95342977  0.14292886] 0.2
+computed line speeds [ 0.13275354 -0.06891494  0.1119573  -0.18290793]
+send commands {"aim_speed": 0.13275354044020027}
+send commands {"aim_speed": -0.06891494414629129}
+send commands {"aim_speed": 0.11195729667473664}
+send commands {"aim_speed": -0.18290792915760612}
+anchor client 0 processing frame 345
+anchor client 2 processing frame 294
+anchor client 1 processing frame 371
+anchor client 3 processing frame 321
+move direction speed [-0.26432065 -0.94883965  0.17273654] 0.2
+computed line speeds [ 0.13230617 -0.06710557  0.11241232 -0.18410236]
+send commands {"aim_speed": 0.13230617288744106}
+send commands {"aim_speed": -0.06710556620462249}
+send commands {"aim_speed": 0.11241231598267731}
+send commands {"aim_speed": -0.18410235651523}
+anchor client 0 processing frame 346
+anchor client 2 processing frame 295
+anchor client 1 processing frame 372
+anchor client 3 processing frame 322
+move direction speed [-0.26178082 -0.93972232  0.21998354] 0.2
+computed line speeds [ 0.13008635 -0.06616485  0.11062429 -0.18637644]
+anchor client 0 processing frame 347
+send commands {"aim_speed": 0.13008635216670505}
+send commands {"aim_speed": -0.06616484754090557}
+send commands {"aim_speed": 0.11062429102478255}
+send commands {"aim_speed": -0.18637644145135823}
+anchor client 2 processing frame 296
+anchor client 1 processing frame 373
+anchor client 3 processing frame 323
+move direction speed [-0.25287761 -0.90776222  0.33469488] 0.2
+computed line speeds [ 0.12028095 -0.0684611   0.09968441 -0.19181609]
+send commands {"aim_speed": 0.12028094753373253}
+send commands {"aim_speed": -0.06846110245471593}
+send commands {"aim_speed": 0.09968441181138221}
+send commands {"aim_speed": -0.1918160918269587}
+anchor client 0 processing frame 348
+anchor client 2 processing frame 297
+anchor client 1 processing frame 374
+anchor client 3 processing frame 324
+Gantry pose updated to: Pos(-1.35,-0.30,0.83), Hpr(0.00,0.00,0.00)
+Tightening all lines
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 0 processing frame 349
+anchor client 2 processing frame 298
+anchor client 1 processing frame 375
+anchor client 3 processing frame 325
+wait for tension speeds=[ 0.12024537 -0.06846257  0.09968137 -0.19182732] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 350
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 2 processing frame 299
+anchor client 1 processing frame 376
+anchor client 3 processing frame 326
+wait for tension speeds=[ 0.12024537 -0.06846257  0.09968137 -0.19182732] tight=[1. 1. 1. 1.]
+anchor client 0 processing frame 351
+anchor client 2 processing frame 300
+anchor client 1 processing frame 377
+anchor client 3 processing frame 327
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 352
+anchor client 2 processing frame 301
+anchor client 1 processing frame 378
+anchor client 3 processing frame 328
+anchor client 0 processing frame 353
+anchor client 2 processing frame 302
+anchor client 1 processing frame 379
+anchor client 3 processing frame 329
+anchor client 0 processing frame 354
+anchor client 2 processing frame 303
+anchor client 1 processing frame 380
+anchor client 3 processing frame 330
+anchor client 0 processing frame 355
+anchor client 2 processing frame 304
+anchor client 1 processing frame 381
+anchor client 3 processing frame 331
+anchor client 0 processing frame 356
+anchor client 2 processing frame 305
+anchor client 1 processing frame 382
+anchor client 3 processing frame 332
+anchor client 0 processing frame 357
+anchor client 2 processing frame 306
+anchor client 1 processing frame 383
+anchor client 3 processing frame 333
+anchor client 0 processing frame 358
+anchor client 2 processing frame 307
+anchor client 1 processing frame 384
+anchor client 3 processing frame 334
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Moving to point 16/16 at [-1.51007888 -0.22533316  0.4870126 ]
+move direction speed [-0.35574415  0.24191079 -0.90273211] 0.2
+computed line speeds [0.08338022 0.14091764 0.01687508 0.10151155]
+anchor client 0 processing frame 359
+send commands {"aim_speed": 0.08338021575462307}
+send commands {"aim_speed": 0.14091763588702655}
+send commands {"aim_speed": 0.01687507642793573}
+send commands {"aim_speed": 0.10151154667684015}
+anchor client 2 processing frame 308
+anchor client 1 processing frame 385
+anchor client 3 processing frame 335
+move direction speed [-0.36389474  0.2474533  -0.89796853] 0.2
+computed line speeds [0.08678844 0.14441094 0.02039754 0.10578526]
+send commands {"aim_speed": 0.0867884397237706}
+send commands {"aim_speed": 0.1444109354309191}
+send commands {"aim_speed": 0.02039754329736443}
+send commands {"aim_speed": 0.10578526122355303}
+anchor client 0 processing frame 360
+anchor client 2 processing frame 309
+anchor client 1 processing frame 386
+anchor client 3 processing frame 336
+move direction speed [-0.37645961  0.25599759 -0.89036138] 0.2
+computed line speeds [0.09026974 0.14854281 0.02283564 0.10964849]
+send commands {"aim_speed": 0.09026973886011191}
+send commands {"aim_speed": 0.14854281402651637}
+send commands {"aim_speed": 0.022835635059640147}
+send commands {"aim_speed": 0.10964848820844608}
+anchor client 0 processing frame 361
+anchor client 2 processing frame 310
+anchor client 1 processing frame 387
+anchor client 3 processing frame 337
+move direction speed [-0.40300368  0.2740479  -0.87320432] 0.2
+computed line speeds [0.09411312 0.15490934 0.02186309 0.11262352]
+anchor client 0 processing frame 362
+send commands {"aim_speed": 0.09411312191639709}
+send commands {"aim_speed": 0.15490934135614154}
+send commands {"aim_speed": 0.02186309454216495}
+send commands {"aim_speed": 0.11262352498790218}
+anchor client 2 processing frame 311
+anchor client 1 processing frame 388
+anchor client 3 processing frame 338
+Gantry pose updated to: Pos(-1.51,-0.23,0.49), Hpr(0.00,0.00,0.00)
+Tightening all lines
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"aim_speed": 0}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+send commands {"tighten": null}
+anchor client 0 processing frame 363
+anchor client 2 processing frame 312
+anchor client 1 processing frame 389
+anchor client 3 processing frame 339
+wait for tension speeds=[0.09024938 0.14853586 0.02283548 0.10964481] tight=[1. 1. 1. 1.]
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor server sets speed to 0 because finished tight
+anchor client 0 processing frame 364
+anchor client 2 processing frame 313
+anchor client 1 processing frame 390
+anchor client 3 processing frame 340
+wait for tension speeds=[0. 0. 0. 0.] tight=[1. 1. 1. 1.]
+Collecting observations of gantry
+anchor client 0 processing frame 365
+anchor client 2 processing frame 314
+anchor client 1 processing frame 391
+anchor client 3 processing frame 341
+anchor client 0 processing frame 366
+anchor client 2 processing frame 315
+anchor client 1 processing frame 392
+anchor client 3 processing frame 342
+anchor client 0 processing frame 367
+anchor client 2 processing frame 316
+anchor client 1 processing frame 393
+anchor client 3 processing frame 343
+anchor client 0 processing frame 368
+anchor client 2 processing frame 317
+anchor client 1 processing frame 394
+anchor client 3 processing frame 344
+anchor client 0 processing frame 369
+anchor client 2 processing frame 318
+anchor client 1 processing frame 395
+anchor client 3 processing frame 345
+anchor client 0 processing frame 370
+anchor client 2 processing frame 319
+anchor client 1 processing frame 396
+anchor client 3 processing frame 346
+anchor client 0 processing frame 371
+anchor client 2 processing frame 320
+anchor client 1 processing frame 397
+anchor client 3 processing frame 347
+Collected 14, 14, 14, 14 visual observations of gantry pose
+Completed data collection. Performing optimization of calibration parameters.
+[(np.float64(-0.21116578679238826), np.float64(0.18883421320761176)), (np.float64(-0.19450151781878414), np.float64(0.20549848218121589)), (np.float64(-0.982862044221616), np.float64(-0.5828620442216159)), (-8, 8), (-8, 8), (1, 6), (-400, 400), (25.1, 55), (8, 8)]
+[(np.float64(-0.20729895807995619), np.float64(0.19270104192004384)), (np.float64(-0.1853553598311773), np.float64(0.21464464016882273)), (np.float64(-2.554360324188729), np.float64(-2.154360324188729)), (-8, 8), (-8, 8), (1, 6), (-400, 400), (25.1, 55), (8, 8)]
+[(np.float64(-0.21228971128150345), np.float64(0.18771028871849657)), (np.float64(-0.20537135093249076), np.float64(0.19462864906750926)), (np.float64(0.5879176002482236), np.float64(0.9879176002482237)), (-8, 8), (-8, 8), (1, 6), (-400, 400), (25.1, 55), (8, 8)]
+[(np.float64(-0.20745427975488506), np.float64(0.19254572024511496)), (np.float64(-0.21376927991771563), np.float64(0.1862307200822844)), (np.float64(2.1534200010026088), np.float64(2.553420001002609)), (-8, 8), (-8, 8), (1, 6), (-400, 400), (25.1, 55), (8, 8)]
+anchor client 0 processing frame 372
+anchor client 2 processing frame 321
+anchor client 1 processing frame 398
+anchor client 3 processing frame 348
+anchor client 0 processing frame 373
+send commands {"report_raw": false}
+send commands {"report_raw": false}
+send commands {"report_raw": false}
+send commands {"report_raw": false}
+Service 123.cranebot-anchor-service.test_1._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Removed
+Service 123.cranebot-anchor-service.test_0._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Removed
+Service 123.cranebot-anchor-service.test_2._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Removed
+Service 123.cranebot-anchor-service.test_3._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Removed
+Service 123.cranebot-gripper-service.test._http._tcp.local. of type _http._tcp.local. state changed: ServiceStateChange.Removed
+Removing service 123.cranebot-anchor-service.test_1. from dict_keys(['123.cranebot-anchor-service.test_1.', '123.cranebot-anchor-service.test_0.', '123.cranebot-anchor-service.test_2.', '123.cranebot-anchor-service.test_3.', '123.cranebot-gripper-service.test.'])
+
+Wait for client shutdown
+Removing service 123.cranebot-anchor-service.test_0. from dict_keys(['123.cranebot-anchor-service.test_1.', '123.cranebot-anchor-service.test_0.', '123.cranebot-anchor-service.test_2.', '123.cranebot-anchor-service.test_3.', '123.cranebot-gripper-service.test.'])
+
+Wait for client shutdown
+Removing service 123.cranebot-anchor-service.test_2. from dict_keys(['123.cranebot-anchor-service.test_1.', '123.cranebot-anchor-service.test_0.', '123.cranebot-anchor-service.test_2.', '123.cranebot-anchor-service.test_3.', '123.cranebot-gripper-service.test.'])
+
+Wait for client shutdown
+Removing service 123.cranebot-anchor-service.test_3. from dict_keys(['123.cranebot-anchor-service.test_1.', '123.cranebot-anchor-service.test_0.', '123.cranebot-anchor-service.test_2.', '123.cranebot-anchor-service.test_3.', '123.cranebot-gripper-service.test.'])
+
+Wait for client shutdown
+Removing service 123.cranebot-gripper-service.test. from dict_keys(['123.cranebot-anchor-service.test_1.', '123.cranebot-anchor-service.test_0.', '123.cranebot-anchor-service.test_2.', '123.cranebot-anchor-service.test_3.', '123.cranebot-gripper-service.test.'])
+
+Wait for client shutdown
+Client ('127.0.0.1', 56046) disconnected: Connection lost
+Closing connection for client: ('127.0.0.1', 56046)
+Client ('127.0.0.1', 38354) disconnected: Connection lost
+Closing connection for client: ('127.0.0.1', 38354)
+Client ('127.0.0.1', 41140) disconnected: Connection lost
+Closing connection for client: ('127.0.0.1', 41140)
+Client ('127.0.0.1', 53806) disconnected: [Errno 104] Connection reset by peer
+Closing connection for client: ('127.0.0.1', 53806)
+Finished client shutdown
+Finished client shutdown
+Finished client shutdown
+Finished client shutdown
+Finished client shutdown
+Anchor server is configured to use mock camera on localhost:8889
+Anchor server is configured to use mock camera on localhost:8888
+Anchor server is configured to use mock camera on localhost:8890
+Anchor server is configured to use mock camera on localhost:8891
+Connected to ws://127.0.0.1:8766.
+receive loop
+Connected to ws://127.0.0.1:8765.
+receive loop
+Connected to ws://127.0.0.1:8767.
+receive loop
+Connected to ws://127.0.0.1:8768.
+receive loop
+Connected to ws://127.0.0.1:8764.
+receive loop
+Connecting to tcp://127.0.0.1:8889
+Connecting to tcp://127.0.0.1:8888
+Connecting to tcp://127.0.0.1:8890
+Connecting to tcp://127.0.0.1:8891
+Client ('127.0.0.1', 36890) connected to mock camera on camera 1
+Observer shutdown
+stop
+stop
+stop
+stop
+stop
+Stopping RPiCamMultiViewServer...
+Server stop initiated.
+Closing connection for client: ('127.0.0.1', 36890)
+RPiCamVidMock server task cancelled.
+RPiCamVidMock server stopped.
+video connection successful < cv2.VideoCapture 0x7efccea17130>
+no video stream available
+no video stream available
+no video stream available
+Connection to 127.0.0.1 closed.
+Client closing connection
+Connection to 127.0.0.1 closed.
+Client closing connection
+Connection to 127.0.0.1 closed.
+Client closing connection
+Connection to 127.0.0.1 closed.
+Client closing connection
+Connection to 127.0.0.1 closed.
+Client closing connection
+.
+
+=============================== warnings summary ===============================
+integration_test.py::TestSystemIntegration::test_auto_calibration
+integration_test.py::TestSystemIntegration::test_auto_calibration
+integration_test.py::TestSystemIntegration::test_auto_calibration
+integration_test.py::TestSystemIntegration::test_auto_calibration
+integration_test.py::TestSystemIntegration::test_auto_calibration
+integration_test.py::TestSystemIntegration::test_auto_calibration
+integration_test.py::TestSystemIntegration::test_auto_calibration
+integration_test.py::TestSystemIntegration::test_auto_calibration
+  /usr/lib/python3.12/multiprocessing/popen_fork.py:66: DeprecationWarning: This process (pid=109436) is multi-threaded, use of fork() may lead to deadlocks in the child.
+    self.pid = os.fork()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================== 1 passed, 8 warnings in 410.22s (0:06:50) ===================
+anchor client 1 processing frame 1

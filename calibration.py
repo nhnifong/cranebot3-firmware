@@ -160,12 +160,6 @@ def calibrate_from_stream():
     ce.calibrate()
     ce.save()
 
-if __name__ == "__main__":
-    # calibrate_from_stream()
-    # collect_images_stream()
-    calibrate_from_files()
-
-
 
 ### the following functions pertain to calibration of the entire assembled robot, not just one camera ###
 
@@ -173,82 +167,90 @@ def calibration_cost_fn(params, observations, spools):
     """Return the mean squared difference between line lengths calculated from encoders, and from visual observation
 
     params - a pose and zero angle, full diameter, and full length for each anchor
-        (3 rot, 3 pos, za, full_d, full_len) * 4.
+        (3 rot, 3 pos, za) * 4.
         the zero angle refers to the encoder position in revolutions where the amount of unspooled line would be zero.
-        full diameter refers to the wrapping diameter of the spool when it is full in millimeters
-        full length refers to the length of line in meters that is wrapped on the spool when the gantry is reeled in all the way
 
     observations - a list with one entry per sample position.
         At each sample position, the gantry was still, and the lines were tight.
         Each sample position will have
         - encoder angles for each of the four anchor spool motors
         - four lists of visual observations, one for each of the four anchor cameras. Each visual observation contains
-          - the pose of an observed gantry aruco marker in the camera's 3d coordinate system. (the output of cv2.solvePnP)
+        - the pose of an observed gantry aruco marker in the camera's 3d coordinate system. (the output of cv2.solvePnP)
 
     spools - a list of four SpiralCalculators to relate zero angles to line lengths.
     """
 
-    # extract parameters
-    params = params.reshape((4,9))
-    anchor_poses = []
-    for i, ap in enumerate(params):
-        anchor_poses.append(ap[:6].reshape((2,3)))
-        spools[i].set_zero_angle(ap[6])
-        spools[i].recalc_k_params(ap[7], ap[8])
+    # Extract parameters and update spools in a vectorized manner
+    params = params.reshape((4, 7))
+    anchor_poses = [p[:6].reshape((2, 3)) for p in params]
+    zero_angles = params[:, 6]
 
-    # obtain the position of the anchor grommet relative to the global origin
-    anchor_grommets = np.array([compose_poses([      
-        pose,                             # the pose of the anchor relative to a chosen origin.
-        model_constants.anchor_grommet,   # the pose of the grommet relative to the anchor
-    ])[1] for pose in anchor_poses])
+    for i in range(4):
+        spools[i].set_zero_angle(zero_angles[i])
+
+    # calculation of anchor grommet positions
+    anchor_grommets = np.array([compose_poses([p, model_constants.anchor_grommet])[1] for p in anchor_poses])
 
     all_errs = []
     for sample in observations:
+        # Calculation of encoder-based lengths
+        encoder_based_lengths = np.array([spools[i].get_unspooled_length(sample['encoders'][i]) for i in range(4)])
 
-        # Calculate the line lengths from zero angles and encoder positions at this sample point.
-        encoder_based_lengths = [
-            spools[i].get_unspooled_length(sample['encoders'][i])
-            for i in range(4)]
-
-        # Every visual observation implies a particular gantry position. calculate the line lengths based
-        # on this position and the anchor poses in the parameters being optimized.
+        # Consolidate visual observations and gantry pose calculations
+        gantry_poses = []
         for anchor_num, obs_list in enumerate(sample['visuals']):
             for pose in obs_list:
-
-                # obtain the position of the gantry and anchor in the same coodinate space.
-                # Specifically the position of the keyring where the four lines meet, which is also the model's origin.
+                # Calculate global gantry pose from each visual observation
                 global_gantry_pose = compose_poses([
-                    anchor_poses[anchor_num],               # the pose of the anchor relative to a chosen origin.
-                    model_constants.anchor_camera,          # the pose of the camera relative to the anchor
-                    pose,                                   # the pose of the aruco marker relative to the camera
-                    model_constants.gantry_aruco_front_inv, # the pose of the gantry relative to the aruco marker
+                    anchor_poses[anchor_num],
+                    model_constants.anchor_camera,
+                    pose,
+                    model_constants.gantry_aruco_front_inv,
                 ])
+                gantry_poses.append(global_gantry_pose[1])
 
-                # calculate the distance between the two line endpoints
-                distance = np.linalg.norm(anchor_grommets[anchor_num] - global_gantry_pose[1])
+        if gantry_poses:
+            gantry_poses = np.array(gantry_poses)
 
-                # calculate the error between the visually implied length and the encoder implied length
-                # append it to the list of errors
-                all_errs.append(distance - encoder_based_lengths[anchor_num])
+            # Distance calculation for all gantry poses against all 4 anchors
+            visual_based_lengths = np.linalg.norm(
+                anchor_grommets.reshape(1, 4, 3) - gantry_poses.reshape(gantry_poses.shape[0], 1, 3),
+                axis=-1)
 
-    # return the mean squared error
-    return np.mean(np.array(all_errs)**2)
+            # error calculation
+            errors_per_sample = (visual_based_lengths - encoder_based_lengths.reshape(1, 4)).flatten()
+            all_errs.append(errors_per_sample)
+
+    if all_errs:
+        # Concatenate all errors from all samples and calculate mean squared error
+        all_errs_array = np.concatenate(all_errs)
+        return np.mean(all_errs_array**2)
+    else:
+        return 0.0 # Return 0 if there are no errors to calculate
 
 
-def find_cal_params(current_anchor_poses, observations):
+def find_cal_params(current_anchor_poses, observations, large_spool_index):
     spools = []
     initial_guess = []
     bounds = []
-    for apose in current_anchor_poses:
+    for i, apose in enumerate(current_anchor_poses):
+        # Determine the full diameter based on the index
+        full_diameter = 47.7 if i == large_spool_index else 27.0
+        full_length = 7.5
+
         # initialize a model of the spool to relate zero angle, encoder readinds, and line lengths
-        spools.append(SpiralCalculator(empty_diameter=25, full_diameter=27, full_length=7.5, gear_ratio=20/51, motor_orientation=-1))
+        spools.append(SpiralCalculator(
+            empty_diameter=25,
+            full_diameter=full_diameter,
+            full_length=full_length,
+            gear_ratio=20/51,
+            motor_orientation=-1
+        ))
 
         guess = [
             *apose[0], # rotation component
             *apose[1], # position component
             0,         # initial guess of zero angle
-            27,        # full diameter in millimeters
-            7.5,       # full length in meters
         ]
         initial_guess.append(guess)
 
@@ -260,9 +262,8 @@ def find_cal_params(current_anchor_poses, observations):
             (-8, 8), # y component of position
             ( 1, 6), # z component of position
             (-400, 400), # bounds on zero angle in revs.
-            (25.1, 55),  # bounds on full diameter in mm.
-            (4, 10),     # bounds on full length in meters
         ]
+        print(anchor_bounds)
         bounds.append(anchor_bounds)
 
     initial_guess =  np.array(initial_guess).flatten()
@@ -276,11 +277,14 @@ def find_cal_params(current_anchor_poses, observations):
         bounds=bounds,
         options={
             'disp': False,
+            'maxiter': 1000000,
         })
 
     try:
         assert result.success
-        return result.x.reshape((4, 3, 3))
+        # four poses with spool zero angle. (*rot, *pos, spool_za)
+        # rot is a rodrruigez vector. pos is a position.
+        return result.x.reshape((4, 7))
     except AssertionError:
         print(result)
         return
@@ -384,3 +388,14 @@ def order_points_for_low_travel(points):
     ordered_points = points[ordered_indices]
     
     return ordered_points, total_distance
+
+if __name__ == "__main__":
+    # calibrate_from_stream()
+    # collect_images_stream()
+    # calibrate_from_files()
+
+    import pickle
+    with open('tests/collected_cal_data.pickle', 'rb') as f:
+        ap, data = pickle.load(f)
+    result_params = find_cal_params(ap, data)
+    print(result_params)
