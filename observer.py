@@ -137,7 +137,7 @@ class AsyncObserver:
             if 'do_line_calibration' in updates:
                 await self.sendReferenceLengths(updates['do_line_calibration'])
             if 'tension_lines' in updates:
-                self.tension_lines()
+                asyncio.create_task(self.tension_lines())
             if 'jog_spool' in updates:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
@@ -220,6 +220,10 @@ class AsyncObserver:
             complete = np.all(tight) and abs(np.sum(speeds)) < 0.02
         return True
 
+    async def tension_and_wait(self):
+        print('Tightening all lines')
+        await self.tension_lines()
+        await self.wait_for_tension()
 
     async def sendReferenceLengths(self, lengths):
         if len(lengths) != 4:
@@ -296,9 +300,7 @@ class AsyncObserver:
         anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
 
         # reel in all lines until the switches indicate they are tight
-        print('Tightening all lines')
-        await self.tension_lines()
-        await self.wait_for_tension()
+        await self.tension_and_wait()
         cutoff = time.time()
         print('Collecting observations of gantry now that its still and lines are tight')
         await asyncio.sleep(6)
@@ -311,17 +313,17 @@ class AsyncObserver:
         print(f'Line lengths from coarse calibration ={lengths}')
         await self.sendReferenceLengths(lengths)
 
-        # Determine the bounding box of the work are
-        min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0)
-        max_x, max_y, _ = np.max(anchor_points, axis=0)
+        # Determine the bounding box of the work area
+        min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0) * 0.5
+        max_x, max_y, _ = np.max(anchor_points, axis=0) * 0.5
         floor_z = 0
-        max_gantry_z = min_anchor_z - 0.7
+        max_gantry_z = min_anchor_z
 
         # make a polygon of the exact work area so we can test if points are inside it
         contour = anchor_points[:,0:2].astype(np.float32)
 
         # generate some sample positions within the work area
-        n_points = 15
+        n_points = 20
         random_x = np.random.uniform(min_x, max_x, n_points*2)
         random_y = np.random.uniform(min_y, max_y, n_points*2)
         candidate_2d_points = np.column_stack((random_x, random_y))
@@ -343,6 +345,7 @@ class AsyncObserver:
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
         # not the poses in self.datastore.gantry_pos so we set a flag in the anchor clients that cause them to save that
         for client in self.anchors:
+            client.save_raw = True
             asyncio.create_task(client.send_commands({'report_raw': True}))
 
         print('Collect data at each position')
@@ -360,13 +363,8 @@ class AsyncObserver:
                 self.test_gantry_goal_callback(point)
 
             # reel in all lines until they are tight
-            print('Tightening all lines')
-            await self.tension_lines()
-            await self.wait_for_tension()
+            await self.tension_and_wait()
             cutoff = time.time()
-
-            # save current raw encoder angles
-            entry = {'encoders': [client.last_raw_encoder for client in self.anchors]}
 
             # collect several visual observations of the gantry from each camera
             print('Collecting observations of gantry')
@@ -376,25 +374,45 @@ class AsyncObserver:
             await asyncio.sleep(6)
 
             v = [client.raw_gant_poses for client in self.anchors]
-            assert(min([len(poses) for poses in v]) >= 3)
-            entry['visuals'] = v
-            print(f'Collected {len(v[0])}, {len(v[1])}, {len(v[2])}, {len(v[3])} visual observations of gantry pose')
-            data.append(entry)
+            # many positions are not visible to all four cameras,
+            # but to use this calibration point, the gantry must have been oberved at least three times in total.
+            if sum([len(poses) for poses in v]) >= 3:
+                # save current raw encoder angles and visual observations
+                entry = {
+                    'encoders': [client.last_raw_encoder for client in self.anchors],
+                    'visuals': v,
+                }
+                print(f'Collected {len(v[0])}, {len(v[1])}, {len(v[2])}, {len(v[3])} visual observations of gantry pose')
+                data.append(entry)
+
+                # save data after every collected point.
+                with open('collected_cal_data.pickle', 'wb') as f:
+                    f.write(pickle.dumps((anchor_poses, data)))
+            else:
+                print(f'Point {point} skipped because gantry could not be observed in that position')
+
+        assert(len(data) > 0)
 
         for client in self.anchors:
-            self.save_raw = False
+            client.save_raw = False
 
         print(f'Completed data collection. Performing optimization of calibration parameters.')
 
         # feed collected data to the optimization process in calibration.py
         with open('collected_cal_data.pickle', 'wb') as f:
             f.write(pickle.dumps((anchor_poses, data)))
-        result_params = find_cal_params(anchor_poses, data)
+
+        # send to pool? this takes too long to be done here.
+        # result_params = find_cal_params(anchor_poses, data)
+        async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data))
+        result_params = async_result.get(timeout=60)
+        print(f'obtained result from find_cal_params {result_params}')
 
         # Use the optimization output to update anchor poses and spool params
-        for i, client in enumerate(self.anchors):
-            pose = result_params[i][0:1]
-            self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
+        # for i, client in enumerate(self.anchors):
+        #     pose = result_params[i][0:5].reshape((2,3))
+        #     za = result_params[i][6]
+        #     self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
 
         # move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
 

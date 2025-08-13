@@ -27,6 +27,7 @@ class SpiralCalculator:
     def __init__(self, empty_diameter, full_diameter, full_length, gear_ratio, motor_orientation):
         self.empty_diameter = empty_diameter * 0.001 # millimeter to meters
         self.gear_ratio = gear_ratio
+        # a negative motor orientation means that negative speeds make the line shorter.
         self.motor_orientation = motor_orientation
         self.zero_angle = 0
 
