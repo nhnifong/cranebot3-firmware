@@ -205,13 +205,14 @@ class AsyncObserver:
     async def tension_lines(self):  
         """Request all anchors to reel in all lines until tight"""
         for client in self.anchors:
-            asyncio.create_task(client.send_commands({'tighten':None}))
+            asyncio.create_task(client.send_commands({'tighten': None}))
         # This function does not  wait for confirmation from every anchor, as it would just hold up the processing of the ob_q
         # this is similar to sending a manual move command. it can be overridden by any subsequent command.
         # thus, it should be done while paused.
 
     async def wait_for_tension(self):
-        # this function returns only once all anchors are reporting tight lines in their regular line record, and are not moving
+        """this function returns only once all anchors are reporting tight lines in their regular line record
+        """
         complete = False
         while not complete:
             await asyncio.sleep(0.1)
@@ -219,7 +220,7 @@ class AsyncObserver:
             speeds = np.array(records[:,2])
             tight = np.array(records[:,3])
             print(f'wait for tension speeds={speeds} tight={tight}')
-            complete = np.all(tight) and abs(np.sum(speeds)) < 0.02
+            complete = np.all(tight) and abs(np.sum(speeds)) < 0.01
         return True
 
     async def tension_and_wait(self):
