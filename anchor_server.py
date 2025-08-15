@@ -36,8 +36,8 @@ stream_command = """
   --listen -o tcp://0.0.0.0:8888
   --codec mjpeg
   --vflip --hflip
-  --buffer-count=4
-  --autofocus-mode continuous""".split()
+  --buffer-count={buffers}
+  --autofocus-mode continuous"""
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
 rpicam_ready_re = re.compile(r"\[(.*?)\]\s+\[(.*?)\]\s+INFO\s+RPI\s+pipeline_base\.cpp:\d+\s+Using\s+configuration\s+file\s+'(.*?)'")
@@ -138,7 +138,8 @@ class RobotComponentServer:
         """
 
         start_time = time.time()
-        self.rpicam_process = await asyncio.create_subprocess_exec(self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
+        scsplit = self.stream_command.format(buffers=self.conf['buffers']).split()
+        self.rpicam_process = await asyncio.create_subprocess_exec(scsplit[0], *scsplit[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
         while True:
             try:
@@ -323,6 +324,9 @@ default_anchor_conf = {
 
     # if set, the switch is disabled and the line is always assumed to be tight
     'disable_switch': False,
+
+    # Number of buffers to use when streaming mjpeg. Use as many as possible for high framerate without running out of ram
+    'buffers': 3
 }
 
 try:

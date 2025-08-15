@@ -1,3 +1,4 @@
+numpy
 websockets==15.0.1
 zeroconf==0.147.0
 pyserial==3.5
