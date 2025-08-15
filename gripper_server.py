@@ -21,8 +21,8 @@ half_res_stream_command = """
   --width=2304 --height=1296
   --listen -o tcp://0.0.0.0:8888
   --codec mjpeg
-  --buffer-count=12
-  --autofocus-mode continuous""".split()
+  --buffer-count={buffers}
+  --autofocus-mode continuous"""
 
 # the speed will not increase at settings beyond this value
 WINCH_MAX_SPEED = 43
@@ -55,6 +55,8 @@ default_gripper_conf = {
     'FINGER_TOUCH': 80,
     # max open servo value
     'OPEN': -80,
+    # number of buffers to use for half size stream
+    'buffers': 12,
 }
 
 class GripperSpoolMotor():

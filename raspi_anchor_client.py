@@ -92,7 +92,6 @@ class ComponentClient:
                 # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
                 fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
-                print(f'anchor client {self.anchor_num} processing frame {fnum}')
                 try:
                     timestamp = time.time() # default to using client clock
                     timestamp = self.frame_times[fnum]
@@ -183,6 +182,7 @@ class ComponentClient:
                 if 'frames' in update:
                     self.handle_frame_times(update['frames'])
                 if 'video_ready' in update:
+                    print(f'got a video ready update {update}')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": int(update['video_ready'])})
                     vid_thread.start()
                 self.handle_update_from_ws(update)

@@ -138,6 +138,8 @@ class AsyncObserver:
                 await self.sendReferenceLengths(updates['do_line_calibration'])
             if 'tension_lines' in updates:
                 asyncio.create_task(self.tension_lines())
+            if 'full_cal' in updates:
+                asyncio.create_task(self.full_auto_calibration())
             if 'jog_spool' in updates:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
@@ -524,7 +526,7 @@ class AsyncObserver:
                 asyncio.create_task(self.run_shape_tracker())
 
             # self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
-            # asyncio.create_task(self.pe.main())
+            asyncio.create_task(self.pe.main())
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:

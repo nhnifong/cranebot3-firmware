@@ -397,5 +397,5 @@ if __name__ == "__main__":
     import pickle
     with open('tests/collected_cal_data.pickle', 'rb') as f:
         ap, data = pickle.load(f)
-    result_params = find_cal_params(ap, data)
+    result_params = find_cal_params(ap, data, 0)
     print(result_params)
