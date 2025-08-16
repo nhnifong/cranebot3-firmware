@@ -384,17 +384,44 @@ class RaspiAnchorServer(RobotComponentServer):
 
     async def tighten(self):
         """
-        Pull in the line slowly until the lever switch clicks.
-        The client may check if this is completed by the tight value in the line_record updates
-
-        if the switch unclicks again within 3 seconds, lower the speed by some fraction and tighten again.
+        Pulls in the line until tight. If the line slips within 3 seconds,
+        it reduces the speed by 30% and retries, up to 5 times.
         """
-        current_rate = self.conf['tightening_speed']
-        while not self.tight_check():
-            self.spooler.setAimSpeed(current_rate)
-            await asyncio.sleep(0.05)
-        print('anchor server sets speed to 0 because finished tight')
+        max_retries = 5
+        monitoring_duration_s = 3
+        check_interval_s = 0.05
+        
+        current_speed = self.conf['tightening_speed']
+
+        for attempt in range(1, max_retries + 1):
+            # 1. Pull in the line until the switch clicks
+            while not self.tight_check():
+                self.spooler.setAimSpeed(current_speed)
+                await asyncio.sleep(check_interval_s)
+            self.spooler.setAimSpeed(0)
+
+            # 2. Monitor for re-loosening over the next 3 seconds
+            loosened = False
+            # Calculate when the monitoring window should end
+            end_time = time.monotonic() + monitoring_duration_s
+            while time.monotonic() < end_time:
+                if not self.tight_check():
+                    loosened = True
+                    break  # Exit monitoring loop immediately on slip
+                await asyncio.sleep(check_interval_s)
+
+            # 3. Check the outcome
+            if not loosened:
+                print(f"Tightening successful on attempt {attempt}.")
+                return # Success!
+
+            # If it slipped, reduce speed and the loop will try again
+            print(f"Line re-loosened on attempt {attempt}. Reducing speed and reeling in.")
+            current_speed *= 0.7
+
+        # If the loop finishes, all retries have failed
         self.spooler.setAimSpeed(0)
+        raise RuntimeError(f"Failed to tighten line after {max_retries} attempts.")
         
 if __name__ == "__main__":
     logging.basicConfig(
