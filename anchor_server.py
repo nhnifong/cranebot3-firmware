@@ -382,11 +382,10 @@ class RaspiAnchorServer(RobotComponentServer):
     def startOtherTasks(self):
         pass
 
-    async def tighten(self, speed):
+    async def tighten(self):
         """
         Pull in the line slowly until the lever switch clicks.
         The client may check if this is completed by the tight value in the line_record updates
-        Speed is in meters of line per second and should be negative. -0.1 is a reasonable value
 
         if the switch unclicks again within 3 seconds, lower the speed by some fraction and tighten again.
         """
