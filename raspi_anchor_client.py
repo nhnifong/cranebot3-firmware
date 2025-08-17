@@ -206,7 +206,7 @@ class ComponentClient:
     async def send_commands(self, update):
         if self.connected:
             x = json.dumps(update)
-            print(f'send commands {x}')
+            # print(f'send commands {x}')
             await self.websocket.send(x)
         # just discard the update if not connected.
 
