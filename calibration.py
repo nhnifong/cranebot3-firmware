@@ -230,6 +230,15 @@ def calibration_cost_fn(params, observations, spools):
 
 
 def find_cal_params(current_anchor_poses, observations, large_spool_index):
+    """ Find optimal anchor poses and zero angles based on previously collected data.
+
+    This seems to work pretty well, except for the fact that the positions are uncontrained
+    in the z axis. that is the whole system would be identical if the floor were lower or higher
+    since we never touch the floor at all.
+
+    A seperate floor offset value could be learned seperately from touch-tilt detection, laser
+    rangefinder, or just taking the origin board observations at face value.
+    """
     spools = []
     initial_guess = []
     bounds = []
@@ -397,5 +406,6 @@ if __name__ == "__main__":
     import pickle
     with open('tests/collected_cal_data.pickle', 'rb') as f:
         ap, data = pickle.load(f)
-    result_params = find_cal_params(ap, data, 0)
+    print(f'Anchor poses that were assumed during calibration \n{ap}')
+    result_params = find_cal_params(ap, data, 2)
     print(result_params)
