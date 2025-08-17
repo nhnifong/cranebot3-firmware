@@ -300,27 +300,34 @@ class AsyncObserver:
             num_o_dets = [len(client.origin_poses) for client in self.anchors]
         # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
         anchor_poses = await self.locate_anchors()
+        for i, client in enumerate(self.anchors):
+            client.anchor_pose = anchor_poses[i]
         anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
+        self.pe.set_anchor_points(anchor_points)
+        print(f'Provisional anchor points relative to origin card {anchor_points}')
 
         # reel in all lines until the switches indicate they are tight
         await self.tension_and_wait()
         cutoff = time.time()
         print('Collecting observations of gantry now that its still and lines are tight')
-        await asyncio.sleep(6)
+        await asyncio.sleep(12)
 
         # use aruco observations of gantry to obtain initial guesses for zero angles
         # use this information to perform rough movements
         gantry_data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
-        position = np.mean(gantry_data[:,1:])
+        position = np.mean(gantry_data[:,1:], axis=0)
+        print(f'the visual position of the gantry is {position}')
         lengths = np.linalg.norm(anchor_points - position, axis=1)
         print(f'Line lengths from coarse calibration ={lengths}')
         await self.sendReferenceLengths(lengths)
+        await asyncio.sleep(4)
 
         # Determine the bounding box of the work area
         min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0) * 0.5
         max_x, max_y, _ = np.max(anchor_points, axis=0) * 0.5
-        floor_z = 0
+        floor_z = 0.2
         max_gantry_z = min_anchor_z
+        print(f'Maximum allowed height of gantry sample point {max_gantry_z}')
 
         # make a polygon of the exact work area so we can test if points are inside it
         contour = anchor_points[:,0:2].astype(np.float32)
@@ -359,7 +366,8 @@ class AsyncObserver:
             # move to a position.
             print(f'Moving to point {i+1}/{len(sample_points)} at {point}')
             self.gantry_goal_pos = point
-            await self.seek_gantry_goal()
+            await self.blind_move_to_goal()
+            # await self.seek_gantry_goal()
 
             # integraiton test specific behavior
             if self.test_gantry_goal_callback is not None:
@@ -405,9 +413,9 @@ class AsyncObserver:
         with open('collected_cal_data.pickle', 'wb') as f:
             f.write(pickle.dumps((anchor_poses, data)))
 
-        # send to pool? this takes too long to be done here.
-        # result_params = find_cal_params(anchor_poses, data)
-        async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data))
+        # TODO, this should not be hard coded. somehow discover which one it is. 
+        power_spool_index = 2
+        async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, power_spool_index))
         result_params = async_result.get(timeout=60)
         print(f'obtained result from find_cal_params {result_params}')
 
@@ -683,6 +691,21 @@ class AsyncObserver:
         self.gantry_goal_pos = None
         self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
+    async def blind_move_to_goal(self):
+        """Only measures current position once, then moves in the right direction
+        for the amount of time it should take to get to the goal.
+        Issue any other move command to cancel"""
+        self.fig_8 = False
+        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+        vector = self.gantry_goal_pos - self.pe.gant_pos
+        dist = np.linalg.norm(vector)
+        speed = 0.1
+        result = await self.move_direction_speed(vector / dist, speed, self.pe.gant_pos)
+        await asyncio.sleep(dist / speed)
+        self.slow_stop_all_spools()
+        self.gantry_goal_pos = None
+        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+
     async def move_direction_speed(self, uvec, speed, starting_pos=None):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
@@ -707,11 +730,7 @@ class AsyncObserver:
         # apply downward bias and renormalize
         uvec = uvec + np.array([0,0,-0.08])
         uvec  = uvec / np.linalg.norm(uvec)
-
-        anchor_positions = np.zeros((4,3))
-        for a in self.anchors:
-            anchor_positions[a.anchor_num] = np.array(a.anchor_pose[1])
-        print(f'move direction speed {uvec} {speed}')
+        # print(f'move direction speed {uvec} {speed}')
 
         # even if the starting position is off slightly, this method should not produce jerky moves.
         # because it's not commanding any absolute length from the spool motor
@@ -719,18 +738,19 @@ class AsyncObserver:
             starting_pos = self.pe.gant_pos
 
         # line lengths at starting pos
-        lengths_a = np.linalg.norm(starting_pos - anchor_positions, axis=1)
+        lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # line lengths at new pos
         s = 10 # don't add a whole meter, curvature might matter at that distance.
         starting_pos += (uvec / s)
-        lengths_b = np.linalg.norm(starting_pos - anchor_positions, axis=1)
+        lengths_b = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # length changes needed to travel 0.1 meters in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
         line_speeds = deltas * s * speed
-        print(f'computed line speeds {line_speeds}')
+        # print(f'computed line speeds {line_speeds}')
+        print(f'move_direction_speed. start={starting_pos} direction={uvec}, line_speed={line_speeds}')
         
-        if np.max(np.abs(line_speeds)) > 0.6:
-            print('abort move because it\'s too fast')
+        if np.max(np.abs(line_speeds)) > 0.5:
+            print('abort move because it\'s too fast.')
             return
 
         # send move

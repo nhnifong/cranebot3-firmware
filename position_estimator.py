@@ -329,6 +329,11 @@ class Positioner2:
         self.grip_pose = (np.zeros(3), np.zeros(3))
         self.slack_lines = [False, False, False, False]
 
+    def set_anchor_points(self, points):
+        """refers to the grommet points. shape (4,3)"""
+        self.anchor_points = points
+
+
     def find_swing(self):
         """When the gantry is still, the IMU's quaternion readout can be used to estimate the gantry swing params
 
@@ -644,11 +649,6 @@ class Positioner2:
         self.to_ui_q.put(update_for_ui)
 
     def notify_update(self, update):
-        if 'anchor_pose' in update:
-            apose = update['anchor_pose']
-            anchor_num = apose[0]
-            print(f'updating the position of anchor {anchor_num} to {apose[1][1]}')
-            self.anchor_points[anchor_num] = np.array(apose[1][1])
         if 'holding' in update:
             self.holding = update['holding']
 
