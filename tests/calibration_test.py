@@ -61,7 +61,8 @@ class TestPoseFunctions(unittest.TestCase):
                 motor_orientation=-1))
             guess = [
                 *ap[0],    # actual rotation of anchor
-                *ap[1],    # actual position of anchor
+                ap[1][0],    # anchor x pos
+                ap[1][1],    # anchor x pos
                 encoder_val, # encoder angle at which line length would be zero.
             ]
             params.append(guess)
