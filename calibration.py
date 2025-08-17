@@ -8,6 +8,7 @@ from config import Config
 from cv_common import compose_poses
 import model_constants
 from spools import SpiralCalculator
+from itertools import combinations
 
 #the number of squares on the board (width and height)
 board_w = 14
@@ -160,14 +161,13 @@ def calibrate_from_stream():
     ce.calibrate()
     ce.save()
 
-
 ### the following functions pertain to calibration of the entire assembled robot, not just one camera ###
 
 def calibration_cost_fn(params, observations, spools):
     """Return the mean squared difference between line lengths calculated from encoders, and from visual observation
 
-    params - a pose and zero angle, full diameter, and full length for each anchor
-        (3 rot, 3 pos, za) * 4.
+    params - a reduced pose and zero angle. the pose only contains x and y position
+        (3 rot, 2 pos, za) * 4.
         the zero angle refers to the encoder position in revolutions where the amount of unspooled line would be zero.
 
     observations - a list with one entry per sample position.
@@ -181,9 +181,10 @@ def calibration_cost_fn(params, observations, spools):
     """
 
     # Extract parameters and update spools in a vectorized manner
-    params = params.reshape((4, 7))
-    anchor_poses = [p[:6].reshape((2, 3)) for p in params]
-    zero_angles = params[:, 6]
+    params = params.reshape((4, 6))
+    zero_angles = params[:, 5].copy()
+    anchor_poses = params.reshape((4, 2, 3))
+    anchor_poses[:,1,2] = 2.5 # the z position doesn't affect the cost function. any constant will do.
 
     for i in range(4):
         spools[i].set_zero_angle(zero_angles[i])
@@ -199,6 +200,7 @@ def calibration_cost_fn(params, observations, spools):
         # Consolidate visual observations and gantry pose calculations
         gantry_poses = []
         for anchor_num, obs_list in enumerate(sample['visuals']):
+            # note that it is common for there to be zero observations from one or more of the cameras.
             for pose in obs_list:
                 # Calculate global gantry pose from each visual observation
                 global_gantry_pose = compose_poses([
@@ -228,20 +230,119 @@ def calibration_cost_fn(params, observations, spools):
     else:
         return 0.0 # Return 0 if there are no errors to calculate
 
+def calibration_cost_fn_new(params, observations, spools):
+    """
+    Return the mean squared error, including line length differences and
+    a new cost for inconsistencies between gantry positions implied by different cameras.
+
+    params - a reduced pose and zero angle. the pose only contains x and y position
+        (3 rot, 2 pos, za) * 4.
+        the zero angle refers to the encoder position in revolutions where the amount of unspooled line would be zero.
+
+    observations - a list with one entry per sample position.
+        At each sample position, the gantry was still, and the lines were tight.
+        Each sample position will have
+        - encoder angles for each of the four anchor spool motors
+        - four lists of visual observations, one for each of the four anchor cameras. Each visual observation contains
+        - the pose of an observed gantry aruco marker in the camera's 3d coordinate system. (the output of cv2.solvePnP)
+
+    spools - a list of four SpiralCalculators to relate zero angles to line lengths.
+    """
+
+    # Extract parameters and update spools in a vectorized manner
+    params = params.reshape((4, 6))
+    zero_angles = params[:, 5].copy()
+    anchor_poses = params.reshape((4, 2, 3))
+    anchor_poses[:, 1, 2] = 2.5  # the z position doesn't affect the cost function. any constant will do.
+
+    for i in range(4):
+        spools[i].set_zero_angle(zero_angles[i])
+
+    # calculation of anchor grommet positions
+    anchor_grommets = np.array([compose_poses([p, model_constants.anchor_grommet])[1] for p in anchor_poses])
+
+    all_length_errs = []
+    all_consistency_errs = []
+
+    for sample in observations:
+        # Calculation of encoder-based lengths
+        encoder_based_lengths = np.array([spools[i].get_unspooled_length(sample['encoders'][i]) for i in range(4)])
+
+        # Consolidate visual observations and calculate implied gantry poses, grouped by anchor camera
+        gantry_positions_by_anchor = [[] for _ in range(4)]
+        for anchor_num, obs_list in enumerate(sample['visuals']):
+            # note that it is common for there to be zero observations from one or more of the cameras.
+            for pose in obs_list:
+                # Calculate global gantry pose from each visual observation
+                global_gantry_pose = compose_poses([
+                    anchor_poses[anchor_num],
+                    model_constants.anchor_camera,
+                    pose,
+                    model_constants.gantry_aruco_front_inv,
+                ])
+                # Store the implied gantry position (the translational part of the pose)
+                gantry_positions_by_anchor[anchor_num].append(global_gantry_pose[1])
+
+        # position consistency error
+        # This cost penalizes deviations in the calculated gantry position between different anchor cameras.
+        gantry_positions_by_anchor_np = [np.array(positions) for positions in gantry_positions_by_anchor]
+        
+        # Iterate over every unique pair of anchor cameras
+        for i, j in combinations(range(4), 2):
+            pos_i = gantry_positions_by_anchor_np[i]
+            pos_j = gantry_positions_by_anchor_np[j]
+            
+            # Only compute if both cameras have observations for this sample
+            if pos_i.size > 0 and pos_j.size > 0:
+                # Use broadcasting to efficiently compute all pairwise distances
+                # between implied gantry positions from camera i and camera j.
+                diffs = pos_i[:, np.newaxis, :] - pos_j[np.newaxis, :, :]
+                distances = np.linalg.norm(diffs, axis=2)
+                all_consistency_errs.append(distances.flatten())
+        
+        # Encoder to visual error
+        # First, flatten the list of poses for the original error calculation
+        all_gantry_pos_flat = [pos for sublist in gantry_positions_by_anchor for pos in sublist]
+
+        if all_gantry_pos_flat:
+            gantry_positions = np.array(all_gantry_pos_flat)
+
+            # Distance calculation for all gantry poses against all 4 anchors
+            visual_based_lengths = np.linalg.norm(
+                anchor_grommets.reshape(1, 4, 3) - gantry_positions.reshape(gantry_positions.shape[0], 1, 3),
+                axis=-1)
+
+            # error calculation
+            errors_per_sample = (visual_based_lengths - encoder_based_lengths.reshape(1, 4)).flatten()
+            all_length_errs.append(errors_per_sample)
+
+    # --- Combine both error sources and calculate final cost ---
+    all_errors_combined = []
+    if all_length_errs:
+        all_errors_combined.append(np.concatenate(all_length_errs))
+    if all_consistency_errs:
+        # apply a weighting factor to this term to balance its influence
+        all_errors_combined.append(np.concatenate(all_consistency_errs) * 0.4)
+    if all_errors_combined:
+        # Concatenate all errors from all sources and samples, then calculate mean squared error
+        final_errs_array = np.concatenate(all_errors_combined)
+        return np.mean(final_errs_array**2)
+    else:
+        return 0.0  # Return 0 if there are no errors to calculate
+
 
 def find_cal_params(current_anchor_poses, observations, large_spool_index):
     """ Find optimal anchor poses and zero angles based on previously collected data.
 
-    This seems to work pretty well, except for the fact that the positions are uncontrained
-    in the z axis. that is the whole system would be identical if the floor were lower or higher
-    since we never touch the floor at all.
-
-    A seperate floor offset value could be learned seperately from touch-tilt detection, laser
-    rangefinder, or just taking the origin board observations at face value.
+    anchor Z positions don't affect the cost function.
+    that is the whole system would be identical if the floor were lower or higher
+    since we never touch the floor at all, so we don't optimize for that value, we just average the z vals
+    that were obtained from the origin card observations
     """
     spools = []
     initial_guess = []
     bounds = []
+    average_z = np.mean(current_anchor_poses[:,1,2])
     for i, apose in enumerate(current_anchor_poses):
         # Determine the full diameter based on the index
         full_diameter = 47.7 if i == large_spool_index else 27.0
@@ -257,9 +358,10 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index):
         ))
 
         guess = [
-            *apose[0], # rotation component
-            *apose[1], # position component
-            0,         # initial guess of zero angle
+            *apose[0],    # xyz rotation component
+            apose[1][0],  # x position component
+            apose[1][1],  # y position component
+            -150,         # initial guess of zero angle
         ]
         initial_guess.append(guess)
 
@@ -269,17 +371,15 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index):
             (guess[2] - 0.2, guess[2] + 0.2), # z component of rotation vector
             (-8, 8), # x component of position
             (-8, 8), # y component of position
-            ( 1, 6), # z component of position
             (-400, 400), # bounds on zero angle in revs.
         ]
-        print(anchor_bounds)
         bounds.append(anchor_bounds)
 
     initial_guess =  np.array(initial_guess).flatten()
     bounds =  np.array(bounds).reshape((len(initial_guess), 2))
 
     result = optimize.minimize(
-        calibration_cost_fn,
+        calibration_cost_fn_new,
         initial_guess,
         args=(observations, spools),
         method='SLSQP',
@@ -291,9 +391,13 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index):
 
     try:
         assert result.success
-        # four poses with spool zero angle. (*rot, *pos, spool_za)
         # rot is a rodrruigez vector. pos is a position.
-        return result.x.reshape((4, 7))
+        poses = result.x.reshape((4, 6)) # move last number out, it's not part of the pose.
+        zero_angles = poses[:,5].copy()
+        poses[:,5] = average_z
+        poses = poses.reshape((4,2,3))
+        # return four poses and four zero angles. [(*rot, *pos), ...], [spool_za, ...]
+        return poses, zero_angles
     except AssertionError:
         print(result)
         return
