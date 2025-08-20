@@ -212,6 +212,8 @@ class RobotComponentServer:
                 self.spooler.jogRelativeLen(float(update['jog']))
             if 'reference_length' in update:
                 self.spooler.setReferenceLength(float(update['reference_length']))
+            if 'set_zero_angle' in update:
+                self.spooler.sc.set_zero_angle(float(update['set_zero_angle']))
             if 'set_config_vars' in update:
                 self.conf.update(update['set_config_vars'])
                 pass
