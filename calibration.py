@@ -164,73 +164,6 @@ def calibrate_from_stream():
 ### the following functions pertain to calibration of the entire assembled robot, not just one camera ###
 
 def calibration_cost_fn(params, observations, spools):
-    """Return the mean squared difference between line lengths calculated from encoders, and from visual observation
-
-    params - a reduced pose and zero angle. the pose only contains x and y position
-        (3 rot, 2 pos, za) * 4.
-        the zero angle refers to the encoder position in revolutions where the amount of unspooled line would be zero.
-
-    observations - a list with one entry per sample position.
-        At each sample position, the gantry was still, and the lines were tight.
-        Each sample position will have
-        - encoder angles for each of the four anchor spool motors
-        - four lists of visual observations, one for each of the four anchor cameras. Each visual observation contains
-        - the pose of an observed gantry aruco marker in the camera's 3d coordinate system. (the output of cv2.solvePnP)
-
-    spools - a list of four SpiralCalculators to relate zero angles to line lengths.
-    """
-
-    # Extract parameters and update spools in a vectorized manner
-    params = params.reshape((4, 6))
-    zero_angles = params[:, 5].copy()
-    anchor_poses = params.reshape((4, 2, 3))
-    anchor_poses[:,1,2] = 2.5 # the z position doesn't affect the cost function. any constant will do.
-
-    for i in range(4):
-        spools[i].set_zero_angle(zero_angles[i])
-
-    # calculation of anchor grommet positions
-    anchor_grommets = np.array([compose_poses([p, model_constants.anchor_grommet])[1] for p in anchor_poses])
-
-    all_errs = []
-    for sample in observations:
-        # Calculation of encoder-based lengths
-        encoder_based_lengths = np.array([spools[i].get_unspooled_length(sample['encoders'][i]) for i in range(4)])
-
-        # Consolidate visual observations and gantry pose calculations
-        gantry_poses = []
-        for anchor_num, obs_list in enumerate(sample['visuals']):
-            # note that it is common for there to be zero observations from one or more of the cameras.
-            for pose in obs_list:
-                # Calculate global gantry pose from each visual observation
-                global_gantry_pose = compose_poses([
-                    anchor_poses[anchor_num],
-                    model_constants.anchor_camera,
-                    pose,
-                    model_constants.gantry_aruco_front_inv,
-                ])
-                gantry_poses.append(global_gantry_pose[1])
-
-        if gantry_poses:
-            gantry_poses = np.array(gantry_poses)
-
-            # Distance calculation for all gantry poses against all 4 anchors
-            visual_based_lengths = np.linalg.norm(
-                anchor_grommets.reshape(1, 4, 3) - gantry_poses.reshape(gantry_poses.shape[0], 1, 3),
-                axis=-1)
-
-            # error calculation
-            errors_per_sample = (visual_based_lengths - encoder_based_lengths.reshape(1, 4)).flatten()
-            all_errs.append(errors_per_sample)
-
-    if all_errs:
-        # Concatenate all errors from all samples and calculate mean squared error
-        all_errs_array = np.concatenate(all_errs)
-        return np.mean(all_errs_array**2)
-    else:
-        return 0.0 # Return 0 if there are no errors to calculate
-
-def calibration_cost_fn_new(params, observations, spools):
     """
     Return the mean squared error, including line length differences and
     a new cost for inconsistencies between gantry positions implied by different cameras.
@@ -379,7 +312,7 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index):
     bounds =  np.array(bounds).reshape((len(initial_guess), 2))
 
     result = optimize.minimize(
-        calibration_cost_fn_new,
+        calibration_cost_fn,
         initial_guess,
         args=(observations, spools),
         method='SLSQP',
@@ -511,5 +444,12 @@ if __name__ == "__main__":
     with open('tests/collected_cal_data.pickle', 'rb') as f:
         ap, data = pickle.load(f)
     print(f'Anchor poses that were assumed during calibration \n{ap}')
-    result_params = find_cal_params(ap, data, 2)
-    print(result_params)
+    poses, zero_a = find_cal_params(ap, data, 2)
+    print(poses)
+    print(zero_a)
+
+    config = Config()
+    for i, anchor in enumerate(config.anchors):
+        anchor.pose = poses[i]
+    config.write()
+    print('wrote new anchor poses to configuration.json')
