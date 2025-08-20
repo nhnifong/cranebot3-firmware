@@ -233,7 +233,6 @@ class AsyncObserver:
             print(f'Cannot send {len(lengths)} ref lengths to anchors')
             return
         # any anchor that receives this and is slack would ignore it
-        # any anchor which is tight would calculate a zero angle and average it in
         # If only some anchors are connected, this would still send reference lengths to those
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
@@ -287,7 +286,23 @@ class AsyncObserver:
         return np.array(anchor_poses)
 
 
+    async def half_auto_calibration(self):
+        """Optimize zero angles from a few points"""
+        n = 3 # number of points
+        d = 1.5 # diameter in meters
+        h = client[0].anchor_pose[1][2] # 1/3 of the way between the floor and ceiling
+        sample_points = np.array([[cos((i/n)*2*pi), sin((i/n)*2*pi), height] for i in range(n)])
+        data = await collect_data_at_points(sample_points)
+        power_spool_index = 2
+        async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, power_spool_index, 'zero_angles_only'))
+        _, zero_angles = async_result.get(timeout=60)
+        await self.tension_and_wait()
+        for client in self.anchors:
+            await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
+
     async def full_auto_calibration(self):
+        """Automatically determine anchor poses and zero angles"""
+
         self.anchors.sort(key=lambda x: x.anchor_num)
         # collect observations of origin card aruco marker to get initial guess of anchor poses.
         #   origin pose detections are actually always stored by all connected clients,
@@ -352,6 +367,28 @@ class AsyncObserver:
         print(f'Ordered points for near-optimal travel. total distance = {distance} m')
 
         # prepare to collect final observations
+        data = await collect_data_at_points(sample_points)
+        print(f'Completed data collection. Performing optimization of calibration parameters.')
+
+        # feed collected data to the optimization process in calibration.py
+        with open('collected_cal_data.pickle', 'wb') as f:
+            f.write(pickle.dumps((anchor_poses, data)))
+
+        # TODO, this should not be hard coded. somehow discover which one it is.
+        power_spool_index = 2
+        async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, power_spool_index))
+        result_params = async_result.get(timeout=60)
+        print(f'obtained result from find_cal_params {result_params}')
+
+        # Use the optimization output to update anchor poses and spool params
+        # for i, client in enumerate(self.anchors):
+        #     pose = result_params[i][0:5].reshape((2,3))
+        #     za = result_params[i][6]
+        #     self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
+
+        # move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
+
+    async def collect_data_at_points(self, sample_points):
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
         # not the poses in self.datastore.gantry_pos so we set a flag in the anchor clients that cause them to save that
         for client in self.anchors:
@@ -406,30 +443,9 @@ class AsyncObserver:
 
         for client in self.anchors:
             client.save_raw = False
-
-        print(f'Completed data collection. Performing optimization of calibration parameters.')
-
-        # feed collected data to the optimization process in calibration.py
-        with open('collected_cal_data.pickle', 'wb') as f:
-            f.write(pickle.dumps((anchor_poses, data)))
-
-        # TODO, this should not be hard coded. somehow discover which one it is. 
-        power_spool_index = 2
-        async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, power_spool_index))
-        result_params = async_result.get(timeout=60)
-        print(f'obtained result from find_cal_params {result_params}')
-
-        # Use the optimization output to update anchor poses and spool params
-        # for i, client in enumerate(self.anchors):
-        #     pose = result_params[i][0:5].reshape((2,3))
-        #     za = result_params[i][6]
-        #     self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
-
-        # move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
-
-        # reset some settings only used during calibration
-        for client in self.anchors:
             asyncio.create_task(client.send_commands({'report_raw': False}))
+
+        return data
 
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
