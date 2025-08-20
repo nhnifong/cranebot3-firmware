@@ -422,7 +422,7 @@ class Floor(Entity):
         else:
             self.button = None
 
-    def update(self,):
+    def update(self):
         if self.button is None:
             if mouse.hovered_entity == self:
                 # Get the intersection point in world coordinates
@@ -570,6 +570,10 @@ class DirectMoveGantryTarget(Entity):
         self.last_move_duration = None # float seconds
         self.last_move_vec = None # numpy array in z-up coordinate space
 
+        # game pad analog movement vector (left stick and triggers)
+        self.analog_dir = [0,0,0]
+
+
     def estimatePosition(self, t):
         """Estimate the gantry's position at the given time and the last length plan sent"""
         elapsed_time = t - self.last_move_start_time
@@ -593,9 +597,18 @@ class DirectMoveGantryTarget(Entity):
         from where it is, towards the indicated goal point, at the given speed.
         positions are given in z-up coordinate system.
         """
-        vector = self.app.direction
-        vector = vector / np.linalg.norm(vector)
-        print(f'direct move {vector}')
+        if sum(self.analog_dir) != 0:
+            vector = np.array(self.analog_dir)
+            mag = np.linalg.norm(vector)
+            vector = vector / mag
+            speed = mag / 4
+        elif sum(self.app.direction) != 0:
+            vector = self.app.direction
+            vector = vector / np.linalg.norm(vector)
+        else:
+            return
+
+        print(f'direct move {vector} {speed}')
         self.app.to_ob_q.put({
             'gantry_dir_sp': {
                 'direction':vector,
@@ -647,6 +660,11 @@ class DirectMoveGantryTarget(Entity):
         })
 
     def update(self):
+
+        # these are available from the update function of any enabled entity
+        net_trigger  = held_keys['gamepad right trigger'] - held_keys['gamepad left trigger']
+        self.analog_dir = [held_keys['gamepad left stick x'], held_keys['gamepad left stick y'], net_trigger]
+
         # update the indicated goal position for gantry
         p = self.position
         p += Vec3(
@@ -655,6 +673,6 @@ class DirectMoveGantryTarget(Entity):
             self.app.direction[1] * self.speed,
         )
         self.position = p
-        self.enabled = (sum(self.app.direction) > 0)
+        # self.enabled = (sum(self.app.direction) > 0)
 
         
