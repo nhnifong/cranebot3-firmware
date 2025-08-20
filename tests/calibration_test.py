@@ -18,7 +18,7 @@ class TestPoseFunctions(unittest.TestCase):
             ((0, 0, 3*pi/4), (-3, -3, 3)),
         ])
 
-    def test_calibration(self):
+    def test_calibration_full(self):
 
         anchor_poses = np.array([
             ((0, 0, -pi/4), (3, 3, 3)),
@@ -34,6 +34,21 @@ class TestPoseFunctions(unittest.TestCase):
             entry['visuals'] = np.random.uniform(-1,1, (4, 10, 2, 3))
             observations.append(entry)
         new_params = find_cal_params(self.anchor_poses, observations, 0)
+
+    def test_calibration_za_only(self):
+
+        anchor_poses = np.array([
+            ((0, 0, -pi/4), (3, 3, 3)),
+            ((0, 0, -3*pi/4), (3, -3, 3)),
+            ((0, 0, pi/4), (-3, 3, 3)),
+            ((0, 0, 3*pi/4), (-3, -3, 3)),
+        ])
+        observations = []
+        for i in range(15):
+            entry = {'encoders': np.random.uniform(-20,20, (4,))}
+            entry['visuals'] = np.random.uniform(-1,1, (4, 10, 2, 3))
+            observations.append(entry)
+        new_params = find_cal_params(self.anchor_poses, observations, 0, 'zero_angles_only')
 
     def test_order_points_for_low_travel(self):
         points, distance = order_points_for_low_travel(np.random.uniform(-3,3,(20,3)))
