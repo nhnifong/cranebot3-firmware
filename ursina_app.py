@@ -460,10 +460,10 @@ class ControlPanelUI:
 
             if sum(self.direction) == 0:
                 self.dmgt.position = self.gantry.position
-            else:
-                # self.dmgt.position will be updated in it's own update function at the framerate.
-                # at this slightly lower rate, command the bot to move towards the goal point.
-                self.dmgt.direct_move()
+            
+            # self.dmgt.position will be updated in it's own update function at the framerate.
+            # at this slightly lower rate, command the bot to move towards the goal point.
+            self.dmgt.direct_move()
 
             time.sleep(1/10)
 
