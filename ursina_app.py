@@ -30,12 +30,10 @@ line_color = color.black
 mode_names = {
     'run':   'Run Normally',
     'pause': 'Pause/Observe',
-    'pose':  'Locate Anchors',
 }
 mode_descriptions = {
     'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
     'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
-    'pose':  'Place the origin card on the floor in the center of the room. Anchor positions are estimated from this card.',
 }
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
@@ -167,20 +165,6 @@ class ControlPanelUI:
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
 
-        # TODO completely remove the hypothetical anchors and associated code since the full auto calibration is now better than the pose mode calibration
-        self.hypo_anchors = [
-            Entity(
-                model='anchor',
-                color=c,
-                shader=unlit_shader,
-                enabled=False,
-            ) for c in [
-                (1.0, 0.0, 0.0, 0.5),
-                (1.0, 1.0, 0.0, 0.5),
-                (0.0, 1.0, 0.0, 0.5),
-                (0.0, 1.0, 1.0, 0.5),
-            ]]
-
     def _create_hud_panels(self):
         # Create the main status panel, text elements, buttons
         self.modePanel = Panel(model='quad', z=99, 
@@ -282,7 +266,6 @@ class ControlPanelUI:
             DropdownMenu('Mode', buttons=(
                 DropdownMenuButton(mode_names['run'], on_click=partial(self.set_mode, 'run')),
                 DropdownMenuButton(mode_names['pause'], on_click=partial(self.set_mode, 'pause')),
-                DropdownMenuButton(mode_names['pose'], on_click=partial(self.set_mode, 'pose')),
                 )),
             DropdownMenuButton('Estimate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, 'tension_lines')),
@@ -368,42 +351,6 @@ class ControlPanelUI:
         self.mode_text.text = mode_names[mode]
         self.mode_descrip_text.text = mode_descriptions[mode]
         self.to_ob_q.put({'set_run_mode': self.calibration_mode})
-        if mode=='pose':
-            self.confirm_poses_bt = Button(
-                text='Confirm',
-                color=color.green,
-                text_color=color.black,
-                on_click=self.finish_locate_anchors,
-                position=(0.5,-0.45),
-                scale=(.10, .033))
-            for h in self.hypo_anchors:
-                h.pose = None
-
-    def finish_locate_anchors(self):
-        self.calibration_mode = 'pause'
-        self.mode_text.text = mode_names['pause']
-        self.mode_descrip_text.text = mode_descriptions['pause']
-        aposes = {}
-        # copy the positions of the hypothetical anchors to the real anchors
-        for i in range(4):
-            if self.hypo_anchors[i].pose is None:
-                print(f'Anchor Camera {i} did not obtain enough observations of the origin card to determine its location')
-                continue
-            aposes[i] = self.hypo_anchors[i].pose
-            self.hypo_anchors[i].enabled = False
-            self.anchors[i].pose = self.hypo_anchors[i].pose
-            self.anchors[i].position = self.hypo_anchors[i].position
-            self.anchors[i].rotation = self.hypo_anchors[i].rotation
-        self.gantry.redraw_wires()
-        self.redraw_walls()
-        # observer will write the config for us
-        self.to_ob_q.put({
-            'confirm_anchors': aposes,
-            'set_run_mode': self.calibration_mode
-            })
-        # hide button
-        self.confirm_poses_bt.enabled = False
-
 
     def calibrate_lines(self):
         # calibrate line lengths
@@ -507,24 +454,14 @@ class ControlPanelUI:
             invoke(self.render_gantry_ob, swap_yz(updates['gantry_observation']), color.white, delay=0.0001)
 
         if 'anchor_pose' in updates:
-            # if you get this message while in pose mode, it's a hypothetical pose not yet confirmed by the user.
-            if self.calibration_mode == 'pose':
-                apose = updates['anchor_pose']
-                print(apose)
-                anchor_num = apose[0]
-                self.hypo_anchors[anchor_num].enabled = True
-                self.hypo_anchors[anchor_num].pose = apose[1]
-                self.hypo_anchors[anchor_num].position = swap_yz(apose[1][1])
-                self.hypo_anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
-            else:
-                apose = updates['anchor_pose']
-                anchor_num = apose[0]
-                self.anchors[anchor_num].enabled = True
-                self.anchors[anchor_num].pose = apose[1]
-                self.anchors[anchor_num].position = swap_yz(apose[1][1])
-                self.anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
-                self.gantry.redraw_wires()
-                self.redraw_walls()
+            apose = updates['anchor_pose']
+            anchor_num = apose[0]
+            self.anchors[anchor_num].enabled = True
+            self.anchors[anchor_num].pose = apose[1]
+            self.anchors[anchor_num].position = swap_yz(apose[1][1])
+            self.anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
+            self.gantry.redraw_wires()
+            self.redraw_walls()
 
         if 'preview_image' in updates:
             pili = updates['preview_image']
