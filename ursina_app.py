@@ -84,25 +84,29 @@ def update_go_quad(position, color, e):
 class ControlPanelUI:
     def __init__(self, to_ob_q):
         self.app = Ursina(fullscreen=False, borderless=False)
-
         self.to_ob_q = to_ob_q
-        self.n_anchors = 4 # todo grab from config
-        self.time_domain = (1,2)
-        self.direction = np.zeros(3, dtype=float)
+        
+        # --- Core State ---
+        self.config = Config()
+        self.n_anchors = len(self.config.anchors)
+        self.calibration_mode = 'pause'
+        self.direction = np.zeros(3, dtype=float) # direction of currently commanded keyboard movement
         self.run_periodic_actions = True
 
-        # start in pose calibration mode. TODO need to do this only if any of the four anchor clients boots up but can't find it's file
-        # maybe you shouldn't read those files in the clients
-        self.calibration_mode = 'pause'
+        # --- Setup Methods ---
+        self._setup_scene_and_lighting()
+        self._create_robot_entities()
+        self._create_shape_tracker_entities()
+        self._create_hud_panels()
+        self._create_menus()
 
-        # an indicator of where the user wants the gantry to be during direct moves.
-        self.dmgt = DirectMoveGantryTarget(self)
-
-        # debug indicators of the visual and hang based position and velocity estimates
-        self.debug_indicator_visual = IndicatorSphere(color=color.red)
-        self.debug_indicator_hang = IndicatorSphere(color=color.blue)
-
-        #show a very large floor
+    def _setup_scene_and_lighting(self):
+        Sky(color=color.light_gray)
+        # the color of this light is how you control the brightness
+        DirectionalLight(position=(2, 20, 1), shadows=True, rotation=(35, -5, 5), color=(0.8,0.8,0.8,1))
+        AmbientLight(color=(0.8,0.8,0.8,1))
+        EditorCamera()
+        # Show a large floor. this is an active entity that moves a reticule with mouse input
         self.floor = Floor(
             app=self,
             model='quad',
@@ -113,7 +117,8 @@ class ControlPanelUI:
             shader=lit_with_shadows_shader
         ) 
 
-        self.config = Config()
+    def _create_robot_entities(self):
+        # Create gantry, gripper, anchors, lines, etc.
         self.anchors = []
         for i, a in enumerate(self.config.anchors):
             anch = Anchor(i, to_ob_q, position=swap_yz(a.pose[1]), rotation=to_ursina_rotation(a.pose[0]))
@@ -138,25 +143,14 @@ class ControlPanelUI:
             shader=lit_with_shadows_shader,
         )
 
+        # TODO consider moving this into the gantry entity code since it's already responsible for redrawing them in redraw_wires
         self.lines = []
         for a in self.anchors:
             self.lines.append(Entity(model=draw_line(a.position, self.gantry.position), color=line_color, shader=unlit_shader))
-
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
 
         # show a visualization of goal positions
         self.goal_marker = GoalPoint([0,0,0], enabled=False)
-
-        # the color is how you control the brightness
-        DirectionalLight(position=(2, 20, 1), shadows=True, rotation=(35, -5, 5), color=(0.8,0.8,0.8,1))
-        AmbientLight(color=(0.8,0.8,0.8,1))
-        # light.look_at(Vec3(1,-1,1))
-
-        self.stop_button = Button(
-            text="STOP",
-            color=color.red,
-            position=(0.83, -0.45), scale=(.10, .033),
-            on_click=self.on_stop_button)
 
         self.walls = [Entity(
             model='quad',
@@ -167,11 +161,13 @@ class ControlPanelUI:
             ) for i in range(4)]
         self.redraw_walls()
 
+        # these cubes indicate the 3d position of gantry aruco detections
         self.go_quads = EntityPool(100, lambda: Entity(
                 model='cube',
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
 
+        # TODO completely remove the hypothetical anchors and associated code since the full auto calibration is now better than the pose mode calibration
         self.hypo_anchors = [
             Entity(
                 model='anchor',
@@ -185,6 +181,8 @@ class ControlPanelUI:
                 (0.0, 1.0, 1.0, 0.5),
             ]]
 
+    def _create_hud_panels(self):
+        # Create the main status panel, text elements, buttons
         self.modePanel = Panel(model='quad', z=99, 
             color=(0.1,0.1,0.1,1.0),
             position=(0,-0.48),
@@ -269,6 +267,8 @@ class ControlPanelUI:
                 scale=0.5,
             )
 
+    def _create_shape_tracker_entities(self):
+        # create entities that are used to visualize the internal state of the shape tracker and 3d hull contruction.
         self.prisms = EntityPool(80, lambda: Entity(
             color=(1.0, 1.0, 1.0, 0.1),
             shader=lit_with_shadows_shader))
@@ -276,7 +276,8 @@ class ControlPanelUI:
             color=(1.0, 1.0, 0.5, 1.0),
             shader=lit_with_shadows_shader))
 
-
+    def _create_menus(self):
+        # Setup the DropdownMenu
         DropdownMenu('Menu', buttons=(
             DropdownMenu('Mode', buttons=(
                 DropdownMenuButton(mode_names['run'], on_click=partial(self.set_mode, 'run')),
@@ -294,9 +295,6 @@ class ControlPanelUI:
                 DropdownMenuButton('Point to Point', on_click=partial(self.set_simulated_data_mode, 'point2point')),
                 )),
             ))
-
-        Sky(color=color.light_gray)
-        EditorCamera()
 
     def set_simulated_data_mode(self, mode):
         self.to_ob_q.put({'set_simulated_data_mode': mode})
