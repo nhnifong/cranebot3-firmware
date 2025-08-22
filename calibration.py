@@ -262,11 +262,11 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index, mode=
     spools = []
     average_z = np.mean(current_anchor_poses[:, 1, 2])
     for i in range(4):
-        full_diameter = 47.7 if i == large_spool_index else 27.0
+        full_diameter = model_constants.full_spool_diameter_power_line if i == large_spool_index else model_constants.full_spool_diameter_fishing_line
         spools.append(SpiralCalculator(
-            empty_diameter=25,
+            empty_diameter=model_constants.empty_spool_diameter,
             full_diameter=full_diameter,
-            full_length=7.5,
+            full_length=model_constants.assumed_full_line_length,
             gear_ratio=20/51,
             motor_orientation=-1
         ))

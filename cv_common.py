@@ -31,10 +31,8 @@ marker_names = [
 
 # some markers are different sizes
 special_sizes = {
-    'origin': 0.188,
-    'gripper_left': 0.082,
-    'gripper_right': 0.082,
-    'gantry_front_new': 0.0909,
+    'origin': 0.186,
+    'gripper_front': 0.081,
 }
 
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)

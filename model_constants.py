@@ -37,6 +37,12 @@ gantry_aruco_front = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105
 # position of the gantry keyring point in the gantry reference frame
 gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
 
+# spool parameters
+empty_spool_diameter = 22.9
+assumed_full_line_length = 7.5 # meters
+full_spool_diameter_fishing_line = 27.5
+full_spool_diameter_power_line = 43.7
+
 # precompute some inverts
 gantry_aruco_front_inv = invert_pose(gantry_aruco_front)
 anchor_cam_inv = invert_pose(anchor_camera)
