@@ -22,6 +22,7 @@ from spools import SpoolController
 from motor_control import MKSSERVO42C
 import argparse
 import logging
+import model_constants
 
 # video framerate and latency are limited by the memory on the raspberry pi zero.
 # with more memory, we could increase buffer-count to 10 or 20 and get great performance.
@@ -351,10 +352,20 @@ class RaspiAnchorServer(RobotComponentServer):
             motor = MKSSERVO42C()
         if power_anchor:
             # A power anchor spool has a thicker line
-            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=43.7, full_length=7.5, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
+            self.spooler = SpoolController(
+                motor,
+                empty_diameter=model_constants.empty_spool_diameter,
+                full_diameter=model_constants.full_spool_diameter_power_line,
+                full_length=model_constants.assumed_full_line_length,
+                conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
         else:
             # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
-            self.spooler = SpoolController(motor, empty_diameter=25, full_diameter=27, full_length=7.5, conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
+            self.spooler = SpoolController(
+                motor,
+                empty_diameter=model_constants.empty_spool_diameter,
+                full_diameter=model_constants.full_spool_diameter_fishing_line,
+                full_length=model_constants.assumed_full_line_length,
+                conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-service.' + unique
 
