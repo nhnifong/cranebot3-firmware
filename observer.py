@@ -140,6 +140,8 @@ class AsyncObserver:
                 asyncio.create_task(self.tension_lines())
             if 'full_cal' in updates:
                 asyncio.create_task(self.full_auto_calibration())
+            if 'half_cal' in updates:
+                asyncio.create_task(self.half_auto_calibration())
             if 'jog_spool' in updates:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
@@ -290,12 +292,15 @@ class AsyncObserver:
         """Optimize zero angles from a few points"""
         n = 3 # number of points
         d = 1.5 # diameter in meters
-        h = client[0].anchor_pose[1][2] # 1/3 of the way between the floor and ceiling
-        sample_points = np.array([[cos((i/n)*2*pi), sin((i/n)*2*pi), height] for i in range(n)])
-        data = await collect_data_at_points(sample_points)
+        anchor_poses = np.array([a.anchor_pose for a in self.anchors])
+        h = anchor_poses[0,1,2] # 1/3 of the way between the floor and ceiling
+        sample_points = np.array([[cos((i/n)*2*pi), sin((i/n)*2*pi), h/3] for i in range(n)])
+        data = await self.collect_data_at_points(sample_points)
         power_spool_index = 2
+        print(f'Starting optimizer with sample points {sample_points}')
         async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, power_spool_index, 'zero_angles_only'))
         _, zero_angles = async_result.get(timeout=60)
+        print(f'zero angles obtained from optimization {zero_angles}')
         await self.tension_and_wait()
         for client in self.anchors:
             await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
@@ -315,6 +320,8 @@ class AsyncObserver:
             num_o_dets = [len(client.origin_poses) for client in self.anchors]
         # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
         anchor_poses = await self.locate_anchors()
+        print(f'anchor poses based on origin card {anchor_poses}')
+        return
         for i, client in enumerate(self.anchors):
             client.anchor_pose = anchor_poses[i]
         anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
@@ -434,8 +441,8 @@ class AsyncObserver:
                 data.append(entry)
 
                 # save data after every collected point.
-                with open('collected_cal_data.pickle', 'wb') as f:
-                    f.write(pickle.dumps((anchor_poses, data)))
+                # with open('collected_cal_data.pickle', 'wb') as f:
+                #     f.write(pickle.dumps((anchor_poses, data)))
             else:
                 print(f'Point {point} skipped because gantry could not be observed in that position')
 
@@ -721,6 +728,9 @@ class AsyncObserver:
         self.slow_stop_all_spools()
         self.gantry_goal_pos = None
         self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+
+        # 0: 3.12/3.77 = 0.84
+        # 1: 4.92/5.64 = 0.87
 
     async def move_direction_speed(self, uvec, speed, starting_pos=None):
         """Move in the direction of the given unit vector at the given speed.
