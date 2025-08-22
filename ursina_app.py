@@ -119,7 +119,7 @@ class ControlPanelUI:
         # Create gantry, gripper, anchors, lines, etc.
         self.anchors = []
         for i, a in enumerate(self.config.anchors):
-            anch = Anchor(i, to_ob_q, position=swap_yz(a.pose[1]), rotation=to_ursina_rotation(a.pose[0]))
+            anch = Anchor(i, self.to_ob_q, position=swap_yz(a.pose[1]), rotation=to_ursina_rotation(a.pose[0]))
             anch.pose = a.pose
             self.anchors.append(anch)
 
@@ -146,6 +146,13 @@ class ControlPanelUI:
         for a in self.anchors:
             self.lines.append(Entity(model=draw_line(a.position, self.gantry.position), color=line_color, shader=unlit_shader))
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
+
+        # an indicator of where the user wants the gantry to be during direct moves.
+        self.dmgt = DirectMoveGantryTarget(self)
+
+        # debug indicators of the visual and hang based position and velocity estimates
+        self.debug_indicator_visual = IndicatorSphere(color=color.red)
+        self.debug_indicator_hang = IndicatorSphere(color=color.blue)
 
         # show a visualization of goal positions
         self.goal_marker = GoalPoint([0,0,0], enabled=False)
@@ -250,6 +257,12 @@ class ControlPanelUI:
                 text=str(i),
                 scale=0.5,
             )
+
+        self.stop_button = Button(
+            text="STOP",
+            color=color.red,
+            position=(0.83, -0.45), scale=(.10, .033),
+            on_click=self.on_stop_button)
 
     def _create_shape_tracker_entities(self):
         # create entities that are used to visualize the internal state of the shape tracker and 3d hull contruction.
