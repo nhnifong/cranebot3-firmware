@@ -42,8 +42,3 @@ empty_spool_diameter = 22.9
 assumed_full_line_length = 7.5 # meters
 full_spool_diameter_fishing_line = 27.5
 full_spool_diameter_power_line = 43.7
-
-# precompute some inverts
-gantry_aruco_front_inv = invert_pose(gantry_aruco_front)
-anchor_cam_inv = invert_pose(anchor_camera)
-gripper_imu_inv = invert_pose(gripper_imu)
