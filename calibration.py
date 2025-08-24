@@ -5,7 +5,7 @@ import scipy.optimize as optimize
 from time import time, sleep
 import glob
 from config import Config
-from cv_common import compose_poses
+from cv_common import compose_poses, gantry_aruco_front_inv
 import model_constants
 from spools import SpiralCalculator
 from itertools import combinations
@@ -210,7 +210,7 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
                     anchor_poses[anchor_num],
                     model_constants.anchor_camera,
                     pose,
-                    model_constants.gantry_aruco_front_inv,
+                    gantry_aruco_front_inv,
                 ])
                 gantry_positions_by_anchor[anchor_num].append(global_gantry_pose[1])
 
