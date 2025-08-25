@@ -344,10 +344,10 @@ class AsyncObserver:
         await self.sendReferenceLengths(lengths)
         await asyncio.sleep(4)
 
-        # Determine the bounding box of the work area
-        min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0) * 0.5
-        max_x, max_y, _ = np.max(anchor_points, axis=0) * 0.5
-        floor_z = 0.2
+        # Determine the bounding box of the work area and shrink it to stay away from the walls and ceiling
+        min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0) * 0.6
+        max_x, max_y, _ = np.max(anchor_points, axis=0) * 0.6
+        floor_z = 0.4
         max_gantry_z = min_anchor_z
         print(f'Maximum allowed height of gantry sample point {max_gantry_z}')
 
@@ -355,19 +355,22 @@ class AsyncObserver:
         contour = anchor_points[:,0:2].astype(np.float32)
 
         # generate some sample positions within the work area
-        n_points = 20
-        random_x = np.random.uniform(min_x, max_x, n_points*2)
-        random_y = np.random.uniform(min_y, max_y, n_points*2)
-        candidate_2d_points = np.column_stack((random_x, random_y))
-        mask = np.array([cv2.pointPolygonTest(contour, pt, False) > 0 for pt in candidate_2d_points])
-        sample_2d_points = candidate_2d_points[mask] # not every point in the bounding box will be in the polygon.
+        # n_points = 20
+        # random_x = np.random.uniform(min_x, max_x, n_points*2)
+        # random_y = np.random.uniform(min_y, max_y, n_points*2)
+        # candidate_2d_points = np.column_stack((random_x, random_y))
+        # mask = np.array([cv2.pointPolygonTest(contour, pt, False) > 0 for pt in candidate_2d_points])
+        # sample_2d_points = candidate_2d_points[mask] # not every point in the bounding box will be in the polygon.
 
-        # truncate to 15 points
-        sample_2d_points = sample_2d_points[:n_points]
+        # # truncate to 15 points
+        # sample_2d_points = sample_2d_points[:n_points]
 
-        # Generate random z-coordinates for the valid 2D points
-        sample_points = np.column_stack((sample_2d_points, np.random.uniform(floor_z, max_gantry_z, len(sample_2d_points))))
-        print(f'Generated {len(sample_points)} sample positions to visit during calibration')
+        # # Generate random z-coordinates for the valid 2D points
+        # sample_points = np.column_stack((sample_2d_points, np.random.uniform(floor_z, max_gantry_z, len(sample_2d_points))))
+        # print(f'Generated {len(sample_points)} sample positions to visit during calibration')
+
+        # use an orderly grid of sample points
+        sample_points = np.mgrid[min_x:max_x:3j, min_y:max_y:4j, floor_z:max_gantry_z:2j].reshape(3, -1).T
 
         # choose an ordering of the points that results in a low travel distance
         sample_points, distance = order_points_for_low_travel(sample_points)
