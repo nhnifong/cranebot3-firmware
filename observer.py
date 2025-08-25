@@ -321,7 +321,12 @@ class AsyncObserver:
         # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
         anchor_poses = await self.locate_anchors()
         print(f'anchor poses based on origin card {anchor_poses}')
-        return
+
+        # the true distance between anchor 0 and anchor 2 should be 5.334 meters
+        a = anchor_poses[0,1,:2]
+        b = anchor_poses[1,1,:2]
+        print(f'distance between anchor 0 and 1 = {np.linalg.norm(a-b)}')
+
         for i, client in enumerate(self.anchors):
             client.anchor_pose = anchor_poses[i]
         anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
@@ -377,7 +382,7 @@ class AsyncObserver:
         print(f'Ordered points for near-optimal travel. total distance = {distance} m')
 
         # prepare to collect final observations
-        data = await collect_data_at_points(sample_points)
+        data = await self.collect_data_at_points(sample_points)
         print(f'Completed data collection. Performing optimization of calibration parameters.')
 
         # feed collected data to the optimization process in calibration.py
@@ -387,14 +392,20 @@ class AsyncObserver:
         # TODO, this should not be hard coded. somehow discover which one it is.
         power_spool_index = 2
         async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, power_spool_index))
-        result_params = async_result.get(timeout=60)
+        anchor_poses, zero_angles = async_result.get(timeout=60)
         print(f'obtained result from find_cal_params {result_params}')
 
         # Use the optimization output to update anchor poses and spool params
-        # for i, client in enumerate(self.anchors):
-        #     pose = result_params[i][0:5].reshape((2,3))
-        #     za = result_params[i][6]
-        #     self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
+        config = Config()
+        for i, client in enumerate(self.anchors):
+            config.anchors[client.anchor_num].pose = anchor_poses[client.anchor_num]
+            self.to_ui_q.put({'anchor_pose': (client.anchor_num, anchor_poses[client.anchor_num])})
+            client.anchor_pose = anchor_poses[client.anchor_num]
+            await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
+        config.write()
+        # inform position estimator
+        anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
+        self.pe.set_anchor_points(anchor_points)
 
         # move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
 
@@ -422,6 +433,7 @@ class AsyncObserver:
 
             # reel in all lines until they are tight
             await self.tension_and_wait()
+            await asyncio.sleep(2)
             cutoff = time.time()
 
             # collect several visual observations of the gantry from each camera
@@ -429,7 +441,7 @@ class AsyncObserver:
             # clear old observations
             for client in self.anchors:
                 client.raw_gant_poses = []
-            await asyncio.sleep(6)
+            await asyncio.sleep(7)
 
             v = [client.raw_gant_poses for client in self.anchors]
             # many positions are not visible to all four cameras,
@@ -725,7 +737,7 @@ class AsyncObserver:
         self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
         vector = self.gantry_goal_pos - self.pe.gant_pos
         dist = np.linalg.norm(vector)
-        speed = 0.1
+        speed = 0.2
         result = await self.move_direction_speed(vector / dist, speed, self.pe.gant_pos)
         await asyncio.sleep(dist / speed)
         self.slow_stop_all_spools()
