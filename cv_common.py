@@ -5,6 +5,7 @@ import numpy as np
 import time
 from functools import lru_cache
 from config import Config
+import model_constants
 
 config = Config()
 mtx = config.intrinsic_matrix
@@ -30,9 +31,10 @@ marker_names = [
 ]
 
 # some markers are different sizes
+fudge = 1.0400
 special_sizes = {
-    'origin': 0.186,
-    'gripper_front': 0.081,
+    'origin': 0.186 * fudge,
+    'gantry_front': 0.081 * fudge,
 }
 
 aruco_dict = aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
@@ -65,6 +67,7 @@ def locate_markers(im):
             if name in special_sizes:
                 mp = marker_points * special_sizes[name]
             else:
+                print(f'using default marker size for {name}')
                 mp = marker_points * marker_size
 
             
@@ -176,6 +179,11 @@ def compose_poses(poses):
     rvec_global, _ = cv2.Rodrigues(R_global)  # Convert back to rotation vector
 
     return rvec_global.reshape((3,)), tvec_global
+
+# precompute some inverts
+gantry_aruco_front_inv = invert_pose(model_constants.gantry_aruco_front)
+anchor_cam_inv = invert_pose(model_constants.anchor_camera)
+gripper_imu_inv = invert_pose(model_constants.gripper_imu)
 
 def generateMarkerImages(border=False):
     if border:
