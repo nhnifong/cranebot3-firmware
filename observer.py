@@ -31,8 +31,12 @@ import traceback
 import cv2
 import pickle
 
+# Define the service names for network discovery
 cranebot_anchor_service_name = 'cranebot-anchor-service'
+cranebot_anchor_power_service_name = 'cranebot-anchor-power-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
+
+N_ANCHORS = 4
 
 def figure_8_coords(t):
     """
@@ -70,6 +74,8 @@ class AsyncObserver:
         self.anchors = []
         # convenience reference to gripper client
         self.gripper_client = None
+        # The index of the anchor with the power-delivering line
+        self.power_spool_index = None
 
         # read a mapping of server names to anchor numbers from the config file
         self.config = Config()
@@ -92,6 +98,26 @@ class AsyncObserver:
         # only used for integration test only to allow some code to run right after sending the gantry to a goal point
         self.test_gantry_goal_callback = None
 
+        # Command dispatcher maps command strings to handler methods
+        self.command_handlers = {
+            'future_anchor_lines': self._handle_future_anchor_lines,
+            'future_winch_line': self._handle_future_winch_line,
+            'set_run_mode': self.set_run_mode,
+            'do_line_calibration': self.sendReferenceLengths,
+            'tension_lines': self.tension_lines,
+            'full_cal': lambda _: self.invoke_motion_task(self.full_auto_calibration()),
+            'half_cal': lambda _: self.invoke_motion_task(self.half_auto_calibration()),
+            'jog_spool': self._handle_jog_spool,
+            'toggle_previews': self._handle_toggle_previews,
+            'gantry_dir_sp': self._handle_gantry_dir_sp,
+            'gantry_goal_pos': self._handle_gantry_goal_pos,
+            'fig_8': lambda _: self.invoke_motion_task(self.move_in_figure_8()),
+            'set_grip': self._handle_set_grip,
+            'slow_stop_one': self._handle_slow_stop_one,
+            'slow_stop_all': self.stop_all,
+            'set_simulated_data_mode': self.set_simulated_data_mode,
+        }
+
     def listen_queue_updates(self, loop):
         """
         Receive any updates on our process input queue
@@ -107,89 +133,83 @@ class AsyncObserver:
             else:
                 asyncio.run_coroutine_threadsafe(self.process_update(updates), loop)
 
-    async def process_update(self, updates):
+    async def process_update(self, updates: dict):
+        """
+        Processes incoming commands from the input queue using a dispatch table.
+        This iterates through all commands in the 'updates' dictionary.
+        """
         try:
-            if 'future_anchor_lines' in updates:
-                fal = updates['future_anchor_lines']
-                if not (fal['sender'] == 'pe' and self.calmode != 'run'):
-                    for client in self.anchors:
-                        message = {'length_plan' : fal['data'][client.anchor_num].tolist()}
-                        if 'host_time' in fal:
-                            message['host_time'] = fal['host_time']
-                        asyncio.create_task(client.send_commands(message))
-
-            if 'future_winch_line' in updates:
-                fal = updates['future_winch_line']
-                if not (fal['sender'] == 'pe' and self.calmode != 'run'):
-                    if self.gripper_client is not None:
-                        message = {'length_plan' : fal['data']}
-                        await self.gripper_client.send_commands(message)
-            if 'set_run_mode' in updates:
-                print(f"set_run_mode to '{updates['set_run_mode']}'") 
-                self.set_run_mode(updates['set_run_mode'])
-            if 'do_line_calibration' in updates:
-                await self.sendReferenceLengths(updates['do_line_calibration'])
-            if 'tension_lines' in updates:
-                await self.tension_lines()
-            if 'full_cal' in updates:
-                await self.invoke_motion_task(self.full_auto_calibration())
-            if 'half_cal' in updates:
-                await self.invoke_motion_task(self.half_auto_calibration())
-            if 'jog_spool' in updates:
-                if 'anchor' in updates['jog_spool']:
-                    for client in self.anchors:
-                        if client.anchor_num == updates['jog_spool']['anchor']:
-                            asyncio.create_task(client.send_commands({
-                                'aim_speed': updates['jog_spool']['speed']
-                            }))
-                elif 'gripper' in updates['jog_spool']:
-                    # we can also jog the gripper spool
-                    print(f'gripper spool moved with update {updates}')
-                    if self.gripper_client is not None:
-                        asyncio.create_task(self.gripper_client.send_commands({
-                            'aim_speed': updates['jog_spool']['speed']
-                        }))
-            if 'toggle_previews' in updates:
-                tp = updates['toggle_previews']
-                if 'anchor' in tp:
-                    for client in self.anchors:
-                        if client.anchor_num == tp['anchor']:
-                            client.sendPreviewToUi = tp['status']
-                elif 'gripper' in tp:
-                    if self.gripper_client is not None:
-                        self.gripper_client.sendPreviewToUi = tp['status']
-            if 'gantry_dir_sp' in updates:
-                dir_sp = updates['gantry_dir_sp']
-                # we want to cancel any motion tasks that may be running when the ui issues this command.
-                # that's why we run move_direction_speed with invoke_motion_task even though it is not
-                # a motion task. it will complete immediatey.
-                await self.invoke_motion_task(self.move_direction_speed(dir_sp['direction'], dir_sp['speed']))
-            if 'gantry_goal_pos' in updates:
-                self.gantry_goal_pos = updates['gantry_goal_pos']
-                await self.invoke_motion_task(self.seek_gantry_goal())
-            if 'fig_8' in updates:
-                await self.invoke_motion_task(self.move_in_figure_8())
-            if 'set_grip' in updates:
-                if self.gripper_client is not None:
-                    asyncio.create_task(self.gripper_client.send_commands({
-                        'grip' : 'closed' if updates['set_grip'] else 'open'
-                    }))
-            if 'slow_stop_one' in updates:
-                if updates['slow_stop_one']['id'] == 'gripper':
-                    if self.gripper_client is not None:
-                        asyncio.create_task(self.gripper_client.slow_stop_spool())
+            for command, data in updates.items():
+                handler = self.command_handlers.get(command)
+                if handler:
+                    # The await handles both regular functions and coroutines
+                    result = handler(data)
+                    if asyncio.iscoroutine(result):
+                        await result
                 else:
-                    for client in self.anchors:
-                        if client.anchor_num == updates['slow_stop_one']['id']:
-                            asyncio.create_task(client.slow_stop_spool())
-            if 'slow_stop_all' in updates:
-                # this is the big red stop button
-                self.stop_all()
-            if 'set_simulated_data_mode' in updates:
-                m = updates['set_simulated_data_mode']
-                await self.set_simulated_data_mode(m)
-        except Exception as e:
+                    print(f"Warning: No handler found for command '{command}'")
+        except Exception:
             traceback.print_exc(file=sys.stderr)
+
+    #region Command Handlers
+    async def _handle_future_anchor_lines(self, fal_data: dict):
+        """Handles sending future line plans to anchors."""
+        if not (fal_data.get('sender') == 'pe' and self.calmode != 'run'):
+            for client in self.anchors:
+                message = {'length_plan': fal_data['data'][client.anchor_num].tolist()}
+                if 'host_time' in fal_data:
+                    message['host_time'] = fal_data['host_time']
+                asyncio.create_task(client.send_commands(message))
+
+    async def _handle_future_winch_line(self, fwl_data: dict):
+        """Handles sending future winch line plans to the gripper."""
+        if not (fwl_data.get('sender') == 'pe' and self.calmode != 'run'):
+            if self.gripper_client:
+                message = {'length_plan': fwl_data['data']}
+                await self.gripper_client.send_commands(message)
+
+    async def _handle_jog_spool(self, jog_data: dict):
+        """Handles manually jogging a spool motor."""
+        if 'anchor' in jog_data:
+            for client in self.anchors:
+                if client.anchor_num == jog_data['anchor']:
+                    asyncio.create_task(client.send_commands({'aim_speed': jog_data['speed']}))
+        elif 'gripper' in jog_data and self.gripper_client:
+            asyncio.create_task(self.gripper_client.send_commands({'aim_speed': jog_data['speed']}))
+
+    async def _handle_toggle_previews(self, preview_data: dict):
+        """Handles turning camera previews on or off."""
+        if 'anchor' in preview_data:
+            for client in self.anchors:
+                if client.anchor_num == preview_data['anchor']:
+                    client.sendPreviewToUi = preview_data['status']
+        elif 'gripper' in preview_data and self.gripper_client:
+            self.gripper_client.sendPreviewToUi = preview_data['status']
+
+    async def _handle_gantry_dir_sp(self, dir_sp_data: dict):
+        """Handles a direct directional move command, cancelling other motion tasks."""
+        await self.invoke_motion_task(self.move_direction_speed(dir_sp_data['direction'], dir_sp_data['speed']))
+
+    async def _handle_gantry_goal_pos(self, goal_pos: np.ndarray):
+        """Handles moving the gantry to a specific goal position."""
+        self.gantry_goal_pos = goal_pos
+        await self.invoke_motion_task(self.seek_gantry_goal())
+
+    async def _handle_set_grip(self, grip_closed: bool):
+        """Handles opening or closing the gripper."""
+        if self.gripper_client:
+            command = 'closed' if grip_closed else 'open'
+            asyncio.create_task(self.gripper_client.send_commands({'grip': command}))
+
+    async def _handle_slow_stop_one(self, stop_data: dict):
+        """Handles stopping a single spool motor."""
+        if stop_data.get('id') == 'gripper' and self.gripper_client:
+            asyncio.create_task(self.gripper_client.slow_stop_spool())
+        else:
+            for client in self.anchors:
+                if client.anchor_num == stop_data.get('id'):
+                    asyncio.create_task(client.slow_stop_spool())
+    #endregion
 
     async def invoke_motion_task(self, coro):
         """
@@ -233,8 +253,8 @@ class AsyncObserver:
 
     async def wait_for_tension(self):
         """this function returns only once all anchors are reporting tight lines in their regular line record"""
-        POLL_INTERVAL_S = 0.1
-        SPEED_SUM_THRESHOLD = 0.01
+        POLL_INTERVAL_S = 0.1 # seconds
+        SPEED_SUM_THRESHOLD = 0.01 # m/s
         
         complete = False
         while not complete:
@@ -253,8 +273,7 @@ class AsyncObserver:
         await self.wait_for_tension()
 
     async def sendReferenceLengths(self, lengths):
-        REQUIRED_NUM_LENGTHS = 4
-        if len(lengths) != REQUIRED_NUM_LENGTHS:
+        if len(lengths) != N_ANCHORS:
             print(f'Cannot send {len(lengths)} ref lengths to anchors')
             return
         # any anchor that receives this and is slack would ignore it
@@ -271,7 +290,7 @@ class AsyncObserver:
         elif mode == 'point2point':
             self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
-    def stop_all(self):
+    def stop_all(self, _=None):
         # First, cancel any high-level motion task that's running.
         # This stops new commands from being generated.
         if self.motion_task is not None and not self.motion_task.done():
@@ -303,10 +322,9 @@ class AsyncObserver:
 
     async def locate_anchors(self):
         """using the record of recent origin detections, estimate the pose of each anchor."""
-        REQUIRED_ANCHORS = 4
         MIN_ORIGIN_OBSERVATIONS = 6
         
-        if len(self.anchors) != REQUIRED_ANCHORS:
+        if len(self.anchors) != N_ANCHORS:
             print(f'anchor pose calibration should not be performed until all anchors are connected. len(anchors)={len(self.anchors)}')
             return
         anchor_poses = []
@@ -326,18 +344,19 @@ class AsyncObserver:
         """Optimize zero angles from a few points
         This is a motion task"""
         NUM_SAMPLE_POINTS = 3
-        # TODO: This should not be hardcoded.
-        POWER_SPOOL_INDEX = 2
-        OPTIMIZER_TIMEOUT_S = 60
+        OPTIMIZER_TIMEOUT_S = 60  # seconds
         
         try:
+            if len(self.anchors) < N_ANCHORS:
+                print('Cannot run half calibration until all anchors are connected')
+                return
             anchor_poses = np.array([a.anchor_pose for a in self.anchors])
             # Estimate a reasonable height for calibration points
             h = anchor_poses[0,1,2]
             sample_points = np.array([[np.cos((i/NUM_SAMPLE_POINTS)*2*np.pi), np.sin((i/NUM_SAMPLE_POINTS)*2*np.pi), h/3] for i in range(NUM_SAMPLE_POINTS)])
             data = await self.collect_data_at_points(sample_points, anchor_poses=anchor_poses)
             print(f'Starting optimizer with sample points {sample_points}')
-            async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, POWER_SPOOL_INDEX, 'zero_angles_only'))
+            async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, self.power_spool_index, 'zero_angles_only'))
             _, zero_angles = async_result.get(timeout=OPTIMIZER_TIMEOUT_S)
             print(f'zero angles obtained from optimization {zero_angles}')
             await self.tension_and_wait()
@@ -349,23 +368,20 @@ class AsyncObserver:
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
-        REQUIRED_ANCHORS = 4
-        DETECTION_WAIT_S = 1.0
-        STABILIZATION_WAIT_S = 12.0
-        SET_LENGTHS_WAIT_S = 4.0
+        DETECTION_WAIT_S = 1.0 # seconds
+        STABILIZATION_WAIT_S = 12.0 # seconds
+        SET_LENGTHS_WAIT_S = 4.0 # seconds
         BOUNDING_BOX_SCALE = 0.6
-        Z_SHIFT = 0.2
-        FLOOR_Z_OFFSET = 0.4
+        Z_SHIFT = 0.2 # meters
+        FLOOR_Z_OFFSET = 0.4 # meters
         GRID_STEPS_X = 3j
         GRID_STEPS_Y = 4j
         GRID_STEPS_Z = 2j
-        # TODO: This should not be hardcoded.
-        POWER_SPOOL_INDEX = 2
-        OPTIMIZER_TIMEOUT_S = 60
+        OPTIMIZER_TIMEOUT_S = 60 # seconds
         
         try:
-            if len(self.anchors) <= REQUIRED_ANCHORS:
-                print('Cannot fun full calibration until all anchors are connected')
+            if len(self.anchors) < N_ANCHORS:
+                print('Cannot run full calibration until all anchors are connected')
                 return
             self.anchors.sort(key=lambda x: x.anchor_num)
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
@@ -435,7 +451,7 @@ class AsyncObserver:
             with open('collected_cal_data.pickle', 'wb') as f:
                 f.write(pickle.dumps((anchor_poses, data)))
 
-            async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, POWER_SPOOL_INDEX))
+            async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, self.power_spool_index))
             anchor_poses, zero_angles = async_result.get(timeout=OPTIMIZER_TIMEOUT_S)
             print(f'obtained result from find_cal_params {result_params}')
 
@@ -456,8 +472,8 @@ class AsyncObserver:
             raise
 
     async def collect_data_at_points(self, sample_points, anchor_poses=None, save_progress=False):
-        SETTLING_TIME_S = 2.0
-        OBSERVATION_COLLECTION_TIME_S = 7.0
+        SETTLING_TIME_S = 2.0 # seconds
+        OBSERVATION_COLLECTION_TIME_S = 7.0 # seconds
         MIN_TOTAL_GANTRY_OBSERVATIONS = 3
         
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
@@ -537,8 +553,7 @@ class AsyncObserver:
         """
         Starts a client to connect to the indicated service
         """
-        INFO_REQUEST_TIMEOUT_MS = 3000
-        MAX_ANCHORS = 4
+        INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
         
         info = AsyncServiceInfo(service_type, name)
         await info.async_request(zc, INFO_REQUEST_TIMEOUT_MS)
@@ -548,7 +563,10 @@ class AsyncObserver:
         address = socket.inet_ntoa(info.addresses[0])
         name_component = name.split('.')[1]
 
-        if name_component == cranebot_anchor_service_name:
+        is_power_anchor = name_component == cranebot_anchor_power_service_name
+        is_standard_anchor = name_component == cranebot_anchor_service_name
+
+        if is_power_anchor or is_standard_anchor:
             # the number of anchors is decided ahead of time (in main.py)
             # but they are assigned numbers as we find them on the network
             # and the chosen numbers are persisted on disk
@@ -557,13 +575,22 @@ class AsyncObserver:
                 anchor_num = self.config.anchor_num_map[info.server]
             else:
                 anchor_num = len(self.config.anchor_num_map)
-                if anchor_num >= MAX_ANCHORS:
+                if anchor_num >= N_ANCHORS:
                     # we do not support yet multiple crane bot assemblies on a single network
                     print(f"Discovered another anchor server on the network, but we already know of 4 {info.server} {address}")
                     return None
                 self.config.anchor_num_map[info.server] = anchor_num
                 self.config.anchors[anchor_num].service_name = info.server
                 self.config.write()
+            
+            # If this is the power anchor, record its index.
+            if is_power_anchor:
+                if self.power_spool_index is not None:
+                    print(f"ERROR: Discovered a second power spool anchor ({info.server}) but one is already registered (anchor #{self.power_spool_index}). Ignoring.")
+                else:
+                    self.power_spool_index = anchor_num
+                    print(f"Power spool anchor discovered and assigned to anchor number {anchor_num}")
+
 
             ac = RaspiAnchorClient(address, info.port, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
             self.bot_clients[info.server] = ac
@@ -644,6 +671,7 @@ class AsyncObserver:
             await self.async_close()
 
     async def async_close(self) -> None:
+        self.stop_all()
         self.run_command_loop = False
         self.stat.run = False
         self.pe.run = False
@@ -661,7 +689,7 @@ class AsyncObserver:
         result = await asyncio.gather(*tasks)
 
     async def run_shape_tracker(self):
-        MIN_SLEEP_S = 0.05
+        MIN_SLEEP_S = 0.05 # seconds
         
         while self.run_command_loop:
             elapsed = 0
@@ -695,12 +723,12 @@ class AsyncObserver:
     async def add_simulated_data_circle(self):
         """ Simulate the gantry moving in a circle"""
         TIME_DIVISOR_FOR_ANGLE = 8.0
-        GANTRY_Z_HEIGHT = 1.3
+        GANTRY_Z_HEIGHT = 1.3 # meters
         RANDOM_EVENT_CHANCE = 0.5
-        RANDOM_NOISE_MAGNITUDE = 0.1
-        WINCH_LINE_LENGTH = 1.0
-        RANGEFINDER_OFFSET = 1.0
-        LOOP_SLEEP_S = 0.05
+        RANDOM_NOISE_MAGNITUDE = 0.1 # meters
+        WINCH_LINE_LENGTH = 1.0 # meters
+        RANGEFINDER_OFFSET = 1.0 # meters
+        LOOP_SLEEP_S = 0.05 # seconds
         
         while self.run_command_loop:
             try:
@@ -729,16 +757,16 @@ class AsyncObserver:
 
     async def add_simulated_data_point2point(self):
         """ Simulate the gantry moving from random point to random point"""
-        LOWER_Z_BOUND = 1.0
-        UPPER_Z_OFFSET = 0.3
-        MAX_SPEED_MPS = 0.2
-        GOAL_PROXIMITY_THRESHOLD = 0.03
+        LOWER_Z_BOUND = 1.0 # meters
+        UPPER_Z_OFFSET = 0.3 # meters
+        MAX_SPEED_MPS = 0.2 # m/s
+        GOAL_PROXIMITY_THRESHOLD = 0.03 # meters
         SOFT_SPEED_FACTOR = 0.25
         RANDOM_EVENT_CHANCE = 0.5
-        OBSERVATION_NOISE_STD_DEV = 0.05
-        WINCH_LINE_LENGTH = 1.0
-        RANGEFINDER_OFFSET = 1.0
-        LOOP_SLEEP_S = 0.05
+        OBSERVATION_NOISE_STD_DEV = 0.05 # meters
+        WINCH_LINE_LENGTH = 1.0 # meters
+        RANGEFINDER_OFFSET = 1.0 # meters
+        LOOP_SLEEP_S = 0.05 # seconds
         
         lower = np.min(self.pe.anchor_points, axis=0)
         upper = np.max(self.pe.anchor_points, axis=0)
@@ -798,9 +826,9 @@ class AsyncObserver:
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
         This is a motion task
         """
-        GOAL_PROXIMITY_M = 0.05
-        GANTRY_SPEED_MPS = 0.2
-        LOOP_SLEEP_S = 0.2
+        GOAL_PROXIMITY_M = 0.05 # meters
+        GANTRY_SPEED_MPS = 0.2 # m/s
+        LOOP_SLEEP_S = 0.2 # seconds
         
         try:
             self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
@@ -823,7 +851,7 @@ class AsyncObserver:
         """Only measures current position once, then moves in the right direction
         for the amount of time it should take to get to the goal.
         This is a motion task."""
-        GANTRY_SPEED_MPS = 0.2
+        GANTRY_SPEED_MPS = 0.2 # m/s
         
         try:
             self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
@@ -854,9 +882,9 @@ class AsyncObserver:
         but we don't have that info. alternatively we could calibrate the bias to make horizontal movements level
         according to the laser rangefinder.
         """
-        DOWNWARD_BIAS_Z = -0.08
+        DOWNWARD_BIAS_Z = -0.08 # meters
         KINEMATICS_STEP_SCALE = 10.0 # Determines the size of the virtual step to calculate line speed derivatives
-        MAX_LINE_SPEED_MPS = 0.5
+        MAX_LINE_SPEED_MPS = 0.5 # m/s
         
         if speed == 0:
             for client in self.anchors:
@@ -894,12 +922,12 @@ class AsyncObserver:
         Move in a figure-8 pattern until interrupted by some other input.
         This is a motion task.
         """
-        PATTERN_HEIGHT = 1.5
-        GANTRY_SPEED_MPS = 0.2
-        CIRCUIT_DISTANCE_M = 18.85 # Pre-calculated path length for a=2
-        PLAN_SEND_INTERVAL_S = 1.0
-        PLAN_DURATION_S = 1.3
-        PLAN_STEP_INTERVAL_S = 1/30
+        PATTERN_HEIGHT = 1.5 # meters
+        GANTRY_SPEED_MPS = 0.2 # m/s
+        CIRCUIT_DISTANCE_M = 18.85 # meters
+        PLAN_SEND_INTERVAL_S = 1.0 # seconds
+        PLAN_DURATION_S = 1.3 # seconds
+        PLAN_STEP_INTERVAL_S = 1/30 # seconds
         
         # move to starting position (over origin)
         try:

@@ -367,7 +367,11 @@ class RaspiAnchorServer(RobotComponentServer):
                 full_length=model_constants.assumed_full_line_length,
                 conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
         unique = ''.join(get_mac_address().split(':'))
-        self.service_name = 'cranebot-anchor-service.' + unique
+
+        if power_anchor:
+            self.service_name = 'cranebot-anchor-power-service.' + unique
+        else:
+            self.service_name = 'cranebot-anchor-service.' + unique
 
         if gpio_ready:
             GPIO.setmode(GPIO.BCM)

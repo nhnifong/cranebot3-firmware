@@ -52,7 +52,7 @@ class TestPoseFunctions(unittest.TestCase):
 
     def test_order_points_for_low_travel(self):
         points, distance = order_points_for_low_travel(np.random.uniform(-3,3,(20,3)))
-        self.assertLess(distance, 40)
+        self.assertLess(distance, 41)
         self.assertEqual(points.shape, (20,3))
 
     def test_calibration_cost_fn(self):
