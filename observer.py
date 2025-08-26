@@ -15,7 +15,6 @@ from zeroconf.asyncio import (
     InterfaceChoice,
 )
 from multiprocessing import Pool
-from math import sin,cos,pi
 import numpy as np
 import scipy.optimize as optimize
 from data_store import DataStore
@@ -32,42 +31,31 @@ import traceback
 import cv2
 import pickle
 
-fields = ['Content-Type', 'Content-Length', 'X-Timestamp-Sec', 'X-Timestamp-Usec']
 cranebot_anchor_service_name = 'cranebot-anchor-service'
 cranebot_gripper_service_name = 'cranebot-gripper-service'
-
-def anchor_pose_cost_fn(params, observations):
-    """mean squared error between expected and actual observations given pose
-    params = [rx,ry,rz,x,y,z]
-    """
-    # what is the expected observed origin pose given these parameters
-    anchor_pose = params.reshape((2,3))
-    expected_origin_pose = np.array(invert_pose(compose_poses([anchor_pose, model_constants.anchor_camera])))
-    distances = np.linalg.norm(observations.reshape(-1,6) - expected_origin_pose.reshape(6), axis=1)
-    return np.mean(distances**2)
 
 def figure_8_coords(t):
     """
     Calculates the (x, y) coordinates for a figure-8.
     figure fits within a box from -2 to +2
     Args:
-        t: The input parameter (angle in radians, typically from 0 to 2*pi).
+        t: The input parameter (angle in radians, from 0 to 2*pi).
     Returns:
         A tuple (x, y) representing the position on the figure-8.
     """
-    x = 2 * math.sin(t)
-    y = 2 * math.sin(2 * t)
+    x = 2 * np.sin(t)
+    y = 2 * np.sin(2 * t)
     return (x, y)
 
 # Manager of multiple tasks running clients connected to each robot component
 # The job of this class in a nutshell is to discover four anchors and a gripper on the network,
-# connect to them, and forward data between them and the position estimate, shape tracker, and UI.
+# connect to them, and forward data between them and the position estimator, shape tracker, and UI.
 class AsyncObserver:
     def __init__(self, to_ui_q, to_ob_q) -> None:
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
-        self.send_position_updates = True
+        self.run_command_loop = True
         self.calmode = "pause"
         self.detection_count = 0
 
@@ -87,7 +75,7 @@ class AsyncObserver:
         self.config = Config()
         self.config.write()
 
-        self.stat = StatCounter(to_ui_q)
+        self.stat = StatCounter(self.to_ui_q)
 
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -97,6 +85,11 @@ class AsyncObserver:
 
         self.sim_task = None
         self.locate_anchor_task = None
+        
+        # only one motion task can be active at a time
+        self.motion_task = None
+
+        # only used for integration test only to allow some code to run right after sending the gantry to a goal point
         self.test_gantry_goal_callback = None
 
     def listen_queue_updates(self, loop):
@@ -106,7 +99,7 @@ class AsyncObserver:
         this thread doesn't actually have a running event loop.
         so run any coroutines back in the main thread with asyncio.run_coroutine_threadsafe
         """
-        while self.send_position_updates:
+        while self.run_command_loop:
             updates = self.to_ob_q.get()
             if 'STOP' in updates:
                 print('Observer shutdown')
@@ -137,11 +130,11 @@ class AsyncObserver:
             if 'do_line_calibration' in updates:
                 await self.sendReferenceLengths(updates['do_line_calibration'])
             if 'tension_lines' in updates:
-                asyncio.create_task(self.tension_lines())
+                await self.tension_lines()
             if 'full_cal' in updates:
-                asyncio.create_task(self.full_auto_calibration())
+                await self.invoke_motion_task(self.full_auto_calibration())
             if 'half_cal' in updates:
-                asyncio.create_task(self.half_auto_calibration())
+                await self.invoke_motion_task(self.half_auto_calibration())
             if 'jog_spool' in updates:
                 if 'anchor' in updates['jog_spool']:
                     for client in self.anchors:
@@ -167,14 +160,15 @@ class AsyncObserver:
                         self.gripper_client.sendPreviewToUi = tp['status']
             if 'gantry_dir_sp' in updates:
                 dir_sp = updates['gantry_dir_sp']
-                self.gantry_goal_pos = None
-                asyncio.create_task(self.move_direction_speed(dir_sp['direction'], dir_sp['speed']))
+                # we want to cancel any motion tasks that may be running when the ui issues this command.
+                # that's why we run move_direction_speed with invoke_motion_task even though it is not
+                # a motion task. it will complete immediatey.
+                await self.invoke_motion_task(self.move_direction_speed(dir_sp['direction'], dir_sp['speed']))
             if 'gantry_goal_pos' in updates:
                 self.gantry_goal_pos = updates['gantry_goal_pos']
-                asyncio.create_task(self.seek_gantry_goal())
+                await self.invoke_motion_task(self.seek_gantry_goal())
             if 'fig_8' in updates:
-                # todo we need to keep track of a single task at a time that is able to send control inputs
-                asyncio.create_task(self.move_in_figure_8())
+                await self.invoke_motion_task(self.move_in_figure_8())
             if 'set_grip' in updates:
                 if self.gripper_client is not None:
                     asyncio.create_task(self.gripper_client.send_commands({
@@ -189,23 +183,48 @@ class AsyncObserver:
                         if client.anchor_num == updates['slow_stop_one']['id']:
                             asyncio.create_task(client.slow_stop_spool())
             if 'slow_stop_all' in updates:
-                self.slow_stop_all_spools()
+                # this is the big red stop button
+                self.stop_all()
             if 'set_simulated_data_mode' in updates:
                 m = updates['set_simulated_data_mode']
                 await self.set_simulated_data_mode(m)
-            if 'confirm_anchors' in updates:
-                poses = updates['confirm_anchors']
-                for client in self.anchors:
-                    if client.anchor_num in poses:
-                        client.anchor_pose = poses[client.anchor_num]
-                        self.config.anchors[client.anchor_num].pose = client.anchor_pose
-                        self.pe.anchor_points[client.anchor_num] = client.anchor_pose[1]
-                self.config.write()
         except Exception as e:
             traceback.print_exc(file=sys.stderr)
 
+    async def invoke_motion_task(self, coro):
+        """
+        Cancel whatever else is happening and start a new long running motion task
+        Any task that can be called this way is known in this file as a "motion task"
+        The defining feature of a motion task is that it could send a second motion command to any client after any amount of sleeping
+        every motion task must have the follwing structure
+
+        try:
+            # do something
+        except asyncio.CancelledError:
+            raise
+        finally:
+            # perform any clean up work
+
+        Do not call invoke_motion_task from within a motion task or it will cancel itself.
+        It is ok to call a motion task from within another, just don't start it with invoke_motion_task
+        Do not call stop_all from within a motion task. use slow_stop_all_spools instead
+
+        """
+        if self.motion_task is not None and not self.motion_task.done():
+            print(f"Cancelling previous motion task: {self.motion_task.get_name()}")
+            self.motion_task.cancel()
+            try:
+                # Wait briefly for the old task's cleanup to complete.
+                await self.motion_task
+            except asyncio.CancelledError:
+                pass # Expected behavior
+
+        self.motion_task = asyncio.create_task(coro)
+        self.motion_task.set_name(coro.__name__)
+
     async def tension_lines(self):  
-        """Request all anchors to reel in all lines until tight"""
+        """Request all anchors to reel in all lines until tight.
+        This is a fire and forget function"""
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'tighten': None}))
         # This function does not  wait for confirmation from every anchor, as it would just hold up the processing of the ob_q
@@ -213,25 +232,29 @@ class AsyncObserver:
         # thus, it should be done while paused.
 
     async def wait_for_tension(self):
-        """this function returns only once all anchors are reporting tight lines in their regular line record
-        """
+        """this function returns only once all anchors are reporting tight lines in their regular line record"""
+        POLL_INTERVAL_S = 0.1
+        SPEED_SUM_THRESHOLD = 0.01
+        
         complete = False
         while not complete:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(POLL_INTERVAL_S)
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
             tight = np.array(records[:,3])
             print(f'wait for tension speeds={speeds} tight={tight}')
-            complete = np.all(tight) and abs(np.sum(speeds)) < 0.01
+            complete = np.all(tight) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
         return True
 
     async def tension_and_wait(self):
+        """Send tightening command and wait until lines appear tight. This is not a motion task"""
         print('Tightening all lines')
         await self.tension_lines()
         await self.wait_for_tension()
 
     async def sendReferenceLengths(self, lengths):
-        if len(lengths) != 4:
+        REQUIRED_NUM_LENGTHS = 4
+        if len(lengths) != REQUIRED_NUM_LENGTHS:
             print(f'Cannot send {len(lengths)} ref lengths to anchors')
             return
         # any anchor that receives this and is slack would ignore it
@@ -248,8 +271,16 @@ class AsyncObserver:
         elif mode == 'point2point':
             self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
+    def stop_all(self):
+        # First, cancel any high-level motion task that's running.
+        # This stops new commands from being generated.
+        if self.motion_task is not None and not self.motion_task.done():
+            print(f"Cancelling previous motion task: {self.motion_task.get_name()}")
+            self.motion_task.cancel()
+            self.motion_task = None
+        self.slow_stop_all_spools()
+
     def slow_stop_all_spools(self):
-        self.fig_8 = False
         for name, client in self.bot_clients.items():
             # Slow stop all spools. gripper too
             asyncio.create_task(client.slow_stop_spool())
@@ -265,19 +296,22 @@ class AsyncObserver:
             print("run mode")
         elif mode == "pause":
             self.calmode = mode
-            self.slow_stop_all_spools()
+            self.stop_all()
         elif mode == 'pose':
             self.calmode = mode
             self.locate_anchor_task = asyncio.create_task(self.locate_anchors())
 
     async def locate_anchors(self):
         """using the record of recent origin detections, estimate the pose of each anchor."""
-        if len(self.anchors) != 4:
+        REQUIRED_ANCHORS = 4
+        MIN_ORIGIN_OBSERVATIONS = 6
+        
+        if len(self.anchors) != REQUIRED_ANCHORS:
             print(f'anchor pose calibration should not be performed until all anchors are connected. len(anchors)={len(self.anchors)}')
             return
         anchor_poses = []
         for client in self.anchors:
-            if len(client.origin_poses) < 6:
+            if len(client.origin_poses) < MIN_ORIGIN_OBSERVATIONS:
                 print(f'Too few origin observations ({len(client.origin_poses)}) from anchor {client.anchor_num}')
                 continue
             print(f'locating anchor {client.anchor_num} from {len(client.origin_poses)} detections')
@@ -289,127 +323,143 @@ class AsyncObserver:
 
 
     async def half_auto_calibration(self):
-        """Optimize zero angles from a few points"""
-        n = 3 # number of points
-        d = 1.5 # diameter in meters
-        anchor_poses = np.array([a.anchor_pose for a in self.anchors])
-        h = anchor_poses[0,1,2] # 1/3 of the way between the floor and ceiling
-        sample_points = np.array([[cos((i/n)*2*pi), sin((i/n)*2*pi), h/3] for i in range(n)])
-        data = await self.collect_data_at_points(sample_points)
-        power_spool_index = 2
-        print(f'Starting optimizer with sample points {sample_points}')
-        async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, power_spool_index, 'zero_angles_only'))
-        _, zero_angles = async_result.get(timeout=60)
-        print(f'zero angles obtained from optimization {zero_angles}')
-        await self.tension_and_wait()
-        for client in self.anchors:
-            await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
+        """Optimize zero angles from a few points
+        This is a motion task"""
+        NUM_SAMPLE_POINTS = 3
+        # TODO: This should not be hardcoded.
+        POWER_SPOOL_INDEX = 2
+        OPTIMIZER_TIMEOUT_S = 60
+        
+        try:
+            anchor_poses = np.array([a.anchor_pose for a in self.anchors])
+            # Estimate a reasonable height for calibration points
+            h = anchor_poses[0,1,2]
+            sample_points = np.array([[np.cos((i/NUM_SAMPLE_POINTS)*2*np.pi), np.sin((i/NUM_SAMPLE_POINTS)*2*np.pi), h/3] for i in range(NUM_SAMPLE_POINTS)])
+            data = await self.collect_data_at_points(sample_points, anchor_poses=anchor_poses)
+            print(f'Starting optimizer with sample points {sample_points}')
+            async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, POWER_SPOOL_INDEX, 'zero_angles_only'))
+            _, zero_angles = async_result.get(timeout=OPTIMIZER_TIMEOUT_S)
+            print(f'zero angles obtained from optimization {zero_angles}')
+            await self.tension_and_wait()
+            for client in self.anchors:
+                await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
+        except asyncio.CancelledError:
+            raise
 
     async def full_auto_calibration(self):
-        """Automatically determine anchor poses and zero angles"""
-
-        self.anchors.sort(key=lambda x: x.anchor_num)
-        # collect observations of origin card aruco marker to get initial guess of anchor poses.
-        #   origin pose detections are actually always stored by all connected clients,
-        #   it is only necessary to ensure enough have been collected from each client and average them.
-        num_o_dets = [len(client.origin_poses) for client in self.anchors]
-        while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
-            assert len(self.anchors) == 4
-            print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
-            await asyncio.sleep(1)
+        """Automatically determine anchor poses and zero angles
+        This is a motion task"""
+        REQUIRED_ANCHORS = 4
+        DETECTION_WAIT_S = 1.0
+        STABILIZATION_WAIT_S = 12.0
+        SET_LENGTHS_WAIT_S = 4.0
+        BOUNDING_BOX_SCALE = 0.6
+        Z_SHIFT = 0.2
+        FLOOR_Z_OFFSET = 0.4
+        GRID_STEPS_X = 3j
+        GRID_STEPS_Y = 4j
+        GRID_STEPS_Z = 2j
+        # TODO: This should not be hardcoded.
+        POWER_SPOOL_INDEX = 2
+        OPTIMIZER_TIMEOUT_S = 60
+        
+        try:
+            if len(self.anchors) <= REQUIRED_ANCHORS:
+                print('Cannot fun full calibration until all anchors are connected')
+                return
+            self.anchors.sort(key=lambda x: x.anchor_num)
+            # collect observations of origin card aruco marker to get initial guess of anchor poses.
+            #   origin pose detections are actually always stored by all connected clients,
+            #   it is only necessary to ensure enough have been collected from each client and average them.
             num_o_dets = [len(client.origin_poses) for client in self.anchors]
-        # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
-        anchor_poses = await self.locate_anchors()
-        print(f'anchor poses based on origin card {anchor_poses}')
+            while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
+                print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
+                await asyncio.sleep(DETECTION_WAIT_S)
+                num_o_dets = [len(client.origin_poses) for client in self.anchors]
+            # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
+            anchor_poses = await self.locate_anchors()
+            print(f'anchor poses based on origin card {anchor_poses}')
 
-        # the true distance between anchor 0 and anchor 2 should be 5.334 meters
-        a = anchor_poses[0,1,:2]
-        b = anchor_poses[1,1,:2]
-        print(f'distance between anchor 0 and 1 = {np.linalg.norm(a-b)}')
+            # the true distance between anchor 0 and anchor 2 should be 5.334 meters
+            a = anchor_poses[0,1,:2]
+            b = anchor_poses[1,1,:2]
+            print(f'distance between anchor 0 and 1 = {np.linalg.norm(a-b)}')
 
-        for i, client in enumerate(self.anchors):
-            client.anchor_pose = anchor_poses[i]
-        anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
-        self.pe.set_anchor_points(anchor_points)
-        print(f'Provisional anchor points relative to origin card {anchor_points}')
+            for i, client in enumerate(self.anchors):
+                client.anchor_pose = anchor_poses[i]
+            anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
+            self.pe.set_anchor_points(anchor_points)
+            print(f'Provisional anchor points relative to origin card \n{anchor_points}')
 
-        # reel in all lines until the switches indicate they are tight
-        await self.tension_and_wait()
-        cutoff = time.time()
-        print('Collecting observations of gantry now that its still and lines are tight')
-        await asyncio.sleep(12)
+            # reel in all lines until the switches indicate they are tight
+            await self.tension_and_wait()
+            cutoff = time.time()
+            print('Collecting observations of gantry now that its still and lines are tight')
+            await asyncio.sleep(STABILIZATION_WAIT_S)
 
-        # use aruco observations of gantry to obtain initial guesses for zero angles
-        # use this information to perform rough movements
-        gantry_data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
-        position = np.mean(gantry_data[:,1:], axis=0)
-        print(f'the visual position of the gantry is {position}')
-        lengths = np.linalg.norm(anchor_points - position, axis=1)
-        print(f'Line lengths from coarse calibration ={lengths}')
-        await self.sendReferenceLengths(lengths)
-        await asyncio.sleep(4)
+            # use aruco observations of gantry to obtain initial guesses for zero angles
+            # use this information to perform rough movements
+            gantry_data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
+            position = np.mean(gantry_data[:,1:], axis=0)
+            print(f'the visual position of the gantry is {position}')
+            lengths = np.linalg.norm(anchor_points - position, axis=1)
+            print(f'Line lengths from coarse calibration ={lengths}')
+            await self.sendReferenceLengths(lengths)
+            await asyncio.sleep(SET_LENGTHS_WAIT_S)
 
-        # Determine the bounding box of the work area and shrink it to stay away from the walls and ceiling
-        min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0) * 0.6
-        max_x, max_y, _ = np.max(anchor_points, axis=0) * 0.6
-        floor_z = 0.4
-        max_gantry_z = min_anchor_z
-        print(f'Maximum allowed height of gantry sample point {max_gantry_z}')
+            # Determine the bounding box of the work area and shrink it to stay away from the walls and ceiling
+            min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0) * BOUNDING_BOX_SCALE
+            max_x, max_y, _ = np.max(anchor_points, axis=0) * BOUNDING_BOX_SCALE
+            floor_z = FLOOR_Z_OFFSET - Z_SHIFT
+            max_gantry_z = min_anchor_z - Z_SHIFT
+            print(f'Maximum allowed height of gantry sample point {max_gantry_z}')
 
-        # make a polygon of the exact work area so we can test if points are inside it
-        contour = anchor_points[:,0:2].astype(np.float32)
+            # make a polygon of the exact work area so we can test if points are inside it
+            contour = anchor_points[:,0:2].astype(np.float32)
 
-        # generate some sample positions within the work area
-        # n_points = 20
-        # random_x = np.random.uniform(min_x, max_x, n_points*2)
-        # random_y = np.random.uniform(min_y, max_y, n_points*2)
-        # candidate_2d_points = np.column_stack((random_x, random_y))
-        # mask = np.array([cv2.pointPolygonTest(contour, pt, False) > 0 for pt in candidate_2d_points])
-        # sample_2d_points = candidate_2d_points[mask] # not every point in the bounding box will be in the polygon.
+            # still evaluating whether this random sample point method was better than the orderly method, so don't delete it yet
+            # ... (commented block remains)
 
-        # # truncate to 15 points
-        # sample_2d_points = sample_2d_points[:n_points]
+            # use an orderly grid of sample points
+            sample_points = np.mgrid[min_x:max_x:GRID_STEPS_X, min_y:max_y:GRID_STEPS_Y, floor_z:max_gantry_z:GRID_STEPS_Z].reshape(3, -1).T
 
-        # # Generate random z-coordinates for the valid 2D points
-        # sample_points = np.column_stack((sample_2d_points, np.random.uniform(floor_z, max_gantry_z, len(sample_2d_points))))
-        # print(f'Generated {len(sample_points)} sample positions to visit during calibration')
+            # choose an ordering of the points that results in a low travel distance
+            sample_points, distance = order_points_for_low_travel(sample_points)
+            print(f'Ordered points for near-optimal travel. total distance = {distance} m')
 
-        # use an orderly grid of sample points
-        sample_points = np.mgrid[min_x:max_x:3j, min_y:max_y:4j, floor_z:max_gantry_z:2j].reshape(3, -1).T
+            # prepare to collect final observations
+            data = await self.collect_data_at_points(sample_points, anchor_poses=anchor_poses, save_progress=True)
+            print(f'Completed data collection. Performing optimization of calibration parameters.')
 
-        # choose an ordering of the points that results in a low travel distance
-        sample_points, distance = order_points_for_low_travel(sample_points)
-        print(f'Ordered points for near-optimal travel. total distance = {distance} m')
+            # feed collected data to the optimization process in calibration.py
+            with open('collected_cal_data.pickle', 'wb') as f:
+                f.write(pickle.dumps((anchor_poses, data)))
 
-        # prepare to collect final observations
-        data = await self.collect_data_at_points(sample_points)
-        print(f'Completed data collection. Performing optimization of calibration parameters.')
+            async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, POWER_SPOOL_INDEX))
+            anchor_poses, zero_angles = async_result.get(timeout=OPTIMIZER_TIMEOUT_S)
+            print(f'obtained result from find_cal_params {result_params}')
 
-        # feed collected data to the optimization process in calibration.py
-        with open('collected_cal_data.pickle', 'wb') as f:
-            f.write(pickle.dumps((anchor_poses, data)))
+            # Use the optimization output to update anchor poses and spool params
+            config = Config()
+            for i, client in enumerate(self.anchors):
+                config.anchors[client.anchor_num].pose = anchor_poses[client.anchor_num]
+                self.to_ui_q.put({'anchor_pose': (client.anchor_num, anchor_poses[client.anchor_num])})
+                client.anchor_pose = anchor_poses[client.anchor_num]
+                await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
+            config.write()
+            # inform position estimator
+            anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
+            self.pe.set_anchor_points(anchor_points)
 
-        # TODO, this should not be hard coded. somehow discover which one it is.
-        power_spool_index = 2
-        async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, power_spool_index))
-        anchor_poses, zero_angles = async_result.get(timeout=60)
-        print(f'obtained result from find_cal_params {result_params}')
+            # move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
+        except asyncio.CancelledError:
+            raise
 
-        # Use the optimization output to update anchor poses and spool params
-        config = Config()
-        for i, client in enumerate(self.anchors):
-            config.anchors[client.anchor_num].pose = anchor_poses[client.anchor_num]
-            self.to_ui_q.put({'anchor_pose': (client.anchor_num, anchor_poses[client.anchor_num])})
-            client.anchor_pose = anchor_poses[client.anchor_num]
-            await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
-        config.write()
-        # inform position estimator
-        anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
-        self.pe.set_anchor_points(anchor_points)
-
-        # move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
-
-    async def collect_data_at_points(self, sample_points):
+    async def collect_data_at_points(self, sample_points, anchor_poses=None, save_progress=False):
+        SETTLING_TIME_S = 2.0
+        OBSERVATION_COLLECTION_TIME_S = 7.0
+        MIN_TOTAL_GANTRY_OBSERVATIONS = 3
+        
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
         # not the poses in self.datastore.gantry_pos so we set a flag in the anchor clients that cause them to save that
         for client in self.anchors:
@@ -424,16 +474,16 @@ class AsyncObserver:
             # move to a position.
             print(f'Moving to point {i+1}/{len(sample_points)} at {point}')
             self.gantry_goal_pos = point
-            await self.blind_move_to_goal()
+            await self.invoke_motion_task(self.blind_move_to_goal())
             # await self.seek_gantry_goal()
 
-            # integraiton test specific behavior
+            # integration-test specific behavior
             if self.test_gantry_goal_callback is not None:
                 self.test_gantry_goal_callback(point)
 
             # reel in all lines until they are tight
             await self.tension_and_wait()
-            await asyncio.sleep(2)
+            await asyncio.sleep(SETTLING_TIME_S)
             cutoff = time.time()
 
             # collect several visual observations of the gantry from each camera
@@ -441,12 +491,12 @@ class AsyncObserver:
             # clear old observations
             for client in self.anchors:
                 client.raw_gant_poses = []
-            await asyncio.sleep(7)
+            await asyncio.sleep(OBSERVATION_COLLECTION_TIME_S)
 
             v = [client.raw_gant_poses for client in self.anchors]
             # many positions are not visible to all four cameras,
             # but to use this calibration point, the gantry must have been oberved at least three times in total.
-            if sum([len(poses) for poses in v]) >= 3:
+            if sum([len(poses) for poses in v]) >= MIN_TOTAL_GANTRY_OBSERVATIONS:
                 # save current raw encoder angles and visual observations
                 entry = {
                     'encoders': [client.last_raw_encoder for client in self.anchors],
@@ -455,9 +505,11 @@ class AsyncObserver:
                 print(f'Collected {len(v[0])}, {len(v[1])}, {len(v[2])}, {len(v[3])} visual observations of gantry pose')
                 data.append(entry)
 
-                # save data after every collected point.
-                # with open('collected_cal_data.pickle', 'wb') as f:
-                #     f.write(pickle.dumps((anchor_poses, data)))
+                # save data after every collected point if requested.
+                if save_progress and anchor_poses is not None:
+                    print("Saving calibration progress to 'collected_cal_data.pickle'...")
+                    with open('collected_cal_data.pickle', 'wb') as f:
+                        f.write(pickle.dumps((anchor_poses, data)))
             else:
                 print(f'Point {point} skipped because gantry could not be observed in that position')
 
@@ -485,8 +537,11 @@ class AsyncObserver:
         """
         Starts a client to connect to the indicated service
         """
+        INFO_REQUEST_TIMEOUT_MS = 3000
+        MAX_ANCHORS = 4
+        
         info = AsyncServiceInfo(service_type, name)
-        await info.async_request(zc, 3000)
+        await info.async_request(zc, INFO_REQUEST_TIMEOUT_MS)
         if not info or info.server is None or info.server == '':
             return None;
         print(f"Service {name} added, service info: {info}, type: {service_type}")
@@ -502,7 +557,7 @@ class AsyncObserver:
                 anchor_num = self.config.anchor_num_map[info.server]
             else:
                 anchor_num = len(self.config.anchor_num_map)
-                if anchor_num >= 4:
+                if anchor_num >= MAX_ANCHORS:
                     # we do not support yet multiple crane bot assemblies on a single network
                     print(f"Discovered another anchor server on the network, but we already know of 4 {info.server} {address}")
                     return None
@@ -541,8 +596,9 @@ class AsyncObserver:
             del self.bot_clients[key]
 
     async def main(self) -> None:
+        POOL_PROCESSES = 8
         # main process loop
-        with Pool(processes=8) as pool:
+        with Pool(processes=POOL_PROCESSES) as pool:
             self.pool = pool
             if self.aiozc is None:
                 self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=InterfaceChoice.All)
@@ -564,8 +620,10 @@ class AsyncObserver:
             print("start observer's queue listener task")
             self.ob_queue_task = asyncio.create_task(asyncio.to_thread(self.listen_queue_updates, loop=asyncio.get_running_loop()))
 
+            # statistic counter - measures things like average camera frame latency
             asyncio.create_task(self.stat.stat_main())
 
+            # experimental object segmentation model
             if self.enable_shape_tracking:
                 # FastSAM model
                 from segment import ShapeTracker
@@ -573,21 +631,22 @@ class AsyncObserver:
                 asyncio.create_task(self.run_shape_tracker())
 
             # self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
+
+            # A task that continuously estimates the position of the gantry
             asyncio.create_task(self.pe.main())
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
-                # tasks started with to_thread must used result = await or exceptions that occur within them are silenced.
+                # tasks started with to_thread must use result = await or exceptions that occur within them are silenced.
                 result = await self.ob_queue_task
             except asyncio.exceptions.CancelledError:
                 pass
             await self.async_close()
 
     async def async_close(self) -> None:
-        self.send_position_updates = False
+        self.run_command_loop = False
         self.stat.run = False
         self.pe.run = False
-        self.fig_8 = False
         tasks = []
         if self.aiobrowser is not None:
             tasks.append(self.aiobrowser.async_cancel())
@@ -602,7 +661,9 @@ class AsyncObserver:
         result = await asyncio.gather(*tasks)
 
     async def run_shape_tracker(self):
-        while self.send_position_updates:
+        MIN_SLEEP_S = 0.05
+        
+        while self.run_command_loop:
             elapsed = 0
             if self.calmode == "pose":
                 # send the UI some shapes representing the whole frustum of each camera
@@ -622,29 +683,37 @@ class AsyncObserver:
                 prisms = []
                 for sdict in self.shape_tracker.last_shapes_by_camera:
                     prisms.extend(sdict.values())
-                if not self.send_position_updates:
+                if not self.run_command_loop:
                     return
                 self.to_ui_q.put({
                     'solids': trimesh_list,
                     'prisms': prisms,
                 })
 
-            await asyncio.sleep(max(0.05, self.shape_tracker.preferred_delay - elapsed))
+            await asyncio.sleep(max(MIN_SLEEP_S, self.shape_tracker.preferred_delay - elapsed))
 
     async def add_simulated_data_circle(self):
         """ Simulate the gantry moving in a circle"""
-        while self.send_position_updates:
+        TIME_DIVISOR_FOR_ANGLE = 8.0
+        GANTRY_Z_HEIGHT = 1.3
+        RANDOM_EVENT_CHANCE = 0.5
+        RANDOM_NOISE_MAGNITUDE = 0.1
+        WINCH_LINE_LENGTH = 1.0
+        RANGEFINDER_OFFSET = 1.0
+        LOOP_SLEEP_S = 0.05
+        
+        while self.run_command_loop:
             try:
                 t = time.time()
-                gantry_real_pos = np.array([t, sin(t/8), cos(t/8), 1.3])
-                if random()>0.5:
-                    dp = gantry_real_pos + np.array([0, random()*0.1, random()*0.1, random()*0.1])
+                gantry_real_pos = np.array([t, np.sin(t/TIME_DIVISOR_FOR_ANGLE), np.cos(t/TIME_DIVISOR_FOR_ANGLE), GANTRY_Z_HEIGHT])
+                if random() > RANDOM_EVENT_CHANCE:
+                    dp = gantry_real_pos + np.array([0, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE])
                     self.datastore.gantry_pos.insert(dp)
                     self.to_ui_q.put({'gantry_observation': dp[1:]})
                 # winch line always 1 meter
-                self.datastore.winch_line_record.insert(np.array([t, 1.0, 0.0]))
+                self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
                 # range always perfect
-                self.datastore.range_record.insert(np.array([t, gantry_real_pos[3]-1]))
+                self.datastore.range_record.insert(np.array([t, gantry_real_pos[3]-RANGEFINDER_OFFSET]))
                 # anchor lines always perfectly agree with gripper position
                 for i, simanc in enumerate(self.pe.anchor_points):
                     dist = np.linalg.norm(simanc - gantry_real_pos[1:])
@@ -654,23 +723,33 @@ class AsyncObserver:
                     speed = travel/timesince
                     self.datastore.anchor_line_record[i].insert(np.array([t, dist, speed, 1.0]))
                 tt = self.datastore.anchor_line_record[0].getLast()[0]
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(LOOP_SLEEP_S)
             except asyncio.exceptions.CancelledError:
                 break
 
     async def add_simulated_data_point2point(self):
         """ Simulate the gantry moving from random point to random point"""
+        LOWER_Z_BOUND = 1.0
+        UPPER_Z_OFFSET = 0.3
+        MAX_SPEED_MPS = 0.2
+        GOAL_PROXIMITY_THRESHOLD = 0.03
+        SOFT_SPEED_FACTOR = 0.25
+        RANDOM_EVENT_CHANCE = 0.5
+        OBSERVATION_NOISE_STD_DEV = 0.05
+        WINCH_LINE_LENGTH = 1.0
+        RANGEFINDER_OFFSET = 1.0
+        LOOP_SLEEP_S = 0.05
+        
         lower = np.min(self.pe.anchor_points, axis=0)
         upper = np.max(self.pe.anchor_points, axis=0)
-        lower[2]=1
-        upper[2] = upper[2]-0.3
+        lower[2] = LOWER_Z_BOUND
+        upper[2] = upper[2] - UPPER_Z_OFFSET
         # starting position
         gantry_real_pos = np.random.uniform(lower, upper)
         # initial goal
         travel_goal = np.random.uniform(lower, upper)
-        max_speed = 0.2 # m/s
         t = time.time()
-        while self.send_position_updates:
+        while self.run_command_loop:
             try:
                 now = time.time()
                 elapsed_time = now - t
@@ -678,23 +757,23 @@ class AsyncObserver:
                 # move the gantry towards the goal
                 to_goal_vec = travel_goal - gantry_real_pos
                 dist_to_goal = np.linalg.norm(to_goal_vec)
-                if dist_to_goal < 0.03:
+                if dist_to_goal < GOAL_PROXIMITY_THRESHOLD:
                     # choose new goal
                     travel_goal = np.random.uniform(lower, upper)
                 else:
-                    soft_speed = dist_to_goal * 0.25
+                    soft_speed = dist_to_goal * SOFT_SPEED_FACTOR
                     # normalize
                     to_goal_vec = to_goal_vec / dist_to_goal
-                    velocity = to_goal_vec * min(soft_speed, max_speed)
+                    velocity = to_goal_vec * min(soft_speed, MAX_SPEED_MPS)
                     gantry_real_pos = gantry_real_pos + velocity * elapsed_time
-                if random()>0.5:
-                    dp = np.concatenate([[t], gantry_real_pos + np.random.normal(0, 0.05, (3,))])
+                if random() > RANDOM_EVENT_CHANCE:
+                    dp = np.concatenate([[t], gantry_real_pos + np.random.normal(0, OBSERVATION_NOISE_STD_DEV, (3,))])
                     self.datastore.gantry_pos.insert(dp)
                     self.to_ui_q.put({'gantry_observation': dp[1:]})
                 # winch line always 1 meter
-                self.datastore.winch_line_record.insert(np.array([t, 1.0, 0.0]))
+                self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
                 # range always perfect
-                self.datastore.range_record.insert(np.array([t, gantry_real_pos[2]-1]))
+                self.datastore.range_record.insert(np.array([t, gantry_real_pos[2]-RANGEFINDER_OFFSET]))
                 # anchor lines always perfectly agree with gripper position
                 for i, simanc in enumerate(self.pe.anchor_points):
                     dist = np.linalg.norm(simanc - gantry_real_pos)
@@ -704,7 +783,7 @@ class AsyncObserver:
                     speed = travel/timesince # referring to the specific speed of this line, not the gantry
                     self.datastore.anchor_line_record[i].insert(np.array([t, dist, speed, 1.0]))
                 tt = self.datastore.anchor_line_record[0].getLast()[0]
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(LOOP_SLEEP_S)
             except asyncio.exceptions.CancelledError:
                 break
 
@@ -715,37 +794,50 @@ class AsyncObserver:
         return result
 
     async def seek_gantry_goal(self):
-        self.fig_8 = False
-        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
-        while self.gantry_goal_pos is not None:
-            vector = self.gantry_goal_pos - self.pe.gant_pos
-            dist = np.linalg.norm(vector)
-            if dist < 0.05:
-                break
-            vector = vector / dist
-            result = await self.move_direction_speed(vector, 0.2, self.pe.gant_pos)
-            await asyncio.sleep(0.2)
-        self.slow_stop_all_spools()
-        self.gantry_goal_pos = None
-        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+        """
+        Move towards a goal position, using the constantly updating gantry position provided by the position estimator
+        This is a motion task
+        """
+        GOAL_PROXIMITY_M = 0.05
+        GANTRY_SPEED_MPS = 0.2
+        LOOP_SLEEP_S = 0.2
+        
+        try:
+            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+            while self.gantry_goal_pos is not None:
+                vector = self.gantry_goal_pos - self.pe.gant_pos
+                dist = np.linalg.norm(vector)
+                if dist < GOAL_PROXIMITY_M:
+                    break
+                vector = vector / dist
+                result = await self.move_direction_speed(vector, GANTRY_SPEED_MPS, self.pe.gant_pos)
+                await asyncio.sleep(LOOP_SLEEP_S)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+            self.gantry_goal_pos = None
+            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
     async def blind_move_to_goal(self):
         """Only measures current position once, then moves in the right direction
         for the amount of time it should take to get to the goal.
-        Issue any other move command to cancel"""
-        self.fig_8 = False
-        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
-        vector = self.gantry_goal_pos - self.pe.gant_pos
-        dist = np.linalg.norm(vector)
-        speed = 0.2
-        result = await self.move_direction_speed(vector / dist, speed, self.pe.gant_pos)
-        await asyncio.sleep(dist / speed)
-        self.slow_stop_all_spools()
-        self.gantry_goal_pos = None
-        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
-
-        # 0: 3.12/3.77 = 0.84
-        # 1: 4.92/5.64 = 0.87
+        This is a motion task."""
+        GANTRY_SPEED_MPS = 0.2
+        
+        try:
+            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+            vector = self.gantry_goal_pos - self.pe.gant_pos
+            dist = np.linalg.norm(vector)
+            if dist > 0:
+                result = await self.move_direction_speed(vector / dist, GANTRY_SPEED_MPS, self.pe.gant_pos)
+                await asyncio.sleep(dist / GANTRY_SPEED_MPS)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+            self.gantry_goal_pos = None
+            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
     async def move_direction_speed(self, uvec, speed, starting_pos=None):
         """Move in the direction of the given unit vector at the given speed.
@@ -762,16 +854,18 @@ class AsyncObserver:
         but we don't have that info. alternatively we could calibrate the bias to make horizontal movements level
         according to the laser rangefinder.
         """
-        self.fig_8 = False
+        DOWNWARD_BIAS_Z = -0.08
+        KINEMATICS_STEP_SCALE = 10.0 # Determines the size of the virtual step to calculate line speed derivatives
+        MAX_LINE_SPEED_MPS = 0.5
+        
         if speed == 0:
             for client in self.anchors:
                 asyncio.create_task(client.send_commands({'aim_speed': 0}))
             return
 
         # apply downward bias and renormalize
-        uvec = uvec + np.array([0,0,-0.08])
+        uvec = uvec + np.array([0,0,DOWNWARD_BIAS_Z])
         uvec  = uvec / np.linalg.norm(uvec)
-        # print(f'move direction speed {uvec} {speed}')
 
         # even if the starting position is off slightly, this method should not produce jerky moves.
         # because it's not commanding any absolute length from the spool motor
@@ -781,16 +875,13 @@ class AsyncObserver:
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # line lengths at new pos
-        s = 10 # don't add a whole meter, curvature might matter at that distance.
-        starting_pos += (uvec / s)
+        starting_pos += (uvec / KINEMATICS_STEP_SCALE)
         lengths_b = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
-        # length changes needed to travel 0.1 meters in uvec direction from starting_pos
+        # length changes needed to travel a small distance in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
-        line_speeds = deltas * s * speed
-        # print(f'computed line speeds {line_speeds}')
-        print(f'move_direction_speed. start={starting_pos} direction={uvec}, line_speed={line_speeds}')
+        line_speeds = deltas * KINEMATICS_STEP_SCALE * speed
         
-        if np.max(np.abs(line_speeds)) > 0.5:
+        if np.max(np.abs(line_speeds)) > MAX_LINE_SPEED_MPS:
             print('abort move because it\'s too fast.')
             return
 
@@ -801,38 +892,43 @@ class AsyncObserver:
     async def move_in_figure_8(self):
         """
         Move in a figure-8 pattern until interrupted by some other input.
+        This is a motion task.
         """
+        PATTERN_HEIGHT = 1.5
+        GANTRY_SPEED_MPS = 0.2
+        CIRCUIT_DISTANCE_M = 18.85 # Pre-calculated path length for a=2
+        PLAN_SEND_INTERVAL_S = 1.0
+        PLAN_DURATION_S = 1.3
+        PLAN_STEP_INTERVAL_S = 1/30
+        
         # move to starting position (over origin)
-        height = 1.5
-        self.gantry_goal_pos = np.array([0,0,height])
-        await self.seek_gantry_goal()
-        # desired speed in meters per second
-        speed = 0.2
-        circuit_distance = 18.85
-        circuit_time = circuit_distance / speed
-        # multiply time.time by this to get a term that increases by 2pi every circuit_time seconds.
-        slow = 2*math.pi / circuit_time
-        start_time = time.time()
+        try:
+            self.gantry_goal_pos = np.array([0,0,PATTERN_HEIGHT])
+            await self.invoke_motion_task(self.seek_gantry_goal())
+            
+            circuit_time = CIRCUIT_DISTANCE_M / GANTRY_SPEED_MPS
+            # multiply time.time by this to get a term that increases by 2pi every circuit_time seconds.
+            time_scaler = 2*np.pi / circuit_time
+            start_time = time.time()
 
-        # every 1 second, send a length plan to every anchor covering the next 1.3 seconds at an interval of 1/30 second
-        send_interval = 1.0
-        plan_duration = 1.3
-        step_interval = 1/30
-        self.fig_8 = True
-        while self.fig_8:
-            now = time.time()
-            times = [now + step_interval * i for i in range(int(plan_duration / step_interval))]
-            xy_positions = np.array([figure_8_coords((t - start_time) * slow) for t in times])
-            positions = np.column_stack([xy_positions, np.repeat(height,len(xy_positions))])
-            # calculate all line lengths in one statement
-            distances = np.linalg.norm(self.pe.anchor_points[:, np.newaxis, :] - positions[np.newaxis, :, :], axis=2)
+            while True:
+                now = time.time()
+                times = [now + PLAN_STEP_INTERVAL_S * i for i in range(int(PLAN_DURATION_S / PLAN_STEP_INTERVAL_S))]
+                xy_positions = np.array([figure_8_coords((t - start_time) * time_scaler) for t in times])
+                positions = np.column_stack([xy_positions, np.repeat(PATTERN_HEIGHT,len(xy_positions))])
+                # calculate all line lengths in one statement
+                distances = np.linalg.norm(self.pe.anchor_points[:, np.newaxis, :] - positions[np.newaxis, :, :], axis=2)
 
-            for client in self.anchors:
-                plan = np.column_stack([times, distances[client.anchor_num]])
-                message = {'length_plan' : plan.tolist()}
-                asyncio.create_task(client.send_commands(message))
+                for client in self.anchors:
+                    plan = np.column_stack([times, distances[client.anchor_num]])
+                    message = {'length_plan' : plan.tolist()}
+                    asyncio.create_task(client.send_commands(message))
 
-            await asyncio.sleep(send_interval)
+                await asyncio.sleep(PLAN_SEND_INTERVAL_S)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
 
 def start_observation(to_ui_q, to_ob_q):
     """
