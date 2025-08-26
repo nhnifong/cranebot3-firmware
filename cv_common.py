@@ -31,7 +31,7 @@ marker_names = [
 ]
 
 # some markers are different sizes
-fudge = 1.0400
+fudge = 0.99
 special_sizes = {
     'origin': 0.186 * fudge,
     'gantry_front': 0.081 * fudge,
