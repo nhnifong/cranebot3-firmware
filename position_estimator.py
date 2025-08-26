@@ -514,6 +514,7 @@ class Positioner2:
         while self.run:
             try:
                 visual_found = self.find_visual_move()
+                # currently testing other means of calibrating zero angle. don't overwrite them.
                 # if visual_found:
                 #     # if visual move was estimated successfully, we may be able to use it to automatically update reference lengths
                 #     asyncio.create_task(self.check_and_recal())
