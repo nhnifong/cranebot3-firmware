@@ -44,10 +44,10 @@ special_sizes = {
 }
 default_marker_size = 0.09 # The default side length of markers in meters
 
-# --- AprilTag Detector Initialization ---
 # The 'tag36h11' family is a good general-purpose choice.
 # Other options include 'tag16h5', 'tag25h9', 'tagCircle21h7', etc.
-options = apriltag.DetectorOptions(families="tag36h11")
+# increase quad_decimate to improve speed at the cost of distance
+options = apriltag.DetectorOptions(families="tag36h11", quad_decimate=1.0)
 detector = apriltag.Detector(options)
 
 def locate_markers(im):
@@ -95,7 +95,9 @@ def locate_markers(im):
             
             # Use solvePnP to get the rotation and translation vectors (rvec, tvec)
             # This gives the pose of the marker relative to the camera.
-            # X points right, Y points down, Z points into the scene.
+            # The coordinate system has the origin at the camera center. The z-axis points from the camera center out the camera lens.
+            # The x-axis is to the right in the image taken by the camera, and y is down. The tag's coordinate frame is centered at the center of the tag.
+            # From the viewer's perspective, the x-axis is to the right, y-axis down, and z-axis is into the tag.
             _, r, t = cv2.solvePnP(mp, corners, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             
             # Append the result in a JSON-serializable format
