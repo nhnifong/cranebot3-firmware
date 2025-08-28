@@ -36,6 +36,10 @@ class RaspiGripperClient(ComponentClient):
             holding = update['holding'] is True
             self.pe.notify_update({'holding': holding})
 
+        if 'winch_zero_success' in update:
+            if update['winch_zero_success']:
+                self.winch_zero_event.set()
+
     def handle_detections(self, detections, timestamp):
         """
         handle a list of aruco detections from the pool
@@ -46,3 +50,9 @@ class RaspiGripperClient(ComponentClient):
         config = Config()
         if len(config.gripper_vars) > 0:
             await self.websocket.send(json.dumps({'set_config_vars': config.gripper_vars}))
+
+    async def zero_winch(self):
+        """Send the command to zero the winch line and wait for it to complete"""
+        self.winch_zero_event = asyncio.Event()
+        self.send_commands({'zero_winch_line': None})
+        await asyncio.wait_for(self.winch_zero_event.wait, timeout=20)

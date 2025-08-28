@@ -480,7 +480,10 @@ class AsyncObserver:
         # not the poses in self.datastore.gantry_pos so we set a flag in the anchor clients that cause them to save that
         for client in self.anchors:
             client.save_raw = True
-            asyncio.create_task(client.send_commands({'report_raw': True}))
+            await client.send_commands({'report_raw': True})
+
+        print('zero the winch line')
+        await self.gripper_client.zero_winch()
 
         print('Collect data at each position')
         # data format is described in docstring of calibration_cost_fn
@@ -517,6 +520,8 @@ class AsyncObserver:
                 entry = {
                     'encoders': [client.last_raw_encoder for client in self.anchors],
                     'visuals': v,
+                    # we are assuming the gripper was pointed straght down when this was collected, but it is possible to verify it with the IMU
+                    'laser_range': self.datastore.range_record.getLast()[1],
                 }
                 print(f'Collected {len(v[0])}, {len(v[1])}, {len(v[2])}, {len(v[3])} visual observations of gantry pose')
                 data.append(entry)

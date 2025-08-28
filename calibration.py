@@ -202,6 +202,8 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
 
     for sample in observations:
         encoder_based_lengths = np.array([spools[i].get_unspooled_length(sample['encoders'][i]) for i in range(4)])
+        # meters from the bottom of the gripper to the floor (or furniture)
+        laser_range = sample['laser_range']
 
         gantry_positions_by_anchor = [[] for _ in range(4)]
         for anchor_num, obs_list in enumerate(sample['visuals']):
@@ -239,6 +241,8 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
         # todo: add another error term to constrain scale and z offset.
         # take readings of gripper winch line and laser rangefidner with each sample point.
         # Every gantry position implies a certain floor z level. all of these should be equal.
+        # these measurements however would be invalid if the sample point were over a piece of furniture,
+        # so this error term may only be done for positions over the origin card.
 
     # Combine errors and return final cost
     all_errors_combined = []
