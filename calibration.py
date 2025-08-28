@@ -236,6 +236,10 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
             errors_per_sample = (visual_based_lengths - encoder_based_lengths.reshape(1, 4)).flatten()
             all_length_errs.append(errors_per_sample)
 
+        # todo: add another error term to constrain scale and z offset.
+        # take readings of gripper winch line and laser rangefidner with each sample point.
+        # Every gantry position implies a certain floor z level. all of these should be equal.
+
     # Combine errors and return final cost
     all_errors_combined = []
     if all_length_errs:
