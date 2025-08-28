@@ -16,7 +16,7 @@ from panda3d.core import (
     GraphicsPipe, PNMFileTypeRegistry, StringStream, LColor,
     loadPrcFileData
 )
-from cv_common import marker_size, special_sizes
+from cv_common import special_sizes
 from math import pi
 
 def convert_pose(pose):
@@ -28,7 +28,7 @@ def convert_pose(pose):
 starting_port = 8888
 ratio = 588/500 # marker occupies 500 px of the 588 px image width
 origin_scale = special_sizes['origin'] * ratio
-gantry_scale = marker_size * ratio
+gantry_scale = special_sizes['gantry'] * ratio
 
 class RPiCamVidMock:
     """
