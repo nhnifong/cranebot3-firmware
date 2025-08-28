@@ -1,6 +1,6 @@
 import os
 import cv2
-import apriltag
+from pupil_apriltags import Detector
 import numpy as np
 import time
 from functools import lru_cache
@@ -13,23 +13,9 @@ mtx = config.intrinsic_matrix
 distortion = config.distortion_coeff
 
 # The marker IDs will correspond to the index in this list.
-# Ensure your physical AprilTags match these IDs.
 marker_names = [
     'origin',
-    'gripper_front',
-    'gripper_back',
-    'gantry_front',
-    'UNUSED',
-    'bin_other',
-    'debug_reel_in',
-    'debug_reel_out',
-    'charuco_origin_1',
-    'charuco_origin_2',
-    'charuco_origin_3',
-    'charuco_origin_4',
-    'gripper_left',
-    'gripper_right',
-    'gantry_front_new',
+    'gantry',
 ]
 
 # AprilTag images are typically downloaded, not generated in code.
@@ -37,18 +23,16 @@ marker_names = [
 # https://github.com/AprilRobotics/apriltag-imgs
 
 # Define the physical size of any markers that are not the default size.
-fudge = 0.99
 special_sizes = {
-    'origin': 0.186 * fudge,       # size in meters
-    'gantry_front': 0.081 * fudge, # size in meters
+    'origin': 0.1680, # size in meters
+    'gantry': 0.0868, # size in meters
 }
 default_marker_size = 0.09 # The default side length of markers in meters
 
 # The 'tag36h11' family is a good general-purpose choice.
 # Other options include 'tag16h5', 'tag25h9', 'tagCircle21h7', etc.
 # increase quad_decimate to improve speed at the cost of distance
-options = apriltag.DetectorOptions(families="tag36h11", quad_decimate=1.0)
-detector = apriltag.Detector(options)
+detector = Detector(families="tag36h11", quad_decimate=1.0)
 
 def locate_markers(im):
     """

@@ -3,7 +3,7 @@ import numpy as np
 from cv_common import locate_markers
 
 
-cap = cv2.VideoCapture("tcp:192.168.1.151:8888")
+cap = cv2.VideoCapture("tcp:192.168.1.153:8888")
 if not cap.isOpened():
     print('no video stream available')
 else:
@@ -14,10 +14,7 @@ else:
         if ret:
             result = locate_markers(frame)
             for detection in result:
-                if detection['n'] == 'gantry_front':
-                    distance = detection["t"][2][0]
-                    avg = avg*0.9 + distance*0.1
-                    print(f'gantry {avg}')
+                print(f'{detection["n"]} distance {detection["t"][2][0]}')
 
 
 """
