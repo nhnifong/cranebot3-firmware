@@ -33,7 +33,7 @@ import model_constants
 # There is an --roi arg to crop the image but it doesnt lessen the amount of memory rpicam-vid attempts to allocate.
 stream_command = """
 /usr/bin/rpicam-vid -t 0
-  --width=4608 --height=2592
+  --width=2304 --height=1296
   --listen -o tcp://0.0.0.0:8888
   --codec mjpeg
   --vflip --hflip
@@ -51,6 +51,8 @@ default_conf = {
     'RUNNING_WS_DELAY': 0.1,
     # delay in seconds between updates sent on websocket during calibration
     'CALIBRATING_WS_DELAY': 0.05,
+    # number of buffers to stream with
+    'buffers': 10,
 }
 
 class RobotComponentServer:
