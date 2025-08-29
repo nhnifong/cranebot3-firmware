@@ -32,6 +32,7 @@ class TestPoseFunctions(unittest.TestCase):
         for i in range(15):
             entry = {'encoders': np.random.uniform(-20,20, (4,))}
             entry['visuals'] = np.random.uniform(-1,1, (4, 10, 2, 3))
+            entry['laser_range'] = 0.9
             observations.append(entry)
         new_params = find_cal_params(self.anchor_poses, observations, 0)
 
@@ -47,6 +48,7 @@ class TestPoseFunctions(unittest.TestCase):
         for i in range(15):
             entry = {'encoders': np.random.uniform(-20,20, (4,))}
             entry['visuals'] = np.random.uniform(-1,1, (4, 10, 2, 3))
+            entry['laser_range'] = 0.9
             observations.append(entry)
         new_params = find_cal_params(self.anchor_poses, observations, 0, 'zero_angles_only')
 
@@ -96,6 +98,7 @@ class TestPoseFunctions(unittest.TestCase):
                 [pose], # visual observations from camera 3
                 [pose], # visual observations from camera 4
             ],
+            'laser_range': 0,
         })
 
         # run the code under test

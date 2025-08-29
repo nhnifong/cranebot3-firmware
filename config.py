@@ -14,11 +14,11 @@ class Config:
         self.anchors = [Anchor(i) for i in range(4)]
         self.anchor_num_map = {}
         # default configuration
-        self.resolution = (4608, 2592)
+        self.resolution = (2304, 1296) # half the native resolution of the raspberry pi camera module 3
         self.intrinsic_matrix = np.array(
-            [[3382.661403509442, 0.0, 2327.7695374218133],
-            [0.0, 3394.795601487364, 1267.8069498365248],
-            [ 0.0, 0.0, 1.0 ]])
+            [[1691.33070175,    0.        , 1163.88476871],
+             [   0.        , 1697.39780074,  633.90347492],
+             [   0.        ,    0.        ,    1.        ]])
         self.distortion_coeff = np.array(
             [[0.021986, 0.160533, -0.003378, 0.002640, -0.356843]])
         self.commmon_anchor_vars = {}
