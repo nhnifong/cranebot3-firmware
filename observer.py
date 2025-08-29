@@ -151,7 +151,6 @@ class AsyncObserver:
         except Exception:
             traceback.print_exc(file=sys.stderr)
 
-    #region Command Handlers
     async def _handle_future_anchor_lines(self, fal_data: dict):
         """Handles sending future line plans to anchors."""
         if not (fal_data.get('sender') == 'pe' and self.calmode != 'run'):
@@ -209,7 +208,6 @@ class AsyncObserver:
             for client in self.anchors:
                 if client.anchor_num == stop_data.get('id'):
                     asyncio.create_task(client.slow_stop_spool())
-    #endregion
 
     async def invoke_motion_task(self, coro):
         """
@@ -315,7 +313,7 @@ class AsyncObserver:
             print("run mode")
         elif mode == "pause":
             self.calmode = mode
-            self.stop_all()
+            self.slow_stop_all_spools()
         elif mode == 'pose':
             self.calmode = mode
             self.locate_anchor_task = asyncio.create_task(self.locate_anchors())
@@ -680,6 +678,7 @@ class AsyncObserver:
         self.run_command_loop = False
         self.stat.run = False
         self.pe.run = False
+        self.fig_8 = False
         tasks = []
         if self.aiobrowser is not None:
             tasks.append(self.aiobrowser.async_cancel())
@@ -899,6 +898,10 @@ class AsyncObserver:
         # apply downward bias and renormalize
         uvec = uvec + np.array([0,0,DOWNWARD_BIAS_Z])
         uvec  = uvec / np.linalg.norm(uvec)
+
+        anchor_positions = np.zeros((4,3))
+        for a in self.anchors:
+            anchor_positions[a.anchor_num] = np.array(a.anchor_pose[1])
 
         # even if the starting position is off slightly, this method should not produce jerky moves.
         # because it's not commanding any absolute length from the spool motor

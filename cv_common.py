@@ -96,6 +96,8 @@ def average_pose(poses):
     """
     Averages a list of pose detection results to provide a more accurate pose.
     """
+
+    # Convert rotation vectors to rotation matrices
     rotation_matrices = []
     translation_vectors = []
     for rvec, tvec in poses:
@@ -103,6 +105,7 @@ def average_pose(poses):
         rotation_matrices.append(rotation_matrix)
         translation_vectors.append(tvec.reshape(3, 1))
 
+    # Average the translation vectors
     average_translation_vector = np.mean(np.array(translation_vectors), axis=0)
 
     sum_of_rotation_matrices = np.sum(rotation_matrices, axis=0)
@@ -111,9 +114,11 @@ def average_pose(poses):
     U, S, V = np.linalg.svd(average_intermediate_matrix)
     average_rotation_matrix = np.dot(U, V)
 
+    # Ensure a proper rotation matrix (det should be close to 1)
     if np.linalg.det(average_rotation_matrix) < 0:
         average_rotation_matrix = -average_rotation_matrix
 
+    # Convert the averaged rotation matrix back to a rotation vector
     average_rotation_vector, _ = cv2.Rodrigues(average_rotation_matrix)
     return average_rotation_vector.reshape((3,)), average_translation_vector.flatten()
 
