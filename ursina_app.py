@@ -290,6 +290,7 @@ class ControlPanelUI:
                 DropdownMenuButton('Circle', on_click=partial(self.set_simulated_data_mode, 'circle')),
                 DropdownMenuButton('Point to Point', on_click=partial(self.set_simulated_data_mode, 'point2point')),
                 )),
+            DropdownMenuButton('Zero Gripper Winch Line', on_click=partial(self.simple_command, 'zero_winch')),
             ))
 
     def set_simulated_data_mode(self, mode):
@@ -478,14 +479,17 @@ class ControlPanelUI:
 
         if 'preview_image' in updates:
             pili = updates['preview_image']
-            anchor = self.anchors[pili['anchor_num']]
-            if anchor.hasSetImage:
-                anchor.camview.texture._texture.setRamImage(pili['image'])
+            if pili['anchor_num'] is not None:
+                ent = self.anchors[pili['anchor_num']]
+            else:
+                ent = self.floor # gripper cam
+            if ent.hasSetImage:
+                ent.camview.texture._texture.setRamImage(pili['image'])
             else:
                 # we only need to do this the first time, so the allocated texture is the right size
                 # even though this method of updating a texture exists, it's horribly slow.
-                anchor.camview.texture = Texture(Image.fromarray(pili['image']))
-                anchor.hasSetImage = True
+                ent.camview.texture = Texture(Image.fromarray(pili['image']))
+                ent.hasSetImage = True
 
         if 'connection_status' in updates:
             status = updates['connection_status']

@@ -271,6 +271,7 @@ class RaspiGripperServer(RobotComponentServer):
                 self.holding = False
 
     async def performZeroWinchLine(self):
+        logging.info('Zeroing winch line')
         self.spooler.pauseTrackingLoop()
         try:
             while self.hat.gpio_pin_value(LIMIT_SWITCH_PIN) == 0 and self.run_server:

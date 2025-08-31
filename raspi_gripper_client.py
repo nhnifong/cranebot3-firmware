@@ -53,6 +53,7 @@ class RaspiGripperClient(ComponentClient):
 
     async def zero_winch(self):
         """Send the command to zero the winch line and wait for it to complete"""
+        print('Zero Winch Line')
         self.winch_zero_event = asyncio.Event()
         await self.send_commands({'zero_winch_line': None})
         await asyncio.wait_for(self.winch_zero_event.wait(), timeout=20)

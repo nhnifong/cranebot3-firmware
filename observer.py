@@ -116,6 +116,7 @@ class AsyncObserver:
             'slow_stop_one': self._handle_slow_stop_one,
             'slow_stop_all': self.stop_all,
             'set_simulated_data_mode': self.set_simulated_data_mode,
+            'zero_winch': self._handle_zero_winch_line,
         }
 
     def listen_queue_updates(self, loop):
@@ -208,6 +209,9 @@ class AsyncObserver:
             for client in self.anchors:
                 if client.anchor_num == stop_data.get('id'):
                     asyncio.create_task(client.slow_stop_spool())
+
+    async def _handle_zero_winch_line(self, data):
+        await self.gripper_client.zero_winch()
 
     async def invoke_motion_task(self, coro):
         """
@@ -420,7 +424,7 @@ class AsyncObserver:
             anchor_poses = await self.locate_anchors()
             print(f'anchor poses based on origin card {anchor_poses}')
 
-            # the true distance between anchor 0 and anchor 2 should be 5.334 meters
+            # the true distance between anchor 0 and anchor 2 should be 5.334 meters in my room
             a = anchor_poses[0,1,:2]
             b = anchor_poses[1,1,:2]
             print(f'distance between anchor 0 and 1 = {np.linalg.norm(a-b)}')
@@ -545,6 +549,8 @@ class AsyncObserver:
                     'laser_range': self.datastore.range_record.getLast()[1],
                 }
                 print(f'Collected {len(v[0])}, {len(v[1])}, {len(v[2])}, {len(v[3])} visual observations of gantry pose')
+                print(f'encoders {entry["encoders"]}')
+                print(f'laser_range {entry["laser_range"]}')
                 data.append(entry)
 
                 # save data after every collected point if requested.
