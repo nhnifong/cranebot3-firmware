@@ -490,18 +490,22 @@ class ControlPanelUI:
         if 'connection_status' in updates:
             status = updates['connection_status']
             print(status)
-            if status['websocket'] == 0:
+            if status['websocket'] == 'none':
                 user_status_str = 'Not Detected'
-            elif status['websocket'] == 1:
+            elif status['websocket'] == 'connecting':
                 user_status_str = 'Connecting...'
-            elif  status['websocket'] == 2:
+            elif  status['websocket'] == 'connected':
                 user_status_str = 'Online'
             else:
                 user_status_str = 'Unknown'
 
-            if status['video']:
+            if status['video'] == 'connected':
                 vidstatus_tex = 'vid_ok.png'
                 number_color = color.black
+            elif status['video'] == 'connecting':
+                user_status_str += '\nConnecting to video...'
+                vidstatus_tex = 'vid_out.png'
+                number_color = color.white
             else:
                 vidstatus_tex = 'vid_out.png'
                 number_color = color.white
@@ -516,6 +520,8 @@ class ControlPanelUI:
                 self.gripper.setStatus(user_status_str)
                 self.vid_status[4].texture = vidstatus_tex
                 self.vid_status[4].numbertext.color = number_color
+                if 'ip_address' in status:
+                    self.gripper.ip_address = status['ip_address']
 
         if 'vid_stats' in updates:
             stats = updates['vid_stats']

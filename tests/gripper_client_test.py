@@ -93,15 +93,15 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.gc.connected)
         # Connecting
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 1, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        self.assertEqual({'gripper': True, 'websocket': 'connecting', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
         # Online
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 2, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        self.assertEqual({'gripper': True, 'websocket': 'connected', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
         await self.clientTearDown()
         self.assertFalse(self.gc.connected)
         # gone
         ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 0, 'video': False, 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        self.assertEqual({'gripper': True, 'websocket': 'none', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
 
         # if gripper_client is going to use the configs in configuration.json, then so will we.
         config = Config()
@@ -156,4 +156,20 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.1)
         self.pe.notify_update.assert_called_with({'holding': True})
         await self.clientTearDown()
+
+
+    async def test_zero_winch(self):
+        # common client setup
+        await self.clientSetup()
+        config = Config()
+
+        # code under test
+        task = asyncio.create_task(self.gc.zero_winch())
+        await asyncio.sleep(0.1)
+        self.receiver.update.assert_called_with({'zero_winch_line': None})
+        self.assertFalse(task.done())
+        asyncio.create_task(self.server_ws.send(json.dumps({'winch_zero_success': True})))
+        await asyncio.sleep(0.1)
+        self.assertTrue(task.done())
+        result = await task
 

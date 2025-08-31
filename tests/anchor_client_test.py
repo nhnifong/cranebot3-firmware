@@ -152,7 +152,7 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         """
         detection_list = [
             {
-                'n': 'gantry_front',
+                'n': 'gantry',
                 'r': [0.1,0.2,0.3],
                 't': [0.4,0.5,0.6]
             },

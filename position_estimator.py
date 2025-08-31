@@ -443,17 +443,21 @@ class Positioner2:
         initial_guess = np.concatenate([ positions[-1], velocity_guess ])
         bounds = np.concatenate([position_bounds, velocity_bounds])
 
-        result = optimize.minimize(
-            linear_move_cost_fn,
-            initial_guess,
-            args=(backtime, times, positions),
-            bounds=bounds,
-            method='SLSQP',
-            options={
-                'disp': False,
-                'maxiter': 100,
-            },
-        )
+        try:
+            result = optimize.minimize(
+                linear_move_cost_fn,
+                initial_guess,
+                args=(backtime, times, positions),
+                bounds=bounds,
+                method='SLSQP',
+                options={
+                    'disp': False,
+                    'maxiter': 100,
+                },
+            )
+        except ValueError as e:
+            print(f'{e} \nIf this occurs a few times after a call to set_anchor_points, it is harmless')
+            return False
         try:
             if not result.message.startswith("Iteration limit reached"):
                 assert result.success
