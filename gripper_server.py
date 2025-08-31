@@ -271,10 +271,10 @@ class RaspiGripperServer(RobotComponentServer):
                 self.holding = False
 
     async def performZeroWinchLine(self):
-        logging.info('Zeroing winch line')
+        logging.info(f'Zeroing winch line {self.hat.gpio_pin_value(LIMIT_SWITCH_PIN)}')
         self.spooler.pauseTrackingLoop()
         try:
-            while self.hat.gpio_pin_value(LIMIT_SWITCH_PIN) == 0 and self.run_server:
+            while self.hat.gpio_pin_value(LIMIT_SWITCH_PIN) == 1 and self.run_server:
                 self.motor.runConstantSpeed(-1)
                 await asyncio.sleep(0.03)
             self.spooler.setReferenceLength(0.01) # 1 cm

@@ -37,6 +37,7 @@ class RaspiGripperClient(ComponentClient):
             self.pe.notify_update({'holding': holding})
 
         if 'winch_zero_success' in update:
+            print(f'winch_zero_success = {update["winch_zero_success"]}')
             if update['winch_zero_success']:
                 self.winch_zero_event.set()
 
