@@ -400,6 +400,17 @@ class Floor(Entity):
             texture='blue_circle.png',
         )
 
+        self.camview = Entity(
+            model='quad',
+            scale=(2, 1/1.777777),
+            position=(0,1,-1),
+            rotation=(0,90,0),
+            texture='cap_38.jpg',
+            shader=unlit_shader,
+            parent=self,
+            enabled=True)
+        self.hasSetImage = False
+
     def set_reticule_height(self, height):
         self.alt = height
         self.circle.position[2] = -self.alt*2
@@ -592,7 +603,7 @@ class DirectMoveGantryTarget(Entity):
     def reset(self):
         self.last_move_vec = None
 
-    def direct_move(self, speed=0.2):
+    def direct_move(self, speed=0.4):
         """
         Send speeds that would move the gantry in a straight line
         from where it is, towards the indicated goal point, at the given speed.
