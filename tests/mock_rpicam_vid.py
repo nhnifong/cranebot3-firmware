@@ -161,7 +161,7 @@ class RPiCamVidMock:
         self._billboard_node.setShaderOff()
 
         # Create the gantry cube model
-        self._gantry_cube_node = self._create_gantry_cube('../boards/gantry_front.png')
+        self._gantry_cube_node = self._create_gantry_cube('../boards/gantry.png')
         self._gantry_cube_node.reparentTo(self.base.render) # Attach to the main scene graph
         
         # Set initial cube pose

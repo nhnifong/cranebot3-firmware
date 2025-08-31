@@ -1,4 +1,4 @@
-
+import asyncio
 from raspi_anchor_client import ComponentClient
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -54,5 +54,5 @@ class RaspiGripperClient(ComponentClient):
     async def zero_winch(self):
         """Send the command to zero the winch line and wait for it to complete"""
         self.winch_zero_event = asyncio.Event()
-        self.send_commands({'zero_winch_line': None})
-        await asyncio.wait_for(self.winch_zero_event.wait, timeout=20)
+        await self.send_commands({'zero_winch_line': None})
+        await asyncio.wait_for(self.winch_zero_event.wait(), timeout=20)

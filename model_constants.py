@@ -30,11 +30,14 @@ anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
 
-# rotation and translation vectors of the 'gantry_front' aruco marker in the gantry reference frame.
+# rotation and translation vectors of the 'gantry' april tag in the gantry reference frame.
 gantry_aruco_front = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105], dtype=float))
 
 # position of the gantry keyring point in the gantry reference frame
 gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
+
+# The way I made myself understand this was to think of the room being mounted on the origin card with a certain rotation.
+room_relative_to_origin_card = (np.array([pi,0,0], dtype=float), np.array([0,0,0], dtype=float))
 
 # spool parameters
 empty_spool_diameter = 22.9

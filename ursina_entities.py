@@ -116,6 +116,7 @@ class Gripper(Entity):
         # winch line jog speed
         self.jog_speed = 0
         self.vid_visible = False
+        self.ip_address = None
 
     def setStatus(self, status):
         self.label.text = f"Gripper\n{status}"
@@ -135,7 +136,7 @@ class Gripper(Entity):
 
     def on_click(self):
         self.wp = WindowPanel(
-        title=f"Gripper Controls",
+        title=f"Gripper at {self.ip_address}",
         content=(
             Button(text='Open (Space)', color=color.gold, text_color=color.black),
             Button(text='Show video feed', color=color.gold, text_color=color.black,

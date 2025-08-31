@@ -233,14 +233,14 @@ class AsyncObserver:
             self.motion_task.cancel()
             try:
                 # Wait briefly for the old task's cleanup to complete.
-                await self.motion_task
+                result = await self.motion_task
             except asyncio.CancelledError:
                 pass # Expected behavior
 
         self.motion_task = asyncio.create_task(coro)
         self.motion_task.set_name(coro.__name__)
 
-    async def tension_lines(self):  
+    async def tension_lines(self, _=None):
         """Request all anchors to reel in all lines until tight.
         This is a fire and forget function"""
         for client in self.anchors:
@@ -288,13 +288,32 @@ class AsyncObserver:
         elif mode == 'point2point':
             self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
-    def stop_all(self, _=None):
-        # First, cancel any high-level motion task that's running.
-        # This stops new commands from being generated.
-        if self.motion_task is not None and not self.motion_task.done():
-            print(f"Cancelling previous motion task: {self.motion_task.get_name()}")
-            self.motion_task.cancel()
+    async def stop_all(self, _=None):
+        # Cancel any active motion task
+        if self.motion_task is not None:
+            # Store the handle and clear the class attribute immediately.
+            # This prevents race conditions if another command comes in.
+            task_to_stop = self.motion_task
             self.motion_task = None
+
+            # Only cancel the task if it's actually still running.
+            if not task_to_stop.done():
+                print(f"Cancelling motion task: {task_to_stop.get_name()}")
+                task_to_stop.cancel()
+
+            # Now, await the task's completion.
+            try:
+                # Awaiting a task will re-raise any exception it had,
+                # or raise CancelledError if we just cancelled it.
+                await task_to_stop
+            except asyncio.CancelledError:
+                # This is the expected, non-error outcome of a clean cancellation.
+                print(f"Task '{task_to_stop.get_name()}' was successfully stopped.")
+            except Exception as e:
+                # If any other exception occurred, print it now.
+                print(f"An unhandled exception occurred in motion task '{task_to_stop.get_name()}':\n{e}")
+                traceback.print_exc()
+
         self.slow_stop_all_spools()
 
     def slow_stop_all_spools(self):
@@ -331,7 +350,14 @@ class AsyncObserver:
                 print(f'Too few origin observations ({len(client.origin_poses)}) from anchor {client.anchor_num}')
                 continue
             print(f'locating anchor {client.anchor_num} from {len(client.origin_poses)} detections')
-            pose = np.array(invert_pose(compose_poses([model_constants.anchor_camera, average_pose(client.origin_poses)])))
+            app = average_pose(client.origin_poses)
+            print(f'average origin pose {app}')
+            pose = np.array(invert_pose(compose_poses([
+                model_constants.anchor_camera,
+                app,
+                model_constants.room_relative_to_origin_card,
+            ])))
+            print(f'pose {pose}')
             assert pose is not None
             self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
             anchor_poses.append(pose)
@@ -431,9 +457,6 @@ class AsyncObserver:
             # make a polygon of the exact work area so we can test if points are inside it
             contour = anchor_points[:,0:2].astype(np.float32)
 
-            # still evaluating whether this random sample point method was better than the orderly method, so don't delete it yet
-            # ... (commented block remains)
-
             # use an orderly grid of sample points
             sample_points = np.mgrid[min_x:max_x:GRID_STEPS_X, min_y:max_y:GRID_STEPS_Y, floor_z:max_gantry_z:GRID_STEPS_Z].reshape(3, -1).T
 
@@ -491,7 +514,7 @@ class AsyncObserver:
             # move to a position.
             print(f'Moving to point {i+1}/{len(sample_points)} at {point}')
             self.gantry_goal_pos = point
-            await self.invoke_motion_task(self.blind_move_to_goal())
+            await self.blind_move_to_goal()
             # await self.seek_gantry_goal()
 
             # integration-test specific behavior
@@ -674,7 +697,7 @@ class AsyncObserver:
             await self.async_close()
 
     async def async_close(self) -> None:
-        self.stop_all()
+        result = self.stop_all()
         self.run_command_loop = False
         self.stat.run = False
         self.pe.run = False

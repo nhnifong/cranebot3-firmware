@@ -1,7 +1,11 @@
 import cv2
 import numpy as np
 from cv_common import locate_markers
+from config import Config
 
+config = Config()
+mtx = config.intrinsic_matrix
+distortion = config.distortion_coeff
 
 cap = cv2.VideoCapture("tcp:192.168.1.153:8888")
 if not cap.isOpened():
@@ -12,13 +16,23 @@ else:
         # blocks until a frame can be read, then decodes it. 
         ret, frame = cap.read()
         if ret:
+
             result = locate_markers(frame)
             for detection in result:
-                print(f'{detection["n"]} distance {detection["t"][2][0]}')
+                # print(f'{detection["n"]} distance {detection["t"][2][0]}')
+                cv2.drawFrameAxes(frame,
+                    mtx, distortion,
+                    np.array(detection["r"]),
+                    np.array(detection["t"]),
+                    length=0.05, thickness=3)
+            cv2.imshow('stream', frame)
+        if cv2.waitKey(1) == ord('q'):
+             break
 
-
+cap.release()
+cv2.destroyAllWindows()
 """
-/usr/bin/rpicam-vid -t 0 --width=4608 --height=2592 --listen -o tcp://0.0.0.0:8888 --codec mjpeg --vflip --hflip --buffer-count=3 --autofocus-mode continuous
+/usr/bin/rpicam-vid -t 0 --width=2304 --height=1296 --listen -o tcp://0.0.0.0:8888 --codec mjpeg --vflip --hflip --buffer-count=3 --autofocus-mode continuous
 
 
 Provisional anchor points relative to origin card

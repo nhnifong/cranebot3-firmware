@@ -203,7 +203,7 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
     for sample in observations:
         encoder_based_lengths = np.array([spools[i].get_unspooled_length(sample['encoders'][i]) for i in range(4)])
         # meters from the bottom of the gripper to the floor (or furniture)
-        laser_range = sample['laser_range']
+        # laser_range = sample['laser_range']
 
         gantry_positions_by_anchor = [[] for _ in range(4)]
         for anchor_num, obs_list in enumerate(sample['visuals']):
@@ -302,6 +302,7 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index, mode=
         initial_guess = np.array(initial_guess).flatten()
         bounds = np.array(bounds).reshape((len(initial_guess), 2))
         args = (observations, spools, 'full', None)
+        print(len(observations))
 
     elif mode == 'zero_angles_only':
         initial_guess = np.array([-150.0] * 4)

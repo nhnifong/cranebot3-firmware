@@ -52,6 +52,8 @@ class ComponentClient:
     def receive_video(self, port):
         video_uri = f'tcp://{self.address}:{port}'
         print(f'Connecting to {video_uri}')
+        self.conn_status['video'] = 'connecting'
+        self.to_ui_q.put({'connection_status': self.conn_status})
         cap = cv2.VideoCapture(video_uri)
         # cap = cv2.VideoCapture(video_uri, cv2.CAP_FFMPEG) # this is probably the default anyways
         # cap = cv2.VideoCapture(video_uri, cv2.CAP_OPENCV_MJPEG) # would this be any faster?
@@ -61,17 +63,17 @@ class ComponentClient:
         
         if not cap.isOpened():
             print('no video stream available')
-            self.conn_status['video'] = False
+            self.conn_status['video'] = 'none'
             self.to_ui_q.put({'connection_status': self.conn_status})
             return
         print(f'video connection successful {cap}')
-        self.conn_status['video'] = True
+        self.conn_status['video'] = 'connected'
         self.notify_video = True
         lastSam = time.time()
+        last_time = time.time()
         while self.connected:
             # blocks until a frame can be read, then decodes it. 
             ret, frame = cap.read()
-            last_time = time.time()
             if ret:
 
                 # send frame to shape tracker
@@ -98,7 +100,8 @@ class ComponentClient:
                     del self.frame_times[fnum]
                     now = time.time()
                     self.stat.latency.append(now - timestamp)
-                    self.stat.framerate.append(1/(now - last_time))
+                    fr = 1/(now - last_time)
+                    self.stat.framerate.append(fr)
                     last_time = now
                 except KeyError:
                     # expected behavior during unit test
@@ -120,7 +123,7 @@ class ComponentClient:
 
             # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
             # handle_detections runs in this process, but in a thread managed by the pool.
-            time.sleep(0.1)
+            time.sleep(0.001)
 
     def handle_frame_times(self, frame_time_list):
         """
@@ -142,8 +145,8 @@ class ComponentClient:
 
     async def connect_websocket(self):
         # main client loop
-        self.conn_status['websocket'] = 1
-        self.conn_status['video'] = False
+        self.conn_status['websocket'] = 'connecting'
+        self.conn_status['video'] = 'none'
         self.conn_status['ip_address'] = self.address
         self.to_ui_q.put({'connection_status': self.conn_status})
         ws_uri = f"ws://{self.address}:{self.port}"
@@ -164,7 +167,7 @@ class ComponentClient:
 
     async def receive_loop(self, websocket):
         print('receive loop')
-        self.conn_status['websocket'] = 2
+        self.conn_status['websocket'] = 'connected'
         self.to_ui_q.put({'connection_status': self.conn_status})
         # loop of a single websocket connection.
         # save a reference to this for send_commands
@@ -194,8 +197,8 @@ class ComponentClient:
                 print(f"Connection to {self.address} closed.")
                 self.connected = False
                 self.websocket = None
-                self.conn_status['websocket'] = 0
-                self.conn_status['video'] = False
+                self.conn_status['websocket'] = 'none'
+                self.conn_status['video'] = 'none'
                 self.to_ui_q.put({'connection_status': self.conn_status})
                 raise e
                 break
@@ -257,7 +260,7 @@ class RaspiAnchorClient(ComponentClient):
     def handle_update_from_ws(self, update):
         # TODO if we are not regularly receiving line_record, display this as a server problem status
         if 'line_record' in update:
-            self.datastore.anchor_line_record[self.anchor_num].insertList(update['line_record'])
+            self.datastore.anchor_line_record[self.anchor_num].insertList(np.array(update['line_record']))
         if 'last_raw_encoder' in update:
             self.last_raw_encoder = update['last_raw_encoder']
 
@@ -276,7 +279,7 @@ class RaspiAnchorClient(ComponentClient):
                 if len(self.origin_poses) > max_origin_detections:
                     self.origin_poses.pop(0)
 
-            if detection['n'] == 'gantry_front':
+            if detection['n'] == 'gantry':
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
