@@ -9,6 +9,7 @@ from cv_common import compose_poses, gantry_aruco_front_inv
 import model_constants
 from spools import SpiralCalculator
 from itertools import combinations
+from position_estimator import find_hang_point
 
 #the number of squares on the board (width and height)
 board_w = 14
@@ -162,6 +163,29 @@ def calibrate_from_stream():
     ce.save()
 
 ### the following functions pertain to calibration of the entire assembled robot, not just one camera ###
+
+def params_consistent_with_move(params, point1_obs, point2_obs, spools):
+    """Return a score measuring how well the given params predict the observed move"""
+
+    # Use the raw gantry marker observations of the sample point, and the hypothetical poses to calculate a starting and ending gantry position.
+    starting_pos = np.mean(gantry_positions[n-1], axis=0)
+    ending_pos = np.mean(gantry_positions[n], axis=0)
+
+    # Calculate the line lengths from that position to the hypothetical anchor points.
+    np.mean(visual_based_lengths, axis=0)
+
+    # Using the hypothetical zero angles and encoder positions before and after the move, calculate line length deltas that would have occurred.
+    deltas = encoder_based_lengths[1] - encoder_based_lengths[0]
+
+    # Add the line deltas from point n-1 to point n to the lengths.
+    new_lengths = lengths + deltas
+
+    # Using the new lengths, calculate a hang point.
+    hang_point = find_hang_point(anchor_points, new_lengths)
+
+    # Compare the hang point to the ending position
+    return np.linalg.norm(hang_point - ending_pos)
+
 
 def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=None):
     """
