@@ -398,7 +398,7 @@ class AsyncObserver:
         This is a motion task"""
         DETECTION_WAIT_S = 1.0 # seconds
         STABILIZATION_WAIT_S = 12.0 # seconds
-        SET_LENGTHS_WAIT_S = 4.0 # seconds
+        SET_LENGTHS_WAIT_S = 1.0 # seconds
         BOUNDING_BOX_SCALE = 0.6
         Z_SHIFT = 0.2 # meters
         FLOOR_Z_OFFSET = 0.4 # meters
@@ -423,6 +423,10 @@ class AsyncObserver:
             # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
             anchor_poses = await self.locate_anchors()
             print(f'anchor poses based on origin card {anchor_poses}')
+
+            # Experiment: scale pose positions
+            scale = 1.04
+            anchor_poses[:,1,:] *= scale
 
             # the true distance between anchor 0 and anchor 2 should be 5.334 meters in my room
             a = anchor_poses[0,1,:2]
@@ -449,6 +453,7 @@ class AsyncObserver:
             lengths = np.linalg.norm(anchor_points - position, axis=1)
             print(f'Line lengths from coarse calibration ={lengths}')
             await self.sendReferenceLengths(lengths)
+            return
             await asyncio.sleep(SET_LENGTHS_WAIT_S)
 
             # Determine the bounding box of the work area and shrink it to stay away from the walls and ceiling
