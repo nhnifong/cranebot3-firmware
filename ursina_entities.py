@@ -603,7 +603,7 @@ class DirectMoveGantryTarget(Entity):
     def reset(self):
         self.last_move_vec = None
 
-    def direct_move(self, speed=0.4):
+    def direct_move(self, speed=0.3):
         """
         Send speeds that would move the gantry in a straight line
         from where it is, towards the indicated goal point, at the given speed.

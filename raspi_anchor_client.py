@@ -5,7 +5,7 @@ import signal
 import websockets
 import time
 import json
-from cv_common import locate_markers, compose_poses, invert_pose, average_pose, gantry_aruco_front_inv
+from cv_common import locate_markers, compose_poses, invert_pose, average_pose, gantry_april_inv
 import cv2
 import numpy as np
 import model_constants
@@ -289,7 +289,7 @@ class RaspiAnchorClient(ComponentClient):
                     self.anchor_pose, # obtained from calibration
                     model_constants.anchor_camera, # constant
                     pose_from_det(detection), # the pose obtained just now
-                    gantry_aruco_front_inv, # constant
+                    gantry_april_inv, # constant
                 ]))
                 position = pose.reshape(6)[3:]
                 self.datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
