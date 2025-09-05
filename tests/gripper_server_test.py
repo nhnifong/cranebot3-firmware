@@ -134,13 +134,13 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_zero_winch_line(self):
         self.mock_spooler.setReferenceLength.reset_mock()
-        self.mock_hat.gpio_pin_value.return_value = 0
+        self.mock_hat.gpio_pin_value.return_value = 1
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
             await ws.send(json.dumps({'zero_winch_line': None}))
             await asyncio.sleep(0.1)
             self.assertFalse(self.server_task.done(), "Server should still be running")
             self.assertEqual(-1, self.debug_motor.speed)
-            self.mock_hat.gpio_pin_value.return_value = 1
+            self.mock_hat.gpio_pin_value.return_value = 0
             await asyncio.sleep(0.1)
             self.assertEqual(0, self.debug_motor.speed)
             self.mock_spooler.setReferenceLength.assert_called_once_with(0.01)
