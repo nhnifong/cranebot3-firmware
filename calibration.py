@@ -164,27 +164,34 @@ def calibrate_from_stream():
 
 ### the following functions pertain to calibration of the entire assembled robot, not just one camera ###
 
-def params_consistent_with_move(params, point1_obs, point2_obs, spools):
-    """Return a score measuring how well the given params predict the observed move"""
+def params_consistent_with_move(
+    starting_pos_visual, ending_pos_visual,
+    encoder_lengths1, encoder_lengths2,
+    anchor_points):
+    """
+    Return a score measuring how well params predict an observed move.
+    """
+    # Calculate the visually-based line lengths for the starting position.
+    # This uses the mean gantry position from the first observation.
+    starting_lengths_visual = np.linalg.norm(anchor_points - starting_pos_visual, axis=1)
 
-    # Use the raw gantry marker observations of the sample point, and the hypothetical poses to calculate a starting and ending gantry position.
-    starting_pos = np.mean(gantry_positions[n-1], axis=0)
-    ending_pos = np.mean(gantry_positions[n], axis=0)
+    # Calculate the change in line lengths based on encoder readings between the two points.
+    encoder_deltas = encoder_lengths2 - encoder_lengths1
 
-    # Calculate the line lengths from that position to the hypothetical anchor points.
-    np.mean(visual_based_lengths, axis=0)
+    # Predict the new line lengths by adding the encoder deltas to the visual starting lengths.
+    predicted_ending_lengths = starting_lengths_visual + encoder_deltas
 
-    # Using the hypothetical zero angles and encoder positions before and after the move, calculate line length deltas that would have occurred.
-    deltas = encoder_based_lengths[1] - encoder_based_lengths[0]
+    # Using the predicted new lengths, calculate a hypothetical hang point.
+    print(f'try to find hang point with anchor_points={anchor_points}, lengths={predicted_ending_lengths}')
+    hp_result = find_hang_point(anchor_points, predicted_ending_lengths)
+    if hp_result is None:
+        return 1 # 1 meter
+    predicted_hang_point = hp_result[0] # element 0 is position, element 1 is predicted line tightness.
 
-    # Add the line deltas from point n-1 to point n to the lengths.
-    new_lengths = lengths + deltas
-
-    # Using the new lengths, calculate a hang point.
-    hang_point = find_hang_point(anchor_points, new_lengths)
-
-    # Compare the hang point to the ending position
-    return np.linalg.norm(hang_point - ending_pos)
+    # Compare the predicted hang point to the observed visual ending position.
+    # The smaller the distance, the more consistent the parameters are with the move.
+    print(f'hp={predicted_hang_point} ep={ending_pos_visual}')
+    return np.linalg.norm(predicted_hang_point - ending_pos_visual)
 
 
 def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=None):
@@ -199,14 +206,22 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
     """
     # Unpack parameters based on the operating mode
     if mode == 'full':
-        params = params.reshape((4, 6))
-        # first, extract the zero angle=
-        zero_angles = params[:, 5].copy()
-        # the gobal z offset of the robot doesn't affect the cost, but all anchors must have the same z, and
-        # poses must must have shape (2,3) so overwrite the
-        # column that was being used to store zero angle and put a constant in there.
-        anchor_poses = params.reshape((4, 2, 3))
-        anchor_poses[:, 1, 2] = 2.5
+        # The incoming `params` is a flat array of 24 elements.
+        # Reshape it to our logical (4 anchors, 6 params) structure.
+        params_matrix = params.reshape((4, 6))
+        # Explicitly unpack each part of the matrix into named variables.
+        rodrigues_vectors = params_matrix[:, 0:3]  # Columns 0, 1, 2 are rotation
+        positions_xy = params_matrix[:, 3:5]      # Columns 3, 4 are position X, Y
+        zero_angles = params_matrix[:, 5]         # Column 5 is the zero angle
+
+        # construct the anchor_poses array.
+        anchor_poses = np.zeros((4, 2, 3))
+        # Fill the rotation part
+        anchor_poses[:, 0, :] = rodrigues_vectors
+        # Fill the position part
+        anchor_poses[:, 1, 0:2] = positions_xy
+        anchor_poses[:, 1, 2] = 2.5  # Set a constant Z value directly
+
     elif mode == 'zero_angles_only':
         # In 'zero_angles_only' mode, params are just the zero angles
         assert fixed_poses is not None, "fixed_poses must be provided in 'zero_angles_only' mode."
@@ -223,6 +238,9 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
 
     all_length_errs = []
     all_consistency_errs = []
+
+    # save some results during the first loop for the move consistency calculation.
+    intermediate_data = []
 
     for sample in observations:
         encoder_based_lengths = np.array([spools[i].get_unspooled_length(sample['encoders'][i]) for i in range(4)])
@@ -251,16 +269,22 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
                     distances = np.linalg.norm(diffs, axis=2)
                     all_consistency_errs.append(distances.flatten())
 
+        gantry_positions = np.array([pos for sublist in gantry_positions_by_anchor for pos in sublist])
+        if len(gantry_positions) == 0:
+            continue # This point should not have even been recorded.
+
         # Encoder to visual error
-        all_gantry_pos_flat = [pos for sublist in gantry_positions_by_anchor for pos in sublist]
-        if all_gantry_pos_flat:
-            gantry_positions = np.array(all_gantry_pos_flat)
-            visual_based_lengths = np.linalg.norm(
-                anchor_grommets.reshape(1, 4, 3) - gantry_positions.reshape(gantry_positions.shape[0], 1, 3),
-                axis=-1
-            )
-            errors_per_sample = (visual_based_lengths - encoder_based_lengths.reshape(1, 4)).flatten()
-            all_length_errs.append(errors_per_sample)
+        visual_based_lengths = np.linalg.norm(
+            anchor_grommets.reshape(1, 4, 3) - gantry_positions.reshape(gantry_positions.shape[0], 1, 3),
+            axis=-1
+        )
+        errors_per_sample = (visual_based_lengths - encoder_based_lengths.reshape(1, 4)).flatten()
+        all_length_errs.append(errors_per_sample)
+
+        intermediate_data.append({
+            'mean_gantry_pos': np.mean(gantry_positions, axis=0),
+            'encoder_lengths': encoder_based_lengths
+        })
 
         # todo: add another error term to constrain scale and z offset.
         # take readings of gripper winch line and laser rangefidner with each sample point.
@@ -268,12 +292,31 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
         # these measurements however would be invalid if the sample point were over a piece of furniture,
         # so this error term may only be done for positions over the origin card.
 
+    # Calculate move consistency error between consecutive points ---
+    all_move_consistency_errs = []
+    for i in range(1, len(intermediate_data)):
+        point1 = intermediate_data[i-1]
+        point2 = intermediate_data[i]
+        
+        # Ensure both consecutive points had valid visual data
+        if point1 and point2:
+            err = params_consistent_with_move(
+                starting_pos_visual=point1['mean_gantry_pos'],
+                ending_pos_visual=point2['mean_gantry_pos'],
+                encoder_lengths1=point1['encoder_lengths'],
+                encoder_lengths2=point2['encoder_lengths'],
+                anchor_points=anchor_grommets
+            )
+            all_move_consistency_errs.append(err)
+
     # Combine errors and return final cost
     all_errors_combined = []
     if all_length_errs:
         all_errors_combined.append(np.concatenate(all_length_errs))
     if all_consistency_errs:
         all_errors_combined.append(np.concatenate(all_consistency_errs) * 0.4)
+    if all_move_consistency_errs:
+        all_errors_combined.append(np.array(all_move_consistency_errs) * 0.5)
 
     if all_errors_combined:
         final_errs_array = np.concatenate(all_errors_combined)
