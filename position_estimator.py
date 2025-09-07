@@ -326,8 +326,11 @@ class Positioner2:
 
         self.visual_move_start_time = time.time()
         self.visual_move_line_params = np.concatenate([self.hang_gant_pos, self.hang_gant_vel])
+        self.visual_pos = np.zeros(3, dtype=float)
+        self.visual_vel = np.zeros(3, dtype=float)
         self.grip_pose = (np.zeros(3), np.zeros(3))
         self.slack_lines = [False, False, False, False]
+        self.last_visual_data_timestamp = 0
 
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
@@ -416,16 +419,18 @@ class Positioner2:
           * a starting position
           * a velocity vector
         """
-        backtime = time.time()-2
+        now = time.time()
+        backtime = now-1.5
         cutoff = backtime
         moving = True
-        if self.stop_cutoff is not None:
+        if self.stop_cutoff is not None and now > self.stop_cutoff:
             moving = False
             cutoff = self.stop_cutoff
         data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
         if len(data) < 2:
             return False
         times = data[:,0]
+        self.last_visual_data_timestamp = np.max(times)
         positions = data[:,1:]
 
         lower = np.min(self.anchor_points, axis=0)
@@ -469,26 +474,6 @@ class Positioner2:
         self.visual_move_line_params = result.x
         return True
 
-    def send_debugging_indicators(self):
-        velocity = self.visual_move_line_params[3:6]
-        visual_pos = eval_linear_pos(
-            np.array([time.time()]),
-            self.visual_move_start_time,
-            self.visual_move_line_params[0:3],
-            velocity,
-        )[0]
-        update_for_ui = {
-            'pos_factors_debug': {
-                # position as esimated by visual observations
-                'visual_pos': visual_pos,
-                'visual_vel': velocity,
-                # position as estimated by line length only
-                'hang_pos': self.hang_gant_pos,
-                'hang_vel': self.hang_gant_vel,
-                },
-        }
-        self.to_ui_q.put(update_for_ui)
-
     async def check_and_recal(self):
         """
         Automatically send line reference length based on visual observation under certain conditions.
@@ -523,7 +508,6 @@ class Positioner2:
                 #     # if visual move was estimated successfully, we may be able to use it to automatically update reference lengths
                 #     asyncio.create_task(self.check_and_recal())
                 self.find_swing()
-                self.send_debugging_indicators()
                 await asyncio.sleep(0.2)
             except Exception as e:
                 self.run = False
@@ -531,7 +515,7 @@ class Positioner2:
 
     def estimate(self):
         """
-        Estimate current gantry and gripper position and velocity from lines
+        Estimate current gantry and gripper position and velocity
         """
         self.start = time.time()
         z = np.zeros(3, dtype=float)
@@ -570,43 +554,51 @@ class Positioner2:
             if result is None:
                 # print(f'estimate bailed because it failed to calc a hang point with lengths {lengths}')
                 self.time_taken = time.time() - self.start
-                return False
-            self.hang_gant_pos, slack_lines = result
-
-            # this represents a prediction of which lines are slack, it may not match reality.
-            # if this prediction says a line is tight but measured slackness says otherwise, the hang point is probably quite wrong.
-            # self.slack_lines = result[1]
-            self.slack_lines = np.logical_not(tight)
-
-            if sum(speeds) == 0:
-                self.hang_gant_vel = z
-                # if the gantry just now stopped moving, record the time.
-                if self.stop_cutoff is None:
-                    self.stop_cutoff = time.time()
+                # self.hang_gant_pos will not be updated this time around.
             else:
-                self.stop_cutoff = None
-                # repeat for a position some small increment in the future to get the gantry velocity
-                increment = 0.1 # seconds
-                lengths += speeds * increment
-                result = find_hang_point(self.anchor_points, lengths)
-                if result is None:
-                    # print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
-                    self.time_taken = time.time() - self.start
-                    self.hang_gant_vel = np.zeros((3,))
-                else:
-                    self.hang_gant_vel = result[0] - self.hang_gant_pos
-                    self.hang_gant_vel = self.hang_gant_vel / increment
+                self.hang_gant_pos, slack_lines = result
 
-            # use information both from hang position and visual observation
-            visual_vel = self.visual_move_line_params[3:6]
-            visual_pos = eval_linear_pos(
-                np.array([time.time()]),
-                self.visual_move_start_time,
-                self.visual_move_line_params[0:3],
-                visual_vel,
-            )[0]
-            self.gant_pos = self.hang_gant_pos * 0.7 + visual_pos * 0.3
-            self.gant_vel = self.hang_gant_vel * 0.7 + visual_vel * 0.3
+                # this represents a prediction of which lines are slack, it may not match reality.
+                # if this prediction says a line is tight but measured slackness says otherwise, the hang point is probably quite wrong.
+                # self.slack_lines = result[1]
+                self.slack_lines = np.logical_not(tight)
+
+                if sum(speeds) == 0:
+                    self.hang_gant_vel = z
+                    # if the gantry just now stopped moving, record the time.
+                    if self.stop_cutoff is None:
+                        self.stop_cutoff = time.time()
+                else:
+                    self.stop_cutoff = None
+                    # repeat for a position some small increment in the future to get the gantry velocity
+                    increment = 0.1 # seconds
+                    lengths += speeds * increment
+                    result = find_hang_point(self.anchor_points, lengths)
+                    if result is None:
+                        # print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
+                        self.time_taken = time.time() - self.start
+                        self.hang_gant_vel = np.zeros((3,))
+                    else:
+                        self.hang_gant_vel = result[0] - self.hang_gant_pos
+                        self.hang_gant_vel = self.hang_gant_vel / increment
+
+        # use information both from hang position and visual observation
+        self.visual_vel = self.visual_move_line_params[3:6]
+        print(f'visualo_vel={np.linalg.norm(self.visual_vel)} m/s')
+        eval_time = time.time()
+        # if self.stop_cutoff is not None and self.stop_cutoff > self.last_visual_data_timestamp:
+        #     print(f'extrapolate visual velocity for {eval_time-self.last_visual_data_timestamp}s because we know gantry stopped')
+        #     eval_time = self.stop_cutoff
+        self.visual_pos = eval_linear_pos(
+            np.array([eval_time]),
+            self.visual_move_start_time,
+            self.visual_move_line_params[0:3],
+            self.visual_vel,
+        )[0]
+
+
+        self.gant_pos = self.hang_gant_pos * 0.7 + self.visual_pos * 0.3
+        self.gant_vel = self.hang_gant_vel * 0.7 + self.visual_vel * 0.3
 
         # figure out gripper position.
 
@@ -648,6 +640,14 @@ class Positioner2:
                 # 'errors': softmax(self.errors),
                 'data_ts': self.data_ts,
                 'time_taken': self.time_taken,
+                },
+            'pos_factors_debug': {
+                # position as esimated by visual observations
+                'visual_pos': self.visual_pos,
+                'visual_vel': self.visual_vel,
+                # position as estimated by line length only
+                'hang_pos': self.hang_gant_pos,
+                'hang_vel': self.hang_gant_vel,
                 },
             # 'goal_points': self.des_grip_locations, # each goal is a time and a position
         }
