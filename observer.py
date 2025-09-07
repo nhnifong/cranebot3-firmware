@@ -403,7 +403,7 @@ class AsyncObserver:
         Z_SHIFT = 0.2 # meters
         FLOOR_Z_OFFSET = 0.4 # meters
         GRID_STEPS_X = 3j
-        GRID_STEPS_Y = 4j
+        GRID_STEPS_Y = 3j
         GRID_STEPS_Z = 2j
         OPTIMIZER_TIMEOUT_S = 60 # seconds
         
@@ -425,8 +425,8 @@ class AsyncObserver:
             print(f'anchor poses based on origin card {anchor_poses}')
 
             # Experiment: scale pose positions
-            scale = 1.04
-            anchor_poses[:,1,:] *= scale
+            # scale = 1.04
+            # anchor_poses[:,1,:] *= scale
 
             # the true distance between anchor 0 and anchor 2 should be 5.334 meters in my room
             a = anchor_poses[0,1,:2]
@@ -502,8 +502,8 @@ class AsyncObserver:
             raise
 
     async def collect_data_at_points(self, sample_points, anchor_poses=None, save_progress=False):
-        SETTLING_TIME_S = 2.0 # seconds
-        OBSERVATION_COLLECTION_TIME_S = 7.0 # seconds
+        SETTLING_TIME_S = 1.5 # seconds
+        OBSERVATION_COLLECTION_TIME_S = 6.0 # seconds
         MIN_TOTAL_GANTRY_OBSERVATIONS = 3
         
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
@@ -889,7 +889,7 @@ class AsyncObserver:
         """Only measures current position once, then moves in the right direction
         for the amount of time it should take to get to the goal.
         This is a motion task."""
-        GANTRY_SPEED_MPS = 0.2 # m/s
+        GANTRY_SPEED_MPS = 0.25 # m/s
         
         try:
             self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
@@ -945,7 +945,7 @@ class AsyncObserver:
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # line lengths at new pos
-        starting_pos += (uvec / KINEMATICS_STEP_SCALE)
+        starting_pos = starting_pos + (uvec / KINEMATICS_STEP_SCALE)
         lengths_b = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # length changes needed to travel a small distance in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
