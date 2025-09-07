@@ -54,76 +54,91 @@ class ComponentClient:
         print(f'Connecting to {video_uri}')
         self.conn_status['video'] = 'connecting'
         self.to_ui_q.put({'connection_status': self.conn_status})
-        cap = cv2.VideoCapture(video_uri)
-        # cap = cv2.VideoCapture(video_uri, cv2.CAP_FFMPEG) # this is probably the default anyways
-        # cap = cv2.VideoCapture(video_uri, cv2.CAP_OPENCV_MJPEG) # would this be any faster?
-        # if the stream were UDP would it be faster? https://mpolinowski.github.io/docs/IoT-and-Machine-Learning/ML/2021-12-02--opencv-with-videos/2021-12-02/
-        # cap.read() is a combination of cap.grab() and cap.receive(). receive starts the decoding. are these any different for web streams vs local cameras?
-        # if we just did cap.grab() as fast as possible would the framerate still be limited by the ram on the RPI zero 2W?
+
         
-        if not cap.isOpened():
-            print('no video stream available')
-            self.conn_status['video'] = 'none'
-            self.to_ui_q.put({'connection_status': self.conn_status})
-            return
+        # if not cap.isOpened():
+        #     print('no video stream available')
+        #     self.conn_status['video'] = 'none'
+        #     self.to_ui_q.put({'connection_status': self.conn_status})
+        #     return
+
+        # even though this function is being run in a thread, due to the GIL, it can still block the main loop on this process that is running the observer.
+        # cv2.VideoCapture is a somewhat heavyweight decoding job and it needed to be moved off this process.
+
+
+        # Create a queue to hold frames from the process
+        frame_queue = Queue(maxsize=5) 
+        # An event to signal to the process to shut down gracefully.
+        stop_event = Event()
+        # start the process.
+        reader_processes = Process(target=video_reader, args=(i, uri, frame_queue, stop_event))
+        reader_processes.start()
+
+
         print(f'video connection successful {cap}')
         self.conn_status['video'] = 'connected'
         self.notify_video = True
         lastSam = time.time()
         last_time = time.time()
-        while self.connected:
-            # blocks until a frame can be read, then decodes it. 
-            ret, frame = cap.read()
-            if ret:
 
-                # send frame to shape tracker
-                if self.shape_tracker is not None and self.anchor_num is not None: # skip gripper for now:
+        try:
+            while self.connected:
 
-                    # send one frame per second to the fastSAM model
-                    if time.time() > lastSam + self.shape_tracker.preferred_delay:
-                        lastSam = time.time()
+                if not frame_queue.empty():
+                    # Get a frame from the queue.
+                    frame = frame_queue.get(block=False)
+
+                    # send frame to shape tracker
+                    if self.shape_tracker is not None and self.anchor_num is not None: # skip gripper for now:
+
+                        # send one frame per second to the fastSAM model
+                        if time.time() > lastSam + self.shape_tracker.preferred_delay:
+                            lastSam = time.time()
+                            if not self.connected:
+                                break
+                            # self.shape_tracker.processFrame(self.anchor_num, frame)
+                            
+                    if self.sendPreviewToUi:
+                        # send frame to UI
+                        preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
+                        self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
+
+                    # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
+                    fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+                    try:
+                        timestamp = time.time() # default to using client clock
+                        timestamp = self.frame_times[fnum]
+                        del self.frame_times[fnum]
+                        now = time.time()
+                        self.stat.latency.append(now - timestamp)
+                        fr = 1/(now - last_time)
+                        self.stat.framerate.append(fr)
+                        last_time = now
+                    except KeyError:
+                        # expected behavior during unit test
+                        # print(f'received a frame without knowing when it was captured')
+                        pass 
+                        # continue
+
+                    # send frame to apriltag detector
+                    try:
                         if not self.connected:
-                            return
-                        # self.shape_tracker.processFrame(self.anchor_num, frame)
-                        
-                if self.sendPreviewToUi:
-                    # send frame to UI
-                    preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
-                    self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
+                            break
+                        if self.stat.pending_frames_in_pool < 60:
+                            self.stat.pending_frames_in_pool += 1
+                            self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                        else:
+                            print(f'Dropping frame because there are already too many pending.')
+                    except ValueError:
+                        break # the pool is not running
 
-                # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
-                fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-                try:
-                    timestamp = time.time() # default to using client clock
-                    timestamp = self.frame_times[fnum]
-                    del self.frame_times[fnum]
-                    now = time.time()
-                    self.stat.latency.append(now - timestamp)
-                    fr = 1/(now - last_time)
-                    self.stat.framerate.append(fr)
-                    last_time = now
-                except KeyError:
-                    # expected behavior during unit test
-                    # print(f'received a frame without knowing when it was captured')
-                    pass 
-                    # continue
-
-                # send frame to aruco detector
-                try:
-                    if not self.connected:
-                        return
-                    if self.stat.pending_frames_in_pool < 60:
-                        self.stat.pending_frames_in_pool += 1
-                        self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
-                    else:
-                        print(f'Dropping frame because there are already too many pending.')
-                except ValueError:
-                    return # the pool is not running
-
-            # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
-            # handle_detections runs in this process, but in a thread managed by the pool.
-            time.sleep(0.001)
+                time.sleep(0.01) # small sleep to prevent a tight loop
+        finally:
+            # once we have broken out of the loop, we need to end the subprocess.
+            stop_event.set()
+            print('Joining video reader process')
+            reader_processes.join()
 
     def handle_frame_times(self, frame_time_list):
         """
