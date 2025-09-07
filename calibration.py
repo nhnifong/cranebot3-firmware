@@ -182,7 +182,7 @@ def params_consistent_with_move(
     predicted_ending_lengths = starting_lengths_visual + encoder_deltas
 
     # Using the predicted new lengths, calculate a hypothetical hang point.
-    print(f'try to find hang point with anchor_points={anchor_points}, lengths={predicted_ending_lengths}')
+    # print(f'try to find hang point with anchor_points={anchor_points}, lengths={predicted_ending_lengths}')
     hp_result = find_hang_point(anchor_points, predicted_ending_lengths)
     if hp_result is None:
         return 1 # 1 meter
@@ -190,7 +190,7 @@ def params_consistent_with_move(
 
     # Compare the predicted hang point to the observed visual ending position.
     # The smaller the distance, the more consistent the parameters are with the move.
-    print(f'hp={predicted_hang_point} ep={ending_pos_visual}')
+    # print(f'hp={predicted_hang_point} ep={ending_pos_visual}')
     return np.linalg.norm(predicted_hang_point - ending_pos_visual)
 
 
@@ -314,9 +314,9 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
     if all_length_errs:
         all_errors_combined.append(np.concatenate(all_length_errs))
     if all_consistency_errs:
-        all_errors_combined.append(np.concatenate(all_consistency_errs) * 0.4)
+        all_errors_combined.append(np.concatenate(all_consistency_errs) * 0.5)
     if all_move_consistency_errs:
-        all_errors_combined.append(np.array(all_move_consistency_errs) * 0.5)
+        all_errors_combined.append(np.array(all_move_consistency_errs) * 0.3)
 
     if all_errors_combined:
         final_errs_array = np.concatenate(all_errors_combined)
@@ -386,7 +386,7 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index, mode=
         args=args,
         method='SLSQP',
         bounds=bounds,
-        options={'disp': False, 'maxiter': 1000000}
+        options={'disp': False, 'maxiter': 10000}
     )
 
     # --- Process and return results based on the mode ---
@@ -521,6 +521,10 @@ if __name__ == "__main__":
     poses, zero_a = find_cal_params(ap, data, 2)
     print(poses)
     print(zero_a)
+
+    bedroom_side_len = 5.334
+    side_len = np.linalg.norm( poses[0][1] - poses[2][1] )
+    print(f'side len = {side_len} ({(side_len/bedroom_side_len)*100:.3f}% of ideal)')
 
     config = Config()
     for i, anchor in enumerate(config.anchors):
