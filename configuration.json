@@ -105,11 +105,12 @@
   "common_anchor_vars": {
     "MAX_ACCEL": 0.3,
     "REC_MOD": 1,
-    "RUNNING_WS_DELAY": 0.03
+    "RUNNING_WS_DELAY": 0.03,
+    "buffers": 10
   },
   "gripper": {
     "MAX_ACCEL": 0.9,
     "TARGET_HOLDING_PRESSURE": 1.1,
-    "buffers": 10
+    "buffers": 9
   }
 }

@@ -21,7 +21,6 @@ half_res_stream_command = """
   --width=1920 --height=1080
   --listen -o tcp://0.0.0.0:8888
   --codec h264
-  --bitrate 5000000
   --buffer-count={buffers}
   --autofocus-mode continuous"""
 
@@ -57,7 +56,7 @@ default_gripper_conf = {
     # max open servo value
     'OPEN': -80,
     # number of buffers to use for half size stream
-    'buffers': 12,
+    'buffers': 10,
 }
 
 class GripperSpoolMotor():
