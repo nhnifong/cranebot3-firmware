@@ -12,6 +12,8 @@ import model_constants
 from functools import partial
 import threading
 from config import Config
+from multiprocessing import Queue, Process, Event
+from fast_vid_reader import video_reader
 
 # number of origin detections to average
 max_origin_detections = 12
@@ -68,25 +70,31 @@ class ComponentClient:
 
         # Create a queue to hold frames from the process
         frame_queue = Queue(maxsize=5) 
+        frame_queue.cancel_join_thread()
         # An event to signal to the process to shut down gracefully.
         stop_event = Event()
         # start the process.
-        reader_processes = Process(target=video_reader, args=(i, uri, frame_queue, stop_event))
-        reader_processes.start()
-
-
-        print(f'video connection successful {cap}')
-        self.conn_status['video'] = 'connected'
-        self.notify_video = True
-        lastSam = time.time()
-        last_time = time.time()
-
+        reader_processes = Process(target=video_reader, args=(self.anchor_num, video_uri, frame_queue, stop_event))
         try:
-            while self.connected:
+            reader_processes.start()
+            is_connected = frame_queue.get(block=True) # first item on queue is expected to be a bool indicating successful connection
+            if is_connected:
+                print(f'video connection successful {self.anchor_num} observer pid = {os.getpid()}')
+                self.conn_status['video'] = 'connected'
+            else:
+                self.conn_status['video'] = 'none'
+            self.notify_video = True
+            lastSam = time.time()
+            last_time = time.time()
+            fnum = -1
+
+            while self.connected and is_connected: # websocket is connected, and video is connected
 
                 if not frame_queue.empty():
                     # Get a frame from the queue.
-                    frame = frame_queue.get(block=False)
+                    s,frame = frame_queue.get(block=False)
+                    print(f'took {time.time() - s} seconds')
+                    fnum += 1
 
                     # send frame to shape tracker
                     if self.shape_tracker is not None and self.anchor_num is not None: # skip gripper for now:
@@ -103,10 +111,8 @@ class ComponentClient:
                         preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
                         self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
 
-                    # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
-                    fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-
                     try:
+                        # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
                         timestamp = time.time() # default to using client clock
                         timestamp = self.frame_times[fnum]
                         del self.frame_times[fnum]
@@ -117,7 +123,7 @@ class ComponentClient:
                         last_time = now
                     except KeyError:
                         # expected behavior during unit test
-                        # print(f'received a frame without knowing when it was captured')
+                        print(f'received a frame without knowing when it was captured')
                         pass 
                         # continue
 
@@ -137,7 +143,8 @@ class ComponentClient:
         finally:
             # once we have broken out of the loop, we need to end the subprocess.
             stop_event.set()
-            print('Joining video reader process')
+            time.sleep(0.01)
+            print(f'Joining video reader process. alive={reader_processes.is_alive()}')
             reader_processes.join()
 
     def handle_frame_times(self, frame_time_list):

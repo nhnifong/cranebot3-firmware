@@ -35,7 +35,7 @@ stream_command = """
 /usr/bin/rpicam-vid -t 0
   --width=2304 --height=1296
   --listen -o tcp://0.0.0.0:8888
-  --codec mjpeg
+  --codec h264
   --vflip --hflip
   --buffer-count={buffers}
   --autofocus-mode continuous"""

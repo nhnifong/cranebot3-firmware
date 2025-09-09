@@ -584,7 +584,6 @@ class Positioner2:
 
         # use information both from hang position and visual observation
         self.visual_vel = self.visual_move_line_params[3:6]
-        print(f'visualo_vel={np.linalg.norm(self.visual_vel)} m/s')
         eval_time = time.time()
         # if self.stop_cutoff is not None and self.stop_cutoff > self.last_visual_data_timestamp:
         #     print(f'extrapolate visual velocity for {eval_time-self.last_visual_data_timestamp}s because we know gantry stopped')

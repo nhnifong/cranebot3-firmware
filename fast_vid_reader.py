@@ -1,5 +1,6 @@
 import cv2
 import os
+import time
 
 
 def video_reader(stream_id, uri, frame_queue, stop_event):
@@ -22,25 +23,21 @@ def video_reader(stream_id, uri, frame_queue, stop_event):
     if not cap.isOpened():
         print(f"[{os.getpid()}] Error: Could not open video stream {stream_id} at {uri}")
         stop_event.set() # Signal main process to stop if a stream fails
+        frame_queue.put(False)
         return
+    frame_queue.put(True)
 
     while not stop_event.is_set():
+        s = time.time()
         ret, frame = cap.read()
         
         if not ret:
             print(f"[{os.getpid()}] Reached end of stream {stream_id}. Exiting.")
             break
         
-        # Hand off the frame immediately to the shared queue.
-        # This is the key to decoupling the reader from the processor.
-        # The reader does not wait for the frame to be processed.
-        try:
-            frame_queue.put((stream_id, frame), block=False)
-        except Exception as e:
-            # If the queue is full, the video reader will be blocked,
-            # but this is a good indicator that the processors can't keep up.
-            print(f"[{os.getpid()}] Queue is full, dropping frame from stream {stream_id}")
-            continue
+        # Hand off the frame immediately to the queue
+        frame_queue.put((s,frame), block=True)
+
 
     cap.release()
     print(f"[{os.getpid()}] Video reader for stream {stream_id} has stopped.")
