@@ -1,11 +1,11 @@
-from cv_common import locate_markers
-import time
-from pprint import pprint
-import cv2
-import base64
-import subprocess
+import sys
+import os
+# This will let us import files and modules located in the parent directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-def local_aruco_detection(outq, control_queue):
+from cv_common import locate_markers
+
+def local_aruco_detection():
     """
     Open the camera and detect aruco markers. put any detections on the provided queue
     TODO this seems to chew up pretty much all the resources we have.
@@ -21,53 +21,19 @@ def local_aruco_detection(outq, control_queue):
     # capture_config = picam2.create_preview_configuration(main={"size": (2304, 1296), "format": "RGB888"})
     # running at full resolution takes pretty much all the RAM on the raspi zero even with just 1 framebuffer.
     # nearly every other process will get swapped out.
-    capture_config = picam2.create_still_configuration(main={"size": (4608, 2592), "format": "RGB888"})
+    capture_config = picam2.create_still_configuration(main={"size": (1920, 1080), "format": "RGB888"})
     # allow Picamera2 to choose an efficient size close to what we requested
     picam2.align_configuration(capture_config)
     picam2.configure(capture_config)
     picam2.start()
-    picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.1, "AfSpeed": controls.AfSpeedEnum.Fast}) 
-    send_images = False
-    send_detections = False
+    picam2.set_controls({"AfMode": controls.AfModeEnum.Continuous, "AfSpeed": controls.AfSpeedEnum.Fast}) 
+
     while True:
-        if not control_queue.empty():
-            message = control_queue.get_nowait()
-            if message == 'STOP':
-                break # exit loop, ending process
-            if message.startswith('MODE'):
-                m = message.split(':')
-                send_images = m[1] == 'True'
-                send_detections = m[2] == 'True'
-        if send_images or send_detections:
-            sec = time.time()
-            im = picam2.capture_array()
-            if send_images:
-                result, encoded_img = cv2.imencode('.jpg', im)  # Encode to memory buffer
-                if result:
-                    outq.put({'image':{
-                        'timestamp':sec,
-                        'data':base64.b64encode(encoded_img.tobytes()).decode('utf-8')
-                    }})
-                else:
-                    print(f"Encoding failed with extension {ext}")
-            if send_detections:
-                detections = locate_markers(im)
-                if len(detections) > 0:
-                    for det in detections:
-                        det['s'] = sec # add the time of capture to the detection
-                        outq.put({'detection':det})
-        else:
-            time.sleep(1)
+        im = picam2.capture_array()
+        detections = locate_markers(im)
+        if len(detections) > 0:
+            for det in detections:
+                print(det)
     print("PiCamera detection process ended")
 
-
-def dummyProcess(outq, control_queue):
-    """
-    A process that can act as a stand in for local_aruco_detection in situations where picamera is not installed/working
-    """
-    print("dummy process started")
-    while True:
-        if not control_queue.empty():
-            if control_queue.get_nowait() == "STOP":
-                break # exit loop, ending process
-    print("dummy process ended")
+local_aruco_detection()
