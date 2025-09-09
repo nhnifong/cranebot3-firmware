@@ -93,7 +93,6 @@ class ComponentClient:
                 if not frame_queue.empty():
                     # Get a frame from the queue.
                     s,frame = frame_queue.get(block=False)
-                    print(f'took {time.time() - s} seconds')
                     fnum += 1
 
                     # send frame to shape tracker

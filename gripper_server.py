@@ -18,9 +18,10 @@ from adafruit_vl53l1x import VL53L1X
 # this will require a different calibration matrix
 half_res_stream_command = """
 /usr/bin/rpicam-vid -t 0
-  --width=2304 --height=1296
+  --width=1920 --height=1080
   --listen -o tcp://0.0.0.0:8888
-  --codec mjpeg
+  --codec h264
+  --bitrate 5000000
   --buffer-count={buffers}
   --autofocus-mode continuous"""
 
