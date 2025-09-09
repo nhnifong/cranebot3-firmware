@@ -31,9 +31,10 @@ import model_constants
 # higher framerate is possible with lower resolution, but it is not useful because at fullres
 # I can still barely detect a 9cm aruco marker at 5 meters.
 # There is an --roi arg to crop the image but it doesnt lessen the amount of memory rpicam-vid attempts to allocate.
+# --width=2304 --height=1296
 stream_command = """
 /usr/bin/rpicam-vid -t 0
-  --width=2304 --height=1296
+  --width=1920 --height=1080
   --listen -o tcp://0.0.0.0:8888
   --codec h264
   --vflip --hflip
