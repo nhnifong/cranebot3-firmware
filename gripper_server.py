@@ -21,7 +21,6 @@ half_res_stream_command = """
   --width=1920 --height=1080
   --listen -o tcp://0.0.0.0:8888
   --codec h264
-  --buffer-count={buffers}
   --autofocus-mode continuous"""
 
 # the speed will not increase at settings beyond this value

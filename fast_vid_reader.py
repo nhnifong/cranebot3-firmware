@@ -18,6 +18,7 @@ def video_reader(stream_id, uri, frame_queue, stop_event):
         stop_event (Event): An event to signal the process to stop.
     """
     print(f"[{os.getpid()}] Starting video reader for stream {stream_id}...")
+    os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
     
     cap = cv2.VideoCapture(uri)
     if not cap.isOpened():

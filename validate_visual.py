@@ -1,3 +1,5 @@
+import os
+os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 import cv2
 import numpy as np
 from cv_common import locate_markers
@@ -7,7 +9,11 @@ config = Config()
 mtx = config.intrinsic_matrix
 distortion = config.distortion_coeff
 
-cap = cv2.VideoCapture("tcp:192.168.1.157:8888")
+
+env_var = os.getenv("OPENCV_FFMPEG_CAPTURE_OPTIONS")
+print(f'var value = {env_var}')
+cap = cv2.VideoCapture("tcp:192.168.1.157:8888", cv2.CAP_FFMPEG)
+
 if not cap.isOpened():
     print('no video stream available')
 else:

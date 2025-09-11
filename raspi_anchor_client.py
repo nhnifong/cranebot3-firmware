@@ -130,7 +130,7 @@ class ComponentClient:
                     try:
                         if not self.connected:
                             break
-                        if self.stat.pending_frames_in_pool < 60:
+                        if self.stat.pending_frames_in_pool < 100:
                             self.stat.pending_frames_in_pool += 1
                             self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                         else:

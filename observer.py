@@ -660,7 +660,7 @@ class AsyncObserver:
             del self.bot_clients[key]
 
     async def main(self) -> None:
-        POOL_PROCESSES = 8
+        POOL_PROCESSES = 16
         # main process loop
         with Pool(processes=POOL_PROCESSES) as pool:
             self.pool = pool
