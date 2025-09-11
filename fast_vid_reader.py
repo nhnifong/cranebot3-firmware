@@ -37,7 +37,7 @@ def video_reader(stream_id, uri, frame_queue, stop_event):
             break
 
         # Hand off the frame immediately to the queue
-        frame_queue.put((s,frame), block=True)
+        frame_queue.put((s,frame), block=False)
 
     cap.release()
     print(f"[{os.getpid()}] Video reader for stream {stream_id} has stopped.")
