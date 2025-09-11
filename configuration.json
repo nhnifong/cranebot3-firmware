@@ -106,11 +106,11 @@
     "MAX_ACCEL": 0.3,
     "REC_MOD": 1,
     "RUNNING_WS_DELAY": 0.03,
-    "buffers": 10
+    "buffers": 8
   },
   "gripper": {
     "MAX_ACCEL": 0.9,
     "TARGET_HOLDING_PRESSURE": 1.1,
-    "buffers": 9
+    "buffers": 8
   }
 }

@@ -31,12 +31,12 @@ def video_reader(stream_id, uri, frame_queue, stop_event):
         s = time.time()
         ret, frame = cap.read()
         
-        # Hand off the frame immediately to the queue
-        if ret:
-            frame_queue.put((s,frame), block=True)
-        else:
-            time.sleep(0.01)
+        if not ret:
+            print(f"[{os.getpid()}] Reached end of stream {stream_id}. Exiting.")
+            break
 
+        # Hand off the frame immediately to the queue
+        frame_queue.put((s,frame), block=True)
 
     cap.release()
     print(f"[{os.getpid()}] Video reader for stream {stream_id} has stopped.")

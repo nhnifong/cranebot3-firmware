@@ -7,7 +7,7 @@ config = Config()
 mtx = config.intrinsic_matrix
 distortion = config.distortion_coeff
 
-cap = cv2.VideoCapture("tcp:192.168.1.156:8888")
+cap = cv2.VideoCapture("tcp:192.168.1.157:8888")
 if not cap.isOpened():
     print('no video stream available')
 else:
@@ -26,8 +26,11 @@ else:
                     np.array(detection["t"]),
                     length=0.05, thickness=3)
             cv2.imshow('stream', frame)
+        else:
+            print('Reached end of stream')
+            break
         if cv2.waitKey(1) == ord('q'):
-             break
+            break
 
 cap.release()
 cv2.destroyAllWindows()

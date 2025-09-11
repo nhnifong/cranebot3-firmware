@@ -38,7 +38,8 @@ stream_command = """
   --listen -o tcp://0.0.0.0:8888
   --codec h264
   --vflip --hflip
-  --buffer-count={buffers}
+  --framerate {buffers}
+  --buffer-count=0
   --autofocus-mode continuous"""
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
@@ -195,7 +196,7 @@ class RobotComponentServer:
                 if line.startswith("ERROR: ***"):
                     logging.info('Killing rpicam-vid subprocess')
                     self.rpicam_process.kill()
-                    break    
+                    break
             # nothing wrong keep going
 
         # wait for the subprocess to exit, whether because we killed it, or it stopped normally

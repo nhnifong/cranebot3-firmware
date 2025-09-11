@@ -88,7 +88,7 @@ class ComponentClient:
             last_time = time.time()
             fnum = -1
 
-            while self.connected and is_connected: # websocket is connected, and video is connected
+            while self.connected and is_connected and reader_processes.is_alive(): # websocket is connected, and video is connected
 
                 if not frame_queue.empty():
                     # Get a frame from the queue.
@@ -142,8 +142,9 @@ class ComponentClient:
         finally:
             # once we have broken out of the loop, we need to end the subprocess.
             stop_event.set()
-            time.sleep(0.01)
+            time.sleep(0.1)
             print(f'Joining video reader process. alive={reader_processes.is_alive()}')
+            reader_processes.kill()
             reader_processes.join()
 
     def handle_frame_times(self, frame_time_list):
