@@ -69,6 +69,7 @@ class ComponentClient:
         try:
             container = av.open(video_uri, options=options, mode='r')
             stream = next(s for s in container.streams if s.type == 'video')
+            stream.thread_type = "SLICE"
         
             # if not cap.isOpened():
             #     print('no video stream available')
