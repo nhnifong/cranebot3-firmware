@@ -54,8 +54,6 @@ default_gripper_conf = {
     'FINGER_TOUCH': 80,
     # max open servo value
     'OPEN': -80,
-    # number of buffers to use for half size stream
-    'buffers': 10,
 }
 
 class GripperSpoolMotor():

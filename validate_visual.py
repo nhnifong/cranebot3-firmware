@@ -12,7 +12,8 @@ distortion = config.distortion_coeff
 
 env_var = os.getenv("OPENCV_FFMPEG_CAPTURE_OPTIONS")
 print(f'var value = {env_var}')
-cap = cv2.VideoCapture("tcp:192.168.1.157:8888", cv2.CAP_FFMPEG)
+cap = cv2.VideoCapture("tcp:192.168.1.156:8888")
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 if not cap.isOpened():
     print('no video stream available')
@@ -32,11 +33,8 @@ else:
                     np.array(detection["t"]),
                     length=0.05, thickness=3)
             cv2.imshow('stream', frame)
-        else:
-            print('Reached end of stream')
-            break
         if cv2.waitKey(1) == ord('q'):
-            break
+             break
 
 cap.release()
 cv2.destroyAllWindows()

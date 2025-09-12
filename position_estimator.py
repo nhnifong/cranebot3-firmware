@@ -656,6 +656,15 @@ class Positioner2:
         if 'holding' in update:
             self.holding = update['holding']
 
+    async def hang_update():
+        while True:
+            await time.sleep(0.03)
+            await self.hang_data_event.wait()
+            measured_position, tights = find_hang_point()
+            # measurement_time could be the average time of the line records used to calc hang point
+            self.kf.update(measurement_time, measured_position, sensor)
+            self.hang_data_event.reset()
+
     async def main(self):
         print('Starting position estimator')
         rest_task = asyncio.create_task(self.restimate())

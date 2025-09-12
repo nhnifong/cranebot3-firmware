@@ -69,7 +69,7 @@ class ComponentClient:
 
 
         # Create a queue to hold frames from the process
-        frame_queue = Queue(maxsize=5) 
+        frame_queue = Queue(maxsize=1) 
         frame_queue.cancel_join_thread()
         # An event to signal to the process to shut down gracefully.
         stop_event = Event()

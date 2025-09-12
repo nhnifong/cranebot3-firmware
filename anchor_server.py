@@ -50,7 +50,7 @@ default_conf = {
     # delay in seconds between updates sent on websocket during normal operation
     'RUNNING_WS_DELAY': 0.1,
     # delay in seconds between updates sent on websocket during calibration
-    'CALIBRATING_WS_DELAY': 0.05,
+    'CALIBRATING_WS_DELAY': 0.05
 }
 
 class RobotComponentServer:

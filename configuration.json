@@ -110,7 +110,6 @@
   },
   "gripper": {
     "MAX_ACCEL": 0.9,
-    "TARGET_HOLDING_PRESSURE": 1.1,
-    "buffers": 15
+    "TARGET_HOLDING_PRESSURE": 1.1
   }
 }

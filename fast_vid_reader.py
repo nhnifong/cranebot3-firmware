@@ -1,7 +1,13 @@
-import cv2
 import os
+import av
 import time
 
+options = {
+    'rtsp_transport': 'tcp',
+    'fflags': 'nobuffer',
+    'flags': 'low_delay',
+    'fast': '1',
+}
 
 def video_reader(stream_id, uri, frame_queue, stop_event):
     """
@@ -18,26 +24,21 @@ def video_reader(stream_id, uri, frame_queue, stop_event):
         stop_event (Event): An event to signal the process to stop.
     """
     print(f"[{os.getpid()}] Starting video reader for stream {stream_id}...")
-    os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
-    
-    cap = cv2.VideoCapture(uri)
-    if not cap.isOpened():
-        print(f"[{os.getpid()}] Error: Could not open video stream {stream_id} at {uri}")
-        stop_event.set() # Signal main process to stop if a stream fails
-        frame_queue.put(False)
-        return
-    frame_queue.put(True)
+    try:
+        container = av.open(video_uri, options=options, mode='r')
+        stream = next(s for s in container.streams if s.type == 'video')
+        stream.thread_type = "SLICE"
+        frame_queue.put(True) # TODO, what does it look like when connection does not succeed
+        fnum = -1
+        for av_frame in container.decode(stream):
+            if stop_event.is_set():
+                break
+            frame = av_frame.to_ndarray(format='bgr24')
+            fnum += 1
+            # Hand off the frame immediately to the queue
+            frame_queue.put((fnum,frame), block=False)
+    finally:
+        if 'container' in locals():
+            container.close()
 
-    while not stop_event.is_set():
-        s = time.time()
-        ret, frame = cap.read()
-        
-        if not ret:
-            print(f"[{os.getpid()}] Reached end of stream {stream_id}. Exiting.")
-            break
-
-        # Hand off the frame immediately to the queue
-        frame_queue.put((s,frame), block=False)
-
-    cap.release()
     print(f"[{os.getpid()}] Video reader for stream {stream_id} has stopped.")
