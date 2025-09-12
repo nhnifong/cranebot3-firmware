@@ -7,7 +7,9 @@ config = Config()
 mtx = config.intrinsic_matrix
 distortion = config.distortion_coeff
 
-cap = cv2.VideoCapture("tcp:192.168.1.156:8888")
+cap = cv2.VideoCapture("tcp:192.168.1.157:8888")
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
 if not cap.isOpened():
     print('no video stream available')
 else:
@@ -17,14 +19,14 @@ else:
         ret, frame = cap.read()
         if ret:
 
-            result = locate_markers(frame)
-            for detection in result:
-                # print(f'{detection["n"]} distance {detection["t"][2][0]}')
-                cv2.drawFrameAxes(frame,
-                    mtx, distortion,
-                    np.array(detection["r"]),
-                    np.array(detection["t"]),
-                    length=0.05, thickness=3)
+            # result = locate_markers(frame)
+            # for detection in result:
+            #     # print(f'{detection["n"]} distance {detection["t"][2][0]}')
+            #     cv2.drawFrameAxes(frame,
+            #         mtx, distortion,
+            #         np.array(detection["r"]),
+            #         np.array(detection["t"]),
+            #         length=0.05, thickness=3)
             cv2.imshow('stream', frame)
         if cv2.waitKey(1) == ord('q'):
              break

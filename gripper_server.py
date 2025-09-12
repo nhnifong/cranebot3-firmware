@@ -18,10 +18,9 @@ from adafruit_vl53l1x import VL53L1X
 # this will require a different calibration matrix
 half_res_stream_command = """
 /usr/bin/rpicam-vid -t 0
-  --width=2304 --height=1296
+  --width=1920 --height=1080
   --listen -o tcp://0.0.0.0:8888
-  --codec mjpeg
-  --buffer-count={buffers}
+  --codec h264
   --autofocus-mode continuous"""
 
 # the speed will not increase at settings beyond this value
@@ -55,8 +54,6 @@ default_gripper_conf = {
     'FINGER_TOUCH': 80,
     # max open servo value
     'OPEN': -80,
-    # number of buffers to use for half size stream
-    'buffers': 12,
 }
 
 class GripperSpoolMotor():
