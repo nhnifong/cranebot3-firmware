@@ -33,11 +33,10 @@ import model_constants
 # There is an --roi arg to crop the image but it doesnt lessen the amount of memory rpicam-vid attempts to allocate.
 stream_command = """
 /usr/bin/rpicam-vid -t 0
-  --width=2304 --height=1296
+  --width=1920 --height=1080
   --listen -o tcp://0.0.0.0:8888
-  --codec mjpeg
+  --codec h264
   --vflip --hflip
-  --buffer-count={buffers}
   --autofocus-mode continuous"""
 frame_line_re = re.compile(r"#(\d+) \((\d+\.\d+)\s+fps\) exp (\d+\.\d+)\s+ag (\d+\.\d+)\s+dg (\d+\.\d+)")
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
@@ -50,9 +49,7 @@ default_conf = {
     # delay in seconds between updates sent on websocket during normal operation
     'RUNNING_WS_DELAY': 0.1,
     # delay in seconds between updates sent on websocket during calibration
-    'CALIBRATING_WS_DELAY': 0.05,
-    # number of buffers to stream with
-    'buffers': 10,
+    'CALIBRATING_WS_DELAY': 0.05
 }
 
 class RobotComponentServer:
@@ -141,7 +138,7 @@ class RobotComponentServer:
         """
 
         start_time = time.time()
-        scsplit = self.stream_command.format(buffers=self.conf['buffers']).split()
+        scsplit = self.stream_command.split()
         self.rpicam_process = await asyncio.create_subprocess_exec(scsplit[0], *scsplit[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
         while True:

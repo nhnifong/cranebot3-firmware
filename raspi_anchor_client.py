@@ -12,6 +12,9 @@ import model_constants
 from functools import partial
 import threading
 from config import Config
+import os
+
+os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
 # number of origin detections to average
 max_origin_detections = 12
@@ -55,11 +58,6 @@ class ComponentClient:
         self.conn_status['video'] = 'connecting'
         self.to_ui_q.put({'connection_status': self.conn_status})
         cap = cv2.VideoCapture(video_uri)
-        # cap = cv2.VideoCapture(video_uri, cv2.CAP_FFMPEG) # this is probably the default anyways
-        # cap = cv2.VideoCapture(video_uri, cv2.CAP_OPENCV_MJPEG) # would this be any faster?
-        # if the stream were UDP would it be faster? https://mpolinowski.github.io/docs/IoT-and-Machine-Learning/ML/2021-12-02--opencv-with-videos/2021-12-02/
-        # cap.read() is a combination of cap.grab() and cap.receive(). receive starts the decoding. are these any different for web streams vs local cameras?
-        # if we just did cap.grab() as fast as possible would the framerate still be limited by the ram on the RPI zero 2W?
         
         if not cap.isOpened():
             print('no video stream available')
