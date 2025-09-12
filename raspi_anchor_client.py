@@ -7,6 +7,7 @@ import time
 import json
 from cv_common import locate_markers, compose_poses, invert_pose, average_pose, gantry_april_inv
 import cv2
+import av
 import numpy as np
 import model_constants
 from functools import partial
@@ -57,22 +58,36 @@ class ComponentClient:
         print(f'Connecting to {video_uri}')
         self.conn_status['video'] = 'connecting'
         self.to_ui_q.put({'connection_status': self.conn_status})
-        cap = cv2.VideoCapture(video_uri)
+
+        options = {
+            'rtsp_transport': 'tcp',
+            'fflags': 'nobuffer',
+            'flags': 'low_delay',
+            'fast': '1',
+        }
+
+        try:
+            container = av.open(video_uri, options=options, mode='r')
+            stream = next(s for s in container.streams if s.type == 'video')
         
-        if not cap.isOpened():
-            print('no video stream available')
-            self.conn_status['video'] = 'none'
-            self.to_ui_q.put({'connection_status': self.conn_status})
-            return
-        print(f'video connection successful {cap}')
-        self.conn_status['video'] = 'connected'
-        self.notify_video = True
-        lastSam = time.time()
-        last_time = time.time()
-        while self.connected:
-            # blocks until a frame can be read, then decodes it. 
-            ret, frame = cap.read()
-            if ret:
+            # if not cap.isOpened():
+            #     print('no video stream available')
+            #     self.conn_status['video'] = 'none'
+            #     self.to_ui_q.put({'connection_status': self.conn_status})
+            #     return
+
+            print(f'video connection successful')
+            self.conn_status['video'] = 'connected'
+            self.notify_video = True
+            lastSam = time.time()
+            last_time = time.time()
+            fnum = -1
+
+            for av_frame in container.decode(stream):
+                if not self.connected:
+                    break
+                frame = av_frame.to_ndarray(format='bgr24')
+                fnum += 1
 
                 # send frame to shape tracker
                 if self.shape_tracker is not None and self.anchor_num is not None: # skip gripper for now:
@@ -80,17 +95,12 @@ class ComponentClient:
                     # send one frame per second to the fastSAM model
                     if time.time() > lastSam + self.shape_tracker.preferred_delay:
                         lastSam = time.time()
-                        if not self.connected:
-                            return
                         # self.shape_tracker.processFrame(self.anchor_num, frame)
                         
                 if self.sendPreviewToUi:
                     # send frame to UI
                     preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
                     self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
-
-                # determine the timestamp of when the frame was captured by looking it up in the self frame_times map
-                fnum = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
                 try:
                     timestamp = time.time() # default to using client clock
@@ -107,21 +117,23 @@ class ComponentClient:
                     pass 
                     # continue
 
-                # send frame to aruco detector
+                # send frame to detector
                 try:
-                    if not self.connected:
-                        return
                     if self.stat.pending_frames_in_pool < 60:
                         self.stat.pending_frames_in_pool += 1
                         self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                     else:
                         print(f'Dropping frame because there are already too many pending.')
                 except ValueError:
-                    return # the pool is not running
+                    break # the pool is not running
 
-            # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
-            # handle_detections runs in this process, but in a thread managed by the pool.
-            time.sleep(0.001)
+                # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
+                # handle_detections runs in this process, but in a thread managed by the pool.
+                time.sleep(0.001)
+
+        finally:
+            if 'container' in locals():
+                container.close()
 
     def handle_frame_times(self, frame_time_list):
         """
