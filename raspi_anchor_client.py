@@ -82,7 +82,7 @@ class ComponentClient:
             self.notify_video = True
             lastSam = time.time()
             last_time = time.time()
-            fnum = -1
+            fnum = 59 # pyav will read exactly 60 frames with these settings before yeilding one.
 
             for av_frame in container.decode(stream):
                 if not self.connected:
@@ -130,7 +130,7 @@ class ComponentClient:
 
                 # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
                 # handle_detections runs in this process, but in a thread managed by the pool.
-                time.sleep(0.001)
+                time.sleep(0.02)
 
         finally:
             if 'container' in locals():

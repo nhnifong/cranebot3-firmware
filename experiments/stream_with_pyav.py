@@ -26,7 +26,7 @@ try:
         
         cv2.imshow('stream', img)
         if cv2.waitKey(1) == ord('q'):
-             break
+            break
 
 finally:
     if 'container' in locals():
