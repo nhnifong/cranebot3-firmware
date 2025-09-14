@@ -697,7 +697,7 @@ class AsyncObserver:
             # self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
 
             # A task that continuously estimates the position of the gantry
-            asyncio.create_task(self.pe.main())
+            self.pe_task = asyncio.create_task(self.pe.main())
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
@@ -713,7 +713,8 @@ class AsyncObserver:
         self.stat.run = False
         self.pe.run = False
         self.fig_8 = False
-        tasks = []
+        self.pe_task.cancel()
+        tasks = [self.pe_task]
         if self.aiobrowser is not None:
             tasks.append(self.aiobrowser.async_cancel())
         if self.aiozc is not None:
@@ -835,6 +836,7 @@ class AsyncObserver:
                 if random() > RANDOM_EVENT_CHANCE:
                     dp = np.concatenate([[t], gantry_real_pos + np.random.normal(0, OBSERVATION_NOISE_STD_DEV, (3,))])
                     self.datastore.gantry_pos.insert(dp)
+                    self.datastore.gantry_pos_event.set()
                     self.to_ui_q.put({'gantry_observation': dp[1:]})
                 # winch line always 1 meter
                 self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
@@ -848,6 +850,7 @@ class AsyncObserver:
                     travel = dist-last[1]
                     speed = travel/timesince # referring to the specific speed of this line, not the gantry
                     self.datastore.anchor_line_record[i].insert(np.array([t, dist, speed, 1.0]))
+                    self.datastore.anchor_line_record_event.set()
                 tt = self.datastore.anchor_line_record[0].getLast()[0]
                 await asyncio.sleep(LOOP_SLEEP_S)
             except asyncio.exceptions.CancelledError:
