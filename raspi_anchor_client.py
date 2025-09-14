@@ -272,6 +272,7 @@ class RaspiAnchorClient(ComponentClient):
         # TODO if we are not regularly receiving line_record, display this as a server problem status
         if 'line_record' in update:
             self.datastore.anchor_line_record[self.anchor_num].insertList(np.array(update['line_record']))
+            self.datastore.anchor_line_record_event.set()
         if 'last_raw_encoder' in update:
             self.last_raw_encoder = update['last_raw_encoder']
 
@@ -305,6 +306,7 @@ class RaspiAnchorClient(ComponentClient):
                 position = pose.reshape(6)[3:]
                 self.datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
                 # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
+                self.datastore.gantry_pos_event.set()
 
                 self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
                 self.to_ui_q.put({'gantry_observation': position})

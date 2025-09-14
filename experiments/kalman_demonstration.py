@@ -38,7 +38,7 @@ class KalmanFilter:
         # Process noise accounts for uncertainty in our model
         self.process_noise_covariance = np.diag([0.01, 0.01, 0.01, 0.005, 0.005, 0.05])
         
-        # Measurement matrix: maps state to measurement (position only)
+        # Measurement matrix: maps state to measurement (we can measure position only)
         self.measurement_matrix = np.array([
             [1, 0, 0, 0, 0, 0],
             [0, 1, 0, 0, 0, 0],

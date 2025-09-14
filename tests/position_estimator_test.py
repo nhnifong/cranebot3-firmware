@@ -14,6 +14,7 @@ import numpy as np
 from math import pi, sqrt, sin, cos
 import time
 from random import random
+from observer import AsyncObserver
 
 class TestPositionEstimator(unittest.TestCase):
 
@@ -144,9 +145,6 @@ class TestPositionEstimator(unittest.TestCase):
         self.assertTrue(slack_lines[2])
         self.assertFalse(slack_lines[3])
 
-    def test_estimate(self):
-        self.pe.estimate()
-
     def test_swing_angle_from_params(self):
         expected_angles = np.array([
             [1, -2],
@@ -194,62 +192,25 @@ class TestPositionEstimator(unittest.TestCase):
         self.pe.find_swing()
         # np.testing.assert_array_almost_equal(self.pe.swing_params, expected_params, 2)
 
-    def test_find_visual_move(self):
-        actual_move_start_time = time.time()-2
-        actual_move_start_pos = np.array([1.0, 2.0, 1.2])
-        actual_move_velocity = np.array([0.2, -0.2, 0.01])
+class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 
-        # generate simulated observations
-        offset = 0
-        for i in range(20):
-            x, y, z = actual_move_start_pos + actual_move_velocity * offset
-            self.datastore.gantry_pos.insert([actual_move_start_time+offset, x, y, z])
-            offset += 0.1
+    async def asyncSetUp(self):
+        to_ui_q = Queue()
+        to_ob_q = Queue()
+        to_ui_q.cancel_join_thread()
+        to_ob_q.cancel_join_thread()
+        # make an instance of observer just to use it's simulated data function.
+        self.ob = AsyncObserver(to_ui_q, to_ob_q)
+        self.datastore = self.ob.datastore
 
-        # set position estimator's internal state to indicate that line speeds are nonzero.
-        # specifically the time that they all became zero is undefined.
-        self.pe.stop_cutoff = None
-
-        # run the code under test
-        self.pe.find_visual_move()
-
-        np.testing.assert_array_almost_equal(
-            self.pe.visual_move_line_params,
-            np.concatenate([actual_move_start_pos, actual_move_velocity]),
-            4)
-
-    def test_find_visual_move_while_stopped(self):
-        stop_time = time.time()-2
-        rest_position = np.array([1.0, 2.0, 1.2])
-        pre_stop_velocity = np.array([0.2, -0.2, 0.01])
-        self.pe.stop_cutoff = stop_time
-
-        # generate simulated observations
-        t = stop_time - 1
-        for i in range(30):
-            if t < stop_time:
-                x, y, z = rest_position + pre_stop_velocity * (t - stop_time)
-            else:
-                x, y, z = rest_position + np.random.uniform(0,1e-4,3)
-            self.datastore.gantry_pos.insert([t, x, y, z])
-            t += 0.1
-
-        # run the code under test
-        self.pe.find_visual_move()
-
-        np.testing.assert_array_almost_equal(
-            self.pe.visual_move_line_params,
-            np.concatenate([rest_position, np.zeros(3)]),
-            3)
-
-# class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
-
-#     async def asyncSetUp(self):
-#         self.datastore = DataStore(size=200)
-#         to_ui_q = Queue()
-#         to_ui_q.cancel_join_thread()
-#         self.mock_observer = MagicMock()
-#         self.pe = Positioner2(self.datastore, to_ui_q, self.mock_observer)
-
-#     async def test_restimate(self):
-#         await self.pe.restimate()
+    async def test_positioner_main(self):
+        
+        task = asyncio.create_task(self.ob.pe.main())
+        self.ob.run_command_loop = True
+        sim_task = asyncio.create_task(self.ob.add_simulated_data_point2point())
+        await asyncio.sleep(5)
+        self.ob.pe.run = False
+        self.ob.run_command_loop = False
+        task.cancel()
+        result = await asyncio.wait_for(task, 1)
+        result = await asyncio.wait_for(sim_task, 1)

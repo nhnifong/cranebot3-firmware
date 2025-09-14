@@ -12,6 +12,7 @@ from config import Config
 from cv_common import compose_poses
 import model_constants
 from scipy.spatial.transform import Rotation
+from kalman_filter import KalmanFilter
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -285,7 +286,18 @@ def linear_move_cost_fn(model_params, starting_time, times, observed_positions):
 
 class Positioner2:
     def __init__(self, datastore, to_ui_q, observer):
-        self.run = True # run main loop
+        """
+        continuous position estimation
+        recalculates hang point only when the data affecting it changes and consideres it a measurement'
+        considers also any visually obtained position a measurement
+        uses all measurements to update a kalman filter with each measurement type having it's own covariance matrix learned from data
+        
+        main consists of three tasks in a task group
+        * task to periodically predict forwards the kalman filter model
+        * task to wait for updates that affect hang point and recalculate it, then update filter
+        * task to wait for updates that affect visual estimates and update filter.
+        """
+        self.run = False # false until main is called
         self.datastore = datastore
         self.to_ui_q = to_ui_q
         self.ob = observer
@@ -299,16 +311,19 @@ class Positioner2:
         ], dtype=float)
         for i, a in enumerate(self.config.anchors):
             self.anchor_points[i] = np.array(compose_poses([a.pose, model_constants.anchor_grommet])[1])
-        self.holding = False
         self.data_ts = time.time()
 
         # the gantry position and velocity estimated from reported line length and speeds.
-        self.hang_gant_pos = np.zeros(3, dtype=float)
-        self.hang_gant_vel = np.zeros(3, dtype=float)
+        self.hang_pos = np.zeros(3, dtype=float)
+        self.hang_vel = np.zeros(3, dtype=float)
 
-        # gantry position and velocity as a weighted average of hang pose and visual pos
+        # gantry position and velocity as last determined by the kalman filter
         self.gant_pos = np.zeros(3, dtype=float)
         self.gant_vel = np.zeros(3, dtype=float)
+
+        # last visual estimate of gantry position
+        self.visual_pos = np.zeros(3, dtype=float)
+        self.visual_vel = np.zeros(3, dtype=float)
 
         # the time at which all reported line speeds became zero.
         # If some nonzero speed was occuring on any line at the last update, this will be None
@@ -324,13 +339,29 @@ class Positioner2:
             sin(1.5), # sin y phase
         ], dtype=float)
 
-        self.visual_move_start_time = time.time()
-        self.visual_move_line_params = np.concatenate([self.hang_gant_pos, self.hang_gant_vel])
-        self.visual_pos = np.zeros(3, dtype=float)
-        self.visual_vel = np.zeros(3, dtype=float)
+        # last estimate of the gripper pose
         self.grip_pose = (np.zeros(3), np.zeros(3))
+        # last information on whether the gripper is thought to be holding something
+        self.holding = False
+
+        # hang point based prediction of slack lines (currently unused)
         self.slack_lines = [False, False, False, False]
-        self.last_visual_data_timestamp = 0
+
+        self.last_visual_cutoff = time.time()
+
+        noise_std_dev=0.3
+        self.visual_noise_covariance = np.diag([noise_std_dev**2] * 3)
+        self.hang_noise_covariance = np.diag([noise_std_dev**2] * 3)
+
+        # Initialize the Kalman filter with floats
+        initial_estimate = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        initial_covariance = np.diag([10.0] * 3 + [1.0] * 3)
+        self.kf = KalmanFilter(initial_estimate, initial_covariance)
+
+        # recorded amount of time take to perform various update steps
+        self.predict_time_taken = 0
+        self.visual_time_taken = 0
+        self.hang_time_taken = 0
 
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
@@ -412,68 +443,6 @@ class Positioner2:
         self.swing_params[3] = self.swing_params[3] % (2*pi)
         self.swing_params[4] = self.swing_params[4] % (2*pi)
 
-    def find_visual_move(self):
-        """
-        fit a line to the last few visual gantry position observations
-        The parameters of the line are
-          * a starting position
-          * a velocity vector
-        """
-        now = time.time()
-        backtime = now-1.5
-        cutoff = backtime
-        moving = True
-        if self.stop_cutoff is not None and now > self.stop_cutoff:
-            moving = False
-            cutoff = self.stop_cutoff
-        data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
-        if len(data) < 2:
-            return False
-        times = data[:,0]
-        self.last_visual_data_timestamp = np.max(times)
-        positions = data[:,1:]
-
-        lower = np.min(self.anchor_points, axis=0)
-        lower[2] = 0 # lowest possible gantry position is the floor, not the lowest anchor
-        upper = np.max(self.anchor_points, axis=0)
-        position_bounds = np.column_stack([lower, upper])
-
-        velocity_guess = positions[-1]-positions[-2]
-        speed = 0.5
-        if not moving:
-            speed = 0.0
-            velocity_guess = np.zeros(3)
-        velocity_bounds = np.column_stack([np.repeat(-speed, 3), np.repeat(speed, 3)])
-
-        initial_guess = np.concatenate([ positions[-1], velocity_guess ])
-        bounds = np.concatenate([position_bounds, velocity_bounds])
-
-        try:
-            result = optimize.minimize(
-                linear_move_cost_fn,
-                initial_guess,
-                args=(backtime, times, positions),
-                bounds=bounds,
-                method='SLSQP',
-                options={
-                    'disp': False,
-                    'maxiter': 100,
-                },
-            )
-        except ValueError as e:
-            print(f'{e} \nIf this occurs a few times after a call to set_anchor_points, it is harmless')
-            return False
-        try:
-            if not result.message.startswith("Iteration limit reached"):
-                assert result.success
-        except AssertionError:
-            print(result)
-            return False
-
-        self.visual_move_start_time = backtime
-        self.visual_move_line_params = result.x
-        return True
-
     async def check_and_recal(self):
         """
         Automatically send line reference length based on visual observation under certain conditions.
@@ -495,55 +464,59 @@ class Positioner2:
         print(f'auto line calibration lengths={lengths}')
         await self.ob.sendReferenceLengths(lengths)
 
-
-    async def restimate(self):
-        """
-        Perform estimations that are meant to occur at a slower rate.
-        """
+    async def predict_forwards(self):
         while self.run:
-            try:
-                visual_found = self.find_visual_move()
-                # currently testing other means of calibrating zero angle. don't overwrite them.
-                # if visual_found:
-                #     # if visual move was estimated successfully, we may be able to use it to automatically update reference lengths
-                #     asyncio.create_task(self.check_and_recal())
-                self.find_swing()
-                await asyncio.sleep(0.2)
-            except Exception as e:
-                self.run = False
-                raise e
+            start_time = time.time()
+            await asyncio.sleep(1/60)
+            # advance the prediction to the current time.
+            self.kf.predict_present()
+            self.gant_pos = self.kf.state_estimate[:3].copy()
+            self.gant_vel = self.kf.state_estimate[3:].copy()
+            self.predict_time_taken = time.time()-start_time
+            self.send_positions()
 
-    def estimate(self):
-        """
-        Estimate current gantry and gripper position and velocity
-        """
-        self.start = time.time()
-        z = np.zeros(3, dtype=float)
+    async def update_visual(self):
+        while self.run:
+            start_time = time.time()
+            # wait at least this long
+            await asyncio.sleep(1/30)
+            # and wait for new visual data if necessary
+            await self.datastore.gantry_pos_event.wait()
+            self.datastore.gantry_pos_event.clear()
+            # grab any new data
+            data = self.datastore.gantry_pos.deepCopy(cutoff=self.last_visual_cutoff)
+            if len(data) == 0:
+                continue
+            self.last_visual_cutoff = np.max(data[:,0])
 
-        # Look at the last report for each anchor line.
-        # time, length, speed, tight
-        records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
-        lengths = np.array(records[:,1])
-        speeds = np.array(records[:,2])
-        tight = np.array(records[:,3])
-        
-        # nothing has been recorded
-        if sum(lengths) == 0:
-            self.time_taken = time.time() - self.start
-            return False
+            # update filter with every datapoint
+            # (or if that is too slow, update once with the mean of all the data points)
 
-        # timestamp of the last record used to produce this estimate. used for latency feedback
-        data_ts = np.max(records[0])
-        # print(f'find hang point with lens {lengths}, data_ts > self.data_ts: {data_ts > self.data_ts}')
-        # only perform work in this block when line records actually change
-        if data_ts > self.data_ts:
-            self.data_ts = data_ts
+            for measurement in data:
+                timestamp = measurement[0]
+                self.visual_pos = measurement[1:]
+                self.kf.update(self.visual_pos, timestamp, self.visual_noise_covariance)
 
-            # extrapolate the current length based on the time elapsed since the measurement and the speed at the time.
-            # TODO account for clock desync before turning this part on.
-            # elapsed = self.start - records[:,0]
-            # offsets = records[:,1] + records[:,2] * elapsed
-            # lengths += offsets
+            self.visual_time_taken = time.time()-start_time
+
+    async def update_hang(self):
+        while self.run:
+            start_time = time.time()
+            # wait at least this long
+            await asyncio.sleep(1/30)
+            # and wait for new data affecting hang point if necessary
+            await self.datastore.anchor_line_record_event.wait()
+            self.datastore.anchor_line_record_event.clear()
+
+            # Look at the last report for each anchor line.
+            # time, length, speed, tight
+            records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
+            lengths = np.array(records[:,1])
+            speeds = np.array(records[:,2])
+            tight = np.array(records[:,3])
+
+            # average timestamp of the four lines contributing to this hang point.
+            data_ts = np.mean(records[:,0])
 
             # if any line is measured to be slack,
             # make its length effectively infinite so it won't play a part in the hang position
@@ -551,56 +524,34 @@ class Positioner2:
 
             # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)
-            if result is None:
-                # print(f'estimate bailed because it failed to calc a hang point with lengths {lengths}')
-                self.time_taken = time.time() - self.start
-                # self.hang_gant_pos will not be updated this time around.
-            else:
-                self.hang_gant_pos, slack_lines = result
+            if result is not None:
+                self.hang_pos, self.slack_lines = result
+                # update kalman filter with this position
+                self.kf.update(self.hang_pos, data_ts, self.hang_noise_covariance)
+                self.data_ts = data_ts
 
-                # this represents a prediction of which lines are slack, it may not match reality.
-                # if this prediction says a line is tight but measured slackness says otherwise, the hang point is probably quite wrong.
-                # self.slack_lines = result[1]
-                self.slack_lines = np.logical_not(tight)
+            # optional hang velocity (unreviewed)
+            # if sum(speeds) == 0:
+            #     self.hang_vel = z
+            #     # if the gantry just now stopped moving, record the time.
+            #     if self.stop_cutoff is None:
+            #         self.stop_cutoff = time.time()
+            # else:
+            #     self.stop_cutoff = None
+            #     # repeat for a position some small increment in the future to get the gantry velocity
+            #     increment = 0.1 # seconds
+            #     lengths += speeds * increment
+            #     result = find_hang_point(self.anchor_points, lengths)
+            #     if result is None:
+            #         # print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
+            #         self.hang_vel = np.zeros((3,))
+            #     else:
+            #         self.hang_vel = result[0] - self.hang_pos
+            #         self.hang_vel = self.hang_vel / increment
 
-                if sum(speeds) == 0:
-                    self.hang_gant_vel = z
-                    # if the gantry just now stopped moving, record the time.
-                    if self.stop_cutoff is None:
-                        self.stop_cutoff = time.time()
-                else:
-                    self.stop_cutoff = None
-                    # repeat for a position some small increment in the future to get the gantry velocity
-                    increment = 0.1 # seconds
-                    lengths += speeds * increment
-                    result = find_hang_point(self.anchor_points, lengths)
-                    if result is None:
-                        # print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
-                        self.time_taken = time.time() - self.start
-                        self.hang_gant_vel = np.zeros((3,))
-                    else:
-                        self.hang_gant_vel = result[0] - self.hang_gant_pos
-                        self.hang_gant_vel = self.hang_gant_vel / increment
+            self.hang_time_taken = time.time()-start_time
 
-        # use information both from hang position and visual observation
-        self.visual_vel = self.visual_move_line_params[3:6]
-        eval_time = time.time()
-        # if self.stop_cutoff is not None and self.stop_cutoff > self.last_visual_data_timestamp:
-        #     print(f'extrapolate visual velocity for {eval_time-self.last_visual_data_timestamp}s because we know gantry stopped')
-        #     eval_time = self.stop_cutoff
-        self.visual_pos = eval_linear_pos(
-            np.array([eval_time]),
-            self.visual_move_start_time,
-            self.visual_move_line_params[0:3],
-            self.visual_vel,
-        )[0]
-
-
-        self.gant_pos = self.hang_gant_pos * 0.7 + self.visual_pos * 0.3
-        self.gant_vel = self.hang_gant_vel * 0.7 + self.visual_vel * 0.3
-
-        # figure out gripper position.
-
+    def update_swing(self):
         # get the last IMU reading from the gripper, take only the z axis
         last_rotvec = self.datastore.imu_rotvec.getLast()[1:]
         grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
@@ -623,11 +574,8 @@ class Positioner2:
             (current_rotation, np.array([0,0,-length], dtype=float)),
         ])
 
-        self.time_taken = time.time() - self.start
-        return True
-
     def send_positions(self):
-        # send control points of position splines to UI for visualization
+        # send position factors to UI for visualization
         update_for_ui = {
             'pos_estimate': {
                 'gantry_pos': self.gant_pos,
@@ -636,17 +584,18 @@ class Positioner2:
                 'slack_lines': self.slack_lines,
                 },
             'minimizer_stats': {
-                # 'errors': softmax(self.errors),
                 'data_ts': self.data_ts,
-                'time_taken': self.time_taken,
+                'kalman_prediction_rate': self.predict_time_taken,
+                'visual_update_rate': self.visual_time_taken,
+                'hang_update_rate': self.hang_time_taken,
                 },
             'pos_factors_debug': {
                 # position as esimated by visual observations
                 'visual_pos': self.visual_pos,
                 'visual_vel': self.visual_vel,
                 # position as estimated by line length only
-                'hang_pos': self.hang_gant_pos,
-                'hang_vel': self.hang_gant_vel,
+                'hang_pos': self.hang_pos,
+                'hang_vel': self.hang_vel,
                 },
             # 'goal_points': self.des_grip_locations, # each goal is a time and a position
         }
@@ -656,27 +605,14 @@ class Positioner2:
         if 'holding' in update:
             self.holding = update['holding']
 
-    async def hang_update():
-        while True:
-            await time.sleep(0.03)
-            await self.hang_data_event.wait()
-            measured_position, tights = find_hang_point()
-            # measurement_time could be the average time of the line records used to calc hang point
-            self.kf.update(measurement_time, measured_position, sensor)
-            self.hang_data_event.reset()
-
     async def main(self):
         print('Starting position estimator')
-        rest_task = asyncio.create_task(self.restimate())
-        while self.run:
-            try:
-                self.estimate()
-                self.send_positions()
-                # cProfile.runctx('self.estimate()', globals(), locals())
-                # some sleep is necessary or we will not receive updates
-                rem = (1/20 - self.time_taken)
-                await asyncio.sleep(max(0.005, rem))
-            except KeyboardInterrupt:
-                print('Exiting')
-                return
-        result = await rest_task
+        self.run = True
+        try:
+            async with asyncio.TaskGroup() as tg:
+                predict_task = tg.create_task(self.predict_forwards())
+                visual_task = tg.create_task(self.update_visual())
+                hang_task = tg.create_task(self.update_hang())
+        except asyncio.exceptions.CancelledError:
+            pass
+        print('All position estimator tasks finished')

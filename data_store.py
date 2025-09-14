@@ -1,6 +1,7 @@
 import numpy as np
 from time import time
 from random import random
+import asyncio
 
 class CircularBuffer:
     """
@@ -67,3 +68,7 @@ class DataStore:
         self.winch_line_record = CircularBuffer((size, 3))
         self.anchor_line_record = [CircularBuffer((size, 4)) for n in range(n_anchors)]
         self.range_record = CircularBuffer((size, 2))
+
+        # events that trip when data is added to certain circular buffers
+        self.anchor_line_record_event = asyncio.Event()
+        self.gantry_pos_event = asyncio.Event()
