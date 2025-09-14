@@ -708,7 +708,7 @@ class AsyncObserver:
             await self.async_close()
 
     async def async_close(self) -> None:
-        result = self.stop_all()
+        result = await self.stop_all()
         self.run_command_loop = False
         self.stat.run = False
         self.pe.run = False
@@ -725,7 +725,10 @@ class AsyncObserver:
 
             tasks.append(self.locate_anchor_task)
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
-        result = await asyncio.gather(*tasks)
+        try:
+            result = await asyncio.gather(*tasks)
+        except asyncio.exceptions.CancelledError:
+            pass
 
     async def run_shape_tracker(self):
         MIN_SLEEP_S = 0.05 # seconds

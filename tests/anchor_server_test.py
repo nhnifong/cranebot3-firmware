@@ -99,7 +99,7 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         """
         Assert that the rpicam-vid subprocess is killed when the client disconnects.
         """
-        self.server.stream_command = "sleep infinity {buffers}" # the extra arg after ifinity has no effect
+        self.server.stream_command = "sleep infinity" # the extra arg after ifinity has no effect
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
             await asyncio.sleep(0.1)
             await ws.close()
@@ -114,7 +114,7 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         """
         Assert that the rpicam-vid subprocess is killed when the client disconnects with an internal error
         """
-        self.server.stream_command = "sleep infinity {buffers}"
+        self.server.stream_command = "sleep infinity"
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
             await asyncio.sleep(0.1)
             await ws.close(1011)
@@ -127,7 +127,7 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         """
         Assert that the rpicam-vid subprocess is killed when the server is stopped while a client is connected
         """
-        self.server.stream_command = "sleep infinity {buffers}"
+        self.server.stream_command = "sleep infinity"
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
             await asyncio.sleep(0.1)
             # crash spool tracking loop
@@ -145,7 +145,7 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
 
         TODO find a way to check for orphaned process after server closes
         """
-        self.server.stream_command = "sleep infinity {buffers}"
+        self.server.stream_command = "sleep infinity"
         self.server.line_timeout = 1
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
             print(dir(ws))
