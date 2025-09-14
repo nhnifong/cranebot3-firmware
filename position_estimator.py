@@ -349,14 +349,16 @@ class Positioner2:
 
         self.last_visual_cutoff = time.time()
 
-        noise_std_dev=0.3
-        self.visual_noise_covariance = np.diag([noise_std_dev**2] * 3)
-        self.hang_noise_covariance = np.diag([noise_std_dev**2] * 3)
+        visual_noise_std_dev=0.08
+        self.visual_noise_covariance = np.diag([visual_noise_std_dev**2] * 3)
+        hang_noise_std_dev=0.005
+        self.hang_noise_covariance = np.diag([hang_noise_std_dev**2] * 3)
 
         # Initialize the Kalman filter with floats
         initial_estimate = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         initial_covariance = np.diag([10.0] * 3 + [1.0] * 3)
-        self.kf = KalmanFilter(initial_estimate, initial_covariance)
+        self.sensor_names = ['v0', 'v1' ,'v2' ,'v3', 'hang']
+        self.kf = KalmanFilter(initial_estimate, initial_covariance, self.sensor_names)
 
         # recorded amount of time take to perform various update steps
         self.predict_time_taken = 0
@@ -471,7 +473,7 @@ class Positioner2:
             # advance the prediction to the current time.
             self.kf.predict_present()
             self.gant_pos = self.kf.state_estimate[:3].copy()
-            self.gant_vel = self.kf.state_estimate[3:].copy()
+            self.gant_vel = self.kf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
             self.send_positions()
 
@@ -494,8 +496,9 @@ class Positioner2:
 
             for measurement in data:
                 timestamp = measurement[0]
-                self.visual_pos = measurement[1:]
-                self.kf.update(self.visual_pos, timestamp, self.visual_noise_covariance)
+                anchor_num = int(measurement[1])
+                self.visual_pos = measurement[2:]
+                self.kf.update(self.visual_pos, timestamp, self.sensor_names[anchor_num], self.visual_noise_covariance)
 
             self.visual_time_taken = time.time()-start_time
 
@@ -527,7 +530,7 @@ class Positioner2:
             if result is not None:
                 self.hang_pos, self.slack_lines = result
                 # update kalman filter with this position
-                self.kf.update(self.hang_pos, data_ts, self.hang_noise_covariance)
+                self.kf.update(self.hang_pos, data_ts, self.sensor_names[-1], self.hang_noise_covariance)
                 self.data_ts = data_ts
 
             # optional hang velocity (unreviewed)

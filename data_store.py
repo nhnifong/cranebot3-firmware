@@ -55,7 +55,7 @@ class DataStore:
         """
         Initialize measurement arrays with sizes proportional to the approximate number of seconds of data we expect to store.
         
-        gantry_pos: shape (size, 4) T XYZ
+        gantry_pos: shape (size, 5) T N XYZ   time, anchor_num, z, y, x
         imu_rotvec: shape (size, 5) each row TXYZ
         winch_line_record: shape (size, 3) TLS
         anchor_line_record: shape (size, 4) TLST  time, length, speed, tight.  one for each line
@@ -63,7 +63,7 @@ class DataStore:
         """
         self.n_anchors = n_anchors
 
-        self.gantry_pos = CircularBuffer((size, 4))
+        self.gantry_pos = CircularBuffer((size, 5))
         self.imu_rotvec = CircularBuffer((size, 4))
         self.winch_line_record = CircularBuffer((size, 3))
         self.anchor_line_record = [CircularBuffer((size, 4)) for n in range(n_anchors)]
