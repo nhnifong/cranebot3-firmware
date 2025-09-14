@@ -282,6 +282,11 @@ class AsyncObserver:
         # If only some anchors are connected, this would still send reference lengths to those
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
+        # reset biases on kalman filter
+        data = self.datastore.gantry_pos.deepCopy()
+        position = np.mean(data[:,2:], axis=0)
+        print(f'reseting filter biases with assumed position of {position}')
+        self.pe.kf.reset_biases(position)
 
     async def set_simulated_data_mode(self, mode):
         if self.sim_task is not None:
@@ -448,7 +453,7 @@ class AsyncObserver:
             # use aruco observations of gantry to obtain initial guesses for zero angles
             # use this information to perform rough movements
             gantry_data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
-            position = np.mean(gantry_data[:,1:], axis=0)
+            position = np.mean(gantry_data[:,2:], axis=0)
             print(f'the visual position of the gantry is {position}')
             lengths = np.linalg.norm(anchor_points - position, axis=1)
             print(f'Line lengths from coarse calibration ={lengths}')
@@ -777,7 +782,8 @@ class AsyncObserver:
                 t = time.time()
                 gantry_real_pos = np.array([t, np.sin(t/TIME_DIVISOR_FOR_ANGLE), np.cos(t/TIME_DIVISOR_FOR_ANGLE), GANTRY_Z_HEIGHT])
                 if random() > RANDOM_EVENT_CHANCE:
-                    dp = gantry_real_pos + np.array([0, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE])
+                    anum = anchor_num = np.random.randint(4)
+                    dp = gantry_real_pos + np.array([t, anum, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE])
                     self.datastore.gantry_pos.insert(dp)
                     self.to_ui_q.put({'gantry_observation': dp[1:]})
                 # winch line always 1 meter
@@ -837,7 +843,8 @@ class AsyncObserver:
                     velocity = to_goal_vec * min(soft_speed, MAX_SPEED_MPS)
                     gantry_real_pos = gantry_real_pos + velocity * elapsed_time
                 if random() > RANDOM_EVENT_CHANCE:
-                    dp = np.concatenate([[t], gantry_real_pos + np.random.normal(0, OBSERVATION_NOISE_STD_DEV, (3,))])
+                    anchor_num = np.random.randint(4) # which camera it was observed from.
+                    dp = np.concatenate([[t], [anchor_num], gantry_real_pos + np.random.normal(0, OBSERVATION_NOISE_STD_DEV, (3,))])
                     self.datastore.gantry_pos.insert(dp)
                     self.datastore.gantry_pos_event.set()
                     self.to_ui_q.put({'gantry_observation': dp[1:]})

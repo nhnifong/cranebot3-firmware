@@ -304,7 +304,7 @@ class RaspiAnchorClient(ComponentClient):
                     gantry_april_inv, # constant
                 ]))
                 position = pose.reshape(6)[3:]
-                self.datastore.gantry_pos.insert(np.concatenate([[timestamp], position])) # take only the position
+                self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position])) # take only the position
                 # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
                 self.datastore.gantry_pos_event.set()
 
