@@ -124,7 +124,10 @@ class RobotComponentServer:
                     return
                 except asyncio.CancelledError as e:
                     logging.info("Killing rpicam-vid subprocess the task is being cancelled")
-                    self.rpicam_process.kill()
+                    try:
+                        self.rpicam_process.kill()
+                    except ProcessLookupError:
+                        pass
                     return await self.rpicam_process.wait()
 
     async def run_rpicam_vid(self):
