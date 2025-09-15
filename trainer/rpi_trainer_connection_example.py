@@ -10,6 +10,9 @@ from bleak import BleakScanner, BleakClient
 # The name of the BLE device we want to connect to
 TARGET_DEVICE_NAME = "Stringman Training Controller"
 
+# target device address
+DEVICE_ADDRESS = "34:85:18:92:1D:05"
+
 # The UUIDs for the UART service and its transmit characteristic
 # These must match the UUIDs on the ESP32-S3 firmware
 UART_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -41,23 +44,14 @@ def notification_handler(sender, data):
 
 async def main():
     """
-    The main asynchronous function that handles device discovery and connection.
+    The main asynchronous function that handles device connection.
     """
-    print("Scanning for BLE devices...")
-    
-    # Scan for the target device by name
-    device = await BleakScanner.find_device_by_name(TARGET_DEVICE_NAME)
-
-    if device is None:
-        print(f"Could not find a device named '{TARGET_DEVICE_NAME}'")
-        return
-
-    print(f"Found device: {device.name} ({device.address})")
+    print(f"Attempting to connect to {DEVICE_ADDRESS}...")
 
     # This context manager ensures the client is properly disconnected
-    async with BleakClient(device) as client:
+    async with BleakClient(DEVICE_ADDRESS) as client:
         if client.is_connected:
-            print(f"Connected to {device.name}")
+            print(f"Connected to controller!")
             
             # Start listening for notifications on the TX characteristic
             await client.start_notify(UART_TX_CHAR_UUID, notification_handler)
@@ -68,7 +62,7 @@ async def main():
             while client.is_connected:
                 await asyncio.sleep(1)
         else:
-            print(f"Failed to connect to {device.name}")
+            print(f"Failed to connect to {DEVICE_ADDRESS}")
 
 if __name__ == "__main__":
     try:
