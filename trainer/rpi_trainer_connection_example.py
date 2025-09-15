@@ -8,7 +8,7 @@ import asyncio
 from bleak import BleakScanner, BleakClient
 
 # The name of the BLE device we want to connect to
-TARGET_DEVICE_NAME = "Firebeetle Game Controller"
+TARGET_DEVICE_NAME = "Stringman Training Controller"
 
 # The UUIDs for the UART service and its transmit characteristic
 # These must match the UUIDs on the ESP32-S3 firmware
@@ -33,7 +33,7 @@ def notification_handler(sender, data):
             analog_value = int(parts[3])
             
             # Print the formatted controller state
-            print(f"B1: {button1}, B2: {button2}, B3: {button3}, Trigger: {analog_value:04d}", end='\r')
+            print(f"B1: {button1}, B2: {button2}, B3: {button3}, Trigger: {analog_value}")
         else:
             print(f"Received unexpected data format: {message}")
     except Exception as e:
