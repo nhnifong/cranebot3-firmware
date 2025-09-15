@@ -60,11 +60,11 @@ void setup(){
    pinMode(BUT_A_PIN, INPUT_PULLUP);
    pinMode(BUT_B_PIN, INPUT_PULLUP);
    pinMode(BUT_C_PIN, INPUT_PULLUP);
-   Serial.begin(11520);   //Initialize serial port
+   Serial.begin(115200);   //Initialize serial port
 
 
   BLEDevice::init("Stringman Training Controller"); // name of BLE device
-  
+
   // This enables "Just Works" pairing, which doesn't require a PIN or passkey.
   BLESecurity *pSecurity = new BLESecurity();
   pSecurity->setAuthenticationMode(ESP_LE_AUTH_NO_BOND);
