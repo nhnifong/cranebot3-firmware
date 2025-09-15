@@ -85,3 +85,19 @@ class TestDatastore(unittest.TestCase):
         c.insert([9,9])
         a = c.deepCopy()
         np.testing.assert_array_almost_equal(a[-1], [9,9])
+
+    def test_getClosest(self):
+        c = CircularBuffer((6, 2))
+        c.insertList(np.array([
+            [124.1, 3.0],
+            [124.2, 4.0],
+            [124.3, 5.0],
+            [124.4, 6.0], # included
+            [124.5, 7.0], # included | desired answer
+            [124.6, 8.0], # included
+            [124.7, 9.0], # included
+            [124.8, 9.0], # included
+            [124.9, 9.0], # included
+        ]))
+        a = c.getClosest(124.54)
+        self.assertEqual(a[0], 124.5)

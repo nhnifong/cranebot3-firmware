@@ -5,7 +5,7 @@ import asyncio
 
 class CircularBuffer:
     """
-    circular buffer implemented as a numpy
+    circular buffer implemented as a numpy array
     """
     def __init__(self, shape):
         self.shape = shape
@@ -45,6 +45,27 @@ class CircularBuffer:
 
     def getLast(self):
         return self.arr[self.idx]
+
+    def getClosest(self, timestamp):
+        """Get the data point closest to the given timestamp"""
+
+        # reorder from oldest to newest
+        sorted_arr = np.roll(self.arr, -1 * (self.idx + 1), axis=0)
+        # Filter out any uninitialized rows
+        valid_data = sorted_arr[sorted_arr[:, 0] > 0]
+        insertion_index = np.searchsorted(valid_data[:, 0], timestamp)
+
+        # Handle edge cases: timestamp is outside the range of stored data
+        if insertion_index == 0:
+            return valid_data[0]
+        if insertion_index == len(valid_data):
+            return valid_data[-1]
+
+        # Compare the two neighbors and return the closer one.
+        # In case of a tie, the later measurement (after) is returned.
+        before = valid_data[insertion_index - 1]
+        after = valid_data[insertion_index]
+        return before if (timestamp - before[0]) < (after[0] - timestamp) else after
 
 class DataStore:
     """

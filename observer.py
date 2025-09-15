@@ -342,36 +342,44 @@ class AsyncObserver:
         elif mode == "pause":
             self.calmode = mode
             self.slow_stop_all_spools()
-        elif mode == 'pose':
-            self.calmode = mode
-            self.locate_anchor_task = asyncio.create_task(self.locate_anchors())
+        elif mode == 'train':
+            self.calmode = 'training'
+            asyncio.create_task(self.start_training_mode())
 
-    async def locate_anchors(self):
-        """using the record of recent origin detections, estimate the pose of each anchor."""
-        MIN_ORIGIN_OBSERVATIONS = 6
-        
-        if len(self.anchors) != N_ANCHORS:
-            print(f'anchor pose calibration should not be performed until all anchors are connected. len(anchors)={len(self.anchors)}')
-            return
-        anchor_poses = []
-        for client in self.anchors:
-            if len(client.origin_poses) < MIN_ORIGIN_OBSERVATIONS:
-                print(f'Too few origin observations ({len(client.origin_poses)}) from anchor {client.anchor_num}')
-                continue
-            print(f'locating anchor {client.anchor_num} from {len(client.origin_poses)} detections')
-            app = average_pose(client.origin_poses)
-            print(f'average origin pose {app}')
-            pose = np.array(invert_pose(compose_poses([
-                model_constants.anchor_camera,
-                app,
-                model_constants.room_relative_to_origin_card,
-            ])))
-            print(f'pose {pose}')
-            assert pose is not None
-            self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
-            anchor_poses.append(pose)
-        return np.array(anchor_poses)
+    async def start_training_mode(self):
+        """
+        The real gantry must be stowed in a high location out of view before this starts. right now the operator is responsible for doing that.
+        When the episode button is pressed, the observer must terminate the current dataset episode and begin a new one.
+        """        
+        # The anchor cameras remain running and forwarding video but the line_record updates become irrelevant to position estimates.
+        # Set a mode flag in the position estimator that makes it ignore them.
+        self.pe.training_mode = True
 
+        # disconnect from the installed gripper and connect to the training gripper as the service is discovered.
+        # During this time the operator may turn on the training wand. Wait for this to occur
+        # The installed gripper will remain powered because the anchors are powered.
+        await self.gripper_client.shutdown()
+        self.gripper_client = None
+        self.to_ui_q.put({'visible_message': 'Turn on the training wand with a connected gripper.'})
+        self.accept_connection_from_training_gripper = True
+        await self.gripper_training_client_connected.wait()
+
+        # Command the training gripper into training mode.
+        # This causes it to connect to the training wand over BT and forward control inputs to us.
+        # Confirm we are reciving them before proceeding.
+        await self.gripper_client.send_commands({'training_mode': True})
+        await self.training_inputs_received.wait()
+        self.to_ui_q.put({'visible_message': 'Training wand connected successfully.'})
+
+        # Initialize the dataset.
+        self.le_dataset = LeRobotDatasetCollector()
+        self.le_dataset.start_recording('stringman_pickup_clutter')
+        self.le_dataset.start_episode('task description')
+
+        # The observer must now record position estimates, gripper sensor data, and gripper control inputs.
+        # Each time a video frame arrives at the gripper client, it will look up the closest datapoint to the frame's timestamp for all the other sensors
+        # and insert them all into the dataset together.
+        self.gripper_client.training_frame_cb = self.le_dataset.handle_training_vid_frame
 
     async def half_auto_calibration(self):
         """Optimize zero angles from a few points

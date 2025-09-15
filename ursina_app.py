@@ -30,10 +30,12 @@ line_color = color.black
 mode_names = {
     'run':   'Run Normally',
     'pause': 'Pause/Observe',
+    'train': 'Record Training Data',
 }
 mode_descriptions = {
     'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
     'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
+    'train': 'Use training wand to record episodes to LeRobot dataset. Connects to alternate gripper.',
 }
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
@@ -276,10 +278,10 @@ class ControlPanelUI:
     def _create_menus(self):
         # Setup the DropdownMenu
         DropdownMenu('Menu', buttons=(
-            DropdownMenu('Mode', buttons=(
-                DropdownMenuButton(mode_names['run'], on_click=partial(self.set_mode, 'run')),
-                DropdownMenuButton(mode_names['pause'], on_click=partial(self.set_mode, 'pause')),
-                )),
+            DropdownMenu('Mode', buttons=(*[
+                    DropdownMenuButton(mode, on_click=partial(self.set_mode, mode))
+                    for mode in mode_names.keys()
+                ])),
             DropdownMenuButton('Estimate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, 'tension_lines')),
             DropdownMenuButton('Run Full Calibration', on_click=partial(self.simple_command, 'full_cal')),
