@@ -33,7 +33,7 @@ def notification_handler(sender, data):
             button1 = "Pressed" if parts[0] == '1' else "Released"
             button2 = "Pressed" if parts[1] == '1' else "Released"
             button3 = "Pressed" if parts[2] == '1' else "Released"
-            analog_value = int(parts[3])
+            analog_value = float(parts[3])
             
             # Print the formatted controller state
             print(f"B1: {button1}, B2: {button2}, B3: {button3}, Trigger: {analog_value}")
