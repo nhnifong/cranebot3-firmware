@@ -4,8 +4,9 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
 
 class LeRobotDatasetCollector:
-    def __init__(self, root_path="my_lerobot_dataset"):
+    def __init__(self, root_path="last_dataset", datastore):
         
+        self.datastore = datastore # reference to the class containing circular buffers of recent robot data
         self.is_recording = False
         self.dataset = None
         self.root_path = root_path
@@ -15,15 +16,16 @@ class LeRobotDatasetCollector:
         self.observation_features = {
             # The absolute position of the gantry is a crucial piece of state information.
             "gantry_position": {"shape": (3,), "dtype": "float32"},
-            "imu": {"shape": (6,), "dtype": "float32"},
+            "imu": {"shape": (3,), "dtype": "float32"},
             "laser_rangefinder": {"shape": (1,), "dtype": "float32"},
             "wrist_camera": {"shape": (576, 324, 3), "dtype": "uint8"}, # 1/4 of native camera resolution
-            "sensed_finger_pressure": {"shape": (1,), "dtype": "float32"},
+            "finger_pressure": {"shape": (1,), "dtype": "float32"},
+            "winch_length": {"shape": (1,), "dtype": "float32"},
         }
         self.action_features = {
             # The relative change in position is the action the policy will learn to output.
             "relative_gantry_movement": {"shape": (3,), "dtype": "float32"},
-            "gripper_winch_speed": {"shape": (1,), "dtype": "float32"},
+            "winch_speed": {"shape": (1,), "dtype": "float32"},
             "commanded_finger_angle": {"shape": (1,), "dtype": "float32"},
         }
 
@@ -76,6 +78,34 @@ class LeRobotDatasetCollector:
         self.current_task_description = None
         print("Episode saved.")
 
+    def handle_training_vid_frame(self, timestamp, frame):
+        """
+        handle a timestamped frame of video by finding the latest recorded datapoint from every other sensor
+        and storing them together as a single dataset frame.
+        """
+        winch = self.datastore.winch_line_record.getLast()
+
+        # resize image
+        sized_frame = frame
+        gantry_position = pe.gant_pos
+
+        observation = {
+            "wrist_camera": sized_frame,
+            "gantry_position": pe.gant_pos,
+            "relative_gantry_movement": pe.gant_vel,
+            "winch_length": winch[1],
+            "winch_speed": winch[2],
+            "imu": self.datastore.imu_rotvec.getLast()[1:],
+            "laser_rangefinder": self.datastore.range_record.getLast()[1:],
+            "finger_pressure": self.datastore.finger_pressure.getLast()[1:],
+            "commanded_finger_angle": self.datastore.commanded_finger_angle.getLast()[1:],
+        }
+
+        last_gantry_position = gantry_position
+
+
+
+
     def add_observation(self, source: str, data):
         """
         Updates the most recent value for a given sensor, along with the
@@ -88,7 +118,7 @@ class LeRobotDatasetCollector:
     def add_timestep(self, wrist_camera_image, relative_gantry_movement, commanded_finger_angle, gripper_winch_speed):
         """
         This is called every time you get a new camera frame.
-        It checks for data staleness, calculates the relative gantry movement action,
+        It checks for data staleness, stores the relative gantry movement,
         and adds one complete, aligned frame to the dataset.
         """
         STALE_DATA_THRESHOLD_S = 0.5 # seconds

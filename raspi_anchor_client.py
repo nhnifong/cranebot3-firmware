@@ -49,6 +49,7 @@ class ComponentClient:
         self.last_gantry_frame_coords = None
         self.ct = None # task to connect to websocket
         self.save_raw = False
+        self.training_frame_cb = None
 
         # todo: receive a command in observer that will set this value
         self.sendPreviewToUi = False
@@ -117,6 +118,10 @@ class ComponentClient:
                     # print(f'received a frame without knowing when it was captured')
                     pass 
                     # continue
+
+                # process frame with an additional callback if set
+                if self.training_frame_cb is not None:
+                    self.training_frame_cb(timestamp, frame)
 
                 # send frame to detector
                 try:

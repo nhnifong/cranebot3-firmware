@@ -365,6 +365,9 @@ class Positioner2:
         self.visual_time_taken = 0
         self.hang_time_taken = 0
 
+        # variables related to training process
+        self.training_mode = False
+
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
         self.anchor_points = points
@@ -504,6 +507,10 @@ class Positioner2:
 
     async def update_hang(self):
         while self.run:
+            if self.training_mode:
+                await asyncio.sleep(1)
+                continue
+            
             start_time = time.time()
             # wait at least this long
             await asyncio.sleep(1/30)
