@@ -15,6 +15,7 @@
 #define BUT_A_PIN D6
 #define BUT_B_PIN D9
 #define BUT_C_PIN D7
+#define LED_PIN D13
 #define RELAXED 1500
 #define PULLED 1050
 
@@ -60,6 +61,7 @@ void setup(){
    pinMode(BUT_A_PIN, INPUT_PULLUP);
    pinMode(BUT_B_PIN, INPUT_PULLUP);
    pinMode(BUT_C_PIN, INPUT_PULLUP);
+   pinMode(LED_PIN, OUTPUT);
    Serial.begin(115200);   //Initialize serial port
 
 
@@ -95,6 +97,8 @@ void setup(){
 }
 
 void loop(){
+  // turn on led
+  digitalWrite(LED_PIN, HIGH);
 
   // Read trigger and add smoothing
   sensorValue = analogRead(TRIG_PIN);
