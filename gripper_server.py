@@ -14,6 +14,7 @@ import busio
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X
+from bleak import BleakClient
 
 # this will require a different calibration matrix
 half_res_stream_command = """
@@ -35,6 +36,11 @@ SPEED1_REVS = WINCH_MAX_RPM / (WINCH_MAX_SPEED - WINCH_DEAD_ZONE)
 PRESSURE_PIN = 0
 # gpio pin of limit switch. 0 is pressed
 LIMIT_SWITCH_PIN = 1
+
+# The UUIDs for the UART service and its transmit characteristic
+# These must match the UUIDs on the ESP32-S3 firmware
+UART_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+UART_TX_CHAR_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 
 # values that can be overridden by the controller
 default_gripper_conf = {
@@ -67,6 +73,8 @@ class GripperSpoolMotor():
         self.servo = hat.servos[SERVO_1]
         self.hat = hat
         self.run = True
+        self.training_mode = False
+        self.last_ep_btn_state = False
 
     def ping(self):
         return True
@@ -144,19 +152,19 @@ class RaspiGripperServer(RobotComponentServer):
 
     def readOtherSensors(self):
 
+        self.update['grip_sensors'] = {
+            'time': time.time(),
+            'quat': self.imu.quaternion,
+            'fing_v': self.hat.gpio_pin_value(PRESSURE_PIN),
+            'fing_a': self.last_value,
+        }
+
         if self.rangefinder.data_ready:
             distance = self.rangefinder.distance
             # If the floor is out of range, distance is None
             if distance:
-                logging.debug("Distance: {} cm".format(self.rangefinder.distance))
                 self.rangefinder.clear_interrupt()
-                self.update['range'] = [time.time(), distance / 100]
-
-        self.update['imu'] = {
-            'time': time.time(),
-            'quat': self.imu.quaternion,
-        }
-        logging.debug(f"imu {self.update['imu']}")
+                self.update['grip_sensors']['range'] = [distance / 100]
 
 
     def startOtherTasks(self):
@@ -284,6 +292,63 @@ class RaspiGripperServer(RobotComponentServer):
             self.motor.runConstantSpeed(0)
             self.spooler.resumeTrackingLoop()
 
+    async def connectTrainingWand(self):
+        addr = self.conf['TRAINING_WAND_BT_ADDRESS']
+        logging.info(f"Attempting to connect to {addr}...")
+        # This context manager ensures the client is properly disconnected
+        async with BleakClient(addr) as client:
+            if client.is_connected:
+                logging.info(f"Connected to controller!")
+                self.update['training_wand_connected'] = True
+                # Start listening for notifications on the TX characteristic
+                await client.start_notify(UART_TX_CHAR_UUID, self.bt_notification_handler)
+                # Keep the func running to receive notifications
+                while client.is_connected:
+                    await asyncio.sleep(1)
+            else:
+                logging.error(f"Failed to connect to {addr}")
+        self.update['training_wand_connected'] = False
+
+    def bt_notification_handler(self, sender, data):
+        """
+        This function is called whenever a notification is received from the training wand.
+        """
+        # Decode the byte array into a string
+        message = data.decode('utf-8')
+        
+        # The data is expected to be a comma-separated string: "btn1,btn2,btn3,analog"
+        parts = message.split(',')
+        buttons = [False, False, False]
+        if len(parts) == 4:
+            for i in range(3):
+                buttons[i] = parts[i] == '1'
+            analog_value = float(parts[3])
+            
+            # Print the formatted controller state
+            logging.debug(f"B1: {button1}, B2: {button2}, B3: {button3}, Trigger: {analog_value}")
+
+            # Control the fingers
+            # analog_value ranges from 0 to 1.
+            self.last_value = clamp(analog_value*180-90, -90, 90)
+            self.hand_servo.value(self.last_value)
+
+            # control the winch
+            # TODO, protect winch from extents
+            if buttons[0]:
+                self.spooler.setAimSpeed(0.06) # winch down
+            elif buttons[1]:
+                self.spooler.setAimSpeed(-0.06) # winch up
+            else:
+                self.spooler.setAimSpeed(0) # stop winch
+
+            if buttons[2] and buttons[2] != self.last_ep_btn_state:
+                # the espisode button state has been pressed. send a message to the observer.
+                self.update['episode_button_pushed'] = True
+            self.last_ep_btn_state = buttons[2]
+
+
+        else:
+            logging.error(f"Received unexpected data format: {message}")
 
     async def processOtherUpdates(self, update, tg):
         if 'grip' in update:
@@ -295,11 +360,16 @@ class RaspiGripperServer(RobotComponentServer):
                 self.tryHoldChanged.set()
         if 'zero_winch_line' in update:
             tg.create_task(self.performZeroWinchLine())
+        if 'training_mode' in update:
+            self.training_mode = bool(update['training_mode'])
+            self.tryHold = False
+            self.tryHoldChanged.set()
+            tg.create_task(self.connectTrainingWand())
 
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     gs = RaspiGripperServer()

@@ -9,3 +9,4 @@ Adafruit-Blinka==8.56.0
 adafruit-circuitpython-bno08x==1.2.9
 adafruit-circuitpython-vl53l1x==1.2.2
 RPi.GPIO==0.7.1
+bleak==1.1.1

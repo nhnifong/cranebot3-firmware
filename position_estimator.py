@@ -507,7 +507,9 @@ class Positioner2:
 
     async def update_hang(self):
         while self.run:
+
             if self.training_mode:
+                # in this mode disregard lines because we are only observing the training wand markers
                 await asyncio.sleep(1)
                 continue
             
