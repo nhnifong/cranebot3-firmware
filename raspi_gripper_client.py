@@ -18,18 +18,21 @@ class RaspiGripperClient(ComponentClient):
         if 'line_record' in update:
             self.datastore.winch_line_record.insertList(update['line_record'])
 
-        if 'imu' in update:
-            timestamp = update['imu']['time']
+        if 'grip_sensors' in update:
+            gs = update['grip_sensors']
+            timestamp = gs['time']
             grip_pose = compose_poses([
-                (Rotation.from_quat(update['imu']['quat']).as_rotvec(), np.array([0,0,0])),
+                (Rotation.from_quat(gs['quat']).as_rotvec(), np.array([0,0,0])),
                 model_constants.gripper_imu,
             ])
             self.datastore.imu_rotvec.insert(np.concatenate([np.array([timestamp], dtype=float), grip_pose[0]]))
 
-        if 'range' in update:
-            # expect a tuple of (time, distance)
-            distance_measurement = update['range']
-            self.datastore.range_record.insert(distance_measurement)
+            if 'range' in gs:
+                # expect a tuple of (time, distance)
+                distance_measurement = float(gs['range'])
+                self.datastore.range_record.insert([timestamp, distance_measurement])
+
+            self.datastore.finger.insert([timestamp, float(gs['fing_a']), float(gs['fing_v'])])
             
         if 'holding' in update:
             # expect a bool. Forward it to the position estimator

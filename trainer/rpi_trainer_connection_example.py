@@ -27,20 +27,17 @@ def notification_handler(sender, data):
     message = data.decode('utf-8')
     
     # The data is expected to be a comma-separated string: "btn1,btn2,btn3,analog"
-    try:
-        parts = message.split(',')
-        if len(parts) == 4:
-            button1 = "Pressed" if parts[0] == '1' else "Released"
-            button2 = "Pressed" if parts[1] == '1' else "Released"
-            button3 = "Pressed" if parts[2] == '1' else "Released"
-            analog_value = float(parts[3])
-            
-            # Print the formatted controller state
-            print(f"B1: {button1}, B2: {button2}, B3: {button3}, Trigger: {analog_value}")
-        else:
-            print(f"Received unexpected data format: {message}")
-    except Exception as e:
-        print(f"Error processing data: {e} - Raw data: {message}")
+    parts = message.split(',')
+    if len(parts) == 4:
+        button1 = "Pressed" if parts[0] == '1' else "Released"
+        button2 = "Pressed" if parts[1] == '1' else "Released"
+        button3 = "Pressed" if parts[2] == '1' else "Released"
+        analog_value = float(parts[3])
+        
+        # Print the formatted controller state
+        print(f"B1: {button1}, B2: {button2}, B3: {button3}, Trigger: {analog_value}")
+    else:
+        print(f"Received unexpected data format: {message}")
 
 async def main():
     """
@@ -70,5 +67,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nScript stopped by user.")
-    except Exception as e:
-        print(f"An error occurred: {e}")

@@ -360,6 +360,7 @@ class AsyncObserver:
         # The installed gripper will remain powered because the anchors are powered.
         await self.gripper_client.shutdown()
         self.gripper_client = None
+        self.gripper_training_client_connected.clear()
         self.to_ui_q.put({'visible_message': 'Turn on the training wand with a connected gripper.'})
         self.accept_connection_from_training_gripper = True
         await self.gripper_training_client_connected.wait()
@@ -367,14 +368,15 @@ class AsyncObserver:
         # Command the training gripper into training mode.
         # This causes it to connect to the training wand over BT and forward control inputs to us.
         # Confirm we are reciving them before proceeding.
+        self.training_inputs_received.clear()
         await self.gripper_client.send_commands({'training_mode': True})
         await self.training_inputs_received.wait()
         self.to_ui_q.put({'visible_message': 'Training wand connected successfully.'})
 
         # Initialize the dataset.
-        self.le_dataset = LeRobotDatasetCollector()
+        self.le_dataset = LeRobotDatasetCollector(datastore=self.datastore, posi=self.pe)
         self.le_dataset.start_recording('stringman_pickup_clutter')
-        self.le_dataset.start_episode('task description')
+        # self.le_dataset.start_episode('task description')
 
         # The observer must now record position estimates, gripper sensor data, and gripper control inputs.
         # Each time a video frame arrives at the gripper client, it will look up the closest datapoint to the frame's timestamp for all the other sensors
