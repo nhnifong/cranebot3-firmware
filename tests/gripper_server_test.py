@@ -7,7 +7,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
-from unittest.mock import patch, Mock, MagicMock, ANY
+from unittest.mock import patch, Mock, MagicMock, ANY, call
 import asyncio
 from gripper_server import RaspiGripperServer
 from debug_motor import DebugMotor
@@ -156,3 +156,14 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         def check(resp):
             self.assertEqual(True, self.server.tryHold)
         await self.command_and_check({'grip': 'closed'}, check, 0.1)
+
+    async def test_bt_notification_handler(self):
+        # test of the data handler for receiving updates from bluetooth connected training wand
+        # button 0 is pressed (winch down)
+        # and the trigger is at 88% corresponding to a servo angle of 68.4 degrees
+        data = ','.join(map(str,[1,0,0,0.88]))
+        self.server.bt_notification_handler('foo', data.encode('utf-8'))
+
+        self.mock_spooler.setAimSpeed.assert_called_once_with(self.server.conf['TR_WINCH_SPEED'])
+        # -80 for startup, then 68.4 for the action triggered by the bluetooth message handler
+        self.mock_hat.servos[1].value.assert_has_calls([call(-80), call(68.4)])

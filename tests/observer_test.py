@@ -50,6 +50,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client = self.mock_gripper_client_class.return_value
         self.mock_gripper_client.startup = self.watchable_routine
         self.mock_gripper_client.shutdown = self.watchable_routine
+        self.mock_gripper_client.send_commands = self.mock_send_commands
+        self.commands_sent = None
         self.patchers.append(patch('observer.RaspiGripperClient', self.mock_gripper_client_class))
 
         self.mock_anchor_client_class = Mock(spec=RaspiAnchorClient)
@@ -82,6 +84,9 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
     async def watchable_routine(self):
         self.watchable_event.set()
 
+    async def mock_send_commands(self, c):
+        self.commands_sent = c
+
     async def test_startup_shutdown(self):
         self.assertFalse(self.ob_task.done())
 
@@ -110,10 +115,37 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.ob_task.done())
         self.assertTrue(self.ob.gripper_client is not None)
 
-        # all the things observer may do with the gripper client:
-        # toggle sendPreviewToUi attribute
-        # run sendCommands()
-        # run slow_stop_spool()
+    async def test_training_mode(self):
+        self.ob.calmode = 'training'
+        # add additional events to gripper client mock that are expected to exist by the observer
+        self.mock_gripper_client.connection_established_event = asyncio.Event()
+        self.mock_gripper_client.training_inputs_received = asyncio.Event()
+        # advertise a service on localhost matching the training gripper name in tests/configuration.json
+        await self.advertise_service(f"123.cranebot-gripper-service.train", "_http._tcp.local.", 8765)
+        # Run the method under test
+        task = asyncio.create_task(self.ob.start_training_mode())
+        # wait for connection
+        await asyncio.wait_for(self.watchable_event.wait(), 11)
+        # now the observer is going to be waiting for the gripper client to set gc.connection_established_event
+        self.mock_gripper_client.connection_established_event.set()
+        await asyncio.sleep(0.1)
+        # expect the mock gripper client to have been asked to send certain commands
+        self.assertEqual(self.commands_sent, {'training_mode': True})
+        # observer is now waiting on this event
+        self.mock_gripper_client.training_inputs_received.set()
+        await asyncio.sleep(0.1)
+        #observer should now have an initialized lerobot dataset instance.
+        # start an episode
+        await self.ob._handle_episode_start(None)
+        self.assertTrue(self.ob.le_dataset.is_recording)
+        # add a frame
+        self.ob.le_dataset.handle_training_vid_frame(12345, np.zeros((100,100,3)))
+        # stop the episode
+        await self.ob._handle_episode_start(None)
+
+        self.assertFalse(self.ob_task.done())
+        self.assertTrue(self.ob.gripper_client is not None)
+        self.assertTrue(task.done())
 
     async def test_anchor_connect_familiar(self):
         """Confirm that we can connnect to an anchor that advertises a name we recognize from our configuration"""

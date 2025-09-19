@@ -100,5 +100,5 @@
     "TARGET_HOLDING_PRESSURE": 1.1
   },
   "installed_gripper_id": "123.cranebot-gripper-service.test.",
-  "training_gripper_id": ""
+  "training_gripper_id": "123.cranebot-gripper-service.train."
 }

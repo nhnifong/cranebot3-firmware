@@ -2,11 +2,13 @@ import numpy as np
 import time
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
+import shutil
+import cv2
 
 image_size = (480, 270)
 
 class LeRobotDatasetCollector:
-    def __init__(self, root_path="last_dataset", datastore, posi):
+    def __init__(self, datastore, posi, root_path="last_dataset", allow_overwrite=True):
         self.datastore = datastore
         self.pe = posi
         self.is_recording = False
@@ -14,6 +16,12 @@ class LeRobotDatasetCollector:
         self.root_path = root_path
         self.current_task_description = None
         
+        if allow_overwrite:
+            try:
+                shutil.rmtree(root_path)
+            except OSError:
+                pass
+
         # define dataset features
         self.observation_features = {
             "gantry_position": {"shape": (3,), "dtype": "float32"},
@@ -38,8 +46,8 @@ class LeRobotDatasetCollector:
             print("Warning: Recording is already active.")
             return
 
-        obs_features = hw_to_dataset_features(self.observation_features, "observation", use_videos=True)
-        act_features = hw_to_dataset_features(self.action_features, "action", use_videos=True)
+        obs_features = hw_to_dataset_features(self.observation_features, "observation", use_video=True)
+        act_features = hw_to_dataset_features(self.action_features, "action", use_video=True)
         dataset_features = {**obs_features, **act_features}
 
         # create lerobot dataset instance
@@ -50,7 +58,7 @@ class LeRobotDatasetCollector:
             features=dataset_features,
             use_videos=True,
         )
-        print(f"Dataset '{repo_id}' created successfully.")
+        print(f"Dataset '{repo_id}' created successfully. {self.dataset}")
 
     def start_episode(self, task_description: str):
         """
@@ -59,7 +67,7 @@ class LeRobotDatasetCollector:
         Args:
             task_description: A string describing the goal, e.g., "pick up the t-shirt".
         """
-        if not self.dataset:
+        if self.dataset is None:
             print("Error: Must call start_recording() before starting an episode.")
             return
         self.is_recording = True
@@ -81,6 +89,7 @@ class LeRobotDatasetCollector:
         """
 
         if not self.is_recording or self.current_task_description is None:
+            print(f'cannot record a frame. is_recording={self.is_recording} current_task_description="{self.current_task_description}"')
             return
 
         winch = self.datastore.winch_line_record.getLast()
@@ -93,7 +102,7 @@ class LeRobotDatasetCollector:
         sized_frame = cv2.resize(frame, image_size, interpolation=cv2.INTER_LINEAR)
 
         observation = {
-            "gantry_position": pe.gant_pos, # treat kalman filter output as sensor
+            "gantry_position": self.pe.gant_pos, # treat kalman filter output as sensor
             "gripper_imu_rot": imu,
             "laser_rangefinder": laser,
             "wrist_camera": sized_frame,
@@ -102,7 +111,7 @@ class LeRobotDatasetCollector:
         }
 
         action  = {
-            "gantry_velocity": pe.gant_vel,
+            "gantry_velocity": self.pe.gant_vel,
             "winch_speed": winch[2],
             "finger_angle": finger[1],
         }
