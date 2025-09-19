@@ -30,6 +30,7 @@ import model_constants
 import traceback
 import cv2
 import pickle
+from dataset_collector import LeRobotDatasetCollector
 
 # Define the service names for network discovery
 cranebot_anchor_service_name = 'cranebot-anchor-service'
@@ -364,7 +365,8 @@ class AsyncObserver:
         # disconnect from the installed gripper and connect to the training gripper as the service is discovered.
         # During this time the operator may turn on the training wand. Wait for this to occur
         # The installed gripper will remain powered because the anchors are powered.
-        await self.gripper_client.shutdown()
+        if self.gripper_client is not None:
+            await self.gripper_client.shutdown()
         self.gripper_client = None
         self.gripper_client_connected.clear()
         self.to_ui_q.put({'visible_message': 'Turn on the training wand with a connected gripper.'})
@@ -376,9 +378,9 @@ class AsyncObserver:
         # Confirm we are reciving them before proceeding.
         self.gripper_client.training_inputs_received.clear()
         await self.gripper_client.send_commands({'training_mode': True})
-        await self.training_inputs_received.wait()
+        await self.gripper_client.training_inputs_received.wait()
 
-        # Initialize the dataset.
+        print('Initializing LeRobot Dataset')
         self.le_dataset = LeRobotDatasetCollector(datastore=self.datastore, posi=self.pe)
         self.le_dataset.start_recording('stringman_pickup_clutter')
 
@@ -673,6 +675,7 @@ class AsyncObserver:
                 elif self.config.training_gripper_id != info.server:
                     print(f'accepting only gripper connects from known training gripper {self.config.installed_gripper_id} so {info.server} is being ignored')
                     return
+                print(f'Connecting to "{info.server}" as training gripper')
             else:
                 # we want to connect to the gripper designated for standard use
                 if self.config.installed_gripper_id == '':
@@ -682,6 +685,7 @@ class AsyncObserver:
                 elif self.config.installed_gripper_id != info.server:
                     print(f'accepting only gripper connects from known installed gripper {self.config.installed_gripper_id} so {info.server} is being ignored')
                     return
+                print(f'Connecting to "{info.server}" as standard gripper')
 
             gc = RaspiGripperClient(address, info.port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
             gc.connection_established_event = self.gripper_client_connected

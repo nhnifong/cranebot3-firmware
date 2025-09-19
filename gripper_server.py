@@ -60,6 +60,8 @@ default_gripper_conf = {
     'FINGER_TOUCH': 80,
     # max open servo value
     'OPEN': -80,
+    # speed to winch when using training wand in meters per second
+    'TR_WINCH_SPEED': 0.06,
 }
 
 class GripperSpoolMotor():
@@ -325,7 +327,7 @@ class RaspiGripperServer(RobotComponentServer):
             analog_value = float(parts[3])
             
             # Print the formatted controller state
-            logging.debug(f"B1: {button1}, B2: {button2}, B3: {button3}, Trigger: {analog_value}")
+            logging.debug(f"B1: {buttons[0]}, B2: {buttons[0]}, B3: {buttons[2]}, Trigger: {analog_value}")
 
             # Control the fingers
             # analog_value ranges from 0 to 1.
@@ -335,9 +337,9 @@ class RaspiGripperServer(RobotComponentServer):
             # control the winch
             # TODO, protect winch from extents
             if buttons[0]:
-                self.spooler.setAimSpeed(0.06) # winch down
+                self.spooler.setAimSpeed(self.conf['TR_WINCH_SPEED']) # winch down
             elif buttons[1]:
-                self.spooler.setAimSpeed(-0.06) # winch up
+                self.spooler.setAimSpeed(-self.conf['TR_WINCH_SPEED']) # winch up
             else:
                 self.spooler.setAimSpeed(0) # stop winch
 

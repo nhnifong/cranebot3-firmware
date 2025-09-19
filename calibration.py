@@ -10,6 +10,11 @@ import model_constants
 from spools import SpiralCalculator
 from itertools import combinations
 from position_estimator import find_hang_point
+import argparse
+import logging
+
+# Set up logging configuration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 #the number of squares on the board (width and height)
 board_w = 14
@@ -17,38 +22,59 @@ board_h = 9
 # side length of one square in meters
 board_dim = 0.075
 
-# when on the raspi, just collect the images. it doesn't have enough ram to analyze them.
-def collect_images():
-    from picamera2 import Picamera2
-    from libcamera import Transform, controls
+def collect_images_locally_raspi(num_images, resolution_str):
+    """
+    Collects images locally on a Raspberry Pi using the picamera2 library.
+    
+    Args:
+        num_images (int): The number of images to collect.
+        resolution_str (str): The resolution as a string, e.g., "4608x2592".
+    """
+    try:
+        from picamera2 import Picamera2
+        from libcamera import Transform, controls
+    except ImportError:
+        logging.error("picamera2 or libcamera not found. This function is for Raspberry Pi only.")
+        return
+        
+    width, height = map(int, resolution_str.split('x'))
+
     picam2 = Picamera2()
-    capture_config = picam2.create_still_configuration(main={"size": (4608, 2592), "format": "RGB888"})
+    capture_config = picam2.create_still_configuration(main={"size": (width, height), "format": "RGB888"})
     picam2.configure(capture_config)
     picam2.start()
     picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.000001, "AfSpeed": controls.AfSpeedEnum.Fast}) 
-    print("started pi camera")
+    logging.info("Started Pi camera.")
     sleep(1)
-    for i in range(50):
+    for i in range(num_images):
         sleep(1)
         im = picam2.capture_array()
         cv2.imwrite(f"images/cal/cap_{i}.jpg", im)
         sleep(1)
-        print(f'collected ({i+1}/20)')
+        logging.info(f'Collected ({i+1}/{num_images}) images.')
 
-def collect_images_stream():
-    video_uri = 'tcp://192.168.1.151:8888'
-    print(f'Connecting to {video_uri}')
-    cap = cv2.VideoCapture(video_uri)
-    print(cap)
+def collect_images_stream(address, num_images):
+    """
+    Connects to a video stream and collects a specified number of images.
+    
+    Args:
+        address (str): The network address of the video stream.
+        num_images (int): The number of images to collect.
+    """
+    logging.info(f'Connecting to {address}...')
+    cap = cv2.VideoCapture(address)
+    logging.debug(f'Video capture object: {cap}')
     i = 0
-    while i < 50:
+    while i < num_images:
         ret, frame = cap.read()
         if not ret:
+            logging.warning("Failed to capture frame from stream. Retrying...")
+            sleep(1)
             continue
         fpath = f'images/cal/cap_{i}.jpg'
         cv2.imwrite(fpath, frame)
         i += 1
-        print(f'saved frame to {fpath}')
+        logging.info(f'Saved frame to {fpath}')
         sleep(1)
 
 def is_blurry(image, threshold=6.0):
@@ -75,7 +101,7 @@ class CalibrationInteractive:
         self.objp = np.zeros((board_n,3), np.float32)
         self.objp[:,:2] = np.mgrid[0:board_w,0:board_h].T.reshape(-1,2)
         self.objp = self.objp * board_dim
-        print(self.objp)
+        logging.debug(f'Object points:\n{self.objp}')
 
         self.images_obtained = 0
         self.image_shape = None
@@ -86,7 +112,7 @@ class CalibrationInteractive:
         grey_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         self.image_shape = grey_image.shape[::-1]
         #Find chessboard corners
-        print(f'search image {self.cnt}')
+        logging.debug(f'Searching image {self.cnt}')
         self.cnt+=1
         found, corners = cv2.findChessboardCornersSB(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
         # found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ADAPTIVE_THRESH)
@@ -97,28 +123,30 @@ class CalibrationInteractive:
 
             self.ipts.append(corners)
             self.images_obtained += 1 
-            print(f"chessboards obtained {self.images_obtained}")
+            logging.info(f"Chessboards obtained: {self.images_obtained}")
 
             image = cv2.drawChessboardCorners(image, (14,9), corners, found)
         # this resize is only for display and should not affect calibration
-        image = cv2.resize(image, (2304, 1296),  interpolation = cv2.INTER_LINEAR)
+        image = cv2.resize(image, (1920, 1080),  interpolation = cv2.INTER_LINEAR)
         cv2.imshow('img', image)
         cv2.waitKey(500)
 
     def calibrate(self):
         if self.images_obtained < 20:
+            logging.error(f'Obtained {self.images_obtained} images of checkerboard. Required 20.')
             raise RuntimeError(f'Obtained {self.images_obtained} images of checkerboard. Required 20')
 
-        print('Running Calibrations...')
+        logging.info('Running calibrations...')
         ret, self.intrinsic_matrix, self.distCoeff, rvecs, tvecs = cv2.calibrateCamera(
             self.opts, self.ipts, self.image_shape, None, None)
 
         #Save matrices
-        print('Intrinsic Matrix: ')
-        print(str(self.intrinsic_matrix))
-        print('Distortion Coefficients: ')
-        print(str(self.distCoeff))
-        print('Calibration complete')
+        logging.info(f"Camera calibration performed with image resolution: {self.image_shape[0]}x{self.image_shape[1]}.")
+        logging.info('Intrinsic Matrix:')
+        logging.info(str(self.intrinsic_matrix))
+        logging.info('Distortion Coefficients:')
+        logging.info(str(self.distCoeff))
+        logging.info('Calibration complete.')
 
         #Calculate the total reprojection error.  The closer to zero the better.
         tot_error = 0
@@ -127,10 +155,10 @@ class CalibrationInteractive:
             error = cv2.norm(self.ipts[i], imgpoints2, cv2.NORM_L2)/len(imgpoints2)
             tot_error += error
         terr = tot_error/len(self.opts)
-        print("Total reprojection error: ", terr)
+        logging.info(f"Total reprojection error: {terr}")
 
     def save(self): 
-        print(f'Saving data to configuration.json')
+        logging.info('Saving data to configuration.json...')
         config = Config()
         config.intrinsic_matrix = self.intrinsic_matrix
         config.distortion_coeff = self.distCoeff
@@ -141,17 +169,16 @@ class CalibrationInteractive:
 def calibrate_from_files():
     ce = CalibrationInteractive()
     for filepath in glob.glob('images/cal/*.jpg'):
-        print(f"analyzing {filepath}")
+        logging.info(f"Analyzing {filepath}")
         image = cv2.imread(filepath)
         ce.addImage(image)
     ce.calibrate()
     ce.save()
 
-def calibrate_from_stream():
-    video_uri = 'tcp://192.168.1.151:8888'
-    print(f'Connecting to {video_uri}')
-    cap = cv2.VideoCapture(video_uri)
-    print(cap)
+def calibrate_from_stream(address):
+    logging.info(f'Connecting to {address}...')
+    cap = cv2.VideoCapture(address)
+    logging.debug(f'Video capture object: {cap}')
     ce = CalibrationInteractive()
     i=0
     while ce.images_obtained < 20:
@@ -182,7 +209,7 @@ def params_consistent_with_move(
     predicted_ending_lengths = starting_lengths_visual + encoder_deltas
 
     # Using the predicted new lengths, calculate a hypothetical hang point.
-    # print(f'try to find hang point with anchor_points={anchor_points}, lengths={predicted_ending_lengths}')
+    # logging.debug(f'try to find hang point with anchor_points={anchor_points}, lengths={predicted_ending_lengths}')
     hp_result = find_hang_point(anchor_points, predicted_ending_lengths)
     if hp_result is None:
         return 1 # 1 meter
@@ -190,7 +217,7 @@ def params_consistent_with_move(
 
     # Compare the predicted hang point to the observed visual ending position.
     # The smaller the distance, the more consistent the parameters are with the move.
-    # print(f'hp={predicted_hang_point} ep={ending_pos_visual}')
+    # logging.debug(f'hp={predicted_hang_point} ep={ending_pos_visual}')
     return np.linalg.norm(predicted_hang_point - ending_pos_visual)
 
 
@@ -351,10 +378,10 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index, mode=
         bounds = []
         for apose in current_anchor_poses:
             guess = [
-                *apose[0],      # xyz rotation component
-                apose[1][0],    # x position component
-                apose[1][1],    # y position component
-                -150,           # initial guess of zero angle
+                *apose[0],    # xyz rotation component
+                apose[1][0],  # x position component
+                apose[1][1],  # y position component
+                -150,          # initial guess of zero angle
             ]
             initial_guess.append(guess)
             bounds.append([
@@ -369,7 +396,7 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index, mode=
         initial_guess = np.array(initial_guess).flatten()
         bounds = np.array(bounds).reshape((len(initial_guess), 2))
         args = (observations, spools, 'full', None)
-        print(len(observations))
+        logging.info(f"Number of observations: {len(observations)}")
 
     elif mode == 'zero_angles_only':
         initial_guess = np.array([-150.0] * 4)
@@ -406,7 +433,7 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index, mode=
         
         return poses, zero_angles
     except AssertionError:
-        print(result)
+        logging.error(f"Optimization failed. Result:\n{result}")
         return None, None
 
 def order_points_for_low_travel(points):
@@ -421,22 +448,22 @@ def order_points_for_low_travel(points):
 
     Args:
         points (np.ndarray): A NumPy array of shape (N, 3) where N is the
-                             number of points, and each row is an (x, y, z)
-                             coordinate.
+                            number of points, and each row is an (x, y, z)
+                            coordinate.
 
     Returns:
         tuple: A tuple containing:
             - ordered_points (np.ndarray): The points reordered along the path.
             - total_distance (float): The total Euclidean distance of the path.
-                                      Returns (empty array, 0.0) if input is empty.
+                                     Returns (empty array, 0.0) if input is empty.
 
     Function written by AI
     """
     if points.shape[0] == 0:
-        print("Input points array is empty. Returning empty ordered_points and 0.0 distance.")
+        logging.warning("Input points array is empty. Returning empty ordered_points and 0.0 distance.")
         return np.array([]), 0.0
     if points.shape[0] == 1:
-        print("Only one point provided. Returning the point and 0.0 distance.")
+        logging.warning("Only one point provided. Returning the point and 0.0 distance.")
         return points, 0.0
 
     num_points = points.shape[0]
@@ -501,7 +528,7 @@ def order_points_for_low_travel(points):
         else:
             # Fallback for unexpected scenarios (e.g., if only one end had a valid neighbor)
             # This logic should cover all cases, but a print for debugging if needed
-            print("Warning: Neither head nor tail could find a valid next point. Breaking loop.")
+            logging.warning("Neither head nor tail could find a valid next point. Breaking loop.")
             break
             
     # Convert the list of ordered indices to an array of points
@@ -509,25 +536,62 @@ def order_points_for_low_travel(points):
     
     return ordered_points, total_distance
 
-if __name__ == "__main__":
-    # calibrate_from_stream()
-    # collect_images_stream()
-    # calibrate_from_files()
-
+def calibrate_poses_from_data():
     import pickle
     with open('tests/collected_cal_data.pickle', 'rb') as f:
         ap, data = pickle.load(f)
-    print(f'Anchor poses that were assumed during calibration \n{ap}')
+    logging.info(f'Anchor poses that were assumed during data collection:\n{ap}')
     poses, zero_a = find_cal_params(ap, data, 2)
-    print(poses)
-    print(zero_a)
+    if poses is not None:
+        logging.info(f"Optimized poses:\n{poses}")
+        logging.info(f"Optimized zero angles:\n{zero_a}")
 
-    bedroom_side_len = 5.334
-    side_len = np.linalg.norm( poses[0][1] - poses[2][1] )
-    print(f'side len = {side_len} ({(side_len/bedroom_side_len)*100:.3f}% of ideal)')
+        bedroom_side_len = 5.334
+        side_len = np.linalg.norm( poses[0][1] - poses[2][1] )
+        logging.info(f"Side length = {side_len:.3f}m ({(side_len/bedroom_side_len)*100:.2f}% of ideal)")
 
-    config = Config()
-    for i, anchor in enumerate(config.anchors):
-        anchor.pose = poses[i]
-    config.write()
-    print('wrote new anchor poses to configuration.json')
+        config = Config()
+        for i, anchor in enumerate(config.anchors):
+            anchor.pose = poses[i]
+        config.write()
+        logging.info('Wrote new anchor poses to configuration.json.')
+    else:
+        logging.error("Failed to find calibration parameters.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Run robot calibration functions. Use --help for more details on each command.')
+    parser.add_argument('--mode', type=str, choices=[
+        'collect-images-stream',
+        'calibrate-from-files',
+        'calibrate-poses-from-data',
+        'collect-images-locally-raspi',
+        'calibrate-from-stream'
+    ], required=True, help='Choose the calibration function to run:\n \
+            "collect-images-stream" to capture a specified number of images from a network stream; \
+            "calibrate-from-files" to run camera calibration on a local set of images; \
+            "calibrate-poses-from-data" to optimize robot poses and zero angles from pre-collected data; \
+            "collect-images-locally-raspi" to capture a specified number of images from a connected camera on a Raspberry Pi; \
+            "calibrate-from-stream" to run camera calibration directly from a network stream until 20 images are collected.')
+    parser.add_argument('--address', type=str, default='tcp://192.168.1.151:8888',
+                        help='The network address for the video stream (used with stream modes).')
+    parser.add_argument('--num-images', type=int, default=50,
+                        help='The number of images to collect when using "collect-images-locally-raspi" or "collect-images-stream".')
+    parser.add_argument('--resolution', type=str, default='4608x2592',
+                        help='The resolution for the camera on the Raspberry Pi (e.g., "4608x2592"). Used with "collect-images-locally-raspi" mode.')
+
+    args = parser.parse_args()
+
+    if args.mode == 'collect-images-locally-raspi':
+        collect_images_locally_raspi(args.num_images, args.resolution)
+    elif args.mode == 'collect-images-stream':
+        collect_images_stream(args.address, args.num_images)
+    elif args.mode == 'calibrate-from-files':
+        calibrate_from_files()
+    elif args.mode == 'calibrate-poses-from-data':
+        calibrate_poses_from_data()
+    elif args.mode == 'calibrate-from-stream':
+        calibrate_from_stream(args.address)
+
+if __name__ == "__main__":
+    main()
