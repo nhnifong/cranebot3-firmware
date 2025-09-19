@@ -227,6 +227,9 @@ class RaspiGripperServer(RobotComponentServer):
         or by looking at the output tensor of the AI camera 
         """
         while self.run_server:
+            if self.training_mode:
+                await asyncio.sleep(1)
+                continue
             # repeatedly try to grasp the object
             while self.tryHold:
                 logging.debug(f'tryHold={self.tryHold} holding={self.holding}')
@@ -336,14 +339,14 @@ class RaspiGripperServer(RobotComponentServer):
 
             # control the winch
             # TODO, protect winch from extents
-            if buttons[0]:
+            if buttons[2]:
                 self.spooler.setAimSpeed(self.conf['TR_WINCH_SPEED']) # winch down
             elif buttons[1]:
                 self.spooler.setAimSpeed(-self.conf['TR_WINCH_SPEED']) # winch up
             else:
                 self.spooler.setAimSpeed(0) # stop winch
 
-            if buttons[2] and buttons[2] != self.last_ep_btn_state:
+            if buttons[0] and buttons[0] != self.last_ep_btn_state:
                 # the espisode button state has been pressed. send a message to the observer.
                 self.update['episode_button_pushed'] = True
             self.last_ep_btn_state = buttons[2]
@@ -371,7 +374,7 @@ class RaspiGripperServer(RobotComponentServer):
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     gs = RaspiGripperServer()

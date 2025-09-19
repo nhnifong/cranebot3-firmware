@@ -115,7 +115,7 @@ class AsyncObserver:
             'slow_stop_all': self.stop_all,
             'set_simulated_data_mode': self.set_simulated_data_mode,
             'zero_winch': self._handle_zero_winch_line,
-            'episode_start': self._handle_episode_start,
+            'episode': self._handle_episode_start,
         }
 
     def listen_queue_updates(self, loop):
