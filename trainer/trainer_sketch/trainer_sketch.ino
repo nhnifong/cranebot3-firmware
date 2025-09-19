@@ -16,8 +16,8 @@
 #define BUT_B_PIN D9
 #define BUT_C_PIN D7
 #define LED_PIN D13
-#define RELAXED 1500
-#define PULLED 1050
+#define RELAXED 3470
+#define PULLED 1180
 
 int sensorValue = 0;
 float triggerFrac  = 0;
