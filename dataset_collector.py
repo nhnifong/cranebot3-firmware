@@ -89,7 +89,6 @@ class LeRobotDatasetCollector:
         """
 
         if not self.is_recording or self.current_task_description is None:
-            print(f'cannot record a frame. is_recording={self.is_recording} current_task_description="{self.current_task_description}"')
             return
 
         winch = self.datastore.winch_line_record.getLast()
