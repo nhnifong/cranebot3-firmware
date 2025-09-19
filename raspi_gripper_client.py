@@ -13,6 +13,8 @@ class RaspiGripperClient(ComponentClient):
         self.conn_status = {'gripper': True}
         self.anchor_num = None
         self.pe = pe
+        # event used by start_training_mode in observer.py
+        self.training_inputs_received = asyncio.Event()
 
     def handle_update_from_ws(self, update):
         if 'line_record' in update:
@@ -43,6 +45,13 @@ class RaspiGripperClient(ComponentClient):
             print(f'winch_zero_success = {update["winch_zero_success"]}')
             if update['winch_zero_success']:
                 self.winch_zero_event.set()
+
+        if 'training_wand_connected' in update:
+            # set event known to observer
+            self.training_inputs_received.set()
+
+        if 'episode_button_pushed' in update:
+            self.to_ob_q.put({'episode': True})
 
     def handle_detections(self, detections, timestamp):
         """

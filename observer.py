@@ -62,12 +62,10 @@ class AsyncObserver:
         self.run_command_loop = True
         self.calmode = "pause"
         self.detection_count = 0
-
         self.datastore = DataStore()
         self.to_ui_q = to_ui_q
         self.to_ob_q = to_ob_q
         self.pool = None
-
         # all clients by server name
         self.bot_clients = {}
         # all connected anchors
@@ -76,27 +74,26 @@ class AsyncObserver:
         self.gripper_client = None
         # The index of the anchor with the power-delivering line
         self.power_spool_index = None
-
         # read a mapping of server names to anchor numbers from the config file
         self.config = Config()
         self.config.write()
-
         self.stat = StatCounter(self.to_ui_q)
-
         self.enable_shape_tracking = False
         self.shape_tracker = None
-
         # Position Estimator. this used to be a seperate process so it's still somewhat independent.
         self.pe = Positioner2(self.datastore, self.to_ui_q, self)
-
         self.sim_task = None
         self.locate_anchor_task = None
-        
         # only one motion task can be active at a time
         self.motion_task = None
-
         # only used for integration test only to allow some code to run right after sending the gantry to a goal point
         self.test_gantry_goal_callback = None
+        # event used to notify tasks that gripper is connected.
+        self.gripper_client_connected = asyncio.Event()
+        # task description to use when storing lerobot episode
+        self.training_task_description = 'pick_up_clutter'
+        self.accept_connection_from_training_gripper = False
+
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -117,6 +114,7 @@ class AsyncObserver:
             'slow_stop_all': self.stop_all,
             'set_simulated_data_mode': self.set_simulated_data_mode,
             'zero_winch': self._handle_zero_winch_line,
+            'episode_start': self._handle_episode_start,
         }
 
     def listen_queue_updates(self, loop):
@@ -212,6 +210,14 @@ class AsyncObserver:
 
     async def _handle_zero_winch_line(self, data):
         await self.gripper_client.zero_winch()
+
+    async def _handle_episode_start(self, data):
+        if self.calmode == 'training' and self.le_dataset is not None:
+            if self.le_dataset.is_recording:
+                # note that we do not stop an episode and immdietely start another. the user needs to press again to start the next one.
+                self.le_dataset.stop_episode()
+            else:
+                self.le_dataset.start_episode(self.training_task_description)
 
     async def invoke_motion_task(self, coro):
         """
@@ -360,28 +366,34 @@ class AsyncObserver:
         # The installed gripper will remain powered because the anchors are powered.
         await self.gripper_client.shutdown()
         self.gripper_client = None
-        self.gripper_training_client_connected.clear()
+        self.gripper_client_connected.clear()
         self.to_ui_q.put({'visible_message': 'Turn on the training wand with a connected gripper.'})
         self.accept_connection_from_training_gripper = True
-        await self.gripper_training_client_connected.wait()
+        await self.gripper_client_connected.wait()
 
         # Command the training gripper into training mode.
         # This causes it to connect to the training wand over BT and forward control inputs to us.
         # Confirm we are reciving them before proceeding.
-        self.training_inputs_received.clear()
+        self.gripper_client.training_inputs_received.clear()
         await self.gripper_client.send_commands({'training_mode': True})
         await self.training_inputs_received.wait()
-        self.to_ui_q.put({'visible_message': 'Training wand connected successfully.'})
 
         # Initialize the dataset.
         self.le_dataset = LeRobotDatasetCollector(datastore=self.datastore, posi=self.pe)
         self.le_dataset.start_recording('stringman_pickup_clutter')
-        # self.le_dataset.start_episode('task description')
 
         # The observer must now record position estimates, gripper sensor data, and gripper control inputs.
         # Each time a video frame arrives at the gripper client, it will look up the closest datapoint to the frame's timestamp for all the other sensors
         # and insert them all into the dataset together.
         self.gripper_client.training_frame_cb = self.le_dataset.handle_training_vid_frame
+        self.to_ui_q.put({'visible_message': 'Training wand connected successfully. Press episode button to begin'})
+
+    async def stop_training_mode(self):
+        await self.gripper_client.shutdown()
+        self.gripper_client = None
+        self.gripper_client_connected.clear()
+        self.accept_connection_from_training_gripper = False
+        await self.gripper_client_connected.wait()
 
     async def half_auto_calibration(self):
         """Optimize zero angles from a few points
@@ -621,7 +633,7 @@ class AsyncObserver:
         if is_power_anchor or is_standard_anchor:
             # the number of anchors is decided ahead of time (in main.py)
             # but they are assigned numbers as we find them on the network
-            # and the chosen numbers are persisted on disk
+            # and the chosen numbers are persisted in configuration.json
 
             if info.server in self.config.anchor_num_map:
                 anchor_num = self.config.anchor_num_map[info.server]
@@ -651,7 +663,28 @@ class AsyncObserver:
             asyncio.create_task(ac.startup())
 
         elif name_component == cranebot_gripper_service_name:
+            # accept a gripper connection from the correct gripper
+            if self.accept_connection_from_training_gripper:
+                # we want to connect to the gripper designated for training use.
+                # if a training gripper has never been seen before, and this one 
+                if self.config.training_gripper_id == '':
+                    self.config.training_gripper_id = info.server
+                    self.config.write()
+                elif self.config.training_gripper_id != info.server:
+                    print(f'accepting only gripper connects from known training gripper {self.config.installed_gripper_id} so {info.server} is being ignored')
+                    return
+            else:
+                # we want to connect to the gripper designated for standard use
+                if self.config.installed_gripper_id == '':
+                    # if an installed gripper has never been seen before, assume this one is the installed gripper an save it to the config
+                    self.config.installed_gripper_id = info.server
+                    self.config.write()
+                elif self.config.installed_gripper_id != info.server:
+                    print(f'accepting only gripper connects from known installed gripper {self.config.installed_gripper_id} so {info.server} is being ignored')
+                    return
+
             gc = RaspiGripperClient(address, info.port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
+            gc.connection_established_event = self.gripper_client_connected
             self.bot_clients[info.server] = gc
             self.gripper_client = gc
             asyncio.create_task(gc.startup())
