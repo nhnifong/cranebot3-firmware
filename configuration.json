@@ -112,6 +112,6 @@
     "TARGET_HOLDING_PRESSURE": 1.1,
     "TRAINING_WAND_BT_ADDRESS": "34:85:18:92:1D:05"
   },
-  "installed_gripper_id": "",
-  "training_gripper_id": ""
+  "installed_gripper_id": "todo allow this to be written once original gripper is fixed",
+  "training_gripper_id": "123.cranebot-gripper-service.2ccf67b11a2d."
 }

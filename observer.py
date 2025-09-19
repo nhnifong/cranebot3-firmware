@@ -343,6 +343,11 @@ class AsyncObserver:
         "run" - move autonomously to pick up objects
         "pause" - hold all motors at current position, but continue to make observations
         """
+        # exit current mode
+        if self.calmode == "train":
+            asyncio.create_task(self.stop_training_mode())
+
+        # enter new mode
         if mode == "run":
             self.calmode = mode
             print("run mode")
@@ -391,7 +396,8 @@ class AsyncObserver:
         self.to_ui_q.put({'visible_message': 'Training wand connected successfully. Press episode button to begin'})
 
     async def stop_training_mode(self):
-        await self.gripper_client.shutdown()
+        if self.gripper_client is not None:
+            await self.gripper_client.shutdown()
         self.gripper_client = None
         self.gripper_client_connected.clear()
         self.accept_connection_from_training_gripper = False

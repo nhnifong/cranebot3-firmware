@@ -166,7 +166,7 @@ class RaspiGripperServer(RobotComponentServer):
             # If the floor is out of range, distance is None
             if distance:
                 self.rangefinder.clear_interrupt()
-                self.update['grip_sensors']['range'] = [distance / 100]
+                self.update['grip_sensors']['range'] = distance / 100
 
 
     def startOtherTasks(self):
