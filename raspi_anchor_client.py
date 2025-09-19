@@ -131,6 +131,7 @@ class ComponentClient:
                         self.stat.pending_frames_in_pool += 1
                         self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                     else:
+                        pass
                         # print(f'Dropping frame because there are already too many pending.')
                         # TODO record fraction of frames which are dropped in stat collector
                 except ValueError:

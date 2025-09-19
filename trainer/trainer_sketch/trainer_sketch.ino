@@ -106,7 +106,7 @@ void loop(){
     static_cast<float>(RELAXED - sensorValue) / (RELAXED - PULLED),
     0, 1);
   triggerFrac = triggerFrac*0.4 + rawFrac*0.6;
-  // Serial.printf("Trigger : %0.2f%%\n", triggerFrac*100);  //Print the read sensor value
+  Serial.printf("Trigger : %0.3f%%\n", triggerFrac*100);  //Print the read sensor value
 
   // Read buttons and invert
   int buttonStateA = !digitalRead(BUT_A_PIN);
@@ -119,7 +119,13 @@ void loop(){
 
     // Create a comma-separated string with the input states.
     // Example: "1,0,1,0.0224"
-    String dataToSend = String(buttonStateA) + "," + String(buttonStateB) + "," + String(buttonStateC) + "," + String(triggerFrac);
+    char triggerString[10];
+    dtostrf(triggerFrac, 1, 2, triggerString); // 1 = min width, 3 = decimal places
+    String dataToSend = String(buttonStateA) + "," 
+      + String(buttonStateB) + ","
+      + String(buttonStateC) + ","
+      + triggerString + ","
+      + String(sensorValue);
 
     // Set the value of the characteristic and send a notification.
     pTxCharacteristic->setValue(dataToSend.c_str());
