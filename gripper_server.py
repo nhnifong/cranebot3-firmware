@@ -330,7 +330,7 @@ class RaspiGripperServer(RobotComponentServer):
             analog_value = float(parts[3])
             
             # Print the formatted controller state
-            logging.debug(f"B1: {buttons[0]}, B2: {buttons[0]}, B3: {buttons[2]}, Trigger: {analog_value}")
+            logging.debug(f"B1: {buttons[0]}, B2: {buttons[0]}, B3: {buttons[2]}, Trigger: {analog_value}, Raw: {parts[4]}")
 
             # Control the fingers
             # analog_value ranges from 0 to 1.
