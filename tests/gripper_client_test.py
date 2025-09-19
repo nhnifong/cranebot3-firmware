@@ -119,32 +119,28 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         await self.clientTearDown()
 
 
-    async def test_imu(self):
+    async def test_grip_sensors(self):
         """
-        When gripper client receives "imu" it should put it in the imu array in datatore
-        and send a rodruiges rotation vector to the ui via it's queue
+        When gripper client receives "grip_sensors" it should put put the readings in the datastore.
+        expect the the imu array in datatore and a rodruiges rotation vector to the ui via it's queue
         """
         await self.clientSetup()
         timestamp = 1.23
-        imu_data = {
+        data = {
             'time': timestamp,
             'quat': [4,5,6,7],
+            'fing_v': 1.0,
+            'fing_a': 10.0,
+            'range': 30.0,
         }
-        asyncio.create_task(self.server_ws.send(json.dumps({'imu': imu_data})))
+        asyncio.create_task(self.server_ws.send(json.dumps({'grip_sensors': data})))
         await asyncio.sleep(0.1)
         expected_rotation_vector = np.array([ timestamp, 0.140709, -0.422127, -1.5478])
         np.testing.assert_array_almost_equal(expected_rotation_vector, self.datastore.imu_rotvec.getLast())
-        await self.clientTearDown()
-
-    async def test_range(self):
-        """
-        When gripper client receives "range" it should put it in the range array in datastore
-        """
-        await self.clientSetup()
-        rangerecord = [88.0,30.0]
-        asyncio.create_task(self.server_ws.send(json.dumps({'range': rangerecord})))
-        await asyncio.sleep(0.1)
-        np.testing.assert_array_almost_equal(rangerecord, self.datastore.range_record.getLast())
+        expected_range_record = np.array([timestamp, 30.0])
+        np.testing.assert_array_almost_equal(expected_range_record, self.datastore.range_record.getLast())
+        expected_finger_record = np.array([timestamp, 10.0, 1.0]) # time, angle, voltage
+        np.testing.assert_array_almost_equal(expected_finger_record, self.datastore.finger.getLast())
         await self.clientTearDown()
 
     async def test_holding(self):

@@ -50,6 +50,7 @@ class ComponentClient:
         self.ct = None # task to connect to websocket
         self.save_raw = False
         self.training_frame_cb = None
+        self.connection_established_event = None
 
         # todo: receive a command in observer that will set this value
         self.sendPreviewToUi = False
@@ -120,6 +121,7 @@ class ComponentClient:
                     # continue
 
                 # process frame with an additional callback if set
+                # expected to be LeRobotDatasetCollector.handle_training_vid_frame
                 if self.training_frame_cb is not None:
                     self.training_frame_cb(timestamp, frame)
 
@@ -173,6 +175,9 @@ class ComponentClient:
             async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
                 self.connected = True
                 print(f"Connected to {ws_uri}.")
+                # TODO Set an event that the observer is waiting on.
+                if self.connection_established_event is not None:
+                    self.connection_established_event.set()
                 await self.receive_loop(websocket)
         except asyncio.exceptions.CancelledError:
             print("Cancelling connection")

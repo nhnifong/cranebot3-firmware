@@ -29,6 +29,8 @@ class LeRobotDatasetCollector:
             "finger_angle": {"shape": (1,), "dtype": "float32"},
         }
 
+        # there is no final cleanup or save call necessary, but consider using dataset.push_to_hub()
+
 
     def start_recording(self, repo_id: str, fps: int = 30):
         """Call this once to initialize the dataset file on disk."""
