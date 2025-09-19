@@ -324,7 +324,7 @@ class RaspiGripperServer(RobotComponentServer):
         # The data is expected to be a comma-separated string: "btn1,btn2,btn3,analog"
         parts = message.split(',')
         buttons = [False, False, False]
-        if len(parts) == 4:
+        if len(parts) == 5:
             for i in range(3):
                 buttons[i] = parts[i] == '1'
             analog_value = float(parts[3])
