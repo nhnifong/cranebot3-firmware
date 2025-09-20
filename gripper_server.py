@@ -62,6 +62,8 @@ default_gripper_conf = {
     'OPEN': -80,
     # speed to winch when using training wand in meters per second
     'TR_WINCH_SPEED': 0.06,
+    # default bluetooth address of training wand.
+    "TRAINING_WAND_BT_ADDRESS": "34:85:18:92:1D:05",
 }
 
 class GripperSpoolMotor():
