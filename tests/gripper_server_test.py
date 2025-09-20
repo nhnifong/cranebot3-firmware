@@ -161,7 +161,7 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         # test of the data handler for receiving updates from bluetooth connected training wand
         # button 0 is pressed (winch down)
         # and the trigger is at 88% corresponding to a servo angle of 68.4 degrees
-        data = ','.join(map(str,[1,0,0,0.88]))
+        data = ','.join(map(str,[0,0,1,0.88,3000]))
         self.server.bt_notification_handler('foo', data.encode('utf-8'))
 
         self.mock_spooler.setAimSpeed.assert_called_once_with(self.server.conf['TR_WINCH_SPEED'])
