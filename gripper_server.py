@@ -349,7 +349,7 @@ class RaspiGripperServer(RobotComponentServer):
             if buttons[0] and buttons[0] != self.last_ep_btn_state:
                 # the espisode button state has been pressed. send a message to the observer.
                 self.update['episode_button_pushed'] = True
-            self.last_ep_btn_state = buttons[2]
+            self.last_ep_btn_state = buttons[0]
 
 
         else:
