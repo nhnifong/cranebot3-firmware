@@ -122,3 +122,7 @@ class LeRobotDatasetCollector:
         # add the combined frame to the dataset, tagged with the current task
         frame = {**observation_frame, **action_frame}
         self.dataset.add_frame(frame, task=self.current_task_description)
+
+    def close(self):
+        if self.dataset is not None:
+            self.dataset.push_to_hub()

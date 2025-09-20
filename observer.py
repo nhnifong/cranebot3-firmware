@@ -387,7 +387,7 @@ class AsyncObserver:
 
         print('Initializing LeRobot Dataset')
         self.le_dataset = LeRobotDatasetCollector(datastore=self.datastore, posi=self.pe)
-        self.le_dataset.start_recording('stringman_pickup_clutter')
+        self.le_dataset.start_recording('naavox/stringman-practice-dataset')
 
         # The observer must now record position estimates, gripper sensor data, and gripper control inputs.
         # Each time a video frame arrives at the gripper client, it will look up the closest datapoint to the frame's timestamp for all the other sensors
@@ -766,6 +766,9 @@ class AsyncObserver:
             await self.async_close()
 
     async def async_close(self) -> None:
+        if self.calmode == 'training':
+            print('closing training dataset')
+            self.le_dataset.close()
         result = await self.stop_all()
         self.run_command_loop = False
         self.stat.run = False

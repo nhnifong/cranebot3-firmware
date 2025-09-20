@@ -12,4 +12,4 @@ cranebot.log
 mks42c_expected_err.cal
 zero-angles.txt
 tests/last_dataset
-last_dataset
+*_dataset
