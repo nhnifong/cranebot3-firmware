@@ -77,7 +77,6 @@ class GripperSpoolMotor():
         self.servo = hat.servos[SERVO_1]
         self.hat = hat
         self.run = True
-        self.training_mode = False
         self.last_ep_btn_state = False
 
     def ping(self):
@@ -151,8 +150,8 @@ class RaspiGripperServer(RobotComponentServer):
         self.past_val_rates = deque(maxlen=self.conf['UPDATE_RATE'])
         self.holding = False
         self.holdPressure = False
-
         self.stream_command = half_res_stream_command
+        self.training_mode = False
 
     def readOtherSensors(self):
 
