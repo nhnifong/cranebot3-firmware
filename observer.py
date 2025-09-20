@@ -766,7 +766,7 @@ class AsyncObserver:
             await self.async_close()
 
     async def async_close(self) -> None:
-        if self.calmode == 'training':
+        if self.calmode == 'training' and self.le_dataset is not None:
             print('closing training dataset')
             self.le_dataset.close()
         result = await self.stop_all()
