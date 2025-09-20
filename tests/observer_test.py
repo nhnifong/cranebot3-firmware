@@ -147,6 +147,9 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.ob.gripper_client is not None)
         self.assertTrue(task.done())
 
+        # delete this so the async_close function in observer won't try to upload it to huggingface in a unit test
+        self.ob.le_dataset = None
+
     async def test_anchor_connect_familiar(self):
         """Confirm that we can connnect to an anchor that advertises a name we recognize from our configuration"""
         await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
