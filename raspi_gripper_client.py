@@ -51,6 +51,7 @@ class RaspiGripperClient(ComponentClient):
             self.training_inputs_received.set()
 
         if 'episode_button_pushed' in update:
+            print('episode_button_pushed')
             self.to_ob_q.put({'episode': True})
 
     def handle_detections(self, detections, timestamp):
