@@ -64,18 +64,19 @@ def collect_images_stream(address, num_images):
     logging.info(f'Connecting to {address}...')
     cap = cv2.VideoCapture(address)
     logging.debug(f'Video capture object: {cap}')
+    last_cap_time = time()
     i = 0
     while i < num_images:
         ret, frame = cap.read()
         if not ret:
             logging.warning("Failed to capture frame from stream. Retrying...")
-            sleep(1)
-            continue
-        fpath = f'images/cal/cap_{i}.jpg'
-        cv2.imwrite(fpath, frame)
-        i += 1
-        logging.info(f'Saved frame to {fpath}')
-        sleep(1)
+            return
+        if time() > last_cap_time+1:
+            fpath = f'images/cal/cap_{i}.jpg'
+            cv2.imwrite(fpath, frame)
+            i += 1
+            logging.info(f'Saved frame to {fpath}')
+            last_cap_time = time()
 
 def is_blurry(image, threshold=6.0):
     """
