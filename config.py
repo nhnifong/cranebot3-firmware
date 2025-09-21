@@ -23,8 +23,6 @@ class Config:
             [[0.021986, 0.160533, -0.003378, 0.002640, -0.356843]])
         self.commmon_anchor_vars = {}
         self.gripper_vars = {}
-        self.installed_gripper_id = ''
-        self.training_gripper_id = ''
         try:
             self.reload()
         except FileNotFoundError:
@@ -54,8 +52,6 @@ class Config:
         self.distortion_coeff = np.array(cam['distortion_coeff'])
         self.commmon_anchor_vars = conf.get('common_anchor_vars', {})
         self.gripper_vars = conf.get('gripper', {})
-        self.installed_gripper_id = conf.get('installed_gripper_id', '')
-        self.training_gripper_id = conf.get('training_gripper_id', '')
 
     def write(self):
         outf = open('configuration.json', 'w')
@@ -76,8 +72,6 @@ class Config:
             },
             'common_anchor_vars': self.commmon_anchor_vars,
             'gripper': self.gripper_vars,
-            'installed_gripper_id': self.installed_gripper_id,
-            'training_gripper_id': self.training_gripper_id,
         }
         outf.write(json.dumps(conf, indent=2))
         outf.close()
