@@ -33,9 +33,10 @@ import pickle
 from dataset_collector import LeRobotDatasetCollector
 
 # Define the service names for network discovery
-cranebot_anchor_service_name = 'cranebot-anchor-service'
-cranebot_anchor_power_service_name = 'cranebot-anchor-power-service'
-cranebot_gripper_service_name = 'cranebot-gripper-service'
+anchor_service_name = 'cranebot-anchor-service'
+anchor_power_service_name = 'cranebot-anchor-power-service'
+gripper_service_name = 'cranebot-gripper-service'
+training_gripper_service_name = 'cranebot-training-gripper-service'
 
 N_ANCHORS = 4
 
@@ -94,6 +95,8 @@ class AsyncObserver:
         # task description to use when storing lerobot episode
         self.training_task_description = 'pick_up_clutter'
         self.accept_connection_from_training_gripper = False
+        self.gripper_addresses = {'training': None, 'standard': None}
+        self.le_dataset = None
 
 
         # Command dispatcher maps command strings to handler methods
@@ -339,9 +342,7 @@ class AsyncObserver:
 
     def set_run_mode(self, mode):
         """
-        Sets the calibration mode of connected bots
-        "run" - move autonomously to pick up objects
-        "pause" - hold all motors at current position, but continue to make observations
+        Sets the robot mode, governing nearly all behavior.
         """
         # exit current mode
         if self.calmode == "train":
@@ -367,25 +368,31 @@ class AsyncObserver:
         # Set a mode flag in the position estimator that makes it ignore them.
         self.pe.training_mode = True
 
-        # disconnect from the installed gripper and connect to the training gripper as the service is discovered.
-        # During this time the operator may turn on the training wand. Wait for this to occur
+        # disconnect from the standard gripper and connect to the training gripper.
+        # During this time the operator may turn on the training wand if it is not on already
         # The installed gripper will remain powered because the anchors are powered.
         if self.gripper_client is not None:
             await self.gripper_client.shutdown()
-        self.gripper_client = None
+            self.gripper_client = None
+            del self.bot_clients[self.gripper_addresses['standard'][2]]
         self.gripper_client_connected.clear()
-        self.to_ui_q.put({'visible_message': 'Turn on the training wand with a connected gripper.'})
+
+        if self.gripper_addresses['training'] is not None:
+            # if the training gripper had already been discovered and is still online, connect to it immediately.
+            print(f'Training gripper was previously discovered as {self.gripper_addresses["training"]}')
+            address, port, full_name = self.gripper_addresses['training']
+            self.connect_to_gripper(address, port, full_name)
+        else:
+            # otherwise we need to wait for a training type gripper to be discovered.
+            self.to_ui_q.put({'visible_message': 'Turn on the training wand with a connected gripper.'})
+
+        # either way await the connection being ready.
         self.accept_connection_from_training_gripper = True
+        print('waiting for connection to training gripper')
         await self.gripper_client_connected.wait()
 
-        # Command the training gripper into training mode.
-        # This causes it to connect to the training wand over BT and forward control inputs to us.
-        # Confirm we are reciving them before proceeding.
-        self.gripper_client.training_inputs_received.clear()
-        await self.gripper_client.send_commands({'training_mode': True})
-        await self.gripper_client.training_inputs_received.wait()
-
         print('Initializing LeRobot Dataset')
+        # this will require having run 'huggingface-cli login' in the same terminal and virtualenv
         self.le_dataset = LeRobotDatasetCollector(datastore=self.datastore, posi=self.pe)
         self.le_dataset.start_recording('naavox/stringman-practice-dataset')
 
@@ -396,12 +403,23 @@ class AsyncObserver:
         self.to_ui_q.put({'visible_message': 'Training wand connected successfully. Press episode button to begin'})
 
     async def stop_training_mode(self):
+        self.to_ui_q.put({'visible_message': 'When leaving training mode, please store the training wand out of sight of the anchor cams.'})
+        if self.le_dataset is not None:
+            print('closing training dataset')
+            self.le_dataset.close()
+
         if self.gripper_client is not None:
             await self.gripper_client.shutdown()
-        self.gripper_client = None
+            self.gripper_client = None
         self.gripper_client_connected.clear()
+
+        if self.gripper_addresses['standard'] is not None:
+            # if the standard gripper had already been discovered and is still online, reconnect to it immediately.
+            address, port, full_name = self.gripper_addresses['standard']
+            self.connect_to_gripper(address, port, full_name)
+        
+        # set the flag that causes us to connect to the next standard type gripper to be discovered if necessary
         self.accept_connection_from_training_gripper = False
-        await self.gripper_client_connected.wait()
 
     async def half_auto_calibration(self):
         """Optimize zero angles from a few points
@@ -617,7 +635,7 @@ class AsyncObserver:
             if state_change is ServiceStateChange.Added:
                 asyncio.create_task(self.add_service(zeroconf, service_type, name))
             if state_change is ServiceStateChange.Removed:
-                asyncio.create_task(self.remove_service(zeroconf, service_type, name))
+                asyncio.create_task(self.remove_service(service_type, name))
             elif state_change is ServiceStateChange.Updated:
                 pass
 
@@ -635,8 +653,10 @@ class AsyncObserver:
         address = socket.inet_ntoa(info.addresses[0])
         name_component = name.split('.')[1]
 
-        is_power_anchor = name_component == cranebot_anchor_power_service_name
-        is_standard_anchor = name_component == cranebot_anchor_service_name
+        is_power_anchor = name_component == anchor_power_service_name
+        is_standard_anchor = name_component == anchor_service_name
+        is_training_gripper = name_component == training_gripper_service_name
+        is_standard_gripper = name_component == gripper_service_name
 
         if is_power_anchor or is_standard_anchor:
             # the number of anchors is decided ahead of time (in main.py)
@@ -670,36 +690,29 @@ class AsyncObserver:
             print('appending anchor client to list and starting server')
             asyncio.create_task(ac.startup())
 
-        elif name_component == cranebot_gripper_service_name:
-            # accept a gripper connection from the correct gripper
-            if self.accept_connection_from_training_gripper:
-                # we want to connect to the gripper designated for training use.
-                # if a training gripper has never been seen before, and this one 
-                if self.config.training_gripper_id == '':
-                    self.config.training_gripper_id = info.server
-                    self.config.write()
-                elif self.config.training_gripper_id != info.server:
-                    print(f'accepting only gripper connects from known training gripper {self.config.installed_gripper_id} so {info.server} is being ignored')
-                    return
-                print(f'Connecting to "{info.server}" as training gripper')
+        elif is_training_gripper or is_standard_gripper:
+            # a gripper has been discovered. store the address and port
+            key = 'standard' if is_standard_gripper else 'training'
+            self.gripper_addresses[key] = (address, info.port, info.server)
+
+
+            # if it is the type we want to be connected to right now, connect immediately.
+            if self.accept_connection_from_training_gripper == is_training_gripper:
+                print(f'Connecting to "{info.server}" as {key} gripper')
+                assert(self.gripper_client is None)
+                self.connect_to_gripper(address, info.port, info.server)
             else:
-                # we want to connect to the gripper designated for standard use
-                if self.config.installed_gripper_id == '':
-                    # if an installed gripper has never been seen before, assume this one is the installed gripper an save it to the config
-                    self.config.installed_gripper_id = info.server
-                    self.config.write()
-                elif self.config.installed_gripper_id != info.server:
-                    print(f'accepting only gripper connects from known installed gripper {self.config.installed_gripper_id} so {info.server} is being ignored')
-                    return
-                print(f'Connecting to "{info.server}" as standard gripper')
+                print(f'Ignored "{info.server}" because it is not the type we want.')
 
-            gc = RaspiGripperClient(address, info.port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
-            gc.connection_established_event = self.gripper_client_connected
-            self.bot_clients[info.server] = gc
-            self.gripper_client = gc
-            asyncio.create_task(gc.startup())
+    def connect_to_gripper(self, address, port, key):
+        gc = RaspiGripperClient(address, port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
+        self.gripper_client_connected.clear()
+        gc.connection_established_event = self.gripper_client_connected
+        self.bot_clients[key] = gc
+        self.gripper_client = gc
+        asyncio.create_task(gc.startup())
 
-    async def remove_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+    async def remove_service(self, service_type: str, name: str) -> None:
         """
         Finds if we have a client connected to this service. if so, ends the task if it is running, and deletes the client
         """
@@ -708,14 +721,21 @@ class AsyncObserver:
         key  = ".".join(namesplit[:3])+'.'
         print(f'Removing service {key} from {self.bot_clients.keys()}')
 
+        # only in this dict if we are connected to it.
         if key in self.bot_clients:
             client = self.bot_clients[key]
             await client.shutdown()
-            if name_component == cranebot_anchor_service_name:
+            if name_component == anchor_service_name or name_component == anchor_power_service_name:
                 self.anchors.remove(client)
-            elif name_component == cranebot_gripper_service_name:
+            elif name_component == gripper_service_name or name_component == training_gripper_service_name:
                 self.gripper_client = None
             del self.bot_clients[key]
+
+        # regardless of whether we were connected to it, remove grippers from this address book if they are gone.
+        if name_component == gripper_service_name:
+            self.gripper_addresses['standard'] = None
+        elif name_component == training_gripper_service_name:
+            self.gripper_addresses['training'] = None
 
     async def main(self) -> None:
         POOL_PROCESSES = 8

@@ -261,6 +261,8 @@ class RobotComponentServer:
         # thread for controlling stepper motor
         spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
 
+        # Call a function which subclasses implement to start tasks at startup that should remain running even if clients disconnect.
+        # tasks started this way should run only while self.run_server is true
         self.startOtherTasks()
 
         async with websockets.serve(self.handler, "0.0.0.0", port):

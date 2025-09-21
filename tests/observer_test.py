@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import asyncio
 import unittest
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, ANY
 from multiprocessing import Pool, Queue
 import numpy as np
 from observer import AsyncObserver
@@ -36,7 +36,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         ], dtype=float)
 
         self.patchers = []
-        self.watchable_event = asyncio.Event()
+        self.watchable_startup_event = asyncio.Event()
+        self.watchable_shutdown_event = asyncio.Event()
 
         self.mock_pe_class = Mock(spec=Positioner2)
         self.mock_pe = self.mock_pe_class.return_value
@@ -48,16 +49,15 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
         self.mock_gripper_client_class = Mock(spec=RaspiGripperClient)
         self.mock_gripper_client = self.mock_gripper_client_class.return_value
-        self.mock_gripper_client.startup = self.watchable_routine
-        self.mock_gripper_client.shutdown = self.watchable_routine
-        self.mock_gripper_client.send_commands = self.mock_send_commands
-        self.commands_sent = None
+        self.mock_gripper_client.startup = self.event_startup
+        self.mock_gripper_client.shutdown = self.event_shutdown
+        self.mock_gripper_client.connection_established_event = asyncio.Event()
         self.patchers.append(patch('observer.RaspiGripperClient', self.mock_gripper_client_class))
 
         self.mock_anchor_client_class = Mock(spec=RaspiAnchorClient)
         self.mock_anchor_client = self.mock_anchor_client_class.return_value
-        self.mock_anchor_client.startup = self.watchable_routine
-        self.mock_anchor_client.shutdown = self.watchable_routine
+        self.mock_anchor_client.startup = self.event_startup
+        self.mock_anchor_client.shutdown = self.event_shutdown
         self.patchers.append(patch('observer.RaspiAnchorClient', self.mock_anchor_client_class))
 
         for p in self.patchers:
@@ -81,11 +81,14 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         for p in self.patchers:
             p.stop()
 
-    async def watchable_routine(self):
-        self.watchable_event.set()
+    async def event_startup(self):
+        print('gripper client startup called')
+        self.mock_gripper_client.connection_established_event.set()
+        self.watchable_startup_event.set()
 
-    async def mock_send_commands(self, c):
-        self.commands_sent = c
+    async def event_shutdown(self):
+        print('gripper client shutdown called')
+        self.watchable_shutdown_event.set()
 
     async def test_startup_shutdown(self):
         self.assertFalse(self.ob_task.done())
@@ -111,28 +114,20 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         await self.advertise_service(f"123.cranebot-gripper-service.test", "_http._tcp.local.", 8765)
         # by default zeroconf checks for advertized services every 10 seconds
         # so if the timeout is raised, then it means observer didn't discover the service.
-        await asyncio.wait_for(self.watchable_event.wait(), 10)
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
         self.assertFalse(self.ob_task.done())
         self.assertTrue(self.ob.gripper_client is not None)
 
     async def test_training_mode(self):
         self.ob.calmode = 'training'
-        # add additional events to gripper client mock that are expected to exist by the observer
-        self.mock_gripper_client.connection_established_event = asyncio.Event()
-        self.mock_gripper_client.training_inputs_received = asyncio.Event()
-        # advertise a service on localhost matching the training gripper name in tests/configuration.json
-        await self.advertise_service(f"123.cranebot-gripper-service.train", "_http._tcp.local.", 8765)
+        # advertise a service on localhost matching the training gripper name
+        await self.advertise_service(f"123.cranebot-training-gripper-service.test", "_http._tcp.local.", 8765)
         # Run the method under test
         task = asyncio.create_task(self.ob.start_training_mode())
         # wait for connection
-        await asyncio.wait_for(self.watchable_event.wait(), 11)
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 11)
         # now the observer is going to be waiting for the gripper client to set gc.connection_established_event
         self.mock_gripper_client.connection_established_event.set()
-        await asyncio.sleep(0.1)
-        # expect the mock gripper client to have been asked to send certain commands
-        self.assertEqual(self.commands_sent, {'training_mode': True})
-        # observer is now waiting on this event
-        self.mock_gripper_client.training_inputs_received.set()
         await asyncio.sleep(0.1)
         #observer should now have an initialized lerobot dataset instance.
         # start an episode
@@ -150,10 +145,42 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # delete this so the async_close function in observer won't try to upload it to huggingface in a unit test
         self.ob.le_dataset = None
 
+    async def test_gripper_switch(self):
+        """Test changing from the standard gripper to the training gripper when both have already been discovered."""
+        
+        # start with a situation where the observer discovers both and connects to the standard gripper.
+        self.ob.calmode = 'pause'
+        # there is only one mock gripper client and only one instance of the client class should be used at a time by observer.
+        # advertise a service for both types of gripper
+        await self.advertise_service(f"123.cranebot-gripper-service.test", "_http._tcp.local.", 8765)
+        await self.advertise_service(f"123.cranebot-training-gripper-service.test", "_http._tcp.local.", 8766)
+        # wait for connection
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 11)
+        # assert which gripper it connected to by looking at the port send to the constructor
+        self.mock_gripper_client_class.assert_called_with(ANY, 8765, ANY, ANY, ANY, ANY, ANY, ANY)
+        # now the observer is going to be waiting for the gripper client to set gc.connection_established_event
+        self.mock_gripper_client.connection_established_event.set()
+        await asyncio.sleep(0.1)
+
+        # now place the observer in training mode and expect that it immediately disconnects from the standard gripper and connects to the training one.
+        print('Changing observer mode to training')
+        self.ob.set_run_mode('training')
+        task = asyncio.create_task(self.ob.start_training_mode())
+        # await asyncio.wait_for(self.watchable_shutdown_event.wait(), 1)
+        self.watchable_startup_event.clear()
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 1)
+        # assert which gripper it connected to by looking at the port send to the constructor
+        self.mock_gripper_client_class.assert_called_with(ANY, 8766, ANY, ANY, ANY, ANY, ANY, ANY)
+        await asyncio.sleep(0.1)
+        self.assertFalse(self.ob_task.done())
+        self.assertTrue(self.ob.gripper_client is not None)
+        self.assertTrue(task.done())
+
+
     async def test_anchor_connect_familiar(self):
         """Confirm that we can connnect to an anchor that advertises a name we recognize from our configuration"""
         await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
-        await asyncio.wait_for(self.watchable_event.wait(), 10)
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
         self.assertFalse(self.ob_task.done())
         self.assertEqual(len(self.ob.anchors), 1)
 
@@ -163,7 +190,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         all we are confirming here is that if the MDNS advertisement for the services goes down and back up, that we start the client task again.
         """
         info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
-        await asyncio.wait_for(self.watchable_event.wait(), 10)
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
         self.assertFalse(self.ob_task.done())
         self.assertEqual(len(self.ob.anchors), 1)
 
@@ -172,11 +199,11 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.ob.anchors), 0)
         print('observer removed anchor client correctly, re-advertising service')
 
-        self.watchable_event.clear()
+        self.watchable_startup_event.clear()
         await asyncio.sleep(0.01) # it is necessary to reliquish control of the event loop after calling clear or it may not have the intended effect
 
         info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
-        await asyncio.wait_for(self.watchable_event.wait(), 10)
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
         self.assertEqual(len(self.ob.anchors), 1)
 
     async def test_wait_for_tension(self):
