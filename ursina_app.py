@@ -42,15 +42,14 @@ video_latency_format_str = 'Video latency {val:.2f} s'
 video_framerate_format_str = 'Avg framerate {val:.2f} fps'
 estimate_age_format_str = 'Position est. latency {val:.2f} s'
 
-ds = 0.1 # direct movement speed in meters per second
 key_behavior = {
     # key: (axis, speed)
-    'a': (0, -ds),
-    'd': (0, ds),
-    'w': (1, ds),
-    's': (1, -ds),
-    'q': (2, -ds),
-    'e': (2, ds),
+    'a': (0, -1),
+    'd': (0, 1),
+    'w': (1, 1),
+    's': (1, -1),
+    'q': (2, -1),
+    'e': (2, 1),
 
     'a up': (0, 0),
     'd up': (0, 0),
@@ -560,6 +559,9 @@ class ControlPanelUI:
             # (anchor_num, (rvec, tvec))
             for anum, pose in o_poses:
                 self.origin_cards.add(partial(update_origin_card, anum, pose))
+
+        if 'last_commanded_vel' in updates:
+            self.dmgt.last_commanded_vel = updates['last_commanded_vel']
 
     def start(self):
         self.app.run()

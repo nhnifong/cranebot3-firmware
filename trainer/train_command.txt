@@ -6,3 +6,10 @@ lerobot-train \
 python -m lerobot.datasets.v2.convert_dataset_v1_to_v2 \
     --repo-id naavox/four-cluttre-dataset \
     --single-task "pick up socks and place them in a pile."
+
+python -m lerobot.scripts.visualize_dataset \
+    --repo-id lerobot/pusht \
+    --root ./my_local_data_dir \
+    --episode-index 0
+
+    "wrist_camera": {"shape": (image_size[0], image_size[1], 3), "dtype": "uint8"}, # 1/4 of native camera resolution

@@ -561,6 +561,10 @@ class IndicatorSphere(Entity):
         self.position = swap_yz(self.zup_pos)
         self.last_update_t = now
 
+# consider completely removing this Entity.
+# move input handling and sending of the gantry_dir_sp message somewhere else.
+# make the commanded velocity indicator work like the visual position indicator.
+# as it is now this is not even an accurate visualization of what velocity is being commanded.
 class DirectMoveGantryTarget(Entity):
     """A visual indicator and manager of gantry direct movement commands"""
 
@@ -572,49 +576,32 @@ class DirectMoveGantryTarget(Entity):
             scale=(0.1),
             shader=unlit_shader)
         self.app = app
-        self.speed = 0.1
-
-        # expected seconds of latency between when we calculate a movement and when the anchors start to act on it.
-        self.latency = 0.05
-
-        self.last_move_start_pos = None # numpy array in z-up coordinate space
-        self.last_move_start_time = None # float seconds since epoch
-        self.last_move_duration = None # float seconds
-        self.last_move_vec = None # numpy array in z-up coordinate space
+        self.speed = 0.25
+        self.last_update_t = time.time()
 
         # game pad analog movement vector (left stick and triggers)
         self.analog_dir = [0,0,0]
 
-
-    def estimatePosition(self, t):
-        """Estimate the gantry's position at the given time and the last length plan sent"""
-        elapsed_time = t - self.last_move_start_time
-        if elapsed_time <= 0:
-            return self.last_move_start_pos
-        elif elapsed_time >= self.last_move_duration:
-            # If the time is after the move ended, the position is the end position
-            return self.last_move_start_pos + self.last_move_vec
-        else:
-            # Calculate the fraction of the move that has been completed
-            fraction_complete = elapsed_time / self.last_move_duration
-            # Estimate the current position by interpolating along the move vector
-            return self.last_move_start_pos + self.last_move_vec * fraction_complete
+        # last actual commanded gantry velocity from observer in z-up coordinate space
+        self.last_commanded_vel = np.zeros(3)
 
     def reset(self):
         self.last_move_vec = None
 
-    def direct_move(self, speed=0.3):
+    def direct_move(self, speed=0.25):
         """
         Send speeds that would move the gantry in a straight line
         from where it is, towards the indicated goal point, at the given speed.
         positions are given in z-up coordinate system.
         """
         if sum(self.analog_dir) != 0:
+            # game pad controller
             vector = np.array(self.analog_dir)
             mag = np.linalg.norm(vector)
             vector = vector / mag
-            speed = mag / 4
+            speed = mag * speed
         elif sum(self.app.direction) != 0:
+            # keyboard
             vector = self.app.direction
             vector = vector / np.linalg.norm(vector)
         else:
@@ -628,63 +615,25 @@ class DirectMoveGantryTarget(Entity):
             }
         })
 
-    def direct_move_via_plan(self, speed=0.1):
-        """
-        Send planned line lengths to the robot that would move the gantry in a straight line
-        from where it is, to the indicated goal point, at the given speed.
-        positions are given in z-up coordinate system.
-        """
-        now = time.time()
-        expected_rcv_time = now + self.latency
-        goal = np.array(swap_yz(self.position))
-
-        if self.last_move_vec is None:
-            self.last_move_start_pos = np.array(swap_yz(self.app.gantry.position))
-        else:
-            self.last_move_start_pos = self.estimatePosition(expected_rcv_time)
-        self.last_move_start_time = expected_rcv_time
-        self.last_move_vec = goal - self.last_move_start_pos
-        self.last_move_duration = np.linalg.norm(self.last_move_vec) / speed # seconds
-
-        print(f'Direct move vector {self.last_move_vec}')
-
-        # calculate regular intervals
-        intervals = np.linspace(0, 1, 6, dtype=np.float64).reshape(-1, 1)
-        # where we want the gantry to be at the time intervals
-        gantry_positions = self.last_move_vec * intervals + self.last_move_start_pos
-        print(f'first gant pos = {gantry_positions[0]}')
-        # represent as absolute times
-        times = intervals * self.last_move_duration + self.last_move_start_time
-        # find the anchor line lengths if the gantry were at those positions
-        # format as an array of times and lengths, one array for each anchor
-        future_anchor_lines = np.array([
-            np.column_stack([
-                times,
-                np.linalg.norm(gantry_positions - np.array(swap_yz(a.position)), axis=1)])
-            for a in self.app.anchors])
-        # send it
-        self.app.to_ob_q.put({
-            'future_anchor_lines': {
-                'sender':'ui',
-                'data':future_anchor_lines,
-                'host_time': now,
-            }
-        })
+        self.speed = speed # in meters per second
 
     def update(self):
-
         # these are available from the update function of any enabled entity
         net_trigger  = held_keys['gamepad right trigger'] - held_keys['gamepad left trigger']
         self.analog_dir = [held_keys['gamepad left stick x'], held_keys['gamepad left stick y'], net_trigger]
 
-        # update the indicated goal position for gantry
+        # update the indicated direct move (cyan ball)
+        now = time.time()
+        elapsed = now - self.last_update_t
         p = self.position
         p += Vec3(
-            self.app.direction[0] * self.speed,
-            self.app.direction[2] * self.speed,
-            self.app.direction[1] * self.speed,
+            self.last_commanded_vel[0] * elapsed,
+            self.last_commanded_vel[2] * elapsed,
+            self.last_commanded_vel[1] * elapsed,
         )
         self.position = p
         # self.enabled = (sum(self.app.direction) > 0)
+
+        self.last_update_t = now
 
         
