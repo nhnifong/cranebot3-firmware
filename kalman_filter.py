@@ -47,39 +47,48 @@ class KalmanFilter:
         self.state_covariance = state_transition_matrix @ self.state_covariance @ state_transition_matrix.T + self.process_noise_covariance
         self.model_time += delta_time
 
-    def update(self, position, measurement_time, sensor_name, sensor_noise_covariance):
-        """Update the state estimate with a new measurement and its timestamp."""
-        assert(position.shape == (3,))
+    def update(self, measurement_vector, measurement_time, sensor_noise_covariance, measurement_type, sensor_name=None):
+        """
+        Update the state estimate with a new measurement.
+        measurement_type can be 'position' or 'velocity'.
+        """
+        assert(measurement_vector.shape == (3,))
         
-        # Determine the index for the sensor's bias in the state vector
-        sensor_idx = self.sensor_names.index(sensor_name)
-        bias_start_idx = 6 + 3 * sensor_idx
-
-        # Define the measurement matrix for this specific sensor
         measurement_matrix = np.zeros((3, self.state_size))
-        # H maps from the state to the measurement (position + bias)
-        measurement_matrix[0, 0] = 1.0  # x_measured = x_true + bias_x
-        measurement_matrix[1, 1] = 1.0  # y_measured = y_true + bias_y
-        measurement_matrix[2, 2] = 1.0  # z_measured = z_true + bias_z
-        measurement_matrix[0, bias_start_idx] = 1.0
-        measurement_matrix[1, bias_start_idx + 1] = 1.0
-        measurement_matrix[2, bias_start_idx + 2] = 1.0
         
+        if measurement_type == 'position':
+            # Position measurement matrix includes position and bias
+            assert sensor_name is not None, "sensor_name is required for position updates."
+            sensor_idx = self.sensor_names.index(sensor_name)
+            bias_start_idx = 6 + 3 * sensor_idx
+            measurement_matrix[0, 0] = 1.0
+            measurement_matrix[1, 1] = 1.0
+            measurement_matrix[2, 2] = 1.0
+            measurement_matrix[0, bias_start_idx] = 1.0
+            measurement_matrix[1, bias_start_idx + 1] = 1.0
+            measurement_matrix[2, bias_start_idx + 2] = 1.0
+        
+        elif measurement_type == 'velocity':
+            # Velocity measurement matrix only includes velocity
+            measurement_matrix[0, 3] = 1.0
+            measurement_matrix[1, 4] = 1.0
+            measurement_matrix[2, 5] = 1.0
+
+        else:
+            raise ValueError("Invalid measurement_type. Must be 'position' or 'velocity'.")
+            
         # Retrodict (propagate backwards) from current state to measurement time
         delta_time = self.model_time - measurement_time
-        
-        # Retro-propagation state transition matrix (F_inv_exact)
         state_transition_matrix_retro = np.eye(self.state_size)
         state_transition_matrix_retro[0, 3] = -delta_time
         state_transition_matrix_retro[1, 4] = -delta_time
         state_transition_matrix_retro[2, 5] = -delta_time
         
-        # State and covariance at the measurement timestamp
         state_at_meas_time = state_transition_matrix_retro @ self.state_estimate
         cov_at_meas_time = state_transition_matrix_retro @ self.state_covariance @ state_transition_matrix_retro.T
         
         # Perform standard update step at the measurement time
-        innovation = position - measurement_matrix @ state_at_meas_time
+        innovation = measurement_vector - measurement_matrix @ state_at_meas_time
         innovation_covariance = measurement_matrix @ cov_at_meas_time @ measurement_matrix.T + sensor_noise_covariance
         kalman_gain = cov_at_meas_time @ measurement_matrix.T @ np.linalg.inv(innovation_covariance)
         
@@ -118,3 +127,34 @@ class KalmanFilter:
         
         self.state_estimate = self.state_estimate + kalman_gain @ innovation
         self.state_covariance = (np.eye(self.state_size) - kalman_gain @ perfect_measurement_matrix) @ self.state_covariance
+
+    def enforce_bias_constraint(self, constraint_strength=0.01):
+        """
+        Applies a pseudo-measurement to enforce that the sum of all sensor biases
+        is approximately zero.
+        """
+        # A pseudo-measurement of zero
+        measurement_vector = np.zeros(3)
+        
+        # The measurement noise covariance matrix for the constraint.
+        # A smaller value means a stronger constraint.
+        sensor_noise_covariance = np.eye(3) * constraint_strength
+
+        # Construct the measurement matrix H for the bias sum constraint
+        measurement_matrix = np.zeros((3, self.state_size))
+        for i in range(self.num_sensors):
+            # The columns corresponding to each sensor's bias
+            bias_start_idx = 6 + 3 * i
+            measurement_matrix[0, bias_start_idx] = 1.0
+            measurement_matrix[1, bias_start_idx + 1] = 1.0
+            measurement_matrix[2, bias_start_idx + 2] = 1.0
+
+        # Perform the standard Kalman update using this pseudo-measurement
+        # Use the current state and covariance, since this is an immediate update
+        innovation = measurement_vector - measurement_matrix @ self.state_estimate
+        innovation_covariance = measurement_matrix @ self.state_covariance @ measurement_matrix.T + sensor_noise_covariance
+        
+        kalman_gain = self.state_covariance @ measurement_matrix.T @ np.linalg.inv(innovation_covariance)
+        
+        self.state_estimate = self.state_estimate + kalman_gain @ innovation
+        self.state_covariance = (np.eye(self.state_size) - kalman_gain @ measurement_matrix) @ self.state_covariance

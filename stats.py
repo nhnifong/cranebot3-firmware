@@ -11,14 +11,14 @@ class StatCounter:
         self.framerate = []
         self.last_update = time.time()
         self.run = True
+        self.mean_latency = 0
 
     async def stat_main(self):
         while self.run:
             now = time.time()
             elapsed = now-self.last_update
-            mean_latency = 0
             if len(self.latency) > 0:
-                mean_latency = np.mean(np.array(self.latency))
+                self.mean_latency = np.mean(np.array(self.latency))
             mean_framerate = 0
             if len(self.framerate) > 0:
                 mean_framerate = np.mean(np.array(self.framerate))
@@ -29,7 +29,7 @@ class StatCounter:
             self.detection_count = 0
             self.to_ui_q.put({'vid_stats':{
                 'detection_rate':detection_rate,
-                'video_latency':mean_latency,
+                'video_latency':self.mean_latency,
                 'video_framerate':mean_framerate,
                 'pending_frames': self.pending_frames_in_pool,
                 }})

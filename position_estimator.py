@@ -349,10 +349,12 @@ class Positioner2:
 
         self.last_visual_cutoff = time.time()
 
-        visual_noise_std_dev=0.08
+        visual_noise_std_dev=0.05
         self.visual_noise_covariance = np.diag([visual_noise_std_dev**2] * 3)
-        hang_noise_std_dev=0.005
+        hang_noise_std_dev=0.02
         self.hang_noise_covariance = np.diag([hang_noise_std_dev**2] * 3)
+        vel_std_dev=0.08
+        self.vel_noise_covariance = np.diag([vel_std_dev**2] * 3)
 
         # Initialize the Kalman filter with floats
         initial_estimate = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -367,6 +369,10 @@ class Positioner2:
 
         # variables related to training process
         self.training_mode = False
+
+        # last commanded gantry velocity.
+        self.commanded_vel = np.zeros(3)
+        self.commanded_vel_ts = time.time()
 
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
@@ -500,8 +506,11 @@ class Positioner2:
             for measurement in data:
                 timestamp = measurement[0]
                 anchor_num = int(measurement[1])
-                self.visual_pos = measurement[2:]
-                self.kf.update(self.visual_pos, timestamp, self.sensor_names[anchor_num], self.visual_noise_covariance)
+                this_visual_pos = measurement[2:]
+                self.kf.update(this_visual_pos, timestamp, self.visual_noise_covariance, 'position', self.sensor_names[anchor_num])
+
+                # average this visual position into self.visual_pos. this is purely for the UI
+                self.visual_pos = self.visual_pos * 0.9 + this_visual_pos * 0.1
 
             self.visual_time_taken = time.time()-start_time
 
@@ -539,8 +548,10 @@ class Positioner2:
             if result is not None:
                 self.hang_pos, self.slack_lines = result
                 # update kalman filter with this position
-                self.kf.update(self.hang_pos, data_ts, self.sensor_names[-1], self.hang_noise_covariance)
+                self.kf.update(self.hang_pos, data_ts, self.hang_noise_covariance, 'position', self.sensor_names[-1])
                 self.data_ts = data_ts
+
+            self.kf.enforce_bias_constraint()
 
             # optional hang velocity (unreviewed)
             # if sum(speeds) == 0:
@@ -562,6 +573,20 @@ class Positioner2:
             #         self.hang_vel = self.hang_vel / increment
 
             self.hang_time_taken = time.time()-start_time
+
+    def record_commanded_vel(self, vel):
+        self.commanded_vel = vel
+        self.commanded_vel_ts = time.time()
+
+    async def update_commanded_vel(self):
+        """provide an observation to the filter based on the commanded velocity"""
+        while self.run:
+            if self.training_mode:
+                # in this mode disregard lines because we are only observing the training wand markers
+                await asyncio.sleep(1)
+                continue
+            self.kf.update(self.commanded_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
+            await asyncio.sleep(1/30)
 
     def update_swing(self):
         # get the last IMU reading from the gripper, take only the z axis
@@ -625,6 +650,8 @@ class Positioner2:
                 predict_task = tg.create_task(self.predict_forwards())
                 visual_task = tg.create_task(self.update_visual())
                 hang_task = tg.create_task(self.update_hang())
+                comv_task = tg.create_task(self.update_commanded_vel())
+                
         except asyncio.exceptions.CancelledError:
             pass
         print('All position estimator tasks finished')

@@ -339,6 +339,7 @@ class AsyncObserver:
         for name, client in self.bot_clients.items():
             # Slow stop all spools. gripper too
             asyncio.create_task(client.slow_stop_spool())
+        self.pe.record_commanded_vel(np.zeros(3))
 
     def set_run_mode(self, mode):
         """
@@ -421,6 +422,32 @@ class AsyncObserver:
         # set the flag that causes us to connect to the next standard type gripper to be discovered if necessary
         self.accept_connection_from_training_gripper = False
 
+    async def locate_anchors(self):
+        """using the record of recent origin detections, estimate the pose of each anchor."""
+        MIN_ORIGIN_OBSERVATIONS = 12
+        
+        if len(self.anchors) != N_ANCHORS:
+            print(f'anchor pose calibration should not be performed until all anchors are connected. len(anchors)={len(self.anchors)}')
+            return
+        anchor_poses = []
+        for client in self.anchors:
+            if len(client.origin_poses) < MIN_ORIGIN_OBSERVATIONS:
+                print(f'Too few origin observations ({len(client.origin_poses)}) from anchor {client.anchor_num}')
+                continue
+            print(f'locating anchor {client.anchor_num} from {len(client.origin_poses)} detections')
+            app = average_pose(client.origin_poses)
+            print(f'average origin pose {app}')
+            pose = np.array(invert_pose(compose_poses([
+                model_constants.anchor_camera,
+                app,
+                model_constants.room_relative_to_origin_card,
+            ])))
+            print(f'pose {pose}')
+            assert pose is not None
+            self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
+            anchor_poses.append(pose)
+        return np.array(anchor_poses)
+
     async def half_auto_calibration(self):
         """Optimize zero angles from a few points
         This is a motion task"""
@@ -452,9 +479,7 @@ class AsyncObserver:
         DETECTION_WAIT_S = 1.0 # seconds
         STABILIZATION_WAIT_S = 12.0 # seconds
         SET_LENGTHS_WAIT_S = 1.0 # seconds
-        BOUNDING_BOX_SCALE = 0.6
-        Z_SHIFT = 0.2 # meters
-        FLOOR_Z_OFFSET = 0.4 # meters
+        BOUNDING_BOX_SCALE = 0.5
         GRID_STEPS_X = 3j
         GRID_STEPS_Y = 3j
         GRID_STEPS_Z = 2j
@@ -506,21 +531,20 @@ class AsyncObserver:
             lengths = np.linalg.norm(anchor_points - position, axis=1)
             print(f'Line lengths from coarse calibration ={lengths}')
             await self.sendReferenceLengths(lengths)
-            return
             await asyncio.sleep(SET_LENGTHS_WAIT_S)
 
             # Determine the bounding box of the work area and shrink it to stay away from the walls and ceiling
             min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0) * BOUNDING_BOX_SCALE
             max_x, max_y, _ = np.max(anchor_points, axis=0) * BOUNDING_BOX_SCALE
-            floor_z = FLOOR_Z_OFFSET - Z_SHIFT
-            max_gantry_z = min_anchor_z - Z_SHIFT
-            print(f'Maximum allowed height of gantry sample point {max_gantry_z}')
+            min_z = 0.8
+            max_z = 1.2
+            print(f'Maximum allowed height of gantry sample point {max_z}')
 
             # make a polygon of the exact work area so we can test if points are inside it
             contour = anchor_points[:,0:2].astype(np.float32)
 
             # use an orderly grid of sample points
-            sample_points = np.mgrid[min_x:max_x:GRID_STEPS_X, min_y:max_y:GRID_STEPS_Y, floor_z:max_gantry_z:GRID_STEPS_Z].reshape(3, -1).T
+            sample_points = np.mgrid[min_x:max_x:GRID_STEPS_X, min_y:max_y:GRID_STEPS_Y, min_z:max_z:GRID_STEPS_Z].reshape(3, -1).T
 
             # choose an ordering of the points that results in a low travel distance
             sample_points, distance = order_points_for_low_travel(sample_points)
@@ -558,6 +582,7 @@ class AsyncObserver:
         SETTLING_TIME_S = 1.5 # seconds
         OBSERVATION_COLLECTION_TIME_S = 6.0 # seconds
         MIN_TOTAL_GANTRY_OBSERVATIONS = 3
+        IDEAL_GANTRY_OBSERVATIONS = 40
         
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
         # not the poses in self.datastore.gantry_pos so we set a flag in the anchor clients that cause them to save that
@@ -576,8 +601,8 @@ class AsyncObserver:
             # move to a position.
             print(f'Moving to point {i+1}/{len(sample_points)} at {point}')
             self.gantry_goal_pos = point
-            await self.blind_move_to_goal()
-            # await self.seek_gantry_goal()
+            # await self.blind_move_to_goal()
+            await self.seek_gantry_goal()
 
             # integration-test specific behavior
             if self.test_gantry_goal_callback is not None:
@@ -585,7 +610,7 @@ class AsyncObserver:
 
             # reel in all lines until they are tight
             await self.tension_and_wait()
-            await asyncio.sleep(SETTLING_TIME_S)
+            await asyncio.sleep(self.stat.mean_latency)
             cutoff = time.time()
 
             # collect several visual observations of the gantry from each camera
@@ -593,7 +618,8 @@ class AsyncObserver:
             # clear old observations
             for client in self.anchors:
                 client.raw_gant_poses = []
-            await asyncio.sleep(OBSERVATION_COLLECTION_TIME_S)
+            while sum([len(client.raw_gant_poses) for client in self.anchors]) < IDEAL_GANTRY_OBSERVATIONS:
+                await asyncio.sleep(0.1)
 
             v = [client.raw_gant_poses for client in self.anchors]
             # many positions are not visible to all four cameras,
@@ -953,7 +979,7 @@ class AsyncObserver:
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
         This is a motion task
         """
-        GOAL_PROXIMITY_M = 0.05 # meters
+        GOAL_PROXIMITY_M = 0.07 # meters
         GANTRY_SPEED_MPS = 0.2 # m/s
         LOOP_SLEEP_S = 0.2 # seconds
         
@@ -1021,6 +1047,10 @@ class AsyncObserver:
         # apply downward bias and renormalize
         uvec = uvec + np.array([0,0,DOWNWARD_BIAS_Z])
         uvec  = uvec / np.linalg.norm(uvec)
+        velocity = uvec * speed
+
+        self.to_ui_q.put({'last_commanded_vel': velocity})
+        self.pe.record_commanded_vel(velocity)
 
         anchor_positions = np.zeros((4,3))
         for a in self.anchors:
@@ -1034,8 +1064,8 @@ class AsyncObserver:
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # line lengths at new pos
-        starting_pos = starting_pos + (uvec / KINEMATICS_STEP_SCALE)
-        lengths_b = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
+        new_pos = starting_pos + (uvec / KINEMATICS_STEP_SCALE)
+        lengths_b = np.linalg.norm(new_pos - self.pe.anchor_points, axis=1)
         # length changes needed to travel a small distance in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
         line_speeds = deltas * KINEMATICS_STEP_SCALE * speed
