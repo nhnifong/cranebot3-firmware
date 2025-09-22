@@ -30,7 +30,7 @@ import model_constants
 import traceback
 import cv2
 import pickle
-from dataset_collector import LeRobotDatasetCollector
+from collections import deque
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -364,7 +364,8 @@ class AsyncObserver:
         """
         The real gantry must be stowed in a high location out of view before this starts. right now the operator is responsible for doing that.
         When the episode button is pressed, the observer must terminate the current dataset episode and begin a new one.
-        """        
+        """
+        from dataset_collector import LeRobotDatasetCollector
         # The anchor cameras remain running and forwarding video but the line_record updates become irrelevant to position estimates.
         # Set a mode flag in the position estimator that makes it ignore them.
         self.pe.training_mode = True
@@ -477,7 +478,7 @@ class AsyncObserver:
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
         DETECTION_WAIT_S = 1.0 # seconds
-        STABILIZATION_WAIT_S = 12.0 # seconds
+        STABILIZATION_WAIT_S = 2.0 # seconds
         SET_LENGTHS_WAIT_S = 1.0 # seconds
         BOUNDING_BOX_SCALE = 0.5
         GRID_STEPS_X = 3j
@@ -579,10 +580,10 @@ class AsyncObserver:
             raise
 
     async def collect_data_at_points(self, sample_points, anchor_poses=None, save_progress=False):
-        SETTLING_TIME_S = 1.5 # seconds
+        SETTLING_TIME_S = 0.5 # seconds
         OBSERVATION_COLLECTION_TIME_S = 6.0 # seconds
         MIN_TOTAL_GANTRY_OBSERVATIONS = 3
-        IDEAL_GANTRY_OBSERVATIONS = 40
+        IDEAL_GANTRY_OBSERVATIONS = 150
         
         # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
         # not the poses in self.datastore.gantry_pos so we set a flag in the anchor clients that cause them to save that
@@ -618,6 +619,7 @@ class AsyncObserver:
             # clear old observations
             for client in self.anchors:
                 client.raw_gant_poses = []
+            await asyncio.sleep(SETTLING_TIME_S)
             while sum([len(client.raw_gant_poses) for client in self.anchors]) < IDEAL_GANTRY_OBSERVATIONS:
                 await asyncio.sleep(0.1)
 
@@ -909,15 +911,21 @@ class AsyncObserver:
         """ Simulate the gantry moving from random point to random point"""
         LOWER_Z_BOUND = 1.0 # meters
         UPPER_Z_OFFSET = 0.3 # meters
-        MAX_SPEED_MPS = 0.2 # m/s
+        MAX_SPEED_MPS = 0.25 # m/s
         GOAL_PROXIMITY_THRESHOLD = 0.03 # meters
         SOFT_SPEED_FACTOR = 0.25
         RANDOM_EVENT_CHANCE = 0.5
-        OBSERVATION_NOISE_STD_DEV = 0.05 # meters
+        CAM_BIAS_STD_DEV = 0.2 # meters
+        OBSERVATION_NOISE_STD_DEV = 0.01 # meters
         WINCH_LINE_LENGTH = 1.0 # meters
         RANGEFINDER_OFFSET = 1.0 # meters
         LOOP_SLEEP_S = 0.05 # seconds
         
+        # each camera produces measurements with a position bias that can be around 20x larger than the position noise from a given camera.
+        cam_bias = np.random.normal(0, CAM_BIAS_STD_DEV, (4, 3))
+
+        pending_obs = deque()
+
         lower = np.min(self.pe.anchor_points, axis=0)
         upper = np.max(self.pe.anchor_points, axis=0)
         lower[2] = LOWER_Z_BOUND
@@ -946,14 +954,22 @@ class AsyncObserver:
                     gantry_real_pos = gantry_real_pos + velocity * elapsed_time
                 if random() > RANDOM_EVENT_CHANCE:
                     anchor_num = np.random.randint(4) # which camera it was observed from.
-                    dp = np.concatenate([[t], [anchor_num], gantry_real_pos + np.random.normal(0, OBSERVATION_NOISE_STD_DEV, (3,))])
-                    self.datastore.gantry_pos.insert(dp)
-                    self.datastore.gantry_pos_event.set()
-                    self.to_ui_q.put({'gantry_observation': dp[1:]})
+                    observed_position = gantry_real_pos + cam_bias[anchor_num] + np.random.normal(0, OBSERVATION_NOISE_STD_DEV, (3,))
+                    dp = np.concatenate([[t], [anchor_num], observed_position])
+                    # simulate delayed data
+                    pending_obs.appendleft(dp)
+                    if len(pending_obs) > 10:
+                        dp = pending_obs.pop()
+                        self.datastore.gantry_pos.insert(dp)
+                        self.datastore.gantry_pos_event.set()
+                        self.to_ui_q.put({'gantry_observation': dp[2:]})
+                
                 # winch line always 1 meter
                 self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
+                
                 # range always perfect
                 self.datastore.range_record.insert(np.array([t, gantry_real_pos[2]-RANGEFINDER_OFFSET]))
+
                 # anchor lines always perfectly agree with gripper position
                 for i, simanc in enumerate(self.pe.anchor_points):
                     dist = np.linalg.norm(simanc - gantry_real_pos)

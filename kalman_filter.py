@@ -26,10 +26,10 @@ class KalmanFilter:
         # Process noise covariance accounts for uncertainty in our model
         # Includes noise for position, velocity, and each bias. Biases are assumed constant.
         q_diag = np.zeros(self.state_size)
-        q_diag[:3] = 0.001  # Position noise
-        q_diag[3:6] = 0.0005 # Velocity noise
-        # Bias noise is small, but not too small, such that over about 1000 observations the position estimate will gravitate towards the mean.
-        q_diag[6:] = 0.01
+        q_diag[:3] = 0.01  # Position noise
+        q_diag[3:6] = 0.005 # Velocity noise
+        # The difference in bias between cameras can be huge, but this small constant reflects the assumtion that the bias is not expected to change much
+        q_diag[6:] = 0.001
         self.process_noise_covariance = np.diag(q_diag)
 
     def predict_present(self):
