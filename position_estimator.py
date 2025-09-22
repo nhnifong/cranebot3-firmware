@@ -349,11 +349,11 @@ class Positioner2:
 
         self.last_visual_cutoff = time.time()
 
-        visual_noise_std_dev=0.05
+        visual_noise_std_dev=0.01
         self.visual_noise_covariance = np.diag([visual_noise_std_dev**2] * 3)
-        hang_noise_std_dev=0.02
+        hang_noise_std_dev=0.005
         self.hang_noise_covariance = np.diag([hang_noise_std_dev**2] * 3)
-        vel_std_dev=0.08
+        vel_std_dev=0.01
         self.vel_noise_covariance = np.diag([vel_std_dev**2] * 3)
 
         # Initialize the Kalman filter with floats
