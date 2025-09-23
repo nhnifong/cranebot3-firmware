@@ -598,6 +598,9 @@ class AsyncObserver:
         print('zero the winch line')
         await self.gripper_client.zero_winch()
 
+        last_hang_position = None
+        last_visual_position = None
+
         print('Collect data at each position')
         # data format is described in docstring of calibration_cost_fn
         # [{'encoders':[0, 0, 0, 0], 'visuals':[[pose, pose, ...], x4]}, ...]
@@ -624,12 +627,11 @@ class AsyncObserver:
             for client in self.anchors:
                 client.raw_gant_poses = []
             await asyncio.sleep(SETTLING_TIME_S)
+            # TODO this loop may never end if the gantry has moved too high to be seen by any camera
             while sum([len(client.raw_gant_poses) for client in self.anchors]) < IDEAL_GANTRY_OBSERVATIONS:
                 await asyncio.sleep(0.1)
 
             v = [client.raw_gant_poses for client in self.anchors]
-            # many positions are not visible to all four cameras,
-            # but to use this calibration point, the gantry must have been oberved at least three times in total.
             if sum([len(poses) for poses in v]) >= MIN_TOTAL_GANTRY_OBSERVATIONS:
                 # save current raw encoder angles and visual observations
                 entry = {
@@ -648,6 +650,22 @@ class AsyncObserver:
                     print("Saving calibration progress to 'collected_cal_data.pickle'...")
                     with open('collected_cal_data.pickle', 'wb') as f:
                         f.write(pickle.dumps((anchor_poses, data)))
+
+                # calculate the consistency error of the most recent move
+                hang_position = self.pe.hang_pos
+                visual_position = self.pe.visual_pos
+                if last_hang_position is not None and last_visual_position is not None:
+                    hang_move = hang_position - last_hang_position
+                    visual_move = visual_position - last_visual_position
+                    move_error = np.linalg.norm(hang_move - visual_move)
+                    print(f'hang and visual moves deviate by {move_error} meters')
+                last_hang_position = hang_position
+                last_visual_position = visual_position
+
+                # params_consistent_with_move(
+                #     starting_pos_visual, ending_pos_visual,
+                #     prev_entry['encoders'], entry['encoders'],
+                #     self.pe.anchor_points)
             else:
                 print(f'Point {point} skipped because gantry could not be observed in that position')
 
