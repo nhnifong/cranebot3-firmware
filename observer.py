@@ -522,7 +522,8 @@ class AsyncObserver:
             await self.tension_and_wait()
             cutoff = time.time()
             print('Collecting observations of gantry now that its still and lines are tight')
-            await asyncio.sleep(STABILIZATION_WAIT_S)
+            while len(self.datastore.gantry_pos.deepCopy(cutoff=cutoff)) < 10:
+                await asyncio.sleep(STABILIZATION_WAIT_S)
 
             # use aruco observations of gantry to obtain initial guesses for zero angles
             # use this information to perform rough movements
@@ -530,6 +531,9 @@ class AsyncObserver:
             position = np.mean(gantry_data[:,2:], axis=0)
             print(f'the visual position of the gantry is {position}')
             lengths = np.linalg.norm(anchor_points - position, axis=1)
+            if np.any(np.isnan(lengths)):
+                print(f'Cannot proceed with calibration when lengths={lengths}')
+                return
             print(f'Line lengths from coarse calibration ={lengths}')
             await self.sendReferenceLengths(lengths)
             await asyncio.sleep(SET_LENGTHS_WAIT_S)

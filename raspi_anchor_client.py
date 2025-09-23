@@ -273,6 +273,7 @@ class RaspiAnchorClient(ComponentClient):
         self.shape_tracker = shape_tracker
         self.last_raw_encoder = None
         self.raw_gant_poses = []
+        self.line_record_receipt = asyncio.Event()
 
         config = Config()
         self.anchor_pose = config.anchors[anchor_num].pose
@@ -284,7 +285,15 @@ class RaspiAnchorClient(ComponentClient):
         # TODO if we are not regularly receiving line_record, display this as a server problem status
         if 'line_record' in update:
             self.datastore.anchor_line_record[self.anchor_num].insertList(np.array(update['line_record']))
+
+            # this is the event that is set when *any* anchor sends a line record.
+            # used by the position estimator to immedately recalculate the hang point
             self.datastore.anchor_line_record_event.set()
+
+            # this event is set only for this specific anchor
+            # it is used to detect an un-responsive state.
+            self.line_record_receipt.set() 
+
         if 'last_raw_encoder' in update:
             self.last_raw_encoder = update['last_raw_encoder']
 
@@ -330,6 +339,25 @@ class RaspiAnchorClient(ComponentClient):
         anchor_config_vars = config.vars_for_anchor(self.anchor_num)
         if len(anchor_config_vars) > 0:
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
+
+        # Arm the unresponsiveness safety check
+        self.safety_task = asyncio.create_task(self.safety_monitor())
+
+    async def safety_monitor(self):
+        """stops robot motion on other anchors if this anchor stops sending line record updates for some time"""
+        TIMEOUT=0.5 # seconds
+        try:
+            while self.connected:
+                await asyncio.wait_for(self.line_record_receipt.wait(), TIMEOUT)
+                # if you see the event within the timeout, all is well, clear it and wait again
+                self.line_record_receipt.clear()
+        except TimoutError:
+            print(f'Anchor {self.anchor_num} has not sent a line record update in {TIMEOUT} seconds. Stopping all motors to prevent a ceiling pull.')
+            self.to_ob_q.put({'slow_stop_all'})
+            # we remain connected, but in my experience the anchor server does not come back without a reboot.
+            # still working on this one but it's probably run out of memory.
+
+
 
 if __name__ == "__main__":
     from multiprocessing import Queue
