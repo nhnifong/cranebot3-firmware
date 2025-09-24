@@ -539,7 +539,7 @@ def order_points_for_low_travel(points):
 
 def calibrate_poses_from_data():
     import pickle
-    with open('tests/collected_cal_data.pickle', 'rb') as f:
+    with open('collected_cal_data.pickle', 'rb') as f:
         ap, data = pickle.load(f)
     logging.info(f'Anchor poses that were assumed during data collection:\n{ap}')
     poses, zero_a = find_cal_params(ap, data, 2)
@@ -549,6 +549,9 @@ def calibrate_poses_from_data():
 
         bedroom_side_len = 5.334
         side_len = np.linalg.norm( poses[0][1] - poses[2][1] )
+        #ideal here meaning the actual length I measured between these two anchors in my bedroom with a tape measure
+        # while this is a crude indication, the best test in my experience of the quality of a calibration is the robot's
+        # ability to move in cardinal directions while very close to a wall.
         logging.info(f"Side length = {side_len:.3f}m ({(side_len/bedroom_side_len)*100:.2f}% of ideal)")
 
         config = Config()

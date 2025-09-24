@@ -2,9 +2,20 @@ import numpy as np
 import time
 
 class KalmanFilter:
-    """A Kalman Filter to estimate a 3D position, velocity, and sensor biases."""
+    """A Kalman Filter to estimate a 3D position, velocity, and sensor biases.
+    This version includes a dynamically calculated process noise covariance.
+    """
 
-    def __init__(self, initial_state, initial_covariance, sensor_names):
+    def __init__(self, sensor_names, acceleration_std_dev, bias_std_dev):
+        """
+        Initializes the Kalman Filter.
+
+        Parameters:
+            sensor_names (list): A list of strings for each sensor's name.
+            acceleration_std_dev (float): Standard deviation of unmodeled acceleration.
+                                          This is the primary tuning parameter for filter smoothness.
+            bias_std_dev (float): Standard deviation of the sensor bias change.
+        """
         # State vector: [x, y, z, vx, vy, vz, bias1_x, bias1_y, bias1_z, bias2_x, ...]^T
         self.sensor_names = sensor_names
         self.num_sensors = len(sensor_names)
@@ -13,8 +24,8 @@ class KalmanFilter:
         self.state_covariance = np.eye(self.state_size)
 
         # Set initial values for the core state
-        self.state_estimate[:6] = initial_state
-        self.state_covariance[:6, :6] = initial_covariance
+        self.state_estimate[:6] = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.state_covariance[:6, :6] = np.diag([10.0] * 3 + [1.0] * 3)
         
         # Initialize bias states to zero with high uncertainty
         for i in range(self.num_sensors):
@@ -23,28 +34,56 @@ class KalmanFilter:
 
         self.model_time = time.time()
         
-        # Process noise covariance accounts for uncertainty in our model
-        # Includes noise for position, velocity, and each bias. Biases are assumed constant.
-        q_diag = np.zeros(self.state_size)
-        q_diag[:3] = 0.01  # Position noise
-        q_diag[3:6] = 0.005 # Velocity noise
-        # The difference in bias between cameras can be huge, but this small constant reflects the assumtion that the bias is not expected to change much
-        q_diag[6:] = 0.001
-        self.process_noise_covariance = np.diag(q_diag)
+        # The standard deviations for the process noise are stored here
+        # and used to compute the process noise covariance dynamically in `predict`.
+        self.acceleration_std_dev = acceleration_std_dev
+        self.bias_std_dev = bias_std_dev
+    
+    def _get_F(self, delta_time):
+        """Constructs the state transition matrix F for a given time step."""
+        state_transition_matrix = np.eye(self.state_size)
+        state_transition_matrix[0, 3] = delta_time
+        state_transition_matrix[1, 4] = delta_time
+        state_transition_matrix[2, 5] = delta_time
+        return state_transition_matrix
+
+    def _get_process_noise_covariance(self, delta_time):
+        """
+        Calculates the process noise covariance (Q) for a given time step.
+        """
+        q_accel_squared = self.acceleration_std_dev**2
+        dt = delta_time
+        dt2 = dt**2
+        dt3 = dt**3
+        dt4 = dt**4
+
+        process_noise_covariance = np.zeros((self.state_size, self.state_size))
+
+        # Fill in the 3x3 position/velocity blocks
+        process_noise_covariance[:3, :3] = np.eye(3) * dt4 / 4 * q_accel_squared
+        process_noise_covariance[:3, 3:6] = np.eye(3) * dt3 / 2 * q_accel_squared
+        process_noise_covariance[3:6, :3] = np.eye(3) * dt3 / 2 * q_accel_squared
+        process_noise_covariance[3:6, 3:6] = np.eye(3) * dt2 * q_accel_squared
+        
+        # Add the bias noise (assumed to be a random walk, constant Q)
+        for i in range(self.num_sensors):
+            start_idx = 6 + 3 * i
+            process_noise_covariance[start_idx:start_idx+3, start_idx:start_idx+3] = np.eye(3) * self.bias_std_dev**2
+        
+        return process_noise_covariance
 
     def predict_present(self):
         return self.predict(time.time() - self.model_time)
 
     def predict(self, delta_time):
-        """Predict the state and covariance forward in time."""
-        # The transition matrix is now larger and includes bias terms
-        state_transition_matrix = np.eye(self.state_size)
-        state_transition_matrix[0, 3] = delta_time
-        state_transition_matrix[1, 4] = delta_time
-        state_transition_matrix[2, 5] = delta_time
-
+        """
+        Predict the state and covariance forward in time.
+        """
+        state_transition_matrix = self._get_F(delta_time)
+        process_noise_covariance = self._get_process_noise_covariance(delta_time)
+        
         self.state_estimate = state_transition_matrix @ self.state_estimate
-        self.state_covariance = state_transition_matrix @ self.state_covariance @ state_transition_matrix.T + self.process_noise_covariance
+        self.state_covariance = state_transition_matrix @ self.state_covariance @ state_transition_matrix.T + process_noise_covariance
         self.model_time += delta_time
 
     def update(self, measurement_vector, measurement_time, sensor_noise_covariance, measurement_type, sensor_name=None):
@@ -57,32 +96,21 @@ class KalmanFilter:
         measurement_matrix = np.zeros((3, self.state_size))
         
         if measurement_type == 'position':
-            # Position measurement matrix includes position and bias
             assert sensor_name is not None, "sensor_name is required for position updates."
             sensor_idx = self.sensor_names.index(sensor_name)
             bias_start_idx = 6 + 3 * sensor_idx
-            measurement_matrix[0, 0] = 1.0
-            measurement_matrix[1, 1] = 1.0
-            measurement_matrix[2, 2] = 1.0
-            measurement_matrix[0, bias_start_idx] = 1.0
-            measurement_matrix[1, bias_start_idx + 1] = 1.0
-            measurement_matrix[2, bias_start_idx + 2] = 1.0
+            measurement_matrix[:3, :3] = np.eye(3)
+            measurement_matrix[:3, bias_start_idx:bias_start_idx+3] = np.eye(3)
         
         elif measurement_type == 'velocity':
-            # Velocity measurement matrix only includes velocity
-            measurement_matrix[0, 3] = 1.0
-            measurement_matrix[1, 4] = 1.0
-            measurement_matrix[2, 5] = 1.0
+            measurement_matrix[:3, 3:6] = np.eye(3)
 
         else:
             raise ValueError("Invalid measurement_type. Must be 'position' or 'velocity'.")
             
         # Retrodict (propagate backwards) from current state to measurement time
         delta_time = self.model_time - measurement_time
-        state_transition_matrix_retro = np.eye(self.state_size)
-        state_transition_matrix_retro[0, 3] = -delta_time
-        state_transition_matrix_retro[1, 4] = -delta_time
-        state_transition_matrix_retro[2, 5] = -delta_time
+        state_transition_matrix_retro = self._get_F(-delta_time)
         
         state_at_meas_time = state_transition_matrix_retro @ self.state_estimate
         cov_at_meas_time = state_transition_matrix_retro @ self.state_covariance @ state_transition_matrix_retro.T
@@ -96,13 +124,11 @@ class KalmanFilter:
         corrected_cov_at_meas_time = (np.eye(self.state_size) - kalman_gain @ measurement_matrix) @ cov_at_meas_time
         
         # Propagate corrected state forward to the current time
-        prop_F = np.eye(self.state_size)
-        prop_F[0, 3] = delta_time
-        prop_F[1, 4] = delta_time
-        prop_F[2, 5] = delta_time
+        prop_F = self._get_F(delta_time)
+        prop_Q = self._get_process_noise_covariance(delta_time)
         
         self.state_estimate = prop_F @ corrected_state_at_meas_time
-        self.state_covariance = prop_F @ corrected_cov_at_meas_time @ prop_F.T + self.process_noise_covariance
+        self.state_covariance = prop_F @ corrected_cov_at_meas_time @ prop_F.T + prop_Q
 
     def reset_biases(self, perfect_position):
         """
@@ -111,9 +137,7 @@ class KalmanFilter:
         """
         # Define a measurement matrix for a perfect position sensor
         perfect_measurement_matrix = np.zeros((3, self.state_size))
-        perfect_measurement_matrix[0, 0] = 1.0
-        perfect_measurement_matrix[1, 1] = 1.0
-        perfect_measurement_matrix[2, 2] = 1.0
+        perfect_measurement_matrix[:3, :3] = np.eye(3)
         
         # A perfect measurement has zero covariance
         perfect_measurement_covariance = np.zeros((3, 3))
@@ -145,9 +169,7 @@ class KalmanFilter:
         for i in range(self.num_sensors):
             # The columns corresponding to each sensor's bias
             bias_start_idx = 6 + 3 * i
-            measurement_matrix[0, bias_start_idx] = 1.0
-            measurement_matrix[1, bias_start_idx + 1] = 1.0
-            measurement_matrix[2, bias_start_idx + 2] = 1.0
+            measurement_matrix[:3, bias_start_idx:bias_start_idx+3] = np.eye(3)
 
         # Perform the standard Kalman update using this pseudo-measurement
         # Use the current state and covariance, since this is an immediate update

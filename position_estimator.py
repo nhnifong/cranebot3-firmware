@@ -349,18 +349,23 @@ class Positioner2:
 
         self.last_visual_cutoff = time.time()
 
-        visual_noise_std_dev=0.01
-        self.visual_noise_covariance = np.diag([visual_noise_std_dev**2] * 3)
-        hang_noise_std_dev=0.005
-        self.hang_noise_covariance = np.diag([hang_noise_std_dev**2] * 3)
-        vel_std_dev=0.01
-        self.vel_noise_covariance = np.diag([vel_std_dev**2] * 3)
+        # Expected standard deviation in gantry acceleration
+        acceleration_std_dev=0.001
+        # noise in the position biases used for each sensor. the biases can be 10 to 50 cm in my experience.
+        # this small constant reflects the assumtion that the bias for a camera is expected to change at least 10x slower than the gantry position.
+        bias_std_dev=0.0001
+        # noise in visual observations of gantry position from a single camera 
+        visual_noise_std_dev=0.01 # experimentally confirmed.
+        hang_noise_std_dev=0.015 # noise in hang position as a sensor. This is odd, it will be tightly near some position but make large jumps in z occationally.
+        commanded_vel_std_dev=0.01 # the velocity that was commanded of the robot is also considered a sensor. the actual movement may differ from it somewhat.
 
-        # Initialize the Kalman filter with floats
-        initial_estimate = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        initial_covariance = np.diag([10.0] * 3 + [1.0] * 3)
+        self.visual_noise_covariance = np.diag([visual_noise_std_dev**2] * 3)
+        self.hang_noise_covariance = np.diag([hang_noise_std_dev**2] * 3)
+        self.vel_noise_covariance = np.diag([commanded_vel_std_dev**2] * 3)
+
+        # Initialize the Kalman filter
         self.sensor_names = ['v0', 'v1' ,'v2' ,'v3', 'hang']
-        self.kf = KalmanFilter(initial_estimate, initial_covariance, self.sensor_names)
+        self.kf = KalmanFilter(self.sensor_names, acceleration_std_dev, bias_std_dev)
 
         # recorded amount of time take to perform various update steps
         self.predict_time_taken = 0
