@@ -1073,7 +1073,7 @@ class AsyncObserver:
         but we don't have that info. alternatively we could calibrate the bias to make horizontal movements level
         according to the laser rangefinder.
         """
-        DOWNWARD_BIAS_Z = -0.08 # meters
+        DOWNWARD_BIAS_Z = -0.04 # meters
         KINEMATICS_STEP_SCALE = 10.0 # Determines the size of the virtual step to calculate line speed derivatives
         MAX_LINE_SPEED_MPS = 0.5 # m/s
         

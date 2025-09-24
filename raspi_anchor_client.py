@@ -207,7 +207,7 @@ class ComponentClient:
                 update = json.loads(message)
                 if 'frames' in update:
                     self.handle_frame_times(update['frames'])
-                if 'video_ready' in update:
+                if 'video_ready' in update and self.anchor_num is not None: # temporarily disable gripper video for latency reasons
                     print(f'got a video ready update {update}')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": int(update['video_ready'])})
                     vid_thread.start()
@@ -345,15 +345,15 @@ class RaspiAnchorClient(ComponentClient):
 
     async def safety_monitor(self):
         """stops robot motion on other anchors if this anchor stops sending line record updates for some time"""
-        TIMEOUT=0.5 # seconds
+        TIMEOUT=1.0 # seconds
         try:
             while self.connected:
                 await asyncio.wait_for(self.line_record_receipt.wait(), TIMEOUT)
                 # if you see the event within the timeout, all is well, clear it and wait again
                 self.line_record_receipt.clear()
-        except TimoutError:
+        except TimeoutError:
             print(f'Anchor {self.anchor_num} has not sent a line record update in {TIMEOUT} seconds. Stopping all motors to prevent a ceiling pull.')
-            self.to_ob_q.put({'slow_stop_all'})
+            self.to_ob_q.put({'slow_stop_all': None})
             # we remain connected, but in my experience the anchor server does not come back without a reboot.
             # still working on this one but it's probably run out of memory.
 

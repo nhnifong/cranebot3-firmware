@@ -10,6 +10,9 @@ from scipy.spatial.transform import Rotation
 from functools import partial
 import time
 
+def constrain(value, minimum, maximum):
+    return max(minimum, min(value, maximum))
+
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
     return (vec[0], vec[2], vec[1])
@@ -604,6 +607,14 @@ class DirectMoveGantryTarget(Entity):
             # keyboard
             vector = self.app.direction
             vector = vector / np.linalg.norm(vector)
+            # when using keyboard, use a height dependent speed.
+            # 0.25 m/s seems to be a reasonable speed limit for 1.62 meters.
+            # the reason being that as gantry height approaches anchor height, the line tension increases exponentially,
+            # and a slower speed is need to maintain enough torque from the stepper motors.
+            z = self.position[1]
+            speed = 0.000000782*z**2 - 0.2605*z + 0.55
+            speed = constrain(speed, 0.01, 0.55)
+
         else:
             return
 
