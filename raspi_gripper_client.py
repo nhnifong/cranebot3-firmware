@@ -28,7 +28,6 @@ class RaspiGripperClient(ComponentClient):
             self.datastore.imu_rotvec.insert(np.concatenate([np.array([timestamp], dtype=float), grip_pose[0]]))
 
             if 'range' in gs:
-                # expect a tuple of (time, distance)
                 distance_measurement = float(gs['range'])
                 self.datastore.range_record.insert([timestamp, distance_measurement])
 

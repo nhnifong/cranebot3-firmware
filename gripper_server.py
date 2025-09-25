@@ -296,6 +296,10 @@ class RaspiGripperServer(RobotComponentServer):
             while self.hat.gpio_pin_value(LIMIT_SWITCH_PIN) == 1 and self.run_server:
                 self.motor.runConstantSpeed(-1)
                 await asyncio.sleep(0.03)
+                # TODO, also stop this loop if encoder shows the spool isn't rotating
+                # spoolangle = self.hat.encoders[0].revolutions()
+                # if abs(spoolangle - lastspoolangle) < (however much it should turn in 0.03 seconds):
+                #     raise RuntimeError("Spool became stuck while zeroing winch line")
             self.spooler.setReferenceLength(0.01) # 1 cm
             self.update['winch_zero_success'] = True
         except Exception as e:
