@@ -315,6 +315,7 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
         # Every gantry position implies a certain floor z level. all of these should be equal.
         # these measurements however would be invalid if the sample point were over a piece of furniture,
         # so this error term may only be done for positions over the origin card.
+        # however, we could place more cards on the floor, which has other benefits too.
 
     # Calculate move consistency error between consecutive points ---
     all_move_consistency_errs = []
