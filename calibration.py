@@ -199,27 +199,23 @@ def params_consistent_with_move(
     """
     Return a score measuring how well params predict an observed move.
     """
-    # Calculate the visually-based line lengths for the starting position.
-    # This uses the mean gantry position from the first observation.
-    starting_lengths_visual = np.linalg.norm(anchor_points - starting_pos_visual, axis=1)
+    # Calculate the apparent move based only on the visual observations
+    # This uses the mean gantry position from each position
+    vis_move = starting_pos_visual - ending_pos_visual
 
-    # Calculate the change in line lengths based on encoder readings between the two points.
-    encoder_deltas = encoder_lengths2 - encoder_lengths1
+    # Calculate a hypothetical hang point for the start and ending encoder values
+    hang_points = []
+    for encoders in [encoder_lengths1, encoder_lengths2]:
+        hp_result = find_hang_point(anchor_points, predicted_ending_lengths)
+        if hp_result is None:
+            return 1 # 1 meter
+        hang_points.append(hp_result[0]) # element 0 is position, element 1 is predicted line tightness.
 
-    # Predict the new line lengths by adding the encoder deltas to the visual starting lengths.
-    predicted_ending_lengths = starting_lengths_visual + encoder_deltas
+    # Calculate the apparent move based on hang points only
+    hang_move = hang_points[1] - hang_points[0]
 
-    # Using the predicted new lengths, calculate a hypothetical hang point.
-    # logging.debug(f'try to find hang point with anchor_points={anchor_points}, lengths={predicted_ending_lengths}')
-    hp_result = find_hang_point(anchor_points, predicted_ending_lengths)
-    if hp_result is None:
-        return 1 # 1 meter
-    predicted_hang_point = hp_result[0] # element 0 is position, element 1 is predicted line tightness.
-
-    # Compare the predicted hang point to the observed visual ending position.
-    # The smaller the distance, the more consistent the parameters are with the move.
-    # logging.debug(f'hp={predicted_hang_point} ep={ending_pos_visual}')
-    return np.linalg.norm(predicted_hang_point - ending_pos_visual)
+    # The error is the magnitude of the difference between the two moves
+    return np.linalg.norm(vis_move - hang_move)
 
 
 def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=None):
