@@ -19,6 +19,9 @@ gripper_grommet = (np.array([0,0,0], dtype=float), np.array([0,0.115,0.013], dty
 # position of the gripper center of gravity in the gripper reference frame. rotation is irrelevant
 gripper_cog = (np.array([0,0,0], dtype=float), np.array([0,0.055,0.011], dtype=float))
 
+# z offset of the gripper laser rangefinder from the origin of the gantry when the winch is zeroed.
+laser_offset = 0.14 # meters
+
 # rotation and translation of the anchor camera (the frame of reference used in aruco detection) in the reference frame of the anchor
 # tilt = 28 # camera look tilt downward from horizontal in degrees.
 # anchor_camera = compose_poses([
