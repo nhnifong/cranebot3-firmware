@@ -292,6 +292,7 @@ class ControlPanelUI:
                 DropdownMenuButton('Point to Point', on_click=partial(self.set_simulated_data_mode, 'point2point')),
                 )),
             DropdownMenuButton('Zero Gripper Winch Line', on_click=partial(self.simple_command, 'zero_winch')),
+            DropdownMenuButton('Horizontal Move Test', on_click=partial(self.simple_command, 'horizontal_task')),
             ))
 
     def set_simulated_data_mode(self, mode):

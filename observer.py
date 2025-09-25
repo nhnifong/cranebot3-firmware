@@ -119,6 +119,7 @@ class AsyncObserver:
             'set_simulated_data_mode': self.set_simulated_data_mode,
             'zero_winch': self._handle_zero_winch_line,
             'episode': self._handle_episode_start,
+            'horizontal_task': lambda _: self.invoke_motion_task(self.horizontal_line_task()),
         }
 
     def listen_queue_updates(self, loop):
@@ -677,6 +678,22 @@ class AsyncObserver:
 
         return data
 
+    async def horizontal_line_task(self):
+        """
+        Attempt to move the gantry in a perfectly horizontal line. How hard could this be?
+        This is a motion task
+        """
+        await asyncio.gather([self.gripper_client.zero_winch(), self.tension_and_wait()])
+        await asyncio.sleep(1)
+        range_at_start = self.datastore.range_record.getLast()[1]
+        result = await self.move_direction_speed([1,0,0], 0.2, downward_bias=0)
+        await asyncio.sleep(4)
+        self.slow_stop_all_spools()
+        await asyncio.sleep(1)
+        range_at_end = self.datastore.range_record.getLast()[1]
+        print(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
+
+
     def async_on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
     ) -> None:
@@ -1058,7 +1075,7 @@ class AsyncObserver:
             self.gantry_goal_pos = None
             self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
-    async def move_direction_speed(self, uvec, speed, starting_pos=None):
+    async def move_direction_speed(self, uvec, speed, starting_pos=None, downward_bias=-0.04):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
         we will use the last one sent from position_estimator
@@ -1073,7 +1090,6 @@ class AsyncObserver:
         but we don't have that info. alternatively we could calibrate the bias to make horizontal movements level
         according to the laser rangefinder.
         """
-        DOWNWARD_BIAS_Z = -0.04 # meters
         KINEMATICS_STEP_SCALE = 10.0 # Determines the size of the virtual step to calculate line speed derivatives
         MAX_LINE_SPEED_MPS = 0.5 # m/s
         
@@ -1083,7 +1099,7 @@ class AsyncObserver:
             return
 
         # apply downward bias and renormalize
-        uvec = uvec + np.array([0,0,DOWNWARD_BIAS_Z])
+        uvec = uvec + np.array([0,0,downward_bias])
         uvec  = uvec / np.linalg.norm(uvec)
         velocity = uvec * speed
 
