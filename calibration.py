@@ -205,8 +205,8 @@ def params_consistent_with_move(
 
     # Calculate a hypothetical hang point for the start and ending encoder values
     hang_points = []
-    for encoders in [encoder_lengths1, encoder_lengths2]:
-        hp_result = find_hang_point(anchor_points, predicted_ending_lengths)
+    for encoder_based_lengths in [encoder_lengths1, encoder_lengths2]:
+        hp_result = find_hang_point(anchor_points, encoder_based_lengths)
         if hp_result is None:
             return 1 # 1 meter
         hang_points.append(hp_result[0]) # element 0 is position, element 1 is predicted line tightness.

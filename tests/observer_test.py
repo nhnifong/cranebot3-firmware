@@ -118,65 +118,6 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.ob_task.done())
         self.assertTrue(self.ob.gripper_client is not None)
 
-    async def test_training_mode(self):
-        self.ob.calmode = 'training'
-        # advertise a service on localhost matching the training gripper name
-        await self.advertise_service(f"123.cranebot-training-gripper-service.test", "_http._tcp.local.", 8765)
-        # Run the method under test
-        task = asyncio.create_task(self.ob.start_training_mode())
-        # wait for connection
-        await asyncio.wait_for(self.watchable_startup_event.wait(), 11)
-        # now the observer is going to be waiting for the gripper client to set gc.connection_established_event
-        self.mock_gripper_client.connection_established_event.set()
-        await asyncio.sleep(0.1)
-        #observer should now have an initialized lerobot dataset instance.
-        # start an episode
-        await self.ob._handle_episode_start(None)
-        self.assertTrue(self.ob.le_dataset.is_recording)
-        # add a frame
-        self.ob.le_dataset.handle_training_vid_frame(12345, np.zeros((100,100,3)))
-        # stop the episode
-        await self.ob._handle_episode_start(None)
-
-        self.assertFalse(self.ob_task.done())
-        self.assertTrue(self.ob.gripper_client is not None)
-        self.assertTrue(task.done())
-
-        # delete this so the async_close function in observer won't try to upload it to huggingface in a unit test
-        self.ob.le_dataset = None
-
-    async def test_gripper_switch(self):
-        """Test changing from the standard gripper to the training gripper when both have already been discovered."""
-        
-        # start with a situation where the observer discovers both and connects to the standard gripper.
-        self.ob.calmode = 'pause'
-        # there is only one mock gripper client and only one instance of the client class should be used at a time by observer.
-        # advertise a service for both types of gripper
-        await self.advertise_service(f"123.cranebot-gripper-service.test", "_http._tcp.local.", 8765)
-        await self.advertise_service(f"123.cranebot-training-gripper-service.test", "_http._tcp.local.", 8766)
-        # wait for connection
-        await asyncio.wait_for(self.watchable_startup_event.wait(), 11)
-        # assert which gripper it connected to by looking at the port send to the constructor
-        self.mock_gripper_client_class.assert_called_with(ANY, 8765, ANY, ANY, ANY, ANY, ANY, ANY)
-        # now the observer is going to be waiting for the gripper client to set gc.connection_established_event
-        self.mock_gripper_client.connection_established_event.set()
-        await asyncio.sleep(0.1)
-
-        # now place the observer in training mode and expect that it immediately disconnects from the standard gripper and connects to the training one.
-        print('Changing observer mode to training')
-        self.ob.set_run_mode('training')
-        task = asyncio.create_task(self.ob.start_training_mode())
-        # await asyncio.wait_for(self.watchable_shutdown_event.wait(), 1)
-        self.watchable_startup_event.clear()
-        await asyncio.wait_for(self.watchable_startup_event.wait(), 1)
-        # assert which gripper it connected to by looking at the port send to the constructor
-        self.mock_gripper_client_class.assert_called_with(ANY, 8766, ANY, ANY, ANY, ANY, ANY, ANY)
-        await asyncio.sleep(0.1)
-        self.assertFalse(self.ob_task.done())
-        self.assertTrue(self.ob.gripper_client is not None)
-        self.assertTrue(task.done())
-
-
     async def test_anchor_connect_familiar(self):
         """Confirm that we can connnect to an anchor that advertises a name we recognize from our configuration"""
         await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)

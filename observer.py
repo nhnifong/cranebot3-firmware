@@ -31,12 +31,12 @@ import traceback
 import cv2
 import pickle
 from collections import deque
+from trainer.control_service import start_robot_control_server
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
 anchor_power_service_name = 'cranebot-anchor-power-service'
 gripper_service_name = 'cranebot-gripper-service'
-training_gripper_service_name = 'cranebot-training-gripper-service'
 
 N_ANCHORS = 4
 
@@ -92,12 +92,6 @@ class AsyncObserver:
         self.test_gantry_goal_callback = None
         # event used to notify tasks that gripper is connected.
         self.gripper_client_connected = asyncio.Event()
-        # task description to use when storing lerobot episode
-        self.training_task_description = 'pick_up_clutter'
-        self.accept_connection_from_training_gripper = False
-        self.gripper_addresses = {'training': None, 'standard': None}
-        self.le_dataset = None
-
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -118,7 +112,6 @@ class AsyncObserver:
             'slow_stop_all': self.stop_all,
             'set_simulated_data_mode': self.set_simulated_data_mode,
             'zero_winch': self._handle_zero_winch_line,
-            'episode': self._handle_episode_start,
             'horizontal_task': lambda _: self.invoke_motion_task(self.horizontal_line_task()),
         }
 
@@ -215,14 +208,6 @@ class AsyncObserver:
 
     async def _handle_zero_winch_line(self, data):
         await self.gripper_client.zero_winch()
-
-    async def _handle_episode_start(self, data):
-        if self.calmode == 'training' and self.le_dataset is not None:
-            if self.le_dataset.is_recording:
-                # note that we do not stop an episode and immdietely start another. the user needs to press again to start the next one.
-                self.le_dataset.stop_episode()
-            else:
-                self.le_dataset.start_episode(self.training_task_description)
 
     async def invoke_motion_task(self, coro):
         """
@@ -346,9 +331,6 @@ class AsyncObserver:
         """
         Sets the robot mode, governing nearly all behavior.
         """
-        # exit current mode
-        if self.calmode == "train":
-            asyncio.create_task(self.stop_training_mode())
 
         # enter new mode
         if mode == "run":
@@ -359,70 +341,6 @@ class AsyncObserver:
             self.slow_stop_all_spools()
         elif mode == 'train':
             self.calmode = 'training'
-            asyncio.create_task(self.start_training_mode())
-
-    async def start_training_mode(self):
-        """
-        The real gantry must be stowed in a high location out of view before this starts. right now the operator is responsible for doing that.
-        When the episode button is pressed, the observer must terminate the current dataset episode and begin a new one.
-        """
-        from dataset_collector import LeRobotDatasetCollector
-        # The anchor cameras remain running and forwarding video but the line_record updates become irrelevant to position estimates.
-        # Set a mode flag in the position estimator that makes it ignore them.
-        self.pe.training_mode = True
-
-        # disconnect from the standard gripper and connect to the training gripper.
-        # During this time the operator may turn on the training wand if it is not on already
-        # The installed gripper will remain powered because the anchors are powered.
-        if self.gripper_client is not None:
-            await self.gripper_client.shutdown()
-            self.gripper_client = None
-            del self.bot_clients[self.gripper_addresses['standard'][2]]
-        self.gripper_client_connected.clear()
-
-        if self.gripper_addresses['training'] is not None:
-            # if the training gripper had already been discovered and is still online, connect to it immediately.
-            print(f'Training gripper was previously discovered as {self.gripper_addresses["training"]}')
-            address, port, full_name = self.gripper_addresses['training']
-            self.connect_to_gripper(address, port, full_name)
-        else:
-            # otherwise we need to wait for a training type gripper to be discovered.
-            self.to_ui_q.put({'visible_message': 'Turn on the training wand with a connected gripper.'})
-
-        # either way await the connection being ready.
-        self.accept_connection_from_training_gripper = True
-        print('waiting for connection to training gripper')
-        await self.gripper_client_connected.wait()
-
-        print('Initializing LeRobot Dataset')
-        # this will require having run 'huggingface-cli login' in the same terminal and virtualenv
-        self.le_dataset = LeRobotDatasetCollector(datastore=self.datastore, posi=self.pe)
-        self.le_dataset.start_recording('naavox/stringman-practice-dataset')
-
-        # The observer must now record position estimates, gripper sensor data, and gripper control inputs.
-        # Each time a video frame arrives at the gripper client, it will look up the closest datapoint to the frame's timestamp for all the other sensors
-        # and insert them all into the dataset together.
-        self.gripper_client.training_frame_cb = self.le_dataset.handle_training_vid_frame
-        self.to_ui_q.put({'visible_message': 'Training wand connected successfully. Press episode button to begin'})
-
-    async def stop_training_mode(self):
-        self.to_ui_q.put({'visible_message': 'When leaving training mode, please store the training wand out of sight of the anchor cams.'})
-        if self.le_dataset is not None:
-            print('closing training dataset')
-            self.le_dataset.close()
-
-        if self.gripper_client is not None:
-            await self.gripper_client.shutdown()
-            self.gripper_client = None
-        self.gripper_client_connected.clear()
-
-        if self.gripper_addresses['standard'] is not None:
-            # if the standard gripper had already been discovered and is still online, reconnect to it immediately.
-            address, port, full_name = self.gripper_addresses['standard']
-            self.connect_to_gripper(address, port, full_name)
-        
-        # set the flag that causes us to connect to the next standard type gripper to be discovered if necessary
-        self.accept_connection_from_training_gripper = False
 
     async def locate_anchors(self):
         """using the record of recent origin detections, estimate the pose of each anchor."""
@@ -722,7 +640,6 @@ class AsyncObserver:
 
         is_power_anchor = name_component == anchor_power_service_name
         is_standard_anchor = name_component == anchor_service_name
-        is_training_gripper = name_component == training_gripper_service_name
         is_standard_gripper = name_component == gripper_service_name
 
         if is_power_anchor or is_standard_anchor:
@@ -751,25 +668,17 @@ class AsyncObserver:
                     print(f"Power spool anchor discovered and assigned to anchor number {anchor_num}")
 
 
-            ac = RaspiAnchorClient(address, info.port, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.shape_tracker)
+            ac = RaspiAnchorClient(address, info.port, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat)
             self.bot_clients[info.server] = ac
             self.anchors.append(ac)
             print('appending anchor client to list and starting server')
             asyncio.create_task(ac.startup())
 
-        elif is_training_gripper or is_standard_gripper:
-            # a gripper has been discovered. store the address and port
-            key = 'standard' if is_standard_gripper else 'training'
-            self.gripper_addresses[key] = (address, info.port, info.server)
-
-
-            # if it is the type we want to be connected to right now, connect immediately.
-            if self.accept_connection_from_training_gripper == is_training_gripper:
-                print(f'Connecting to "{info.server}" as {key} gripper')
-                assert(self.gripper_client is None)
-                self.connect_to_gripper(address, info.port, info.server)
-            else:
-                print(f'Ignored "{info.server}" because it is not the type we want.')
+        elif name_component == gripper_service_name:
+            # a gripper has been discovered, connect immediately.
+            print(f'Connecting to "{info.server}" as gripper')
+            assert(self.gripper_client is None)
+            self.connect_to_gripper(address, info.port, info.server)
 
     def connect_to_gripper(self, address, port, key):
         gc = RaspiGripperClient(address, port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
@@ -794,15 +703,9 @@ class AsyncObserver:
             await client.shutdown()
             if name_component == anchor_service_name or name_component == anchor_power_service_name:
                 self.anchors.remove(client)
-            elif name_component == gripper_service_name or name_component == training_gripper_service_name:
+            elif name_component == gripper_service_name:
                 self.gripper_client = None
             del self.bot_clients[key]
-
-        # regardless of whether we were connected to it, remove grippers from this address book if they are gone.
-        if name_component == gripper_service_name:
-            self.gripper_addresses['standard'] = None
-        elif name_component == training_gripper_service_name:
-            self.gripper_addresses['training'] = None
 
     async def main(self) -> None:
         POOL_PROCESSES = 8
@@ -843,6 +746,9 @@ class AsyncObserver:
 
             # A task that continuously estimates the position of the gantry
             self.pe_task = asyncio.create_task(self.pe.main())
+
+            # start grpc server for connections to lerobot scripts
+            self.grpc_server = await start_robot_control_server(self)
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
@@ -853,16 +759,13 @@ class AsyncObserver:
             await self.async_close()
 
     async def async_close(self) -> None:
-        if self.calmode == 'training' and self.le_dataset is not None:
-            print('closing training dataset')
-            self.le_dataset.close()
         result = await self.stop_all()
         self.run_command_loop = False
         self.stat.run = False
         self.pe.run = False
         self.fig_8 = False
         self.pe_task.cancel()
-        tasks = [self.pe_task]
+        tasks = [self.pe_task, self.grpc_server.stop(grace=5)]
         if self.aiobrowser is not None:
             tasks.append(self.aiobrowser.async_cancel())
         if self.aiozc is not None:
