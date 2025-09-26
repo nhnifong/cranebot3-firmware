@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package trainer;
+
+service RobotControlService {
+  rpc GetObservation (GetObservationRequest) returns (GetObservationResponse);
+  rpc TakeAction (TakeActionRequest) returns (TakeActionResponse);
+}
+
+message Point3D {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+// currently this communication is expected to occur on the same machine and low latency is important
+// but if those assumptions no longer hold, some compression should be used.
+message NpyImage {
+  // Raw bytes of the NumPy array
+  bytes data = 1;
+  repeated int32 shape = 2;
+  // Data type (e.g., "uint8", "float32")
+  string dtype = 3;
+}
+
+message GetObservationRequest {
+  // no args
+}
+
+// The collection of observations about the robot which the server can return on demand.
+message GetObservationResponse {
+  Point3D gantry_pos = 1;
+  float winch_length = 2;
+  float finger_angle = 3;
+  // Rodruigez rotation vector from IMU in gripper
+  Point3D gripper_imu_rot = 4;
+  float laser_rangefinder = 5;
+  float finger_pad_voltage = 6;
+
+  // images
+  optional NpyImage anchor_cam_0 = 7;
+  optional NpyImage anchor_cam_1 = 8;
+  optional NpyImage anchor_cam_2 = 9;
+  optional NpyImage anchor_cam_3 = 10;
+  optional NpyImage gripper_cam = 11;
+}
+
+// A complete action which the robot is expected to take immediately.
+message TakeActionRequest {
+  Point3D gantry_pos = 1;
+  float winch_length = 2;
+  float finger_angle = 3;
+}
+
+message TakeActionResponse {
+  bool success = 1;
+}

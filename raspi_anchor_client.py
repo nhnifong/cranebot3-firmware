@@ -45,7 +45,6 @@ class ComponentClient:
         self.frame_times = {}
         self.pool = pool
         self.stat = stat
-        self.shape_tracker = None
         self.last_gantry_frame_coords = None
         self.ct = None # task to connect to websocket
         self.save_raw = False
@@ -91,14 +90,6 @@ class ComponentClient:
                     break
                 frame = av_frame.to_ndarray(format='bgr24')
                 fnum += 1
-
-                # send frame to shape tracker
-                if self.shape_tracker is not None and self.anchor_num is not None: # skip gripper for now:
-
-                    # send one frame per second to the fastSAM model
-                    if time.time() > lastSam + self.shape_tracker.preferred_delay:
-                        lastSam = time.time()
-                        # self.shape_tracker.processFrame(self.anchor_num, frame)
                         
                 if self.sendPreviewToUi:
                     # send frame to UI
@@ -266,19 +257,16 @@ class ComponentClient:
             self.ct.cancel()
 
 class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, port, anchor_num, datastore, to_ui_q, to_ob_q, pool, stat, shape_tracker):
+    def __init__(self, address, port, anchor_num, datastore, to_ui_q, to_ob_q, pool, stat):
         super().__init__(address, port, datastore, to_ui_q, to_ob_q, pool, stat)
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = {'anchor_num': self.anchor_num}
-        self.shape_tracker = shape_tracker
         self.last_raw_encoder = None
         self.raw_gant_poses = []
         self.line_record_receipt = asyncio.Event()
 
         config = Config()
         self.anchor_pose = config.anchors[anchor_num].pose
-        if self.shape_tracker is not None:
-            self.shape_tracker.setCameraPoses(self.anchor_num, compose_poses([self.anchor_pose, model_constants.anchor_camera]))
         self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
 
     def handle_update_from_ws(self, update):

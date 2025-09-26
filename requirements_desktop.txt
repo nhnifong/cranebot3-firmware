@@ -6,12 +6,8 @@ ursina==7.0.0
 zeroconf==0.147.0
 asyncio==3.4.3
 websockets==15.0.1
-trimesh==4.6.9
-mapbox-earcut==1.0.3
-manifold3d==3.0.1
-ultralytics==8.3.134
-shapely==2.1.0
 python-fcl==0.7.0.8
 pupil-apriltags
 av
 lerobot
+grpcio-tools

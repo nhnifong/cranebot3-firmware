@@ -13,3 +13,4 @@ panda3d==1.10.15
 pupil-apriltags
 av
 lerobot
+grpcio-tools
