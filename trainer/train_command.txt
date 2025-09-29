@@ -1,16 +1,2 @@
-lerobot-train \
-    --dataset.repo_id=naavox/stringman_pickup_clutter \
-    --dataset.root=chop_dataset \
-    --policy.type=diffusion 
-
-python -m lerobot.datasets.v2.convert_dataset_v1_to_v2 \
-    --repo-id naavox/four-cluttre-dataset \
-    --single-task "pick up socks and place them in a pile."
-
-python -m lerobot.scripts.visualize_dataset \
-    --repo-id lerobot/pusht \
-    --root ./my_local_data_dir \
-    --episode-index 0
-
 rebuild protos from repo root
 python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. trainer/robot_control_service.proto

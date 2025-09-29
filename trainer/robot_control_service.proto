@@ -5,6 +5,7 @@ package trainer;
 service RobotControlService {
   rpc GetObservation (GetObservationRequest) returns (GetObservationResponse);
   rpc TakeAction (TakeActionRequest) returns (TakeActionResponse);
+  rpc GetWandInfo (GetWandInfoRequest) returns (GetWandInfoResponse);
 }
 
 message Point3D {
@@ -53,5 +54,16 @@ message TakeActionRequest {
 }
 
 message TakeActionResponse {
-  bool success = 1;
+  // returns the action that was actually taken in case it needed to be clipped to bounds
+  Point3D gantry_pos = 1;
+  float winch_length = 2;
+  float finger_angle = 3;
+}
+
+message GetWandInfoRequest {
+
+}
+
+message GetWandInfoResponse {
+  Point3D absolute_wand_position = 1;
 }
