@@ -984,42 +984,48 @@ class AsyncObserver:
         """
         KINEMATICS_STEP_SCALE = 10.0 # Determines the size of the virtual step to calculate line speed derivatives
         MAX_LINE_SPEED_MPS = 0.5 # m/s
-        
-        if speed is not None:
-            if speed == 0:
-                for client in self.anchors:
-                    asyncio.create_task(client.send_commands({'aim_speed': 0}))
-                velocity = np.zeros(3)
-            else:
-                # apply downward bias and renormalize
-                uvec = uvec + np.array([0,0,downward_bias])
-                uvec  = uvec / np.linalg.norm(uvec)
-                velocity = uvec * speed
-        else:
-            # use uvec directly (mode used with lerobot)
-            velocity = uvec
-            speed = np.linalg.norm(velocity)
-            if speed < 0.005:
-                # when a very small velocity is provided, clamp it to zero.
-                velocity = np.zeros(3)
-                speed = 0
 
-        # TODO: move the height based speed limit here instead of in DirectMoveGantryTarget
-        # TODO: zero the velocity if it would move the gantry out of the work area
+        if starting_pos is None:
+            starting_pos = self.pe.gant_pos
+
+        # when speed is not provided, use uvec as a velocity vector in m/s (mode used with lerobot)
+        if speed is None:
+            speed = np.linalg.norm(uvec)
+
+        # Enforce a height dependent speed limit.
+        # the reason being that as gantry height approaches anchor height, the line tension increases exponentially,
+        # and a slower speed is need to maintain enough torque from the stepper motors.
+        # this function was determined through some trial and error.
+        # TODO reformulate it for possibly taller or shorter installations. it's not distance from the ground that matters
+        # but how low we are hanging from the average anchor height.
+        z = starting_pos[1]
+        speed_limit = 0.000000782*z**2 - 0.2605*z + 0.55
+        speed_limit = constrain(speed_limit, 0.01, 0.55)
+        speed = min(speed, speed_limit)
+
+        # TODO: zero the speed if it would move the gantry out of the work area
+
+        # when a very small speed is provided, clamp it to zero.
+        if speed < 0.005:
+            speed = 0
 
         if speed == 0:
+            for client in self.anchors:
+                asyncio.create_task(client.send_commands({'aim_speed': 0}))
+            velocity = np.zeros(3)
             self.to_ui_q.put({'last_commanded_vel': velocity})
             self.pe.record_commanded_vel(velocity)
             return velocity
 
+        # normalize, apply downward bias and renormalize
+        uvec  = uvec / np.linalg.norm(uvec)
+        uvec = uvec + np.array([0,0,downward_bias])
+        uvec  = uvec / np.linalg.norm(uvec)
+        velocity = uvec * speed
+
         anchor_positions = np.zeros((4,3))
         for a in self.anchors:
             anchor_positions[a.anchor_num] = np.array(a.anchor_pose[1])
-
-        # even if the starting position is off slightly, this method should not produce jerky moves.
-        # because it's not commanding any absolute length from the spool motor
-        if starting_pos is None:
-            starting_pos = self.pe.gant_pos
 
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)

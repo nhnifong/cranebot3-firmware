@@ -155,6 +155,9 @@ class ControlPanelUI:
         self.debug_indicator_visual = IndicatorSphere(color=color.red)
         self.debug_indicator_hang = IndicatorSphere(color=color.blue)
 
+        # indicator of the last commanded gantry velocity, whether it was commanded manually or by some automatic process.
+        self.commanded_velocity_indicator = VelocityArrow(color=color.cyan, parent=self.gantry)
+
         # show a visualization of goal positions
         self.goal_marker = GoalPoint([0,0,0], enabled=False)
 
@@ -562,7 +565,7 @@ class ControlPanelUI:
                 self.origin_cards.add(partial(update_origin_card, anum, pose))
 
         if 'last_commanded_vel' in updates:
-            self.dmgt.last_commanded_vel = updates['last_commanded_vel']
+            self.commanded_velocity_indicator.set_velocity(updates['last_commanded_vel'])
 
     def start(self):
         self.app.run()

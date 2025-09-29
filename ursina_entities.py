@@ -564,6 +564,48 @@ class IndicatorSphere(Entity):
         self.position = swap_yz(self.zup_pos)
         self.last_update_t = now
 
+class VelocityArrow(Entity):
+    """A debugging arrow entity to visualize a velocity vector."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.zup_vel = np.zeros(3)
+
+        # The arrow is composed of a shaft (cylinder) and a head (cone)
+        self.shaft = Entity(
+            parent=self,
+            model='cylinder',
+            color=kwargs['color'],
+            scale=(0.5, 1, 0.5), # y-scale will be controlled by magnitude
+            shader=unlit_shader
+        )
+        self.head = Entity(
+            parent=self,
+            model='cone',
+            color=kwargs['color'],
+            scale=(1, 0.5, 1),
+            y=0.5,
+            shader=unlit_shader
+        )
+        self.scale
+
+    def set_velocity(self, vel):
+        """Sets the velocity vector to visualize in z-up space."""
+        self.zup_vel = np.array(vel)
+        magnitude = np.linalg.norm(self.zup_vel)
+
+        # If magnitude is zero, hide the arrow
+        if magnitude < 1e-6:
+            self.enabled = False
+            return
+        self.enabled = True
+
+        self.shaft.scale_y = magnitude
+        self.head.y = magnitude / 2
+        self.head.scale = self.shaft.scale_x * 2
+
+        yup_vel = swap_yz(self.zup_vel)
+        self.up = yup_vel.normalized()
+
 # consider completely removing this Entity.
 # move input handling and sending of the gantry_dir_sp message somewhere else.
 # make the commanded velocity indicator work like the visual position indicator.
