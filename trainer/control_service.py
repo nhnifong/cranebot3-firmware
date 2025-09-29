@@ -54,9 +54,15 @@ class RobotControlService(RobotControlServiceServicer):
         gantry_goal_pos = np.array([request.gantry_pos.x, request.gantry_pos.y, request.gantry_pos.z])
         winch = request.winch_length
         finger = request.finger_angle
-        print(f'gantry_goal_pos={gantry_goal_pos} winch={winch} finger={finger}')
+        print(f'TakeAction received on grpc channel gantry_goal_pos={gantry_goal_pos} winch={winch} finger={finger}')
 
-        return TakeActionResponse(success=True)
+        # TODO if we have to clip these values to legal limits, return what we clipped them to
+
+        return TakeActionResponse(
+            gantry_pos = request.gantry_pos,
+            winch_length = request.winch_length,
+            finger_angle = request.finger_angle
+        )
 
 async def start_robot_control_server(app_state_manager, port='[::]:50051'):
     server = grpc.aio.server()

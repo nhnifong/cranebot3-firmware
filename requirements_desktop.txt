@@ -9,5 +9,4 @@ websockets==15.0.1
 python-fcl==0.7.0.8
 pupil-apriltags
 av
-lerobot
 grpcio-tools

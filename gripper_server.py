@@ -14,7 +14,6 @@ import busio
 import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X
-from bleak import BleakClient
 
 # this will require a different calibration matrix
 half_res_stream_command = """
@@ -60,10 +59,6 @@ default_gripper_conf = {
     'FINGER_TOUCH': 80,
     # max open servo value
     'OPEN': -80,
-    # speed to winch when using training wand in meters per second
-    'TR_WINCH_SPEED': 0.06,
-    # default bluetooth address of training wand.
-    "TRAINING_WAND_BT_ADDRESS": "34:85:18:92:1D:05",
 }
 
 class GripperSpoolMotor():
@@ -77,7 +72,6 @@ class GripperSpoolMotor():
         self.servo = hat.servos[SERVO_1]
         self.hat = hat
         self.run = True
-        self.last_ep_btn_state = False
 
     def ping(self):
         return True
@@ -110,11 +104,10 @@ class GripperSpoolMotor():
 
 
 class RaspiGripperServer(RobotComponentServer):
-    def __init__(self, mock_motor=None, training=False):
+    def __init__(self, mock_motor=None):
         super().__init__()
         self.conf.update(default_gripper_conf)
         self.service_type = 'cranebot-gripper-service'
-        self.training_mode = training
 
         self.hat = InventorHATMini(init_leds=False)
         self.hand_servo = self.hat.servos[SERVO_2]
@@ -142,13 +135,10 @@ class RaspiGripperServer(RobotComponentServer):
             self.motor = GripperSpoolMotor(self.hat)
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
-        self.spooler = SpoolController(self.motor, empty_diameter=20, full_diameter=36, full_length=2, conf=self.conf)
+        self.spooler = SpoolController(self.motor, empty_diameter=20, full_diameter=24, full_length=1.93, conf=self.conf)
 
         unique = ''.join(get_mac_address().split(':'))
-        if self.training_mode:
-            self.service_name = 'cranebot-training-gripper-service.' + unique
-        else:
-            self.service_name = 'cranebot-gripper-service.' + unique
+        self.service_name = 'cranebot-gripper-service.' + unique
 
         self.last_value = 0
         self.past_val_rates = deque(maxlen=self.conf['UPDATE_RATE'])
@@ -176,11 +166,6 @@ class RaspiGripperServer(RobotComponentServer):
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
         asyncio.create_task(self.fingerLoop())
-        # a gripper should know whether it is a training gripper or not when it starts up
-        if self.training_mode:
-            self.tryHold = False
-            self.tryHoldChanged.set()
-            asyncio.create_task(self.connectTrainingWand())
 
     async def holdPressurePid(self, target_v):
         """
@@ -236,9 +221,6 @@ class RaspiGripperServer(RobotComponentServer):
         or by looking at the output tensor of the AI camera 
         """
         while self.run_server:
-            if self.training_mode:
-                await asyncio.sleep(1)
-                continue
             # repeatedly try to grasp the object
             while self.tryHold:
                 logging.debug(f'tryHold={self.tryHold} holding={self.holding}')
@@ -309,63 +291,6 @@ class RaspiGripperServer(RobotComponentServer):
             # stop motor even if task throws exception
             self.motor.runConstantSpeed(0)
             self.spooler.resumeTrackingLoop()
-
-    async def connectTrainingWand(self):
-        # as long as the server is running, keep trying to reconnect to the training wand
-        while self.run_server:
-            addr = self.conf['TRAINING_WAND_BT_ADDRESS']
-            logging.info(f"Attempting to connect to {addr}...")
-            # This context manager ensures the client is properly disconnected
-            async with BleakClient(addr) as client:
-                if client.is_connected:
-                    logging.info(f"Connected to controller!")
-                    # Start listening for notifications on the TX characteristic
-                    await client.start_notify(UART_TX_CHAR_UUID, self.bt_notification_handler)
-                    # Keep the func running to receive notifications
-                    while client.is_connected and self.run_server:
-                        await asyncio.sleep(1)
-                else:
-                    logging.error(f"Failed to connect to {addr}")
-
-    def bt_notification_handler(self, sender, data):
-        """
-        This function is called whenever a notification is received from the training wand.
-        """
-        # Decode the byte array into a string
-        message = data.decode('utf-8')
-        
-        # The data is expected to be a comma-separated string: "btn1,btn2,btn3,analog,raw"
-        parts = message.split(',')
-        if len(parts) != 5:
-            logging.error(f"Received unexpected data format: {message}")
-            return
-
-        buttons = [False, False, False]
-        for i in range(3):
-            buttons[i] = parts[i] == '1'
-        analog_value = float(parts[3])
-        
-        # Print the formatted controller state
-        logging.debug(f"B1: {buttons[0]}, B2: {buttons[0]}, B3: {buttons[2]}, Trigger: {analog_value}, Raw: {parts[4]}")
-
-        # Control the fingers
-        # analog_value ranges from 0 to 1.
-        self.last_value = clamp(analog_value*180-90, -90, 90)
-        self.hand_servo.value(self.last_value)
-
-        # control the winch
-        # TODO, protect winch from extents
-        if buttons[2]:
-            self.spooler.setAimSpeed(self.conf['TR_WINCH_SPEED']) # winch down
-        elif buttons[1]:
-            self.spooler.setAimSpeed(-self.conf['TR_WINCH_SPEED']) # winch up
-        else:
-            self.spooler.setAimSpeed(0) # stop winch
-
-        if buttons[0] and buttons[0] != self.last_ep_btn_state:
-            # the espisode button state has been pressed. send a message to the observer.
-            self.update['episode_button_pushed'] = True
-        self.last_ep_btn_state = buttons[0]
 
     async def processOtherUpdates(self, update, tg):
         if 'grip' in update:

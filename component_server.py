@@ -44,9 +44,3 @@ elif component_type == 'gripper':
     from gripper_server import RaspiGripperServer
     gs = RaspiGripperServer()
     asyncio.run(gs.main())
-
-
-elif component_type == 'training_gripper':
-    from gripper_server import RaspiGripperServer
-    gs = RaspiGripperServer(training=True)
-    asyncio.run(gs.main())

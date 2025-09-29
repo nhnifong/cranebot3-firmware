@@ -1,1 +1,2 @@
-bleak
+bleak==1.1.1
+lerobot
