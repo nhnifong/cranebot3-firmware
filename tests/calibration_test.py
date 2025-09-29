@@ -34,7 +34,7 @@ class TestPoseFunctions(unittest.TestCase):
             entry['visuals'] = np.random.uniform(-1,1, (4, 10, 2, 3))
             entry['laser_range'] = 0.9
             observations.append(entry)
-        new_params = find_cal_params(self.anchor_poses, observations, 0)
+        new_params = find_cal_params(self.anchor_poses, observations, 0, maxiter=10)
 
     def test_calibration_za_only(self):
 
@@ -50,7 +50,7 @@ class TestPoseFunctions(unittest.TestCase):
             entry['visuals'] = np.random.uniform(-1,1, (4, 10, 2, 3))
             entry['laser_range'] = 0.9
             observations.append(entry)
-        new_params = find_cal_params(self.anchor_poses, observations, 0, 'zero_angles_only')
+        new_params = find_cal_params(self.anchor_poses, observations, 0, 'zero_angles_only', maxiter=10)
 
     def test_order_points_for_low_travel(self):
         points, distance = order_points_for_low_travel(np.random.uniform(-3,3,(20,3)))

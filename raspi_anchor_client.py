@@ -50,6 +50,7 @@ class ComponentClient:
         self.save_raw = False
         self.training_frame_cb = None
         self.connection_established_event = None
+        self.frame = None # last frame of video seen
 
         # todo: receive a command in observer that will set this value
         self.sendPreviewToUi = False
@@ -88,12 +89,12 @@ class ComponentClient:
             for av_frame in container.decode(stream):
                 if not self.connected:
                     break
-                frame = av_frame.to_ndarray(format='bgr24')
+                self.frame = av_frame.to_ndarray(format='bgr24')
                 fnum += 1
                         
                 if self.sendPreviewToUi:
                     # send frame to UI
-                    preview = cv2.flip(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
+                    preview = cv2.flip(cv2.resize(cv2.cvtColor(self.frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
                     self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
 
                 try:
@@ -114,13 +115,13 @@ class ComponentClient:
                 # process frame with an additional callback if set
                 # expected to be LeRobotDatasetCollector.handle_training_vid_frame
                 if self.training_frame_cb is not None:
-                    self.training_frame_cb(timestamp, frame)
+                    self.training_frame_cb(timestamp, self.frame)
 
-                # send frame to detector
+                # send frame to apriltag detector
                 try:
                     if self.stat.pending_frames_in_pool < 60:
                         self.stat.pending_frames_in_pool += 1
-                        self.pool.apply_async(locate_markers, (frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                        self.pool.apply_async(locate_markers, (self.frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                     else:
                         pass
                         # print(f'Dropping frame because there are already too many pending.')

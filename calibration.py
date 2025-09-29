@@ -350,7 +350,7 @@ def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=N
         return 0.0
 
 
-def find_cal_params(current_anchor_poses, observations, large_spool_index, mode='full'):
+def find_cal_params(current_anchor_poses, observations, large_spool_index, mode='full', maxiter=10000):
     """
     Find optimal calibration parameters based on previously collected data.
 
@@ -411,7 +411,7 @@ def find_cal_params(current_anchor_poses, observations, large_spool_index, mode=
         args=args,
         method='SLSQP',
         bounds=bounds,
-        options={'disp': False, 'maxiter': 10000}
+        options={'disp': False, 'maxiter': maxiter}
     )
 
     # --- Process and return results based on the mode ---

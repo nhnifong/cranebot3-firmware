@@ -16,7 +16,7 @@ import io
 from .robot_control_service_pb2 import (
     GetObservationRequest, 
     GetObservationResponse,
-    NpyImage
+    NpyImage, Point3D,
 )
 from .robot_control_service_pb2_grpc import RobotControlServiceStub
 
@@ -42,20 +42,18 @@ class StringmanPilotRobot(Robot):
         # lerobot assumes all features are either joints (float) or images (speicified as a tuple of width, height, channels)
         # here I have place all the properties we can command of the robot, even if they are not strictly motor joints.
         return { 
-            "gantry_pos_x": float,
-            "gantry_pos_y": float,
-            "gantry_pos_z": float,
-            "winch_length": float,
+            "gantry_vel_x": float,
+            "gantry_vel_y": float,
+            "gantry_vel_z": float,
+            "winch_line_speed": float,
             "finger_angle": float,
         }
 
     @cached_property
     def _cameras_ft(self) -> dict[str, tuple]:
+        # use only one anchor camera to keep latency high and training load lower.
         return {
-            "anchor_cam_0": (1920, 1080, 3),
-            "anchor_cam_1": (1920, 1080, 3),
-            "anchor_cam_2": (1920, 1080, 3),
-            "anchor_cam_3": (1920, 1080, 3),
+            "anchor_camera": (1920, 1080, 3),
             "gripper_camera": (1920, 1080, 3),
         }
 
@@ -107,28 +105,25 @@ class StringmanPilotRobot(Robot):
 
         response: GetObservationResponse = self.stub.GetObservation(GetObservationRequest())
         obs_dict = {
-            'gantry_pos_x': response.gantry_pos.x,
-            'gantry_pos_y': response.gantry_pos.y,
-            'gantry_pos_z': response.gantry_pos.z,
-            "winch_length": response.winch_length,
+            'gantry_vel_x': response.gantry_vel.x,
+            'gantry_vel_y': response.gantry_vel.y,
+            'gantry_vel_z': response.gantry_vel.z,
+            "winch_line_speed": response.winch_line_speed,
             "finger_angle": response.finger_angle,
             "gripper_imu_rot_x": response.gripper_imu_rot.x,
             "gripper_imu_rot_y": response.gripper_imu_rot.y,
             "gripper_imu_rot_z": response.gripper_imu_rot.z,
             "laser_rangefinder": response.laser_rangefinder,
             "finger_pad_voltage": response.finger_pad_voltage,
-            "anchor_cam_0": reconstruct_npy_image(response.anchor_cam_0),
-            "anchor_cam_1": reconstruct_npy_image(response.anchor_cam_1),
-            "anchor_cam_2": reconstruct_npy_image(response.anchor_cam_2),
-            "anchor_cam_3": reconstruct_npy_image(response.anchor_cam_3),
-            "gripper_camera": reconstruct_npy_image(response.gripper_cam),
+            "anchor_camera": reconstruct_npy_image(response.anchor_camera),
+            "gripper_camera": reconstruct_npy_image(response.gripper_camera),
         }
         return obs_dict
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         request = TakeActionRequest(
-            gantry_pos=Point3D(x=action['gantry_pos_x'], y=action['gantry_pos_y'], z=action['gantry_pos_z']),
-            winch_length=action['winch_length'],
+            gantry_vel=Point3D(x=action['gantry_vel_x'], y=action['gantry_vel_y'], z=action['gantry_vel_z']),
+            winch_vel=action['winch_line_speed'],
             finger_angle=action['finger_angle'],
         )
         # Call the synchronous stub method
