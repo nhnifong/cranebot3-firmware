@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#trainer/robot_control_service.proto\x12\x07trainer\"*\n\x07Point3D\x12\t\n\x01x\x18\x01 \x01(\x02\x12\t\n\x01y\x18\x02 \x01(\x02\x12\t\n\x01z\x18\x03 \x01(\x02\"6\n\x08NpyImage\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\x12\r\n\x05shape\x18\x02 \x03(\x05\x12\r\n\x05\x64type\x18\x03 \x01(\t\"\x17\n\x15GetObservationRequest\"\x85\x04\n\x16GetObservationResponse\x12$\n\ngantry_pos\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x14\n\x0cwinch_length\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\x12)\n\x0fgripper_imu_rot\x18\x04 \x01(\x0b\x32\x10.trainer.Point3D\x12\x19\n\x11laser_rangefinder\x18\x05 \x01(\x02\x12\x1a\n\x12\x66inger_pad_voltage\x18\x06 \x01(\x02\x12,\n\x0c\x61nchor_cam_0\x18\x07 \x01(\x0b\x32\x11.trainer.NpyImageH\x00\x88\x01\x01\x12,\n\x0c\x61nchor_cam_1\x18\x08 \x01(\x0b\x32\x11.trainer.NpyImageH\x01\x88\x01\x01\x12,\n\x0c\x61nchor_cam_2\x18\t \x01(\x0b\x32\x11.trainer.NpyImageH\x02\x88\x01\x01\x12,\n\x0c\x61nchor_cam_3\x18\n \x01(\x0b\x32\x11.trainer.NpyImageH\x03\x88\x01\x01\x12+\n\x0bgripper_cam\x18\x0b \x01(\x0b\x32\x11.trainer.NpyImageH\x04\x88\x01\x01\x42\x0f\n\r_anchor_cam_0B\x0f\n\r_anchor_cam_1B\x0f\n\r_anchor_cam_2B\x0f\n\r_anchor_cam_3B\x0e\n\x0c_gripper_cam\"e\n\x11TakeActionRequest\x12$\n\ngantry_pos\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x14\n\x0cwinch_length\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\"%\n\x12TakeActionResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x32\xaf\x01\n\x13RobotControlService\x12Q\n\x0eGetObservation\x12\x1e.trainer.GetObservationRequest\x1a\x1f.trainer.GetObservationResponse\x12\x45\n\nTakeAction\x12\x1a.trainer.TakeActionRequest\x1a\x1b.trainer.TakeActionResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#trainer/robot_control_service.proto\x12\x07trainer\"*\n\x07Point3D\x12\t\n\x01x\x18\x01 \x01(\x02\x12\t\n\x01y\x18\x02 \x01(\x02\x12\t\n\x01z\x18\x03 \x01(\x02\"6\n\x08NpyImage\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\x12\r\n\x05shape\x18\x02 \x03(\x05\x12\r\n\x05\x64type\x18\x03 \x01(\t\"\x17\n\x15GetObservationRequest\"\xd4\x02\n\x16GetObservationResponse\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x18\n\x10winch_line_speed\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\x12)\n\x0fgripper_imu_rot\x18\x04 \x01(\x0b\x32\x10.trainer.Point3D\x12\x19\n\x11laser_rangefinder\x18\x05 \x01(\x02\x12\x1a\n\x12\x66inger_pad_voltage\x18\x06 \x01(\x02\x12-\n\ranchor_camera\x18\x07 \x01(\x0b\x32\x11.trainer.NpyImageH\x00\x88\x01\x01\x12.\n\x0egripper_camera\x18\x0b \x01(\x0b\x32\x11.trainer.NpyImageH\x01\x88\x01\x01\x42\x10\n\x0e_anchor_cameraB\x11\n\x0f_gripper_camera\"b\n\x11TakeActionRequest\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x11\n\twinch_vel\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\"c\n\x12TakeActionResponse\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x11\n\twinch_vel\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\"\x14\n\x12GetWandInfoRequest\"9\n\x13GetWandInfoResponse\x12\"\n\x08wand_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D2\xf9\x01\n\x13RobotControlService\x12Q\n\x0eGetObservation\x12\x1e.trainer.GetObservationRequest\x1a\x1f.trainer.GetObservationResponse\x12\x45\n\nTakeAction\x12\x1a.trainer.TakeActionRequest\x1a\x1b.trainer.TakeActionResponse\x12H\n\x0bGetWandInfo\x12\x1b.trainer.GetWandInfoRequest\x1a\x1c.trainer.GetWandInfoResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -38,11 +38,15 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GETOBSERVATIONREQUEST']._serialized_start=148
   _globals['_GETOBSERVATIONREQUEST']._serialized_end=171
   _globals['_GETOBSERVATIONRESPONSE']._serialized_start=174
-  _globals['_GETOBSERVATIONRESPONSE']._serialized_end=691
-  _globals['_TAKEACTIONREQUEST']._serialized_start=693
-  _globals['_TAKEACTIONREQUEST']._serialized_end=794
-  _globals['_TAKEACTIONRESPONSE']._serialized_start=796
-  _globals['_TAKEACTIONRESPONSE']._serialized_end=833
-  _globals['_ROBOTCONTROLSERVICE']._serialized_start=836
-  _globals['_ROBOTCONTROLSERVICE']._serialized_end=1011
+  _globals['_GETOBSERVATIONRESPONSE']._serialized_end=514
+  _globals['_TAKEACTIONREQUEST']._serialized_start=516
+  _globals['_TAKEACTIONREQUEST']._serialized_end=614
+  _globals['_TAKEACTIONRESPONSE']._serialized_start=616
+  _globals['_TAKEACTIONRESPONSE']._serialized_end=715
+  _globals['_GETWANDINFOREQUEST']._serialized_start=717
+  _globals['_GETWANDINFOREQUEST']._serialized_end=737
+  _globals['_GETWANDINFORESPONSE']._serialized_start=739
+  _globals['_GETWANDINFORESPONSE']._serialized_end=796
+  _globals['_ROBOTCONTROLSERVICE']._serialized_start=799
+  _globals['_ROBOTCONTROLSERVICE']._serialized_end=1048
 # @@protoc_insertion_point(module_scope)

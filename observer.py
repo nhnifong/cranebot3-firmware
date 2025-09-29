@@ -328,11 +328,7 @@ class AsyncObserver:
         self.pe.record_commanded_vel(np.zeros(3))
 
     def set_run_mode(self, mode):
-        """
-        Sets the robot mode, governing nearly all behavior.
-        """
-
-        # enter new mode
+        """Sets the robot mode."""
         if mode == "run":
             self.calmode = mode
             print("run mode")
@@ -340,6 +336,8 @@ class AsyncObserver:
             self.calmode = mode
             self.slow_stop_all_spools()
         elif mode == 'train':
+            # TODO, this should have the effect of allowing actions from the GRPC channel and acting as a
+            # motion task that runs indefinitely.
             self.calmode = 'training'
 
     async def locate_anchors(self):
@@ -748,6 +746,8 @@ class AsyncObserver:
             self.pe_task = asyncio.create_task(self.pe.main())
 
             # start grpc server for connections to lerobot scripts
+            # is has a referece to this singleton and calls certain methos to move the robot or collect observations
+            # see trainer/control_service.py
             self.grpc_server = await start_robot_control_server(self)
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
@@ -780,38 +780,6 @@ class AsyncObserver:
             result = await asyncio.gather(*tasks)
         except asyncio.exceptions.CancelledError:
             pass
-
-    async def run_shape_tracker(self):
-        MIN_SLEEP_S = 0.05 # seconds
-        
-        while self.run_command_loop:
-            elapsed = 0
-            if self.calmode == "pose":
-                # send the UI some shapes representing the whole frustum of each camera
-                prisms = []
-                for anchor_num in range(4):
-                    shps = self.shape_tracker.make_shapes(anchor_num, [[[0.0,1.0], [1.0,1.0], [1.0,0.0], [0.0,0.0]]])
-                    prisms.append(shps.values()[0])
-                self.to_ui_q.put({
-                    'prisms': prisms,
-                })
-
-            elif len(self.anchors) > 1:
-                start = time.time()
-                trimesh_list = self.shape_tracker.merge_shapes()
-                elapsed = time.time() - start
-                print(f'Shape merging took {elapsed} sec')
-                prisms = []
-                for sdict in self.shape_tracker.last_shapes_by_camera:
-                    prisms.extend(sdict.values())
-                if not self.run_command_loop:
-                    return
-                self.to_ui_q.put({
-                    'solids': trimesh_list,
-                    'prisms': prisms,
-                })
-
-            await asyncio.sleep(max(MIN_SLEEP_S, self.shape_tracker.preferred_delay - elapsed))
 
     async def add_simulated_data_circle(self):
         """ Simulate the gantry moving in a circle"""
@@ -850,7 +818,9 @@ class AsyncObserver:
                 break
 
     async def add_simulated_data_point2point(self):
-        """ Simulate the gantry moving from random point to random point"""
+        """Simulate the gantry moving from random point to random point.
+        The only purpose of this simulation at the moment is to test the position estimator and it's feedback
+        """
         LOWER_Z_BOUND = 1.0 # meters
         UPPER_Z_OFFSET = 0.3 # meters
         MAX_SPEED_MPS = 0.25 # m/s
@@ -932,6 +902,23 @@ class AsyncObserver:
             result[client.anchor_num] = client.last_gantry_frame_coords
         return result
 
+    async def send_winch_and_finger(self, line_speed, finger_angle):
+        """Command the gripper's motors in one update.
+        command the winch to change line length at the given speed.
+        Enforces extents based on last reported length and returns actual speed commanded.
+
+        Commands the finger to the given angle.
+        """
+        last_length = self.datastore.winch_line_record.getLast()[1]
+        if last_length < 0.02 or last_length > 1.9:
+            line_speed = 0
+        finger_angle = clamp(finger_angle, -90, 90)
+        asyncio.create_task(self.gripper_client.send_commands({
+            'aim_speed': line_speed,
+            'set_finger_angle': finger_angle,
+        }))
+        return line_speed, finger_angle
+
     async def seek_gantry_goal(self):
         """
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
@@ -978,7 +965,7 @@ class AsyncObserver:
             self.gantry_goal_pos = None
             self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
-    async def move_direction_speed(self, uvec, speed, starting_pos=None, downward_bias=-0.04):
+    async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
         we will use the last one sent from position_estimator
@@ -992,22 +979,38 @@ class AsyncObserver:
         The size of the bias should theoretically be a function of the the magnitude of position and line errors,
         but we don't have that info. alternatively we could calibrate the bias to make horizontal movements level
         according to the laser rangefinder.
+
+        if speed is None, uvec is assumed to be velocity and used directly with no bias
         """
         KINEMATICS_STEP_SCALE = 10.0 # Determines the size of the virtual step to calculate line speed derivatives
         MAX_LINE_SPEED_MPS = 0.5 # m/s
         
+        if speed is not None:
+            if speed == 0:
+                for client in self.anchors:
+                    asyncio.create_task(client.send_commands({'aim_speed': 0}))
+                velocity = np.zeros(3)
+            else:
+                # apply downward bias and renormalize
+                uvec = uvec + np.array([0,0,downward_bias])
+                uvec  = uvec / np.linalg.norm(uvec)
+                velocity = uvec * speed
+        else:
+            # use uvec directly (mode used with lerobot)
+            velocity = uvec
+            speed = np.linalg.norm(velocity)
+            if speed < 0.005:
+                # when a very small velocity is provided, clamp it to zero.
+                velocity = np.zeros(3)
+                speed = 0
+
+        # TODO: move the height based speed limit here instead of in DirectMoveGantryTarget
+        # TODO: zero the velocity if it would move the gantry out of the work area
+
         if speed == 0:
-            for client in self.anchors:
-                asyncio.create_task(client.send_commands({'aim_speed': 0}))
-            return
-
-        # apply downward bias and renormalize
-        uvec = uvec + np.array([0,0,downward_bias])
-        uvec  = uvec / np.linalg.norm(uvec)
-        velocity = uvec * speed
-
-        self.to_ui_q.put({'last_commanded_vel': velocity})
-        self.pe.record_commanded_vel(velocity)
+            self.to_ui_q.put({'last_commanded_vel': velocity})
+            self.pe.record_commanded_vel(velocity)
+            return velocity
 
         anchor_positions = np.zeros((4,3))
         for a in self.anchors:
@@ -1031,9 +1034,13 @@ class AsyncObserver:
             print('abort move because it\'s too fast.')
             return
 
+        self.to_ui_q.put({'last_commanded_vel': velocity})
+        self.pe.record_commanded_vel(velocity)
+
         # send move
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
+        return velocity
 
     async def move_in_figure_8(self):
         """
@@ -1075,6 +1082,21 @@ class AsyncObserver:
             raise
         finally:
             self.slow_stop_all_spools()
+
+    def get_last_frame(self, camera_key):
+        """gets the last frame of video from the given camera if possible
+        camera_key should be one of 'g' 0, 1, 2, 3
+        """
+        if camera_key == 'g':
+            if self.gripper_client is not None:
+                return self.gripper_client.frame
+        else:
+            anum = int(camera_key)
+            for client in self.anchors:
+                if client.anchor_num == anum:
+                    return client.frame
+        return None
+
 
 def start_observation(to_ui_q, to_ob_q):
     """

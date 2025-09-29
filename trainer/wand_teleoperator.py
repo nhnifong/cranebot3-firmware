@@ -16,16 +16,19 @@ import asyncio
 from bleak import BleakScanner, BleakClient
 import time
 from .wand_teleoperator_config import WandConfig
+from .robot_control_service_pb2 import (
+    GetWandInfoRequest, GetWandInfoResponse,
+    NpyImage, Point3D,
+)
 
 # The UUIDs for the UART service and its transmit characteristic
 # These must match the UUIDs on the ESP32-S3 firmware
 UART_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 UART_TX_CHAR_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 WAND_DEVICE_NAME = 'Stringman Training Controller'
+BUTTON_WINCH_SPEED = 0.06 # meters of line per second to wind/unwind while button is held.
 
 class StringmanTrainingWand(Teleoperator):
-
-	# TODO change config class
     config_class = WandConfig
     name = "stringman_training_wand"
 
@@ -44,10 +47,10 @@ class StringmanTrainingWand(Teleoperator):
     @property
     def action_features(self) -> dict[str, type]:
         return { 
-            "gantry_pos_x": float,
-            "gantry_pos_y": float,
-            "gantry_pos_z": float,
-            "winch_length": float,
+            "gantry_vel_x": float,
+            "gantry_vel_y": float,
+            "gantry_vel_z": float,
+            "winch_line_speed": float,
             "finger_angle": float,
         }
 
@@ -180,19 +183,30 @@ class StringmanTrainingWand(Teleoperator):
         pass
 
     def get_action(self) -> dict[str, float]:
-    	# the position the real gantry should move to is a certain transformation of the observed position of the trainer wand.
-    	# the exact offset is something the operator should be able to reset as needed.
+        # synchronously request the current wand velocity from the apriltag observer.
+        # this is running on the same machine, latency should be negligible.
+        response: GetWandInfoRequest = self.stub.GetWandInfo(GetWandInfoResponse())
 
-    	# the exact winch length the teleoperator is commanding is always whatever you currently are at plus an offset.
-    	# the offset is 0 unles the up or down button is pressed, in which case the offset is plus or minus some constant.
+        # Control the fingers
+        # analog_value from trigger ranges from 0 to 1.
+        # finger_angle ranges from -90 to 90
+        finger_angle = clamp(self.last_wand_state["trigger"]*180-90, -90, 90)
+
+        # control the winch
+        if self.last_wand_state["buttons"][2]:
+            winch_line_speed = BUTTON_WINCH_SPEED # winch down
+        elif self.last_wand_state["buttons"][1]:
+            winch_line_speed = -BUTTON_WINCH_SPEED # winch up
+        else:
+            winch_line_speed = 0 # stop winch
 
     	# the finger angle the teleoperator is commanding is a pure function of the trigger value.
         return {
-            "gantry_pos_x": gant_pos[0],
-            "gantry_pos_y": gant_pos[1],
-            "gantry_pos_z": gant_pos[2],
-            "winch_length": float,
-            "finger_angle": float,
+            "gantry_vel_x": response.wand_vel.x,
+            "gantry_vel_y": response.wand_vel.y,
+            "gantry_vel_z": response.wand_vel.z,
+            "winch_line_speed": winch_line_speed,
+            "finger_angle": finger_angle,
         }
 
     def send_feedback(self, feedback: dict[str, float]) -> None:

@@ -30,8 +30,10 @@ message GetObservationRequest {
 
 // The collection of observations about the robot which the server can return on demand.
 message GetObservationResponse {
-  Point3D gantry_pos = 1;
-  float winch_length = 2;
+  // Gantry velocity in meters per second.
+  Point3D gantry_vel = 1;
+  // which length change in meters per second. positive is lengthening.
+  float winch_line_speed = 2;
   float finger_angle = 3;
   // Rodruigez rotation vector from IMU in gripper
   Point3D gripper_imu_rot = 4;
@@ -39,31 +41,30 @@ message GetObservationResponse {
   float finger_pad_voltage = 6;
 
   // images
-  optional NpyImage anchor_cam_0 = 7;
-  optional NpyImage anchor_cam_1 = 8;
-  optional NpyImage anchor_cam_2 = 9;
-  optional NpyImage anchor_cam_3 = 10;
-  optional NpyImage gripper_cam = 11;
+  optional NpyImage anchor_camera = 7;
+  optional NpyImage gripper_camera = 11;
 }
 
 // A complete action which the robot is expected to take immediately.
 message TakeActionRequest {
-  Point3D gantry_pos = 1;
-  float winch_length = 2;
+  Point3D gantry_vel = 1;
+  float winch_vel = 2;
   float finger_angle = 3;
 }
 
 message TakeActionResponse {
   // returns the action that was actually taken in case it needed to be clipped to bounds
-  Point3D gantry_pos = 1;
-  float winch_length = 2;
+  // For example, if the winch length is at it's extent, the actual velocity commanded will be zero.
+  Point3D gantry_vel = 1;
+  float winch_vel = 2;
   float finger_angle = 3;
 }
 
 message GetWandInfoRequest {
-
+  // no args
 }
 
 message GetWandInfoResponse {
-  Point3D absolute_wand_position = 1;
+  // velocity of wand as determined by visual observations.
+  Point3D wand_vel = 1;
 }

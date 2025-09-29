@@ -5,7 +5,7 @@ import warnings
 
 from trainer import robot_control_service_pb2 as trainer_dot_robot__control__service__pb2
 
-GRPC_GENERATED_VERSION = '1.75.0'
+GRPC_GENERATED_VERSION = '1.75.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -44,6 +44,11 @@ class RobotControlServiceStub(object):
                 request_serializer=trainer_dot_robot__control__service__pb2.TakeActionRequest.SerializeToString,
                 response_deserializer=trainer_dot_robot__control__service__pb2.TakeActionResponse.FromString,
                 _registered_method=True)
+        self.GetWandInfo = channel.unary_unary(
+                '/trainer.RobotControlService/GetWandInfo',
+                request_serializer=trainer_dot_robot__control__service__pb2.GetWandInfoRequest.SerializeToString,
+                response_deserializer=trainer_dot_robot__control__service__pb2.GetWandInfoResponse.FromString,
+                _registered_method=True)
 
 
 class RobotControlServiceServicer(object):
@@ -61,6 +66,12 @@ class RobotControlServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetWandInfo(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_RobotControlServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -73,6 +84,11 @@ def add_RobotControlServiceServicer_to_server(servicer, server):
                     servicer.TakeAction,
                     request_deserializer=trainer_dot_robot__control__service__pb2.TakeActionRequest.FromString,
                     response_serializer=trainer_dot_robot__control__service__pb2.TakeActionResponse.SerializeToString,
+            ),
+            'GetWandInfo': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetWandInfo,
+                    request_deserializer=trainer_dot_robot__control__service__pb2.GetWandInfoRequest.FromString,
+                    response_serializer=trainer_dot_robot__control__service__pb2.GetWandInfoResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -129,6 +145,33 @@ class RobotControlService(object):
             '/trainer.RobotControlService/TakeAction',
             trainer_dot_robot__control__service__pb2.TakeActionRequest.SerializeToString,
             trainer_dot_robot__control__service__pb2.TakeActionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetWandInfo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/trainer.RobotControlService/GetWandInfo',
+            trainer_dot_robot__control__service__pb2.GetWandInfoRequest.SerializeToString,
+            trainer_dot_robot__control__service__pb2.GetWandInfoResponse.FromString,
             options,
             channel_credentials,
             insecure,

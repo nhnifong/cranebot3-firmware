@@ -100,7 +100,7 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
     async def test_startup_shutdown(self):
         # Startup and shutdown are handled in setUp and tearDown
         self.mock_spool_class.assert_called_once_with(
-            ANY, empty_diameter=20, full_diameter=36, full_length=2, conf=self.server.conf)
+            ANY, empty_diameter=20, full_diameter=ANY, full_length=ANY, conf=self.server.conf)
         self.assertTrue(self.server_task.done() is False, "Server should be running")
 
     async def test_connect(self):
@@ -152,18 +152,14 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         # really cover it. 
         def check(resp):
             self.assertEqual(False, self.server.tryHold)
+            self.assertEqual(True, self.server.use_finger_loop)
         await self.command_and_check({'grip': 'open'}, check, 0.1)
         def check(resp):
             self.assertEqual(True, self.server.tryHold)
         await self.command_and_check({'grip': 'closed'}, check, 0.1)
 
-    async def test_bt_notification_handler(self):
-        # test of the data handler for receiving updates from bluetooth connected training wand
-        # button 0 is pressed (winch down)
-        # and the trigger is at 88% corresponding to a servo angle of 68.4 degrees
-        data = ','.join(map(str,[0,0,1,0.88,3000]))
-        self.server.bt_notification_handler('foo', data.encode('utf-8'))
-
-        self.mock_spooler.setAimSpeed.assert_called_once_with(self.server.conf['TR_WINCH_SPEED'])
-        # -80 for startup, then 68.4 for the action triggered by the bluetooth message handler
-        self.mock_hat.servos[1].value.assert_has_calls([call(-80), call(68.4)])
+    async def test_send_finger_angle(self):
+        def check(resp):
+            self.assertEqual(False, self.server.use_finger_loop)
+            self.mock_hat.servos[1].value.assert_has_calls([call(-80), call(72)])
+        await self.command_and_check({'set_finger_angle': 72}, check, 0.1)

@@ -77,7 +77,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # and any connected clients.
         await self.ob.aiozc.async_unregister_all_services()
         self.to_ob_q.put({'STOP':None})
-        await self.ob_task
+        # allow up to 10 seconds for shutdown.
+        await asyncio.wait_for(self.ob_task, 10)
         for p in self.patchers:
             p.stop()
 
@@ -91,6 +92,11 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.watchable_shutdown_event.set()
 
     async def test_startup_shutdown(self):
+        # this test is only confirming that that asyncSetUp, which calls ob.main(), works correctly,
+        # and that asyncTearDown, which just sends a STOP command to the ob queue, ultimately results
+        # in it shutting down after calling it's own async_close.
+        # If this test fails, you'll know it's a startup/shutdown issue even if all the others fail to.
+        # you can then run this one in isolation.
         self.assertFalse(self.ob_task.done())
 
     async def advertise_service(self, name, service_type, port, properties={}):
@@ -126,7 +132,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.ob.anchors), 1)
 
     async def test_anchor_reconnect(self):
-        """Confirm that if an anchor server goes down and restarts, that we reconnect to it.
+        """Confirm that if an anchor server shuts down and restarts, that we reconnect to it.
         In this test, we are neither running a real websocket server, or client. the client is a mock and the server doesn't exist.
         all we are confirming here is that if the MDNS advertisement for the services goes down and back up, that we start the client task again.
         """
@@ -147,5 +153,20 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
         self.assertEqual(len(self.ob.anchors), 1)
 
-    async def test_wait_for_tension(self):
+    async def test_anchor_abnormal_reconnect(self):
+        """ Confirm that if an anchor server goes offline abruptly, then comes back up and advertises itself that we reconnect to it.
+        In real installations, this looks like observer's websocket handler throwing some non-transient exception,
+        the service never being unregisterd, but zerconf issuing a service update when it comes back up where nothing has actually changed about the address or port
+        """
         pass # TODO
+
+# other functions to test:
+# move_direction_speed - this is a critical function and deserves exhaustive testing.
+# stop_all
+# _handle_jog_spool
+# sendReferenceLengths
+# _handle_zero_winch_line
+# test that starting a motion task and then another aborts the first.
+# tension_and_wait
+# locate_anchors
+#
