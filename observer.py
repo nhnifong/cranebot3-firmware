@@ -983,7 +983,6 @@ class AsyncObserver:
         if speed is None, uvec is assumed to be velocity and used directly with no bias
         """
         KINEMATICS_STEP_SCALE = 10.0 # Determines the size of the virtual step to calculate line speed derivatives
-        MAX_LINE_SPEED_MPS = 0.5 # m/s
 
         if starting_pos is None:
             starting_pos = self.pe.gant_pos
@@ -1035,17 +1034,12 @@ class AsyncObserver:
         # length changes needed to travel a small distance in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
         line_speeds = deltas * KINEMATICS_STEP_SCALE * speed
-        
-        if np.max(np.abs(line_speeds)) > MAX_LINE_SPEED_MPS:
-            print('abort move because it\'s too fast.')
-            return
-
-        self.to_ui_q.put({'last_commanded_vel': velocity})
-        self.pe.record_commanded_vel(velocity)
 
         # send move
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
+        self.to_ui_q.put({'last_commanded_vel': velocity})
+        self.pe.record_commanded_vel(velocity)
         return velocity
 
     async def move_in_figure_8(self):
