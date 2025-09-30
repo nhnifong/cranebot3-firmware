@@ -90,7 +90,6 @@ class ControlPanelUI:
         self.n_anchors = len(self.config.anchors)
         self.calibration_mode = 'pause'
         self.direction = np.zeros(3, dtype=float) # direction of currently commanded keyboard movement
-        self.run_periodic_actions = True
 
         # --- Setup Methods ---
         self._setup_scene_and_lighting()
@@ -147,9 +146,6 @@ class ControlPanelUI:
         for a in self.anchors:
             self.lines.append(Entity(model=draw_line(a.position, self.gantry.position), color=line_color, shader=unlit_shader))
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
-
-        # an indicator of where the user wants the gantry to be during direct moves.
-        self.dmgt = DirectMoveGantryTarget(self)
 
         # debug indicators of the visual and hang based position and velocity estimates
         self.debug_indicator_visual = IndicatorSphere(color=color.red)
@@ -339,14 +335,20 @@ class ControlPanelUI:
             axis, speed = key_behavior[key]
             self.direction[axis] = speed
             
-            # the key change results in no commanded movement of the goal point
             print(f'key = "{key}" direction = {self.direction}')
             if sum(self.direction) == 0:
                 # immediately cancel whatever remains of the movement
                 self.to_ob_q.put({'slow_stop_all': None})
-                self.dmgt.reset()
             else:
-                # a move will be initiated. but sometimes ursina doesn't get the up key that would end the move.
+                # normalize and send
+                vector = self.app.direction
+                vector = vector / np.linalg.norm(vector)
+                self.to_ob_q.put({
+                    'gantry_dir_sp': {
+                        'direction':vector,
+                        'speed':0.25,
+                    }})
+                # a move has been initiated. but sometimes ursina doesn't get the up key that would end the move.
                 # this can be destructive for a CDPR, so we must ensure every move stops eventually.
                 self.last_positive_input_time = time.time()
                 invoke(self.maybe_end_move, delay=2)
@@ -356,7 +358,6 @@ class ControlPanelUI:
             print('Ending direct move with a timeout because ursina missed a key-up')
             self.direction = np.zeros(3, dtype=float)
             self.to_ob_q.put({'slow_stop_all': None})
-            self.dmgt.reset()
 
     def show_error(self, error):
         self.error.text = error
@@ -414,22 +415,6 @@ class ControlPanelUI:
 
     def render_gantry_ob(self, row, color):
         self.go_quads.add(partial(update_go_quad, row, color))
-
-    def periodic_actions(self):
-        """
-        Run certain actions at a rate slightly less than, and independent of the framerate.
-        """
-        time.sleep(2)
-        while self.run_periodic_actions:
-
-            if sum(self.direction) == 0:
-                self.dmgt.position = self.gantry.position
-            
-            # self.dmgt.position will be updated in it's own update function at the framerate.
-            # at this slightly lower rate, command the bot to move towards the goal point.
-            self.dmgt.direct_move()
-
-            time.sleep(1/10)
 
     def notify_connected_bots_change(self, available_bots={}):
         offs = 0
@@ -581,12 +566,8 @@ def start_ui(to_ui_q, to_ob_q, register_input):
     estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
     estimator_update_thread.start()
 
-    rgo = threading.Thread(target=cpui.periodic_actions, daemon=True)
-    rgo.start()
-
     def stop_other_processes():
         print("UI window closed. stopping other processes")
-        cpui.run_periodic_actions = False
         to_ui_q.put({'STOP':None}) # stop our own listening thread too
         to_ob_q.put({'STOP':None})
 

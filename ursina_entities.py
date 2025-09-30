@@ -413,6 +413,7 @@ class Floor(Entity):
             parent=self,
             enabled=True)
         self.hasSetImage = False
+        self.possibly_moving = False
 
     def set_reticule_height(self, height):
         self.alt = height
@@ -444,6 +445,27 @@ class Floor(Entity):
                 self.target.position = mouse.world_point
         else:
             self.button.position = world_position_to_screen_position(self.circle.world_position) + self.button_offset
+
+        # collect input from attatched gamepad
+        # these are available from the update function of any enabled entity
+        net_trigger  = held_keys['gamepad right trigger'] - held_keys['gamepad left trigger']
+        analog_dir = [held_keys['gamepad left stick x'], held_keys['gamepad left stick y'], net_trigger]
+        if sum(analog_dir) > 0:
+            vector = np.array(self.analog_dir)
+            mag = np.linalg.norm(vector)
+            vector = vector / mag
+            speed = 0.25 * mag
+            # Command the movement
+            self.app.to_ob_q.put({
+                'gantry_dir_sp': {
+                    'direction':vector,
+                    'speed':speed,
+                }
+            })
+            self.possibly_moving = True
+        elif self.possibly_moving:
+            self.to_ob_q.put({'slow_stop_all': None})
+            self.possibly_moving = False
 
     def button_confirm(self):
         self.button.enabled = False
@@ -605,88 +627,4 @@ class VelocityArrow(Entity):
 
         yup_vel = swap_yz(self.zup_vel)
         self.up = yup_vel.normalized()
-
-# consider completely removing this Entity.
-# move input handling and sending of the gantry_dir_sp message somewhere else.
-# make the commanded velocity indicator work like the visual position indicator.
-# as it is now this is not even an accurate visualization of what velocity is being commanded.
-class DirectMoveGantryTarget(Entity):
-    """A visual indicator and manager of gantry direct movement commands"""
-
-    def __init__(self, app, *args, **kwargs):
-        super().__init__(*args, **kwargs, 
-            model='sphere',
-            position=(0,0,0),
-            color=color.cyan,
-            scale=(0.1),
-            shader=unlit_shader)
-        self.app = app
-        self.speed = 0.25
-        self.last_update_t = time.time()
-
-        # game pad analog movement vector (left stick and triggers)
-        self.analog_dir = [0,0,0]
-
-        # last actual commanded gantry velocity from observer in z-up coordinate space
-        self.last_commanded_vel = np.zeros(3)
-
-    def reset(self):
-        self.last_move_vec = None
-
-    def direct_move(self, speed=0.25):
-        """
-        Send speeds that would move the gantry in a straight line
-        from where it is, towards the indicated goal point, at the given speed.
-        positions are given in z-up coordinate system.
-        """
-        if sum(self.analog_dir) != 0:
-            # game pad controller
-            vector = np.array(self.analog_dir)
-            mag = np.linalg.norm(vector)
-            vector = vector / mag
-            speed = mag * speed
-        elif sum(self.app.direction) != 0:
-            # keyboard
-            vector = self.app.direction
-            vector = vector / np.linalg.norm(vector)
-            # when using keyboard, use a height dependent speed.
-            # 0.25 m/s seems to be a reasonable speed limit for 1.62 meters.
-            # the reason being that as gantry height approaches anchor height, the line tension increases exponentially,
-            # and a slower speed is need to maintain enough torque from the stepper motors.
-            z = self.position[1]
-            speed = 0.000000782*z**2 - 0.2605*z + 0.55
-            speed = constrain(speed, 0.01, 0.55)
-
-        else:
-            return
-
-        print(f'direct move {vector} {speed}')
-        self.app.to_ob_q.put({
-            'gantry_dir_sp': {
-                'direction':vector,
-                'speed':speed,
-            }
-        })
-
-        self.speed = speed # in meters per second
-
-    def update(self):
-        # these are available from the update function of any enabled entity
-        net_trigger  = held_keys['gamepad right trigger'] - held_keys['gamepad left trigger']
-        self.analog_dir = [held_keys['gamepad left stick x'], held_keys['gamepad left stick y'], net_trigger]
-
-        # update the indicated direct move (cyan ball)
-        now = time.time()
-        elapsed = now - self.last_update_t
-        p = self.position
-        p += Vec3(
-            self.last_commanded_vel[0] * elapsed,
-            self.last_commanded_vel[2] * elapsed,
-            self.last_commanded_vel[1] * elapsed,
-        )
-        self.position = p
-        # self.enabled = (sum(self.app.direction) > 0)
-
-        self.last_update_t = now
-
         
