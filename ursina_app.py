@@ -344,7 +344,7 @@ class ControlPanelUI:
                 self.to_ob_q.put({'slow_stop_all': None})
             else:
                 # normalize and send
-                vector = self.app.direction
+                vector = self.direction
                 vector = vector / np.linalg.norm(vector)
                 self.to_ob_q.put({
                     'gantry_dir_sp': {

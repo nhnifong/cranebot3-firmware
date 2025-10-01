@@ -41,6 +41,9 @@ gripper_service_name = 'cranebot-gripper-service'
 
 N_ANCHORS = 4
 
+def constrain(value, minimum, maximum):
+    return max(minimum, min(value, maximum))
+
 def figure_8_coords(t):
     """
     Calculates the (x, y) coordinates for a figure-8.

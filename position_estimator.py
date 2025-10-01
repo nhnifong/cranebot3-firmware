@@ -635,6 +635,7 @@ class Positioner2:
         self.to_ui_q.put({'last_commanded_vel': vel})
         self.commanded_vel = vel
         self.commanded_vel_ts = time.time()
+        self.to_ui_q.put({'last_commanded_vel': vel})
 
     async def update_commanded_vel(self):
         """provide an observation to the filter based on the commanded velocity"""
