@@ -13,6 +13,7 @@ from cv_common import compose_poses
 import model_constants
 from scipy.spatial.transform import Rotation
 from kalman_filter import KalmanFilter
+import cv2
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -303,14 +304,16 @@ class Positioner2:
         self.ob = observer
         self.config = Config()
         self.n_cables = len(self.config.anchors)
+        self.work_area = None
         self.anchor_points = np.array([
             [-2,  3, 2],
             [ 2,  3, 2],
             [ -1,-2, 2],
             [ -2,-2, 2],
         ], dtype=float)
-        for i, a in enumerate(self.config.anchors):
-            self.anchor_points[i] = np.array(compose_poses([a.pose, model_constants.anchor_grommet])[1])
+        # save grommet points
+        anchor_points = np.array([compose_poses([a.pose, model_constants.anchor_grommet])[1] for a in self.config.anchors])
+        self.set_anchor_points(anchor_points)
         self.data_ts = time.time()
 
         # the gantry position and velocity estimated from reported line length and speeds.
@@ -381,8 +384,23 @@ class Positioner2:
 
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
+        assert points.shape == (4, 3)
         self.anchor_points = points
 
+        # create and save a 2D contour to be used for containment checking.
+        # it must be a valid clockwise polygon so points are sorted by angle relative to centroid
+        anchor_2d = self.anchor_points[:, 0:2]
+        centroid = np.mean(anchor_2d, axis=0)
+        angles = np.arctan2(anchor_2d[:, 1] - centroid[1], anchor_2d[:, 0] - centroid[0])
+        self.work_area = anchor_2d[np.argsort(angles)].astype(np.float32)
+
+    def point_inside_work_area(self, point):
+        if self.work_area is None:
+            return False
+        in_2d = cv2.pointPolygonTest(self.work_area, (float(point[0]), float(point[1])), False) > 0
+        min_anchor_z = np.min(self.pe.anchor_points[:, 2])
+        in_z = 0 < point[2] < min_anchor_z
+        return in_2d and in_z
 
     def find_swing(self):
         """When the gantry is still, the IMU's quaternion readout can be used to estimate the gantry swing params
