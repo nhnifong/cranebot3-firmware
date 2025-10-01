@@ -447,10 +447,9 @@ class Floor(Entity):
         # collect input from attatched gamepad
         # these are available from the update function of any enabled entity
         net_trigger  = held_keys['gamepad right trigger'] - held_keys['gamepad left trigger']
-        analog_dir = [held_keys['gamepad left stick x'], held_keys['gamepad left stick y'], net_trigger]
-        if sum(analog_dir) > 0:
-            vector = np.array(self.analog_dir)
-            mag = np.linalg.norm(vector)
+        vector = np.array([held_keys['gamepad left stick x'], held_keys['gamepad left stick y'], net_trigger])
+        mag = np.linalg.norm(vector)
+        if mag > 0:
             vector = vector / mag
             speed = 0.25 * mag
             # Command the movement
@@ -462,7 +461,7 @@ class Floor(Entity):
             })
             self.possibly_moving = True
         elif self.possibly_moving:
-            self.to_ob_q.put({'slow_stop_all': None})
+            self.app.to_ob_q.put({'slow_stop_all': None})
             self.possibly_moving = False
 
     def button_confirm(self):
@@ -586,30 +585,16 @@ class IndicatorSphere(Entity):
 class VelocityArrow(Entity):
     """A debugging arrow entity to visualize a velocity vector."""
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, 
+            model='arrow',
+            scale=1000, # because its' a child of gantry which has a scale of 1/1000 for some reason
+            **kwargs)
         self.zup_vel = np.zeros(3)
-
-        # The arrow is composed of a shaft (cylinder) and a head (cone)
-        self.shaft = Entity(
-            parent=self,
-            model='cylinder',
-            color=kwargs['color'],
-            scale=(0.5, 1, 0.5), # y-scale will be controlled by magnitude
-            shader=unlit_shader
-        )
-        self.head = Entity(
-            parent=self,
-            model='cone',
-            color=kwargs['color'],
-            scale=(1, 0.5, 1),
-            y=0.5,
-            shader=unlit_shader
-        )
-        self.scale
 
     def set_velocity(self, vel):
         """Sets the velocity vector to visualize in z-up space."""
         self.zup_vel = np.array(vel)
+        print(f'vis velocity {vel}')
         magnitude = np.linalg.norm(self.zup_vel)
 
         # If magnitude is zero, hide the arrow
@@ -618,10 +603,7 @@ class VelocityArrow(Entity):
             return
         self.enabled = True
 
-        self.shaft.scale_y = magnitude
-        self.head.y = magnitude / 2
-        self.head.scale = self.shaft.scale_x * 2
-
-        yup_vel = swap_yz(self.zup_vel)
-        self.up = yup_vel.normalized()
+        self.scale = [100, 100, 1000*magnitude]
+        yup_vel = swap_yz(self.zup_vel / magnitude)
+        self.look_at(yup_vel)
         

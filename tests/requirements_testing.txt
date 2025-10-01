@@ -10,7 +10,7 @@ zeroconf==0.147.0
 asyncio==3.4.3
 websockets==15.0.1
 panda3d==1.10.15
-pupil-apriltags
-av
-lerobot
-grpcio-tools
+grpcio-tools==1.75.1
+pupil-apriltags==1.0.4.post11
+av==15.1.0
+lerobot==0.3.3
