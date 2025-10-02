@@ -563,8 +563,8 @@ def start_ui(to_ui_q, to_ob_q, register_input):
     register_input(cpui)
 
     # use simple threading here. ursina has it's own loop that conflicts with asyncio
-    estimator_update_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
-    estimator_update_thread.start()
+    receive_updates_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
+    receive_updates_thread.start()
 
     def stop_other_processes():
         print("UI window closed. stopping other processes")

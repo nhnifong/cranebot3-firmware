@@ -241,6 +241,9 @@ def swing_angle_from_params(t, freq, xamp, yamp, xphase, yphase):
     return np.column_stack([xangles, yangles])
 
 def swing_angle_from_params_transformed(t, freq, xamp, yamp, cos_xph, sin_xph, cos_yph, sin_yph):
+    """
+    A cost function in phase space
+    """
     omega_t = freq * t * 2 * np.pi
     cos_omega_t = np.cos(omega_t)
     sin_omega_t = np.sin(omega_t)
@@ -403,7 +406,8 @@ class Positioner2:
         return in_2d and in_z
 
     def find_swing(self):
-        """When the gantry is still, the IMU's quaternion readout can be used to estimate the gantry swing params
+        """The gantry is what the gripper hangs from, so When the gantry is still,
+        the IMU's quaternion readout should depend only on the gripper swing.
 
         "still" means you can use any IMU observation that occured when all anchor lines had speed 0.
 
@@ -419,13 +423,18 @@ class Positioner2:
             return
         # convert to x and y angle offsets from vertical.
         timestamps = imu_readings[:,0]
+        # TODO normalize timestamps so that numerical instability does not harm optimization
 
+        # take the x and y tilt from vertical.
+        # TODO z is free to rotate, do x and y tilt need to be altered so as to align with an unmoving coordinate space or
+        # is the estimate still good without doing this? or is the IMU already doing this for us? determime experimentally.
         angles = Rotation.from_rotvec(imu_readings[:,1:]).as_euler('xyz')[:,:2]
         if np.sum(angles[-1]) == 0:
             return
         # print(f'angles = {angles[-1]}')
 
         # get the winch line length and use it to bound the swing frequency
+        # TODO, if the line cannot be zeroed physically, this could be off more than 1 meter.
         _, length, _ = self.datastore.winch_line_record.getLast()
         if length == 0:
             return
