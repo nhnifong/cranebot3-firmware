@@ -415,13 +415,13 @@ class RaspiAnchorServer(RobotComponentServer):
         current_speed = self.conf['tightening_speed']
 
         for attempt in range(1, max_retries + 1):
-            # 1. Pull in the line until the switch clicks
+            # Pull in the line until the switch clicks
             while not self.tight_check():
                 self.spooler.setAimSpeed(current_speed)
                 await asyncio.sleep(check_interval_s)
             self.spooler.setAimSpeed(0)
 
-            # 2. Monitor for re-loosening over the next 3 seconds
+            # Monitor for re-loosening over the next 3 seconds
             loosened = False
             # Calculate when the monitoring window should end
             end_time = time.monotonic() + monitoring_duration_s
@@ -431,7 +431,7 @@ class RaspiAnchorServer(RobotComponentServer):
                     break  # Exit monitoring loop immediately on slip
                 await asyncio.sleep(check_interval_s)
 
-            # 3. Check the outcome
+            # Check the outcome
             if not loosened:
                 print(f"Tightening successful on attempt {attempt}.")
                 return # Success!

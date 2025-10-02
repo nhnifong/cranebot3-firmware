@@ -17,10 +17,6 @@ class RobotControlService(RobotControlServiceServicer):
     """
 
     def __init__(self, app_state_manager):
-        """
-        Initialize the service with a reference to your application's state manager
-        or any other object that provides access to your application's core logic.
-        """
         self.ob = app_state_manager # the instance of AsyncObserver
         print("RobotControlService initialized.")
 

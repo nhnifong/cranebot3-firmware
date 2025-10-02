@@ -333,7 +333,4 @@ async def main():
         print("RPiCamVidMock demonstration finished.")
 
 if __name__ == "__main__":
-    # To run this, you need to have Panda3D and Pillow installed:
-    # pip install panda3d Pillow
-    # Run from your terminal: python your_script_name.py
     asyncio.run(main())

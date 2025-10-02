@@ -32,6 +32,7 @@ import cv2
 import pickle
 from collections import deque
 from trainer.control_service import start_robot_control_server
+from utils import constrain, motion_task
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -92,6 +93,7 @@ class AsyncObserver:
         self.test_gantry_goal_callback = None
         # event used to notify tasks that gripper is connected.
         self.gripper_client_connected = asyncio.Event()
+        self.grpc_server = None
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -327,18 +329,35 @@ class AsyncObserver:
             asyncio.create_task(client.slow_stop_spool())
         self.pe.record_commanded_vel(np.zeros(3))
 
-    def set_run_mode(self, mode):
+    async def set_run_mode(self, mode):
         """Sets the robot mode."""
         if mode == "run":
             self.calmode = mode
             print("run mode")
+            self.pe.enable_wand(False)
         elif mode == "pause":
             self.calmode = mode
-            self.slow_stop_all_spools()
+            await self.stop_all()
         elif mode == 'train':
-            # TODO, this should have the effect of allowing actions from the GRPC channel and acting as a
-            # motion task that runs indefinitely.
+            await self.invoke_motion_task(self.begin_training_mode())
+
+    @motion_task
+    async def begin_training_mode(self):
+        """Begin allowing the robot to be controlled from the grpc server
+        This is a motion task since movement could occur at any time while the server is running"""
+        try:
+            self.pe.enable_wand() # enable kalamn processing of wand tag obervations
             self.calmode = 'training'
+            # begin allowing actions from self.grpc_server
+            self.grpc_server = await start_robot_control_server(self)
+            await self.grpc_server.wait_for_termination()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            print('training server closed.')
+            await self.grpc_server.stop(grace=5)
+            self.grpc_server = None
+            self.slow_stop_all_spools()
 
     async def locate_anchors(self):
         """using the record of recent origin detections, estimate the pose of each anchor."""
@@ -366,6 +385,7 @@ class AsyncObserver:
             anchor_poses.append(pose)
         return np.array(anchor_poses)
 
+    @motion_task
     async def half_auto_calibration(self):
         """Optimize zero angles from a few points
         This is a motion task"""
@@ -391,6 +411,7 @@ class AsyncObserver:
         except asyncio.CancelledError:
             raise
 
+    @motion_task
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
@@ -594,6 +615,7 @@ class AsyncObserver:
 
         return data
 
+    @motion_task
     async def horizontal_line_task(self):
         """
         Attempt to move the gantry in a perfectly horizontal line. How hard could this be?
@@ -744,11 +766,6 @@ class AsyncObserver:
 
             # A task that continuously estimates the position of the gantry
             self.pe_task = asyncio.create_task(self.pe.main())
-
-            # start grpc server for connections to lerobot scripts
-            # is has a referece to this singleton and calls certain methos to move the robot or collect observations
-            # see trainer/control_service.py
-            self.grpc_server = await start_robot_control_server(self)
             
             # await something that will end when the program closes that to keep zeroconf alive and discovering services.
             try:
@@ -765,7 +782,9 @@ class AsyncObserver:
         self.pe.run = False
         self.fig_8 = False
         self.pe_task.cancel()
-        tasks = [self.pe_task, self.grpc_server.stop(grace=5)]
+        tasks = [self.pe_task]
+        if self.grpc_server is not None:
+            tasks.append(self.grpc_server.stop(grace=5))
         if self.aiobrowser is not None:
             tasks.append(self.aiobrowser.async_cancel())
         if self.aiozc is not None:
@@ -919,6 +938,7 @@ class AsyncObserver:
         }))
         return line_speed, finger_angle
 
+    @motion_task
     async def seek_gantry_goal(self):
         """
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
@@ -945,6 +965,7 @@ class AsyncObserver:
             self.gantry_goal_pos = None
             self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
+    @motion_task
     async def blind_move_to_goal(self):
         """Only measures current position once, then moves in the right direction
         for the amount of time it should take to get to the goal.
@@ -994,15 +1015,11 @@ class AsyncObserver:
         # Enforce a height dependent speed limit.
         # the reason being that as gantry height approaches anchor height, the line tension increases exponentially,
         # and a slower speed is need to maintain enough torque from the stepper motors.
-        # this function was determined through some trial and error.
-        # TODO reformulate it for possibly taller or shorter installations. it's not distance from the ground that matters
-        # but how low we are hanging from the average anchor height.
-        z = starting_pos[1]
-        speed_limit = 0.000000782*z**2 - 0.2605*z + 0.55
-        speed_limit = constrain(speed_limit, 0.01, 0.55)
+        # The speed limit is proportional to how far the gantry hangs below a level 30cm below the average anchor.
+        # This makes the behavior consistent across installations of different heights.
+        hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
+        speed_limit = constrain(0.3 * (hang_distance - 0.3), 0.01, 0.55)
         speed = min(speed, speed_limit)
-
-        # TODO: zero the speed if it would move the gantry out of the work area
 
         # when a very small speed is provided, clamp it to zero.
         if speed < 0.005:
@@ -1012,7 +1029,6 @@ class AsyncObserver:
             for client in self.anchors:
                 asyncio.create_task(client.send_commands({'aim_speed': 0}))
             velocity = np.zeros(3)
-            self.to_ui_q.put({'last_commanded_vel': velocity})
             self.pe.record_commanded_vel(velocity)
             return velocity
 
@@ -1030,6 +1046,10 @@ class AsyncObserver:
         lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # line lengths at new pos
         new_pos = starting_pos + (uvec / KINEMATICS_STEP_SCALE)
+        # zero the speed if this would move the gantry out of the work area
+        if not self.pe.point_inside_work_area(new_pos):
+            speed = 0
+            velocity = np.zeros(3)
         lengths_b = np.linalg.norm(new_pos - self.pe.anchor_points, axis=1)
         # length changes needed to travel a small distance in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
@@ -1038,10 +1058,10 @@ class AsyncObserver:
         # send move
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
-        self.to_ui_q.put({'last_commanded_vel': velocity})
         self.pe.record_commanded_vel(velocity)
         return velocity
 
+    @motion_task
     async def move_in_figure_8(self):
         """
         Move in a figure-8 pattern until interrupted by some other input.

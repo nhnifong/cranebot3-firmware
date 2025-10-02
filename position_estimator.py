@@ -90,17 +90,17 @@ def sphere_circle_intersection(sphere_center, sphere_radius, circle_center, circ
         Returns two identical points for the tangency case.
     """
 
-    # 1. Project sphere's center onto the plane of the circle
+    # Project sphere's center onto the plane of the circle
     distance_to_circle_plane = np.dot(sphere_center - circle_center, circle_normal)
     projected_sphere_center = sphere_center - distance_to_circle_plane * circle_normal
 
-    # 2. Effective radius of the sphere in the circle's plane
+    # Effective radius of the sphere in the circle's plane
     projected_sphere_radius_squared = sphere_radius**2 - distance_to_circle_plane**2
     if projected_sphere_radius_squared < -1e-9:
         return []  # No intersection with the plane
     projected_sphere_radius = np.sqrt(np.maximum(0, projected_sphere_radius_squared))
 
-    # 3. Find an orthonormal basis for the plane of the circle
+    # Find an orthonormal basis for the plane of the circle
     if np.abs(np.dot(circle_normal, np.array([0, 0, 1]))) < 1 - 1e-9:
         u_direction = np.cross(circle_normal, np.array([0, 0, 1]))
     else:
@@ -108,12 +108,12 @@ def sphere_circle_intersection(sphere_center, sphere_radius, circle_center, circ
     u_direction = u_direction / np.linalg.norm(u_direction)
     v_direction = np.cross(circle_normal, u_direction)
 
-    # 4. Centers of the two circles in the 2D basis
+    # Centers of the two circles in the 2D basis
     center_offset = projected_sphere_center - circle_center
     x0 = np.dot(center_offset, u_direction)
     y0 = np.dot(center_offset, v_direction)
 
-    # 5. Solve for the intersection of the two 2D circles
+    # Solve for the intersection of the two 2D circles
     centers_distance = np.sqrt(x0**2 + y0**2)
 
     if centers_distance > circle_radius + projected_sphere_radius + 1e-9 or centers_distance < np.abs(circle_radius - projected_sphere_radius) - 1e-9:
@@ -385,6 +385,14 @@ class Positioner2:
         self.commanded_vel = np.zeros(3)
         self.commanded_vel_ts = time.time()
 
+        # wand tracking variables
+        self.wand_tracking_enabled = False
+        self.last_wand_cutoff = time.time()
+        self.wandkf = KalmanFilter(self.sensor_names[:4], acceleration_std_dev, bias_std_dev) # no hang
+        self.wand_pos = np.zeros(3, dtype=float)
+        self.wand_vel = np.zeros(3, dtype=float)
+
+
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
         assert points.shape == (4, 3)
@@ -515,6 +523,10 @@ class Positioner2:
             self.kf.predict_present()
             self.gant_pos = self.kf.state_estimate[:3].copy()
             self.gant_vel = self.kf.state_estimate[3:6].copy()
+            if self.wand_tracking_enabled:
+                self.wandkf.predict_present()
+                self.wand_pos = self.wandkf.state_estimate[:3].copy()
+                self.wand_vel = self.wandkf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
             self.send_positions()
 
@@ -545,6 +557,19 @@ class Positioner2:
                 self.visual_pos = self.visual_pos * 0.9 + this_visual_pos * 0.1
 
             self.visual_time_taken = time.time()-start_time
+
+            # If enabled, update a second kalman filter to track the wand position
+            # use any wand observations that have occured since the last run of this loop.
+            if self.wand_tracking_enabled:
+                data = self.datastore.wand_pos.deepCopy(cutoff=self.last_wand_cutoff)
+                if len(data) == 0:
+                    continue
+                self.last_wand_cutoff = np.max(data[:,0])
+                for measurement in data:
+                    timestamp = measurement[0]
+                    anchor_num = int(measurement[1])
+                    this_visual_pos = measurement[2:]
+                    self.wandkf.update(this_visual_pos, timestamp, self.visual_noise_covariance, 'position', self.sensor_names[anchor_num])
 
     async def update_hang(self):
         while self.run:
@@ -607,6 +632,7 @@ class Positioner2:
             self.hang_time_taken = time.time()-start_time
 
     def record_commanded_vel(self, vel):
+        self.to_ui_q.put({'last_commanded_vel': vel})
         self.commanded_vel = vel
         self.commanded_vel_ts = time.time()
 
@@ -668,11 +694,19 @@ class Positioner2:
                 },
             # 'goal_points': self.des_grip_locations, # each goal is a time and a position
         }
+        if self.wand_tracking_enabled:
+            update_for_ui['wand'] = {
+                'wand_pos': self.wand_pos,
+                'wand_vel': self.wand_vel,
+                },
         self.to_ui_q.put(update_for_ui)
 
     def notify_update(self, update):
         if 'holding' in update:
             self.holding = update['holding']
+
+    def enable_wand(self, enable=True):
+        self.wand_tracking_enabled = enable
 
     async def main(self):
         print('Starting position estimator')
