@@ -594,7 +594,6 @@ class VelocityArrow(Entity):
     def set_velocity(self, vel):
         """Sets the velocity vector to visualize in z-up space."""
         self.zup_vel = np.array(vel)
-        print(f'vis velocity {vel}')
         magnitude = np.linalg.norm(self.zup_vel)
 
         # If magnitude is zero, hide the arrow
