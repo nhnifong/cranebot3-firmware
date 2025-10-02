@@ -545,8 +545,6 @@ class Positioner2:
             self.last_visual_cutoff = np.max(data[:,0])
 
             # update filter with every datapoint
-            # (or if that is too slow, update once with the mean of all the data points)
-
             for measurement in data:
                 timestamp = measurement[0]
                 anchor_num = int(measurement[1])
