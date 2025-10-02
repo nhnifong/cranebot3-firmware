@@ -172,6 +172,9 @@ class ControlPanelUI:
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
 
+        # Visual feedback of detected wand position
+        self.wand_indicator = IndicatorSphere(color=color.green, model='cube', enabled=False)
+
     def _create_hud_panels(self):
         # Create the main status panel, text elements, buttons
         self.modePanel = Panel(model='quad', z=99, 
@@ -551,6 +554,11 @@ class ControlPanelUI:
 
         if 'last_commanded_vel' in updates:
             self.commanded_velocity_indicator.set_velocity(updates['last_commanded_vel'])
+
+        if 'wand' in updates:
+            p = updates['wand']
+            self.wand_indicator.set_position_velocity(p['wand_pos'], p['wand_vel'])
+            self.wand_indicator.enabled = True
 
     def start(self):
         self.app.run()

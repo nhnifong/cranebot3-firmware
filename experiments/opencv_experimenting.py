@@ -9,10 +9,6 @@ from cv_common import cranebot_boards, cranebot_detectors
 
 capture_url = "http://192.168.1.146/capture?_cb=%d"
 
-# Camera calibration parameters (replace with your calibrated values!)
-# camera_matrix = np.array([[600, 0, 320], [0, 600, 240], [0, 0, 1]], dtype=np.float32) # Example values
-# dist_coeffs = np.array([0.1, -0.01, 0.001, 0.0001, 0], dtype=np.float32) # Example Distortion coefficients
-
 # Intrinsic Matrix: 
 camera_matrix = np.array(
 [[1.55802968e+03, 0.00000000e+00, 8.58167917e+02],

@@ -5,6 +5,7 @@ import serial
 import logging
 import asyncio
 import numpy as np
+from utils import constrain
 
 # values that can be overridden by the controller
 default_conf = {
@@ -19,9 +20,6 @@ default_conf = {
     # record line length every x iterations of tracking loop
     'REC_MOD': 3,
 }
-
-def constrain(value, minimum, maximum):
-    return max(minimum, min(value, maximum))
 
 class SpiralCalculator:
     def __init__(self, empty_diameter, full_diameter, full_length, gear_ratio, motor_orientation):

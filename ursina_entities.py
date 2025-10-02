@@ -9,9 +9,7 @@ import model_constants
 from scipy.spatial.transform import Rotation
 from functools import partial
 import time
-
-def constrain(value, minimum, maximum):
-    return max(minimum, min(value, maximum))
+from utils import constrain
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -563,9 +561,8 @@ class ThinSliderLog2(ThinSlider):
         self.knob.text_entity.text = str(round(self.finalValue(), 3))
 
 class IndicatorSphere(Entity):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs, 
-            model='sphere',
+    def __init__(self, model='sphere', *args, **kwargs):
+        super().__init__(*args, **kwargs,
             position=(0,0,0),
             scale=(0.06),
             shader=unlit_shader)

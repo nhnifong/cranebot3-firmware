@@ -19,6 +19,7 @@ import model_constants
 import time
 from zeroconf import IPVersion
 from zeroconf.asyncio import AsyncZeroconf
+from utils import constrain
 
 class TestObserver(unittest.IsolatedAsyncioTestCase):
 
@@ -45,6 +46,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
         self.mock_pe.main = mock_pe_main
         self.mock_pe.anchor_points = self.anchor_points
+        self.mock_pe.gant_pos = np.array([0.4, 0.5, 0.6])
         self.patchers.append(patch('observer.Positioner2', self.mock_pe_class))
 
         self.mock_gripper_client_class = Mock(spec=RaspiGripperClient)
@@ -54,11 +56,15 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client.connection_established_event = asyncio.Event()
         self.patchers.append(patch('observer.RaspiGripperClient', self.mock_gripper_client_class))
 
-        self.mock_anchor_client_class = Mock(spec=RaspiAnchorClient)
-        self.mock_anchor_client = self.mock_anchor_client_class.return_value
-        self.mock_anchor_client.startup = self.event_startup
-        self.mock_anchor_client.shutdown = self.event_shutdown
-        self.patchers.append(patch('observer.RaspiAnchorClient', self.mock_anchor_client_class))
+        # Create four mock anchor clients
+        self.mock_anchor_clients = [Mock(spec=RaspiAnchorClient) for _ in range(4)]
+        for i, client in enumerate(self.mock_anchor_clients):
+            client.startup = self.event_startup
+            client.shutdown = self.event_shutdown
+            client.anchor_num = i
+
+        # The side_effect makes it so each call to the constructor returns the next mock
+        self.patchers.append(patch('observer.RaspiAnchorClient', side_effect=self.mock_anchor_clients))
 
         for p in self.patchers:
             p.start()
@@ -90,6 +96,13 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
     async def event_shutdown(self):
         print('gripper client shutdown called')
         self.watchable_shutdown_event.set()
+
+    async def _setup_mock_anchors(self):
+        """Helper method to populate the observer's anchor list with our mocks."""
+        self.ob.anchors = self.mock_anchor_clients
+        for i, client in enumerate(self.ob.anchors):
+            # Give each mock an anchor_pose attribute, as used in the method under test
+            client.anchor_pose = (np.identity(3), self.anchor_points[i])
 
     async def test_startup_shutdown(self):
         # this test is only confirming that that asyncSetUp, which calls ob.main(), works correctly,
@@ -160,13 +173,181 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         """
         pass # TODO
 
+    async def test_move_direction_speed_normal_case(self):
+        """Tests the standard execution path with valid inputs."""
+        await self._setup_mock_anchors()
+        self.mock_pe.point_inside_work_area.return_value = True
+
+        uvec = np.array([1.0, 0.0, 0.0])
+        speed = 0.1
+        downward_bias = -0.04
+        
+        # Manually calculate expected results
+        biased_uvec = uvec + np.array([0, 0, downward_bias])
+        normalized_biased_uvec = biased_uvec / np.linalg.norm(biased_uvec)
+        expected_velocity = normalized_biased_uvec * speed
+        
+        # Reproduce the kinematics calculation that is done in the code under test
+        KINEMATICS_STEP_SCALE = 10.0
+        starting_pos = self.mock_pe.gant_pos
+        lengths_a = np.linalg.norm(starting_pos - self.anchor_points, axis=1)
+        new_pos = starting_pos + (normalized_biased_uvec / KINEMATICS_STEP_SCALE)
+        lengths_b = np.linalg.norm(new_pos - self.anchor_points, axis=1)
+        deltas = lengths_b - lengths_a
+        expected_line_speeds = deltas * KINEMATICS_STEP_SCALE * speed
+
+        # Call the method
+        returned_velocity = await self.ob.move_direction_speed(uvec, speed)
+        await asyncio.sleep(0) # Allow created tasks to run
+
+        # Assertions
+        np.testing.assert_allclose(returned_velocity, expected_velocity, atol=1e-6)
+        self.mock_pe.record_commanded_vel.assert_called_once_with(ANY)
+        np.testing.assert_allclose(self.mock_pe.record_commanded_vel.call_args[0][0], expected_velocity, atol=1e-6)
+
+        for i, client in enumerate(self.ob.anchors):
+            client.send_commands.assert_called_once_with({'aim_speed': expected_line_speeds[i]})
+
+    async def test_move_direction_speed_no_speed_provided(self):
+        """Tests the path where speed is derived from the uvec magnitude (lerobot mode)."""
+        await self._setup_mock_anchors()
+        self.mock_pe.point_inside_work_area.return_value = True
+
+        # uvec magnitude is the speed
+        velocity_vec = np.array([0.0, 0.2, 0.0])
+        
+        returned_velocity = await self.ob.move_direction_speed(velocity_vec)
+        await asyncio.sleep(0)
+
+        # Expected speed is the norm of the input vector
+        expected_speed = np.linalg.norm(velocity_vec)
+        self.assertAlmostEqual(expected_speed, 0.2)
+
+        # Ensure that send_commands was called on all anchors with non-zero speeds
+        for client in self.ob.anchors:
+            client.send_commands.assert_called_once()
+            sent_speed = client.send_commands.call_args[0][0]['aim_speed']
+            self.assertNotEqual(sent_speed, 0)
+        self.mock_pe.record_commanded_vel.assert_called_once()
+
+    async def test_move_direction_speed_limited_by_height(self):
+        """Tests the path where the requested speed is clamped by the height-based speed limit."""
+        await self._setup_mock_anchors()
+        self.mock_pe.point_inside_work_area.return_value = True
+        
+        # Set a high z-position to get a low speed limit
+        self.mock_pe.gant_pos = np.array([0.0, 0.0, 1.9])
+        expected_speed = 0.01
+        
+        # Request a speed much higher than the limit
+        uvec = np.array([0.0, 1.0, 0.0])
+        speed = 0.5 # much higher than ~0.055
+        
+        returned_velocity = await self.ob.move_direction_speed(uvec, speed)
+        await asyncio.sleep(0)
+
+        # The magnitude of the returned velocity should be the speed limit, not the requested speed
+        returned_speed = np.linalg.norm(returned_velocity)
+        self.assertAlmostEqual(returned_speed, expected_speed, places=5)
+        self.mock_pe.record_commanded_vel.assert_called_once()
+        for client in self.ob.anchors:
+            client.send_commands.assert_called_once()
+
+    async def test_move_direction_speed_clamps_to_zero(self):
+        """Tests the path where a very low speed is clamped to zero, causing an early return."""
+        await self._setup_mock_anchors()
+        
+        uvec = np.array([0.0, 1.0, 0.0])
+        speed = 0.004 # Below the 0.005 threshold
+        
+        returned_velocity = await self.ob.move_direction_speed(uvec, speed)
+        await asyncio.sleep(0)
+
+        # Assertions for the speed == 0 path
+        np.testing.assert_array_equal(returned_velocity, np.zeros(3))
+        self.mock_pe.record_commanded_vel.assert_called_once_with(ANY)
+        np.testing.assert_array_equal(self.mock_pe.record_commanded_vel.call_args[0][0], np.zeros(3))
+        
+        for client in self.ob.anchors:
+            client.send_commands.assert_called_once_with({'aim_speed': 0})
+            
+    async def test_move_direction_speed_outside_work_area(self):
+        """Tests the safety feature where a move outside the work area results in zero speed commands."""
+        await self._setup_mock_anchors()
+        # Mock the safety check to return False
+        self.mock_pe.point_inside_work_area.return_value = False
+
+        uvec = np.array([0.0, 0.0, 1.0])
+        speed = 0.2
+
+        returned_velocity = await self.ob.move_direction_speed(uvec, speed)
+        await asyncio.sleep(0)
+
+        # The returned velocity should be zero
+        np.testing.assert_allclose(returned_velocity, np.zeros(3), atol=1e-6)
+        self.mock_pe.record_commanded_vel.assert_called_once_with(ANY)
+        np.testing.assert_allclose(self.mock_pe.record_commanded_vel.call_args[0][0], np.zeros(3), atol=1e-6)
+        
+        # The line speeds should be zero because the internal speed variable was zeroed out
+        for client in self.ob.anchors:
+            client.send_commands.assert_called_once_with({'aim_speed': 0.0})
+
+    async def test_invoke_motion_task_cancels_previous(self):
+        """
+        Verifies that calling invoke_motion_task while another motion task is
+        running will cancel the first task before starting the second.
+        """
+        # Events to signal the state of our mock tasks
+        task1_started = asyncio.Event()
+        task1_cleanup_finished = asyncio.Event()
+        task2_started = asyncio.Event()
+
+        # Define a mock motion task that follows the required structure
+        async def mock_motion_task_1():
+            try:
+                task1_started.set()
+                # Keep the task alive until it's cancelled
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                # Signal that cleanup has run
+                task1_cleanup_finished.set()
+
+        async def mock_motion_task_2():
+            task2_started.set()
+            await asyncio.sleep(0.1) # a short-lived task
+
+        # Invoke the first task
+        await self.ob.invoke_motion_task(mock_motion_task_1())
+        # Store the task object for later inspection
+        first_task_handle = self.ob.motion_task
+        
+        # Wait until the first task is confirmed to be running
+        await asyncio.wait_for(task1_started.wait(), timeout=1)
+        self.assertFalse(first_task_handle.done(), "First task should be running.")
+
+        # Invoke the second task, which should cancel the first
+        await self.ob.invoke_motion_task(mock_motion_task_2())
+        second_task_handle = self.ob.motion_task
+
+        # Verify the cancellation and cleanup of the first task
+        await asyncio.wait_for(task1_cleanup_finished.wait(), timeout=1)
+        self.assertTrue(first_task_handle.cancelled(), "First task should be marked as cancelled.")
+        
+        # Verify the second task started successfully
+        await asyncio.wait_for(task2_started.wait(), timeout=1)
+        self.assertNotEqual(first_task_handle, second_task_handle, "A new task object should have been created.")
+        self.assertFalse(second_task_handle.done(), "Second task should be running initially.")
+        
+        # Allow the second task to finish
+        await asyncio.sleep(0.2)
+        self.assertTrue(second_task_handle.done(), "Second task should have completed by now.")
+
 # other functions to test:
-# move_direction_speed - this is a critical function and deserves exhaustive testing.
 # stop_all
 # _handle_jog_spool
 # sendReferenceLengths
 # _handle_zero_winch_line
-# test that starting a motion task and then another aborts the first.
 # tension_and_wait
 # locate_anchors
-#
