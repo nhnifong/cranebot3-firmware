@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import inspect
 
 def motion_task(func):
     """

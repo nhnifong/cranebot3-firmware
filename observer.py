@@ -344,7 +344,6 @@ class AsyncObserver:
         elif mode == 'train':
             await self.invoke_motion_task(self.begin_training_mode())
 
-    @motion_task
     async def begin_training_mode(self):
         """Begin allowing the robot to be controlled from the grpc server
         This is a motion task since movement could occur at any time while the server is running"""
@@ -388,7 +387,6 @@ class AsyncObserver:
             anchor_poses.append(pose)
         return np.array(anchor_poses)
 
-    @motion_task
     async def half_auto_calibration(self):
         """Optimize zero angles from a few points
         This is a motion task"""
@@ -414,7 +412,6 @@ class AsyncObserver:
         except asyncio.CancelledError:
             raise
 
-    @motion_task
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
@@ -618,7 +615,6 @@ class AsyncObserver:
 
         return data
 
-    @motion_task
     async def horizontal_line_task(self):
         """
         Attempt to move the gantry in a perfectly horizontal line. How hard could this be?
@@ -941,7 +937,6 @@ class AsyncObserver:
         }))
         return line_speed, finger_angle
 
-    @motion_task
     async def seek_gantry_goal(self):
         """
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
@@ -968,7 +963,6 @@ class AsyncObserver:
             self.gantry_goal_pos = None
             self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
-    @motion_task
     async def blind_move_to_goal(self):
         """Only measures current position once, then moves in the right direction
         for the amount of time it should take to get to the goal.
@@ -1064,7 +1058,6 @@ class AsyncObserver:
         self.pe.record_commanded_vel(velocity)
         return velocity
 
-    @motion_task
     async def move_in_figure_8(self):
         """
         Move in a figure-8 pattern until interrupted by some other input.

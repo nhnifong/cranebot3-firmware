@@ -16,6 +16,7 @@ distortion = config.distortion_coeff
 marker_names = [
     'origin',
     'gantry',
+    'wand',
 ]
 
 # AprilTag images are typically downloaded, not generated in code.

@@ -32,7 +32,7 @@ class StringmanTrainingWand(Teleoperator):
     config_class = WandConfig
     name = "stringman_training_wand"
 
-    def __init__(self, config: WandConfig):
+    def __init__(self, config: WandConfig, events: dict = None):
         super().__init__(config)
         self.config = config
         self.channel_address = 'localhost:50051'
@@ -42,6 +42,9 @@ class StringmanTrainingWand(Teleoperator):
         self._bt_connected: bool = False
         self._stop_event = threading.Event()
         self.last_wand_state: dict[str, Any] = {"trigger": 0.0, "buttons": [False] * 3}
+
+        # object used for forwarding episode start/stop event
+        self.events = events
 
 
     @property
@@ -166,7 +169,17 @@ class StringmanTrainingWand(Teleoperator):
         for i in range(3):
             buttons[i] = parts[i] == '1'
         analog_value = float(parts[3])
-        logging.debug(f"B1: {buttons[0]}, B2: {buttons[0]}, B3: {buttons[2]}, Trigger: {analog_value}, Raw: {parts[4]}")
+        logging.debug(f"B1: {buttons[0]}, B2: {buttons[1]}, B3: {buttons[2]}, Trigger: {analog_value}, Raw: {parts[4]}")
+
+        if self.events is not None:
+            # Check for a rising edge on the first button (i.e., a press)
+            is_pressed = buttons[0]
+            was_pressed = self.last_wand_state["buttons"][0]
+            
+            if is_pressed and not was_pressed:
+                logging.info("Wand button pressed, signaling end of episode.")
+                # This flag tells record_loop to stop its current run gracefully.
+                self.events["exit_early"] = True
 
         # Store last trigger and button state so it can be used in get_action
         self.last_wand_state["buttons"] = buttons
