@@ -175,7 +175,6 @@ class StringmanTrainingWand(Teleoperator):
             # Check for a rising edge on the first button (i.e., a press)
             is_pressed = buttons[0]
             was_pressed = self.last_wand_state["buttons"][0]
-            
             if is_pressed and not was_pressed:
                 logging.info("Wand button pressed, signaling end of episode.")
                 # This flag tells record_loop to stop its current run gracefully.
