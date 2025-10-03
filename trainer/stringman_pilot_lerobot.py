@@ -129,5 +129,5 @@ class StringmanPilotRobot(Robot):
         # Call the synchronous stub method
         response: TakeActionResponse = self.stub.TakeAction(request)
 
-        # return the action that was actually sent
+        # TODO return the action that was actually taken
         return action

@@ -564,7 +564,8 @@ class IndicatorSphere(Entity):
         super().__init__(*args, **kwargs,
             position=(0,0,0),
             scale=(0.06),
-            shader=unlit_shader)
+            shader=unlit_shader,
+            model=model)
         self.zup_pos = np.zeros(3)
         self.zup_vel = np.zeros(3)
         self.last_update_t = time.time()

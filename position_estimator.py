@@ -409,7 +409,7 @@ class Positioner2:
         if self.work_area is None:
             return False
         in_2d = cv2.pointPolygonTest(self.work_area, (float(point[0]), float(point[1])), False) > 0
-        min_anchor_z = np.min(self.pe.anchor_points[:, 2])
+        min_anchor_z = np.min(self.anchor_points[:, 2])
         in_z = 0 < point[2] < min_anchor_z
         return in_2d and in_z
 
@@ -697,7 +697,7 @@ class Positioner2:
             update_for_ui['wand'] = {
                 'wand_pos': self.wand_pos,
                 'wand_vel': self.wand_vel,
-                },
+                }
         self.to_ui_q.put(update_for_ui)
 
     def notify_update(self, update):
