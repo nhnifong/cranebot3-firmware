@@ -59,7 +59,7 @@ class MapPhoneActionToStringmanAction(RobotActionProcessorStep):
         rot = action.pop("phone.rot")
         inputs = action.pop("phone.raw_inputs")
 
-        # --- 1. Calculate and Smooth Phone Velocity ---
+        # Calculate and Smooth Phone Velocity
         current_time = time.time()
         velocity = np.zeros(3)
 
@@ -82,17 +82,12 @@ class MapPhoneActionToStringmanAction(RobotActionProcessorStep):
         if not enabled:
             self._smoothed_velocity = np.zeros(3)
 
-        # --- 2. Map Smoothed Velocity to Gantry Velocity ---
-        # This mapping assumes a standard coordinate frame but may need to be
-        # adjusted based on your physical setup.
-        # - Phone Left/Right velocity (vel[0]) -> Gantry Y Velocity
-        # - Phone Up/Down velocity    (vel[1]) -> Gantry Z Velocity
-        # - Phone Fwd/Back velocity   (vel[2]) -> Gantry X Velocity (inverted)
-        gantry_vel_x = -self._smoothed_velocity[2] * GANTRY_VEL_GAIN
-        gantry_vel_y = self._smoothed_velocity[0] * GANTRY_VEL_GAIN
-        gantry_vel_z = self._smoothed_velocity[1] * GANTRY_VEL_GAIN
+        # Map Smoothed Velocity to Gantry Velocity
+        gantry_vel_x = -self._smoothed_velocity[0] * GANTRY_VEL_GAIN
+        gantry_vel_y = self._smoothed_velocity[1] * GANTRY_VEL_GAIN
+        gantry_vel_z = self._smoothed_velocity[2] * GANTRY_VEL_GAIN
 
-        # --- 3. Map Buttons to Winch Speed ---
+        # Map Buttons to Winch Speed ---
         winch_line_speed = 0.0
         if self.platform == PhoneOS.IOS:
             # Using buttons B2 and B3 for winch up/down on iOS
@@ -105,7 +100,7 @@ class MapPhoneActionToStringmanAction(RobotActionProcessorStep):
             winch_down = float(inputs.get("reservedButtonB", 0.0))
             winch_line_speed = WINCH_SPEED_CONSTANT * (winch_down - winch_up)
 
-        # --- 4. Map Phone Roll to Finger Angle ---
+        # Map Phone Roll to Finger Angle 
         # Get the phone's orientation in Euler angles (roll, pitch, yaw).
         # We use the 'xyz' sequence, where the first angle ('x') corresponds to roll.
         scipy_rot = Rotation.from_quat(rot.as_quat())
@@ -115,7 +110,6 @@ class MapPhoneActionToStringmanAction(RobotActionProcessorStep):
         # The finger angle is sent even when disabled to allow independent control.
         finger_angle = np.clip(roll, -90, 90)
 
-        # --- 5. Assemble the final action dictionary ---
         action["gantry_vel_x"] = gantry_vel_x
         action["gantry_vel_y"] = gantry_vel_y
         action["gantry_vel_z"] = gantry_vel_z
