@@ -931,10 +931,12 @@ class AsyncObserver:
         if last_length < 0.02 or last_length > 1.9:
             line_speed = 0
         finger_angle = clamp(finger_angle, -90, 90)
-        asyncio.create_task(self.gripper_client.send_commands({
+        update = {
             'aim_speed': line_speed,
             'set_finger_angle': finger_angle,
-        }))
+        }
+        print(f'sending to gripper {update}')
+        asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_angle
 
     async def seek_gantry_goal(self):
@@ -1103,15 +1105,20 @@ class AsyncObserver:
         """gets the last frame of video from the given camera if possible
         camera_key should be one of 'g' 0, 1, 2, 3
         """
+        image_ndarray = None
         if camera_key == 'g':
             if self.gripper_client is not None:
-                return self.gripper_client.frame
+                image_ndarray = self.gripper_client.frame
         else:
             anum = int(camera_key)
             for client in self.anchors:
                 if client.anchor_num == anum:
-                    return client.frame
-        return None
+                    image_ndarray = client.frame
+        if image_ndarray is not None:
+            is_success, buffer = cv2.imencode(".jpg", image_ndarray, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if is_success:
+                return buffer.tobytes()
+        return bytes()
 
 
 def start_observation(to_ui_q, to_ob_q):

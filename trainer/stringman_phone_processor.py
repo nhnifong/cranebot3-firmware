@@ -1,9 +1,10 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.processor import ProcessorStepRegistry, RobotAction, RobotActionProcessorStep
 from lerobot.teleoperators.phone.config_phone import PhoneOS
-
+import time
+from scipy.spatial.transform import Rotation
 
 
 # --- Tunable Constants ---
@@ -107,7 +108,8 @@ class MapPhoneActionToStringmanAction(RobotActionProcessorStep):
         # --- 4. Map Phone Roll to Finger Angle ---
         # Get the phone's orientation in Euler angles (roll, pitch, yaw).
         # We use the 'xyz' sequence, where the first angle ('x') corresponds to roll.
-        roll, _pitch, _yaw = rot.as_euler("xyz", degrees=True)
+        scipy_rot = Rotation.from_quat(rot.as_quat())
+        roll, _pitch, _yaw = scipy_rot.as_euler("xyz", degrees=True)
 
         # Clamp the angle to the robot's valid range [-90, 90].
         # The finger angle is sent even when disabled to allow independent control.
