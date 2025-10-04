@@ -18,8 +18,12 @@ import time
 from .wand_teleoperator_config import WandConfig
 from .robot_control_service_pb2 import (
     GetWandInfoRequest, GetWandInfoResponse,
-    NpyImage, Point3D,
+    Point3D,
 )
+from .robot_control_service_pb2_grpc import RobotControlServiceStub
+import threading
+import logging
+import grpc
 
 # The UUIDs for the UART service and its transmit characteristic
 # These must match the UUIDs on the ESP32-S3 firmware
@@ -28,6 +32,9 @@ UART_TX_CHAR_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 WAND_DEVICE_NAME = 'Stringman Training Controller'
 BUTTON_WINCH_SPEED = 0.06 # meters of line per second to wind/unwind while button is held.
 
+def constrain(value, minimum, maximum):
+    return max(minimum, min(value, maximum))
+
 class StringmanTrainingWand(Teleoperator):
     config_class = WandConfig
     name = "stringman_training_wand"
@@ -35,7 +42,7 @@ class StringmanTrainingWand(Teleoperator):
     def __init__(self, config: WandConfig, events: dict = None):
         super().__init__(config)
         self.config = config
-        self.channel_address = 'localhost:50051'
+        self.channel_address = config.grpc_addr
 
         # state variables for Bluetooth
         self._bt_thread: threading.Thread | None = None
@@ -103,10 +110,6 @@ class StringmanTrainingWand(Teleoperator):
        		time.sleep(0.1)
 
     def disconnect(self) -> None:
-        if not self.is_connected:
-            # DeviceNotConnectedError needs to be imported/defined
-            raise ConnectionError(f"{self} is not connected.")
-
         logging.info("Stopping bluetooth wand connection...")
         self._stop_event.set() 
 
@@ -134,8 +137,8 @@ class StringmanTrainingWand(Teleoperator):
             return
 
         try:
-            client = BleakClient(device)
-            await client.connect()
+            self.client = BleakClient(device)
+            await self.client.connect()
             
             if self.client.is_connected:
                 logging.info(f"Connected to wand: {device.address}")
@@ -143,7 +146,7 @@ class StringmanTrainingWand(Teleoperator):
                 # Start listening for notifications
                 await self.client.start_notify(UART_TX_CHAR_UUID, self._bt_notification_handler)
                 # Keep the connection alive and listen for a stop signal
-                while self._client.is_connected and not self._stop_event.is_set():
+                while self.client.is_connected and not self._stop_event.is_set():
                     await asyncio.sleep(0.1) # Sleep briefly to yield to the event loop
                 await self.client.stop_notify(UART_TX_CHAR_UUID)
                 await self.client.disconnect()
@@ -151,7 +154,7 @@ class StringmanTrainingWand(Teleoperator):
                 logging.error(f"Failed to connect to {repr(device)}")
         finally:
             self._bt_connected = False
-            self._client = None
+            self.client = None
             logging.info("Bluetooth loop finished.")
 
     def _bt_notification_handler(self, sender, data):
@@ -177,7 +180,8 @@ class StringmanTrainingWand(Teleoperator):
             was_pressed = self.last_wand_state["buttons"][0]
             if is_pressed and not was_pressed:
                 logging.info("Wand button pressed, signaling end of episode.")
-                # This flag tells record_loop to stop its current run gracefully.
+                # This flag tells record_loop to stop its current episode gracefully.
+                # if no episode is running, it also tells the script to start one.
                 self.events["exit_early"] = True
 
         # Store last trigger and button state so it can be used in get_action
@@ -202,7 +206,7 @@ class StringmanTrainingWand(Teleoperator):
         # Control the fingers
         # analog_value from trigger ranges from 0 to 1.
         # finger_angle ranges from -90 to 90
-        finger_angle = clamp(self.last_wand_state["trigger"]*180-90, -90, 90)
+        finger_angle = constrain(self.last_wand_state["trigger"]*180-90, -90, 90)
 
         # control the winch
         if self.last_wand_state["buttons"][2]:

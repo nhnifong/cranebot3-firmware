@@ -9,23 +9,27 @@ from functools import cached_property
 from typing import Any
 
 import numpy as np
+import cv2
 from lerobot.robots import Robot
 from .stringman_pilot_config import StringmanConfig
 import grpc
 import io
 from .robot_control_service_pb2 import (
-    GetObservationRequest, 
-    GetObservationResponse,
-    NpyImage, Point3D,
+    GetObservationRequest, GetObservationResponse,
+    TakeActionRequest, TakeActionResponse,
+    Point3D,
 )
 from .robot_control_service_pb2_grpc import RobotControlServiceStub
 
-def reconstruct_npy_image(npy_image_proto: NpyImage) -> np.ndarray:
-    # Convert dtype string back to numpy dtype object
-    dtype_obj = np.dtype(npy_image_proto.dtype)
-    # Reconstruct the numpy array
-    return np.frombuffer(npy_image_proto.data, dtype=dtype_obj).reshape(npy_image_proto.shape)
+IMAGE_SHAPE = (1080, 1920, 3)
 
+def decode_image(jpeg_bytes):
+    try:
+        im = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        assert im is not None
+        return im
+    except:
+        return np.zeros(IMAGE_SHAPE, dtype=np.uint8)
 
 class StringmanPilotRobot(Robot):
     config_class = StringmanConfig
@@ -33,7 +37,7 @@ class StringmanPilotRobot(Robot):
 
     def __init__(self, config: StringmanConfig):
         super().__init__(config)
-        self.channel_address = 'localhost:50051'
+        self.channel_address = config.grpc_addr
         self.channel = None
         self.stub = None
 
@@ -53,8 +57,8 @@ class StringmanPilotRobot(Robot):
     def _cameras_ft(self) -> dict[str, tuple]:
         # use only one anchor camera to keep latency high and training load lower.
         return {
-            "anchor_camera": (1920, 1080, 3),
-            "gripper_camera": (1920, 1080, 3),
+            "anchor_camera": IMAGE_SHAPE,
+            "gripper_camera": IMAGE_SHAPE,
         }
 
     @cached_property
@@ -115,19 +119,25 @@ class StringmanPilotRobot(Robot):
             "gripper_imu_rot_z": response.gripper_imu_rot.z,
             "laser_rangefinder": response.laser_rangefinder,
             "finger_pad_voltage": response.finger_pad_voltage,
-            "anchor_camera": reconstruct_npy_image(response.anchor_camera),
-            "gripper_camera": reconstruct_npy_image(response.gripper_camera),
+            "anchor_camera": decode_image(response.anchor_camera),
+            "gripper_camera": decode_image(response.gripper_camera),
         }
         return obs_dict
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         request = TakeActionRequest(
             gantry_vel=Point3D(x=action['gantry_vel_x'], y=action['gantry_vel_y'], z=action['gantry_vel_z']),
-            winch_vel=action['winch_line_speed'],
+            winch_line_speed=action['winch_line_speed'],
             finger_angle=action['finger_angle'],
         )
         # Call the synchronous stub method
         response: TakeActionResponse = self.stub.TakeAction(request)
 
         # TODO return the action that was actually taken
-        return action
+        return {
+            "gantry_vel_x": float(response.gantry_vel.x),
+            "gantry_vel_y": float(response.gantry_vel.y),
+            "gantry_vel_z": float(response.gantry_vel.z),
+            "winch_line_speed": float(response.winch_line_speed),
+            "finger_angle": float(response.finger_angle),
+        }

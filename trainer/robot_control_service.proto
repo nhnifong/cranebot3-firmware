@@ -14,16 +14,6 @@ message Point3D {
   float z = 3;
 }
 
-// currently this communication is expected to occur on the same machine and low latency is important
-// but if those assumptions no longer hold, some compression should be used.
-message NpyImage {
-  // Raw bytes of the NumPy array
-  bytes data = 1;
-  repeated int32 shape = 2;
-  // Data type (e.g., "uint8", "float32")
-  string dtype = 3;
-}
-
 message GetObservationRequest {
   // no args
 }
@@ -40,15 +30,15 @@ message GetObservationResponse {
   float laser_rangefinder = 5;
   float finger_pad_voltage = 6;
 
-  // images
-  optional NpyImage anchor_camera = 7;
-  optional NpyImage gripper_camera = 11;
+  // images, compressed jpeg
+  optional bytes anchor_camera = 7;
+  optional bytes gripper_camera = 11;
 }
 
 // A complete action which the robot is expected to take immediately.
 message TakeActionRequest {
   Point3D gantry_vel = 1;
-  float winch_vel = 2;
+  float winch_line_speed = 2;
   float finger_angle = 3;
 }
 
@@ -56,7 +46,7 @@ message TakeActionResponse {
   // returns the action that was actually taken in case it needed to be clipped to bounds
   // For example, if the winch length is at it's extent, the actual velocity commanded will be zero.
   Point3D gantry_vel = 1;
-  float winch_vel = 2;
+  float winch_line_speed = 2;
   float finger_angle = 3;
 }
 

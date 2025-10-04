@@ -6,9 +6,16 @@ from .robot_control_service_pb2 import (
     GetObservationRequest, GetObservationResponse,
     TakeActionRequest, TakeActionResponse,
     GetWandInfoRequest, GetWandInfoResponse,
-    Point3D, NpyImage
+    Point3D
 )
 from .robot_control_service_pb2_grpc import RobotControlServiceServicer, add_RobotControlServiceServicer_to_server
+
+# prefer whichever camera seems to have the best lighting, but stick to one.
+PREFERRED_ANCHOR = 3
+
+# positional argument constructor for Point3D proto message
+def Point3Dp(x, y, z):
+    return Point3D(x=x, y=y, z=z)
 
 class RobotControlService(RobotControlServiceServicer):
     """
@@ -32,31 +39,15 @@ class RobotControlService(RobotControlServiceServicer):
         gant_vel = self.ob.pe.gant_vel
 
         response = GetObservationResponse(
-            gantry_vel=Point3D(*gant_vel),
-            winch_line_speed=winch[2], # index 2 = speed
-            finger_angle=finger[1], # index 1 = angle
-            gripper_imu_rot=Point3D(*imu),
-            laser_rangefinder=laser,
-            finger_pad_voltage=finger[2], # index 2 = voltage
+            gantry_vel=Point3Dp(*gant_vel),
+            winch_line_speed=float(winch[2]), # index 2 = speed
+            finger_angle=float(finger[1]), # index 1 = angle
+            gripper_imu_rot=Point3Dp(*imu),
+            laser_rangefinder=float(laser),
+            finger_pad_voltage=float(finger[2]), # index 2 = voltage
+            gripper_camera=self.ob.get_last_frame('g'),
+            anchor_camera=self.ob.get_last_frame(PREFERRED_ANCHOR),
         )
-
-        g_image = self.ob.get_last_frame('g')
-        if g_image is not None:
-            response.gripper_cam = NpyImage(
-                data=g_image.tobytes(),
-                shape=list(g_image.shape),
-                dtype=str(g_image.dtype)
-            )
-
-        # prefer whichever camera seems to have the best lighting, but stick to one.
-        preferred_anchor = 3
-        a_image = self.ob.get_last_frame(preferred_anchor)
-        if a_image is not None:
-            response.anchor_cam = NpyImage(
-                data=a_image.tobytes(),
-                shape=list(a_image.shape),
-                dtype=str(a_image.dtype)
-            )
 
         return response
 
@@ -71,15 +62,15 @@ class RobotControlService(RobotControlServiceServicer):
         commanded_vel = await self.ob.move_direction_speed(gantry_vel)
 
         return TakeActionResponse(
-            gantry_vel = Point3D(*commanded_vel),
-            winch_line_speed = winch,
-            finger_angle = finger,
+            gantry_vel = Point3Dp(*commanded_vel),
+            winch_line_speed = float(winch),
+            finger_angle = float(finger),
         )
 
     async def GetWandInfo(self, request: GetWandInfoRequest, context) -> GetWandInfoResponse:
         # wand_vel is the output of a kalman filter continuously estimating position and velocity from apriltag observations.
         wand_vel = self.ob.pe.wand_vel
-        response = GetWandInfoResponse(wand_vel=Point3D(*wand_vel))
+        response = GetWandInfoResponse(wand_vel=Point3Dp(*wand_vel))
         return response
 
 async def start_robot_control_server(app_state_manager, port='[::]:50051'):

@@ -199,7 +199,7 @@ class ComponentClient:
                 update = json.loads(message)
                 if 'frames' in update:
                     self.handle_frame_times(update['frames'])
-                if 'video_ready' in update and self.anchor_num is not None: # temporarily disable gripper video for latency reasons
+                if 'video_ready' in update:
                     print(f'got a video ready update {update}')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": int(update['video_ready'])})
                     vid_thread.start()
