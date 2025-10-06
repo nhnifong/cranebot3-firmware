@@ -82,7 +82,6 @@ class DataStore:
         anchor_line_record: shape (size, 4) TLST  time, length, speed, tight.  one for each line
         range_record: shape (size, 3) TL
         finger: shape (size, 3) TAV time, commanded_angle, pad_voltage
-        wand_pos: shape (size, 5) T N XYZ   time, anchor_num, z, y, x
         """
         self.n_anchors = n_anchors
 
@@ -92,7 +91,6 @@ class DataStore:
         self.anchor_line_record = [CircularBuffer((size, 4)) for n in range(n_anchors)]
         self.range_record = CircularBuffer((size, 2))
         self.finger = CircularBuffer((size, 3))
-        self.wand_pos = CircularBuffer((size, 5))
 
         # events that trip when data is added to certain circular buffers
         self.anchor_line_record_event = asyncio.Event()

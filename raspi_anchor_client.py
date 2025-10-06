@@ -301,7 +301,7 @@ class RaspiAnchorClient(ComponentClient):
                 if len(self.origin_poses) > max_origin_detections:
                     self.origin_poses.pop(0)
 
-            if detection['n'] in ('gantry', 'wand'):
+            if detection['n'] == 'gantry':
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
@@ -314,9 +314,6 @@ class RaspiAnchorClient(ComponentClient):
                     gantry_april_inv, # constant
                 ]))
                 position = pose.reshape(6)[3:]
-                if detection['n'] == "wand":
-                    self.datastore.wand_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position]))
-                    return
                 self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position])) # take only the position
                 # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
                 self.datastore.gantry_pos_event.set()

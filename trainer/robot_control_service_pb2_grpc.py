@@ -44,10 +44,15 @@ class RobotControlServiceStub(object):
                 request_serializer=trainer_dot_robot__control__service__pb2.TakeActionRequest.SerializeToString,
                 response_deserializer=trainer_dot_robot__control__service__pb2.TakeActionResponse.FromString,
                 _registered_method=True)
-        self.GetWandInfo = channel.unary_unary(
-                '/trainer.RobotControlService/GetWandInfo',
-                request_serializer=trainer_dot_robot__control__service__pb2.GetWandInfoRequest.SerializeToString,
-                response_deserializer=trainer_dot_robot__control__service__pb2.GetWandInfoResponse.FromString,
+        self.GetGamepadAction = channel.unary_unary(
+                '/trainer.RobotControlService/GetGamepadAction',
+                request_serializer=trainer_dot_robot__control__service__pb2.GetGamepadActionRequest.SerializeToString,
+                response_deserializer=trainer_dot_robot__control__service__pb2.TakeActionResponse.FromString,
+                _registered_method=True)
+        self.GetEpisodeControl = channel.unary_unary(
+                '/trainer.RobotControlService/GetEpisodeControl',
+                request_serializer=trainer_dot_robot__control__service__pb2.GetEpisodeControlRequest.SerializeToString,
+                response_deserializer=trainer_dot_robot__control__service__pb2.GetEpisodeControlResponse.FromString,
                 _registered_method=True)
 
 
@@ -66,7 +71,13 @@ class RobotControlServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetWandInfo(self, request, context):
+    def GetGamepadAction(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetEpisodeControl(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -85,10 +96,15 @@ def add_RobotControlServiceServicer_to_server(servicer, server):
                     request_deserializer=trainer_dot_robot__control__service__pb2.TakeActionRequest.FromString,
                     response_serializer=trainer_dot_robot__control__service__pb2.TakeActionResponse.SerializeToString,
             ),
-            'GetWandInfo': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetWandInfo,
-                    request_deserializer=trainer_dot_robot__control__service__pb2.GetWandInfoRequest.FromString,
-                    response_serializer=trainer_dot_robot__control__service__pb2.GetWandInfoResponse.SerializeToString,
+            'GetGamepadAction': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetGamepadAction,
+                    request_deserializer=trainer_dot_robot__control__service__pb2.GetGamepadActionRequest.FromString,
+                    response_serializer=trainer_dot_robot__control__service__pb2.TakeActionResponse.SerializeToString,
+            ),
+            'GetEpisodeControl': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetEpisodeControl,
+                    request_deserializer=trainer_dot_robot__control__service__pb2.GetEpisodeControlRequest.FromString,
+                    response_serializer=trainer_dot_robot__control__service__pb2.GetEpisodeControlResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -156,7 +172,7 @@ class RobotControlService(object):
             _registered_method=True)
 
     @staticmethod
-    def GetWandInfo(request,
+    def GetGamepadAction(request,
             target,
             options=(),
             channel_credentials=None,
@@ -169,9 +185,36 @@ class RobotControlService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/trainer.RobotControlService/GetWandInfo',
-            trainer_dot_robot__control__service__pb2.GetWandInfoRequest.SerializeToString,
-            trainer_dot_robot__control__service__pb2.GetWandInfoResponse.FromString,
+            '/trainer.RobotControlService/GetGamepadAction',
+            trainer_dot_robot__control__service__pb2.GetGamepadActionRequest.SerializeToString,
+            trainer_dot_robot__control__service__pb2.TakeActionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetEpisodeControl(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/trainer.RobotControlService/GetEpisodeControl',
+            trainer_dot_robot__control__service__pb2.GetEpisodeControlRequest.SerializeToString,
+            trainer_dot_robot__control__service__pb2.GetEpisodeControlResponse.FromString,
             options,
             channel_credentials,
             insecure,

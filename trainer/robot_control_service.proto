@@ -5,7 +5,8 @@ package trainer;
 service RobotControlService {
   rpc GetObservation (GetObservationRequest) returns (GetObservationResponse);
   rpc TakeAction (TakeActionRequest) returns (TakeActionResponse);
-  rpc GetWandInfo (GetWandInfoRequest) returns (GetWandInfoResponse);
+  rpc GetGamepadAction (GetGamepadActionRequest) returns (TakeActionResponse);
+  rpc GetEpisodeControl (GetEpisodeControlRequest) returns (GetEpisodeControlResponse);
 }
 
 message Point3D {
@@ -50,11 +51,14 @@ message TakeActionResponse {
   float finger_angle = 3;
 }
 
-message GetWandInfoRequest {
+message GetGamepadActionRequest {
   // no args
 }
 
-message GetWandInfoResponse {
-  // velocity of wand as determined by visual observations.
-  Point3D wand_vel = 1;
+message GetEpisodeControlRequest {
+  // no args
+}
+
+message GetEpisodeControlResponse {
+  repeated string events = 1;
 }

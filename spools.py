@@ -5,7 +5,6 @@ import serial
 import logging
 import asyncio
 import numpy as np
-from utils import constrain
 
 # values that can be overridden by the controller
 default_conf = {
@@ -108,7 +107,6 @@ class SpoolController:
         self.last_index = 0
         self.run_spool_loop = True
         self.rec_loop_counter = 0
-        self.move_allowed = True
 
         # when this bool is set, spool tracking will pause.
         self.spoolPause = False
@@ -133,6 +131,8 @@ class SpoolController:
 
     def _commandSpeed(self, speed):
         """command a specific speed from the motor."""
+        if self.speed == speed:
+            return
         self.speed = speed
         self.motor.runConstantSpeed(self.speed)
 
@@ -181,11 +181,6 @@ class SpoolController:
         self.last_length = self.sc.get_unspooled_length(angle)
         self.meters_per_rev = self.sc.get_unspool_rate(angle)
         currentLineSpeed = self.speed * self.meters_per_rev
-
-        self.move_allowed = True
-        # if self.last_length < 0 or self.last_length > self.sc.full_length:
-        #     logging.warning(f"Bad length calculation! length={self.last_length}, shaftAngle={angle}. Movement disallowed until new reference length received.")
-            # self.move_allowed = False
 
         # accumulate these so you can send them to the websocket
         if self.tight_check_fn is None:
@@ -279,10 +274,6 @@ class SpoolController:
                     logging.warning(f"would unspool at speed={aimSpeed} but switch shows line is not tight, and unspooling could slacken or tangle line.")
                     aimSpeed = 0
 
-                if self.speed == aimSpeed:
-                    time.sleep(self.conf['LOOP_DELAY_S'])
-                    continue
-
                 # limit the acceleration of the line
                 currentSpeed = self.speed * self.meters_per_rev
                 wouldAccel = (aimSpeed - currentSpeed) / self.conf['LOOP_DELAY_S']
@@ -293,14 +284,11 @@ class SpoolController:
 
                 maxspeed = self.motor.getMaxSpeed()
 
-                if self.move_allowed:
-                    cspeed = constrain(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
-                    # in revs per second.
-                    if abs(cspeed) < 0.2:
-                        cspeed = 0
-                    self._commandSpeed(cspeed)
-                else:
-                    logging.warning(f"would move at speed={self.speed} but length is invalid. calibrate length first.")
+                # convert speed to revolutions per second
+                cspeed = np.clip(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
+                if abs(cspeed) < 0.2:
+                    cspeed = 0
+                self._commandSpeed(cspeed)
 
                 time.sleep(self.conf['LOOP_DELAY_S'])
             except serial.serialutil.SerialTimeoutException:

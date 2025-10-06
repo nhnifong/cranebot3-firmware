@@ -7,19 +7,26 @@ and uses service discovery to automatically connect to robot components.
 
 from functools import cached_property
 from typing import Any
+from dataclasses import dataclass, field
 
 import numpy as np
 import cv2
-from lerobot.robots import Robot
-from .stringman_pilot_config import StringmanConfig
+from lerobot.robots import Robot, RobotConfig
 import grpc
 import io
 from .robot_control_service_pb2 import (
     GetObservationRequest, GetObservationResponse,
     TakeActionRequest, TakeActionResponse,
+    GetGamepadActionRequest,
+    GetEpisodeControlRequest, GetEpisodeControlResponse,
     Point3D,
 )
 from .robot_control_service_pb2_grpc import RobotControlServiceStub
+
+@RobotConfig.register_subclass("stringman")
+@dataclass
+class StringmanConfig(RobotConfig):
+    grpc_addr: str
 
 IMAGE_SHAPE = (1080, 1920, 3)
 
@@ -40,6 +47,7 @@ class StringmanPilotRobot(Robot):
         self.channel_address = config.grpc_addr
         self.channel = None
         self.stub = None
+        self.start_held = False
 
     @cached_property
     def _motors_ft(self) -> dict[str, type]:
@@ -133,7 +141,7 @@ class StringmanPilotRobot(Robot):
         # Call the synchronous stub method
         response: TakeActionResponse = self.stub.TakeAction(request)
 
-        # TODO return the action that was actually taken
+        # return the action that was actually taken
         return {
             "gantry_vel_x": float(response.gantry_vel.x),
             "gantry_vel_y": float(response.gantry_vel.y),
@@ -141,3 +149,24 @@ class StringmanPilotRobot(Robot):
             "winch_line_speed": float(response.winch_line_speed),
             "finger_angle": float(response.finger_angle),
         }
+
+    def get_last_action(self):
+        """
+        Get the last action taken by the robot
+        Not part of normal lerobot flow. I'm bypassing the teleoperator
+        """
+        response: TakeActionResponse = self.stub.GetGamepadAction(GetGamepadActionRequest())
+        return {
+            "gantry_vel_x": float(response.gantry_vel.x),
+            "gantry_vel_y": float(response.gantry_vel.y),
+            "gantry_vel_z": float(response.gantry_vel.z),
+            "winch_line_speed": float(response.winch_line_speed),
+            "finger_angle": float(response.finger_angle),
+        }
+
+    def get_episode_control_events(self):
+        response: GetEpisodeControlResponse = self.stub.GetEpisodeControl(GetEpisodeControlRequest())
+        events = {}
+        for e in response.events:
+            events[e] = True
+        return events

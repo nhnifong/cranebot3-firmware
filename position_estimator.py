@@ -378,20 +378,9 @@ class Positioner2:
         self.visual_time_taken = 0
         self.hang_time_taken = 0
 
-        # variables related to training process
-        self.training_mode = False
-
         # last commanded gantry velocity.
         self.commanded_vel = np.zeros(3)
         self.commanded_vel_ts = time.time()
-
-        # wand tracking variables
-        self.wand_tracking_enabled = False
-        self.last_wand_cutoff = time.time()
-        self.wandkf = KalmanFilter(self.sensor_names[:4], acceleration_std_dev, bias_std_dev) # no hang
-        self.wand_pos = np.zeros(3, dtype=float)
-        self.wand_vel = np.zeros(3, dtype=float)
-
 
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
@@ -523,10 +512,6 @@ class Positioner2:
             self.kf.predict_present()
             self.gant_pos = self.kf.state_estimate[:3].copy()
             self.gant_vel = self.kf.state_estimate[3:6].copy()
-            if self.wand_tracking_enabled:
-                self.wandkf.predict_present()
-                self.wand_pos = self.wandkf.state_estimate[:3].copy()
-                self.wand_vel = self.wandkf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
             self.send_positions()
 
@@ -556,27 +541,8 @@ class Positioner2:
 
             self.visual_time_taken = time.time()-start_time
 
-            # If enabled, update a second kalman filter to track the wand position
-            # use any wand observations that have occured since the last run of this loop.
-            if self.wand_tracking_enabled:
-                data = self.datastore.wand_pos.deepCopy(cutoff=self.last_wand_cutoff)
-                if len(data) == 0:
-                    continue
-                self.last_wand_cutoff = np.max(data[:,0])
-                for measurement in data:
-                    timestamp = measurement[0]
-                    anchor_num = int(measurement[1])
-                    this_visual_pos = measurement[2:]
-                    self.wandkf.update(this_visual_pos, timestamp, self.visual_noise_covariance, 'position', self.sensor_names[anchor_num])
-
     async def update_hang(self):
         while self.run:
-
-            if self.training_mode:
-                # in this mode disregard lines because we are only observing the training wand markers
-                await asyncio.sleep(1)
-                continue
-            
             start_time = time.time()
             # wait at least this long
             await asyncio.sleep(1/30)
@@ -638,10 +604,6 @@ class Positioner2:
     async def update_commanded_vel(self):
         """provide an observation to the filter based on the commanded velocity"""
         while self.run:
-            if self.training_mode:
-                # in this mode disregard lines because we are only observing the training wand markers
-                await asyncio.sleep(1)
-                continue
             self.kf.update(self.commanded_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
             await asyncio.sleep(1/30)
 
@@ -693,19 +655,11 @@ class Positioner2:
                 },
             # 'goal_points': self.des_grip_locations, # each goal is a time and a position
         }
-        if self.wand_tracking_enabled:
-            update_for_ui['wand'] = {
-                'wand_pos': self.wand_pos,
-                'wand_vel': self.wand_vel,
-                }
         self.to_ui_q.put(update_for_ui)
 
     def notify_update(self, update):
         if 'holding' in update:
             self.holding = update['holding']
-
-    def enable_wand(self, enable=True):
-        self.wand_tracking_enabled = enable
 
     async def main(self):
         print('Starting position estimator')

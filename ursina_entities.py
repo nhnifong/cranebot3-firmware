@@ -9,7 +9,6 @@ import model_constants
 from scipy.spatial.transform import Rotation
 from functools import partial
 import time
-from utils import constrain
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -364,6 +363,8 @@ Enter the actual weight in kg."""),
         self.camview.enabled = not self.camview.enabled
         self.to_ob_q.put({'toggle_previews':{'anchor':self.num, 'status':self.camview.enabled}})
 
+GAMEPAD_GRIP_DEG_PER_SEC = 80
+GAMEPAD_WINCH_METER_PER_SEC = 0.08
 
 class Floor(Entity):
     def __init__(self, app, **kwargs):
@@ -411,7 +412,16 @@ class Floor(Entity):
             parent=self,
             enabled=True)
         self.hasSetImage = False
-        self.possibly_moving = False
+
+        # state for gamepad processing
+        self.last_update_t = time.time()
+        self.last_send_t = time.time()
+        self.finger_angle = 0
+        self.smooth_winch_speed = 0
+        self.last_action = np.zeros(6)
+        self.start_was_held = False
+        self.dpad_up_was_held = False
+        self.seat_orbit_mode = True
 
     def set_reticule_height(self, height):
         self.alt = height
@@ -444,25 +454,88 @@ class Floor(Entity):
         else:
             self.button.position = world_position_to_screen_position(self.circle.world_position) + self.button_offset
 
-        # collect input from attatched gamepad
-        # these are available from the update function of any enabled entity
+        #  =========== collect input from attatched gamepad ===========
+        # these are available from the update function of any enabled entity, the floor just happens to be a singular always enabled entity.
+        # inputs are sent to observer if anything changed
+
+        # net trigger, vertical motion (right up, left down)
         net_trigger  = held_keys['gamepad right trigger'] - held_keys['gamepad left trigger']
+
+        # left stick is lateral motion
         vector = np.array([held_keys['gamepad left stick x'], held_keys['gamepad left stick y'], net_trigger])
+
+        seat = np.array([-1.3, 1.9])
+        if self.seat_orbit_mode:
+            # left stick x orbits the seat clockwise
+            # left stick y moves away from the seat
+            gantry_pos_xy = np.array(self.app.gantry.zup_pos[:2])
+            vec_to_object = gantry_pos_xy - seat
+            distance = np.linalg.norm(vec_to_object)
+            # We can only orbit if we aren't at the exact center.
+            if distance > 1e-6:
+                radial_dir = vec_to_object / distance
+                tangential_dir = np.array([radial_dir[1], -radial_dir[0]])
+                orbit_vec_2d = (vector[0] * tangential_dir) + (vector[1] * radial_dir)
+                vector = np.array([orbit_vec_2d[0], orbit_vec_2d[1], net_trigger])
+
         mag = np.linalg.norm(vector)
+        speed = 0
         if mag > 0:
             vector = vector / mag
             speed = 0.25 * mag
-            # Command the movement
+
+        # hold a, close grip further. hold b, open grip further
+        grip_change = 0
+        if held_keys['gamepad a']:
+            grip_change = GAMEPAD_GRIP_DEG_PER_SEC
+        elif held_keys['gamepad b']:
+            grip_change = -GAMEPAD_GRIP_DEG_PER_SEC
+        now = time.time()
+        self.finger_angle += np.clip(grip_change * (now - self.last_update_t), -90, 90)
+        self.last_update_t = now
+
+        # hold y, winch up. hold x, winch down
+        line_speed = 0
+        if held_keys['gamepad y']:
+            line_speed = -GAMEPAD_WINCH_METER_PER_SEC
+        elif held_keys['gamepad x']:
+            line_speed = GAMEPAD_WINCH_METER_PER_SEC
+        self.smooth_winch_speed = self.smooth_winch_speed*0.95 + line_speed*0.05
+        if abs(self.smooth_winch_speed) < 0.0005:
+            self.smooth_winch_speed = 0
+
+        # control other actions
+
+        # Episode control: can send any of
+        # episode_start_stop, rerecord_episode, stop_recording
+
+        # Start - start/stop recording episode. detect rising edge
+        start_held = bool(held_keys['gamepad start'])
+        if start_held and start_held != self.start_was_held:
+            self.app.to_ob_q.put({'episode_ctrl': ['episode_start_stop']})
+        self.start_was_held = start_held
+
+        # D pad up - tension all lines and recalibrate lenths. detect rising edge
+        dpad_up_held = bool(held_keys['gamepad dpad up'])
+        if dpad_up_held and dpad_up_held != self.dpad_up_was_held:
+            print('tension lines command from gamepad')
+            self.app.to_ob_q.put({'tension_lines': None})
+        self.dpad_up_was_held = dpad_up_held
+
+        act = np.array([*vector, speed, self.smooth_winch_speed, self.finger_angle])
+        if not np.array_equal(act, self.last_action) or (now > (self.last_send_t + 0.2) and sum(vector) != 0):
             self.app.to_ob_q.put({
-                'gantry_dir_sp': {
-                    'direction':vector,
-                    'speed':speed,
+                'gamepad': {
+                    'winch': self.smooth_winch_speed,
+                    'finger': self.finger_angle,
+                    'dir': vector,
+                    'speed': speed,
                 }
             })
-            self.possibly_moving = True
-        elif self.possibly_moving:
-            self.app.to_ob_q.put({'slow_stop_all': None})
-            self.possibly_moving = False
+            self.last_action = act
+            self.last_send_t = now
+
+        # -1.29516723  1.89840947  0.88209196
 
     def button_confirm(self):
         self.button.enabled = False

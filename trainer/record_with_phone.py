@@ -17,11 +17,8 @@ from lerobot.processor.converters import (
 from lerobot.teleoperators.phone.config_phone import PhoneConfig, PhoneOS
 from lerobot.teleoperators.phone.teleop_phone import Phone
 
-from .stringman_pilot import StringmanPilotRobot
-from .stringman_pilot_config import StringmanConfig
+from .stringman_pilot import StringmanPilotRobot, StringmanConfig
 from .stringman_phone_processor import MapPhoneActionToStringmanAction
-from .stringman_pilot import StringmanPilotRobot
-from .stringman_pilot_config import StringmanConfig
 
 import time
 import os
