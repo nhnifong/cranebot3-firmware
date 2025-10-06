@@ -10,9 +10,13 @@ from scipy.spatial.transform import Rotation
 # --- Tunable Constants ---
 # Feel free to adjust these gains to make the robot more or less sensitive.
 # Scales phone velocity (in m/s) to gantry velocity (in m/s).
-GANTRY_VEL_GAIN = 1.2
-# The winch speed (in m/s) when a button is held.
-WINCH_SPEED_CONSTANT = 0.06
+GANTRY_VEL_GAIN = 1.8
+# Factor relating phone pitch to winch speed.
+WINCH_SPEED_GAIN = 0.002
+# maximum winch speed in meters of line per second
+MAX_WINCH_SPEED = 0.1
+# the factor by which phone roll angle relates to finger angle
+FINGER_GAIN = 1.8
 # Smoothing factor for the velocity calculation (0 < alpha <= 1).
 # A smaller value means more smoothing but more latency.
 VELOCITY_SMOOTHING_ALPHA = 0.6
@@ -83,32 +87,35 @@ class MapPhoneActionToStringmanAction(RobotActionProcessorStep):
             self._smoothed_velocity = np.zeros(3)
 
         # Map Smoothed Velocity to Gantry Velocity
-        gantry_vel_x = -self._smoothed_velocity[0] * GANTRY_VEL_GAIN
+        gantry_vel_x = -self._smoothed_velocity[0] * GANTRY_VEL_GAIN * -1
         gantry_vel_y = self._smoothed_velocity[1] * GANTRY_VEL_GAIN
         gantry_vel_z = self._smoothed_velocity[2] * GANTRY_VEL_GAIN
 
         # Map Buttons to Winch Speed ---
-        winch_line_speed = 0.0
-        if self.platform == PhoneOS.IOS:
-            # Using buttons B2 and B3 for winch up/down on iOS
-            winch_up = float(inputs.get("b2", 0.0))
-            winch_down = float(inputs.get("b3", 0.0))
-            winch_line_speed = WINCH_SPEED_CONSTANT * (winch_down - winch_up)
-        else:  # Android
-            # Using the reserved buttons A and B for winch up/down
-            winch_up = float(inputs.get("reservedButtonA", 0.0))
-            winch_down = float(inputs.get("reservedButtonB", 0.0))
-            winch_line_speed = WINCH_SPEED_CONSTANT * (winch_down - winch_up)
+        # winch_line_speed = 0.0
+        # if self.platform == PhoneOS.IOS:
+        #     # Using buttons B2 and B3 for winch up/down on iOS
+        #     winch_up = float(inputs.get("b2", 0.0))
+        #     winch_down = float(inputs.get("b3", 0.0))
+        #     winch_line_speed = WINCH_SPEED_CONSTANT * (winch_down - winch_up)
+        # else:  # Android
+        #     # Using the reserved buttons A and B for winch up/down
+        #     winch_up = float(inputs.get("reservedButtonA", 0.0))
+        #     winch_down = float(inputs.get("reservedButtonB", 0.0))
+        #     winch_line_speed = WINCH_SPEED_CONSTANT * (winch_down - winch_up)
 
         # Map Phone Roll to Finger Angle 
         # Get the phone's orientation in Euler angles (roll, pitch, yaw).
         # We use the 'xyz' sequence, where the first angle ('x') corresponds to roll.
         scipy_rot = Rotation.from_quat(rot.as_quat())
-        roll, _pitch, _yaw = scipy_rot.as_euler("xyz", degrees=True)
+        roll, pitch, yaw = scipy_rot.as_euler("xyz", degrees=True)
 
         # Clamp the angle to the robot's valid range [-90, 90].
         # The finger angle is sent even when disabled to allow independent control.
-        finger_angle = np.clip(roll, -90, 90)
+        finger_angle = np.clip(roll * FINGER_GAIN, -90, 90)
+
+        # Map phone pitch to winch speed
+        winch_line_speed = np.clip(pitch * WINCH_SPEED_GAIN, -MAX_WINCH_SPEED, MAX_WINCH_SPEED)
 
         action["gantry_vel_x"] = gantry_vel_x
         action["gantry_vel_y"] = gantry_vel_y

@@ -5,7 +5,8 @@ import numpy as np
 from .robot_control_service_pb2 import (
     GetObservationRequest, GetObservationResponse,
     TakeActionRequest, TakeActionResponse,
-    GetWandInfoRequest, GetWandInfoResponse,
+    GetGamepadActionRequest,
+    GetEpisodeControlRequest, GetEpisodeControlResponse,
     Point3D
 )
 from .robot_control_service_pb2_grpc import RobotControlServiceServicer, add_RobotControlServiceServicer_to_server
@@ -67,11 +68,21 @@ class RobotControlService(RobotControlServiceServicer):
             finger_angle = float(finger),
         )
 
-    async def GetWandInfo(self, request: GetWandInfoRequest, context) -> GetWandInfoResponse:
-        # wand_vel is the output of a kalman filter continuously estimating position and velocity from apriltag observations.
-        wand_vel = self.ob.pe.wand_vel
-        response = GetWandInfoResponse(wand_vel=Point3Dp(*wand_vel))
-        return response
+    async def GetGamepadAction(self, request: GetGamepadActionRequest, context) -> TakeActionResponse:
+        """
+        get the last action that was caused directly by the gamepad.
+        This should be post filtering and bounds checking.
+        """
+        commanded_vel, winch, finger = self.ob.last_gp_action
+
+        return TakeActionResponse(
+            gantry_vel = Point3Dp(*commanded_vel),
+            winch_line_speed = float(winch),
+            finger_angle = float(finger),
+        )
+
+    async def GetEpisodeControl(self, request: GetEpisodeControlRequest, context) -> GetEpisodeControlResponse:
+        return GetEpisodeControlResponse(events=self.ob.get_episode_control_events())
 
 async def start_robot_control_server(app_state_manager, port='[::]:50051'):
     server = grpc.aio.server()

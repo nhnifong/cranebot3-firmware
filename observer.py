@@ -32,6 +32,7 @@ import cv2
 import pickle
 from collections import deque
 from trainer.control_service import start_robot_control_server
+from trainer.stringman_record_loop import record_until_disconnected
 from utils import constrain, motion_task
 
 # Define the service names for network discovery
@@ -97,6 +98,8 @@ class AsyncObserver:
         # event used to notify tasks that gripper is connected.
         self.gripper_client_connected = asyncio.Event()
         self.grpc_server = None
+        self.last_gp_action = None
+        self.episode_control_events = set()
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -118,6 +121,9 @@ class AsyncObserver:
             'set_simulated_data_mode': self.set_simulated_data_mode,
             'zero_winch': self._handle_zero_winch_line,
             'horizontal_task': lambda _: self.invoke_motion_task(self.horizontal_line_task()),
+            'winch_and_finger': self._handle_send_winch_finger,
+            'gamepad': self._handle_gamepad_action,
+            'episode_ctrl': self._handle_add_episode_control_event,
         }
 
     def listen_queue_updates(self, loop):
@@ -213,6 +219,13 @@ class AsyncObserver:
 
     async def _handle_zero_winch_line(self, data):
         await self.gripper_client.zero_winch()
+
+    async def _handle_gamepad_action(self, data):
+        # if we have to clip these values to legal limits, save what they were clipped to
+        winch, finger = await self.send_winch_and_finger(data['winch'], data['finger'])
+        commanded_vel = await self.move_direction_speed(data['dir'], data['speed'])
+        # the saved values will be what we return from GetLastAction
+        self.last_gp_action = (commanded_vel, winch, finger)
 
     async def invoke_motion_task(self, coro):
         """
@@ -337,21 +350,23 @@ class AsyncObserver:
         if mode == "run":
             self.calmode = mode
             print("run mode")
-            self.pe.enable_wand(False)
         elif mode == "pause":
             self.calmode = mode
             await self.stop_all()
         elif mode == 'train':
-            await self.invoke_motion_task(self.begin_training_mode())
+            self.training_task = asyncio.create_task(self.begin_training_mode())
 
     async def begin_training_mode(self):
         """Begin allowing the robot to be controlled from the grpc server
-        This is a motion task since movement could occur at any time while the server is running"""
+        movement could occur at any time while the server is running"""
         try:
-            self.pe.enable_wand() # enable kalamn processing of wand tag obervations
             self.calmode = 'training'
-            # begin allowing actions from self.grpc_server
+            # begin allowing requests from self.grpc_server
             self.grpc_server = await start_robot_control_server(self)
+            # Start child process to run the dataset manager
+            # dataset_process = multiprocessing.Process(target=record_until_disconnected, name='lerobot_record')
+            # dataset_process.daemon = False
+            # dataset_process.start()
             await self.grpc_server.wait_for_termination()
         except asyncio.CancelledError:
             raise
@@ -920,6 +935,9 @@ class AsyncObserver:
             result[client.anchor_num] = client.last_gantry_frame_coords
         return result
 
+    async def _handle_send_winch_finger(self, data):
+        await self.send_winch_and_finger(**data)
+
     async def send_winch_and_finger(self, line_speed, finger_angle):
         """Command the gripper's motors in one update.
         command the winch to change line length at the given speed.
@@ -929,13 +947,13 @@ class AsyncObserver:
         """
         last_length = self.datastore.winch_line_record.getLast()[1]
         if last_length < 0.02 or last_length > 1.9:
+            print()
             line_speed = 0
         finger_angle = clamp(finger_angle, -90, 90)
         update = {
             'aim_speed': line_speed,
             'set_finger_angle': finger_angle,
         }
-        print(f'sending to gripper {update}')
         asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_angle
 
@@ -1017,7 +1035,7 @@ class AsyncObserver:
         # The speed limit is proportional to how far the gantry hangs below a level 30cm below the average anchor.
         # This makes the behavior consistent across installations of different heights.
         hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
-        speed_limit = constrain(0.3 * (hang_distance - 0.3), 0.01, 0.55)
+        speed_limit = constrain(0.3 * (hang_distance - 0.5), 0.01, 0.55)
         speed = min(speed, speed_limit)
 
         # when a very small speed is provided, clamp it to zero.
@@ -1119,6 +1137,15 @@ class AsyncObserver:
             if is_success:
                 return buffer.tobytes()
         return bytes()
+
+    def get_episode_control_events(self):
+        e = list(self.episode_control_events)
+        self.episode_control_events.clear()
+        return e
+
+    def _handle_add_episode_control_event(self, data):
+        for k in data:
+            self.episode_control_events.add(str(k))
 
 
 def start_observation(to_ui_q, to_ob_q):

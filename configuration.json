@@ -109,7 +109,6 @@
   },
   "gripper": {
     "MAX_ACCEL": 0.9,
-    "TARGET_HOLDING_PRESSURE": 1.1,
-    "TRAINING_WAND_BT_ADDRESS": "34:85:18:92:1D:05"
+    "TARGET_HOLDING_PRESSURE": 1.1
   }
 }

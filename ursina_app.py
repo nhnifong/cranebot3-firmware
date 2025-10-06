@@ -35,7 +35,7 @@ mode_names = {
 mode_descriptions = {
     'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
     'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
-    'train': 'Use training wand to record episodes to LeRobot dataset. Connects to alternate gripper.',
+    'train': 'Use gamepad to record episodes to LeRobot dataset.',
 }
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
@@ -171,9 +171,6 @@ class ControlPanelUI:
                 model='cube',
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
-
-        # Visual feedback of detected wand position
-        self.wand_indicator = IndicatorSphere(color=color.green, model='cube', enabled=False)
 
     def _create_hud_panels(self):
         # Create the main status panel, text elements, buttons
@@ -554,11 +551,6 @@ class ControlPanelUI:
 
         if 'last_commanded_vel' in updates:
             self.commanded_velocity_indicator.set_velocity(updates['last_commanded_vel'])
-
-        if 'wand' in updates:
-            p = updates['wand']
-            self.wand_indicator.set_position_velocity(p['wand_pos'], p['wand_vel'])
-            self.wand_indicator.enabled = True
 
     def start(self):
         self.app.run()

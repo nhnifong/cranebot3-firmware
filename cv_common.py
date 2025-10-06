@@ -16,7 +16,6 @@ distortion = config.distortion_coeff
 marker_names = [
     'origin',
     'gantry',
-    'wand',
 ]
 
 # AprilTag images are typically downloaded, not generated in code.
@@ -27,7 +26,6 @@ marker_names = [
 special_sizes = {
     'origin': 0.1680, # size in meters
     'gantry': 0.0868,
-    'wand': 0.0868,
 }
 default_marker_size = 0.09 # The default side length of markers in meters
 
