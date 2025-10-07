@@ -1,2 +1,5 @@
 rebuild protos from repo root
 python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. trainer/robot_control_service.proto
+
+record new episodes seperately
+python -m trainer.stringman_record_loop
