@@ -19,7 +19,7 @@ from .stringman_pilot import StringmanPilotRobot, StringmanConfig
 EPISODE_MAX_TIME_SEC = 600
 FPS = 30
 TASK_DESCRIPTION = "Pick up clutter from the floor and drop it in the bin."
-HF_REPO_ID = "naavox/stringman-practice-dataset-3"
+HF_REPO_ID = "naavox/stringman-practice-dataset-4"
 GRPC_ADDR = 'localhost:50051'
 NUM_BUFFERS = 3
 
@@ -67,9 +67,7 @@ def record_episode(
 
         # Write to dataset
         frame = {**observation_frame, **action_frame, "task": task_description}
-        xt = time.time()
         dataset.add_frame(frame)
-        print(f'time taken to add_frame {time.time() - xt}')
 
         if display_data:
             log_rerun_data(observation=obs, action=action_sent)
@@ -118,6 +116,7 @@ def record_until_disconnected():
             robot_type = robot.name,
             use_videos = True,
             image_writer_threads = 8,
+            async_video_encoding = True,
         )
     else:
         dataset = LeRobotDataset(
@@ -184,8 +183,7 @@ def record_until_disconnected():
 
         if recorded_episodes > 0:
             log_say(f"{recorded_episodes} episodes collected. Encoding remaining video")
-            dataset.wait_for_async_encoding()
-            dataset.stop_async_video_encoder()
+            dataset.stop_async_video_encoder(wait=True)
             log_say("Encoding complete. Uploading to hugging face.")
             dataset.push_to_hub()
             log_say("Upload complete.")
