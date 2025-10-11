@@ -3,3 +3,12 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. trainer/robot
 
 record new episodes seperately
 python -m trainer.stringman_record_loop
+
+lerobot-train \
+  --dataset.repo_id=naavox/stringman-practice-dataset-7 \
+  --policy.type=act \
+  --output_dir=outputs/train/act_your_dataset \
+  --job_name=act_your_dataset \
+  --wandb.enable=true \
+  --policy.repo_id=naavox/act_policy
+

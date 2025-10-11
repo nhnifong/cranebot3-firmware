@@ -89,7 +89,7 @@ class ComponentClient:
             for av_frame in container.decode(stream):
                 if not self.connected:
                     break
-                self.frame = av_frame.to_ndarray(format='bgr24')
+                self.frame = av_frame.to_ndarray(format='rgb24')
                 fnum += 1
                         
                 if self.sendPreviewToUi:
