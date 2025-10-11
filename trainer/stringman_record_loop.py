@@ -15,11 +15,21 @@ from lerobot.utils.utils import log_say
 
 from .stringman_pilot import StringmanPilotRobot, StringmanConfig
 
+import sys
+import logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s - %(message)s',
+)
+handler = logging.StreamHandler(stream=sys.stdout)
+logger.addHandler(handler)
+
 # --- Configuration ---
 EPISODE_MAX_TIME_SEC = 600
 FPS = 30
 TASK_DESCRIPTION = "Pick up clutter from the floor and drop it in the bin."
-HF_REPO_ID = "naavox/stringman-practice-dataset-4"
+HF_REPO_ID = "naavox/stringman-practice-dataset-6"
 GRPC_ADDR = 'localhost:50051'
 NUM_BUFFERS = 3
 
@@ -106,7 +116,7 @@ def record_until_disconnected():
     # if os.path.exists(base_cache_dir):
     #     shutil.rmtree(base_cache_dir)
 
-    create_dataset = False
+    create_dataset = True
     dataset = None
     if create_dataset:
         dataset = LeRobotDataset.create(
@@ -117,12 +127,14 @@ def record_until_disconnected():
             use_videos = True,
             image_writer_threads = 8,
             async_video_encoding = True,
+            vcodec = 'h264',
         )
     else:
         dataset = LeRobotDataset(
             repo_id = HF_REPO_ID,
             download_videos = False,
             async_video_encoding = True,
+            vcodec = 'h264',
         )
         dataset.start_image_writer(num_threads=8)
         dataset.start_async_video_encoder()
