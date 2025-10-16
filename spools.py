@@ -70,8 +70,8 @@ class SpiralCalculator:
         if self.diameter_diff == 0:
             return math.pi * self.empty_diameter * self.gear_ratio
         else:
-            rate_spool_rev_per_spool_rev = math.pi * (self.empty_diameter + self.diameter_diff * (self.get_spooled_length(motor_angle_revs) / self.full_length))
-            return rate_spool_rev_per_spool_rev * self.gear_ratio
+            effective_spool_diameter =  self.empty_diameter + self.diameter_diff * (self.get_spooled_length(motor_angle_revs) / self.full_length)
+            return math.pi * effective_spool_diameter * self.gear_ratio
 
 class SpoolController:
     def __init__(self, motor, empty_diameter, full_diameter, full_length, conf, gear_ratio=1.0, tight_check_fn=None):
@@ -286,7 +286,7 @@ class SpoolController:
 
                 # convert speed to revolutions per second
                 cspeed = np.clip(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
-                if abs(cspeed) < 0.2:
+                if abs(cspeed) < 0.02:
                     cspeed = 0
                 self._commandSpeed(cspeed)
 
