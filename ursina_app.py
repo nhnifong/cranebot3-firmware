@@ -535,9 +535,6 @@ class ControlPanelUI:
             else:
                 self.goal_marker.enabled = False
 
-        # if 'gripper_rvec' in updates:
-        #     self.gripper.rotation = to_ursina_rotation(updates['gripper_rvec'])
-
         if 'origin_poses' in updates:
             o_poses = updates['origin_poses']
             # list of poses of detected origin cards from all anchors
