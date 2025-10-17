@@ -264,6 +264,9 @@ class ControlPanelUI:
             position=(0.83, -0.45), scale=(.10, .033),
             on_click=self.on_stop_button)
 
+        # reusable window panel for containing a popup message
+        self.pop_message = PopMessage()
+
     def _create_shape_tracker_entities(self):
         # create entities that are used to visualize the internal state of the shape tracker and 3d hull contruction.
         self.prisms = EntityPool(80, lambda: Entity(
@@ -505,11 +508,12 @@ class ControlPanelUI:
                 number_color = color.white
 
             if 'anchor_num' in status:
-                self.anchors[status['anchor_num']].setStatus(user_status_str)
-                self.vid_status[status['anchor_num']].texture = vidstatus_tex
-                self.vid_status[status['anchor_num']].numbertext.color = number_color
+                num = int(status['anchor_num'])
+                self.anchors[num].setStatus(user_status_str)
+                self.vid_status[num].texture = vidstatus_tex
+                self.vid_status[num].numbertext.color = number_color
                 if 'ip_address' in status:
-                    self.anchors[status['anchor_num']].ip_address = status['ip_address']
+                    self.anchors[num].ip_address = status['ip_address']
             elif 'gripper' in status:
                 self.gripper.setStatus(user_status_str)
                 self.vid_status[4].texture = vidstatus_tex
@@ -531,14 +535,6 @@ class ControlPanelUI:
             else:
                 self.goal_marker.enabled = False
 
-        if 'solids' in updates:
-            for key, val in updates["solids"].items():
-                for mesh in val:
-                    self.solids.add(partial(update_from_trimesh_with_color, solid_colors[key], mesh))
-
-        if 'prisms' in updates:
-            self.prisms.replace(updates["prisms"], update_from_trimesh)
-
         # if 'gripper_rvec' in updates:
         #     self.gripper.rotation = to_ursina_rotation(updates['gripper_rvec'])
 
@@ -551,6 +547,12 @@ class ControlPanelUI:
 
         if 'last_commanded_vel' in updates:
             self.commanded_velocity_indicator.set_velocity(updates['last_commanded_vel'])
+
+        if 'pop_message' in updates:
+            self.pop_message.show_message(updates['pop_message'])
+
+        if 'lrange' in updates:
+            self.gripper.setLaserRange(updates['lrange'])
 
     def start(self):
         self.app.run()

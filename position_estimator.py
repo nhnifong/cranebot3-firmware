@@ -513,6 +513,7 @@ class Positioner2:
             self.gant_pos = self.kf.state_estimate[:3].copy()
             self.gant_vel = self.kf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
+            self.estimate_gripper()
             self.send_positions()
 
     async def update_visual(self):
@@ -628,6 +629,20 @@ class Positioner2:
         self.grip_pose = compose_poses([
             (z, self.gant_pos),
             (current_rotation, np.array([0,0,-length], dtype=float)),
+        ])
+
+    def estimate_gripper(self):
+        """Place the gripper under the gantry by the winch line length, tilted according to the IMU"""
+        # get the last IMU reading from the gripper
+        last_rotvec = self.datastore.imu_rotvec.getLast()[1:]
+        grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
+
+        # get the winch line length
+        timestamp, length, speed = self.datastore.winch_line_record.getLast()
+
+        self.grip_pose = compose_poses([
+            (np.zeros(3), self.gant_pos),
+            (grv, np.array([0,0,-length], dtype=float)),
         ])
 
     def send_positions(self):
