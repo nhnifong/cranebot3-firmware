@@ -403,8 +403,11 @@ class AsyncObserver:
         return np.array(anchor_poses)
 
     async def half_auto_calibration(self):
-        """Optimize zero angles from a few points
-        This is a motion task"""
+        """
+        Set line lengths from observation
+        tighten, wait for obs, estimate line lengths, move up slightly, estimate line lengths, move down slightly
+        This is a motion task
+        """
         NUM_SAMPLE_POINTS = 3
         OPTIMIZER_TIMEOUT_S = 60  # seconds
         
@@ -412,18 +415,19 @@ class AsyncObserver:
             if len(self.anchors) < N_ANCHORS:
                 print('Cannot run half calibration until all anchors are connected')
                 return
-            anchor_poses = np.array([a.anchor_pose for a in self.anchors])
-            # Estimate a reasonable height for calibration points
-            h = anchor_poses[0,1,2]
-            sample_points = np.array([[np.cos((i/NUM_SAMPLE_POINTS)*2*np.pi), np.sin((i/NUM_SAMPLE_POINTS)*2*np.pi), h/3] for i in range(NUM_SAMPLE_POINTS)])
-            data = await self.collect_data_at_points(sample_points, anchor_poses=anchor_poses)
-            print(f'Starting optimizer with sample points {sample_points}')
-            async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, self.power_spool_index, 'zero_angles_only'))
-            _, zero_angles = async_result.get(timeout=OPTIMIZER_TIMEOUT_S)
-            print(f'zero angles obtained from optimization {zero_angles}')
-            await self.tension_and_wait()
-            for client in self.anchors:
-                await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
+
+            for direction in [[0,0,-1], [0,0,1]]:
+                await self.tension_and_wait()
+                # wait for some new obs
+                await asyncio.sleep(0.5)
+                lengths = np.linalg.norm(self.pe.anchor_points - self.pe.visual_pos, axis=1)
+                await self.sendReferenceLengths(lengths)
+                await asyncio.sleep(0.25)
+                # move in direction for short time
+                await self.move_direction_speed(direction, 0.05, downward_bias=0)
+                await asyncio.sleep(0.25)
+                self.slow_stop_all_spools()
+
         except asyncio.CancelledError:
             raise
 
@@ -437,7 +441,7 @@ class AsyncObserver:
         GRID_STEPS_X = 3j
         GRID_STEPS_Y = 3j
         GRID_STEPS_Z = 2j
-        OPTIMIZER_TIMEOUT_S = 60 # seconds
+        OPTIMIZER_TIMEOUT_S = 300 # seconds
         
         try:
             if len(self.anchors) < N_ANCHORS:
@@ -954,7 +958,8 @@ class AsyncObserver:
             'aim_speed': line_speed,
             'set_finger_angle': finger_angle,
         }
-        asyncio.create_task(self.gripper_client.send_commands(update))
+        if self.gripper_client is not None:
+            asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_angle
 
     async def seek_gantry_goal(self):

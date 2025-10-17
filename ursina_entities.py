@@ -105,6 +105,15 @@ class Gripper(Entity):
             scale=(-1,1,1),
             color=(0.0, 0.2, 0.0, 1.0),
         )
+        # laser range indicator
+        self.lrange = Entity(
+            parent=self,
+            model='cube',
+            scale=(1000,250,1000),
+            color=color.red,
+            position=(0,-250,0),
+        )
+
         self.remap = {
             'r down': 'up arrow down',
             'r up': 'up arrow up',
@@ -120,6 +129,9 @@ class Gripper(Entity):
 
     def setStatus(self, status):
         self.label.text = f"Gripper\n{status}"
+
+    def setLaserRange(self, distance_m):
+        self.lrange.position = (0,-distance_m/1000,0)
 
     def setPose(self, pose):
         """
@@ -410,7 +422,7 @@ class Floor(Entity):
             texture='cap_38.jpg',
             shader=unlit_shader,
             parent=self,
-            enabled=True)
+            enabled=False)
         self.hasSetImage = False
 
         # state for gamepad processing
@@ -680,3 +692,25 @@ class VelocityArrow(Entity):
         yup_vel = swap_yz(self.zup_vel / magnitude)
         self.look_at(yup_vel)
         
+
+class PopMessage(WindowPanel):
+    def __init__(self):
+        self.popup_text_field = Text('Default message...', wordwrap=True, origin=(0, 0))
+        super().__init__(
+            title='System Message', 
+            content=[
+                self.popup_text_field,
+                Button('Dismiss', color=color.azure, on_click=self.close_popup) 
+            ],
+            x=-0.25, 
+            y=0.15,
+            scale=(0.5, 0.5),
+            enabled=False, # Start as hidden
+        )
+
+    def close_popup(self):
+        self.enabled = False
+
+    def show_message(self, message):
+        self.popup_text_field.text = message
+        self.enabled = True

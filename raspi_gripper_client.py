@@ -31,6 +31,9 @@ class RaspiGripperClient(ComponentClient):
                 distance_measurement = float(gs['range'])
                 self.datastore.range_record.insert([timestamp, distance_measurement])
 
+                # send range to the UI for visualization
+                to_ui_q.put({'lrange': distance_measurement})
+
             self.datastore.finger.insert([timestamp, float(gs['fing_a']), float(gs['fing_v'])])
             
         if 'holding' in update:
