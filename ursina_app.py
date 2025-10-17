@@ -551,8 +551,10 @@ class ControlPanelUI:
         if 'pop_message' in updates:
             self.pop_message.show_message(updates['pop_message'])
 
-        if 'lrange' in updates:
-            self.gripper.setLaserRange(updates['lrange'])
+        if 'grip_sensors' in updates:
+            l_range, f_angle, pressure = updates['grip_sensors'] 
+            self.gripper.setLaserRange(l_range)
+            self.gripper.setFingerAngle(f_angle)
 
     def start(self):
         self.app.run()

@@ -27,14 +27,23 @@ class RaspiGripperClient(ComponentClient):
             ])
             self.datastore.imu_rotvec.insert(np.concatenate([np.array([timestamp], dtype=float), grip_pose[0]]))
 
+            distance_measurement = 0
             if 'range' in gs:
                 distance_measurement = float(gs['range'])
                 self.datastore.range_record.insert([timestamp, distance_measurement])
 
-                # send range to the UI for visualization
-                to_ui_q.put({'lrange': distance_measurement})
 
-            self.datastore.finger.insert([timestamp, float(gs['fing_a']), float(gs['fing_v'])])
+            # Note that finger angles are returned in the range of (-90, 90)
+            # this is because that's the range we use when talking to the inventor hat mini.
+            # fully open is about -90 and fully closed is about 80
+            # the actual servo installed in the Pilot hardware is a 270 degree servo
+            # and it is connected to the fingers with a reduction gear.
+
+            angle = float(gs['fing_a'])
+            voltage = float(gs['fing_v'])
+
+            self.datastore.finger.insert([timestamp, angle, voltage])
+            to_ui_q.put({'grip_sensors': (distance_measurement, angle, voltage)})
             
         if 'holding' in update:
             # expect a bool. Forward it to the position estimator

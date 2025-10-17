@@ -31,6 +31,9 @@ def draw_line(point_a, point_b, slack=False):
     else:
         return Mesh(vertices=[point_a, point_b], mode='line')
 
+def mapval(x, in_min, in_max, out_min, out_max):
+    return (float(x) - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+
 MAX_JOG_SPEED = 0.3
 
 gripper_color = (0.9, 0.20, 0.34, 1.0)
@@ -214,15 +217,16 @@ class Gripper(Entity):
     def toggleClosed(self):
         self.closed = not self.closed
         self.to_ob_q.put({'set_grip': self.closed})
-        self.setAppearanceClosed(self.closed)
 
-    def setAppearanceClosed(self, closed):
-        if closed:
-            self.left_finger.rotation = (0,0,0)
-            self.right_finger.rotation = (0,0,0)
-        else:
-            self.left_finger.rotation = (0,0,60)
-            self.right_finger.rotation = (0,0,-60)
+    def setFingerAngle(self, commanded_angle):
+        """
+        Sets the appearance of the finger angle.
+        commanded_angle is int the range (-90, 90) This is the value that was commanded of the inventor hat mini
+        this function translates it into the pilot hardware gripper's physical angle 
+        """
+        phys_angle = mapval(commanded_angle, -90, 90, 60, 0)
+        self.left_finger.rotation = (0,0,phys_angle)
+        self.right_finger.rotation = (0,0,-phys_angle)
 
     def toggle_vid_feed(self):
         self.vid_visible = not self.vid_visible
