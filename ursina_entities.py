@@ -112,7 +112,7 @@ class Gripper(Entity):
         self.lrange = Entity(
             parent=self,
             model='cube',
-            scale=(1000,250,1000),
+            scale=(100,25,100),
             color=color.red,
             position=(0,-250,0),
         )
@@ -134,7 +134,7 @@ class Gripper(Entity):
         self.label.text = f"Gripper\n{status}"
 
     def setLaserRange(self, distance_m):
-        self.lrange.position = (0,-distance_m/1000,0)
+        self.lrange.position = (0,-distance_m*1000)
 
     def setPose(self, pose):
         """

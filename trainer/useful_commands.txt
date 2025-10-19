@@ -15,10 +15,3 @@ python3 src/lerobot/scripts/lerobot_train.py \
 
 Currently this torch version seems to work with nvidia driver 580 and the RTX 5090
 pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
-
-/usr/bin/rpicam-vid -t 0 \
-  --width=1920 --height=1080 \
-  --listen -o tcp://0.0.0.0:8888 \
-  --codec h264 \
-  --vflip --hflip \
-  --autofocus-mode continuous

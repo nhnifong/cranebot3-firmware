@@ -16,6 +16,7 @@ class RaspiGripperClient(ComponentClient):
 
     def handle_update_from_ws(self, update):
         if 'line_record' in update:
+            print(f'gripper line record {update["line_record"]}')
             self.datastore.winch_line_record.insertList(update['line_record'])
 
         if 'grip_sensors' in update:
