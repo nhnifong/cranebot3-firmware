@@ -10,6 +10,5 @@ python-fcl==0.7.0.8
 grpcio-tools==1.75.1
 pupil-apriltags==1.0.4.post11
 av==15.1.0
-bleak==1.1.1
 lerobot==0.3.3
 teleop==0.1.2

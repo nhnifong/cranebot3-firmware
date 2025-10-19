@@ -4,11 +4,21 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. trainer/robot
 record new episodes seperately
 python -m trainer.stringman_record_loop
 
-lerobot-train \
+python3 src/lerobot/scripts/lerobot_train.py \
   --dataset.repo_id=naavox/stringman-practice-dataset-7 \
   --policy.type=act \
   --output_dir=outputs/train/act_your_dataset \
   --job_name=act_your_dataset \
   --wandb.enable=true \
-  --policy.repo_id=naavox/act_policy
+  --policy.repo_id=naavox/act_policy \
+  --batch_size=3
 
+Currently this torch version seems to work with nvidia driver 580 and the RTX 5090
+pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
+
+/usr/bin/rpicam-vid -t 0 \
+  --width=1920 --height=1080 \
+  --listen -o tcp://0.0.0.0:8888 \
+  --codec h264 \
+  --vflip --hflip \
+  --autofocus-mode continuous
