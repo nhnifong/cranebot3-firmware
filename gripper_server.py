@@ -137,7 +137,7 @@ class RaspiGripperServer(RobotComponentServer):
         # the superclass, RobotComponentServer, assumes the presense of this attribute
         self.spooler = SpoolController(
             self.motor,
-            gear_ratio=9/36,
+            gear_ratio=36/9,
             empty_diameter=20,
             full_diameter=24,
             full_length=1.93,
@@ -147,11 +147,21 @@ class RaspiGripperServer(RobotComponentServer):
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-gripper-service.' + unique
 
-        self.last_value = 0
+        self.last_finger_angle = 0
         self.past_val_rates = deque(maxlen=self.conf['UPDATE_RATE'])
         self.holding = False
         self.holdPressure = False
         self.stream_command = half_res_stream_command
+
+        # try to read the physical positions of winch and finger last written to disk.
+        # For the gripper, there's a good change nothing has moved since power down.
+        try:
+            with open('offsets.pickle', 'rb') as f:
+                winch, finger = pickle.load(f)
+                self.spooler.setReferenceLength(winch)
+                self.last_finger_angle = finger
+        except FileNotFoundError:
+            pass
 
         # a mode in which the finger tries to automatically hold a given pressure
         # mode will switch to False if a "set_finger_angle" update is received and
@@ -166,7 +176,7 @@ class RaspiGripperServer(RobotComponentServer):
             'fing_v': self.hat.gpio_pin_value(PRESSURE_PIN),
             # we don't have an encoder that tells us the true finger angle. fing_a is only what it was last commanded to be.
             # this could be easily remedied by using a smart servo or by adding another mouse wheel encoder to the IHM's B port
-            'fing_a': self.last_value,
+            'fing_a': self.last_finger_angle,
         }
 
         if self.rangefinder.data_ready:
@@ -180,6 +190,18 @@ class RaspiGripperServer(RobotComponentServer):
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
         asyncio.create_task(self.fingerLoop())
+        asyncio.create_task(self.saveOffsets())
+
+    async def saveOffsets(self):
+        """Periodically save winch length and finger position to disk so we don't recal after power out"""
+        i=0
+        while self.run_server:
+            await asyncio.sleep(1) # less sleep so this won't hold up server shutdown
+            i+=1
+            if i==30:
+                i=0
+                with open('offsets.pickle', 'wb') as f:
+                    f.write(pickle.dumps((self.spooler.last_length, self.last_finger_angle)))
 
     async def holdPressurePid(self, target_v):
         """
@@ -198,8 +220,8 @@ class RaspiGripperServer(RobotComponentServer):
             pos = clamp(pos+val,-90,90)
             self.hand_servo.value(pos)
             # record the absolute value change to know if it is stabilizing
-            self.past_val_rates.append(abs(pos - self.last_value))
-            self.last_value = pos
+            self.past_val_rates.append(abs(pos - self.last_finger_angle))
+            self.last_finger_angle = pos
             await asyncio.sleep(1/self.conf['UPDATE_RATE'])
 
     async def readStableFingerValue(self):
@@ -211,7 +233,7 @@ class RaspiGripperServer(RobotComponentServer):
         while sum(self.past_val_rates)/self.conf['UPDATE_RATE'] > self.conf['MEAN_SERVO_VAL_CHANGE_THRESHOLD'] and timeout > 0:
             await asyncio.sleep(0.25)
             timeout -= 0.25
-        return self.last_value
+        return self.last_finger_angle
 
 
     async def fingerLoop(self):
@@ -322,8 +344,8 @@ class RaspiGripperServer(RobotComponentServer):
             tg.create_task(self.performZeroWinchLine())
         if 'set_finger_angle' in update:
             self.use_finger_loop = False
-            self.last_value = clamp(float(update['set_finger_angle']), -90, 90)
-            self.hand_servo.value(self.last_value)
+            self.last_finger_angle = clamp(float(update['set_finger_angle']), -90, 90)
+            self.hand_servo.value(self.last_finger_angle)
 
 if __name__ == "__main__":
     logging.basicConfig(

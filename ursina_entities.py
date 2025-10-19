@@ -379,8 +379,8 @@ Enter the actual weight in kg."""),
         self.camview.enabled = not self.camview.enabled
         self.to_ob_q.put({'toggle_previews':{'anchor':self.num, 'status':self.camview.enabled}})
 
-GAMEPAD_GRIP_DEG_PER_SEC = 80
-GAMEPAD_WINCH_METER_PER_SEC = 0.08
+GAMEPAD_GRIP_DEG_PER_SEC = 90
+GAMEPAD_WINCH_METER_PER_SEC = 0.2
 
 class Floor(Entity):
     def __init__(self, app, **kwargs):
