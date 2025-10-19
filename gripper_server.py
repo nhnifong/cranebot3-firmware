@@ -135,7 +135,14 @@ class RaspiGripperServer(RobotComponentServer):
             self.motor = GripperSpoolMotor(self.hat)
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
-        self.spooler = SpoolController(self.motor, empty_diameter=20, full_diameter=24, full_length=1.93, conf=self.conf)
+        self.spooler = SpoolController(
+            self.motor,
+            gear_ratio=9/36,
+            empty_diameter=20,
+            full_diameter=24,
+            full_length=1.93,
+            conf=self.conf
+        )
 
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-gripper-service.' + unique
