@@ -43,7 +43,7 @@ class RaspiGripperClient(ComponentClient):
             voltage = float(gs['fing_v'])
 
             self.datastore.finger.insert([timestamp, angle, voltage])
-            to_ui_q.put({'grip_sensors': (distance_measurement, angle, voltage)})
+            self.to_ui_q.put({'grip_sensors': (distance_measurement, angle, voltage)})
             
         if 'holding' in update:
             # expect a bool. Forward it to the position estimator
