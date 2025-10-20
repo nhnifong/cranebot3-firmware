@@ -116,7 +116,7 @@ def record_until_disconnected():
     # if os.path.exists(base_cache_dir):
     #     shutil.rmtree(base_cache_dir)
 
-    create_dataset = True
+    create_dataset = False
     dataset = None
     if create_dataset:
         dataset = LeRobotDataset.create(
