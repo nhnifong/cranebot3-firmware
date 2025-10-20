@@ -8,6 +8,7 @@ from getmac import get_mac_address
 import logging
 from collections import deque
 import time
+import pickle
 
 import board
 import busio
