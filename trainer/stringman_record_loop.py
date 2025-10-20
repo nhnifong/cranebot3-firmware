@@ -28,8 +28,8 @@ logger.addHandler(handler)
 # --- Configuration ---
 EPISODE_MAX_TIME_SEC = 600
 FPS = 30
-TASK_DESCRIPTION = "Pick up clutter from the floor and drop it in the bin."
-HF_REPO_ID = "naavox/stringman-practice-dataset-6"
+TASK_DESCRIPTION = "Pick up laundry from the floor and drop it in the metal basket."
+HF_REPO_ID = "naavox/stringman-practice-dataset-8"
 GRPC_ADDR = 'localhost:50051'
 NUM_BUFFERS = 3
 
