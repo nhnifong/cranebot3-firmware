@@ -1128,19 +1128,17 @@ class AsyncObserver:
         """gets the last frame of video from the given camera if possible
         camera_key should be one of 'g' 0, 1, 2, 3
         """
-        image_ndarray = None
+        image = None
         if camera_key == 'g':
             if self.gripper_client is not None:
-                image_ndarray = self.gripper_client.frame
+                image = self.gripper_client.lerobot_jpeg_bytes
         else:
             anum = int(camera_key)
             for client in self.anchors:
                 if client.anchor_num == anum:
-                    image_ndarray = client.frame
-        if image_ndarray is not None:
-            is_success, buffer = cv2.imencode(".jpg", image_ndarray, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            if is_success:
-                return buffer.tobytes()
+                    image = client.lerobot_jpeg_bytes
+        if image is not None:
+            return image
         return bytes()
 
     def get_episode_control_events(self):
