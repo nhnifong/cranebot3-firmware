@@ -29,6 +29,7 @@ class StringmanConfig(RobotConfig):
     grpc_addr: str
 
 IMAGE_SHAPE = (1080, 1920, 3)
+# IMAGE_SHAPE = (360, 640, 3)
 
 def decode_image(jpeg_bytes):
     try:

@@ -29,9 +29,10 @@ logger.addHandler(handler)
 EPISODE_MAX_TIME_SEC = 600
 FPS = 30
 TASK_DESCRIPTION = "Pick up laundry from the floor and drop it in the metal basket."
-HF_REPO_ID = "naavox/stringman-practice-dataset-8"
+HF_REPO_ID = "naavox/stringman-practice-dataset-9"
 GRPC_ADDR = 'localhost:50051'
 NUM_BUFFERS = 3
+create_dataset = True
 
 OBS_STR = "observation"
 ACTION = "action"
@@ -116,7 +117,6 @@ def record_until_disconnected():
     # if os.path.exists(base_cache_dir):
     #     shutil.rmtree(base_cache_dir)
 
-    create_dataset = False
     dataset = None
     if create_dataset:
         dataset = LeRobotDataset.create(

@@ -14,6 +14,7 @@ from functools import partial
 import threading
 from config import Config
 import os
+from trainer.stringman_pilot import IMAGE_SHAPE
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -52,6 +53,13 @@ class ComponentClient:
         self.connection_established_event = None
         self.frame = None # last frame of video seen
 
+        # things used by jpeg thread for training mode
+        self.frame_lock = threading.Lock()
+        # This condition variable signals the worker when a new frame is ready
+        self.new_frame_condition = threading.Condition(self.frame_lock)
+        # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
+        self.lerobot_jpeg_bytes = None
+
         # todo: receive a command in observer that will set this value
         self.sendPreviewToUi = False
 
@@ -89,7 +97,10 @@ class ComponentClient:
             for av_frame in container.decode(stream):
                 if not self.connected:
                     break
-                self.frame = av_frame.to_ndarray(format='rgb24')
+                fr = av_frame.to_ndarray(format='rgb24')
+                with self.new_frame_condition:
+                    self.frame = fr
+                    self.new_frame_condition.notify()
                 fnum += 1
                         
                 if self.sendPreviewToUi:
@@ -136,6 +147,43 @@ class ComponentClient:
         finally:
             if 'container' in locals():
                 container.close()
+
+    def jpeg_encoder_loop(self):
+        """
+        This runs in a dedicated thread. It waits for a signal that a new
+        frame is available, then encodes it and stores the bytes.
+        These bytes are intended to be returnd by the GRPC lerobot connects with
+        so this only needs to be running when that is connected.
+
+        The purpose of this method is to have a frame ready to return to lerobot as fast as possible.
+        Numpy functions such as those used by cv2.resize actually release the GIL
+        which is why this is a thread not a task
+        """
+        while self.connected:
+            with self.new_frame_condition:
+                # Wait until the main receive_video loop signals us.
+                # The 'wait' call will timeout after 1 second to re-check
+                # the self.connected flag, allowing the thread to exit gracefully.
+                signaled = self.new_frame_condition.wait(timeout=1.0)
+                if not signaled:
+                    continue
+                # We were woken up, so copy the frame pointer while we have the lock
+                frame_to_encode = self.frame
+
+            # Do the actual work outside the lock
+            # This lets the receive_video loop add the next frame without waiting for the encode.
+            if frame_to_encode is not None:
+                # return the size lerobot is expecting. it's faster to do this resize before encoding.
+                dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
+                resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
+                params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+                is_success, buffer = cv2.imencode(".jpg", resized, params)
+
+                # Store the result. This is an atomic operation in Python.
+                if is_success:
+                    self.lerobot_jpeg_bytes = buffer.tobytes()
+        
+        print("Encoder thread exiting.")
 
     def handle_frame_times(self, frame_time_list):
         """
@@ -188,6 +236,9 @@ class ComponentClient:
         # save a reference to this for send_commands
         self.websocket = websocket
         self.notify_video = False
+        # start thread for lerobot jpeg encoding
+        encoder_thread = threading.Thread(target=self.jpeg_encoder_loop, daemon=True)
+        encoder_thread.start()
         # send configuration to robot component to override default.
         asyncio.create_task(self.send_config())
         vid_thread = None
@@ -201,8 +252,9 @@ class ComponentClient:
                     self.handle_frame_times(update['frames'])
                 if 'video_ready' in update:
                     print(f'got a video ready update {update}')
-                    vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": int(update['video_ready'])})
-                    vid_thread.start()
+                    if self.anchor_num in [None,2,3]:
+                        vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": int(update['video_ready'])})
+                        vid_thread.start()
                 self.handle_update_from_ws(update)
 
             except Exception as e:
@@ -220,6 +272,8 @@ class ComponentClient:
         if vid_thread is not None:
             # vid_thread should stop because self.connected is False
             vid_thread.join()
+        if encoder_thread is not None:
+            encoder_thread.join()
 
     async def send_commands(self, update):
         if self.connected:
