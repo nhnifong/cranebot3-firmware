@@ -437,6 +437,7 @@ class Floor(Entity):
         self.last_action = np.zeros(6)
         self.start_was_held = False
         self.dpad_up_was_held = False
+        self.dpad_left_was_held = False
         self.seat_orbit_mode = True
 
     def set_reticule_height(self, height):
@@ -537,6 +538,12 @@ class Floor(Entity):
             print('tension lines command from gamepad')
             self.app.to_ob_q.put({'tension_lines': None})
         self.dpad_up_was_held = dpad_up_held
+
+        # D pad left - Run quick calibration. detect rising edge
+        dpad_left_held = bool(held_keys['gamepad dpad left'])
+        if dpad_left_held and dpad_left_held != self.dpad_left_was_held:
+            self.app.to_ob_q.put({'half_cal': None})
+        self.dpad_left_was_held = dpad_left_held
 
         act = np.array([*vector, speed, self.smooth_winch_speed, self.finger_angle])
         if not np.array_equal(act, self.last_action) or (now > (self.last_send_t + 0.2) and sum(vector) != 0):
