@@ -43,13 +43,12 @@ class ComponentClient:
         self.connected = False  # status of connection to websocket
         self.receive_task = None  # Task for receiving messages from websocket
         self.video_task = None  # Task for streaming video
-        self.frame_times = {}
+        self.stream_start_ts = None
         self.pool = pool
         self.stat = stat
         self.last_gantry_frame_coords = None
         self.ct = None # task to connect to websocket
         self.save_raw = False
-        self.training_frame_cb = None
         self.connection_established_event = None
         self.frame = None # last frame of video seen
 
@@ -80,53 +79,35 @@ class ComponentClient:
             container = av.open(video_uri, options=options, mode='r')
             stream = next(s for s in container.streams if s.type == 'video')
             stream.thread_type = "SLICE"
-        
-            # if not cap.isOpened():
-            #     print('no video stream available')
-            #     self.conn_status['video'] = 'none'
-            #     self.to_ui_q.put({'connection_status': self.conn_status})
-            #     return
 
             print(f'video connection successful')
             self.conn_status['video'] = 'connected'
             self.notify_video = True
             lastSam = time.time()
             last_time = time.time()
-            fnum = 59 # pyav will read exactly 60 frames with these settings before yeilding one.
 
             for av_frame in container.decode(stream):
                 if not self.connected:
                     break
+                # determine the wall time when the frame was captured
+                timestamp = self.stream_start_ts + av_frame.time
+
                 fr = av_frame.to_ndarray(format='rgb24')
                 with self.new_frame_condition:
                     self.frame = fr
                     self.new_frame_condition.notify()
-                fnum += 1
                         
                 if self.sendPreviewToUi:
                     # send frame to UI
                     preview = cv2.flip(cv2.resize(cv2.cvtColor(self.frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
                     self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
 
-                try:
-                    timestamp = time.time() # default to using client clock
-                    timestamp = self.frame_times[fnum]
-                    del self.frame_times[fnum]
-                    now = time.time()
-                    self.stat.latency.append(now - timestamp)
-                    fr = 1/(now - last_time)
-                    self.stat.framerate.append(fr)
-                    last_time = now
-                except KeyError:
-                    # expected behavior during unit test
-                    # print(f'received a frame without knowing when it was captured')
-                    pass 
-                    # continue
-
-                # process frame with an additional callback if set
-                # expected to be LeRobotDatasetCollector.handle_training_vid_frame
-                if self.training_frame_cb is not None:
-                    self.training_frame_cb(timestamp, self.frame)
+                # save information about stream latency and framerate
+                now = time.time()
+                self.stat.latency.append(now - timestamp)
+                fr = 1/(now - last_time)
+                self.stat.framerate.append(fr)
+                last_time = now
 
                 # send frame to apriltag detector
                 try:
@@ -142,7 +123,13 @@ class ComponentClient:
 
                 # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
                 # handle_detections runs in this process, but in a thread managed by the pool.
-                time.sleep(0.02)
+                time.sleep(0.005)
+
+        except av.error.TimeoutError:
+            print('no video stream available')
+            self.conn_status['video'] = 'none'
+            self.to_ui_q.put({'connection_status': self.conn_status})
+            return
 
         finally:
             if 'container' in locals():
@@ -157,7 +144,7 @@ class ComponentClient:
 
         The purpose of this method is to have a frame ready to return to lerobot as fast as possible.
         Numpy functions such as those used by cv2.resize actually release the GIL
-        which is why this is a thread not a task
+        which is why this is a thread not a task (main loop can run faster this way)
         """
         while self.connected:
             with self.new_frame_condition:
@@ -252,8 +239,10 @@ class ComponentClient:
                     self.handle_frame_times(update['frames'])
                 if 'video_ready' in update:
                     print(f'got a video ready update {update}')
+                    port = int(update['video_ready'][0])
+                    self.stream_start_ts = float(update['video_ready'][1])
                     if self.anchor_num in [None,2,3]:
-                        vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": int(update['video_ready'])})
+                        vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
                         vid_thread.start()
                 self.handle_update_from_ws(update)
 

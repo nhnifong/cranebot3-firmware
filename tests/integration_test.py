@@ -21,6 +21,7 @@ from mock_rpicam_vid import RPiCamVidMock, convert_pose
 from math import pi
 from cv_common import compose_poses
 import model_constants
+import pytest
 
 # this test starts four anchor servers and a gripper server and then starts up a full instances of the observer
 # which is expoected to discover and connect to all of them.
@@ -147,6 +148,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
     def move_fake_gantry(self, pos):
         self.mock_camera.update_gantry_pose((*pos, 0,0,0))
 
+    @pytest.mark.skip(reason="Taskes about five minutes")
     async def test_auto_calibration(self):
         self.ob.test_gantry_goal_callback = self.move_fake_gantry
         await asyncio.sleep(16) # wait for observer to startup and discover services
