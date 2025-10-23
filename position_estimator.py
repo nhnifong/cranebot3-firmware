@@ -14,6 +14,7 @@ import model_constants
 from scipy.spatial.transform import Rotation
 from kalman_filter import KalmanFilter
 import cv2
+from frequency_estimator import SwingFrequencyEstimator
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -225,49 +226,6 @@ def find_hang_point(positions, lengths):
     return candidates[index_of_lowest], slack_lines
 
 
-def swing_angle_from_params(t, freq, xamp, yamp, xphase, yphase):
-    """
-    Evaluate a swing angles at an array of times
-
-    t numpy array of timestamps
-    freq in hertz
-    amplitude of x andy y waves in meters
-    phase offset of waves, -pi to pi
-    """
-    xangles = np.cos(freq * t * 2 * pi + xphase) * xamp
-    yangles = np.sin(freq * t * 2 * pi + yphase) * yamp
-    if np.isscalar(t):
-        return xangles, yangles
-    return np.column_stack([xangles, yangles])
-
-def swing_angle_from_params_transformed(t, freq, xamp, yamp, cos_xph, sin_xph, cos_yph, sin_yph):
-    """
-    A cost function in phase space
-    """
-    omega_t = freq * t * 2 * np.pi
-    cos_omega_t = np.cos(omega_t)
-    sin_omega_t = np.sin(omega_t)
-
-    # For x-angle: xamp * cos(omega_t + xphase)
-    x_angles = xamp * (cos_omega_t * cos_xph - sin_omega_t * sin_xph)
-    # For y-angle: yamp * sin(omega_t + yphase)
-    y_angles = yamp * (sin_omega_t * cos_yph + cos_omega_t * sin_yph)
-
-    if np.isscalar(t):
-        return x_angles, y_angles
-    return np.column_stack([x_angles, y_angles])
-
-def swing_cost_fn(model_params, times, measured_angles):
-    predicted_angles = swing_angle_from_params(times, *model_params)
-    distances = np.linalg.norm(measured_angles - predicted_angles, axis=1)
-    return np.mean(distances**2)
-
-def swing_cost_fn_transformed(model_params_transformed, times, measured_angles):
-    predicted_angles = swing_angle_from_params_transformed(times, *model_params_transformed)
-    distances = np.linalg.norm(measured_angles - predicted_angles, axis=1)
-    return np.mean(distances**2)
-
-
 def eval_linear_pos(t, starting_time, starting_pos, velocity_vec):
     """
     Evaluate positions on a line at an array of times.
@@ -335,16 +293,6 @@ class Positioner2:
         # If some nonzero speed was occuring on any line at the last update, this will be None
         self.stop_cutoff = time.time()
 
-        self.swing_params = np.array([
-            1, # frequency
-            0.01, # x amplitude
-            0.01, # y amplitude
-            cos(1.5), # cos x phase
-            sin(1.5), # sin x phase
-            cos(1.5), # cos y phase
-            sin(1.5), # sin y phase
-        ], dtype=float)
-
         # last estimate of the gripper pose
         self.grip_pose = (np.zeros(3), np.zeros(3))
         # last information on whether the gripper is thought to be holding something
@@ -382,6 +330,9 @@ class Positioner2:
         self.commanded_vel = np.zeros(3)
         self.commanded_vel_ts = time.time()
 
+        # gripper swing freqency estimator
+        self.swing_est = SwingFrequencyEstimator(hysteresis=0.04, smoothing_factor=0.15)
+
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
         assert points.shape == (4, 3)
@@ -401,87 +352,6 @@ class Positioner2:
         min_anchor_z = np.min(self.anchor_points[:, 2])
         in_z = 0 < point[2] < min_anchor_z
         return in_2d and in_z
-
-    def find_swing(self):
-        """The gantry is what the gripper hangs from, so When the gantry is still,
-        the IMU's quaternion readout should depend only on the gripper swing.
-
-        "still" means you can use any IMU observation that occured when all anchor lines had speed 0.
-
-        A swing in two dimension is defined by
-        - the natural frequency, from which I could derive the length.
-        - the amplitude in the x dimension
-        - the amplitude in the y dimention
-        - the phase offset of the x swing
-        - the phase offset of the y swing
-        """
-        imu_readings = self.datastore.imu_rotvec.deepCopy()
-        if len(imu_readings) < 20:
-            return
-        # convert to x and y angle offsets from vertical.
-        timestamps = imu_readings[:,0]
-        # TODO normalize timestamps so that numerical instability does not harm optimization
-
-        # take the x and y tilt from vertical.
-        # TODO z is free to rotate, do x and y tilt need to be altered so as to align with an unmoving coordinate space or
-        # is the estimate still good without doing this? or is the IMU already doing this for us? determime experimentally.
-        angles = Rotation.from_rotvec(imu_readings[:,1:]).as_euler('xyz')[:,:2]
-        if np.sum(angles[-1]) == 0:
-            return
-        # print(f'angles = {angles[-1]}')
-
-        # get the winch line length and use it to bound the swing frequency
-        # TODO, if the line cannot be zeroed physically, this could be off more than 1 meter.
-        _, length, _ = self.datastore.winch_line_record.getLast()
-        if length == 0:
-            return
-        swing_freq = 1/(2*pi*sqrt(length/9.81))
-
-        bounds = [
-            (swing_freq*0.8, swing_freq*1.2), # frequency +- 20%
-            (0, 1), # x amplitude. max possible swing angle in radians
-            (0, 1), # y amplitude
-            (-1, 1), # cos_xphase
-            (-1, 1), # sin_xphase
-            (-1, 1), # cos_yphase
-            (-1, 1), # sin_yphase
-        ]
-        initial_guess = self.swing_params.copy()
-        initial_guess[0] = swing_freq
-
-        constraints = [
-            {'type': 'eq', 'fun': lambda p: p[3]**2 + p[4]**2 - 1.0},  # cos_xph^2 + sin_xph^2 = 1
-            {'type': 'eq', 'fun': lambda p: p[5]**2 + p[6]**2 - 1.0}   # cos_yph^2 + sin_yph^2 = 1
-        ]
-
-        # print(f'initial_guess = {initial_guess}')
-
-        # given this array of timed x and y angles, compute what the expected angles should have been, and total up the error.
-        # then use SLSQP to find the parameters.
-        result = optimize.minimize(
-            swing_cost_fn_transformed,
-            initial_guess,
-            args=(timestamps, angles),
-            method='SLSQP',
-            bounds=bounds,
-            constraints=constraints,
-            options={
-                'disp': False,
-                'maxiter': 100,
-                # 'ftol': 1e-6,
-                # 'gtol': 1e-9,
-            },
-
-        )
-        try:
-            if not result.message.startswith("Iteration limit reached"):
-                assert result.success
-        except AssertionError:
-            print(result)
-            return
-        self.swing_params = result.x
-        self.swing_params[3] = self.swing_params[3] % (2*pi)
-        self.swing_params[4] = self.swing_params[4] % (2*pi)
 
     async def check_and_recal(self):
         """
@@ -576,11 +446,9 @@ class Positioner2:
             self.kf.enforce_bias_constraint()
 
             # optional hang velocity (unreviewed)
-            # if sum(speeds) == 0:
-            #     self.hang_vel = z
-            #     # if the gantry just now stopped moving, record the time.
-            #     if self.stop_cutoff is None:
-            #         self.stop_cutoff = time.time()
+            if sum(speeds) == 0:
+                self.hang_vel = np.zeros(3)
+                self.kf.update(self.hang_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
             # else:
             #     self.stop_cutoff = None
             #     # repeat for a position some small increment in the future to get the gantry velocity
@@ -608,42 +476,29 @@ class Positioner2:
             self.kf.update(self.commanded_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
             await asyncio.sleep(1/30)
 
-    def update_swing(self):
-        # get the last IMU reading from the gripper, take only the z axis
-        last_rotvec = self.datastore.imu_rotvec.getLast()[1:]
-        grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
-        last_z = grv[2]
-
-        # print(f'gripper tilt {grv[0:2]}')
-        # print(f'self.swing_params = {self.swing_params}')
-
-        # predict the x and y based on swing parameters
-        pre_x, pre_y = swing_angle_from_params_transformed(time.time(), *self.swing_params)
-        current_rotation = Rotation.from_euler('xyz', (pre_x, pre_y, last_z)).as_rotvec()
-
-        # get the winch line length
-        timestamp, length, speed = self.datastore.winch_line_record.getLast()
-
-        # starting at the gantry, rotate the frame of reference by the gripper rotation
-        # and translate along the negative z axis by the rope length
-        self.grip_pose = compose_poses([
-            (z, self.gant_pos),
-            (current_rotation, np.array([0,0,-length], dtype=float)),
-        ])
+    def get_pendulum_length(self):
+        return self.swing_est.get_pendulum_length()
 
     def estimate_gripper(self):
         """Place the gripper under the gantry by the winch line length, tilted according to the IMU"""
         # get the last IMU reading from the gripper
-        last_rotvec = self.datastore.imu_rotvec.getLast()[1:]
+        t_rot = self.datastore.imu_rotvec.getLast()
+        ts = t_rot[0]
+        last_rotvec = t_rot[1:]
         grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
 
+        # feed angle to frequency estimator
+        self.swing_est.add_rotation_vector(ts, last_rotvec)
+        # calculated_length = self.swing_est.get_pendulum_length()
+
         # get the winch line length
-        timestamp, length, speed = self.datastore.winch_line_record.getLast()
+        _, length, speed = self.datastore.winch_line_record.getLast()
 
         self.grip_pose = compose_poses([
-            (np.zeros(3), self.gant_pos),
-            (grv, np.array([0,0,-length], dtype=float)),
+            (grv, self.gant_pos),
+            (np.zeros(3), np.array([0,0,-length], dtype=float)),
         ])
+
 
     def send_positions(self):
         # send position factors to UI for visualization

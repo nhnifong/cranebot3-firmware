@@ -296,6 +296,11 @@ class AsyncObserver:
         # If only some anchors are connected, this would still send reference lengths to those
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
+        # winch line length is set to last swing based estimate
+        if self.gripper_client is not None:
+            winch_length = self.pe.get_pendulum_length()
+            if winch_length is not None:
+                asyncio.create_task(self.gripper_client.send_commands({'reference_length': winch_length}))
         # reset biases on kalman filter
         data = self.datastore.gantry_pos.deepCopy()
         position = np.mean(data[:,2:], axis=0)
