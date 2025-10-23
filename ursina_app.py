@@ -286,7 +286,7 @@ class ControlPanelUI:
             DropdownMenuButton('Estimate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, 'tension_lines')),
             DropdownMenuButton('Run Full Calibration', on_click=partial(self.simple_command, 'full_cal')),
-            DropdownMenuButton('Run Zero-Angle Calibration', on_click=partial(self.simple_command, 'half_cal')),
+            DropdownMenuButton('Run Quick Calibration', on_click=partial(self.simple_command, 'half_cal')),
             DropdownMenuButton('Figure-8 motion test', on_click=partial(self.simple_command, 'fig-8')),
             DropdownMenu('Simulated Data', buttons=(
                 DropdownMenuButton('Disable', on_click=partial(self.set_simulated_data_mode, 'disable')),
@@ -331,6 +331,8 @@ class ControlPanelUI:
     def input(self, key):
         if key == 'space':
             self.gripper.toggleClosed()
+        elif key == 'c':
+            self.simple_command('half_cal')
 
         was_dir = self.direction
 
