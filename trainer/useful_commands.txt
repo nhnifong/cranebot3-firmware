@@ -22,3 +22,12 @@ pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
   --codec h264 \
   --vflip --hflip \
   --autofocus-mode continuous
+
+/usr/bin/rpicam-vid -t 0 -n \
+  --width=1920 --height=1080 \
+  -o tcp://0.0.0.0:8888?listen=1 \
+  --codec libav \
+  --libav-format mpegts \
+  --low-latency \
+  --vflip --hflip \
+  --autofocus-mode continuous
