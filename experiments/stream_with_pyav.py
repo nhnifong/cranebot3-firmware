@@ -1,6 +1,10 @@
+# stream with av but keep the compressed frame around
+
 import av
 import numpy as np
+import time
 import cv2
+import sys
 
 options = {
     'rtsp_transport': 'tcp',
@@ -9,23 +13,29 @@ options = {
     'fast': '1',
 }
 
-try:
-    # Open the stream with explicit FFmpeg options
-    container = av.open("tcp://192.168.1.157:8888", options=options, mode='r')
+container = av.open(f"tcp://192.168.1.{sys.argv[1]}:8888", options=options, mode='r')
+stream = next(s for s in container.streams if s.type == 'video')
+stream.thread_type = "SLICE"
+fnum = 59 
+lt = time.time()
 
-    stream = next(s for s in container.streams if s.type == 'video')
 
-    for frame in container.decode(stream):
-        # The frame object is a PyAV video frame.
-        # You can convert it to a NumPy array for OpenCV/NumPy-based processing.
-        img = frame.to_ndarray(format='bgr24')
+for packet in container.demux(stream):
+    for frame in packet.decode():
+        # This is your raw, uncompressed image for Apriltag detection
+        print(f'pts={frame.pts}')
+        print(f'dts={frame.dts}')
+        print(f'time={frame.time}')
+        print(f'time_base={frame.time_base}')
+        raw_image_ndarray = frame.to_ndarray(format='bgr24')
         
-        cv2.imshow('stream', img)
-        if cv2.waitKey(1) == ord('q'):
-            break
+        now = time.time()
+        fr = 1/(now-lt)
+        lt = now
 
-finally:
-    if 'container' in locals():
-        container.close()
-
-    cv2.destroyAllWindows()
+# /usr/bin/rpicam-vid -t 0 \
+#   --width=1920 --height=1080 \
+#   --listen -o tcp://0.0.0.0:8888 \
+#   --codec h264 \
+#   --vflip --hflip \
+#   --autofocus-mode continuous
