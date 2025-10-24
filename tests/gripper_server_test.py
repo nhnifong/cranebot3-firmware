@@ -100,7 +100,7 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
     async def test_startup_shutdown(self):
         # Startup and shutdown are handled in setUp and tearDown
         self.mock_spool_class.assert_called_once_with(
-            ANY, empty_diameter=20, full_diameter=ANY, full_length=ANY, conf=self.server.conf)
+            ANY, gear_ratio=4.0, empty_diameter=20, full_diameter=ANY, full_length=ANY, conf=self.server.conf)
         self.assertTrue(self.server_task.done() is False, "Server should be running")
 
     async def test_connect(self):

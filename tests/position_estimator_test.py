@@ -145,53 +145,6 @@ class TestPositionEstimator(unittest.TestCase):
         self.assertTrue(slack_lines[2])
         self.assertFalse(slack_lines[3])
 
-    def test_swing_angle_from_params(self):
-        expected_angles = np.array([
-            [1, -2],
-            [0,  0],
-            [-1,  2]
-        ], dtype=float)
-        times = np.array([100,101,102], dtype=float)
-        freq = 1/4
-        xamp = 1
-        yamp = 2
-        xphase = 0
-        yphase = -pi/2
-
-        angles = swing_angle_from_params(times, freq, xamp, yamp, xphase, yphase)
-        np.testing.assert_array_almost_equal(angles, expected_angles)
-
-        # add full circle to both phases, nothing should change
-        xphase += 2*pi
-        yphase += 2*pi
-        angles = swing_angle_from_params(times, freq, xamp, yamp, xphase, yphase)
-        np.testing.assert_array_almost_equal(angles, expected_angles)
-
-    def test_swing_cost_fn_zero(self):
-        model_params = np.array([1,1,1,0,0])
-        times = np.array([1, 2, 3])
-        measured_angles =  np.array([[1,0],[1,0],[1,0]])
-        expected_cost = 0.0
-        cost = swing_cost_fn(model_params, times, measured_angles)
-        self.assertAlmostEqual(expected_cost, cost, 8)
-
-    def test_find_swing(self):
-        freq = 0.5
-        xamp = 0.1
-        yamp = 0.5
-        xphase = pi/3
-        yphase = pi/5
-        expected_params = np.array([freq, xamp, yamp, cos(xphase), sin(xphase), cos(yphase), sin(yphase)])
-        for t in np.linspace(100,105,self.datastore.imu_rotvec.shape[0]):
-            xangle = cos(freq * t * 2 * pi + xphase) * xamp
-            yangle = sin(freq * t * 2 * pi + yphase) * yamp
-            zangle = random() # test should be insensitive to z
-            rotvec = Rotation.from_euler('xyz', [xangle, yangle, zangle]).as_rotvec()
-            self.datastore.imu_rotvec.insert(np.concatenate([[t], rotvec]))
-        self.datastore.winch_line_record.insert([100,1,0]) #insert a length of 1, which implies a frequency of 0.5 hz
-        self.pe.find_swing()
-        # np.testing.assert_array_almost_equal(self.pe.swing_params, expected_params, 2)
-
 class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):

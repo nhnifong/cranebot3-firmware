@@ -69,7 +69,6 @@ class RaspiGripperClient(ComponentClient):
         if len(config.gripper_vars) > 0:
             await self.websocket.send(json.dumps({
                 'set_config_vars': config.gripper_vars,
-                'reference_length': 0.35, # initial estimate of reference length typical for gripper
                 }))
 
     async def zero_winch(self):

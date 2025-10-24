@@ -139,7 +139,7 @@ class RobotComponentServer:
         # read all the lines of output
         while True:
             # during normal streaming, it is normal for this to block a long time because rpicam-vid isn't writing lines
-            await rpicam_process.stdout.readline()
+            await self.rpicam_process.stdout.readline()
             if not line: # EOF.
                 print('rpicam-vid exited')
                 break
