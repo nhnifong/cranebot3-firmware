@@ -82,6 +82,7 @@ time.sleep(0.5)
 
 start_quat = imu.quaternion
 assert sum(start_quat)!=0, "IMU readings appeard to be zero. it may be dead or there may be a continuity problem in the I2C bus wire"
+print('IMU readings appear normal')
 
 rangefinder = VL53L1X(i2c)
 rangefinder.distance_mode = 2 # LONG. results returned in centimeters.
@@ -94,5 +95,6 @@ while count>0 and abs(rangefinder.distance-start_dist) < 1:
     count-=1
     time.sleep(0.05)
 assert count!=0, "Timed out waiting for change in observed distance from rangefinder. Rangefinger may not be functioning."
+print('Rangefinder readings normal')
 
 print('All sensors working normally. Camera not checked.')
