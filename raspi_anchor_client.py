@@ -128,7 +128,7 @@ class ComponentClient:
         except av.error.TimeoutError:
             print('no video stream available')
             self.conn_status['video'] = 'none'
-            self.to_ui_q.put({'connection_status': self.conn_status})
+            self.notify_video = True
             return
 
         finally:
@@ -171,24 +171,6 @@ class ComponentClient:
                     self.lerobot_jpeg_bytes = buffer.tobytes()
         
         print("Encoder thread exiting.")
-
-    def handle_frame_times(self, frame_time_list):
-        """
-        Handle messages from the server contain information about when frames were captured.
-        this info is not embedded in the video stream, we have to save and reassociate it later.
-        """
-        for ft in frame_time_list:
-            # this item represents the time that rpicam-vid captured the frame with the given number.
-            # we need to know this for when we get frames from the stream
-            if len(self.frame_times) > 500:
-                print('How did we miss 500 frames? Video task crashed?')
-                raise RuntimeError("The websocket connection continued to receive info on frames, but the video thread is not consuming them, and got too far behind.")
-            self.frame_times[int(ft['fnum'])] = float(ft['time'])
-
-        # do this here because we seemingly can't do it in receive_video
-        if self.notify_video:
-            self.to_ui_q.put({'connection_status': self.conn_status})
-            self.notify_video = False
 
     async def connect_websocket(self):
         # main client loop
@@ -235,16 +217,20 @@ class ComponentClient:
                 message = await websocket.recv()
                 # print(f'received message of length {len(message)}')
                 update = json.loads(message)
-                if 'frames' in update:
-                    self.handle_frame_times(update['frames'])
                 if 'video_ready' in update:
                     print(f'got a video ready update {update}')
                     port = int(update['video_ready'][0])
                     self.stream_start_ts = float(update['video_ready'][1])
+                    print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
                     if self.anchor_num in [None,2,3]:
                         vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
                         vid_thread.start()
                 self.handle_update_from_ws(update)
+
+                # do this here because we seemingly can't do it in receive_video
+                if self.notify_video:
+                    self.to_ui_q.put({'connection_status': self.conn_status})
+                    self.notify_video = False
 
             except Exception as e:
                 # don't catch websockets.exceptions.ConnectionClosedOK here because we want it to trip the infinite generator in websockets.connect
