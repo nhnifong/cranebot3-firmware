@@ -14,7 +14,7 @@ from asyncio.subprocess import PIPE, STDOUT
 stream_command_args = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
     "--width=1920", "--height=1080",
-    "-o", "tcp://0.0.0.0:8888?listen=1",
+    "-o", "tcp://127.0.0.1:8888?listen=1",
     "--codec", "libav",
     "--libav-format", "mpegts",
     "--vflip", "--hflip",
@@ -93,6 +93,7 @@ async def run_experiment():
     event = asyncio.Event()
     server = asyncio.create_task(run_rpicam_vid(event))
     await event.wait()
+    await asyncio.sleep(2)
     dts_zero_walltime = await asyncio.to_thread(connect_client)
     ready_line_walltime = await server
     offset = dts_zero_walltime - ready_line_walltime
