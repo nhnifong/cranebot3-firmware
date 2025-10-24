@@ -59,13 +59,13 @@ while count>0 and hat.gpio_pin_value(LIMIT_SWITCH_PIN)==1:
 assert count!=0, "Timed out waiting for limit switch click. Switch may not be connected properly."
 
 winch_servo.value(0)
-start_revs = self.hat.encoders[0].revolutions()
+start_revs = hat.encoders[0].revolutions()
 
 input("Press Enter to move winch motor...")
 try:
     winch_servo.value(10)
     time.sleep(1)
-    revs = self.hat.encoders[0].revolutions()
+    revs = hat.encoders[0].revolutions()
     assert revs > start_revs, "Encoder did not show any winch spool motion. If you heard it move, you may need up update the IHM firmware."
     winch_servo.value(-0.4)
     time.sleep(1)
