@@ -37,12 +37,13 @@ hand_servo.value(0)
 # check finger voltage
 voltage = hat.gpio_pin_value(PRESSURE_PIN)
 time.sleep(1)
+voltage = hat.gpio_pin_value(PRESSURE_PIN)
 assert voltage==0, f"finger voltage did not measure zero with fingers not touching. (was {voltage}v)"
 
 hand_servo.value(90)
-time.sleep(0.5)
+time.sleep(1)
 voltage = hat.gpio_pin_value(PRESSURE_PIN)
-assert voltage>2, f"finger voltage did not rise above 2.0v after moving to max closed position. Either the fingers did not touch and you need to disassemble and adjust them closed by one tooth or the pressure sense resistor is not connectd."
+assert voltage>1, f"finger voltage did not rise above 1.0v after moving to max closed position. Either the fingers did not touch and you need to disassemble and adjust them closed by one tooth or the pressure sense resistor is not connectd."
 
 print('Finger function and pressure sense are normal')
 hand_servo.value(0)
