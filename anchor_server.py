@@ -45,7 +45,7 @@ ready_line_re = re.compile(r"Output #0, mpegts, to 'tcp://([^:]+):(\d+)\?listen=
 
 # offset in seconds between the appearance of the ready line and the zero point of the DTS times in the stream container.
 # determined experimentally by running experiments/measure_dts_zero_point.py on the rpi
-dts_zero_offset = 0.5
+dts_zero_offset = 0.719379
 
 # values that can be overridden by the controller
 default_conf = {
