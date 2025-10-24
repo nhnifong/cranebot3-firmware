@@ -57,6 +57,7 @@ while count>0 and hat.gpio_pin_value(LIMIT_SWITCH_PIN)==1:
     count-=1
     time.sleep(0.05)
 assert count!=0, "Timed out waiting for limit switch click. Switch may not be connected properly."
+print('Limit switch OK')
 
 winch_servo.value(0)
 start_revs = hat.encoders[0].revolutions()
@@ -67,15 +68,17 @@ try:
     time.sleep(1)
     revs = hat.encoders[0].revolutions()
     assert revs > start_revs, "Encoder did not show any winch spool motion. If you heard it move, you may need up update the IHM firmware."
-    winch_servo.value(-0.4)
+    winch_servo.value(-10)
     time.sleep(1)
 finally:
     winch_servo.value(0)
+print('Winch and encoder ok')
 
 # confim readings from IMU
 i2c = busio.I2C(board.SCL, board.SDA)
 imu = BNO08X_I2C(i2c, address=0x4b)
 imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
+time.sleep(0.5)
 
 start_quat = imu.quaternion
 assert sum(start_quat)!=0, "IMU readings appeard to be zero. it may be dead or there may be a continuity problem in the I2C bus wire"
