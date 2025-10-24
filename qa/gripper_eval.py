@@ -36,18 +36,19 @@ input("Press Enter to move gripper fingers...")
 hand_servo.value(0)
 # check finger voltage
 voltage = hat.gpio_pin_value(PRESSURE_PIN)
-time.sleep(1)
+time.sleep(1.5)
 voltage = hat.gpio_pin_value(PRESSURE_PIN)
 assert voltage==0, f"finger voltage did not measure zero with fingers not touching. (was {voltage}v)"
 
-hand_servo.value(90)
-time.sleep(1)
-voltage = hat.gpio_pin_value(PRESSURE_PIN)
-assert voltage>1, f"finger voltage did not rise above 1.0v after moving to max closed position. Either the fingers did not touch and you need to disassemble and adjust them closed by one tooth or the pressure sense resistor is not connectd."
-
-print('Finger function and pressure sense are normal')
-hand_servo.value(0)
-time.sleep(0.5)
+try:
+    hand_servo.value(90)
+    time.sleep(1.5)
+    voltage = hat.gpio_pin_value(PRESSURE_PIN)
+    assert voltage>1, f"finger voltage did not rise above 1.0v after moving to max closed position. Either the fingers did not touch and you need to disassemble and adjust them closed by one tooth or the pressure sense resistor is not connectd."
+    print('Finger function and pressure sense are normal')
+finally:
+    hand_servo.value(0)
+    time.sleep(1)
 
 
 assert hat.gpio_pin_value(LIMIT_SWITCH_PIN)==1, "Limit switch pin may be disconnected or wired to the wrong switch terminals. circuit should be closed when switch is depressed."
