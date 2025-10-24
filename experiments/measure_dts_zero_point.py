@@ -31,7 +31,7 @@ ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 line_timeout = 30
 
 async def run_rpicam_vid(event):
-	ready_wall_time = None
+    ready_wall_time = None
     rpicam_process = await asyncio.create_subprocess_exec(stream_command_args[0], *stream_command_args[1:], stdout=PIPE, stderr=STDOUT)
     # read all the lines of output
     while True:
@@ -42,7 +42,7 @@ async def run_rpicam_vid(event):
             rpicam_process.kill()
             break
         if not line: # EOF.
-        	print('rpicam-vid exited without showing the line we wanted to see')
+            print('rpicam-vid exited without showing the line we wanted to see')
             break
         line = line.decode()
         # remove color codes
@@ -52,9 +52,9 @@ async def run_rpicam_vid(event):
         # Look for the line indicating the stream is ready
         match = ready_line_re.match(line)
         if match:
-        	ready_wall_time = time.time()
-        	event.set()
-        	break
+            ready_wall_time = time.time()
+            event.set()
+            break
 
     # wait for the subprocess to exit.
     # it isn't going to exit until our client connects and disconnects.
@@ -81,21 +81,21 @@ def connect_client():
     dts_zero_estimates = []
 
     for av_frame in container.decode(stream):
-    	dts_zero_time = time.time() - av_frame.time
-    	dts_zero_estimates.append(dts_zero_time)
-    	if len(dts_zero_estimates) == count:
-    		break
+        dts_zero_time = time.time() - av_frame.time
+        dts_zero_estimates.append(dts_zero_time)
+        if len(dts_zero_estimates) == count:
+            break
 
     container.close()
     return sum(dts_zero_estimates)/count
 
 async def run_experiment():
-	event = asyncio.Event()
-	server = asyncio.create_task(run_rpicam_vid(event))
-	await event.wait()
-	dts_zero_walltime = await asyncio.to_thread(connect_client)
-	ready_line_walltime = await server
-	offset = dts_zero_walltime - ready_line_walltime
-	print(f'DTS zero occurs {offset}s after the ready line is printed by rpicam-vid')
+    event = asyncio.Event()
+    server = asyncio.create_task(run_rpicam_vid(event))
+    await event.wait()
+    dts_zero_walltime = await asyncio.to_thread(connect_client)
+    ready_line_walltime = await server
+    offset = dts_zero_walltime - ready_line_walltime
+    print(f'DTS zero occurs {offset}s after the ready line is printed by rpicam-vid')
 
 asyncio.run(run_experiment())
