@@ -697,6 +697,7 @@ class AsyncObserver:
                 if anchor_num >= N_ANCHORS:
                     # we do not support yet multiple crane bot assemblies on a single network
                     print(f"Discovered another anchor server on the network, but we already know of 4 {info.server} {address}")
+                    print(f"existing anchors: {self.config.anchor_num_map.keys()}")
                     return None
                 self.config.anchor_num_map[info.server] = anchor_num
                 self.config.anchors[anchor_num].service_name = info.server
