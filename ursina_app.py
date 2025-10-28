@@ -152,7 +152,7 @@ class ControlPanelUI:
         self.debug_indicator_hang = IndicatorSphere(color=color.blue)
 
         # indicator of the last commanded gantry velocity, whether it was commanded manually or by some automatic process.
-        self.commanded_velocity_indicator = VelocityArrow(color=color.cyan, parent=self.gantry)
+        self.commanded_velocity_indicator = VelocityArrow(color=color.cyan, parent=self.gantry, enabled=False)
 
         # show a visualization of goal positions
         self.goal_marker = GoalPoint([0,0,0], enabled=False)
@@ -267,6 +267,18 @@ class ControlPanelUI:
         # reusable window panel for containing a popup message
         self.pop_message = PopMessage()
 
+        # panel for showing the gamepad controls
+        self.gamepad_window = Sprite(
+            parent=camera.ui,
+            texture='gamepad.png',
+            origin=(0, 0),
+            ppu=800,
+            # z=0,
+            enabled=False, # Start disabled
+            collider='box',
+            on_click=self.toggle_gamepad_window,
+        )
+
     def _create_shape_tracker_entities(self):
         # create entities that are used to visualize the internal state of the shape tracker and 3d hull contruction.
         self.prisms = EntityPool(80, lambda: Entity(
@@ -295,7 +307,11 @@ class ControlPanelUI:
                 )),
             DropdownMenuButton('Zero Gripper Winch Line', on_click=partial(self.simple_command, 'zero_winch')),
             DropdownMenuButton('Horizontal Move Test', on_click=partial(self.simple_command, 'horizontal_task')),
+            DropdownMenuButton('Gamepad Controls', on_click=self.toggle_gamepad_window)
             ))
+
+    def toggle_gamepad_window(self):
+        self.gamepad_window.enabled = not self.gamepad_window.enabled
 
     def set_simulated_data_mode(self, mode):
         self.to_ob_q.put({'set_simulated_data_mode': mode})
@@ -333,6 +349,8 @@ class ControlPanelUI:
             self.gripper.toggleClosed()
         elif key == 'c':
             self.simple_command('half_cal')
+        elif key == 'escape' and self.gamepad_window.enabled:
+            self.gamepad_window.enabled = False
 
         was_dir = self.direction
 
