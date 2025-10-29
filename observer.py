@@ -352,6 +352,12 @@ class AsyncObserver:
 
     async def set_run_mode(self, mode):
         """Sets the robot mode."""
+
+        # exit previous mode
+        if self.calmode == "train":
+            if self.grpc_server is not None:
+                await self.grpc_server.stop(grace=5)
+
         if mode == "run":
             self.calmode = mode
             print("run mode")
@@ -369,9 +375,9 @@ class AsyncObserver:
             # begin allowing requests from self.grpc_server
             self.grpc_server = await start_robot_control_server(self)
             # Start child process to run the dataset manager
-            # dataset_process = multiprocessing.Process(target=record_until_disconnected, name='lerobot_record')
-            # dataset_process.daemon = False
-            # dataset_process.start()
+            dataset_process = multiprocessing.Process(target=record_until_disconnected, name='lerobot_record')
+            dataset_process.daemon = False
+            dataset_process.start()
             await self.grpc_server.wait_for_termination()
         except asyncio.CancelledError:
             raise
