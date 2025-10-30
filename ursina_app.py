@@ -279,6 +279,8 @@ class ControlPanelUI:
             on_click=self.toggle_gamepad_window,
         )
 
+        self.calibration_feedback = CalFeedback(self)
+
     def _create_shape_tracker_entities(self):
         # create entities that are used to visualize the internal state of the shape tracker and 3d hull contruction.
         self.prisms = EntityPool(80, lambda: Entity(
@@ -297,7 +299,7 @@ class ControlPanelUI:
                 ])),
             DropdownMenuButton('Estimate line lengths', on_click=self.calibrate_lines),
             DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, 'tension_lines')),
-            DropdownMenuButton('Run Full Calibration', on_click=partial(self.simple_command, 'full_cal')),
+            DropdownMenuButton('Run Full Calibration', on_click=self.run_full_cal),
             DropdownMenuButton('Run Quick Calibration', on_click=partial(self.simple_command, 'half_cal')),
             DropdownMenuButton('Figure-8 motion test', on_click=partial(self.simple_command, 'fig-8')),
             DropdownMenu('Simulated Data', buttons=(
@@ -309,6 +311,10 @@ class ControlPanelUI:
             DropdownMenuButton('Horizontal Move Test', on_click=partial(self.simple_command, 'horizontal_task')),
             DropdownMenuButton('Gamepad Controls', on_click=self.toggle_gamepad_window)
             ))
+
+    def run_full_cal(self):
+        self.calibration_feedback.start()
+        self.simple_command('full_cal')
 
     def toggle_gamepad_window(self):
         self.gamepad_window.enabled = not self.gamepad_window.enabled
@@ -572,6 +578,9 @@ class ControlPanelUI:
             l_range, f_angle, pressure = updates['grip_sensors'] 
             self.gripper.setLaserRange(l_range)
             self.gripper.setFingerAngle(f_angle)
+
+        if 'cal_progress' in updates:
+            self.calibration_feedback.handle_message(updates['cal_progress'])
 
     def start(self):
         self.app.run()
