@@ -178,12 +178,13 @@ class ComponentClient:
         self.conn_status['video'] = 'none'
         self.conn_status['ip_address'] = self.address
         self.to_ui_q.put({'connection_status': self.conn_status})
+        abnormal_shutdown = False
         ws_uri = f"ws://{self.address}:{self.port}"
         print(f"Connecting to {ws_uri}...")
         try:
             # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
             # It re-raises any error which it would not retry on. Some are expected on normal disconnects.
-            async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
+            async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10, ping_interval=2, ping_timeout=2):
                 self.connected = True
                 print(f"Connected to {ws_uri}.")
                 # TODO Set an event that the observer is waiting on.
@@ -192,10 +193,14 @@ class ComponentClient:
                 await self.receive_loop(websocket)
         except asyncio.exceptions.CancelledError:
             print("Cancelling connection")
-            return
         except websockets.exceptions.ConnectionClosedOK:
             print("Client closing connection")
-            return
+        except websockets.exceptions.ConnectionClosedError as e:
+            print(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
+            abnormal_shutdown = True
+        finally:
+            self.connected = False
+        return abnormal_shutdown
 
     async def receive_loop(self, websocket):
         print('receive loop')
@@ -264,7 +269,7 @@ class ComponentClient:
 
     async def startup(self):
         self.ct = asyncio.create_task(self.connect_websocket())
-        await self.ct
+        return await self.ct
 
     async def shutdown(self):
         print("\nWait for client shutdown")
