@@ -388,7 +388,7 @@ class AsyncObserver:
             self.grpc_server = None
             self.slow_stop_all_spools()
 
-    async def locate_anchors(self):
+    def locate_anchors(self):
         """using the record of recent origin detections, estimate the pose of each anchor."""
         MIN_ORIGIN_OBSERVATIONS = 12
         
@@ -454,6 +454,30 @@ class AsyncObserver:
         GRID_STEPS_Y = 3j
         GRID_STEPS_Z = 2j
         OPTIMIZER_TIMEOUT_S = 300 # seconds
+
+        # use an orderly grid of sample points
+        sample_points = np.mgrid[min_x:max_x:GRID_STEPS_X, min_y:max_y:GRID_STEPS_Y, min_z:max_z:GRID_STEPS_Z].reshape(3, -1).T
+
+        tension_time = 2 # expected time to tension all lines
+        zero_winch_time = 5 # expected time to zero the winch line
+        move_time = 3 # expected time to move to goal point
+        observe_time = 2.5 # expected time to observe a sample point
+        optimization_time = 120 # time needed to perform numerical optimization
+
+        # How long will this take?
+        self.cal_steps = [
+            ('Observing origin card', DETECTION_WAIT_S),
+            ('Creating initial guesses', tension_time + STABILIZATION_WAIT_S + SET_LENGTHS_WAIT_S),
+            ('Zeroing the winch line', zero_winch_time),
+        ]
+        for i in range(len(sample_points)):
+            self.cal_steps.append((
+                f'Collecting sample {i} of {len(sample_points)}',
+                move_time + tension_time + observe_time
+            ))
+        self.cal_steps.append(('Calculating optimal parameters', optimization_time))
+        self.cal_index = -1
+        self.report_calibration_progress()
         
         try:
             if len(self.anchors) < N_ANCHORS:
@@ -468,8 +492,9 @@ class AsyncObserver:
                 print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses) for client in self.anchors]
+            self.report_calibration_progress()
             # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
-            anchor_poses = await self.locate_anchors()
+            anchor_poses = self.locate_anchors()
             print(f'anchor poses based on origin card {anchor_poses}')
 
             # Experiment: scale pose positions
@@ -517,14 +542,12 @@ class AsyncObserver:
             # make a polygon of the exact work area so we can test if points are inside it
             contour = anchor_points[:,0:2].astype(np.float32)
 
-            # use an orderly grid of sample points
-            sample_points = np.mgrid[min_x:max_x:GRID_STEPS_X, min_y:max_y:GRID_STEPS_Y, min_z:max_z:GRID_STEPS_Z].reshape(3, -1).T
-
             # choose an ordering of the points that results in a low travel distance
             sample_points, distance = order_points_for_low_travel(sample_points)
             print(f'Ordered points for near-optimal travel. total distance = {distance} m')
 
             # prepare to collect final observations
+            self.report_calibration_progress()
             data = await self.collect_data_at_points(sample_points, anchor_poses=anchor_poses, save_progress=True)
             print(f'Completed data collection. Performing optimization of calibration parameters.')
 
@@ -535,6 +558,7 @@ class AsyncObserver:
             async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, self.power_spool_index))
             anchor_poses, zero_angles = async_result.get(timeout=OPTIMIZER_TIMEOUT_S)
             print(f'obtained result from find_cal_params {result_params}')
+            self.report_calibration_progress()
 
             # Use the optimization output to update anchor poses and spool params
             config = Config()
@@ -566,6 +590,7 @@ class AsyncObserver:
 
         print('zero the winch line')
         await self.gripper_client.zero_winch()
+        self.report_calibration_progress()
 
         last_hang_position = None
         last_visual_position = None
@@ -637,6 +662,7 @@ class AsyncObserver:
                 #     self.pe.anchor_points)
             else:
                 print(f'Point {point} skipped because gantry could not be observed in that position')
+            self.report_calibration_progress()
 
         assert(len(data) > 0)
 
@@ -645,6 +671,32 @@ class AsyncObserver:
             asyncio.create_task(client.send_commands({'report_raw': False}))
 
         return data
+
+    def report_calibration_progress(self):
+        # estimate the progress percentage
+        # get latest status message
+        # estimate seconds remaining
+        step_times = [s[1] for s in self.cal_steps] # the amount of time each step should take
+        self.cal_step_index+=1 # index of the step we're currently waiting on
+        total = sum(step_times)
+        speed = 100 / total # in percentage points per second
+        if self.cal_step_index < len(self.cal_steps):
+            remaining = sum(step_times[self.cal_step_index:])
+            progress = (total-remaining)/total * 100
+            dont_go_past = (total-(remaining-step_times[self.cal_step_index]))/total * 100
+            message = self.cal_steps[self.cal_step_index][0]
+        else:
+            speed = 0
+            progress = 100
+            dont_go_past = 100
+            message = "Calibration complete"
+        self.to_ui_q.put({'cal_progress': {
+            'speed': speed,
+            'progress': progress,
+            'dont_go_past': dont_go_past,
+            'message': message,
+        }})
+
 
     async def horizontal_line_task(self):
         """
