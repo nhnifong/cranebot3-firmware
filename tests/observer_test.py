@@ -53,6 +53,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client = self.mock_gripper_client_class.return_value
         self.mock_gripper_client.startup = self.event_startup
         self.mock_gripper_client.shutdown = self.event_shutdown
+        self.mock_gripper_client.slow_stop_spool = self.instant_nothing
         self.mock_gripper_client.connection_established_event = asyncio.Event()
         self.patchers.append(patch('observer.RaspiGripperClient', self.mock_gripper_client_class))
 
@@ -61,6 +62,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         for i, client in enumerate(self.mock_anchor_clients):
             client.startup = self.event_startup
             client.shutdown = self.event_shutdown
+            client.slow_stop_spool = self.instant_nothing
             client.anchor_num = i
 
         # The side_effect makes it so each call to the constructor returns the next mock
@@ -81,7 +83,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # this should have the effect of making the update listener task stop, which the main task is awaiting.
         # it should then run it's own async_close method, which runs the async shutdown methods on zeroconf
         # and any connected clients.
-        await self.ob.aiozc.async_unregister_all_services()
+        # print('test teardown is unregistering all services')
+        # await self.ob.aiozc.async_unregister_all_services()
         self.to_ob_q.put({'STOP':None})
         # allow up to 10 seconds for shutdown.
         await asyncio.wait_for(self.ob_task, 10)
@@ -89,13 +92,24 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             p.stop()
 
     async def event_startup(self):
-        print('gripper client startup called')
+        print('client startup called')
         self.mock_gripper_client.connection_established_event.set()
         self.watchable_startup_event.set()
+        return False
+
+    async def abnormal_event_startup(self):
+        print('abnormal client startup called')
+        self.mock_gripper_client.connection_established_event.set()
+        self.watchable_startup_event.set()
+        await asyncio.sleep(0.1)
+        return True
 
     async def event_shutdown(self):
-        print('gripper client shutdown called')
+        print('client shutdown called')
         self.watchable_shutdown_event.set()
+
+    async def instant_nothing(self):
+        pass
 
     async def _setup_mock_anchors(self):
         """Helper method to populate the observer's anchor list with our mocks."""
@@ -112,7 +126,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # you can then run this one in isolation.
         self.assertFalse(self.ob_task.done())
 
-    async def advertise_service(self, name, service_type, port, properties={}):
+    async def advertise_service(self, name, service_type, port, properties={}, update=False):
         info = zeroconf.ServiceInfo(
             service_type,
             name + "." + service_type,
@@ -122,7 +136,10 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             server=name,
         )
         # We can't make a second zeroconf instance so we use the observer's isntance to advertize the existence of our test gripper server
-        await self.zc.async_register_service(info)
+        if update:
+            await self.zc.async_update_service(info)
+        else:
+            await self.zc.async_register_service(info)
         return info
 
     async def test_discover_gripper(self):
@@ -145,7 +162,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.ob.anchors), 1)
 
     async def test_anchor_reconnect(self):
-        """Confirm that if an anchor server shuts down and restarts, that we reconnect to it.
+        """Confirm that if an anchor server shuts down cleanly and restarts, that we reconnect to it.
         In this test, we are neither running a real websocket server, or client. the client is a mock and the server doesn't exist.
         all we are confirming here is that if the MDNS advertisement for the services goes down and back up, that we start the client task again.
         """
@@ -163,15 +180,43 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.01) # it is necessary to reliquish control of the event loop after calling clear or it may not have the intended effect
 
         info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
-        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 20)
         self.assertEqual(len(self.ob.anchors), 1)
 
     async def test_anchor_abnormal_reconnect(self):
         """ Confirm that if an anchor server goes offline abruptly, then comes back up and advertises itself that we reconnect to it.
-        In real installations, this looks like observer's websocket handler throwing some non-transient exception,
+        In real installations, this looks like observer's websocket handler throwing a ConnectionClosedError exception,
         the service never being unregisterd, but zerconf issuing a service update when it comes back up where nothing has actually changed about the address or port
         """
-        pass # TODO
+        # in order to immitate this scenario with a mock client, it's startup() method only needs to return True
+        self.mock_anchor_clients[0].startup = self.abnormal_event_startup
+
+        # advertise the service
+        info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
+        self.assertFalse(self.ob_task.done())
+        self.assertEqual(len(self.ob.anchors), 1)
+
+        # 0.1 second later, the client's startup() function returns True to indicate an abnormal disconnect
+        await asyncio.wait_for(self.watchable_shutdown_event.wait(), 0.2)
+        # assert this resulted in it's removal as a listed client
+        self.assertEqual(len(self.ob.anchors), 0)
+        self.assertEqual(len(self.ob.bot_clients), 0)
+
+        # reset events
+        self.watchable_startup_event.clear()
+        self.watchable_shutdown_event.clear()
+
+        # back to normal anchor behavior
+        self.mock_anchor_clients[0].startup = self.event_startup
+
+        # advertise it again
+        print('advertise it again')
+        info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8766, update=True)
+
+        # confirm reconnection
+        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
+        self.assertEqual(len(self.ob.anchors), 1)
 
     async def test_move_direction_speed_normal_case(self):
         """Tests the standard execution path with valid inputs."""

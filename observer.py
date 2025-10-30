@@ -41,6 +41,7 @@ anchor_power_service_name = 'cranebot-anchor-power-service'
 gripper_service_name = 'cranebot-gripper-service'
 
 N_ANCHORS = 4
+INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
 
 def constrain(value, minimum, maximum):
     return max(minimum, min(value, maximum))
@@ -668,17 +669,15 @@ class AsyncObserver:
             print(f"Service {name} of type {service_type} state changed: {state_change}")
             if state_change is ServiceStateChange.Added:
                 asyncio.create_task(self.add_service(zeroconf, service_type, name))
+            if state_change is ServiceStateChange.Updated:
+                asyncio.create_task(self.update_service(zeroconf, service_type, name))
             if state_change is ServiceStateChange.Removed:
                 asyncio.create_task(self.remove_service(service_type, name))
             elif state_change is ServiceStateChange.Updated:
                 pass
 
     async def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
-        """
-        Starts a client to connect to the indicated service
-        """
-        INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
-        
+        """Starts a client to connect to the indicated service"""
         info = AsyncServiceInfo(service_type, name)
         await info.async_request(zc, INFO_REQUEST_TIMEOUT_MS)
         if not info or info.server is None or info.server == '':
@@ -722,21 +721,51 @@ class AsyncObserver:
             self.bot_clients[info.server] = ac
             self.anchors.append(ac)
             print('appending anchor client to list and starting server')
-            asyncio.create_task(ac.startup())
+            # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
+            abnormal_close = await ac.startup()
+            if abnormal_close:
+                self.to_ui_q.put({'pop_message': f'lost connection to {name}'})
+                await self.remove_service(service_type, name)
+                await self.stop_all()
+                # TODO: if recording training data, abort current episode
 
         elif name_component == gripper_service_name:
             # a gripper has been discovered, connect immediately.
             print(f'Connecting to "{info.server}" as gripper')
             assert(self.gripper_client is None)
-            self.connect_to_gripper(address, info.port, info.server)
+            await self.connect_to_gripper(address, info.port, info.server)
 
-    def connect_to_gripper(self, address, port, key):
+    async def connect_to_gripper(self, address, port, key):
         gc = RaspiGripperClient(address, port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
         self.gripper_client_connected.clear()
         gc.connection_established_event = self.gripper_client_connected
         self.bot_clients[key] = gc
         self.gripper_client = gc
-        asyncio.create_task(gc.startup())
+        # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
+        abnormal_close = await gc.startup()
+        if abnormal_close:
+            self.to_ui_q.put({'pop_message': f'lost connection to {name}'})
+            self.gripper_client = None
+            del self.bot_clients[key]
+            await gc.shutdown()
+            await self.stop_all()
+            # TODO: if recording training data, abort current episode
+
+    async def update_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+        # this occurs when a component goes down abnormally and comes back up.
+        # nothing is expected to have changed, and we should already be disconnected from it, but make sure.
+        namesplit = name.split('.')
+        name_component = namesplit[1]
+        key  = ".".join(namesplit[:3])+'.'
+        # see if we already have this loaded
+        if key in self.bot_clients:
+            # we do not expect a service to change without having gone down first
+            # however it could simply be that it went down so recently that we're not done closing the client.
+            await asyncio.sleep(5)
+            if key in self.bot_clients:
+                return
+        # reconnect
+        await self.add_service(zc, service_type, name)
 
     async def remove_service(self, service_type: str, name: str) -> None:
         """
