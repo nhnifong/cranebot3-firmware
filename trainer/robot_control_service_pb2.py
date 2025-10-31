@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#trainer/robot_control_service.proto\x12\x07trainer\"*\n\x07Point3D\x12\t\n\x01x\x18\x01 \x01(\x02\x12\t\n\x01y\x18\x02 \x01(\x02\x12\t\n\x01z\x18\x03 \x01(\x02\"\x17\n\x15GetObservationRequest\"\xae\x02\n\x16GetObservationResponse\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x18\n\x10winch_line_speed\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\x12)\n\x0fgripper_imu_rot\x18\x04 \x01(\x0b\x32\x10.trainer.Point3D\x12\x19\n\x11laser_rangefinder\x18\x05 \x01(\x02\x12\x1a\n\x12\x66inger_pad_voltage\x18\x06 \x01(\x02\x12\x1a\n\ranchor_camera\x18\x07 \x01(\x0cH\x00\x88\x01\x01\x12\x1b\n\x0egripper_camera\x18\x0b \x01(\x0cH\x01\x88\x01\x01\x42\x10\n\x0e_anchor_cameraB\x11\n\x0f_gripper_camera\"i\n\x11TakeActionRequest\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x18\n\x10winch_line_speed\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\"j\n\x12TakeActionResponse\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x18\n\x10winch_line_speed\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\"\x19\n\x17GetGamepadActionRequest\"\x1a\n\x18GetEpisodeControlRequest\"+\n\x19GetEpisodeControlResponse\x12\x0e\n\x06\x65vents\x18\x01 \x03(\t2\xde\x02\n\x13RobotControlService\x12Q\n\x0eGetObservation\x12\x1e.trainer.GetObservationRequest\x1a\x1f.trainer.GetObservationResponse\x12\x45\n\nTakeAction\x12\x1a.trainer.TakeActionRequest\x1a\x1b.trainer.TakeActionResponse\x12Q\n\x10GetGamepadAction\x12 .trainer.GetGamepadActionRequest\x1a\x1b.trainer.TakeActionResponse\x12Z\n\x11GetEpisodeControl\x12!.trainer.GetEpisodeControlRequest\x1a\".trainer.GetEpisodeControlResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#trainer/robot_control_service.proto\x12\x07trainer\"*\n\x07Point3D\x12\t\n\x01x\x18\x01 \x01(\x02\x12\t\n\x01y\x18\x02 \x01(\x02\x12\t\n\x01z\x18\x03 \x01(\x02\"\x17\n\x15GetObservationRequest\"\xe4\x02\n\x16GetObservationResponse\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x18\n\x10winch_line_speed\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\x12)\n\x0fgripper_imu_rot\x18\x04 \x01(\x0b\x32\x10.trainer.Point3D\x12\x19\n\x11laser_rangefinder\x18\x05 \x01(\x02\x12\x1a\n\x12\x66inger_pad_voltage\x18\x06 \x01(\x02\x12\x1c\n\x0f\x61nchor_camera_0\x18\x07 \x01(\x0cH\x00\x88\x01\x01\x12\x1c\n\x0f\x61nchor_camera_1\x18\x08 \x01(\x0cH\x01\x88\x01\x01\x12\x1b\n\x0egripper_camera\x18\x0b \x01(\x0cH\x02\x88\x01\x01\x42\x12\n\x10_anchor_camera_0B\x12\n\x10_anchor_camera_1B\x11\n\x0f_gripper_camera\"i\n\x11TakeActionRequest\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x18\n\x10winch_line_speed\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\"j\n\x12TakeActionResponse\x12$\n\ngantry_vel\x18\x01 \x01(\x0b\x32\x10.trainer.Point3D\x12\x18\n\x10winch_line_speed\x18\x02 \x01(\x02\x12\x14\n\x0c\x66inger_angle\x18\x03 \x01(\x02\"\x19\n\x17GetGamepadActionRequest\"\x1a\n\x18GetEpisodeControlRequest\"+\n\x19GetEpisodeControlResponse\x12\x0e\n\x06\x65vents\x18\x01 \x03(\t2\xde\x02\n\x13RobotControlService\x12Q\n\x0eGetObservation\x12\x1e.trainer.GetObservationRequest\x1a\x1f.trainer.GetObservationResponse\x12\x45\n\nTakeAction\x12\x1a.trainer.TakeActionRequest\x1a\x1b.trainer.TakeActionResponse\x12Q\n\x10GetGamepadAction\x12 .trainer.GetGamepadActionRequest\x1a\x1b.trainer.TakeActionResponse\x12Z\n\x11GetEpisodeControl\x12!.trainer.GetEpisodeControlRequest\x1a\".trainer.GetEpisodeControlResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,17 +36,17 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GETOBSERVATIONREQUEST']._serialized_start=92
   _globals['_GETOBSERVATIONREQUEST']._serialized_end=115
   _globals['_GETOBSERVATIONRESPONSE']._serialized_start=118
-  _globals['_GETOBSERVATIONRESPONSE']._serialized_end=420
-  _globals['_TAKEACTIONREQUEST']._serialized_start=422
-  _globals['_TAKEACTIONREQUEST']._serialized_end=527
-  _globals['_TAKEACTIONRESPONSE']._serialized_start=529
-  _globals['_TAKEACTIONRESPONSE']._serialized_end=635
-  _globals['_GETGAMEPADACTIONREQUEST']._serialized_start=637
-  _globals['_GETGAMEPADACTIONREQUEST']._serialized_end=662
-  _globals['_GETEPISODECONTROLREQUEST']._serialized_start=664
-  _globals['_GETEPISODECONTROLREQUEST']._serialized_end=690
-  _globals['_GETEPISODECONTROLRESPONSE']._serialized_start=692
-  _globals['_GETEPISODECONTROLRESPONSE']._serialized_end=735
-  _globals['_ROBOTCONTROLSERVICE']._serialized_start=738
-  _globals['_ROBOTCONTROLSERVICE']._serialized_end=1088
+  _globals['_GETOBSERVATIONRESPONSE']._serialized_end=474
+  _globals['_TAKEACTIONREQUEST']._serialized_start=476
+  _globals['_TAKEACTIONREQUEST']._serialized_end=581
+  _globals['_TAKEACTIONRESPONSE']._serialized_start=583
+  _globals['_TAKEACTIONRESPONSE']._serialized_end=689
+  _globals['_GETGAMEPADACTIONREQUEST']._serialized_start=691
+  _globals['_GETGAMEPADACTIONREQUEST']._serialized_end=716
+  _globals['_GETEPISODECONTROLREQUEST']._serialized_start=718
+  _globals['_GETEPISODECONTROLREQUEST']._serialized_end=744
+  _globals['_GETEPISODECONTROLRESPONSE']._serialized_start=746
+  _globals['_GETEPISODECONTROLRESPONSE']._serialized_end=789
+  _globals['_ROBOTCONTROLSERVICE']._serialized_start=792
+  _globals['_ROBOTCONTROLSERVICE']._serialized_end=1142
 # @@protoc_insertion_point(module_scope)
