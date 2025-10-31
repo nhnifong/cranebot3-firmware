@@ -34,6 +34,7 @@ from collections import deque
 from trainer.control_service import start_robot_control_server
 from trainer.stringman_record_loop import record_until_disconnected
 from utils import constrain, motion_task
+import multiprocessing
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -376,9 +377,9 @@ class AsyncObserver:
             # begin allowing requests from self.grpc_server
             self.grpc_server = await start_robot_control_server(self)
             # Start child process to run the dataset manager
-            dataset_process = multiprocessing.Process(target=record_until_disconnected, name='lerobot_record')
-            dataset_process.daemon = False
-            dataset_process.start()
+            # dataset_process = multiprocessing.Process(target=record_until_disconnected, name='lerobot_record')
+            # dataset_process.daemon = False
+            # dataset_process.start()
             await self.grpc_server.wait_for_termination()
         except asyncio.CancelledError:
             raise
