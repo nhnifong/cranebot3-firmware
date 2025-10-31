@@ -5,13 +5,14 @@ record new episodes seperately
 python -m trainer.stringman_record_loop
 
 python3 src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id=naavox/stringman-practice-dataset-8 \
+  --dataset.repo_id=naavox/stringman-practice-dataset-11 \
   --policy.type=act \
-  --output_dir=outputs/train/act_8 \
-  --job_name=act_8 \
+  --output_dir=outputs/train/act_11 \
+  --job_name=act_11 \
   --wandb.enable=true \
-  --policy.repo_id=naavox/act_8 \
-  --batch_size=3
+  --policy.repo_id=naavox/act_11 \
+  --batch_size=24 \
+  --save_freq=2000
 
 Currently this torch version seems to work with nvidia driver 580 and the RTX 5090
 pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
@@ -30,4 +31,5 @@ pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
   --libav-format mpegts \
   --low-latency \
   --vflip --hflip \
-  --autofocus-mode continuous
+  --autofocus-mode continuous \
+  --bitrate 1200kbps
