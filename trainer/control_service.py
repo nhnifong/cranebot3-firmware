@@ -12,7 +12,8 @@ from .robot_control_service_pb2 import (
 from .robot_control_service_pb2_grpc import RobotControlServiceServicer, add_RobotControlServiceServicer_to_server
 
 # prefer whichever camera seems to have the best lighting, but stick to one.
-PREFERRED_ANCHOR = 3
+PREFERRED_ANCHOR_0 = 3
+PREFERRED_ANCHOR_1 = 2
 
 # positional argument constructor for Point3D proto message
 def Point3Dp(x, y, z):
@@ -47,7 +48,8 @@ class RobotControlService(RobotControlServiceServicer):
             laser_rangefinder=float(laser),
             finger_pad_voltage=float(finger[2]), # index 2 = voltage
             gripper_camera=self.ob.get_last_frame('g'),
-            anchor_camera=self.ob.get_last_frame(PREFERRED_ANCHOR),
+            anchor_camera_0=self.ob.get_last_frame(PREFERRED_ANCHOR_0),
+            anchor_camera_1=self.ob.get_last_frame(PREFERRED_ANCHOR_1),
         )
 
         return response
