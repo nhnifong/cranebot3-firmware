@@ -12,7 +12,7 @@ python3 src/lerobot/scripts/lerobot_train.py \
   --wandb.enable=true \
   --policy.repo_id=naavox/act_11 \
   --batch_size=24 \
-  --save_freq=2000
+  --save_freq=5000
 
 Currently this torch version seems to work with nvidia driver 580 and the RTX 5090
 pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
@@ -33,3 +33,19 @@ pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
   --vflip --hflip \
   --autofocus-mode continuous \
   --bitrate 1200kbps
+
+  SmolVLA
+
+lerobot-train \
+  --policy.path=lerobot/smolvla_base \
+  --dataset.repo_id=naavox/stringman-practice-dataset-11 \
+  --batch_size=64 \
+  --steps=20000 \
+  --output_dir=outputs/train/my_smolvla \
+  --job_name=my_smolvla_training \
+  --policy.device=cuda \
+  --wandb.enable=true \
+  --save_freq=1000 \
+  --policy.repo_id=naavox/smol_1 \
+  --policy.empty_cameras=1 \
+  --rename_map='{"observation.images.gripper_camera": "observation.images.camera1", "observation.images.anchor_camera": "observation.images.camera2"}'
