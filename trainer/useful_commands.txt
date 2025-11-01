@@ -38,14 +38,13 @@ pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
 
 lerobot-train \
   --policy.path=lerobot/smolvla_base \
-  --dataset.repo_id=naavox/stringman-practice-dataset-11 \
-  --batch_size=64 \
-  --steps=20000 \
-  --output_dir=outputs/train/my_smolvla \
+  --dataset.repo_id=naavox/stringman-socks-3-camera \
+  --batch_size=96 \
+  --steps=30000 \
+  --output_dir=outputs/train/smol_2 \
   --job_name=my_smolvla_training \
   --policy.device=cuda \
   --wandb.enable=true \
   --save_freq=1000 \
-  --policy.repo_id=naavox/smol_1 \
-  --policy.empty_cameras=1 \
-  --rename_map='{"observation.images.gripper_camera": "observation.images.camera1", "observation.images.anchor_camera": "observation.images.camera2"}'
+  --policy.repo_id=naavox/smol_2 \
+  --rename_map='{"observation.images.gripper_camera": "observation.images.camera1", "observation.images.anchor_camera_0": "observation.images.camera2", "observation.images.anchor_camera_1": "observation.images.camera3"}'
