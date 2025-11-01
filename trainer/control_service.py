@@ -58,9 +58,12 @@ class RobotControlService(RobotControlServiceServicer):
         finger = request.finger_angle
         print(f'TakeAction received on grpc channel gantry_goal_pos={gantry_vel} winch={winch} finger={finger}')
 
-        # If AsyncObserver clipped these values to legal limits, return what they were clipped to
-        winch, finger = await self.ob.send_winch_and_finger(winch, finger)
-        commanded_vel = await self.ob.move_direction_speed(gantry_vel)
+        # Send both commands concurrently before waiting for both.
+        # If AsyncObserver clipped these values, the results will be what they were clipped to
+        (winch, finger), commanded_vel = await asyncio.gather(
+            self.ob.send_winch_and_finger(winch, finger),
+            self.ob.move_direction_speed(gantry_vel)
+        )
 
         return TakeActionResponse(
             gantry_vel = Point3Dp(*commanded_vel),
