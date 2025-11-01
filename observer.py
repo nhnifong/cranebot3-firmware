@@ -1134,7 +1134,7 @@ class AsyncObserver:
         # The speed limit is proportional to how far the gantry hangs below a level 30cm below the average anchor.
         # This makes the behavior consistent across installations of different heights.
         hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
-        speed_limit = constrain(0.3 * (hang_distance - 0.6), 0.01, 0.55)
+        speed_limit = constrain(0.3 * (hang_distance - 0.1), 0.01, 0.55)
         speed = min(speed, speed_limit)
 
         # when a very small speed is provided, clamp it to zero.
