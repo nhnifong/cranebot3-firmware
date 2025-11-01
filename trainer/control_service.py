@@ -38,9 +38,11 @@ class RobotControlService(RobotControlServiceServicer):
         # ob is the instance of AsyncObserver (observer.py)
         # pe is the instance of Positioner2 (position_estimator.py)
         # gant_pos and gant_vel attributes are the output of a kalman filter continuously updated from observations.
+        gant_pos = self.ob.pe.gant_pos
         gant_vel = self.ob.pe.gant_vel
 
         response = GetObservationResponse(
+            gantry_pos=Point3Dp(*gant_pos),
             gantry_vel=Point3Dp(*gant_vel),
             winch_line_speed=float(winch[2]), # index 2 = speed
             finger_angle=float(finger[1]), # index 1 = angle
