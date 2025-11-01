@@ -8,6 +8,7 @@ from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import make_robot_action
 from lerobot.utils.control_utils import predict_action
+from lerobot.processor.rename_processor import rename_stats
 from lerobot.robots import Robot
 from lerobot.utils.utils import (
     get_safe_torch_device,
@@ -33,7 +34,7 @@ FPS = 30
 TASK_DESCRIPTION = "Pick up laundry from the floor and drop it in the metal basket."
 GRPC_ADDR = 'localhost:50051'
 DATASET_REPO_ID = "naavox/stringman-practice-dataset-11"
-POLICY_REPO_ID = "naavox/act_12"
+POLICY_REPO_ID = "naavox/smol_1"
 
 def act_one_episode(
     robot: Robot,
@@ -98,16 +99,26 @@ def run_until_disconnected():
     try:
         # currently some data is required from the dataset in order to load the policy
         dataset = LeRobotDataset(DATASET_REPO_ID)
+        rename_map = {"observation.images.gripper_camera": "observation.images.camera1", "observation.images.anchor_camera": "observation.images.camera2"}
 
         # policy_path_or_id = POLICY_REPO_ID
         policy_id = POLICY_REPO_ID
         policy_cfg = PreTrainedConfig.from_pretrained(policy_id)
-        policy = make_policy(policy_cfg, ds_meta=dataset.meta)
+        
+        # policy_cfg.empty_cameras=1
+        policy = make_policy(
+            policy_cfg,
+            ds_meta=dataset.meta,
+            rename_map=rename_map,
+        )
 
         preprocessor, postprocessor = make_pre_post_processors(
             policy_cfg=policy_cfg,
             pretrained_path=policy_cfg.pretrained_path,
-            dataset_stats=dataset.meta.stats,
+            dataset_stats=rename_stats(dataset.meta.stats, rename_map),
+            preprocessor_overrides={
+                "rename_observations_processor": {"rename_map": rename_map},
+            },
         )
 
         # Connect to the robot
