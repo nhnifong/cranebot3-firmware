@@ -65,7 +65,8 @@ class StringmanPilotRobot(Robot):
     def _cameras_ft(self) -> dict[str, tuple]:
         # use only one anchor camera to keep latency high and training load lower.
         return {
-            "anchor_camera": IMAGE_SHAPE,
+            "anchor_camera_0": IMAGE_SHAPE,
+            "anchor_camera_1": IMAGE_SHAPE,
             "gripper_camera": IMAGE_SHAPE,
         }
 
@@ -127,7 +128,8 @@ class StringmanPilotRobot(Robot):
             "gripper_imu_rot_z": response.gripper_imu_rot.z,
             "laser_rangefinder": response.laser_rangefinder,
             "finger_pad_voltage": response.finger_pad_voltage,
-            "anchor_camera": decode_image(response.anchor_camera),
+            "anchor_camera_0": decode_image(response.anchor_camera),
+            "anchor_camera_1": decode_image(response.anchor_camera),
             "gripper_camera": decode_image(response.gripper_camera),
         }
         return obs_dict

@@ -32,7 +32,8 @@ message GetObservationResponse {
   float finger_pad_voltage = 6;
 
   // images, compressed jpeg
-  optional bytes anchor_camera = 7;
+  optional bytes anchor_camera_0 = 7;
+  optional bytes anchor_camera_1 = 8;
   optional bytes gripper_camera = 11;
 }
 
