@@ -797,7 +797,7 @@ class AsyncObserver:
         # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
         abnormal_close = await gc.startup()
         if abnormal_close:
-            self.to_ui_q.put({'pop_message': f'lost connection to {name}'})
+            self.to_ui_q.put({'pop_message': f'lost connection to {key}'})
             self.gripper_client = None
             del self.bot_clients[key]
             await gc.shutdown()
@@ -1134,7 +1134,7 @@ class AsyncObserver:
         # The speed limit is proportional to how far the gantry hangs below a level 30cm below the average anchor.
         # This makes the behavior consistent across installations of different heights.
         hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
-        speed_limit = constrain(0.3 * (hang_distance - 0.5), 0.01, 0.55)
+        speed_limit = constrain(0.3 * (hang_distance - 0.6), 0.01, 0.55)
         speed = min(speed, speed_limit)
 
         # when a very small speed is provided, clamp it to zero.

@@ -21,6 +21,8 @@ message GetObservationRequest {
 
 // The collection of observations about the robot which the server can return on demand.
 message GetObservationResponse {
+  // Gantry position in meters from room origin.
+  Point3D gantry_pos = 12;
   // Gantry velocity in meters per second.
   Point3D gantry_vel = 1;
   // which length change in meters per second. positive is lengthening.
