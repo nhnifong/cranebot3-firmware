@@ -32,11 +32,10 @@ sc = SpiralCalculator(empty_diameter, full_diameter, full_length, gear_ratio, -1
 motor = MKSSERVO42C()
 assert(motor.ping())
 
-
+SWITCH_PIN = 18
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-SWITCH_PIN = 18
 print("Click switch to begin winding spool")
 count = 0
 tight = False
