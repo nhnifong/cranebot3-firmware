@@ -16,7 +16,7 @@ with open('server.conf', 'r') as file:
         line = line.strip()  # Remove leading/trailing whitespace
         if not line.startswith('#') and line:  # Check if line is not a comment and is not empty
             component_type = line
-            logging.info(f'Starting cranebot server of type {component_type}')
+            print(f'determined type {component_type}')
             break
 
 if component_type == 'anchor':
