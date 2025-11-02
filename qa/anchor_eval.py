@@ -1,4 +1,10 @@
 # script to wind up the correct length of line on on an anchor
+
+import sys
+import os
+# This will let us import files and modules located in the parent directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import model_constants
 from motor_control import MKSSERVO42C
 from spools import SpiralCalculator
