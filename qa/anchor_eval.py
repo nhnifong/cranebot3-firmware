@@ -30,7 +30,7 @@ SWITCH_PIN = 18
 print("Click switch to begin winding spool")
 count = 0
 tight = False
-while count < 50 and not tight
+while count < 50 and not tight:
     time.sleep(0.1)
     tight = GPIO.input(SWITCH_PIN) == 0
 assert tight, 'switch never registered any click'
