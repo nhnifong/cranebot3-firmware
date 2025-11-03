@@ -65,9 +65,11 @@ class RobotControlService(RobotControlServiceServicer):
         # Send both commands concurrently before waiting for both.
         # If AsyncObserver clipped these values, the results will be what they were clipped to
         (winch, finger), commanded_vel = await asyncio.gather(
-            self.ob.send_winch_and_finger(winch, finger),
+            self.ob.send_winch_and_finger(0, finger),
             self.ob.move_direction_speed(gantry_vel)
         )
+
+        winch=0
 
         return TakeActionResponse(
             gantry_vel = Point3Dp(*commanded_vel),
