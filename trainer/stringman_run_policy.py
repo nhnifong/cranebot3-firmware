@@ -33,8 +33,8 @@ EPISODE_MAX_TIME_SEC = 600
 FPS = 30
 TASK_DESCRIPTION = "Pick up laundry from the floor and drop it in the metal basket."
 GRPC_ADDR = 'localhost:50051'
-DATASET_REPO_ID = "naavox/stringman-practice-dataset-11"
-POLICY_REPO_ID = "naavox/smol_1"
+DATASET_REPO_ID = "naavox/stringman-socks-3-camera"
+POLICY_REPO_ID = "naavox/smol_2"
 
 def act_one_episode(
     robot: Robot,
@@ -99,7 +99,12 @@ def run_until_disconnected():
     try:
         # currently some data is required from the dataset in order to load the policy
         dataset = LeRobotDataset(DATASET_REPO_ID)
-        rename_map = {"observation.images.gripper_camera": "observation.images.camera1", "observation.images.anchor_camera": "observation.images.camera2"}
+        rename_map = {
+            "observation.images.gripper_camera": "observation.images.camera1",
+            "observation.images.anchor_camera_0": "observation.images.camera2",
+            "observation.images.anchor_camera_1": "observation.images.camera3"
+        }
+
 
         # policy_path_or_id = POLICY_REPO_ID
         policy_id = POLICY_REPO_ID
