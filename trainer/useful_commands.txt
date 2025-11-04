@@ -3,6 +3,7 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. trainer/robot
 
 record new episodes seperately
 python -m trainer.stringman_record_loop
+python -m trainer.stringman_run_policy
 
 python3 src/lerobot/scripts/lerobot_train.py \
   --dataset.repo_id=naavox/stringman-socks-3-camera \
