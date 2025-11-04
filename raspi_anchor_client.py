@@ -184,7 +184,7 @@ class ComponentClient:
         try:
             # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
             # It re-raises any error which it would not retry on. Some are expected on normal disconnects.
-            async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10, ping_interval=2, ping_timeout=2):
+            async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
                 self.connected = True
                 print(f"Connected to {ws_uri}.")
                 # TODO Set an event that the observer is waiting on.

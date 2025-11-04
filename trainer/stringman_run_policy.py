@@ -34,7 +34,7 @@ FPS = 30
 TASK_DESCRIPTION = "Pick up laundry from the floor and drop it in the metal basket."
 GRPC_ADDR = 'localhost:50051'
 DATASET_REPO_ID = "naavox/stringman-socks-3-camera"
-POLICY_REPO_ID = "naavox/smol_2"
+POLICY_REPO_ID = "naavox/act_13"
 
 def act_one_episode(
     robot: Robot,
@@ -99,6 +99,8 @@ def run_until_disconnected():
     try:
         # currently some data is required from the dataset in order to load the policy
         dataset = LeRobotDataset(DATASET_REPO_ID)
+
+        # applies only to smolvla
         rename_map = {
             "observation.images.gripper_camera": "observation.images.camera1",
             "observation.images.anchor_camera_0": "observation.images.camera2",
@@ -114,15 +116,16 @@ def run_until_disconnected():
         policy = make_policy(
             policy_cfg,
             ds_meta=dataset.meta,
-            rename_map=rename_map,
+            # rename_map=rename_map,
         )
 
         preprocessor, postprocessor = make_pre_post_processors(
             policy_cfg=policy_cfg,
             pretrained_path=policy_cfg.pretrained_path,
-            dataset_stats=rename_stats(dataset.meta.stats, rename_map),
+            # dataset_stats=rename_stats(dataset.meta.stats, rename_map),
+            dataset_stats=dataset.meta.stats,
             preprocessor_overrides={
-                "rename_observations_processor": {"rename_map": rename_map},
+                # "rename_observations_processor": {"rename_map": rename_map},
             },
         )
 
