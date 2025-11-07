@@ -163,7 +163,7 @@ class ComponentClient:
                 # return the size lerobot is expecting. it's faster to do this resize before encoding.
                 dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
                 resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
-                params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+                params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
                 is_success, buffer = cv2.imencode(".jpg", resized, params)
 
                 # Store the result. This is an atomic operation in Python.
