@@ -29,10 +29,10 @@ logger.addHandler(handler)
 EPISODE_MAX_TIME_SEC = 600
 FPS = 30
 TASK_DESCRIPTION = "Pick up laundry from the floor and drop it in the metal basket."
-HF_REPO_ID = "naavox/stringman-socks-3-camera"
+HF_REPO_ID = "naavox/stringman-socks-3-camera-1"
 GRPC_ADDR = 'localhost:50051'
 NUM_BUFFERS = 3
-create_dataset = False
+create_dataset = True
 
 OBS_STR = "observation"
 ACTION = "action"
@@ -126,14 +126,14 @@ def record_until_disconnected():
             use_videos = True,
             image_writer_threads = 8,
             async_video_encoding = True,
-            vcodec = 'h264',
+            vcodec = 'libsvtav1',
         )
     else:
         dataset = LeRobotDataset(
             repo_id = HF_REPO_ID,
             download_videos = False,
             async_video_encoding = True,
-            vcodec = 'h264',
+            vcodec = 'libsvtav1',
         )
         dataset.start_image_writer(num_threads=8)
         dataset.start_async_video_encoder()
