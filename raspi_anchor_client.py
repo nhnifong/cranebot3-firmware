@@ -163,7 +163,7 @@ class ComponentClient:
                 # return the size lerobot is expecting. it's faster to do this resize before encoding.
                 dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
                 resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
-                params = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+                params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
                 is_success, buffer = cv2.imencode(".jpg", resized, params)
 
                 # Store the result. This is an atomic operation in Python.
@@ -178,6 +178,7 @@ class ComponentClient:
         self.conn_status['video'] = 'none'
         self.conn_status['ip_address'] = self.address
         self.to_ui_q.put({'connection_status': self.conn_status})
+        abnormal_shutdown = False
         ws_uri = f"ws://{self.address}:{self.port}"
         print(f"Connecting to {ws_uri}...")
         try:
@@ -192,10 +193,14 @@ class ComponentClient:
                 await self.receive_loop(websocket)
         except asyncio.exceptions.CancelledError:
             print("Cancelling connection")
-            return
         except websockets.exceptions.ConnectionClosedOK:
             print("Client closing connection")
-            return
+        except websockets.exceptions.ConnectionClosedError as e:
+            print(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
+            abnormal_shutdown = True
+        finally:
+            self.connected = False
+        return abnormal_shutdown
 
     async def receive_loop(self, websocket):
         print('receive loop')
@@ -264,7 +269,7 @@ class ComponentClient:
 
     async def startup(self):
         self.ct = asyncio.create_task(self.connect_websocket())
-        await self.ct
+        return await self.ct
 
     async def shutdown(self):
         print("\nWait for client shutdown")

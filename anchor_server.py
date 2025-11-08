@@ -36,7 +36,7 @@ stream_command = [
     "--vflip", "--hflip",
     "--autofocus-mode", "continuous",
     "--low-latency",
-    "--bitrate", "320kbps"
+    "--bitrate", "1200kbps"
 ]
 
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
@@ -415,7 +415,7 @@ class RaspiAnchorServer(RobotComponentServer):
 
         # If the loop finishes, all retries have failed
         self.spooler.setAimSpeed(0)
-        raise RuntimeError(f"Failed to tighten line after {max_retries} attempts.")
+        logging.error(f"Failed to tighten line after {max_retries} attempts.")
         
 if __name__ == "__main__":
     logging.basicConfig(

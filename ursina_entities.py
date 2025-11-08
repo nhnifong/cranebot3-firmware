@@ -3,6 +3,7 @@ from ursina.shaders import (
     lit_with_shadows_shader,
     unlit_shader,
 )
+from ursina.prefabs.health_bar import HealthBar
 import numpy as np
 from cv_common import invert_pose, compose_poses
 import model_constants
@@ -725,3 +726,72 @@ class PopMessage(WindowPanel):
     def show_message(self, message):
         self.popup_text_field.text = message
         self.enabled = True
+
+class CalFeedback(Entity):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        self.title = Text(
+            'Auto Calibration',
+            position=(-0.3, 0.50),
+            scale=(0.9, 0.9),
+            enabled=False,
+        )
+        self.status = Text(
+            'Preparing',
+            position=(-0.3, 0.47),
+            scale=(0.6, 0.6),
+            enabled=False,
+        )
+        self.bar = HealthBar(
+            bar_color=color.lime.tint(-.25),
+            roundness=.5,
+            show_text=False,
+            max_value=100,
+            value=0,
+            scale=(.5, 0.05),
+            position=(-0.3, 0.45),
+            enabled=False,
+        )
+        self.button = Button(
+            'Cancel',
+            color=color.gold, text_color=color.black,
+            on_click=self.cancel,
+            scale=(.12, 0.04),
+            position=(0.3, 0.43),
+            enabled=False,
+        )
+        self.last_update_t = time.time()
+        self.dont_go_past = 100
+        self.speed = 1
+
+    def start(self):
+        self.last_update_t = time.time()
+        self.dont_go_past = 1
+        self.speed = 1
+        self.bar.value = 0
+        self.title.enabled = True
+        self.status.enabled = True
+        self.bar.enabled = True
+        self.button.enabled = True
+
+    def cancel(self):
+        self.title.enabled = False
+        self.status.enabled = False
+        self.bar.enabled = False
+        self.button.enabled = False
+        self.app.on_stop_button()
+
+    def handle_message(self, upd):
+        self.status.text = upd['message']
+        self.bar.value = upd['progress']
+        # make the bar move at this many percentage points per second up to a limit
+        self.speed = upd['speed']
+        self.dont_go_past = upd['dont_go_past']
+
+    def update(self):
+        if self.bar.enabled:
+            now = time.time()
+            elapsed = now - self.last_update_t
+            self.bar.value = min(self.bar.value + self.speed * elapsed, self.dont_go_past)
+            self.last_update_t = now
