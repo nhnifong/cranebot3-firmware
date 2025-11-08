@@ -7,7 +7,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
-from unittest.mock import patch, Mock, MagicMock, ANY
+from unittest.mock import patch, Mock, MagicMock, ANY, AsyncMock
 import asyncio
 import numpy as np
 import websockets
@@ -15,6 +15,8 @@ from websockets.exceptions import (
     ConnectionClosedOK,
     ConnectionClosedError,
 )
+from websockets.frames import Close
+
 from multiprocessing import Pool, Queue
 import json
 
@@ -128,7 +130,49 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         self.close_test_server.set()
         await asyncio.sleep(0.1)
         self.assertFalse(self.ac.connected)
-        self.assertTrue(self.client_task.done())
+        result = await asyncio.wait_for(self.client_task, 1)
+        self.assertFalse(result) # false means normal shutdown
+
+    async def test_server_closes_abnormally(self):
+        """
+        The client task should not attempt to reconnect if the server closes abnormally, but it should return true.
+        """
+
+        # define an exception
+        keepalive_exc = ConnectionClosedError(
+            sent=None,
+            rcvd=Close(1011, "keepalive ping timeout"),
+        )
+        # This is the fake websocket object our client will connect to.
+        mock_websocket = AsyncMock()
+
+        # Configure its 'recv' method to raise our specific error once we set an event
+        trigger = asyncio.Event()
+        async def mock_recv():
+            await trigger.wait()
+            print('triggering abnormal disconnect')
+            raise keepalive_exc
+        mock_websocket.recv = mock_recv
+
+        # create a mock 'connect' generator:
+        async def mock_connect_generator(*args, **kwargs):
+            print("TEST: Mock 'websockets.connect' called.")
+            self.got_connection.set()
+            yield mock_websocket
+            print("TEST: Mock websocket yielded. Generator stopping.")
+            # The generator stops, so the 'async for' loop will not reconnect.
+
+        with patch("raspi_anchor_client.websockets.connect", new=mock_connect_generator):
+            await self.clientSetup()
+            self.assertTrue(self.ac.connected)
+
+            # trigger abnormal shutdown on the next message
+            trigger.set()
+
+            await asyncio.sleep(0.1)
+            self.assertFalse(self.ac.connected)
+            result = await asyncio.wait_for(self.client_task, 1)
+            self.assertTrue(result) # true means abnormal
 
     async def test_line_record(self):
         """
@@ -161,3 +205,6 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         last_position = self.datastore.gantry_pos.getLast()
         self.assertEqual(timestamp, last_position[0])
         await self.clientTearDown()
+
+    async def test_abnormal_disconnect(self):
+        """Confirm the client's startup() task would return True if the mock server disconnected with ConnectionClosedError"""

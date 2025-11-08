@@ -12,7 +12,8 @@ from .robot_control_service_pb2 import (
 from .robot_control_service_pb2_grpc import RobotControlServiceServicer, add_RobotControlServiceServicer_to_server
 
 # prefer whichever camera seems to have the best lighting, but stick to one.
-PREFERRED_ANCHOR = 3
+PREFERRED_ANCHOR_0 = 3
+PREFERRED_ANCHOR_1 = 2
 
 # positional argument constructor for Point3D proto message
 def Point3Dp(x, y, z):
@@ -37,9 +38,11 @@ class RobotControlService(RobotControlServiceServicer):
         # ob is the instance of AsyncObserver (observer.py)
         # pe is the instance of Positioner2 (position_estimator.py)
         # gant_pos and gant_vel attributes are the output of a kalman filter continuously updated from observations.
+        gant_pos = self.ob.pe.gant_pos
         gant_vel = self.ob.pe.gant_vel
 
         response = GetObservationResponse(
+            gantry_pos=Point3Dp(*gant_pos),
             gantry_vel=Point3Dp(*gant_vel),
             winch_line_speed=float(winch[2]), # index 2 = speed
             finger_angle=float(finger[1]), # index 1 = angle
@@ -47,7 +50,8 @@ class RobotControlService(RobotControlServiceServicer):
             laser_rangefinder=float(laser),
             finger_pad_voltage=float(finger[2]), # index 2 = voltage
             gripper_camera=self.ob.get_last_frame('g'),
-            anchor_camera=self.ob.get_last_frame(PREFERRED_ANCHOR),
+            anchor_camera_0=self.ob.get_last_frame(PREFERRED_ANCHOR_0),
+            anchor_camera_1=self.ob.get_last_frame(PREFERRED_ANCHOR_1),
         )
 
         return response
@@ -58,9 +62,14 @@ class RobotControlService(RobotControlServiceServicer):
         finger = request.finger_angle
         print(f'TakeAction received on grpc channel gantry_goal_pos={gantry_vel} winch={winch} finger={finger}')
 
-        # If AsyncObserver clipped these values to legal limits, return what they were clipped to
-        winch, finger = await self.ob.send_winch_and_finger(winch, finger)
-        commanded_vel = await self.ob.move_direction_speed(gantry_vel)
+        # Send both commands concurrently before waiting for both.
+        # If AsyncObserver clipped these values, the results will be what they were clipped to
+        (winch, finger), commanded_vel = await asyncio.gather(
+            self.ob.send_winch_and_finger(0, finger),
+            self.ob.move_direction_speed(gantry_vel)
+        )
+
+        winch=0
 
         return TakeActionResponse(
             gantry_vel = Point3Dp(*commanded_vel),

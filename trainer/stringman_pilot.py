@@ -65,13 +65,17 @@ class StringmanPilotRobot(Robot):
     def _cameras_ft(self) -> dict[str, tuple]:
         # use only one anchor camera to keep latency high and training load lower.
         return {
-            "anchor_camera": IMAGE_SHAPE,
+            "anchor_camera_0": IMAGE_SHAPE,
+            "anchor_camera_1": IMAGE_SHAPE,
             "gripper_camera": IMAGE_SHAPE,
         }
 
     @cached_property
     def observation_features(self) -> dict:
         return {**self._motors_ft, **self._cameras_ft,
+            "gantry_pos_x": float,
+            "gantry_pos_y": float,
+            "gantry_pos_z": float,
             "gripper_imu_rot_x": float,
             "gripper_imu_rot_y": float,
             "gripper_imu_rot_z": float,
@@ -117,6 +121,9 @@ class StringmanPilotRobot(Robot):
 
         response: GetObservationResponse = self.stub.GetObservation(GetObservationRequest())
         obs_dict = {
+            'gantry_pos_x': response.gantry_pos.x,
+            'gantry_pos_y': response.gantry_pos.y,
+            'gantry_pos_z': response.gantry_pos.z,
             'gantry_vel_x': response.gantry_vel.x,
             'gantry_vel_y': response.gantry_vel.y,
             'gantry_vel_z': response.gantry_vel.z,
@@ -127,7 +134,8 @@ class StringmanPilotRobot(Robot):
             "gripper_imu_rot_z": response.gripper_imu_rot.z,
             "laser_rangefinder": response.laser_rangefinder,
             "finger_pad_voltage": response.finger_pad_voltage,
-            "anchor_camera": decode_image(response.anchor_camera),
+            "anchor_camera_0": decode_image(response.anchor_camera_0),
+            "anchor_camera_1": decode_image(response.anchor_camera_1),
             "gripper_camera": decode_image(response.gripper_camera),
         }
         return obs_dict

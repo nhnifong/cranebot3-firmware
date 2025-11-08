@@ -1,5 +1,8 @@
 import json
 import numpy as np
+from pathlib import Path # Import pathlib
+
+DEFAULT_CONFIG_PATH = Path(__file__).parent / 'configuration.json'
 
 class Anchor:
     def __init__(self, num):
@@ -26,7 +29,7 @@ class Config:
         try:
             self.reload()
         except FileNotFoundError:
-            'No configuration.json file exists, using defaults'
+            f'No {DEFAULT_CONFIG_PATH} file exists, using defaults'
             self.write()
 
     def vars_for_anchor(self, anchor_num):
@@ -35,7 +38,7 @@ class Config:
         return v
 
     def reload(self):
-        conf = json.loads(open('configuration.json').read())
+        conf = json.loads(open(DEFAULT_CONFIG_PATH).read())
         self.anchor_num_map = {} # convenience map from service name to num
         for a in conf['anchors']:
             self.anchors[a['num']].pose = (np.array(a['rotation'], dtype=float), np.array(a['position'], dtype=float))
@@ -54,7 +57,7 @@ class Config:
         self.gripper_vars = conf.get('gripper', {})
 
     def write(self):
-        outf = open('configuration.json', 'w')
+        outf = open(DEFAULT_CONFIG_PATH, 'w')
         conf = {
             'anchors': [
                 {
