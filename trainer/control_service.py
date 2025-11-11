@@ -39,12 +39,10 @@ class RobotControlService(RobotControlServiceServicer):
         # pe is the instance of Positioner2 (position_estimator.py)
         # gant_pos and gant_vel attributes are the output of a kalman filter continuously updated from observations.
         gant_pos = self.ob.pe.gant_pos
-        gant_vel = self.ob.pe.gant_vel
 
         response = GetObservationResponse(
             gantry_pos=Point3Dp(*gant_pos),
-            gantry_vel=Point3Dp(*gant_vel),
-            winch_line_speed=float(winch[2]), # index 2 = speed
+            winch_line_length=float(winch[1]), # index 1 = length
             finger_angle=float(finger[1]), # index 1 = angle
             gripper_imu_rot=Point3Dp(*imu),
             laser_rangefinder=float(laser),
@@ -57,36 +55,41 @@ class RobotControlService(RobotControlServiceServicer):
         return response
 
     async def TakeAction(self, request: TakeActionRequest, context) -> TakeActionResponse:
-        gantry_vel = np.array([request.gantry_vel.x, request.gantry_vel.y, request.gantry_vel.z])
-        winch = request.winch_line_speed
+        gantry_pos = np.array([request.gantry_pos.x, request.gantry_pos.y, request.gantry_pos.z])
+        winch = request.winch_line_length
         finger = request.finger_angle
-        print(f'TakeAction received on grpc channel gantry_goal_pos={gantry_vel} winch={winch} finger={finger}')
+        print(f'TakeAction received on grpc channel gantry_goal_pos={gantry_pos} winch={winch} finger={finger}')
 
         # Send both commands concurrently before waiting for both.
         # If AsyncObserver clipped these values, the results will be what they were clipped to
-        (winch, finger), commanded_vel = await asyncio.gather(
+        (winch, finger), commanded_pos = await asyncio.gather(
             self.ob.send_winch_and_finger(0, finger),
-            self.ob.move_direction_speed(gantry_vel)
+            self.ob.lerobot_positional_control(gantry_pos)
         )
 
         winch=0
 
         return TakeActionResponse(
-            gantry_vel = Point3Dp(*commanded_vel),
-            winch_line_speed = float(winch),
+            gantry_pos = Point3Dp(*commanded_pos),
+            winch_line_length = float(winch),
             finger_angle = float(finger),
         )
 
     async def GetGamepadAction(self, request: GetGamepadActionRequest, context) -> TakeActionResponse:
         """
-        get the last action that was caused directly by the gamepad.
-        This should be post filtering and bounds checking.
+        Get a positional control input corresponding to whatever the gamepad last commanded.
         """
-        commanded_vel, winch, finger = self.ob.last_gp_action
+        TIME_INT = 1/30
+        try:
+            commanded_vel, winch_speed, finger = self.ob.last_gp_action
+        except TypeError:
+            commanded_vel, winch_speed, finger = (np.zeros(3),0,0)
+        gant_goal_pos = self.ob.pe.gant_pos + commanded_vel * TIME_INT
+        winch = self.ob.datastore.winch_line_record.getLast()[1] + winch_speed * TIME_INT
 
         return TakeActionResponse(
-            gantry_vel = Point3Dp(*commanded_vel),
-            winch_line_speed = float(winch),
+            gantry_pos = Point3Dp(*gant_goal_pos),
+            winch_line_length = float(winch),
             finger_angle = float(finger),
         )
 

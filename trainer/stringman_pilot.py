@@ -54,10 +54,10 @@ class StringmanPilotRobot(Robot):
         # lerobot assumes all features are either joints (float) or images (speicified as a tuple of width, height, channels)
         # here I have place all the properties we can command of the robot, even if they are not strictly motor joints.
         return { 
-            "gantry_vel_x": float,
-            "gantry_vel_y": float,
-            "gantry_vel_z": float,
-            "winch_line_speed": float,
+            "gantry_pos_x": float,
+            "gantry_pos_y": float,
+            "gantry_pos_z": float,
+            "winch_line_length": float,
             "finger_angle": float,
         }
 
@@ -124,10 +124,7 @@ class StringmanPilotRobot(Robot):
             'gantry_pos_x': response.gantry_pos.x,
             'gantry_pos_y': response.gantry_pos.y,
             'gantry_pos_z': response.gantry_pos.z,
-            'gantry_vel_x': response.gantry_vel.x,
-            'gantry_vel_y': response.gantry_vel.y,
-            'gantry_vel_z': response.gantry_vel.z,
-            "winch_line_speed": response.winch_line_speed,
+            "winch_line_length": response.winch_line_length,
             "finger_angle": response.finger_angle,
             "gripper_imu_rot_x": response.gripper_imu_rot.x,
             "gripper_imu_rot_y": response.gripper_imu_rot.y,
@@ -142,8 +139,8 @@ class StringmanPilotRobot(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         request = TakeActionRequest(
-            gantry_vel=Point3D(x=action['gantry_vel_x'], y=action['gantry_vel_y'], z=action['gantry_vel_z']),
-            winch_line_speed=action['winch_line_speed'],
+            gantry_pos=Point3D(x=action['gantry_pos_x'], y=action['gantry_pos_y'], z=action['gantry_pos_z']),
+            winch_line_length=action['winch_line_length'],
             finger_angle=action['finger_angle'],
         )
         # Call the synchronous stub method
@@ -151,10 +148,10 @@ class StringmanPilotRobot(Robot):
 
         # return the action that was actually taken
         return {
-            "gantry_vel_x": float(response.gantry_vel.x),
-            "gantry_vel_y": float(response.gantry_vel.y),
-            "gantry_vel_z": float(response.gantry_vel.z),
-            "winch_line_speed": float(response.winch_line_speed),
+            "gantry_pos_x": float(response.gantry_pos.x),
+            "gantry_pos_y": float(response.gantry_pos.y),
+            "gantry_pos_z": float(response.gantry_pos.z),
+            "winch_line_length": float(response.winch_line_length),
             "finger_angle": float(response.finger_angle),
         }
 
@@ -165,10 +162,10 @@ class StringmanPilotRobot(Robot):
         """
         response: TakeActionResponse = self.stub.GetGamepadAction(GetGamepadActionRequest())
         return {
-            "gantry_vel_x": float(response.gantry_vel.x),
-            "gantry_vel_y": float(response.gantry_vel.y),
-            "gantry_vel_z": float(response.gantry_vel.z),
-            "winch_line_speed": float(response.winch_line_speed),
+            "gantry_pos_x": float(response.gantry_pos.x),
+            "gantry_pos_y": float(response.gantry_pos.y),
+            "gantry_pos_z": float(response.gantry_pos.z),
+            "winch_line_length": float(response.winch_line_length),
             "finger_angle": float(response.finger_angle),
         }
 

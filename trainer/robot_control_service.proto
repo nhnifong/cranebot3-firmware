@@ -23,10 +23,9 @@ message GetObservationRequest {
 message GetObservationResponse {
   // Gantry position in meters from room origin.
   Point3D gantry_pos = 12;
-  // Gantry velocity in meters per second.
-  Point3D gantry_vel = 1;
   // which length change in meters per second. positive is lengthening.
-  float winch_line_speed = 2;
+  float winch_line_length = 2;
+  // last commanded finger angle
   float finger_angle = 3;
   // Rodruigez rotation vector from IMU in gripper
   Point3D gripper_imu_rot = 4;
@@ -41,16 +40,16 @@ message GetObservationResponse {
 
 // A complete action which the robot is expected to take immediately.
 message TakeActionRequest {
-  Point3D gantry_vel = 1;
-  float winch_line_speed = 2;
+  Point3D gantry_pos = 1;
+  float winch_line_length = 2;
   float finger_angle = 3;
 }
 
 message TakeActionResponse {
   // returns the action that was actually taken in case it needed to be clipped to bounds
-  // For example, if the winch length is at it's extent, the actual velocity commanded will be zero.
-  Point3D gantry_vel = 1;
-  float winch_line_speed = 2;
+  // For example, if the winch length is at it's extent, the actual length commanded will be clamped.
+  Point3D gantry_pos = 1;
+  float winch_line_length = 2;
   float finger_angle = 3;
 }
 

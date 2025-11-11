@@ -8,13 +8,13 @@ python -m trainer.stringman_run_policy
 python3 src/lerobot/scripts/lerobot_train.py \
   --dataset.repo_id=naavox/stringman-socks-3-camera \
   --policy.type=act \
-  --output_dir=outputs/train/act_13 \
-  --job_name=act_11 \
+  --output_dir=outputs/train/act_14 \
+  --job_name=act_14 \
   --wandb.enable=true \
-  --policy.repo_id=naavox/act_13 \
+  --policy.repo_id=naavox/act_14 \
   --batch_size=56 \
   --save_freq=10000 \
-  --steps=200000 \
+  --steps=100000
 
 Currently this torch version seems to work with nvidia driver 580 and the RTX 5090
 pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129

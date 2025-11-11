@@ -1102,6 +1102,29 @@ class AsyncObserver:
             self.gantry_goal_pos = None
             self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
+    async def lerobot_positional_control(self, goal):
+        """
+        Move towards the given postion.
+        speed is proportional to the distance to the target
+        and also limited by a height-dependent speed limit
+
+        This is not a motion task, and returns immediately after commanding the robot to move.
+        The robot may remain moving indefinitely. it is expected that lerobot control will send another positional command in 1/30 seconds.
+        And that the control loop always stops all spools on disconnect
+
+        Returns the actual position that we moved towards in case of clamping.
+        """
+        self.gantry_goal_pos = goal
+        self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+        vector = self.gantry_goal_pos - self.pe.gant_pos
+        dist = np.linalg.norm(vector)
+        speed = distance * 0.5
+
+        # move in the calculated direciton at the right speed.
+        vel = await self.move_direction_speed(vector / dist, speed, self.pe.gant_pos)
+        return goal
+
+
     async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
