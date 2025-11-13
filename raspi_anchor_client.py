@@ -227,9 +227,8 @@ class ComponentClient:
                     port = int(update['video_ready'][0])
                     self.stream_start_ts = float(update['video_ready'][1])
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
-                    if self.anchor_num in [None,2,3]:
-                        vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
-                        vid_thread.start()
+                    vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
+                    vid_thread.start()
                 self.handle_update_from_ws(update)
 
                 # do this here because we seemingly can't do it in receive_video
