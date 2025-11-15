@@ -1118,7 +1118,7 @@ class AsyncObserver:
         self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
         vector = self.gantry_goal_pos - self.pe.gant_pos
         dist = np.linalg.norm(vector)
-        speed = distance * 0.5
+        speed = dist * 0.5
 
         # move in the calculated direciton at the right speed.
         vel = await self.move_direction_speed(vector / dist, speed, self.pe.gant_pos)

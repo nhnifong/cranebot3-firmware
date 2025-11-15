@@ -18,6 +18,7 @@ from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.constants import OBS_STR, ACTION
 from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
 from .stringman_pilot import StringmanPilotRobot, StringmanConfig
+from pprint import pprint
 
 import sys
 import logging
@@ -33,8 +34,8 @@ EPISODE_MAX_TIME_SEC = 600
 FPS = 30
 TASK_DESCRIPTION = "Pick up laundry from the floor and drop it in the metal basket."
 GRPC_ADDR = 'localhost:50051'
-DATASET_REPO_ID = "naavox/stringman-socks-3-camera"
-POLICY_REPO_ID = "naavox/act_13"
+DATASET_REPO_ID = "naavox/merged-3-relabeled"
+POLICY_REPO_ID = "naavox/act_16"
 
 def act_one_episode(
     robot: Robot,
@@ -74,7 +75,10 @@ def act_one_episode(
         )
 
         act_processed_policy = make_robot_action(action_values, features)
+        pprint(act_processed_policy)
         sent_action = robot.send_action(act_processed_policy)
+        # sent_action = act_processed_policy
+
 
         # if display_data:
         log_rerun_data(observation=obs, action=sent_action)
@@ -86,13 +90,13 @@ def act_one_episode(
         timestamp = time.perf_counter() - start_episode_t
 
     # stop moving
-    robot.send_action({
-        'gantry_vel_x': 0,
-        'gantry_vel_y': 0,
-        'gantry_vel_z': 0,
-        'winch_line_speed': 0,
-        'finger_angle': 0,
-    })
+    # robot.send_action({
+    #     'gantry_pos_x': 0,
+    #     'gantry_pos_y': 0,
+    #     'gantry_pos_z': 0,
+    #     'winch_line_length': 0,
+    #     'finger_angle': 0,
+    # })
 
 def run_until_disconnected():
     robot = StringmanPilotRobot(StringmanConfig(GRPC_ADDR))
@@ -110,7 +114,10 @@ def run_until_disconnected():
 
         # policy_path_or_id = POLICY_REPO_ID
         policy_id = POLICY_REPO_ID
-        policy_cfg = PreTrainedConfig.from_pretrained(policy_id)
+        path = "/home/nhn/lerobot/outputs/train/act_18/checkpoints/010000/pretrained_model/"
+        policy_cfg = PreTrainedConfig.from_pretrained(path)
+        # policy_cfg = PreTrainedConfig.from_pretrained(policy_id)
+        print(policy_cfg)
         
         # policy_cfg.empty_cameras=1
         policy = make_policy(
@@ -164,13 +171,13 @@ def run_until_disconnected():
             )
             log_say("End")
     finally:
-        robot.send_action({
-            'gantry_vel_x': 0,
-            'gantry_vel_y': 0,
-            'gantry_vel_z': 0,
-            'winch_line_speed': 0,
-            'finger_angle': 0,
-        })
+        # robot.send_action({
+        #     'gantry_vel_x': 0,
+        #     'gantry_vel_y': 0,
+        #     'gantry_vel_z': 0,
+        #     'winch_line_speed': 0,
+        #     'finger_angle': 0,
+        # })
         robot.disconnect()
 
 if __name__ == "__main__":

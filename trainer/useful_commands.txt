@@ -5,17 +5,6 @@ record new episodes seperately
 python -m trainer.stringman_record_loop
 python -m trainer.stringman_run_policy
 
-python3 src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id=naavox/stringman-socks-3-camera \
-  --policy.type=act \
-  --output_dir=outputs/train/act_14 \
-  --job_name=act_14 \
-  --wandb.enable=true \
-  --policy.repo_id=naavox/act_14 \
-  --batch_size=56 \
-  --save_freq=10000 \
-  --steps=100000
-
 Currently this torch version seems to work with nvidia driver 580 and the RTX 5090
 pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
 
@@ -31,17 +20,44 @@ pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
 
 ffplay -fast -fflags nobuffer -flags low_delay "tcp://192.168.1.153:8888"
 
-  SmolVLA
+lerobot-edit-dataset \
+    --repo_id naavox/merged-3 \
+    --operation.type merge \
+    --operation.repo_ids "['naavox/temp-7', 'naavox/temp-1', 'naavox/temp-10', 'naavox/temp-11', 'naavox/merged-2']" \
+    --push_to_hub true
 
-lerobot-train \
-  --policy.path=lerobot/smolvla_base \
-  --dataset.repo_id=naavox/stringman-socks-3-camera \
-  --batch_size=96 \
-  --steps=30000 \
-  --output_dir=outputs/train/smol_2 \
-  --job_name=my_smolvla_training \
-  --policy.device=cuda \
+Act
+
+python3 src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id=naavox/merged-3 \
+  --policy.type=act \
+  --output_dir=outputs/train/act_17_no_vae \
+  --job_name=act_17_no_vae \
+  --wandb.enable=false \
+  --policy.repo_id=naavox/act_17_no_vae \
+  --batch_size=56 \
+  --save_freq=10000 \
+  --steps=100000 \
+  --dataset.image_transforms.enable=True \
+  --policy.n_action_steps=99 \
+  --policy.use_vae=False
+
+Diffusion
+
+python3 src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id=naavox/merged-3 \
+  --policy.type=diffusion \
+  --output_dir=outputs/train/diffusion_01 \
+  --job_name=diffusion_01 \
   --wandb.enable=true \
-  --save_freq=1000 \
-  --policy.repo_id=naavox/smol_2 \
-  --rename_map='{"observation.images.anchor_camera_0": "observation.images.camera1", "observation.images.gripper_camera": "observation.images.camera2", "observation.images.anchor_camera_1": "observation.images.camera3"}'
+  --policy.repo_id=naavox/diffusion_01 \
+  --batch_size=300 \
+  --save_freq=10000 \
+  --steps=200000 \
+  --dataset.image_transforms.enable=True \
+  --policy.n_obs_steps=2 \
+  --policy.n_action_steps=8 \
+  --policy.num_train_timesteps=100 \
+  --policy.vision_backbone=resnet18 \
+  --policy.pretrained_backbone_weights=ResNet18_Weights.IMAGENET1K_V1 \
+  --policy.use_group_norm=False
