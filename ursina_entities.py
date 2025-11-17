@@ -440,6 +440,20 @@ class Floor(Entity):
         self.dpad_up_was_held = False
         self.dpad_left_was_held = False
         self.seat_orbit_mode = True
+        # assumed position of the person holding the gamepad. updated regularly with messages to ui_q using apriltag
+        self.gp_pos = np.array([-1.3, 1.9])
+
+        self.you = Entity(
+            model='sphere',
+            color=color.red,
+            scale=0.05,
+            shader=lit_with_shadows_shader,
+            position=[self.gp_pos[0], 1, self.gp_pos[1]],
+        )
+
+    def set_gp_pos(self, pos):
+        self.gp_pos = pos
+        self.you.position = [self.gp_pos[0], 1, self.gp_pos[1]]
 
     def set_reticule_height(self, height):
         self.alt = height
@@ -482,12 +496,11 @@ class Floor(Entity):
         # left stick is lateral motion
         vector = np.array([held_keys['gamepad left stick x'], held_keys['gamepad left stick y'], net_trigger])
 
-        seat = np.array([-1.3, 1.9])
         if self.seat_orbit_mode:
             # left stick x orbits the seat clockwise
             # left stick y moves away from the seat
             gantry_pos_xy = np.array(self.app.gantry.zup_pos[:2])
-            vec_to_object = gantry_pos_xy - seat
+            vec_to_object = gantry_pos_xy - self.gp_pos
             distance = np.linalg.norm(vec_to_object)
             # We can only orbit if we aren't at the exact center.
             if distance > 1e-6:

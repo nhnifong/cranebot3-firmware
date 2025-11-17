@@ -582,6 +582,9 @@ class ControlPanelUI:
         if 'cal_progress' in updates:
             self.calibration_feedback.handle_message(updates['cal_progress'])
 
+        if 'gp_pos' in updates:
+            self.floor.set_gp_pos(updates['gp_pos'])
+
     def start(self):
         self.app.run()
 

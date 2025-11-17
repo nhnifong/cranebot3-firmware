@@ -16,6 +16,9 @@ distortion = config.distortion_coeff
 marker_names = [
     'origin',
     'gantry',
+    'gamepad',
+    'hamper',
+    'trash',
 ]
 
 # AprilTag images are typically downloaded, not generated in code.
@@ -25,9 +28,8 @@ marker_names = [
 # Define the physical size of any markers that are not the default size.
 special_sizes = {
     'origin': 0.1680, # size in meters
-    'gantry': 0.0868,
 }
-default_marker_size = 0.09 # The default side length of markers in meters
+default_marker_size = 0.0868 # The default side length of markers in meters
 
 # The 'tag36h11' family is a good general-purpose choice.
 # Other options include 'tag16h5', 'tag25h9', 'tagCircle21h7', etc.

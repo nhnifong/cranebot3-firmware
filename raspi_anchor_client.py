@@ -357,6 +357,16 @@ class RaspiAnchorClient(ComponentClient):
                 if self.save_raw:
                     self.raw_gant_poses.append(pose_from_det(detection))
 
+            if detection['n'] in ['gamepad', 'hamper', 'trash']:
+                pose = np.array(compose_poses([
+                    self.anchor_pose,
+                    model_constants.anchor_camera, # constant
+                    pose_from_det(detection), # the pose obtained just now
+                ]))
+                position = pose.reshape(6)[3:]
+                # save the position of this object for use in various planning tasks.
+                self.to_ob_q.put({'avg_named_pos': (detection['n'], position)})
+
     async def send_config(self):
         config = Config()
         anchor_config_vars = config.vars_for_anchor(self.anchor_num)

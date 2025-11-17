@@ -102,6 +102,7 @@ class AsyncObserver:
         self.grpc_server = None
         self.last_gp_action = None
         self.episode_control_events = set()
+        self.named_positions = {}
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -126,6 +127,7 @@ class AsyncObserver:
             'winch_and_finger': self._handle_send_winch_finger,
             'gamepad': self._handle_gamepad_action,
             'episode_ctrl': self._handle_add_episode_control_event,
+            'avg_named_pos': self._handle_avg_named_pos,
         }
 
     def listen_queue_updates(self, loop):
@@ -228,6 +230,18 @@ class AsyncObserver:
         commanded_vel = await self.move_direction_speed(data['dir'], data['speed'])
         # the saved values will be what we return from GetLastAction
         self.last_gp_action = (commanded_vel, winch, finger)
+
+    async def _handle_avg_named_pos(self, data):
+        """Keep running averages of named positions"""
+        (key, position) = data
+        if key not in self.named_positions:
+            self.named_positions[key] = position
+        self.named_positions[key] = self.named_positions[key] * 0.75 + position * 0.25
+
+        if key=='gamepad':
+            # UI needs to know about this one
+            p2 = self.named_positions['gamepad'][:2] # only x and y
+            self.to_ui_q.put({'gp_pos': p2})
 
     async def invoke_motion_task(self, coro):
         """
