@@ -82,7 +82,11 @@ def update_go_quad(position, color, e):
 
 class ControlPanelUI:
     def __init__(self, to_ob_q):
-        self.app = Ursina(fullscreen=False, borderless=False)
+        self.app = Ursina(
+            fullscreen=False,
+            borderless=False,
+            title="Stringman Control Panel",
+        )
         self.to_ob_q = to_ob_q
         
         # --- Core State ---

@@ -377,19 +377,26 @@ class RaspiAnchorClient(ComponentClient):
         self.safety_task = asyncio.create_task(self.safety_monitor())
 
     async def safety_monitor(self):
-        """stops robot motion on other anchors if this anchor stops sending line record updates for some time"""
-        TIMEOUT=1.0 # seconds
-        try:
-            while self.connected:
+        """Notifies observer if this anchor stops sending line record updates for some time"""
+        TIMEOUT=1 # seconds
+        last_update = time.time()
+        while self.connected:
+            try:
                 await asyncio.wait_for(self.line_record_receipt.wait(), TIMEOUT)
                 # if you see the event within the timeout, all is well, clear it and wait again
                 self.line_record_receipt.clear()
-        except TimeoutError:
-            print(f'Anchor {self.anchor_num} has not sent a line record update in {TIMEOUT} seconds. Stopping all motors to prevent a ceiling pull.')
-            self.to_ob_q.put({'slow_stop_all': None})
-            # we remain connected, but in my experience the anchor server does not come back without a reboot.
-            # still working on this one but it's probably run out of memory.
-
+                last_update = time.time()
+            except TimeoutError:
+                try:
+                    latency = await asyncio.wait_for(websocket.ping(), TIMEOUT)
+                    # if the pong arrives, everything is fine, false alarm, resume the loop
+                    # some hiccup on the server raspi made it unable to send anything for some time but it's not down.
+                    continue
+                except (ConnectionClosedError, TimeoutError):
+                    # it's no longer running, either because it lost power, or the server crashed.
+                    print(f'Anchor {self.anchor_num} has not sent a line record update in {time.time() - last_update} seconds.')
+                    # immediately trigger the "abnormal shutdown" return from the connect_websocket task
+                    await self.websocket.close(code=1101)
 
 
 if __name__ == "__main__":

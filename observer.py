@@ -128,6 +128,7 @@ class AsyncObserver:
             'gamepad': self._handle_gamepad_action,
             'episode_ctrl': self._handle_add_episode_control_event,
             'avg_named_pos': self._handle_avg_named_pos,
+            'lost_conn': self._handle_lost_conn,
         }
 
     def listen_queue_updates(self, loop):
@@ -242,6 +243,12 @@ class AsyncObserver:
             # UI needs to know about this one
             p2 = self.named_positions['gamepad'][:2] # only x and y
             self.to_ui_q.put({'gp_pos': p2})
+
+    async def _handle_lost_conn(self, data):
+        anchor_num = data
+        name = f'anchor {anchor_num}' if anchor_num is not None else 'gripper'
+        self.to_ui_q.put({'pop_message': f'lost connection to {name}'})
+
 
     async def invoke_motion_task(self, coro):
         """
