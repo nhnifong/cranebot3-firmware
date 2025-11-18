@@ -720,16 +720,13 @@ class VelocityArrow(Entity):
 
 class PopMessage(WindowPanel):
     def __init__(self):
-        self.popup_text_field = Text('Default message...', wordwrap=True, origin=(0, 0))
+        self.popup_text_field = Text('Default message', wordwrap=34, origin=(0, 0))
         super().__init__(
             title='System Message', 
             content=[
                 self.popup_text_field,
                 Button('Dismiss', color=color.azure, on_click=self.close_popup) 
             ],
-            x=-0.25, 
-            y=0.15,
-            scale=(0.5, 0.5),
             enabled=False, # Start as hidden
         )
 
@@ -737,7 +734,10 @@ class PopMessage(WindowPanel):
         self.enabled = False
 
     def show_message(self, message):
-        self.popup_text_field.text = message
+        destroy(self.popup_text_field) 
+        self.popup_text_field = Text(message, wordwrap=34, origin=(0, 0))
+        self.content[0] = self.popup_text_field
+        self.layout()
         self.enabled = True
 
 class CalFeedback(Entity):
