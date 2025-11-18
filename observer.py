@@ -1265,6 +1265,37 @@ class AsyncObserver:
         for k in data:
             self.episode_control_events.add(str(k))
 
+    """
+    async def pick_and_place_loop(self):
+        #Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
+        while self.run_command_loop:
+            for client in self.anchors:
+                pass
+                # pick last image from every anchor
+                # eval dobby network on image
+                # get points from heatmap
+                # project points to floor
+            # maybe merge close floor points
+            # pick point as next target
+            # pick Z position for gantry so that gripper ends up 10 inches over floor
+            self.gantry_goal_pos = goal_pos
+            await self.seek_gantry_goal()
+            while not holding:
+                # move gripper down until laser rangefinder shows about 5cm or IMU shows tipping
+                # close gripper
+                # wait up to 2 seconds for pad to sense object.
+                holding = voltage > 0.4
+                # if not holding, hop
+            # tension now just in case.
+            await self.tension_and_wait()
+            # to to drop point
+            self.gantry_goal_pos = over_hamper
+            await self.seek_gantry_goal()
+            # open gripper
+            # await not holding.
+            # keep score
+    """
+
 
 def start_observation(to_ui_q, to_ob_q):
     """

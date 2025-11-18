@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import unittest
 import numpy as np
 from math import pi
-from cv_common import compose_poses, invert_pose, average_pose
+from cv_common import compose_poses, invert_pose, average_pose, project_pixel_to_floor
+import model_constants
 
 
 def p(l): # make a numpy array of floats out of the given list. for brevity
@@ -154,3 +155,18 @@ class TestPoseFunctions(unittest.TestCase):
         result = compose_poses(poses)
         np.testing.assert_array_almost_equal(result[0], expected[0]) # rotation
         np.testing.assert_array_almost_equal(result[1], expected[1]) # position
+
+    def test_project_pixel_to_floor(self):
+        from config import Config
+        config = Config()
+
+        anchor_pose = config.anchors[0].pose
+        anchor_camera_pose = np.array(compose_poses([
+            anchor_pose,
+            model_constants.anchor_camera,
+        ]))
+
+        pixel = (1000, 600) # Coordinates are expected in the image resolution that the camera coefficients were calibrated with
+        floor_pos = project_pixel_to_floor(pixel, anchor_camera_pose)
+        print(floor_pos)
+        assert(floor_pos is not None)
