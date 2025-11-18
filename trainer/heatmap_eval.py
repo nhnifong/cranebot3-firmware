@@ -8,7 +8,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 DATASET_REPO_ID = "naavox/merged-5"
 MODEL_PATH = "sock_tracker.pth"
-CAMERA_KEY = "observation.images.anchor_camera_0"
+CAMERA_KEY = "observation.images.anchor_camera_1"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # --- UPDATED Model Definition ---
