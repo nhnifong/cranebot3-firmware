@@ -157,10 +157,9 @@ def homogenize_types(poses):
 import numpy as np
 import cv2
 
-def project_pixels_to_floor(normalized_pixels, pose):
+def project_pixels_to_floor(normalized_pixels, pose, K=mtx, D=distortion):
     """
     Batch projects normalized pixels (0-1) to the floor plane (Z=0).
-    Assumes global 'mtx' and 'distortion' are defined.
     """
     # Scale 0-1 inputs to 1920x1200 and reshape for cv2 (N, 1, 2)
     pts = np.array(normalized_pixels, dtype=np.float64) * [1920, 1200]
@@ -170,7 +169,7 @@ def project_pixels_to_floor(normalized_pixels, pose):
     C = -R.T @ np.array(pose[1]).reshape(3, 1)
     
     # undistortPoints handles the batch. Reshape output to (2, N) and stack 1s -> (3, N)
-    uv_norm = cv2.undistortPoints(pts.reshape(-1, 1, 2), mtx, distortion).reshape(-1, 2).T
+    uv_norm = cv2.undistortPoints(pts.reshape(-1, 1, 2), K, D).reshape(-1, 2).T
     rays_world = R.T @ np.vstack((uv_norm, np.ones(uv_norm.shape[1])))
 
     # Intersect Z=0: s = -C_z / Ray_z

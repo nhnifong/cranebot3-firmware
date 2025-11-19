@@ -289,6 +289,11 @@ class Positioner2:
         self.visual_pos = np.zeros(3, dtype=float)
         self.visual_vel = np.zeros(3, dtype=float)
 
+        try:
+            self.gant_pos = np.load('gant_pos.npy')
+        except:
+            pass
+
         # the time at which all reported line speeds became zero.
         # If some nonzero speed was occuring on any line at the last update, this will be None
         self.stop_cutoff = time.time()
@@ -345,10 +350,13 @@ class Positioner2:
         angles = np.arctan2(anchor_2d[:, 1] - centroid[1], anchor_2d[:, 0] - centroid[0])
         self.work_area = anchor_2d[np.argsort(angles)].astype(np.float32)
 
-    def point_inside_work_area(self, point):
+    def point_inside_work_area_2d(self, point):
         if self.work_area is None:
             return False
         in_2d = cv2.pointPolygonTest(self.work_area, (float(point[0]), float(point[1])), False) > 0
+
+    def point_inside_work_area(self, point):
+        in_2d = self.point_inside_work_area_2d(point)
         min_anchor_z = np.min(self.anchor_points[:, 2])
         in_z = 0 < point[2] < min_anchor_z
         return in_2d and in_z
@@ -543,4 +551,5 @@ class Positioner2:
                 
         except asyncio.exceptions.CancelledError:
             pass
+        np.save('gant_pos.npy', self.gant_pos)
         print('All position estimator tasks finished')

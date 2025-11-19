@@ -14,3 +14,4 @@ zero-angles.txt
 tests/last_dataset
 *_dataset
 dataset_heatmap/
+gast_pos.npy
