@@ -5,6 +5,7 @@ import os
 import random
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from .dobby import DobbyNet
+import argparse
 
 DATASET_REPO_ID = "naavox/merged-5"
 MODEL_PATH = "trainer/models/sock_tracker.pth"
@@ -69,7 +70,7 @@ def extract_targets_from_heatmap(heatmap: np.ndarray, top_n: int = 10, threshold
 
     return results
 
-def main():
+def main(uri):
     if not os.path.exists(MODEL_PATH):
         print(f"Error: {MODEL_PATH} not found.")
         return
@@ -79,20 +80,33 @@ def main():
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.eval()
 
-    print(f"Loading dataset {DATASET_REPO_ID}...")
-    dataset = LeRobotDataset(DATASET_REPO_ID)
+    if uri :
+        print('connecting to stream')
+        cap = cv2.VideoCapture(uri)
+        if not cap.isOpened():
+            print("Error: Could not open video stream.")
+            exit()
+    else:
+        print(f"Loading dataset {DATASET_REPO_ID}...")
+        dataset = LeRobotDataset(DATASET_REPO_ID)
     
     print("\n--- Controls ---")
     print("SPACE: Next random frame")
     print("Q:     Quit")
 
     while True:
-        idx = random.randint(0, len(dataset) - 1)
-        item = dataset[idx]
-        
-        if CAMERA_KEY not in item: continue
-            
-        img_tensor = item[CAMERA_KEY]
+        if uri:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.resize(frame, IMAGE_RES, fx=0, fy=0, interpolation=cv2.INTER_LINEAR)
+            img_tensor = torch.from_numpy(frame).permute(2, 0, 1).float() / 255.0
+        else:
+            idx = random.randint(0, len(dataset) - 1)
+            item = dataset[idx]
+            if CAMERA_KEY not in item: continue
+            img_tensor = item[CAMERA_KEY]
+
         batch = img_tensor.unsqueeze(0).to(DEVICE)
 
         with torch.no_grad():
@@ -124,11 +138,16 @@ def main():
 
         cv2.imshow("Sock Heatmap", overlay)
         
-        key = cv2.waitKey(0) & 0xFF
+        key = cv2.waitKey(1 if uri else 0) & 0xFF
         if key == ord('q'):
             break
             
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--uri", help="When specified, connects to the given stream")
+    args = parser.parse_args()
+
+    main(uri=args.uri)

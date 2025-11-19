@@ -24,7 +24,7 @@ from random import random
 from config import Config
 from stats import StatCounter
 from position_estimator import Positioner2
-from cv_common import invert_pose, compose_poses, average_pose
+from cv_common import invert_pose, compose_poses, average_pose, project_pixel_to_floor
 from calibration import order_points_for_low_travel, find_cal_params
 import model_constants
 import traceback
@@ -103,6 +103,7 @@ class AsyncObserver:
         self.last_gp_action = None
         self.episode_control_events = set()
         self.named_positions = {}
+        self.model = None
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -384,6 +385,7 @@ class AsyncObserver:
         if mode == "run":
             self.calmode = mode
             print("run mode")
+            self.invoke_motion_task(self.pick_and_place_loop())
         elif mode == "pause":
             self.calmode = mode
             await self.stop_all()
@@ -1265,36 +1267,78 @@ class AsyncObserver:
         for k in data:
             self.episode_control_events.add(str(k))
 
-    """
     async def pick_and_place_loop(self):
         #Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
+        MODEL_PATH = "trainer/models/sock_tracker.pth"
+        IMAGE_RES = (640, 360)
+
+        if self.model is None:
+            import torch
+            from trainer.dobby import DobbyNet
+            print(f"Loading model from {MODEL_PATH}...")
+            model = DobbyNet().to(DEVICE)
+            model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+            model.eval()
+
         while self.run_command_loop:
+            await asyncio.sleep(1)
+
+            all_floor_target_arrs = []
             for client in self.anchors:
-                pass
                 # pick last image from every anchor
+                if client.last_frame_resized is None:
+                    continue
+                img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0
+                batch = img_tensor.unsqueeze(0).to(DEVICE)
+
                 # eval dobby network on image
+                with torch.no_grad():
+                    heatmap_out = model(batch)
+                heatmap_np = heatmap_out.squeeze().cpu().numpy()
+
                 # get points from heatmap
+                # for now these don't return confidence, but they could.
+                targets = extract_targets_from_heatmap(heatmap_np)
+
                 # project points to floor
-            # maybe merge close floor points
-            # pick point as next target
-            # pick Z position for gantry so that gripper ends up 10 inches over floor
+                all_floor_target_arrs.append(project_pixels_to_floor(targets, client.anchor_pose))
+                
+                # TODO create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
+
+            floor_targets = np.concatenate(all_floor_target_arrs)
+            
+            # TODO filter out any that are outside of the work area
+
+            if len(floor_targets) == 0:
+                continue
+
+            # pick closest point to gantry as next target
+            gantry2d = self.pe.gant_pos[:2]
+            dist_sq = np.sum((floor_targets - gantry2d)**2, axis=1)
+            closest_idx = np.argmin(dist_sq)
+            next_target = floor_targets[closest_idx]
+            print(f'selected object at floor position {next_target}')
+
+            # pick Z position for gantry so that gripper ends up 10cm over floor and winch is 0.6m long
+            goal_pos = np.array([next_target[0], next_target[1], 0.7])
             self.gantry_goal_pos = goal_pos
             await self.seek_gantry_goal()
-            while not holding:
-                # move gripper down until laser rangefinder shows about 5cm or IMU shows tipping
-                # close gripper
-                # wait up to 2 seconds for pad to sense object.
-                holding = voltage > 0.4
-                # if not holding, hop
-            # tension now just in case.
-            await self.tension_and_wait()
-            # to to drop point
-            self.gantry_goal_pos = over_hamper
-            await self.seek_gantry_goal()
-            # open gripper
-            # await not holding.
-            # keep score
-    """
+            return
+
+            # while not holding:
+            #     # move gripper down until laser rangefinder shows about 5cm or IMU shows tipping
+            #     # close gripper
+            #     # wait up to 2 seconds for pad to sense object.
+            #     holding = voltage > 0.4
+            #     # if not holding, hop
+            # # tension now just in case.
+            # await self.tension_and_wait()
+            # # to to drop point
+            # self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.7])
+            # await self.seek_gantry_goal()
+            # # open gripper
+            # # await not holding.
+            # # keep score
 
 
 def start_observation(to_ui_q, to_ob_q):
