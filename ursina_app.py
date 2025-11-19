@@ -102,6 +102,27 @@ class ControlPanelUI:
         self._create_hud_panels()
         self._create_menus()
 
+    def update_layout(self):
+        # Sync the camera aspect ratio to the physical viewport width
+        # This prevents 3D objects from looking stretched or compressed
+        desired_aspect = window.aspect_ratio * self.split
+        base.camLens.set_aspect_ratio(desired_aspect)
+
+        # Calculate dimensions for the UI panel
+        panel_width = window.aspect_ratio * (1 - self.split)
+        
+        # Update background panel geometry
+        self.right_ui_panel.scale_x = panel_width
+        self.right_ui_panel.scale_y = 2
+        self.right_ui_panel.position = window.top_right
+        
+        # Update horizontal position of all panel items
+        # Center of panel = (Right Edge) - (Half Panel Width)
+        center_x = (window.aspect_ratio / 2) - (panel_width / 2)
+        
+        for item in self.right_panel_items:
+            item.x = center_x
+
     def _setup_scene_and_lighting(self):
         Sky(color=color.light_gray)
         # the color of this light is how you control the brightness
@@ -177,12 +198,53 @@ class ControlPanelUI:
                 shader=unlit_shader))
 
     def _create_hud_panels(self):
-        # Create the main status panel, text elements, buttons
-        self.modePanel = Panel(model='quad', z=99, 
+        self.split = 0.66
+        window.color = color.black
+        
+        # Configure the 3D Viewport to the left side
+        # Arguments: Left, Right, Bottom, Top (0-1 range)
+        base.camNode.getDisplayRegion(0).setDimensions(0, self.split, 0, 1)
+
+        # Setup the Right UI Panel Background
+        self.right_ui_panel = Entity(
+            parent=camera.ui,
+            model='quad',
+            texture='panel_grad',
+            origin=(0.5, 0.5),      # Anchor to top-right
+            position=window.top_right,
+            z=3
+        )
+
+        # Flow management for right panel
+        self.right_panel_items = []
+        # y position of next item to be added to right panel
+        self.cursor_y = 0.45
+
+        # Create a hidden entity to handle calling update_layout
+        # this is necessary to prevent Ursina from setting the aspect ratio back to full screen.
+        self.layout_manager = Entity(update=self.update_layout)
+
+        # Create the bottom status panel, text elements, buttons
+        # self.modePanel = Panel(model='quad', z=99, 
+        #     color=(0.1,0.1,0.1,1.0),
+        #     position=(0,-0.48),
+        #     scale=(3,0.1),
+        # )
+
+        # Setup the Bottom UI Panel Background
+        self.bottom_ui_panel = Entity(
+            parent=camera.ui,
+            model='quad',
             color=(0.1,0.1,0.1,1.0),
+            # origin=(0.5, 0.5),
+            # position=window.top_right,
             position=(0,-0.48),
             scale=(3,0.1),
+            z=2
         )
+
+
+
         self.modePanelLine1y = -0.44
         self.modePanelLine2y = -0.46
         self.modePanelLine3y = -0.48
@@ -248,11 +310,13 @@ class ControlPanelUI:
         y = -0.483
         offx = 0.042
         offy = 0.037
-        self.vid_status = [Panel(model='quad', z=91, 
+        self.vid_status = [Panel(
+            model='quad',
             color=color.white,
             texture='vid_out.png',
             position=position,
             scale=(0.01998,0.01498),
+            z=1
         ) for position in [(x,y), (x+offx,y), (x,y+offy), (x+offx,y+offy), ((x+offx/2,y+offy/2))]]
         for i,vs_panel in enumerate(self.vid_status):
             vs_panel.numbertext = Text(

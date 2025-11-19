@@ -5,6 +5,8 @@ class DobbyNet(nn.Module):
     """
     Learns a heatmap from images that have one or more labeled points
     The points are the locations of socks, hence the name.
+
+    Input images are 640x360
     """
 
     def __init__(self):
