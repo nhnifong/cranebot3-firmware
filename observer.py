@@ -1292,6 +1292,7 @@ class AsyncObserver:
             for client in self.anchors:
                 if client.last_frame_resized is None:
                     continue
+                # these are already assumed to be at the correct resolution 
                 img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0
                 img_tensors.append(img_tensor)
                 valid_clients.append(client)
