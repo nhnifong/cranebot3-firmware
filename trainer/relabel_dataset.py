@@ -14,6 +14,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
+VOLTAGE_THRESHOLD = 0.4
+
 def get_feature_indices(features):
     """Helper function to get the indices of our key features from the dataset metadata."""
     try:
@@ -132,7 +134,7 @@ def process_dataset(input_repo_id, output_repo_id):
         finger_pad_voltage = episode_frames["observation.state"][:, voltage_idx]
         
         # Find the first frame where grasp happens
-        grasp_indices = torch.where(finger_pad_voltage > 1.0)[0]
+        grasp_indices = torch.where(finger_pad_voltage > VOLTAGE_THRESHOLD)[0]
 
         if len(grasp_indices) == 0:
             # This episode is "bad" (no grasp), skip it.

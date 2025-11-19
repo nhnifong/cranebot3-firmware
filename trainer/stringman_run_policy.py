@@ -34,8 +34,8 @@ EPISODE_MAX_TIME_SEC = 600
 FPS = 30
 TASK_DESCRIPTION = "Pick up laundry from the floor and drop it in the metal basket."
 GRPC_ADDR = 'localhost:50051'
-DATASET_REPO_ID = "naavox/merged-3-relabeled"
-POLICY_REPO_ID = "naavox/act_16"
+DATASET_REPO_ID = "naavox/merged-4"
+POLICY_REPO_ID = "naavox/act_19"
 
 def act_one_episode(
     robot: Robot,
@@ -114,9 +114,9 @@ def run_until_disconnected():
 
         # policy_path_or_id = POLICY_REPO_ID
         policy_id = POLICY_REPO_ID
-        path = "/home/nhn/lerobot/outputs/train/act_18/checkpoints/010000/pretrained_model/"
-        policy_cfg = PreTrainedConfig.from_pretrained(path)
-        # policy_cfg = PreTrainedConfig.from_pretrained(policy_id)
+        path = "/home/nhn/lerobot/outputs/train/act_18/checkpoints/020000/pretrained_model/"
+        # policy_cfg = PreTrainedConfig.from_pretrained(path)
+        policy_cfg = PreTrainedConfig.from_pretrained(policy_id)
         print(policy_cfg)
         
         # policy_cfg.empty_cameras=1

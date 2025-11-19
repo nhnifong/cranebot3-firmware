@@ -21,26 +21,31 @@ pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
 ffplay -fast -fflags nobuffer -flags low_delay "tcp://192.168.1.153:8888"
 
 lerobot-edit-dataset \
-    --repo_id naavox/merged-3 \
+    --repo_id naavox/merged-5 \
     --operation.type merge \
-    --operation.repo_ids "['naavox/temp-7', 'naavox/temp-1', 'naavox/temp-10', 'naavox/temp-11', 'naavox/merged-2']" \
+    --operation.repo_ids "['naavox/temp-7', 'naavox/temp-1', 'naavox/temp-10', 'naavox/temp-11', 'naavox/merged-2', 'naavox/stringman-socks-2', 'naavox/stringman-socks-3']" \
+    --push_to_hub true
+
+lerobot-edit-dataset \
+    --repo_id naavox/merged-5-relabeled \
+    --operation.type merge \
+    --operation.repo_ids "['naavox/merged-4-relabeled', 'naavox/stringman-socks-3-relabeled']" \
     --push_to_hub true
 
 Act
 
 python3 src/lerobot/scripts/lerobot_train.py \
-  --dataset.repo_id=naavox/merged-3 \
+  --dataset.repo_id=naavox/stringman-socks-3 \
   --policy.type=act \
-  --output_dir=outputs/train/act_17_no_vae \
-  --job_name=act_17_no_vae \
+  --output_dir=outputs/train/act_19 \
+  --job_name=act_19 \
   --wandb.enable=false \
-  --policy.repo_id=naavox/act_17_no_vae \
-  --batch_size=56 \
+  --policy.repo_id=naavox/act_19 \
+  --batch_size=50 \
   --save_freq=10000 \
-  --steps=100000 \
-  --dataset.image_transforms.enable=True \
-  --policy.n_action_steps=99 \
-  --policy.use_vae=False
+  --steps=50000 \
+  --dataset.image_transforms.enable=False \
+  --policy.n_action_steps=99
 
 Diffusion
 
