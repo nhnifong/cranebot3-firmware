@@ -26,7 +26,7 @@ def extract_targets_from_heatmap(heatmap: np.ndarray, top_n: int = 10, threshold
         threshold (float): Minimum confidence value to consider a blob.
 
     Returns:
-        list[tuple]: A list of tuples (norm_x, norm_y, confidence), sorted by confidence.
+        np.ndarray(3,n): A list of (norm_x, norm_y, confidence), sorted by confidence.
                      Coordinates are normalized [0.0, 1.0].
     """
     # Threshold to find "hot" regions
@@ -68,7 +68,7 @@ def extract_targets_from_heatmap(heatmap: np.ndarray, top_n: int = 10, threshold
         confidence = c[2]
         results.append((norm_x, norm_y, confidence))
 
-    return results
+    return np.array(results)
 
 def main(uri):
     if not os.path.exists(MODEL_PATH):

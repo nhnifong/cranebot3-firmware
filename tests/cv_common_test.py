@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import unittest
 import numpy as np
 from math import pi
+import cv2
 from cv_common import compose_poses, invert_pose, average_pose, project_pixels_to_floor
 import model_constants
 
@@ -175,3 +176,74 @@ class TestPoseFunctions(unittest.TestCase):
         print(floor_pos)
         assert(floor_pos is not None)
         self.assertEqual((3, 2), floor_pos.shape)
+
+    def create_lookat_pose(self, cam_pos, target_pos, up_vector=np.array([0, 0, 1])):
+        """
+        Constructs a rigid transform (rvec, tvec) for a camera at 'cam_pos'
+        looking directly at 'target_pos', using OpenCV coordinates:
+        (Z=Forward, X=Right, Y=Down).
+        
+        Returns standard OpenCV Extrinsics (World-to-Camera).
+        """
+        cam_pos = np.array(cam_pos, dtype=float)
+        target_pos = np.array(target_pos, dtype=float)
+        z_axis = target_pos - cam_pos
+        z_axis = z_axis / np.linalg.norm(z_axis)
+        x_axis = np.cross(z_axis, up_vector) 
+        x_axis = x_axis / np.linalg.norm(x_axis)
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis = y_axis / np.linalg.norm(y_axis)
+        R_c2w = np.column_stack((x_axis, y_axis, z_axis))
+        R_w2c = R_c2w.T
+        rvec, _ = cv2.Rodrigues(R_w2c)
+        tvec = -R_w2c @ cam_pos
+        
+        return (rvec, tvec)
+
+    def test_project_center_pixel_from_corner(self):
+        """
+        Scenario: Camera is high up in a corner (2m, 2m, 2m).
+        Target: It is looking directly at the World Origin (0,0,0).
+        Test: The CENTER pixel of the image MUST map to (0,0) on the floor.
+        """
+        
+        # 1. Setup Mock Intrinsics (Simple pinhole, no distortion)
+        W, H = 1920, 1200
+        cx, cy = W / 2.0, H / 2.0 # Principal point is exactly center
+        
+        K = np.array([
+            [1000, 0, cx],
+            [0, 1000, cy],
+            [0, 0, 1]
+        ], dtype=float)
+        D = np.zeros(5) # No distortion for this math check
+        
+        # 2. Create the Pose (Look from corner to origin)
+        cam_position = [2.0, 2.0, 2.0] # 2 meters up/out in corner
+        target_point = [0.0, 0.0, 0.0] # World Origin
+        
+        pose = self.create_lookat_pose(cam_position, target_point)
+        
+        # 3. Define the Center Pixel
+        # Note: Use the raw pixel coordinates (not normalized 0-1) matching K
+        center_pixel = (cx, cy) 
+        
+        # 4. Run Projection
+        floor_pt = project_pixels_to_floor(np.array([center_pixel]), pose, K, D)
+        
+        print(f"\nTest Configuration:")
+        print(f"  Camera Pos: {cam_position}")
+        print(f"  Looking At: {target_point}")
+        print(f"  Pixel Input: {center_pixel}")
+        print(f"  Projected Floor Point: {floor_pt}")
+        
+        # 5. Assertions
+        self.assertIsNotNone(floor_pt, "Projection returned None (ray missed floor?)")
+        
+        # We expect 0.0, 0.0. Allow small float tolerance.
+        np.testing.assert_allclose(
+            floor_pt, 
+            target_point[:2], # (0,0)
+            atol=0.01,        # 1cm tolerance
+            err_msg="The center pixel did not project to the world origin!"
+        )

@@ -24,7 +24,7 @@ from random import random
 from config import Config
 from stats import StatCounter
 from position_estimator import Positioner2
-from cv_common import invert_pose, compose_poses, average_pose, project_pixel_to_floor
+from cv_common import invert_pose, compose_poses, average_pose, project_pixels_to_floor
 from calibration import order_points_for_low_travel, find_cal_params
 import model_constants
 import traceback
@@ -385,7 +385,7 @@ class AsyncObserver:
         if mode == "run":
             self.calmode = mode
             print("run mode")
-            self.invoke_motion_task(self.pick_and_place_loop())
+            await self.invoke_motion_task(self.pick_and_place_loop())
         elif mode == "pause":
             self.calmode = mode
             await self.stop_all()
@@ -1271,10 +1271,13 @@ class AsyncObserver:
         #Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         MODEL_PATH = "trainer/models/sock_tracker.pth"
         IMAGE_RES = (640, 360)
+        DEVICE = "cpu"
 
         if self.model is None:
             import torch
             from trainer.dobby import DobbyNet
+            from trainer.dobby_eval import extract_targets_from_heatmap
+            DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
             print(f"Loading model from {MODEL_PATH}...")
             model = DobbyNet().to(DEVICE)
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
@@ -1283,33 +1286,42 @@ class AsyncObserver:
         while self.run_command_loop:
             await asyncio.sleep(1)
 
-            all_floor_target_arrs = []
+            # collect images from any anchors that have one
+            valid_clients = []
+            img_tensors = []
             for client in self.anchors:
-                # pick last image from every anchor
                 if client.last_frame_resized is None:
                     continue
                 img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0
-                batch = img_tensor.unsqueeze(0).to(DEVICE)
+                img_tensors.append(img_tensor)
+                valid_clients.append(client)
+            if not img_tensors:
+                continue
 
-                # eval dobby network on image
-                with torch.no_grad():
-                    heatmap_out = model(batch)
-                heatmap_np = heatmap_out.squeeze().cpu().numpy()
+            # run batch inference on GPU and get targets
+            all_floor_target_arrs = []
+            batch = torch.stack(img_tensors).to(DEVICE)
+            with torch.no_grad():
+                heatmaps_out = model(batch)
 
-                # get points from heatmap
-                # for now these don't return confidence, but they could.
-                targets = extract_targets_from_heatmap(heatmap_np)
-
-                # project points to floor
-                all_floor_target_arrs.append(project_pixels_to_floor(targets, client.anchor_pose))
+            # Shape: (Batch, 1, H, W) -> (Batch, H, W)
+            heatmaps_np = heatmaps_out.squeeze(1).cpu().numpy() # this is the blocking call
+            for i, heatmap_np in enumerate(heatmaps_np):
+                client = valid_clients[i]
+                results = extract_targets_from_heatmap(heatmap_np)
+                if len(results) > 0:
+                    targets2d = results[:,:2] # the third number is confidence
+                    # Project points to floor using anchors specific pose
+                    floor_points = project_pixels_to_floor(targets2d, client.anchor_pose)
+                    all_floor_target_arrs.append(floor_points)
                 
                 # TODO create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
 
-            floor_targets = np.concatenate(all_floor_target_arrs)
-            
-            # TODO filter out any that are outside of the work area
+            print(all_floor_target_arrs)
+            floor_targets = np.array([p for p in np.concatenate(all_floor_target_arrs) if self.pe.point_inside_work_area_2d(p)])
 
             if len(floor_targets) == 0:
+                print('No floor targets inside work area')
                 continue
 
             # pick closest point to gantry as next target
@@ -1319,7 +1331,7 @@ class AsyncObserver:
             next_target = floor_targets[closest_idx]
             print(f'selected object at floor position {next_target}')
 
-            # pick Z position for gantry so that gripper ends up 10cm over floor and winch is 0.6m long
+            # pick Z position for gantry
             goal_pos = np.array([next_target[0], next_target[1], 0.7])
             self.gantry_goal_pos = goal_pos
             await self.seek_gantry_goal()
