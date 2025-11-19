@@ -154,87 +154,41 @@ def homogenize_types(poses):
         for r, t in poses
     ]
 
-def project_pixel_to_floor(pixel, pose):
-    """
-    Projects a 2D pixel coordinate onto the floor plane (Z=0).
-    
-    Args:
-        pixel: Tuple (u, v) or list [u, v]. Should be in the 1920x1200 pixel space since that's what the mtx and distortion coeffs were collected with.
-        pose: (Camera rotation vector, Camera position vector)
-        
-    Returns:
-        (x, y) tuple of the point on the floor in world coordinates.
-        Returns None if the ray never hits the floor (parallel or looking up).
-    """
-    rvec = np.array(pose[0], dtype=np.float64).reshape((3, 1))
-    tvec = np.array(pose[1], dtype=np.float64).reshape((3, 1))
-    
-    # Undistort the point
-    # cv2.undistortPoints expects input shape (N, 1, 2)
-    pixel_arr = np.array([[[pixel[0], pixel[1]]]], dtype=np.float64)
-    
-    # This returns the point in "Normalized Camera Coordinates" (x', y')
-    # where the ray direction in camera frame is (x', y', 1)
-    # Note: We pass None for P (newCameraMatrix) to get normalized coords, not pixels
-    undistorted_pt = cv2.undistortPoints(pixel_arr, mtx, distortion)
-    
-    x_norm = undistorted_pt[0, 0, 0]
-    y_norm = undistorted_pt[0, 0, 1]
-    
-    # Define the Ray in Camera Coordinates
-    # The ray starts at (0,0,0) and goes through (x_norm, y_norm, 1)
-    ray_cam = np.array([[x_norm], [y_norm], [1.0]])
+import numpy as np
+import cv2
 
-    # Transform the Ray to World Coordinates
-    # World to Camera: P_cam = R * P_world + t
-    # Camera to World: P_world = R^T * (P_cam - t)
+def project_pixels_to_floor(normalized_pixels, pose):
+    """
+    Batch projects normalized pixels (0-1) to the floor plane (Z=0).
+    Assumes global 'mtx' and 'distortion' are defined.
+    """
+    # Scale 0-1 inputs to 1920x1200 and reshape for cv2 (N, 1, 2)
+    pts = np.array(normalized_pixels, dtype=np.float64) * [1920, 1200]
     
-    # Convert Rodrigues vector to Rotation Matrix
-    R, _ = cv2.Rodrigues(rvec)
+    # Camera Algebra: Get Camera Center (C) and Rotated Rays (world frame)
+    R = cv2.Rodrigues(np.array(pose[0]))[0]
+    C = -R.T @ np.array(pose[1]).reshape(3, 1)
     
-    # Calculate Camera Center in World Frame (The start of the ray)
-    # C_world = -R^T * tvec
-    R_inv = R.T
-    cam_center_world = -R_inv @ tvec
-    
-    # Calculate Ray Direction in World Frame
-    # d_world = R^T * d_cam
-    ray_world = R_inv @ ray_cam
-    
-    # Find Intersection with Z=0 Plane
-    # A point on the ray is P(s) = cam_center + s * ray_direction
-    # We want the point where P_z(s) = 0
-    # 0 = C_z + s * d_z  =>  s = -C_z / d_z
-    
-    C_z = cam_center_world[2, 0]
-    d_z = ray_world[2, 0]
-    
-    # Check if ray is parallel to floor or pointing away
-    if abs(d_z) < 1e-6:
-        print("Ray is parallel to the floor!")
-        return None
-        
-    s = -C_z / d_z
-    print(f's=\n{s}')
-    
-    # If s < 0, the intersection is behind the camera or the ray is pointing up
-    # Since C_z (camera height) is positive (2.455m), d_z must be negative (looking down)
-    if s < 0:
-        # A negative s means the intersection is behind the camera plane (or looking up)
-        # We must confirm the ray is pointing toward the floor (d_z < 0)
-        print("Intersection is invalid (ray pointing away or behind camera plane)!")
-        return None
+    # undistortPoints handles the batch. Reshape output to (2, N) and stack 1s -> (3, N)
+    uv_norm = cv2.undistortPoints(pts.reshape(-1, 1, 2), mtx, distortion).reshape(-1, 2).T
+    rays_world = R.T @ np.vstack((uv_norm, np.ones(uv_norm.shape[1])))
 
-    # If s < 0, the intersection is behind the camera
-    if s < 0:
-        print("Intersection is behind the camera!")
-        return None
-        
-    # Calculate X and Y intersections
-    floor_x = cam_center_world[0, 0] + s * ray_world[0, 0]
-    floor_y = cam_center_world[1, 0] + s * ray_world[1, 0]
+    # Intersect Z=0: s = -C_z / Ray_z
+    # Use errstate to silence divide-by-zero warnings for parallel rays
+    with np.errstate(divide='ignore', invalid='ignore'):
+        s = -C[2] / rays_world[2]
+
+    # Filter valid points (s > 0 means intersection is in front of camera)
+    # We mask immediately to avoid invalid arithmetic on parallel rays
+    valid_mask = (s > 0) & (s != np.inf)
     
-    return (floor_x, floor_y)
+    # Calculate P = C + s * Ray only for valid indices
+    # Result shape starts as (3, M), we take first 2 rows (x,y) and transpose to (M, 2)
+    valid_rays = rays_world[:, valid_mask]
+    valid_s = s[valid_mask]
+    
+    floor_pts = C + valid_rays * valid_s
+    return floor_pts[:2, :].T
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)

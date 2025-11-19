@@ -56,6 +56,7 @@ class ComponentClient:
         self.frame_lock = threading.Lock()
         # This condition variable signals the worker when a new frame is ready
         self.new_frame_condition = threading.Condition(self.frame_lock)
+        self.last_frame_resized = None
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
 
@@ -162,9 +163,9 @@ class ComponentClient:
             if frame_to_encode is not None:
                 # return the size lerobot is expecting. it's faster to do this resize before encoding.
                 dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
-                resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
+                self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
                 params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
-                is_success, buffer = cv2.imencode(".jpg", resized, params)
+                is_success, buffer = cv2.imencode(".jpg", self.last_frame_resized, params)
 
                 # Store the result. This is an atomic operation in Python.
                 if is_success:

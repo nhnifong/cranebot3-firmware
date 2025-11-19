@@ -12,7 +12,7 @@ DATASET_REPO_ID = "naavox/merged-5"
 SAVE_DIR = "dataset_heatmap"
 # We default to the first anchor camera. Change to "observation.images.anchor_camera_1" 
 # if you want to label the other view.
-CAMERA_KEY = "observation.images.anchor_camera_1" 
+CAMERA_KEY = "observation.images.anchor_camera_0" 
 
 os.makedirs(os.path.join(SAVE_DIR, "images"), exist_ok=True)
 os.makedirs(os.path.join(SAVE_DIR, "labels"), exist_ok=True)

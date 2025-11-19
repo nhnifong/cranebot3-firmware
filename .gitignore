@@ -14,4 +14,3 @@ zero-angles.txt
 tests/last_dataset
 *_dataset
 dataset_heatmap/
-sock_tracker.pth

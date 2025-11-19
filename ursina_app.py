@@ -28,14 +28,14 @@ line_color = color.black
 
 # user readable mode names
 mode_names = {
-    'run':   'Run Normally',
+    'run':   'Run Pick-and-Drop',
     'pause': 'Pause/Observe',
-    'train': 'Record Training Data',
+    'train': 'Accept Teleop Connections',
 }
 mode_descriptions = {
-    'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
-    'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
-    'train': 'Use gamepad to record episodes to LeRobot dataset.',
+    'run':   'Continuously alternate between seeking out an object to grab and dropping it int the marked bin.',
+    'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Run calibration in this mode.',
+    'train': 'Use gamepad to record episodes to LeRobot dataset or start and stop policy-driven modement.',
 }
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
@@ -92,7 +92,7 @@ class ControlPanelUI:
         # --- Core State ---
         self.config = Config()
         self.n_anchors = len(self.config.anchors)
-        self.calibration_mode = 'pause'
+        self.system_mode = 'pause'
         self.direction = np.zeros(3, dtype=float) # direction of currently commanded keyboard movement
 
         # --- Setup Methods ---
@@ -198,7 +198,7 @@ class ControlPanelUI:
         self.mode_text = Text(
             color=(0.0,1.0,0.3,1.0),
             position=(-0.1,self.modePanelLine1y),
-            text=mode_names[self.calibration_mode],
+            text=mode_names[self.system_mode],
             scale=0.7,
             enabled=True,
         )
@@ -206,7 +206,7 @@ class ControlPanelUI:
         self.mode_descrip_text = Text(
             color=(0.9,0.9,0.9,1.0),
             position=(-0.45,self.modePanelLine2y),
-            text=mode_descriptions[self.calibration_mode],
+            text=mode_descriptions[self.system_mode],
             scale=0.6,
             enabled=True,
         )
@@ -400,15 +400,15 @@ class ControlPanelUI:
         self.error.enabled = False
 
     def set_mode(self, mode):
-        self.calibration_mode = mode
+        self.system_mode = mode
         self.mode_text.text = mode_names[mode]
         self.mode_descrip_text.text = mode_descriptions[mode]
-        self.to_ob_q.put({'set_run_mode': self.calibration_mode})
+        self.to_ob_q.put({'set_run_mode': self.system_mode})
 
     def calibrate_lines(self):
         # calibrate line lengths
         # Assume we have been stopped for a while.
-        if self.calibration_mode != 'pause':
+        if self.system_mode != 'pause':
             self.error.text = "Line calibration can only be performed while in Pause/Observe mode"
             self.error.enabled = True
             return

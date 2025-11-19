@@ -12,8 +12,8 @@ from .dobby import DobbyNet
 # --- Config ---
 DATA_DIR = "dataset_heatmap"
 MODEL_PATH = "trainer/models/sock_tracker.pth"
-BATCH_SIZE = 16
-EPOCHS = 50
+BATCH_SIZE = 28
+EPOCHS = 100
 LR = 1e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
