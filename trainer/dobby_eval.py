@@ -124,6 +124,7 @@ def main(uri):
         overlay = cv2.addWeighted(img_display, 0.8, heatmap_color, 0.4, 0)
 
         targets = extract_targets_from_heatmap(heatmap_np)
+        print(f'targets=\n{targets}')
 
         for x, y, confidence in targets:
             x = int(x * IMAGE_RES[0])

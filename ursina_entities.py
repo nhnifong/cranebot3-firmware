@@ -298,13 +298,10 @@ class Anchor(Entity):
         content=(
             Button(text='Show video feed', color=color.gold, text_color=color.black,
                 on_click=self.toggle_vid_feed),
-            Button(text='Autofocus', color=color.gold, text_color=color.black),
-            Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
             Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
                 on_click=self.open_manual_spool_control),
-            Button(text='Reference Load', color=color.gold, text_color=color.black,
-                on_click=self.open_ref_load_dialog),
-            ),
+            # Add: tighten, stream logs 
+        ),
         popup=True
         )
 
@@ -315,10 +312,6 @@ class Anchor(Entity):
             title="Manual Spool Control",
             content=(
                 Text(text="Use buttons or Up/Down arrow keys to control spool."),
-                # Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
-                #     on_click=partial(self.reel_manual, -0.05)),
-                # Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                #     on_click=partial(self.reel_manual, 0.05)),
             ),
             popup=True,
         )
@@ -348,33 +341,10 @@ class Anchor(Entity):
                 self.to_ob_q.put({'slow_stop_one':{'id':self.num}})
 
 
-
     def reel_manual(self, metersPerSecond):
         self.wp.enabled = False
         print(f'jog speed {metersPerSecond}')
         self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'speed':metersPerSecond}})
-
-    def open_ref_load_dialog(self):
-        self.ref_load_wp = WindowPanel(
-            title="Measure Reference Load",
-            content=(
-                Text(text="""Calibrate tension measurement by hanging a known weight
-on the line between 0.3 and 1.0 kg.
-Enter the actual weight in kg."""),
-                InputField(default_value="0.5"),
-                Button(text='Calibrate', color=color.orange, text_color=color.black,
-                    on_click=self.measure_ref_load),
-            ),
-            popup=True,
-        )
-
-    def measure_ref_load(self):
-        self.ref_load_wp.enabled = False
-        load = float(self.ref_load_wp.content[1].text)
-        self.to_ob_q.put({'measure_ref_load': {
-            'anchor_num': self.num,
-            'load': load
-            }})
 
     def toggle_vid_feed(self):
         self.camview.enabled = not self.camview.enabled

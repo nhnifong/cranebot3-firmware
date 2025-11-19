@@ -157,37 +157,47 @@ def homogenize_types(poses):
 import numpy as np
 import cv2
 
+def create_lookat_pose(cam_pos, target_pos):
+    """
+    Creates a Camera-to-World pose (rvec, tvec) looking at target_pos.
+    Convention:
+    - tvec: Camera Position in World.
+    - rvec: Rotation from Camera Frame (X-Right, Y-Down, Z-Forward) to World.
+    """
+    cam_pos = np.array(cam_pos, dtype=float)
+    target_pos = np.array(target_pos, dtype=float)
+    
+    z_axis = target_pos - cam_pos
+    z_axis = z_axis / np.linalg.norm(z_axis)
+    forward = z_axis
+    
+    right = np.cross(forward, np.array([0,0,1]))
+    right = right / np.linalg.norm(right)
+
+    down = np.cross(forward, right)
+    down = down / np.linalg.norm(down)
+
+    R_c2w = np.column_stack((right, down, forward))
+    rvec, _ = cv2.Rodrigues(R_c2w)
+    
+    return (rvec, cam_pos)
+
 def project_pixels_to_floor(normalized_pixels, pose, K=mtx, D=distortion):
-    """
-    Batch projects normalized pixels (0-1) to the floor plane (Z=0).
-    """
-    # Scale 0-1 inputs to 1920x1200 and reshape for cv2 (N, 1, 2)
+    # Undistort Points
     pts = np.array(normalized_pixels, dtype=np.float64) * [1920, 1200]
-    
-    # Camera Algebra: Get Camera Center (C) and Rotated Rays (world frame)
-    R = cv2.Rodrigues(np.array(pose[0]))[0]
-    C = -R.T @ np.array(pose[1]).reshape(3, 1)
-    
-    # undistortPoints handles the batch. Reshape output to (2, N) and stack 1s -> (3, N)
-    uv_norm = cv2.undistortPoints(pts.reshape(-1, 1, 2), K, D).reshape(-1, 2).T
-    rays_world = R.T @ np.vstack((uv_norm, np.ones(uv_norm.shape[1])))
+    uv = cv2.undistortPoints(pts.reshape(-1, 1, 2), K, D).reshape(-1, 2).T
 
-    # Intersect Z=0: s = -C_z / Ray_z
-    # Use errstate to silence divide-by-zero warnings for parallel rays
-    with np.errstate(divide='ignore', invalid='ignore'):
-        s = -C[2] / rays_world[2]
+    # Rotate Rays to World Frame
+    rays = cv2.Rodrigues(np.array(pose[0]))[0] @ np.vstack((uv, np.ones(uv.shape[1])))
 
-    # Filter valid points (s > 0 means intersection is in front of camera)
-    # We mask immediately to avoid invalid arithmetic on parallel rays
-    valid_mask = (s > 0) & (s != np.inf)
-    
-    # Calculate P = C + s * Ray only for valid indices
-    # Result shape starts as (3, M), we take first 2 rows (x,y) and transpose to (M, 2)
-    valid_rays = rays_world[:, valid_mask]
-    valid_s = s[valid_mask]
-    
-    floor_pts = C + valid_rays * valid_s
-    return floor_pts[:2, :].T
+    # Calculate Intersections with floor
+    tvec = np.array(pose[1], dtype=np.float64).reshape(3, 1)
+    with np.errstate(divide='ignore'): # Handle potential div/0
+        s = -tvec[2] / rays[2]
+
+    # Filter Valid Points and Return
+    mask = (s > 0) & (np.abs(rays[2]) > 1e-6)
+    return (tvec + s[mask] * rays[:, mask])[:2].T
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)
