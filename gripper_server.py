@@ -9,6 +9,7 @@ import logging
 from collections import deque
 import time
 import pickle
+import os
 
 import board
 import busio
@@ -163,6 +164,8 @@ class RaspiGripperServer(RobotComponentServer):
                 self.last_finger_angle = finger
         except FileNotFoundError:
             pass
+        except EOFError: # corruption
+            os.remove('offsets.pickle')
 
         # a mode in which the finger tries to automatically hold a given pressure
         # mode will switch to False if a "set_finger_angle" update is received and

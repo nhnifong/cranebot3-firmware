@@ -1067,9 +1067,9 @@ class AsyncObserver:
         Commands the finger to the given angle.
         """
         last_length = self.datastore.winch_line_record.getLast()[1]
-        if last_length < 0.02 or last_length > 1.9:
-            print()
-            line_speed = 0
+        # if last_length < 0.02 or last_length > 1.9:
+        #     print('winch too short')
+        #     line_speed = 0
         finger_angle = clamp(finger_angle, -90, 90)
         update = {
             'aim_speed': line_speed,
@@ -1283,8 +1283,9 @@ class AsyncObserver:
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()
 
+        gtask = None
         while self.run_command_loop:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
             # collect images from any anchors that have one
             valid_clients = []
@@ -1313,12 +1314,22 @@ class AsyncObserver:
                 if len(results) > 0:
                     targets2d = results[:,:2] # the third number is confidence
                     # Project points to floor using anchors specific pose
-                    floor_points = project_pixels_to_floor(targets2d, client.anchor_pose)
+                    floor_points = project_pixels_to_floor(targets2d, client.camera_pose)
                     all_floor_target_arrs.append(floor_points)
                 
-                # TODO create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
+                # create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
+                heatmap_vis = (heatmap_np * 255).astype(np.uint8)
+                heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+                img_display = cv2.cvtColor(valid_clients[i].last_frame_resized, cv2.COLOR_RGB2BGR)
+                overlay = cv2.addWeighted(img_display, 0.8, heatmap_color, 0.4, 0)
+                preview = cv2.cvtColor(cv2.flip(overlay, 0), cv2.COLOR_BGR2BGRA) # required format of ursina setRamImage
 
-            print(all_floor_target_arrs)
+                self.to_ui_q.put({'preview_image': {'anchor_num':valid_clients[i].anchor_num, 'image':preview}})
+
+            if len(all_floor_target_arrs) == 0:
+                print('No floor targets seen')
+                continue
+
             floor_targets = np.array([p for p in np.concatenate(all_floor_target_arrs) if self.pe.point_inside_work_area_2d(p)])
 
             if len(floor_targets) == 0:
@@ -1335,8 +1346,10 @@ class AsyncObserver:
             # pick Z position for gantry
             goal_pos = np.array([next_target[0], next_target[1], 0.7])
             self.gantry_goal_pos = goal_pos
-            await self.seek_gantry_goal()
-            return
+            if gtask is None or gtask.done():
+                gtask = asyncio.create_task(self.seek_gantry_goal())
+
+            # return
 
             # while not holding:
             #     # move gripper down until laser rangefinder shows about 5cm or IMU shows tipping
@@ -1352,6 +1365,9 @@ class AsyncObserver:
             # # open gripper
             # # await not holding.
             # # keep score
+
+        if gtask is not None:
+            await gtask
 
 
 def start_observation(to_ui_q, to_ob_q):

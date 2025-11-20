@@ -237,7 +237,7 @@ class Gripper(Entity):
 anchor_color = (0.8, 0.8, 0.8, 1.0)
 anchor_color_selected = (0.9, 0.9, 1.0, 1.0)
 class Anchor(Entity):
-    def __init__(self, num, to_ob_q, position, rotation=(0,0,0)):
+    def __init__(self, num, to_ob_q, app, position, rotation=(0,0,0)):
         super().__init__(
             position=position,
             rotation=rotation,
@@ -247,6 +247,7 @@ class Anchor(Entity):
             shader=lit_with_shadows_shader,
             collider='box'
         )
+        self.app = app
         self.num = num
         self.label_offset = (0.00, 0.04)
         self.to_ob_q = to_ob_q
@@ -284,7 +285,12 @@ class Anchor(Entity):
         self.label.text = f"Anchor {self.num}\n{status}"
 
     def update(self):
-        self.label.position = world_position_to_screen_position(self.position) + self.label_offset
+        uip = self.app.world_position_to_ui_pos(self.position)
+        if uip is None:
+            self.label.enabled = False
+        else:
+            self.label.enabled = True
+            self.label.position = self.app.world_position_to_ui_pos(self.position) + self.label_offset
 
     def on_mouse_enter(self):
         self.color = anchor_color_selected
@@ -454,7 +460,12 @@ class Floor(Entity):
                 # Get the intersection point in world coordinates
                 self.target.position = mouse.world_point
         else:
-            self.button.position = world_position_to_screen_position(self.circle.world_position) + self.button_offset
+            uip = self.app.world_position_to_ui_pos(self.circle.world_position)
+            if uip is None:
+                self.button.enabled = False
+            else:
+                self.button.enabled = True
+                self.button.position = self.app.world_position_to_ui_pos(self.circle.world_position) + self.button_offset
 
         #  =========== collect input from attatched gamepad ===========
         # these are available from the update function of any enabled entity, the floor just happens to be a singular always enabled entity.
@@ -551,7 +562,7 @@ class Floor(Entity):
         self.app.to_ob_q.put({'gantry_goal_pos': gantry_goal})
 
 class GoalPoint(Entity):
-    def __init__(self, position, **kwargs):
+    def __init__(self, position, app, **kwargs):
         super().__init__(
             position=position,
             rotation=(-90,0,0),
@@ -561,6 +572,7 @@ class GoalPoint(Entity):
             shader=lit_with_shadows_shader,
             **kwargs
         )
+        self.app = app
         self.atime = time.time()+10
         self.fmt = 'ETA {val:.2f}'
         self.label_offset = (-0.02, -0.03)
@@ -571,8 +583,13 @@ class GoalPoint(Entity):
         )
 
     def update(self):
-        self.label.position = world_position_to_screen_position(self.position) + self.label_offset
-        self.label.text = self.fmt.format(val=(time.time()-self.atime))
+        uip = self.app.world_position_to_ui_pos(self.position)
+        if uip is None:
+            self.label.enabled = False
+        else:
+            self.label.enabled = True
+            self.label.position = self.app.world_position_to_ui_pos(self.position) + self.label_offset
+            self.label.text = self.fmt.format(val=(time.time()-self.atime))
 
 class EntityPool:
     def __init__(self, max_items, new_entity_fn):
