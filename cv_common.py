@@ -183,7 +183,10 @@ def create_lookat_pose(cam_pos, target_pos):
     return (rvec, cam_pos)
 
 def project_pixels_to_floor(normalized_pixels, pose, K=mtx, D=distortion):
-    print(f'project_pixels_to_floor pixels=\n{normalized_pixels}, \npose={pose}')
+    """
+    batch project normalized pixel coordinates from a camera's point of view to the floor
+    make sure you use the camera pose, not just the anchor pose!
+    """
     # Undistort Points
     pts = np.array(normalized_pixels, dtype=np.float64) * [1920, 1200]
     uv = cv2.undistortPoints(pts.reshape(-1, 1, 2), K, D).reshape(-1, 2).T
@@ -199,6 +202,40 @@ def project_pixels_to_floor(normalized_pixels, pose, K=mtx, D=distortion):
     # Filter Valid Points and Return
     mask = (s > 0) & (np.abs(rays[2]) > 1e-6)
     return (tvec + s[mask] * rays[:, mask])[:2].T
+
+def project_floor_to_pixels(floor_points, pose, K=mtx, D=distortion, image_shape=(1920, 1200)):
+    """
+    Project world coordinates on the floor (z=0) back to normalized pixel coordinates.
+    """
+    floor_points = np.array(floor_points, dtype=np.float64)
+    
+    # Create 3D world points by appending z=0
+    zeros = np.zeros((floor_points.shape[0], 1))
+    object_points = np.hstack((floor_points, zeros))
+
+    # Extract Camera-to-World rotation and translation
+    rvec_c2w = np.array(pose[0], dtype=np.float64)
+    tvec_c2w = np.array(pose[1], dtype=np.float64).reshape(3, 1)
+    
+    R_c2w, _ = cv2.Rodrigues(rvec_c2w)
+
+    # Calculate World-to-Camera transformation for cv2.projectPoints
+    R_w2c = R_c2w.T
+    tvec_w2c = -R_w2c @ tvec_c2w
+    
+    # Convert rotation matrix back to rvec for projectPoints
+    rvec_w2c, _ = cv2.Rodrigues(R_w2c)
+
+    # Project 3D points to 2D pixel coordinates
+    # projectPoints returns shape (N, 1, 2), so we reshape to (N, 2)
+    image_points, _ = cv2.projectPoints(object_points, rvec_w2c, tvec_w2c, K, D)
+    image_points = image_points.reshape(-1, 2)
+
+    # Normalize coordinates to [0, 1] range
+    # We divide by the image width and height provided in image_shape
+    normalized_pixels = image_points / image_shape
+
+    return normalized_pixels
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)
