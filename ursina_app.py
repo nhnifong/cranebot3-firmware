@@ -103,18 +103,8 @@ class ControlPanelUI:
         self._create_menus()
 
     def update_layout(self):
-        # Sync the camera aspect ratio to the physical viewport width
-        # This prevents 3D objects from looking stretched or compressed
-        desired_aspect = window.aspect_ratio * self.split
-        base.camLens.set_aspect_ratio(desired_aspect)
-
         # Calculate dimensions for the UI panel
         panel_width = window.aspect_ratio * (1 - self.split)
-        
-        # Update background panel geometry
-        self.right_ui_panel.scale_x = panel_width
-        self.right_ui_panel.scale_y = 2
-        self.right_ui_panel.position = window.top_right
         
         # Update horizontal position of all panel items
         # Center of panel = (Right Edge) - (Half Panel Width)
@@ -144,7 +134,7 @@ class ControlPanelUI:
         # Create gantry, gripper, anchors, lines, etc.
         self.anchors = []
         for i, a in enumerate(self.config.anchors):
-            anch = Anchor(i, self.to_ob_q, self, position=swap_yz(a.pose[1]), rotation=to_ursina_rotation(a.pose[0]))
+            anch = Anchor(i, self.to_ob_q, pose=a.pose)
             anch.pose = a.pose
             self.anchors.append(anch)
 
@@ -166,11 +156,16 @@ class ControlPanelUI:
             shader=lit_with_shadows_shader,
         )
 
-        # TODO consider moving this into the gantry entity code since it's already responsible for redrawing them in redraw_wires
+        # lines representing the fishing line and tether that connect the anchors to the gantry
         self.lines = []
         for a in self.anchors:
             self.lines.append(Entity(model=draw_line(a.position, self.gantry.position), color=line_color, shader=unlit_shader))
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
+
+        # lines representing the mouse cursor projected from a camera to the floor
+        self.camlines = {}
+        for key in self.config.preferred_cameras:
+            self.camlines[key] = Entity(model=draw_line([0,0,0], [1,1,1]), color=color.green, shader=unlit_shader, enabled=False)
 
         # debug indicators of the visual and hang based position and velocity estimates
         self.debug_indicator_visual = IndicatorSphere(color=color.red)
@@ -180,7 +175,7 @@ class ControlPanelUI:
         self.commanded_velocity_indicator = VelocityArrow(color=color.cyan, parent=self.gantry, enabled=False)
 
         # show a visualization of goal positions
-        self.goal_marker = GoalPoint([0,0,0], self, enabled=False)
+        self.goal_marker = GoalPoint([0,0,0], enabled=False)
 
         self.walls = [Entity(
             model='quad',
@@ -197,58 +192,38 @@ class ControlPanelUI:
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
 
-    def world_position_to_ui_pos(self, wp):
-        p3d = base.cam.get_relative_point(render, wp)
-        p2d = Point2()
-        if base.camLens.project(p3d, p2d):
-            # Map Viewport Normalized Coordinates (-1 to 1) to (0 to 1)
-            viewport_fraction_x = (p2d.x + 1) / 2
-            final_x = (viewport_fraction_x * self.split - 0.5) * window.aspect_ratio
-            final_y = p2d.y / 2
-            return Vec3(final_x, final_y, 0)
-        
-        return None # Point is behind the camera
 
     def _create_hud_panels(self):
         self.split = 0.75
-        window.color = color.black
-        
-        # Configure the 3D Viewport to the left side
-        # Arguments: Left, Right, Bottom, Top (0-1 range)
-        base.camNode.getDisplayRegion(0).setDimensions(0, self.split, 0, 1)
 
         # Setup the Right UI Panel Background
-        self.right_ui_panel = Entity(
-            parent=camera.ui,
-            model='quad',
-            texture='panel_grad',
-            origin=(0.5, 0.5),      # Anchor to top-right
-            position=window.top_right,
-            z=3
-        )
+        # self.right_ui_panel = Entity(
+        #     parent=camera.ui,
+        #     model='quad',
+        #     texture='panel_grad',
+        #     origin=(0.5, 0.5),      # Anchor to top-right
+        #     position=window.top_right,
+        #     z=3
+        # )
 
         # Flow management for right panel
         self.right_panel_items = []
         # y position of next item to be added to right panel
         self.cursor_y = 0.25
 
-        # Create a hidden entity to handle calling update_layout
-        # this is necessary to prevent Ursina from setting the aspect ratio back to full screen.
-        self.layout_manager = Entity(update=self.update_layout)
-
         self.cam_views = {}
         cam_scale = 0.4
         for key in self.config.preferred_cameras: # show only two anchors and the gripper for now
-            c = Entity(
-                model='quad',
-                scale=(cam_scale, cam_scale/1.777777),
-                texture='cap_38.jpg',
-                shader=unlit_shader,
-                # origin=(-0.5, 1.5),
+            c = CamPreview(
+                cam_scale=0.4,
+                name=(f'Anchor {key} camera' if key is not None else 'Gripper camera'),
+                anchor=(self.anchors[key] if key is not None else None),
+                floor=self.floor,
+                app=self,
             )
-            c.hasSetImage = False
             self.add_side_panel_item(c)
             self.cam_views[key] = c
+        self.update_layout()
 
         # Setup the Bottom UI Panel Background
         self.bottom_ui_panel = Entity(
@@ -261,8 +236,6 @@ class ControlPanelUI:
             scale=(3,0.1),
             z=2
         )
-
-
 
         self.modePanelLine1y = -0.44
         self.modePanelLine2y = -0.46
@@ -368,7 +341,7 @@ class ControlPanelUI:
 
         self.calibration_feedback = CalFeedback(self)
 
-    def add_side_panel_item(self, item, padding=0.025):
+    def add_side_panel_item(self, item, padding=0.027):
         # Parent to the screen, not the panel, to avoid distortion
         item.parent = camera.ui
         item.origin = (0, 0)
@@ -378,7 +351,7 @@ class ControlPanelUI:
         item.y = self.cursor_y
         
         # Move cursor down for the next item
-        self.cursor_y -= (item.scale[1] + padding)
+        self.cursor_y -= (item.total_height + padding)
         
         # Store for horizontal alignment updates
         self.right_panel_items.append(item)

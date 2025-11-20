@@ -5,7 +5,7 @@ from ursina.shaders import (
 )
 from ursina.prefabs.health_bar import HealthBar
 import numpy as np
-from cv_common import invert_pose, compose_poses
+from cv_common import *
 import model_constants
 from scipy.spatial.transform import Rotation
 from functools import partial
@@ -230,28 +230,27 @@ class Gripper(Entity):
         self.right_finger.rotation = (0,0,-phys_angle)
 
     def toggle_vid_feed(self):
-        self.vid_visible = not self.vid_visible
-        self.to_ob_q.put({'toggle_previews':{'gripper':None, 'status':self.vid_visible}})
+        pass # todo make this toggle the window in the main app
 
 
 anchor_color = (0.8, 0.8, 0.8, 1.0)
 anchor_color_selected = (0.9, 0.9, 1.0, 1.0)
 class Anchor(Entity):
-    def __init__(self, num, to_ob_q, app, position, rotation=(0,0,0)):
+    def __init__(self, num, to_ob_q, pose):
         super().__init__(
-            position=position,
-            rotation=rotation,
+            position=swap_yz(pose[1]),
+            rotation=to_ursina_rotation(pose[0]),
             model='anchor',
             color=anchor_color,
             scale=1,
             shader=lit_with_shadows_shader,
             collider='box'
         )
-        self.app = app
         self.num = num
         self.label_offset = (0.00, 0.04)
         self.to_ob_q = to_ob_q
-        self.pose = np.array((rotation, position))
+        self.pose = pose # we expect caller to just set this for us.
+        self.anchor_cam_pose = compose_poses([pose, model_constants.anchor_camera])
         self.ip_address = None
 
         self.label = Text(
@@ -260,37 +259,21 @@ class Anchor(Entity):
             scale=0.5,
         )
 
+        # an entity with the rotation of the anchor camera.
+        # entities can use this as a parent to position themselves in the camera's coordinate space.
         self.empty = Entity(
             scale=1,
-            # rotation=(-35,-90,180),
             rotation=to_ursina_rotation(compose_poses([
                 model_constants.anchor_camera,
-                (np.array([pi/2,0,0], dtype=float), np.array([0,0,0], dtype=float))
+                (np.array([pi/2,0,0], dtype=float), np.array([0,0,0], dtype=float)) # extra 90 degree look up
                 ])[0]),
             parent=self)
-
-        self.camview = Entity(
-            model='quad',
-            scale=(2, 2/1.777777),
-            position=(0,0,2),
-            texture='cap_38.jpg',
-            shader=unlit_shader,
-            parent=self.empty,
-            enabled=False)
-
-        # flag for doing something once
-        self.hasSetImage = False
 
     def setStatus(self, status):
         self.label.text = f"Anchor {self.num}\n{status}"
 
     def update(self):
-        uip = self.app.world_position_to_ui_pos(self.position)
-        if uip is None:
-            self.label.enabled = False
-        else:
-            self.label.enabled = True
-            self.label.position = self.app.world_position_to_ui_pos(self.position) + self.label_offset
+        self.label.position = world_position_to_screen_position(self.position) + self.label_offset
 
     def on_mouse_enter(self):
         self.color = anchor_color_selected
@@ -353,8 +336,7 @@ class Anchor(Entity):
         self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'speed':metersPerSecond}})
 
     def toggle_vid_feed(self):
-        self.camview.enabled = not self.camview.enabled
-        self.to_ob_q.put({'toggle_previews':{'anchor':self.num, 'status':self.camview.enabled}})
+        pass # todo make this toggle the window in the main app
 
 GAMEPAD_GRIP_DEG_PER_SEC = 90
 GAMEPAD_WINCH_METER_PER_SEC = 0.2
@@ -395,17 +377,6 @@ class Floor(Entity):
             texture='blue_circle.png',
         )
 
-        self.camview = Entity(
-            model='quad',
-            scale=(2, 1/1.777777),
-            position=(0,1,-1),
-            rotation=(0,90,0),
-            texture='cap_38.jpg',
-            shader=unlit_shader,
-            parent=self,
-            enabled=False)
-        self.hasSetImage = False
-
         # state for gamepad processing
         self.last_update_t = time.time()
         self.last_send_t = time.time()
@@ -428,6 +399,7 @@ class Floor(Entity):
         )
 
     def set_gp_pos(self, pos):
+        # gp for gamepad
         self.gp_pos = pos
         self.you.position = [self.gp_pos[0], 1, self.gp_pos[1]]
 
@@ -439,8 +411,7 @@ class Floor(Entity):
                 thicknesses=(0.01, 0.01),
                 cap_ends=True)
 
-    def on_click(self,):
-        print(mouse.world_point)
+    def on_click(self):
         if self.button is None:
             # put a goal point indicator here and then the user to click it to confirm
             self.button = Button(
@@ -460,12 +431,7 @@ class Floor(Entity):
                 # Get the intersection point in world coordinates
                 self.target.position = mouse.world_point
         else:
-            uip = self.app.world_position_to_ui_pos(self.circle.world_position)
-            if uip is None:
-                self.button.enabled = False
-            else:
-                self.button.enabled = True
-                self.button.position = self.app.world_position_to_ui_pos(self.circle.world_position) + self.button_offset
+            self.button.position = world_position_to_screen_position(self.circle.world_position) + self.button_offset
 
         #  =========== collect input from attatched gamepad ===========
         # these are available from the update function of any enabled entity, the floor just happens to be a singular always enabled entity.
@@ -562,7 +528,7 @@ class Floor(Entity):
         self.app.to_ob_q.put({'gantry_goal_pos': gantry_goal})
 
 class GoalPoint(Entity):
-    def __init__(self, position, app, **kwargs):
+    def __init__(self, position, **kwargs):
         super().__init__(
             position=position,
             rotation=(-90,0,0),
@@ -572,7 +538,6 @@ class GoalPoint(Entity):
             shader=lit_with_shadows_shader,
             **kwargs
         )
-        self.app = app
         self.atime = time.time()+10
         self.fmt = 'ETA {val:.2f}'
         self.label_offset = (-0.02, -0.03)
@@ -583,13 +548,8 @@ class GoalPoint(Entity):
         )
 
     def update(self):
-        uip = self.app.world_position_to_ui_pos(self.position)
-        if uip is None:
-            self.label.enabled = False
-        else:
-            self.label.enabled = True
-            self.label.position = self.app.world_position_to_ui_pos(self.position) + self.label_offset
-            self.label.text = self.fmt.format(val=(time.time()-self.atime))
+        self.label.position = world_position_to_screen_position(self.position) + self.label_offset
+        self.label.text = self.fmt.format(val=(time.time()-self.atime))
 
 class EntityPool:
     def __init__(self, max_items, new_entity_fn):
@@ -795,3 +755,130 @@ class CalFeedback(Entity):
             elapsed = now - self.last_update_t
             self.bar.value = min(self.bar.value + self.speed * elapsed, self.dont_go_past)
             self.last_update_t = now
+
+class CamPreview(Entity):
+    def __init__(self, cam_scale, name, anchor, floor, app):
+        super().__init__()
+        self.anchor = anchor
+        self.floor = floor
+        self.app = app
+
+        # 16:9 aspect ratio for the camera content
+        self.aspect_ratio = 1.777777
+        self.total_width = cam_scale
+        self.total_height = cam_scale / self.aspect_ratio
+
+        # These ratios come from the size of the hole in the rounded frame texture
+        self.content_width = self.total_width * (618 / 640)
+        self.content_height = self.total_height * (338 / 360)
+        
+        # Setup the Camera Quad (The Content)
+        # This sits in the background (z=0)
+        self.cam = Entity(
+            parent=self,
+            model='quad',
+            scale=(self.content_width, self.content_height),
+            texture='cap_38.jpg', # Placeholder
+            shader=unlit_shader,
+            color=color.white,
+            z=0.01, # Slightly behind the frame
+            collider='box',
+            on_click=self.vid_clicked,
+        )
+        
+        # overlay
+        self.frame = Entity(
+            parent=self,
+            model='quad',
+            texture="rounded_frame.png",
+            scale=(self.total_width, self.total_height),
+            color=color.white, # Color is baked into the texture
+            z=0,
+        )
+
+        self.label = Text(
+            parent=self,
+            text=name,
+            origin=(-0.5, -0.5),              # Anchor: Bottom Left of text
+            x=-self.total_width / 2,
+            y=(self.total_height / 2) + 0.003,  # Position: Top Edge of frame + Padding
+            scale=0.8,                          # Text scale (relative to parent)
+            color=(0.1,0.1,0.1,1.0)
+        )
+
+        self.total_height + 0.02
+
+        self.little_point = Entity(
+            parent=self,
+            model='circle',
+            color=color.green,
+            scale=(0.02, 0.01),
+            enabled=False,
+        )
+
+        # indicates whether the texture has been allocated
+        self.haveSetImage = False
+
+    def setImage(self, image):
+        """
+        Expects an image as an np.ndarray in a BGRA pixel format, flipped vertically.
+        """
+        if not self.haveSetImage:
+            # we only need to do this the first time, so the allocated texture is the right size
+            # even though this method of updating a texture exists, it's horribly slow.
+            self.cam.texture = Texture(Image.fromarray(image))
+            self.haveSetImage = True
+        # this call seems to require the image to be flipped vertically and have a BGRA pixel format.
+        self.cam.texture._texture.setRamImage(image)
+
+    def update(self):
+        if self.anchor and self.floor.button is None:
+            if self.cam.hovered:
+                # Convert Mouse World Point to Local Space of the Cam Quad
+                local_point = mouse.world_point - self.cam.world_position
+                
+                # Normalize X and Y. I have no idea how to derive these I just measured them.
+                # x ranges from -3.85 to +3.85
+                # y ranges from -2 to +2
+                u = clamp(mapval(local_point.x, -3.85, 3.85, 0, 1), 0, 1)
+                v = clamp(mapval(local_point.y, -2, 2, 1, 0), 0, 1)
+                
+                self.render_projected_point((u, v))
+
+                # we want to use this coordinate to indicate in the UI what this would look like in other views
+                # move the floor's reticule to the point where that ray intersects the floor
+                floor_pos = project_pixels_to_floor(np.array([[u, v]]), self.anchor.anchor_cam_pose)
+                if len(floor_pos) == 1:
+                    pos2d = floor_pos[0]
+                    self.floor.target.position = [pos2d[0], 0, pos2d[1]]
+
+                    # draw a line directly from this anchor's camera to the floor reticule position.
+                    self.app.camlines[self.anchor.num].enabled = True
+                    self.app.camlines[self.anchor.num].model = draw_line(
+                        self.anchor.empty.world_position, self.floor.target.world_position)
+
+                    for key, other_cam in self.app.cam_views.items():
+                        if key is None or other_cam is self:
+                            continue
+                        # in any other cameras which are enabled, project that floor position back into their UV coords
+                        uv_coords = project_floor_to_pixels(floor_pos, other_cam.anchor.anchor_cam_pose)
+                        if len(uv_coords) == 1:
+                            other_cam.render_projected_point(uv_coords[0])
+            else:
+                # disable any visualizations when the mouse moves outside the camera rect
+                self.app.camlines[self.anchor.num].enabled = False
+                self.little_point.enabled = False
+
+    def on_mouse_exit(self):
+        if self.floor.button is None:
+            self.app.camlines[self.anchor.num].enabled = False
+            for other_cam in self.app.cam_views.values():
+                other_cam.little_point.enabled = False
+
+    def render_projected_point(self, uv_point):
+        self.little_point.enabled = True
+        self.little_point.x = mapval(uv_point[0], 0, 1, -self.content_width/2, self.content_width/2)
+        self.little_point.y = mapval(uv_point[1], 1, 0, -self.content_height/2, self.content_height/2)
+
+    def vid_clicked(self):
+        self.floor.on_click()

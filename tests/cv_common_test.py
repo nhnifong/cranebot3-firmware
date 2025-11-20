@@ -12,7 +12,7 @@ import unittest
 import numpy as np
 from math import pi
 import cv2
-from cv_common import compose_poses, invert_pose, average_pose, create_lookat_pose, project_pixels_to_floor
+from cv_common import *
 import model_constants
 
 
@@ -218,3 +218,30 @@ class TestPoseFunctions(unittest.TestCase):
             atol=0.01,        # 1cm tolerance
             err_msg="The center pixel did not project to the world origin!"
         )
+
+    def test_project_floor_to_pixels(self):
+        W, H = 1920, 1200
+        cx, cy = W / 2.0, H / 2.0 # Principal point is exactly center
+        
+        K = np.array([
+            [1000, 0, cx],
+            [0, 1000, cy],
+            [0, 0, 1]
+        ], dtype=float)
+        D = np.zeros(5)
+        
+        cam_position = [2.0, 2.0, 2.0] # 2 meters up/out in corner
+        target_point = [0.0, 0.0, 0.0] # World Origin
+        
+        pose = create_lookat_pose(cam_position, target_point)
+        pixels = np.array([
+            (0.5, 0.4),
+            (0.5, 0.5),
+            (0.5, 0.6),
+        ])
+        
+        floor_pts = project_pixels_to_floor(pixels, pose, K, D)
+
+        # round trip
+        out_pixels = project_floor_to_pixels(floor_pts, pose, K, D)
+        np.testing.assert_array_almost_equal(out_pixels, pixels)
