@@ -60,8 +60,8 @@ class ComponentClient:
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
 
-        # todo: receive a command in observer that will set this value
-        self.sendPreviewToUi = False
+        config = Config()
+        self.preferred_cameras = config.preferred_cameras
 
     def receive_video(self, port):
         video_uri = f'tcp://{self.address}:{port}'
@@ -97,11 +97,6 @@ class ComponentClient:
                 with self.new_frame_condition:
                     self.frame = fr
                     self.new_frame_condition.notify()
-                        
-                if self.sendPreviewToUi:
-                    # send frame to UI
-                    preview = cv2.flip(cv2.resize(cv2.cvtColor(self.frame, cv2.COLOR_RGB2RGBA), None, fx=0.25, fy=0.25), 0)
-                    self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':preview}})
 
                 # save information about stream latency and framerate
                 now = time.time()
@@ -228,7 +223,7 @@ class ComponentClient:
                     port = int(update['video_ready'][0])
                     self.stream_start_ts = float(update['video_ready'][1])
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
-                    if self.anchor_num in [None,2,3]:
+                    if self.anchor_num in self.preferred_cameras:
                         vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
                         vid_thread.start()
                 self.handle_update_from_ws(update)
@@ -303,6 +298,10 @@ class RaspiAnchorClient(ComponentClient):
 
         config = Config()
         self.anchor_pose = config.anchors[anchor_num].pose
+        self.camera_pose = np.array(compose_poses([
+            self.anchor_pose,
+            model_constants.anchor_camera,
+        ]))
         self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
 
     def handle_update_from_ws(self, update):

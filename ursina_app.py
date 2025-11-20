@@ -7,7 +7,7 @@ from functools import partial
 from cv_common import invert_pose, compose_poses
 from math import pi
 import atexit
-from panda3d.core import LQuaternionf
+from panda3d.core import LQuaternionf, Point2
 from cv_common import average_pose, compose_poses
 import model_constants
 from PIL import Image
@@ -144,7 +144,7 @@ class ControlPanelUI:
         # Create gantry, gripper, anchors, lines, etc.
         self.anchors = []
         for i, a in enumerate(self.config.anchors):
-            anch = Anchor(i, self.to_ob_q, position=swap_yz(a.pose[1]), rotation=to_ursina_rotation(a.pose[0]))
+            anch = Anchor(i, self.to_ob_q, self, position=swap_yz(a.pose[1]), rotation=to_ursina_rotation(a.pose[0]))
             anch.pose = a.pose
             self.anchors.append(anch)
 
@@ -180,7 +180,7 @@ class ControlPanelUI:
         self.commanded_velocity_indicator = VelocityArrow(color=color.cyan, parent=self.gantry, enabled=False)
 
         # show a visualization of goal positions
-        self.goal_marker = GoalPoint([0,0,0], enabled=False)
+        self.goal_marker = GoalPoint([0,0,0], self, enabled=False)
 
         self.walls = [Entity(
             model='quad',
@@ -197,8 +197,20 @@ class ControlPanelUI:
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
 
+    def world_position_to_ui_pos(self, wp):
+        p3d = base.cam.get_relative_point(render, wp)
+        p2d = Point2()
+        if base.camLens.project(p3d, p2d):
+            # Map Viewport Normalized Coordinates (-1 to 1) to (0 to 1)
+            viewport_fraction_x = (p2d.x + 1) / 2
+            final_x = (viewport_fraction_x * self.split - 0.5) * window.aspect_ratio
+            final_y = p2d.y / 2
+            return Vec3(final_x, final_y, 0)
+        
+        return None # Point is behind the camera
+
     def _create_hud_panels(self):
-        self.split = 0.66
+        self.split = 0.75
         window.color = color.black
         
         # Configure the 3D Viewport to the left side
@@ -218,18 +230,25 @@ class ControlPanelUI:
         # Flow management for right panel
         self.right_panel_items = []
         # y position of next item to be added to right panel
-        self.cursor_y = 0.45
+        self.cursor_y = 0.25
 
         # Create a hidden entity to handle calling update_layout
         # this is necessary to prevent Ursina from setting the aspect ratio back to full screen.
         self.layout_manager = Entity(update=self.update_layout)
 
-        # Create the bottom status panel, text elements, buttons
-        # self.modePanel = Panel(model='quad', z=99, 
-        #     color=(0.1,0.1,0.1,1.0),
-        #     position=(0,-0.48),
-        #     scale=(3,0.1),
-        # )
+        self.cam_views = {}
+        cam_scale = 0.4
+        for key in self.config.preferred_cameras: # show only two anchors and the gripper for now
+            c = Entity(
+                model='quad',
+                scale=(cam_scale, cam_scale/1.777777),
+                texture='cap_38.jpg',
+                shader=unlit_shader,
+                # origin=(-0.5, 1.5),
+            )
+            c.hasSetImage = False
+            self.add_side_panel_item(c)
+            self.cam_views[key] = c
 
         # Setup the Bottom UI Panel Background
         self.bottom_ui_panel = Entity(
@@ -348,6 +367,21 @@ class ControlPanelUI:
         )
 
         self.calibration_feedback = CalFeedback(self)
+
+    def add_side_panel_item(self, item, padding=0.025):
+        # Parent to the screen, not the panel, to avoid distortion
+        item.parent = camera.ui
+        item.origin = (0, 0)
+        item.z = -1  # Ensure it renders in front of the panel
+        
+        # Set vertical position based on cursor
+        item.y = self.cursor_y
+        
+        # Move cursor down for the next item
+        self.cursor_y -= (item.scale[1] + padding)
+        
+        # Store for horizontal alignment updates
+        self.right_panel_items.append(item)
 
     def _create_shape_tracker_entities(self):
         # create entities that are used to visualize the internal state of the shape tracker and 3d hull contruction.
@@ -566,17 +600,15 @@ class ControlPanelUI:
 
         if 'preview_image' in updates:
             pili = updates['preview_image']
-            if pili['anchor_num'] is not None:
-                ent = self.anchors[pili['anchor_num']]
-            else:
-                ent = self.floor # gripper cam
-            if ent.hasSetImage:
-                ent.camview.texture._texture.setRamImage(pili['image'])
-            else:
+            # note that self.cam_views is a dict keyd by anchor num and 'None' is the key of the gripper cam view
+            ent = self.cam_views[pili['anchor_num']]
+            if not ent.hasSetImage:
                 # we only need to do this the first time, so the allocated texture is the right size
                 # even though this method of updating a texture exists, it's horribly slow.
-                ent.camview.texture = Texture(Image.fromarray(pili['image']))
+                ent.texture = Texture(Image.fromarray(pili['image']))
                 ent.hasSetImage = True
+            # this call seems to require the image to be flipped vertically and have a BGRA pixel format.
+            ent.texture._texture.setRamImage(pili['image'])
 
         if 'connection_status' in updates:
             status = updates['connection_status']

@@ -183,6 +183,7 @@ def create_lookat_pose(cam_pos, target_pos):
     return (rvec, cam_pos)
 
 def project_pixels_to_floor(normalized_pixels, pose, K=mtx, D=distortion):
+    print(f'project_pixels_to_floor pixels=\n{normalized_pixels}, \npose={pose}')
     # Undistort Points
     pts = np.array(normalized_pixels, dtype=np.float64) * [1920, 1200]
     uv = cv2.undistortPoints(pts.reshape(-1, 1, 2), K, D).reshape(-1, 2).T
