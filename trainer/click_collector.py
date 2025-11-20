@@ -12,7 +12,7 @@ from huggingface_hub import HfApi, create_repo
 SOURCE_DATASET_ID = "naavox/merged-5"
 TARGET_HF_REPO = "naavox/laundry-spots-dataset"  # Change this to your desired target repo name
 LOCAL_DATASET_ROOT = "laundry_spots_data"        # Local folder name
-CAMERA_KEY = "observation.images.anchor_camera_0"
+CAMERA_KEY = "observation.images.anchor_camera_1"
 
 # Paths for the structure: root -> train -> images + metadata.jsonl
 TRAIN_DIR = os.path.join(LOCAL_DATASET_ROOT, "train")
@@ -70,8 +70,8 @@ def draw_interface():
     status_text = f"Points: {len(current_clicks)}"
     cv2.putText(display, status_text, (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    cv2.putText(display, "[Space] Save | [N] Skip | [Q] Quit & Upload", (10, 60), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+    # cv2.putText(display, "[Space] Save | [N] Skip | [Q] Quit & Upload", (10, 60), 
+    #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
     cv2.imshow("Collector", display)
 
