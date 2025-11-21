@@ -117,7 +117,7 @@ class ControlPanelUI:
         # the color of this light is how you control the brightness
         DirectionalLight(position=(2, 20, 1), shadows=True, rotation=(35, -5, 5), color=(0.8,0.8,0.8,1))
         AmbientLight(color=(0.8,0.8,0.8,1))
-        EditorCamera()
+        EditorCamera(position=(1.8804024, 0.66652613, -0.1954718), rotation=(30.175781, 18.576408, 0))
         # Show a large floor. this is an active entity that moves a reticule with mouse input
         self.floor = Floor(
             app=self,
@@ -191,6 +191,10 @@ class ControlPanelUI:
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
 
+    def toggle_heatmaps(self):
+        self.show_heatmap = not self.show_heatmap
+        self.heatmap_button.color = color.gold if self.show_heatmap else color.gray
+        self.heatmap_button.highlight_color = self.heatmap_button.color.tint(.2) 
 
     def _create_hud_panels(self):
         self.split = 0.75
@@ -208,9 +212,19 @@ class ControlPanelUI:
         # Flow management for right panel
         self.right_panel_items = []
         # y position of next item to be added to right panel
-        self.cursor_y = 0.25
+        self.cursor_y = 0.4
 
         self.show_heatmap = True
+        self.heatmap_button = Button(
+            text="Heatmaps",
+            color=color.gray,
+            text_color=color.black,
+            scale=(.15, .033),
+            on_click=self.toggle_heatmaps
+        )
+        self.add_side_panel_item(self.heatmap_button)
+        self.cursor_y -= 0.1
+
         self.cam_views = {}
         cam_scale = 0.4
         for key in self.config.preferred_cameras: # show only two anchors and the gripper for now
@@ -351,7 +365,10 @@ class ControlPanelUI:
         item.y = self.cursor_y
         
         # Move cursor down for the next item
-        self.cursor_y -= (item.total_height + padding)
+        height = item.scale[1]
+        if hasattr(item, 'total_height'):
+            height = item.total_height
+        self.cursor_y -= (height + padding)
         
         # Store for horizontal alignment updates
         self.right_panel_items.append(item)

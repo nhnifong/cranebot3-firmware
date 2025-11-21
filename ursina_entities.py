@@ -780,7 +780,7 @@ class CamPreview(Entity):
             parent=self,
             model='quad',
             scale=(self.content_width, self.content_height),
-            texture='cap_38.jpg', # Placeholder
+            texture='waiting_for_video.png', # Placeholder
             shader=unlit_shader,
             color=color.white,
             z=0.01, # Slightly behind the frame

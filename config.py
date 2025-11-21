@@ -26,7 +26,7 @@ class Config:
             [[0.021986, 0.160533, -0.003378, 0.002640, -0.356843]])
         self.commmon_anchor_vars = {}
         self.gripper_vars = {}
-        self.preferred_cameras = [0,1,None]
+        self.preferred_cameras = [0,2,None]
         try:
             self.reload()
         except FileNotFoundError:
