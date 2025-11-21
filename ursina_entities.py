@@ -10,6 +10,7 @@ import model_constants
 from scipy.spatial.transform import Rotation
 from functools import partial
 import time
+from PIL import Image
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -762,6 +763,7 @@ class CamPreview(Entity):
         self.anchor = anchor
         self.floor = floor
         self.app = app
+        self.heatmap = None
 
         # 16:9 aspect ratio for the camera content
         self.aspect_ratio = 1.777777
@@ -819,17 +821,28 @@ class CamPreview(Entity):
         # indicates whether the texture has been allocated
         self.haveSetImage = False
 
+    def setHeatmap(self, heatmap):
+        """Store a heatmap image in BGR pixel format."""
+        self.heatmap = heatmap
+
     def setImage(self, image):
         """
-        Expects an image as an np.ndarray in a BGRA pixel format, flipped vertically.
+        Expects an image as an np.ndarray in a BGR pixel format, right side up.
         """
         if not self.haveSetImage:
             # we only need to do this the first time, so the allocated texture is the right size
             # even though this method of updating a texture exists, it's horribly slow.
             self.cam.texture = Texture(Image.fromarray(image))
             self.haveSetImage = True
-        # this call seems to require the image to be flipped vertically and have a BGRA pixel format.
-        self.cam.texture._texture.setRamImage(image)
+
+        if self.app.show_heatmap and self.heatmap is not None:
+            overlay = cv2.addWeighted(image, 0.8, self.heatmap, 0.4, 0)
+        else:
+            overlay = image
+
+        # setRamImage seems to require the image to be flipped vertically and have a BGRA pixel format.
+        overlay = cv2.cvtColor(cv2.flip(overlay, 0), cv2.COLOR_BGR2BGRA)
+        self.cam.texture._texture.setRamImage(overlay)
 
     def update(self):
         if self.anchor and self.floor.button is None:

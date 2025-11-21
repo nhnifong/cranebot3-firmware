@@ -1320,11 +1320,7 @@ class AsyncObserver:
                 # create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
                 heatmap_vis = (heatmap_np * 255).astype(np.uint8)
                 heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
-                img_display = cv2.cvtColor(valid_clients[i].last_frame_resized, cv2.COLOR_RGB2BGR)
-                overlay = cv2.addWeighted(img_display, 0.8, heatmap_color, 0.4, 0)
-                preview = cv2.cvtColor(cv2.flip(overlay, 0), cv2.COLOR_BGR2BGRA) # required format of ursina setRamImage
-
-                self.to_ui_q.put({'preview_image': {'anchor_num':valid_clients[i].anchor_num, 'image':preview}})
+                self.to_ui_q.put({'heatmap': {'anchor_num':valid_clients[i].anchor_num, 'image':heatmap_color}})
 
             if len(all_floor_target_arrs) == 0:
                 print('No floor targets seen')
@@ -1346,8 +1342,8 @@ class AsyncObserver:
             # pick Z position for gantry
             goal_pos = np.array([next_target[0], next_target[1], 0.7])
             self.gantry_goal_pos = goal_pos
-            if gtask is None or gtask.done():
-                gtask = asyncio.create_task(self.seek_gantry_goal())
+            # if gtask is None or gtask.done():
+            #     gtask = asyncio.create_task(self.seek_gantry_goal())
 
             # return
 

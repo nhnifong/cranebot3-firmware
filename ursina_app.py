@@ -10,7 +10,6 @@ import atexit
 from panda3d.core import LQuaternionf, Point2
 from cv_common import average_pose, compose_poses
 import model_constants
-from PIL import Image
 from config import Config
 
 from ursina import *
@@ -211,6 +210,7 @@ class ControlPanelUI:
         # y position of next item to be added to right panel
         self.cursor_y = 0.25
 
+        self.show_heatmap = True
         self.cam_views = {}
         cam_scale = 0.4
         for key in self.config.preferred_cameras: # show only two anchors and the gripper for now
@@ -574,14 +574,11 @@ class ControlPanelUI:
         if 'preview_image' in updates:
             pili = updates['preview_image']
             # note that self.cam_views is a dict keyd by anchor num and 'None' is the key of the gripper cam view
-            ent = self.cam_views[pili['anchor_num']]
-            if not ent.hasSetImage:
-                # we only need to do this the first time, so the allocated texture is the right size
-                # even though this method of updating a texture exists, it's horribly slow.
-                ent.texture = Texture(Image.fromarray(pili['image']))
-                ent.hasSetImage = True
-            # this call seems to require the image to be flipped vertically and have a BGRA pixel format.
-            ent.texture._texture.setRamImage(pili['image'])
+            self.cam_views[pili['anchor_num']].setImage(pili['image'])
+
+        if 'heatmap' in updates:
+            pili = updates['heatmap']
+            self.cam_views[pili['anchor_num']].setHeatmap(pili['image'])
 
         if 'connection_status' in updates:
             status = updates['connection_status']

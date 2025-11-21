@@ -59,6 +59,7 @@ class ComponentClient:
         self.last_frame_resized = None
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
+        self.lerobot_mode = False # when false disables constant encoded to improve performance.
 
         config = Config()
         self.preferred_cameras = config.preferred_cameras
@@ -159,13 +160,17 @@ class ComponentClient:
                 # return the size lerobot is expecting. it's faster to do this resize before encoding.
                 dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
                 self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
-                params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
-                is_success, buffer = cv2.imencode(".jpg", self.last_frame_resized, params)
 
-                # Store the result. This is an atomic operation in Python.
-                if is_success:
-                    self.lerobot_jpeg_bytes = buffer.tobytes()
-        
+                img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
+                self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':img_preview}})
+
+                if self.lerobot_mode:
+                    params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
+                    is_success, buffer = cv2.imencode(".jpg", self.last_frame_resized, params)
+                    # Store the result. This is an atomic operation in Python.
+                    if is_success:
+                        self.lerobot_jpeg_bytes = buffer.tobytes()
+            
         print("Encoder thread exiting.")
 
     async def connect_websocket(self):
