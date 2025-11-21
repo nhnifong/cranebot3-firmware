@@ -300,8 +300,14 @@ class Positioner2:
 
         # last estimate of the gripper pose
         self.grip_pose = (np.zeros(3), np.zeros(3))
+
         # last information on whether the gripper is thought to be holding something
         self.holding = False
+        self.finger_pressure_rising = asyncio.Event()
+        self.finger_pressure_falling = asyncio.Event()
+
+        # event coupled to gripper tipping from vertical
+        self.tip_over = asyncio.Event()
 
         # hang point based prediction of slack lines (currently unused)
         self.slack_lines = [False, False, False, False]
@@ -394,6 +400,7 @@ class Positioner2:
             self.gant_vel = self.kf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
             self.estimate_gripper()
+            self.detect_grip()
             self.send_positions()
 
     async def update_visual(self):
@@ -490,24 +497,48 @@ class Positioner2:
         return self.swing_est.get_pendulum_length()
 
     def estimate_gripper(self):
-        """Place the gripper under the gantry by the winch line length, tilted according to the IMU"""
-        # get the last IMU reading from the gripper
+        """Estimate attributes of the gripper that depend on its IMU reading"""
         t_rot = self.datastore.imu_rotvec.getLast()
         ts = t_rot[0]
         last_rotvec = t_rot[1:]
         grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
 
+        # Detect Tipping
+        THRESHOLD_RADIANS = 0.174533
+        if abs(grv[0]) > THRESHOLD_RADIANS or abs(grv[1]) > THRESHOLD_RADIANS:
+            self.tip_over.set()
+
         # feed angle to frequency estimator
         self.swing_est.add_rotation_vector(ts, last_rotvec)
-        # calculated_length = self.swing_est.get_pendulum_length()
 
-        # get the winch line length
+        # get the encoder based winch line length
         _, length, speed = self.datastore.winch_line_record.getLast()
 
         self.grip_pose = compose_poses([
             (grv, self.gant_pos),
             (np.zeros(3), np.array([0,0,-length], dtype=float)),
         ])
+
+    def detect_grip(self):
+        """
+        Watch for the rising and falling edge in grip pressure and set corresponding asyncio events
+        may set self.finger_pressure_rising or self.finger_pressure_falling
+        """
+        THRESHOLD = 0.4
+        HYSTERESIS = 0.04
+        pressure = self.datastore.finger.getLast()[2]
+
+        # Detect Rising Edge
+        # Only trigger if we aren't currently holding to ensure we capture the
+        # transition event rather than the continuous state of being compressed.
+        if not self.holding and pressure >= THRESHOLD:
+            self.holding = True
+            self.finger_pressure_rising.set()
+
+        # Detect Falling Edge
+        elif self.holding and pressure <= (THRESHOLD - HYSTERESIS):
+            self.holding = False
+            self.finger_pressure_falling.set()
 
 
     def send_positions(self):

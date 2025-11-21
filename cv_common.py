@@ -19,6 +19,9 @@ marker_names = [
     'gamepad',
     'hamper',
     'trash',
+    'cal_assist_1',
+    'cal_assist_2',
+    'cal_assist_3',
 ]
 
 # AprilTag images are typically downloaded, not generated in code.
