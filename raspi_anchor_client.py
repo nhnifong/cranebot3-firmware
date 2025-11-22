@@ -15,6 +15,7 @@ import threading
 from config import Config
 import os
 from trainer.stringman_pilot import IMAGE_SHAPE
+from collections import defaultdict, deque
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -35,7 +36,7 @@ class ComponentClient:
     def __init__(self, address, port, datastore, to_ui_q, to_ob_q, pool, stat):
         self.address = address
         self.port = port
-        self.origin_poses = []
+        self.origin_poses = defaultdict(lambda: deque(maxlen=max_origin_detections))
         self.datastore = datastore
         self.to_ui_q = to_ui_q
         self.to_ob_q = to_ob_q
@@ -161,15 +162,16 @@ class ComponentClient:
                 dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
                 self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
 
-                img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
-                self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':img_preview}})
+                if self.anchor_num in self.preferred_cameras:
+                    img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
+                    self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':img_preview}})
 
-                if self.lerobot_mode:
-                    params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
-                    is_success, buffer = cv2.imencode(".jpg", self.last_frame_resized, params)
-                    # Store the result. This is an atomic operation in Python.
-                    if is_success:
-                        self.lerobot_jpeg_bytes = buffer.tobytes()
+                    if self.lerobot_mode:
+                        params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
+                        is_success, buffer = cv2.imencode(".jpg", self.last_frame_resized, params)
+                        # Store the result. This is an atomic operation in Python.
+                        if is_success:
+                            self.lerobot_jpeg_bytes = buffer.tobytes()
             
         print("Encoder thread exiting.")
 
@@ -228,9 +230,8 @@ class ComponentClient:
                     port = int(update['video_ready'][0])
                     self.stream_start_ts = float(update['video_ready'][1])
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
-                    if self.anchor_num in self.preferred_cameras:
-                        vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
-                        vid_thread.start()
+                    vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
+                    vid_thread.start()
                 self.handle_update_from_ws(update)
 
                 # do this here because we seemingly can't do it in receive_video
@@ -334,11 +335,9 @@ class RaspiAnchorClient(ComponentClient):
 
         for detection in detections:
 
-            if detection['n'] == "origin":
+            if detection['n'] in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3']:
                 # save all the detections of the origin for later analysis
-                self.origin_poses.append(pose_from_det(detection))
-                if len(self.origin_poses) > max_origin_detections:
-                    self.origin_poses.pop(0)
+                self.origin_poses[detection['n']].append(pose_from_det(detection))
 
             if detection['n'] == 'gantry':
                 # rotate and translate to where that object's origin would be

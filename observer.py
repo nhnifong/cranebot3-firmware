@@ -25,12 +25,12 @@ from config import Config
 from stats import StatCounter
 from position_estimator import Positioner2
 from cv_common import invert_pose, compose_poses, average_pose, project_pixels_to_floor
-from calibration import order_points_for_low_travel, find_cal_params
+from calibration import optimize_anchor_poses
 import model_constants
 import traceback
 import cv2
 import pickle
-from collections import deque
+from collections import deque, defaultdict
 from trainer.control_service import start_robot_control_server
 from trainer.stringman_record_loop import record_until_disconnected
 from utils import constrain, motion_task
@@ -414,29 +414,19 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
     def locate_anchors(self):
-        """using the record of recent origin detections, estimate the pose of each anchor."""
-        MIN_ORIGIN_OBSERVATIONS = 12
-        
-        if len(self.anchors) != N_ANCHORS:
-            print(f'anchor pose calibration should not be performed until all anchors are connected. len(anchors)={len(self.anchors)}')
-            return
-        anchor_poses = []
+        """using the record of recent origin detections and cal_assist marker detections, estimate the pose of each anchor."""
+        markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3']
+        averages = defaultdict(lambda: [None]*4)
         for client in self.anchors:
-            if len(client.origin_poses) < MIN_ORIGIN_OBSERVATIONS:
-                print(f'Too few origin observations ({len(client.origin_poses)}) from anchor {client.anchor_num}')
-                continue
-            print(f'locating anchor {client.anchor_num} from {len(client.origin_poses)} detections')
-            app = average_pose(client.origin_poses)
-            print(f'average origin pose {app}')
-            pose = np.array(invert_pose(compose_poses([
-                model_constants.anchor_camera,
-                app,
-                model_constants.room_relative_to_origin_card,
-            ])))
-            print(f'pose {pose}')
-            assert pose is not None
-            self.to_ui_q.put({'anchor_pose': (client.anchor_num, pose)})
-            anchor_poses.append(pose)
+            # average each list of detections, but leave them in the camera's reference frame.
+            for marker in markers:
+                averages[marker][client.anchor_num] = average_pose(list(client.origin_poses[marker]))
+
+        # run optimization in pool
+        async_result = self.pool.apply_async(optimize_anchor_poses, (dict(averages),))
+        anchor_poses = async_result.get(timeout=30)
+        print(f'obtained result from find_cal_params anchor_poses=\n{anchor_poses}')
+
         return np.array(anchor_poses)
 
     async def half_auto_calibration(self):
@@ -472,38 +462,6 @@ class AsyncObserver:
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
         DETECTION_WAIT_S = 1.0 # seconds
-        STABILIZATION_WAIT_S = 2.0 # seconds
-        SET_LENGTHS_WAIT_S = 1.0 # seconds
-        BOUNDING_BOX_SCALE = 0.5
-        GRID_STEPS_X = 3j
-        GRID_STEPS_Y = 3j
-        GRID_STEPS_Z = 2j
-        OPTIMIZER_TIMEOUT_S = 300 # seconds
-
-        # use an orderly grid of sample points
-        sample_points = np.mgrid[min_x:max_x:GRID_STEPS_X, min_y:max_y:GRID_STEPS_Y, min_z:max_z:GRID_STEPS_Z].reshape(3, -1).T
-
-        tension_time = 2 # expected time to tension all lines
-        zero_winch_time = 5 # expected time to zero the winch line
-        move_time = 3 # expected time to move to goal point
-        observe_time = 2.5 # expected time to observe a sample point
-        optimization_time = 120 # time needed to perform numerical optimization
-
-        # How long will this take?
-        self.cal_steps = [
-            ('Observing origin card', DETECTION_WAIT_S),
-            ('Creating initial guesses', tension_time + STABILIZATION_WAIT_S + SET_LENGTHS_WAIT_S),
-            ('Zeroing the winch line', zero_winch_time),
-        ]
-        for i in range(len(sample_points)):
-            self.cal_steps.append((
-                f'Collecting sample {i} of {len(sample_points)}',
-                move_time + tension_time + observe_time
-            ))
-        self.cal_steps.append(('Calculating optimal parameters', optimization_time))
-        self.cal_index = -1
-        self.report_calibration_progress()
-        
         try:
             if len(self.anchors) < N_ANCHORS:
                 print('Cannot run full calibration until all anchors are connected')
@@ -512,78 +470,13 @@ class AsyncObserver:
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
             #   it is only necessary to ensure enough have been collected from each client and average them.
-            num_o_dets = [len(client.origin_poses) for client in self.anchors]
+            num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors]
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
                 print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 await asyncio.sleep(DETECTION_WAIT_S)
-                num_o_dets = [len(client.origin_poses) for client in self.anchors]
-            self.report_calibration_progress()
-            # Maybe wait on input from user here to confirm the positions and ask "Are the lines clear to start moving?"
+                num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors]
+            
             anchor_poses = self.locate_anchors()
-            print(f'anchor poses based on origin card {anchor_poses}')
-
-            # Experiment: scale pose positions
-            # scale = 1.04
-            # anchor_poses[:,1,:] *= scale
-
-            # the true distance between anchor 0 and anchor 2 should be 5.334 meters in my room
-            a = anchor_poses[0,1,:2]
-            b = anchor_poses[1,1,:2]
-            print(f'distance between anchor 0 and 1 = {np.linalg.norm(a-b)}')
-
-            for i, client in enumerate(self.anchors):
-                client.anchor_pose = anchor_poses[i]
-            anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
-            self.pe.set_anchor_points(anchor_points)
-            print(f'Provisional anchor points relative to origin card \n{anchor_points}')
-
-            # reel in all lines until the switches indicate they are tight
-            await self.tension_and_wait()
-            cutoff = time.time()
-            print('Collecting observations of gantry now that its still and lines are tight')
-            while len(self.datastore.gantry_pos.deepCopy(cutoff=cutoff)) < 10:
-                await asyncio.sleep(STABILIZATION_WAIT_S)
-
-            # use aruco observations of gantry to obtain initial guesses for zero angles
-            # use this information to perform rough movements
-            gantry_data = self.datastore.gantry_pos.deepCopy(cutoff=cutoff)
-            position = np.mean(gantry_data[:,2:], axis=0)
-            print(f'the visual position of the gantry is {position}')
-            lengths = np.linalg.norm(anchor_points - position, axis=1)
-            if np.any(np.isnan(lengths)):
-                print(f'Cannot proceed with calibration when lengths={lengths}')
-                return
-            print(f'Line lengths from coarse calibration ={lengths}')
-            await self.sendReferenceLengths(lengths)
-            await asyncio.sleep(SET_LENGTHS_WAIT_S)
-
-            # Determine the bounding box of the work area and shrink it to stay away from the walls and ceiling
-            min_x, min_y, min_anchor_z = np.min(anchor_points, axis=0) * BOUNDING_BOX_SCALE
-            max_x, max_y, _ = np.max(anchor_points, axis=0) * BOUNDING_BOX_SCALE
-            min_z = 0.8
-            max_z = 1.2
-            print(f'Maximum allowed height of gantry sample point {max_z}')
-
-            # make a polygon of the exact work area so we can test if points are inside it
-            contour = anchor_points[:,0:2].astype(np.float32)
-
-            # choose an ordering of the points that results in a low travel distance
-            sample_points, distance = order_points_for_low_travel(sample_points)
-            print(f'Ordered points for near-optimal travel. total distance = {distance} m')
-
-            # prepare to collect final observations
-            self.report_calibration_progress()
-            data = await self.collect_data_at_points(sample_points, anchor_poses=anchor_poses, save_progress=True)
-            print(f'Completed data collection. Performing optimization of calibration parameters.')
-
-            # feed collected data to the optimization process in calibration.py
-            with open('collected_cal_data.pickle', 'wb') as f:
-                f.write(pickle.dumps((anchor_poses, data)))
-
-            async_result = self.pool.apply_async(find_cal_params, (anchor_poses, data, self.power_spool_index))
-            anchor_poses, zero_angles = async_result.get(timeout=OPTIMIZER_TIMEOUT_S)
-            print(f'obtained result from find_cal_params {result_params}')
-            self.report_calibration_progress()
 
             # Use the optimization output to update anchor poses and spool params
             config = Config()
@@ -591,137 +484,21 @@ class AsyncObserver:
                 config.anchors[client.anchor_num].pose = anchor_poses[client.anchor_num]
                 self.to_ui_q.put({'anchor_pose': (client.anchor_num, anchor_poses[client.anchor_num])})
                 client.anchor_pose = anchor_poses[client.anchor_num]
-                await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
+                # await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
             config.write()
             # inform position estimator
             anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
             self.pe.set_anchor_points(anchor_points)
 
-            # move to random locations and determine the quality of the calibration by how often all four lines are tight during and after moves.
+            await self.half_auto_calibration()
+
+            # TODO raise gantry to about 1 meter from floor and induce a small swing. then perform half cal again.
+
+            # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
+            self.to_ui_q.put({'pop_message':'Calibration complete. Cards can be removed from the floor.'})
+
         except asyncio.CancelledError:
             raise
-
-    async def collect_data_at_points(self, sample_points, anchor_poses=None, save_progress=False):
-        SETTLING_TIME_S = 0.5 # seconds
-        OBSERVATION_COLLECTION_TIME_S = 6.0 # seconds
-        MIN_TOTAL_GANTRY_OBSERVATIONS = 3
-        IDEAL_GANTRY_OBSERVATIONS = 150
-        
-        # these gantry observations these need to be raw gantry aruco poses in the camera coordinate space
-        # not the poses in self.datastore.gantry_pos so we set a flag in the anchor clients that cause them to save that
-        for client in self.anchors:
-            client.save_raw = True
-            await client.send_commands({'report_raw': True})
-
-        print('zero the winch line')
-        await self.gripper_client.zero_winch()
-        self.report_calibration_progress()
-
-        last_hang_position = None
-        last_visual_position = None
-
-        print('Collect data at each position')
-        # data format is described in docstring of calibration_cost_fn
-        # [{'encoders':[0, 0, 0, 0], 'visuals':[[pose, pose, ...], x4]}, ...]
-        data = []
-        for i, point in enumerate(sample_points):
-            # move to a position.
-            print(f'Moving to point {i+1}/{len(sample_points)} at {point}')
-            self.gantry_goal_pos = point
-            # await self.blind_move_to_goal()
-            await self.seek_gantry_goal()
-
-            # integration-test specific behavior
-            if self.test_gantry_goal_callback is not None:
-                self.test_gantry_goal_callback(point)
-
-            # reel in all lines until they are tight
-            await self.tension_and_wait()
-            await asyncio.sleep(self.stat.mean_latency)
-            cutoff = time.time()
-
-            # collect several visual observations of the gantry from each camera
-            print('Collecting observations of gantry')
-            # clear old observations
-            for client in self.anchors:
-                client.raw_gant_poses = []
-            await asyncio.sleep(SETTLING_TIME_S)
-            # TODO this loop may never end if the gantry has moved too high to be seen by any camera
-            while sum([len(client.raw_gant_poses) for client in self.anchors]) < IDEAL_GANTRY_OBSERVATIONS:
-                await asyncio.sleep(0.1)
-
-            v = [client.raw_gant_poses for client in self.anchors]
-            if sum([len(poses) for poses in v]) >= MIN_TOTAL_GANTRY_OBSERVATIONS:
-                # save current raw encoder angles and visual observations
-                entry = {
-                    'encoders': [client.last_raw_encoder for client in self.anchors],
-                    'visuals': v,
-                    # we are assuming the gripper was pointed straght down when this was collected, but it is possible to verify it with the IMU
-                    'laser_range': self.datastore.range_record.getLast()[1],
-                }
-                print(f'Collected {len(v[0])}, {len(v[1])}, {len(v[2])}, {len(v[3])} visual observations of gantry pose')
-                print(f'encoders {entry["encoders"]}')
-                print(f'laser_range {entry["laser_range"]}')
-                data.append(entry)
-
-                # save data after every collected point if requested.
-                if save_progress and anchor_poses is not None:
-                    print("Saving calibration progress to 'collected_cal_data.pickle'...")
-                    with open('collected_cal_data.pickle', 'wb') as f:
-                        f.write(pickle.dumps((anchor_poses, data)))
-
-                # calculate the consistency error of the most recent move
-                hang_position = self.pe.hang_pos
-                visual_position = self.pe.visual_pos
-                if last_hang_position is not None and last_visual_position is not None:
-                    hang_move = hang_position - last_hang_position
-                    visual_move = visual_position - last_visual_position
-                    move_error = np.linalg.norm(hang_move - visual_move)
-                    print(f'hang and visual moves deviate by {move_error} meters')
-                last_hang_position = hang_position
-                last_visual_position = visual_position
-
-                # params_consistent_with_move(
-                #     starting_pos_visual, ending_pos_visual,
-                #     prev_entry['encoders'], entry['encoders'],
-                #     self.pe.anchor_points)
-            else:
-                print(f'Point {point} skipped because gantry could not be observed in that position')
-            self.report_calibration_progress()
-
-        assert(len(data) > 0)
-
-        for client in self.anchors:
-            client.save_raw = False
-            asyncio.create_task(client.send_commands({'report_raw': False}))
-
-        return data
-
-    def report_calibration_progress(self):
-        # estimate the progress percentage
-        # get latest status message
-        # estimate seconds remaining
-        step_times = [s[1] for s in self.cal_steps] # the amount of time each step should take
-        self.cal_step_index+=1 # index of the step we're currently waiting on
-        total = sum(step_times)
-        speed = 100 / total # in percentage points per second
-        if self.cal_step_index < len(self.cal_steps):
-            remaining = sum(step_times[self.cal_step_index:])
-            progress = (total-remaining)/total * 100
-            dont_go_past = (total-(remaining-step_times[self.cal_step_index]))/total * 100
-            message = self.cal_steps[self.cal_step_index][0]
-        else:
-            speed = 0
-            progress = 100
-            dont_go_past = 100
-            message = "Calibration complete"
-        self.to_ui_q.put({'cal_progress': {
-            'speed': speed,
-            'progress': progress,
-            'dont_go_past': dont_go_past,
-            'message': message,
-        }})
-
 
     async def horizontal_line_task(self):
         """
@@ -1288,6 +1065,7 @@ class AsyncObserver:
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
             model.eval()
 
+        config = Config()
 
         while self.run_command_loop:
             await asyncio.sleep(LOOP_DELAY)
@@ -1296,7 +1074,7 @@ class AsyncObserver:
             valid_clients = []
             img_tensors = []
             for client in self.anchors:
-                if client.last_frame_resized is None:
+                if client.last_frame_resized is None or client.anchor_num not in config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
                 img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0
@@ -1386,12 +1164,12 @@ class AsyncObserver:
                 continue
 
             # tension now just in case.
-            await self.tension_and_wait()
+            # await self.tension_and_wait()
             # fly to to drop point
             self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.7])
             await self.seek_gantry_goal()
             # open gripper
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))
             # keep score
 
         if gtask is not None:

@@ -63,12 +63,12 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         self.patcher2.stop()
 
         # make sure we didn't leave and subprocesses running
-        command = 'ps aux | grep "sleep infinity" | grep -v "grep sleep infinity"'
+        command = 'ps aux | grep "sleep infinity" | grep -v grep'
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         # stdout should be empty if no 'sleep infinity' processes are left
         self.assertTrue(
             result.stdout.strip() == '',
-            f"Found orphaned processes running after test teardown: {result.stdout}"
+            f"Found orphaned processes running after test teardown: {repr(result.stdout)}"
         )
 
     def assertLastAimSpeed(self, speed):
