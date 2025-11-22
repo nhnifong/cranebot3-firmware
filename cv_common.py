@@ -31,6 +31,9 @@ marker_names = [
 # Define the physical size of any markers that are not the default size.
 special_sizes = {
     'origin': 0.1680, # size in meters
+    'cal_assist_1': 0.1640, # shouldn't these have printed with the same dimensions as the origin card?
+    'cal_assist_2': 0.1640,
+    'cal_assist_3': 0.1640,
 }
 default_marker_size = 0.0868 # The default side length of markers in meters
 

@@ -34,7 +34,8 @@ stream_command = [
     "--codec", "libav",
     "--libav-format", "mpegts",
     "--vflip", "--hflip",
-    "--autofocus-mode", "continuous",
+    "--autofocus-mode", "manual",
+    "--lens-position", "0.1",
     "--low-latency",
     "--bitrate", "1200kbps"
 ]
@@ -319,7 +320,7 @@ except RuntimeError:
 SWITCH_PIN = 18
 
 class RaspiAnchorServer(RobotComponentServer):
-    def __init__(self, power_anchor=False, flat=False, mock_motor=None):
+    def __init__(self, power_anchor=False, mock_motor=None):
         super().__init__()
         self.conf.update(default_anchor_conf)
         ratio = 20/51 # 20 drive gear teeth, 51 spool teeth.
@@ -426,8 +427,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--power", action="store_true",
                         help="Configures this anchor as the one which has the power line")
-    parser.add_argument("--flat", action="store_true",
-                        help="Configures this anchor as one of the old direct drive type")
     args = parser.parse_args()
 
     ras = RaspiAnchorServer(args.power)

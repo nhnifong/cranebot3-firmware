@@ -353,8 +353,6 @@ class ControlPanelUI:
             on_click=self.toggle_gamepad_window,
         )
 
-        self.calibration_feedback = CalFeedback(self)
-
     def add_side_panel_item(self, item, padding=0.027):
         # Parent to the screen, not the panel, to avoid distortion
         item.parent = camera.ui
@@ -405,7 +403,6 @@ class ControlPanelUI:
             ))
 
     def run_full_cal(self):
-        self.calibration_feedback.start()
         self.simple_command('full_cal')
 
     def toggle_gamepad_window(self):
@@ -665,9 +662,6 @@ class ControlPanelUI:
             l_range, f_angle, pressure = updates['grip_sensors'] 
             self.gripper.setLaserRange(l_range)
             self.gripper.setFingerAngle(f_angle)
-
-        if 'cal_progress' in updates:
-            self.calibration_feedback.handle_message(updates['cal_progress'])
 
         if 'gp_pos' in updates:
             self.floor.set_gp_pos(updates['gp_pos'])
