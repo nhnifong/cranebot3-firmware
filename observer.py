@@ -1124,6 +1124,13 @@ class AsyncObserver:
         closest_idx = np.argmin(dist_sq)
         next_target = self.floor_targets[closest_idx]
 
+        # no calibration is perfect, and usually what's wrong is that the scale of the room is off, the height of the anchor is off, or the tilt of the camera is off.
+        # the yaw though is always bang on. So, instead of just projecting points onto the floor, it might be better to project a line onto the floor.
+        # in other words, add some small offset vertically above and below the point in pixel space and project both of these, then  draw a segment between them on the floor.
+        # then find the spot where lines from multiple cameras come closest to intersecting.
+
+        # however, this isn't actually going to produce good results unless you are doing it for the same object in both views, which you just have to guess at.
+
         print(f'selected object at floor position {next_target}')
         return next_target
 

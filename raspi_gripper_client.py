@@ -21,11 +21,7 @@ class RaspiGripperClient(ComponentClient):
         if 'grip_sensors' in update:
             gs = update['grip_sensors']
             timestamp = gs['time']
-            grip_pose = compose_poses([
-                (Rotation.from_quat(gs['quat']).as_rotvec(), np.array([0,0,0])),
-                model_constants.gripper_imu,
-            ])
-            self.datastore.imu_rotvec.insert(np.concatenate([np.array([timestamp], dtype=float), grip_pose[0]]))
+            self.datastore.imu_quat.insert(np.concatenate([np.array([timestamp], dtype=float), gs['quat']]))
 
             distance_measurement = 0
             if 'range' in gs:

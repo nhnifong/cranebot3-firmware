@@ -399,7 +399,7 @@ class Positioner2:
             self.gant_pos = self.kf.state_estimate[:3].copy()
             self.gant_vel = self.kf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
-            self.estimate_gripper()
+            # self.estimate_gripper()
             self.detect_grip()
             self.send_positions()
 

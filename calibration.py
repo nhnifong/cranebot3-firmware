@@ -2,7 +2,7 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 import scipy.optimize as optimize
-from time import time, sleep
+import time
 import glob
 from config import Config
 from cv_common import *
@@ -45,12 +45,12 @@ def collect_images_locally_raspi(num_images, resolution_str):
     picam2.start()
     picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.000001, "AfSpeed": controls.AfSpeedEnum.Fast}) 
     logging.info("Started Pi camera.")
-    sleep(1)
+    time.sleep(1)
     for i in range(num_images):
-        sleep(1)
+        time.sleep(1)
         im = picam2.capture_array()
         cv2.imwrite(f"images/cal/cap_{i}.jpg", im)
-        sleep(1)
+        time.sleep(1)
         logging.info(f'Collected ({i+1}/{num_images}) images.')
 
 def collect_images_stream(address, num_images):
@@ -64,19 +64,19 @@ def collect_images_stream(address, num_images):
     logging.info(f'Connecting to {address}...')
     cap = cv2.VideoCapture(address)
     logging.debug(f'Video capture object: {cap}')
-    last_cap_time = time()
+    last_cap_time = time.time()
     i = 0
     while i < num_images:
         ret, frame = cap.read()
         if not ret:
             logging.warning("Failed to capture frame from stream. Retrying...")
             return
-        if time() > last_cap_time+1:
-            fpath = f'images/cal/cap_{i}.jpg'
+        if time.time() > last_cap_time+1:
+            fpath = f'images/cal2/cap_{i}.png'
             cv2.imwrite(fpath, frame)
             i += 1
             logging.info(f'Saved frame to {fpath}')
-            last_cap_time = time()
+            last_cap_time = time.time()
 
 def is_blurry(image, threshold=6.0):
     """
@@ -169,7 +169,7 @@ class CalibrationInteractive:
 # calibrate from files locally
 def calibrate_from_files():
     ce = CalibrationInteractive()
-    for filepath in glob.glob('images/cal/*.jpg'):
+    for filepath in glob.glob('images/cal/*.png'):
         logging.info(f"Analyzing {filepath}")
         image = cv2.imread(filepath)
         ce.addImage(image)

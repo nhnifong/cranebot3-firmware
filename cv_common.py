@@ -6,6 +6,7 @@ import time
 from functools import lru_cache
 from config import Config
 import model_constants
+from scipy.spatial.transform import Rotation
 
 # --- Configuration ---
 config = Config()
@@ -242,6 +243,58 @@ def project_floor_to_pixels(floor_points, pose, K=mtx, D=distortion, image_shape
     normalized_pixels = image_points / image_shape
 
     return normalized_pixels
+
+static_ref = Rotation.from_euler('xyz', [-15.75, 23, 0], degrees=True).as_rotvec()
+
+def stabilize_frame(frame, rvec, K=mtx, scale_factor=1.3):
+    """
+    Warp a video frame to a stationary perspective based on rotation.
+
+    Args:
+        frame: The source image (numpy array).
+        rvec: Rodrigues rotation vector (3x1) from gripper to world.
+        K: Camera intrinsic matrix (3x3).
+        scale_factor: Multiplier for FOV (1.0 = same zoom, >1.0 = zoomed out).
+    """
+    h, w = frame.shape[:2]
+    calib_w, calib_h = (1920, 1080)
+
+    print(Rotation.from_rotvec(rvec).as_euler('xyz', degrees=True))
+    
+    # Scale K to match current frame size ---
+    # If we don't do this, the math assumes pixels are in 1080p coordinates
+    # but the image is actually 360p.
+    ratio_x = w / float(calib_w)
+    ratio_y = h / float(calib_h)
+    
+    # Create a local copy of K so we don't modify the global K_original
+    K_current = K.copy()
+    K_current[0, 0] *= ratio_x  # Scale fx
+    K_current[1, 1] *= ratio_y  # Scale fy
+    K_current[0, 2] *= ratio_x  # Scale cx
+    K_current[1, 2] *= ratio_y  # Scale cy
+    
+    # Rotation Math (Correct Physics Order) ---
+    R_curr, _ = cv2.Rodrigues(rvec)
+    
+    R_relative = R_curr.T
+
+    # Define Virtual Camera ---
+    # We build K_new based on the SCALED K_current, not the original huge one.
+    K_new = np.array([
+        [K_current[0, 0] / scale_factor, 0,                        w / 2.0],
+        [0,                              K_current[1, 1] / scale_factor, h / 2.0],
+        [0,                              0,                            1      ]
+    ])
+
+    # Homography ---
+    # H = K_new * R_relative * K_current_inverse
+    H = K_new @ R_relative @ np.linalg.inv(K_current)
+
+    # Warp the perspective.
+    # We use BORDER_CONSTANT to make the "void" areas black, distinguishing
+    # the valid camera view from the stabilized canvas.
+    return cv2.warpPerspective(frame, H, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)
