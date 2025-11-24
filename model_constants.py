@@ -1,5 +1,7 @@
 import numpy as np
 from math import pi, sqrt
+import cv2
+from scipy.spatial.transform import Rotation as R
 
 # data obtained manually from onshape
 # poses are specified as tuples of (rvec, tvec) # ROTATION IS FIRST
@@ -10,8 +12,41 @@ from math import pi, sqrt
 gripper_camera = (np.array([pi/2,0,0], dtype=float), np.array([0,0.004,-0.026], dtype=float))
 
 # rotation and translation vectors of the gripper IMU in the gripper reference frame
+# the BNO085 is mounted in the gripper with it's y axis up, x axis out of the grippers right ear, and X axis pointing out of the back of it's head.
+# to translate it into the reference frame of the gripper
 hpi = sqrt(2*pi**2)/2 # half hypoteneuse of a right triangle with legs=pi
-gripper_imu = (np.array([0., -hpi, -hpi], dtype=float), np.array([0.022, 0.03, 0.029], dtype=float))
+# gripper_imu = (np.array([0., -hpi, -hpi], dtype=float), np.array([0.022, 0.03, 0.029], dtype=float))
+gripper_imu = (np.array([pi/2, 0, 0], dtype=float), np.array([0, 0, 0], dtype=float))
+
+def get_camera_rvec_from_imu(quat_x, quat_y, quat_z, quat_w):
+# 1. Get standard World->IMU rotation
+    # REMOVE THE TRANSPOSE HERE.
+    # We trust the BNO085 to give us the rotation of the sensor in the world.
+    r_imu = R.from_quat([quat_x, quat_y, quat_z, quat_w])
+    R_world_to_imu = r_imu.as_matrix().T
+
+    # 2. Static Transform: IMU -> Camera
+    # YOUR MATRIX WAS CORRECT based on your description.
+    # IMU X (Right) -> Cam X (Right)
+    # IMU Z (Back)  -> Cam Y (Down in Image / Back of Gripper)
+    # IMU Y (Up)    -> Cam Z (Down into floor / -Up)
+    R_imu_to_cam = np.array([
+        [1,  0,  0],  # Cam X = IMU -Y
+        [0,  0,  1],  # Cam Y = IMU Z
+        [0, -1,  0]   # Cam Z = IMU X
+    ])
+
+    cam_to_fudge = np.array([
+        [-1,  0,  0],
+        [0,  -1,  0],
+        [0,   0,  1]
+    ])
+    
+    # 3. Chain: World -> IMU -> Camera -> fudge
+    R_world_to_cam = cam_to_fudge @ R_imu_to_cam @ R_world_to_imu
+    
+    rvec, _ = cv2.Rodrigues(R_world_to_cam)
+    return rvec
 
 # position of the gripper grommet point in the reference frame of the gripper. rotation is irrelevant
 gripper_grommet = (np.array([0,0,0], dtype=float), np.array([0,0.115,0.013], dtype=float))

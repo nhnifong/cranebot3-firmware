@@ -5,7 +5,7 @@ import signal
 import websockets
 import time
 import json
-from cv_common import locate_markers, compose_poses, invert_pose, average_pose, gantry_april_inv
+from cv_common import *
 import cv2
 import av
 import numpy as np
@@ -61,6 +61,7 @@ class ComponentClient:
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
+        self.ref_rvec =None
 
         config = Config()
         self.preferred_cameras = config.preferred_cameras
@@ -161,6 +162,14 @@ class ComponentClient:
                 # return the size lerobot is expecting. it's faster to do this resize before encoding.
                 dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
                 self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
+
+                if self.anchor_num is None:
+                    gripper_quat = self.datastore.imu_quat.getLast()[1:]
+                    # if self.ref_rvec is None:
+                    #     self.ref_rvec = gripper_rvec
+                    #     print(f'self.ref_rvec = {self.ref_rvec}')
+                    gripper_rvec = model_constants.get_camera_rvec_from_imu(*gripper_quat)
+                    self.last_frame_resized = stabilize_frame(self.last_frame_resized, gripper_rvec.T)
 
                 if self.anchor_num in self.preferred_cameras:
                     img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
