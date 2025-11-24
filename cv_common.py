@@ -244,57 +244,44 @@ def project_floor_to_pixels(floor_points, pose, K=mtx, D=distortion, image_shape
 
     return normalized_pixels
 
-static_ref = Rotation.from_euler('xyz', [-15.75, 23, 0], degrees=True).as_rotvec()
+expected_shape = (640, 360) # image dimensions that will be passed to stabilize_frame
+calibration_shape = (1920, 1080) # image dimensions that were used to calibrate camera
+sf_image_ratio = 1/3 # scale ratio between those two dimensioms
+sf_scale_factor=0.9 # amount to zoom in or out the stabilized image
+starting_K = mtx.copy()
+starting_K[0, 0] *= sf_image_ratio  # Scale fx
+starting_K[1, 1] *= sf_image_ratio  # Scale fy
+starting_K[0, 2] *= sf_image_ratio  # Scale cx
+starting_K[1, 2] *= sf_image_ratio  # Scale cy
+K_new = np.array([
+    [starting_K[0, 0] / sf_scale_factor, 0,                                   expected_shape[0] / 2.0],
+    [0,                                  starting_K[1, 1] / sf_scale_factor,  expected_shape[1] / 2.0],
+    [0,                                  0,                                   1                      ]
+])
 
-def stabilize_frame(frame, rvec, K=mtx, scale_factor=1.3):
+
+def stabilize_frame(frame, quat, K=mtx):
     """
     Warp a video frame to a stationary perspective based on rotation.
 
     Args:
-        frame: The source image (numpy array).
-        rvec: Rodrigues rotation vector (3x1) from gripper to world.
+        frame: The source image (numpy array). must be in the size used above to calculate ratios
+        quat: gripper rotation quaternion
         K: Camera intrinsic matrix (3x3).
-        scale_factor: Multiplier for FOV (1.0 = same zoom, >1.0 = zoomed out).
     """
-    h, w = frame.shape[:2]
-    calib_w, calib_h = (1920, 1080)
-
-    print(Rotation.from_rotvec(rvec).as_euler('xyz', degrees=True))
-    
-    # Scale K to match current frame size ---
-    # If we don't do this, the math assumes pixels are in 1080p coordinates
-    # but the image is actually 360p.
-    ratio_x = w / float(calib_w)
-    ratio_y = h / float(calib_h)
-    
-    # Create a local copy of K so we don't modify the global K_original
-    K_current = K.copy()
-    K_current[0, 0] *= ratio_x  # Scale fx
-    K_current[1, 1] *= ratio_y  # Scale fy
-    K_current[0, 2] *= ratio_x  # Scale cx
-    K_current[1, 2] *= ratio_y  # Scale cy
-    
-    # Rotation Math (Correct Physics Order) ---
-    R_curr, _ = cv2.Rodrigues(rvec)
-    
-    R_relative = R_curr.T
-
-    # Define Virtual Camera ---
-    # We build K_new based on the SCALED K_current, not the original huge one.
-    K_new = np.array([
-        [K_current[0, 0] / scale_factor, 0,                        w / 2.0],
-        [0,                              K_current[1, 1] / scale_factor, h / 2.0],
-        [0,                              0,                            1      ]
+    r_imu = Rotation.from_quat(quat)
+    R_world_to_imu = r_imu.as_matrix().T
+    R_imu_to_cam = np.array([
+        [-1, 0,  0],
+        [0,  0, -1],
+        [0, -1,  0]
     ])
-
-    # Homography ---
-    # H = K_new * R_relative * K_current_inverse
-    H = K_new @ R_relative @ np.linalg.inv(K_current)
+    R_world_to_cam = R_imu_to_cam @ R_world_to_imu
+    R_relative = R_world_to_cam.T
+    H = K_new @ R_relative @ np.linalg.inv(starting_K)
 
     # Warp the perspective.
-    # We use BORDER_CONSTANT to make the "void" areas black, distinguishing
-    # the valid camera view from the stabilized canvas.
-    return cv2.warpPerspective(frame, H, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+    return cv2.warpPerspective(frame, H, expected_shape, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)
