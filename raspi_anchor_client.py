@@ -165,11 +165,7 @@ class ComponentClient:
 
                 if self.anchor_num is None:
                     gripper_quat = self.datastore.imu_quat.getLast()[1:]
-                    # if self.ref_rvec is None:
-                    #     self.ref_rvec = gripper_rvec
-                    #     print(f'self.ref_rvec = {self.ref_rvec}')
-                    gripper_rvec = model_constants.get_camera_rvec_from_imu(*gripper_quat)
-                    self.last_frame_resized = stabilize_frame(self.last_frame_resized, gripper_rvec.T)
+                    self.last_frame_resized = stabilize_frame(self.last_frame_resized, gripper_quat)
 
                 if self.anchor_num in self.preferred_cameras:
                     img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
