@@ -52,6 +52,7 @@ class ComponentClient:
         self.save_raw = False
         self.connection_established_event = None
         self.frame = None # last frame of video seen
+        self.last_frame_cap_time = None
 
         # things used by jpeg thread for training mode
         self.frame_lock = threading.Lock()
@@ -95,6 +96,7 @@ class ComponentClient:
                     break
                 # determine the wall time when the frame was captured
                 timestamp = self.stream_start_ts + av_frame.time
+                self.last_frame_cap_time = timestamp
 
                 fr = av_frame.to_ndarray(format='rgb24')
                 with self.new_frame_condition:
@@ -164,14 +166,12 @@ class ComponentClient:
                 self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
 
                 if self.anchor_num is None:
-                    # TODO, get a reading from the IMU that is a few steps back from the latest, so that it
-                    # is a better timestamp match with the instant the frame was captured.
                     # create a method of capturing data for a network that centers the gripper over objects.
                     # 1. go to a location predicted by the dobby network.
                     # 2. switch to manual control
                     # 3. start recording these stabilized frames along with the gantry velocity and IMU just in case it is needed later.
                     # 4. train a network to predict the gantry velocity from the frame.
-                    gripper_quat = self.datastore.imu_quat.getLast()[1:]
+                    gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time)[1:]
                     self.last_frame_resized = stabilize_frame(self.last_frame_resized, gripper_quat)
 
                 if self.anchor_num in self.preferred_cameras:
