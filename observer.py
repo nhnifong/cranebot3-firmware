@@ -1073,7 +1073,7 @@ class AsyncObserver:
             # collect images from any anchors that have one
             valid_clients = []
             img_tensors = []
-            for client in self.anchors:
+            for client in self.bot_clients:
                 if client.last_frame_resized is None or client.anchor_num not in config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
@@ -1096,7 +1096,8 @@ class AsyncObserver:
                 results = extract_targets_from_heatmap(heatmap_np)
                 if len(results) > 0:
                     targets2d = results[:,:2] # the third number is confidence
-                    # Project points to floor using anchors specific pose
+                    # TODO if this is the gripper, use the target closest to the image center to compute a lateral gantry velocity for homing.
+                    # if this is an anchor, project points to floor using anchor's specific pose
                     floor_points = project_pixels_to_floor(targets2d, client.camera_pose)
                     all_floor_target_arrs.append(floor_points)
                 
