@@ -33,6 +33,7 @@ import pickle
 from collections import deque, defaultdict
 from trainer.control_service import start_robot_control_server
 from trainer.stringman_record_loop import record_until_disconnected
+from trainer.gripper_click_collector import capture_gripper_image
 from utils import constrain, motion_task
 import multiprocessing
 
@@ -1073,7 +1074,7 @@ class AsyncObserver:
             # collect images from any anchors that have one
             valid_clients = []
             img_tensors = []
-            for client in self.bot_clients:
+            for client in self.anchors:
                 if client.last_frame_resized is None or client.anchor_num not in config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
@@ -1081,6 +1082,7 @@ class AsyncObserver:
                 img_tensors.append(img_tensor)
                 valid_clients.append(client)
             if not img_tensors:
+                print('no image tensors')
                 continue
 
             # run batch inference on GPU and get targets
@@ -1096,7 +1098,6 @@ class AsyncObserver:
                 results = extract_targets_from_heatmap(heatmap_np)
                 if len(results) > 0:
                     targets2d = results[:,:2] # the third number is confidence
-                    # TODO if this is the gripper, use the target closest to the image center to compute a lateral gantry velocity for homing.
                     # if this is an anchor, project points to floor using anchor's specific pose
                     floor_points = project_pixels_to_floor(targets2d, client.camera_pose)
                     all_floor_target_arrs.append(floor_points)
@@ -1139,49 +1140,62 @@ class AsyncObserver:
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
-        gtask = None
-        while self.run_command_loop:
-            time.sleep(0.5)
-            next_target = self.select_target()
-            if next_target is None:
-                # TODO park on the saddle.
+        try:
+            gtask = None
+            while self.run_command_loop:
+
+                await asyncio.sleep(0.5)
+                # capture an image for the gripper centering dataset
+                capture_gripper_image(self.gripper_client.last_frame_resized)
                 continue
 
-            # pick Z position for gantry
-            goal_pos = np.array([next_target[0], next_target[1], 0.7])
-            self.gantry_goal_pos = goal_pos
+                next_target = self.select_target()
+                if next_target is None:
+                    # TODO park on the saddle.
+                    await asyncio.sleep(0.5)
+                    continue
 
-            # gantry is now heading for a position over next_target
-            # wait only one second for it to arrive.
-            try:
-                if gtask is None or gtask.done():
-                    gtask = asyncio.create_task(self.seek_gantry_goal())
-                await asyncio.wait_for(gtask, 1)
-            except TimeoutError:
-                # if doesn't arrive in one second, run target selection again since a better one might have appeared or the user might have put one in their queue
-                continue
+                # pick Z position for gantry
+                goal_pos = np.array([next_target[0], next_target[1], 1.2])
+                self.gantry_goal_pos = goal_pos
 
-            if self.gripper_client is None:
-                print('pick and place aborted because we lost the gripper connection')
-                break
+                # gantry is now heading for a position over next_target
+                # wait only one second for it to arrive.
+                try:
+                    if gtask is None or gtask.done():
+                        gtask = asyncio.create_task(self.seek_gantry_goal())
+                    await asyncio.wait_for(gtask, 1)
+                except TimeoutError:
+                    # if doesn't arrive in one second, run target selection again since a better one might have appeared or the user might have put one in their queue
+                    continue
 
-            # when we reach this point we arrived over the item. commit to it unless it proves impossible to pick up.
-            success = await self.execute_grasp()
-            if not success:
-                # just pick another target, but consider downranking this object or something.
-                continue
+                if self.gripper_client is None:
+                    print('pick and place aborted because we lost the gripper connection')
+                    break
 
-            # tension now just in case.
-            # await self.tension_and_wait()
-            # fly to to drop point
-            self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.7])
-            await self.seek_gantry_goal()
-            # open gripper
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))
-            # keep score
+                # when we reach this point we arrived over the item. commit to it unless it proves impossible to pick up.
+                success = await self.execute_grasp()
+                if not success:
+                    # just pick another target, but consider downranking this object or something.
+                    await asyncio.sleep(0.5)
+                    continue
 
-        if gtask is not None:
-            gtask.cancel()
+                # tension now just in case.
+                # await self.tension_and_wait()
+                # fly to to drop point
+                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.5])
+                await self.seek_gantry_goal()
+                # open gripper
+                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))
+                # keep score
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if gtask is not None:
+                gtask.cancel()
+            self.slow_stop_all_spools()
+            self.gantry_goal_pos = None
+            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
 
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
@@ -1191,11 +1205,13 @@ class AsyncObserver:
         while not self.pe.holding and attempts > 0:
             attempts -= 1
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+            await asyncio.sleep(0.7)
+
             print('move gripper down until laser rangefinder shows about 5cm or IMU shows tipping or timeout elapsed')
             self.pe.tip_over.clear()
             await self.move_direction_speed([0,0,-1], 0.05, downward_bias=0)
             try:
-                await asyncio.wait_for(self.pe.tip_over.wait(), 2)
+                await asyncio.wait_for(self.pe.tip_over.wait(), 4)
             except TimeoutError:
                 pass
             finally:
@@ -1208,9 +1224,9 @@ class AsyncObserver:
                 self.pe.finger_pressure_rising.clear()
             except TimeoutError:
                 print('did not detect a successful hold, open and hop.')
-                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.06]])
+                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.1]])
                 await self.move_direction_speed(direction, 0.05, downward_bias=0)
-                await asyncio.sleep(0.85)
+                await asyncio.sleep(3.0)
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
                 self.slow_stop_all_spools()
                 continue

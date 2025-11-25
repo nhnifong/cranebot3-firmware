@@ -240,6 +240,7 @@ class ComponentClient:
                 if 'video_ready' in update:
                     print(f'got a video ready update {update}')
                     port = int(update['video_ready'][0])
+                    # if self.anchor_num in self.preferred_cameras:
                     self.stream_start_ts = float(update['video_ready'][1])
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})

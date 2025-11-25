@@ -8,7 +8,7 @@ import json
 import numpy as np
 import argparse
 from huggingface_hub import snapshot_download
-from .dobby import DobbyNet  
+from .dobby import DobbyNet
 
 # Configuration Defaults
 DEFAULT_REPO_ID = "naavox/laundry-spots-dataset"
@@ -118,3 +118,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     train(args)
+
+"""
+python -m trainer.dobby_train \
+  --dataset_id=naavox/gripper-spots-dataset \
+  --model_path=trainer/models/sock_gripper.pth \
+  --epochs=1000
+"""
