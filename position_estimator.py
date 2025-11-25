@@ -399,7 +399,7 @@ class Positioner2:
             self.gant_pos = self.kf.state_estimate[:3].copy()
             self.gant_vel = self.kf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
-            # self.estimate_gripper()
+            self.estimate_gripper()
             self.detect_grip()
             self.send_positions()
 
@@ -498,24 +498,28 @@ class Positioner2:
 
     def estimate_gripper(self):
         """Estimate attributes of the gripper that depend on its IMU reading"""
-        t_rot = self.datastore.imu_rotvec.getLast()
-        ts = t_rot[0]
-        last_rotvec = t_rot[1:]
-        grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
+        last_imu = self.datastore.imu_quat.getLast()
+        ts = last_imu[0]
+        try:
+            rotation = Rotation.from_quat(last_imu[1:])
+        except ValueError:
+            rotation = Rotation.identity()
 
         # Detect Tipping
         THRESHOLD_RADIANS = 0.174533
-        if abs(grv[0]) > THRESHOLD_RADIANS or abs(grv[1]) > THRESHOLD_RADIANS:
+        euler = rotation.as_euler('xyz')
+        if abs(euler[0]) > THRESHOLD_RADIANS or abs(euler[1]) > THRESHOLD_RADIANS:
             self.tip_over.set()
 
         # feed angle to frequency estimator
-        self.swing_est.add_rotation_vector(ts, last_rotvec)
+        rotvec = rotation.as_rotvec()
+        self.swing_est.add_rotation_vector(ts, rotvec)
 
         # get the encoder based winch line length
         _, length, speed = self.datastore.winch_line_record.getLast()
 
         self.grip_pose = compose_poses([
-            (grv, self.gant_pos),
+            (rotvec, self.gant_pos),
             (np.zeros(3), np.array([0,0,-length], dtype=float)),
         ])
 

@@ -47,11 +47,14 @@ gantry_april = (np.array([-pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055]
 # position of the gantry keyring point in the gantry reference frame
 gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
 
-# The way I made myself understand this was to think of the room being mounted on the origin card with a certain rotation.
-room_relative_to_origin_card = (np.array([pi,0,0], dtype=float), np.array([0,0,0], dtype=float))
+# position in front of a basket marker where objects should be dropped
+basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.2], dtype=float))
+basket_offset_inv = (np.array([0,0,0], dtype=float), np.array([0,0,-0.2], dtype=float))
 
 # spool parameters
 empty_spool_diameter = 22.9
 assumed_full_line_length = 7.5 # meters
 full_spool_diameter_fishing_line = 27.5
 full_spool_diameter_power_line = 43.7
+
+rpi_cam_3_fov = np.array([66, 41])

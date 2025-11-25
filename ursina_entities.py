@@ -520,8 +520,6 @@ class Floor(Entity):
             self.last_action = act
             self.last_send_t = now
 
-        # -1.29516723  1.89840947  0.88209196
-
     def button_confirm(self):
         self.button.enabled = False
         self.button = None
@@ -717,6 +715,7 @@ class CamPreview(Entity):
             z=0.01, # Slightly behind the frame
             collider='box',
             on_click=self.vid_clicked,
+            on_mouse_exit=self.on_mouse_exit,
         )
         
         # overlay
@@ -780,12 +779,11 @@ class CamPreview(Entity):
             if self.cam.hovered:
                 # Convert Mouse World Point to Local Space of the Cam Quad
                 local_point = mouse.world_point - self.cam.world_position
-                
-                # Normalize X and Y. I have no idea how to derive these I just measured them.
-                # x ranges from -3.85 to +3.85
-                # y ranges from -2 to +2
-                u = clamp(mapval(local_point.x, -3.85, 3.85, 0, 1), 0, 1)
-                v = clamp(mapval(local_point.y, -2, 2, 1, 0), 0, 1)
+
+                dx = mouse.world_point.x - self.cam.world_position.x
+                dy = mouse.world_point.y - self.cam.world_position.y
+                u = clamp((dx / self.cam.world_scale_x) + 0.5, 0, 1)
+                v = clamp((-dy / self.cam.world_scale_y) + 0.5, 0, 1)
                 
                 self.render_projected_point((u, v))
 
@@ -801,6 +799,7 @@ class CamPreview(Entity):
                     self.app.camlines[self.anchor.num].model = draw_line(
                         self.anchor.empty.world_position, self.floor.target.world_position)
 
+                    # update the view of this point in other cameras
                     for key, other_cam in self.app.cam_views.items():
                         if key is None or other_cam is self:
                             continue
@@ -808,21 +807,23 @@ class CamPreview(Entity):
                         uv_coords = project_floor_to_pixels(floor_pos, other_cam.anchor.anchor_cam_pose)
                         if len(uv_coords) == 1:
                             other_cam.render_projected_point(uv_coords[0])
-            else:
-                # disable any visualizations when the mouse moves outside the camera rect
-                self.app.camlines[self.anchor.num].enabled = False
-                self.little_point.enabled = False
 
     def on_mouse_exit(self):
+        print(f'{self} on_mouse_exit')
         if self.floor.button is None:
-            self.app.camlines[self.anchor.num].enabled = False
-            for other_cam in self.app.cam_views.values():
-                other_cam.little_point.enabled = False
+            if self.anchor is not None:
+                # Cleanup lines
+                if self.app.camlines.get(self.anchor.num):
+                    self.app.camlines[self.anchor.num].enabled = False
+            
+                # Cleanup ALL little points
+                for other_cam in self.app.cam_views.values():
+                    other_cam.little_point.enabled = False
 
     def render_projected_point(self, uv_point):
         self.little_point.enabled = True
-        self.little_point.x = mapval(uv_point[0], 0, 1, -self.content_width/2, self.content_width/2)
-        self.little_point.y = mapval(uv_point[1], 1, 0, -self.content_height/2, self.content_height/2)
+        self.little_point.x = mapval(clamp(uv_point[0], 0, 1), 0, 1, -self.content_width/2, self.content_width/2)
+        self.little_point.y = mapval(clamp(uv_point[1], 0, 1), 1, 0, -self.content_height/2, self.content_height/2)
 
     def vid_clicked(self):
         self.floor.on_click()

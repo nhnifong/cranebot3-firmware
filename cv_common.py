@@ -62,10 +62,12 @@ def locate_markers(im):
     if detections:
         # These are the 3D corner points of a generic marker of size 1x1 meter.
         # We will scale this based on the actual marker size.
-        marker_points = np.array([[-0.5, 0.5, 0],
-                                  [0.5, 0.5, 0],
-                                  [0.5, -0.5, 0],
-                                  [-0.5, -0.5, 0]], dtype=np.float32)
+        marker_points_z_out = np.array([
+            [-0.5, -0.5, 0], # Index 0: Bottom-Left
+            [ 0.5, -0.5, 0], # Index 1: Bottom-Right
+            [ 0.5,  0.5, 0], # Index 2: Top-Right
+            [-0.5,  0.5, 0]  # Index 3: Top-Left
+        ], dtype=np.float32)
 
         for detection in detections:
             marker_id = detection.tag_id
@@ -90,7 +92,7 @@ def locate_markers(im):
             # This gives the pose of the marker relative to the camera.
             # The coordinate system has the origin at the camera center. The z-axis points from the camera center out the camera lens.
             # The x-axis is to the right in the image taken by the camera, and y is down. The tag's coordinate frame is centered at the center of the tag.
-            # From the viewer's perspective, the x-axis is to the right, y-axis down, and z-axis is into the tag.
+            # From the viewer's perspective, the x-axis is to the right, y-axis down, and z-axis is out of the tag.
             _, r, t = cv2.solvePnP(mp, corners, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             
             # Append the result in a JSON-serializable format

@@ -8,7 +8,7 @@ import json
 import numpy as np
 import argparse
 from huggingface_hub import snapshot_download
-from .seeker import SeekerNet
+from .centering import CenteringNet
 
 # Configuration Defaults
 DEFAULT_REPO_ID = "naavox/gripper-spots-dataset"
@@ -62,13 +62,11 @@ class SockDataset(Dataset):
         
         if isinstance(pt, (list, tuple)):
             cx, cy = pt[0], pt[1]
-            cz = pt[2] if len(pt) > 2 else 0.0
         elif isinstance(pt, dict):
             cx = pt.get('x', 0)
             cy = pt.get('y', 0)
-            cz = pt.get('z', 0.0) # Default to 0 if z is missing
         else:
-            cx, cy, cz = w/2, h/2, 0.0
+            cx, cy = w/2, h/2
 
         # Normalize Coordinates to [-1, 1] range
         # (0, 0) becomes top-left (-1, -1), (w, h) becomes bottom-right (1, 1)
@@ -76,11 +74,7 @@ class SockDataset(Dataset):
         norm_x = (cx - (w / 2)) / (w / 2)
         norm_y = (cy - (h / 2)) / (h / 2)
         
-        # We assume Z is already normalized or small relative to pixel counts. 
-        # If Z is in pixels, you might need to normalize it similarly.
-        norm_z = float(cz)
-
-        vector_target = torch.tensor([norm_x, norm_y, norm_z], dtype=torch.float32)
+        vector_target = torch.tensor([norm_x, norm_y], dtype=torch.float32)
             
         return img_tensor, vector_target
 
@@ -99,8 +93,8 @@ def train(args):
     
     os.makedirs(os.path.dirname(args.model_path), exist_ok=True)
     
-    # Initialize SeekerNet
-    model = SeekerNet().to(DEVICE)
+    # Initialize CenteringNet
+    model = CenteringNet().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     
     # MSELoss is standard for continuous vector regression
@@ -140,7 +134,7 @@ def train(args):
     print(f"Final Model saved to {args.model_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train SeekerNet on Gripper Spots Dataset")
+    parser = argparse.ArgumentParser(description="Train CenteringNet on Gripper Spots Dataset")
     
     parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID, 
                         help=f"HuggingFace Dataset Repo ID (default: {DEFAULT_REPO_ID})")

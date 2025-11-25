@@ -289,7 +289,6 @@ def optimize_anchor_poses(averages):
         guess = invert_pose(compose_poses([
             model_constants.anchor_camera,
             origin_marker_pose,
-            model_constants.room_relative_to_origin_card,
         ]))
         
         initial_guesses.append(guess)
