@@ -5,17 +5,15 @@ import json
 import numpy as np
 import random
 import shutil
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from huggingface_hub import HfApi, create_repo
-from scipy.spatial.transform import Rotation
-from cv_common import stabilize_frame, invert_pose, compose_poses
 import model_constants
+import random
 
 # Configuration
-SOURCE_DATASET_ID = "naavox/merged-5"
 TARGET_HF_REPO = "naavox/gripper-spots-dataset"  # Change this to your desired target repo name
 LOCAL_DATASET_ROOT = "gripper_spots_data"        # Local folder name
 CAMERA_KEY = "observation.images.gripper_camera"
+UNPROCESSED_DIR = "gripper_spots_data_unprocessed"
 
 # Paths for the structure: root -> train -> images + metadata.jsonl
 TRAIN_DIR = os.path.join(LOCAL_DATASET_ROOT, "train")
@@ -36,11 +34,28 @@ if not os.path.exists(readme_path):
         f.write("  - split: train\n")
         f.write("    path: train/metadata.jsonl\n")
         f.write("---\n\n")
-        f.write(f"# Laundry Spots Dataset\n\nGenerated from {SOURCE_DATASET_ID}.")
 
 # State
 current_clicks = []
 current_image = None
+
+def capture_gripper_image(ndimage):
+    file_id = str(uuid.uuid4())
+    img_filename = f"{file_id}.jpg"
+    img_full_path = os.path.join(UNPROCESSED_DIR, img_filename)
+    # Save Image to train folder
+    cv2.imwrite(img_full_path, ndimage)
+
+def get_unprocessed_image_filepath():
+    files = [
+        f for f in os.listdir(UNPROCESSED_DIR) 
+        if os.path.isfile(os.path.join(UNPROCESSED_DIR, f))
+    ]
+    if not files:
+        print(f"No files found in {UNPROCESSED_DIR}")
+        return None
+    else:
+        return os.path.join(UNPROCESSED_DIR, random.choice(files))
 
 def mouse_callback(event, x, y, flags, param):
     global current_clicks
@@ -79,8 +94,6 @@ def draw_interface():
     cv2.imshow("Collector", display)
 
 def main():
-    print(f"Loading source dataset {SOURCE_DATASET_ID}...")
-    dataset = LeRobotDataset(SOURCE_DATASET_ID)
     
     cv2.namedWindow("Collector")
     cv2.setMouseCallback("Collector", mouse_callback)
@@ -95,36 +108,14 @@ def main():
     global current_clicks, current_image
     
     while True:
-        # Pick a random frame
-        idx = random.randint(0, len(dataset) - 1)
-        item = dataset[idx]
-        
-        if CAMERA_KEY not in item:
-            continue
-            
-        state = item['observation.state']
-        pad_voltage = state[9]
-        if pad_voltage > 0.4:
-            continue # don't want to use images where a sock is being held.
+        # Pick a random image from the unprocessed directory
+        fn = get_unprocessed_image_filepath()
+        if fn is None:
+            print("All files processed")
+            break 
 
-        # Process Image (LeRobot Tensor -> OpenCV BGR)
-        img_tensor = item[CAMERA_KEY] 
-        img_np = img_tensor.permute(1, 2, 0).numpy()
-
-        # apply the iamge stabilization using the IMU value from the moment the image was collected
-        gripper_rvec = state[5:8]
-        imu_rvec = compose_poses([
-            (gripper_rvec.numpy(), np.zeros(3)),
-            invert_pose(model_constants.gripper_imu)
-        ])[0]
-
-        gripper_quat = Rotation.from_rotvec(imu_rvec).as_quat()
-        img_np = stabilize_frame(img_np, gripper_quat)
-        
-        if img_np.dtype == np.float32 or img_np.dtype == np.float64:
-            img_np = (img_np * 255).astype(np.uint8)
-        
-        current_image = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+        current_image = cv2.imread(fn)
+        # current_image = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         current_clicks = [] 
         
         draw_interface()
@@ -168,6 +159,7 @@ def main():
                 else:
                     print("No points selected! Press 'n' to skip.")
                     
+        os.remove(fn)
         if break_outer:
             break
 

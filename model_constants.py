@@ -33,7 +33,9 @@ laser_offset = 0.14 # meters
 # 	(np.array([0,pi,0], dtype=float), np.array([0.054, -0.038, 0.017], dtype=float)), # the camera is mounted upside down
 #     (np.array([(90-tilt)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float)),
 # ])
-anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -0.038,  0.017], dtype=float))
+# anchor_camera = (np.array([ 0.        ,  2.57344204, -1.80194352], dtype=float), np.array([ 0.054, -0.038,  0.017], dtype=float)) # 20
+anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -0.038,  0.017], dtype=float)) # 28
+# anchor_camera = (np.array([ 0.        ,  2.79917955, -1.42625322], dtype=float), np.array([ 0.054, -0.038,  0.017], dtype=float)) # 36
 
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
