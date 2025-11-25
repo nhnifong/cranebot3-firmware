@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 
-class SeekerNet(nn.Module):
+class CenteringNet(nn.Module):
     """
-    Predicts a 3D velocity vector (x, y, z) from a 640x360 input image.
+    Predicts a 2D vector (x, y) from a 640x360 input image.
     Uses CoordConv to explicitly explicitly encode spatial position.
     """
 
@@ -31,7 +31,7 @@ class SeekerNet(nn.Module):
             nn.Dropout(p=0.5),
             nn.Linear(512, 64),
             nn.ReLU(inplace=True),
-            nn.Linear(64, 3) 
+            nn.Linear(64, 2) # 2d vector output
         )
 
     def conv_block(self, in_c, out_c):

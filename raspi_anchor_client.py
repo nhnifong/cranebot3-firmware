@@ -374,11 +374,13 @@ class RaspiAnchorClient(ComponentClient):
                 if self.save_raw:
                     self.raw_gant_poses.append(pose_from_det(detection))
 
-            if detection['n'] in ['gamepad', 'hamper', 'trash']:
+            if detection['n'] in ['gamepad', 'hamper', 'trash', 'gamepad-back', 'hamper-back', 'trash-back']:
+                offset = model_constants.basket_offset_inv if detection['n'].endswith('back') else model_constants.basket_offset
                 pose = np.array(compose_poses([
                     self.anchor_pose,
                     model_constants.anchor_camera, # constant
                     pose_from_det(detection), # the pose obtained just now
+                    offset, # the named location is out in front of the tag.
                 ]))
                 position = pose.reshape(6)[3:]
                 # save the position of this object for use in various planning tasks.

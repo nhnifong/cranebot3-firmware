@@ -19,7 +19,6 @@ import model_constants
 import time
 from zeroconf import IPVersion
 from zeroconf.asyncio import AsyncZeroconf
-from utils import constrain
 
 class TestObserver(unittest.IsolatedAsyncioTestCase):
 

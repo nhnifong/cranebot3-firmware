@@ -6,7 +6,7 @@ import numpy as np
 import argparse
 import random
 from huggingface_hub import snapshot_download
-from .seeker import SeekerNet
+from .centering import CenteringNet
 
 # Configuration Defaults
 DEFAULT_REPO_ID = "naavox/gripper-spots-dataset"
@@ -31,24 +31,21 @@ def load_dataset_samples(root_dir):
     return samples, data_dir
 
 def get_vector_from_sample(sample, w, h):
-    """Extracts the normalized vector (x, y, z) from a sample."""
+    """Extracts the normalized vector (x, y) from a sample."""
     pt = sample["points"][0]
     if isinstance(pt, (list, tuple)):
         cx, cy = pt[0], pt[1]
-        cz = pt[2] if len(pt) > 2 else 0.0
     elif isinstance(pt, dict):
         cx = pt.get('x', 0)
         cy = pt.get('y', 0)
-        cz = pt.get('z', 0.0)
     else:
-        cx, cy, cz = w/2, h/2, 0.0
+        cx, cy = w/2, h/2
 
     # Normalize to [-1, 1]
     norm_x = (cx - (w / 2)) / (w / 2)
     norm_y = (cy - (h / 2)) / (h / 2)
-    norm_z = float(cz)
     
-    return torch.tensor([norm_x, norm_y, norm_z], dtype=torch.float32), (cx, cy)
+    return torch.tensor([norm_x, norm_y], dtype=torch.float32), (cx, cy)
 
 def denormalize_coords(norm_x, norm_y, w, h):
     """Converts model output [-1, 1] back to pixel coordinates."""
@@ -59,7 +56,7 @@ def denormalize_coords(norm_x, norm_y, w, h):
 def visualize(args):
     # 1. Load Model
     print(f"Loading model from {args.model_path}...")
-    model = SeekerNet().to(DEVICE)
+    model = CenteringNet().to(DEVICE)
     try:
         model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
     except FileNotFoundError:
@@ -129,7 +126,7 @@ def visualize(args):
         cv2.putText(img, info_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         cv2.putText(img, gt_text, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-        cv2.imshow("SeekerNet Prediction", img)
+        cv2.imshow("CenteringNet Prediction", img)
 
         key = cv2.waitKey(0) & 0xFF
         if key == ord('q'):
@@ -138,7 +135,7 @@ def visualize(args):
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Visualize SeekerNet Predictions")
+    parser = argparse.ArgumentParser(description="Visualize CenteringNet Predictions")
     parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
     parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     

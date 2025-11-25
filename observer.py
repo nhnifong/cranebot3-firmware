@@ -33,8 +33,7 @@ import pickle
 from collections import deque, defaultdict
 from trainer.control_service import start_robot_control_server
 from trainer.stringman_record_loop import record_until_disconnected
-from trainer.gripper_click_collector import capture_gripper_image
-from utils import constrain, motion_task
+from trainer.centering_labler import capture_gripper_image
 import multiprocessing
 
 # Define the service names for network discovery
@@ -44,9 +43,6 @@ gripper_service_name = 'cranebot-gripper-service'
 
 N_ANCHORS = 4
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
-
-def constrain(value, minimum, maximum):
-    return max(minimum, min(value, maximum))
 
 def figure_8_coords(t):
     """
@@ -104,8 +100,10 @@ class AsyncObserver:
         self.last_gp_action = None
         self.episode_control_events = set()
         self.named_positions = {}
-        self.model = None
+        self.dobby_model = None
         self.floor_targets = []
+        self.centering_model = None
+        self.predicted_lateral_vector = None
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -935,7 +933,7 @@ class AsyncObserver:
         # The speed limit is proportional to how far the gantry hangs below a level 30cm below the average anchor.
         # This makes the behavior consistent across installations of different heights.
         hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
-        speed_limit = constrain(0.3 * (hang_distance - 0.1), 0.01, 0.55)
+        speed_limit = clamp(0.3 * (hang_distance - 0.1), 0.01, 0.55)
         speed = min(speed, speed_limit)
 
         # when a very small speed is provided, clamp it to zero.
@@ -1051,20 +1049,30 @@ class AsyncObserver:
         Send heatmaps to UI.
         Store target candidates and confidence.
         """
-        MODEL_PATH = "trainer/models/sock_tracker.pth"
+        DOBBY_MODEL_PATH = "trainer/models/sock_tracker.pth"
+        CENTERING_MODEL_PATH = "trainer/models/sock_gripper.pth"
         IMAGE_RES = (640, 360)
         DEVICE = "cpu"
         LOOP_DELAY = 0.5
 
-        if self.model is None:
+        if self.dobby_model is None:
             import torch
             from trainer.dobby import DobbyNet
             from trainer.dobby_eval import extract_targets_from_heatmap
             DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"Loading model from {MODEL_PATH}...")
-            model = DobbyNet().to(DEVICE)
-            model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-            model.eval()
+            print(f"Loading model from {DOBBY_MODEL_PATH}...")
+            self.dobby_model = DobbyNet().to(DEVICE)
+            self.dobby_model.load_state_dict(torch.load(DOBBY_MODEL_PATH, map_location=DEVICE))
+            self.dobby_model.eval()
+
+        if self.centering_model is None:
+            import torch
+            from trainer.centering import CenteringNet
+            DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"Loading model from {CENTERING_MODEL_PATH}...")
+            self.centering_model = CenteringNet().to(DEVICE)
+            self.centering_model.load_state_dict(torch.load(CENTERING_MODEL_PATH, map_location=DEVICE))
+            self.centering_model.eval()
 
         config = Config()
 
@@ -1072,29 +1080,40 @@ class AsyncObserver:
             await asyncio.sleep(LOOP_DELAY)
 
             # collect images from any anchors that have one
-            valid_clients = []
+            valid_anchor_clients = []
             img_tensors = []
-            for client in self.anchors:
+            gripper_image_tensor = None
+            for client in self.bot_clients.values():
                 if client.last_frame_resized is None or client.anchor_num not in config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
                 img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0
-                img_tensors.append(img_tensor)
-                valid_clients.append(client)
+                if client.anchor_num is not None:
+                    img_tensors.append(img_tensor)
+                    valid_anchor_clients.append(client)
+                else:
+                    gripper_image_tensor = img_tensor
+            
+            if gripper_image_tensor is not None:
+                with torch.no_grad():
+                    # you get a normalized u,v coordinate in the [-1,1] range
+                    self.predicted_lateral_vector = self.centering_model(gripper_image_tensor).cpu().squeeze().numpy()
+                    self.to_ui_q.put({'grip_lat': self.predicted_lateral_vector})
+
             if not img_tensors:
-                print('no image tensors')
+                # no anchor images to process right now. cameras are probably still connecting.
                 continue
 
             # run batch inference on GPU and get targets
             all_floor_target_arrs = []
             batch = torch.stack(img_tensors).to(DEVICE)
             with torch.no_grad():
-                heatmaps_out = model(batch)
+                heatmaps_out = self.dobby_model(batch)
 
             # Shape: (Batch, 1, H, W) -> (Batch, H, W)
             heatmaps_np = heatmaps_out.squeeze(1).cpu().numpy() # this is the blocking call
             for i, heatmap_np in enumerate(heatmaps_np):
-                client = valid_clients[i]
+                client = valid_anchor_clients[i]
                 results = extract_targets_from_heatmap(heatmap_np)
                 if len(results) > 0:
                     targets2d = results[:,:2] # the third number is confidence
@@ -1105,7 +1124,7 @@ class AsyncObserver:
                 # create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
                 heatmap_vis = (heatmap_np * 255).astype(np.uint8)
                 heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
-                self.to_ui_q.put({'heatmap': {'anchor_num':valid_clients[i].anchor_num, 'image':heatmap_color}})
+                self.to_ui_q.put({'heatmap': {'anchor_num':valid_anchor_clients[i].anchor_num, 'image':heatmap_color}})
 
             if len(all_floor_target_arrs) == 0:
                 continue
@@ -1140,15 +1159,12 @@ class AsyncObserver:
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
+        PICK_WINCH_LENGTH = 0.8
+        DROP_WINCH_LENGTH = 0.4
+
         try:
             gtask = None
             while self.run_command_loop:
-
-                await asyncio.sleep(0.5)
-                # capture an image for the gripper centering dataset
-                capture_gripper_image(self.gripper_client.last_frame_resized)
-                continue
-
                 next_target = self.select_target()
                 if next_target is None:
                     # TODO park on the saddle.
@@ -1158,6 +1174,9 @@ class AsyncObserver:
                 # pick Z position for gantry
                 goal_pos = np.array([next_target[0], next_target[1], 1.2])
                 self.gantry_goal_pos = goal_pos
+
+                # set winch for ideal pickup length (0.8m?)
+                await self.gripper_client.send_commands({'length_plan': [time.time(), PICK_WINCH_LENGTH]})
 
                 # gantry is now heading for a position over next_target
                 # wait only one second for it to arrive.
@@ -1182,12 +1201,18 @@ class AsyncObserver:
 
                 # tension now just in case.
                 # await self.tension_and_wait()
+
+                await self.gripper_client.send_commands({'length_plan': [time.time(), DROP_WINCH_LENGTH]})
+
                 # fly to to drop point
                 self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.5])
                 await self.seek_gantry_goal()
                 # open gripper
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))
+
                 # keep score
+
+
         except asyncio.CancelledError:
             raise
         finally:
@@ -1201,11 +1226,35 @@ class AsyncObserver:
         """Try to grasp whatever is directly below the gripper"""
         OPEN = -30
         CLOSED = 85
+        CENTERING_SEC = 1.5
+
         attempts = 4
         while not self.pe.holding and attempts > 0:
             attempts -= 1
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(0.7) # wait for fingers to get out of the way of the camera
+
+            # determine which direction we'd have to move laterally to center the object
+            if self.predicted_lateral_vector is not None:
+                # you get a normalized u,v coordinate in the [-1,1] range
+                pred_vector = self.predicted_lateral_vector
+                # for now assume that the up direction in the gripper image is +Y in world space 
+                # stabilize_frame produced this direction and I think it depends on the compass.
+                # the direction in world space depends on how the user placed the origin card on the ground
+                # we need to capture a number during calibration to relate these two.
+                pred_vector[1] *= -1 # invert Y
+                # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
+                distance_to_floor = 0.8 # TODO fix i2c bus problem with rangefinder
+                # and the FOV of the simulated image, which is sf_scale_factor * (camera module 3 fov)
+                half_virtual_fov = model_constants.rpi_cam_3_fov * sf_scale_factor / 2
+                # lateral distance to object
+                lateral_vector = np.sin(pred_vector * half_virtual_fov) * distance_to_floor
+                # lateral distance in meters
+                lateral_distance = np.linalg.norm(lateral_vector)
+                # speed to travel that lateral distance in CENTERING_SEC
+                lateral_speed = lateral_distance / CENTERING_SEC
+                await self.move_direction_speed([lateral_vector[0],lateral_vector[1],0], lateral_speed)
+                await asyncio.sleep(CENTERING_SEC)
 
             print('move gripper down until laser rangefinder shows about 5cm or IMU shows tipping or timeout elapsed')
             self.pe.tip_over.clear()
@@ -1225,7 +1274,7 @@ class AsyncObserver:
             except TimeoutError:
                 print('did not detect a successful hold, open and hop.')
                 direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.1]])
-                await self.move_direction_speed(direction, 0.05, downward_bias=0)
+                await self.move_direction_speed(direction, 0.05)
                 await asyncio.sleep(3.0)
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
                 self.slow_stop_all_spools()
@@ -1233,9 +1282,6 @@ class AsyncObserver:
             print('Successful grasp')
             return True
         print('Gave up on grasp after a few attempts')
-        # TODO train a small network to assist with positioning.
-        # using the gripper camera, and an estimate of which way it pointing in world space, predict a gantry move to center the target.
-        # Since the pilot version gripper can freely rotate in Z, this is needlessly hard and supports the justification for rigidly linking it to the gantry
         return False
 
 def start_observation(to_ui_q, to_ob_q):

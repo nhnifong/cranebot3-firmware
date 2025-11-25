@@ -135,8 +135,8 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         }
         asyncio.create_task(self.server_ws.send(json.dumps({'grip_sensors': data})))
         await asyncio.sleep(0.1)
-        expected_rotation_vector = np.array([ timestamp, 0.140709, -0.422127, -1.5478])
-        np.testing.assert_array_almost_equal(expected_rotation_vector, self.datastore.imu_rotvec.getLast())
+        expected_rotation_vector = np.array([ timestamp, 4,5,6,7])
+        np.testing.assert_array_almost_equal(expected_rotation_vector, self.datastore.imu_quat.getLast())
         expected_range_record = np.array([timestamp, 30.0])
         np.testing.assert_array_almost_equal(expected_range_record, self.datastore.range_record.getLast())
         expected_finger_record = np.array([timestamp, 10.0, 1.0]) # time, angle, voltage
