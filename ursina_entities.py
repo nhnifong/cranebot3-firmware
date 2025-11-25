@@ -57,8 +57,6 @@ class Gantry(Entity):
         self.zup_pos = pos
         self.zup_vel = vel
         self.position = swap_yz(pos)
-        # height of the mouse target reticule, not the height of the floor
-        # self.ui.floor.set_reticule_height(pos[2])
 
     def set_slack_vis(self, slack):
         """slack is an array of bools for each anchor. true meaning the line should be drawn with a droop"""
@@ -350,8 +348,6 @@ class Floor(Entity):
         )
         self.app = app
         self.alt = 0.3 # altitude of blue circle in meters
-        self.button = None
-        self.button_offset = (0.02, -0.03)
         self.target = Entity(
             model='quad',
             position=(0, 0, 0),
@@ -377,6 +373,12 @@ class Floor(Entity):
             parent=self.target,
             texture='blue_circle.png',
         )
+
+        # Target lock state and confirm buttons
+        self.locked = False
+        self.confirm_btn = None
+        self.cancel_btn = None
+        self.button_offset = (0.02, -0.03)
 
         # state for gamepad processing
         self.last_update_t = time.time()
@@ -404,35 +406,62 @@ class Floor(Entity):
         self.gp_pos = pos
         self.you.position = [self.gp_pos[0], 1, self.gp_pos[1]]
 
-    def set_reticule_height(self, height):
-        self.alt = height
-        self.circle.position[2] = -self.alt*2
-        self.pipe.model=Pipe(
-                path=[(0,0,0), (0,self.alt*2,0)],
-                thicknesses=(0.01, 0.01),
-                cap_ends=True)
+    # def on_click(self):
+    #     if not self.locked:
+    #         self.lock_target()
 
-    def on_click(self):
-        if self.button is None:
-            # put a goal point indicator here and then the user to click it to confirm
-            self.button = Button(
-                color=rgb(0.1,0.8,0.1),
-                text_color=color.black,
-                text="Confirm",
-                scale=(0.05, 0.02),
-                text_size=0.5,
-                on_click=self.button_confirm
-            )
-        else:
-            self.button = None
+    def lock_target(self):
+        self.locked = True
+        # Create UI buttons
+        self.confirm_btn = Button(
+            parent=camera.ui,
+            color=color.azure, text_color=color.white, text="Confirm",
+            scale=(0.12, 0.05), text_size=0.75, 
+            on_click=self.button_confirm
+        )
+        self.cancel_btn = Button(
+            parent=camera.ui,
+            color=color.red, text_color=color.white, text="Cancel",
+            scale=(0.12, 0.05), text_size=0.75,
+            on_click=self.button_cancel
+        )
+        # Force position update immediately so they don't jump 
+        self.update_buttons()
+
+    def button_cancel(self):
+        self.unlock_target()
+
+    def unlock_target(self):
+        self.locked = False
+        if self.confirm_btn:
+            destroy(self.confirm_btn)
+            self.confirm_btn = None
+        if self.cancel_btn:
+            destroy(self.cancel_btn)
+            self.cancel_btn = None
+
+    def button_confirm(self):
+        print(f"Goal Confirmed: {self.target.position}")
+        if self.app.to_ob_q:
+            self.app.to_ob_q.put({'add_floor_target': swap_yz(self.target.world_position)})
+        self.unlock_target()
+
+    def update_buttons(self):
+        if self.confirm_btn:
+            # We use world_position_to_screen_position to place UI elements over 3D objects
+            screen_pos = self.target.screen_position
+            # Screen pos is (0,0) center, range -0.5 to 0.5
+            # We add a small offset to put buttons near the target
+            self.confirm_btn.position = screen_pos + self.button_offset
+            self.cancel_btn.position = screen_pos + self.button_offset + Vec2(0, -0.06)
 
     def update(self):
-        if self.button is None:
+        # Target Selection Logic
+        if not self.locked:
             if mouse.hovered_entity == self:
-                # Get the intersection point in world coordinates
                 self.target.position = mouse.world_point
         else:
-            self.button.position = world_position_to_screen_position(self.circle.world_position) + self.button_offset
+            self.update_buttons()
 
         #  =========== collect input from attatched gamepad ===========
         # these are available from the update function of any enabled entity, the floor just happens to be a singular always enabled entity.
@@ -508,7 +537,7 @@ class Floor(Entity):
         self.dpad_left_was_held = dpad_left_held
 
         act = np.array([*vector, speed, self.smooth_winch_speed, self.finger_angle])
-        if not np.array_equal(act, self.last_action) or (now > (self.last_send_t + 0.2) and sum(vector) != 0):
+        if not np.array_equal(act, self.last_action) or (now > (self.last_send_t + 0.2) and np.linalg.norm(vector) > 1e-3):
             self.app.to_ob_q.put({
                 'gamepad': {
                     'winch': self.smooth_winch_speed,
@@ -775,7 +804,7 @@ class CamPreview(Entity):
         self.cam.texture._texture.setRamImage(overlay)
 
     def update(self):
-        if self.anchor and self.floor.button is None:
+        if self.anchor and not self.floor.locked:
             if self.cam.hovered:
                 # Convert Mouse World Point to Local Space of the Cam Quad
                 local_point = mouse.world_point - self.cam.world_position
@@ -810,7 +839,7 @@ class CamPreview(Entity):
 
     def on_mouse_exit(self):
         print(f'{self} on_mouse_exit')
-        if self.floor.button is None:
+        if not self.floor.locked:
             if self.anchor is not None:
                 # Cleanup lines
                 if self.app.camlines.get(self.anchor.num):
@@ -826,4 +855,6 @@ class CamPreview(Entity):
         self.little_point.y = mapval(clamp(uv_point[1], 0, 1), 1, 0, -self.content_height/2, self.content_height/2)
 
     def vid_clicked(self):
-        self.floor.on_click()
+        # Only allow locking if this is an anchor (not generic/gripper) AND not already locked
+        if self.anchor and not self.floor.locked:
+            self.floor.lock_target()
