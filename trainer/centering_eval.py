@@ -98,7 +98,7 @@ def visualize(args):
             pred_vector = model(img_tensor).cpu().squeeze()
 
         # 7. Visualization Logic
-        pred_x, pred_y, pred_z = pred_vector[0].item(), pred_vector[1].item(), pred_vector[2].item()
+        pred_x, pred_y = pred_vector[0].item(), pred_vector[1].item()
         
         # Convert prediction to pixels
         pred_cx, pred_cy = denormalize_coords(pred_x, pred_y, w, h)
@@ -118,8 +118,8 @@ def visualize(args):
         cv2.circle(img, (pred_cx, pred_cy), 5, (0, 0, 255), -1)
 
         # Text Overlay
-        info_text = f"Pred: ({pred_x:.2f}, {pred_y:.2f}, {pred_z:.2f})"
-        gt_text =   f"True: ({gt_vector[0]:.2f}, {gt_vector[1]:.2f}, {gt_vector[2]:.2f})"
+        info_text = f"Pred: ({pred_x:.2f}, {pred_y:.2f})"
+        gt_text =   f"True: ({gt_vector[0]:.2f}, {gt_vector[1]:.2f})"
         
         # Add background for text readability
         cv2.rectangle(img, (5, 5), (300, 60), (0, 0, 0), -1)

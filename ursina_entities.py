@@ -777,8 +777,58 @@ class CamPreview(Entity):
             enabled=False,
         )
 
+        # Diagnostic Arrow
+        self.prediction_arrow = Entity(
+            parent=self,
+            model='arrow',
+            color=color.cyan,
+            enabled=False,
+            position=(0,0,-0.2), # Slightly in front of little_point
+            # Initialize scale to thin proportions, Z will be overridden by magnitude
+            scale=(0.015, 0.015, 1)
+        )
+
         # indicates whether the texture has been allocated
         self.haveSetImage = False
+
+    def set_prediction_vector(self, vec):
+        """
+        Takes a 2D vector in [-1, 1] range (e.g. from a joystick) and draws 
+        a thin arrow from the center of the view.
+        If vec is None or magnitude is ~0, hides the arrow.
+        """
+        if vec is None:
+            self.prediction_arrow.enabled = False
+            return
+
+        # Map normalized [-1,1] input to local physical dimensions of the content view
+        # Assuming vec[0] is X (Right+) and vec[1] is Y (Up+)
+        # target_x = vec[0] * (self.content_width / 2)
+        # target_y = -vec[1] * (self.content_height / 2)
+        target_x = mapval(clamp(vec[0], -1, 1), -1, 1, -self.content_width/2, self.content_width/2)
+        target_y = mapval(clamp(vec[1], -1, 1), 1, -1, -self.content_height/2, self.content_height/2)
+
+        # Vector length in local physical units
+        physical_magnitude = Vec2(target_x, target_y).length()
+
+        if physical_magnitude < 1e-3:
+            self.prediction_arrow.enabled = False
+            return
+
+        self.prediction_arrow.enabled = True
+
+        # Set length based on magnitude. Keep thickness thin and constant.
+        # The default Ursina arrow model is 1 unit long along its Z-axis.
+        self.prediction_arrow.scale_z = physical_magnitude
+        self.prediction_arrow.scale_x = 0.015 # Constant thin width
+        self.prediction_arrow.scale_y = 0.015 # Constant thin height
+
+        # Orientation using look_at:
+        # Define the target point relative to the arrow's own position within the parent space.
+        # We keep the Z coordinate the same as the arrow's Z to keep it flat in that plane.
+        target_point_in_parent_space = Vec3(target_x, target_y, self.prediction_arrow.z)
+        # Point the arrow's Z-axis (its length) towards the target point.
+        self.prediction_arrow.look_at(target_point_in_parent_space)
 
     def setHeatmap(self, heatmap):
         """Store a heatmap image in BGR pixel format."""

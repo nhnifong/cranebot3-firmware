@@ -157,7 +157,8 @@ def main():
                     print(f"Saved {len(current_clicks)} points -> {img_filename}")
                     break 
                 else:
-                    print("No points selected! Press 'n' to skip.")
+                    print("Skipped frame.")
+                    break
                     
         os.remove(fn)
         if break_outer:

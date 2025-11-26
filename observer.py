@@ -24,7 +24,7 @@ from random import random
 from config import Config
 from stats import StatCounter
 from position_estimator import Positioner2
-from cv_common import invert_pose, compose_poses, average_pose, project_pixels_to_floor
+from cv_common import *
 from calibration import optimize_anchor_poses
 import model_constants
 import traceback
@@ -385,7 +385,9 @@ class AsyncObserver:
         if mode == "run":
             self.calmode = mode
             print("run mode")
-            await self.invoke_motion_task(self.pick_and_place_loop())
+            # await self.invoke_motion_task(self.pick_and_place_loop())
+            await self.invoke_motion_task(self.execute_grasp())
+
         elif mode == "pause":
             self.calmode = mode
             await self.stop_all()
@@ -1095,6 +1097,7 @@ class AsyncObserver:
                     gripper_image_tensor = img_tensor
             
             if gripper_image_tensor is not None:
+                gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
                 with torch.no_grad():
                     # you get a normalized u,v coordinate in the [-1,1] range
                     self.predicted_lateral_vector = self.centering_model(gripper_image_tensor).cpu().squeeze().numpy()
@@ -1226,54 +1229,64 @@ class AsyncObserver:
         """Try to grasp whatever is directly below the gripper"""
         OPEN = -30
         CLOSED = 85
-        CENTERING_SEC = 1.5
+        CENTERING_SEC = 2.5
 
         attempts = 4
         while not self.pe.holding and attempts > 0:
             attempts -= 1
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-            await asyncio.sleep(0.7) # wait for fingers to get out of the way of the camera
+            # await asyncio.sleep(0.7) # wait for fingers to get out of the way of the camera
 
-            # determine which direction we'd have to move laterally to center the object
-            if self.predicted_lateral_vector is not None:
+            # move laterally until target is centered
+            # at the same time, move downward until tip is detected.
+
+            downward_speed = -0.07
+
+            while self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set():
+                # determine which direction we'd have to move laterally to center the object
                 # you get a normalized u,v coordinate in the [-1,1] range
                 pred_vector = self.predicted_lateral_vector
-                # for now assume that the up direction in the gripper image is +Y in world space 
+                # for now assume that the up direction in the gripper image is -Y in world space 
                 # stabilize_frame produced this direction and I think it depends on the compass.
                 # the direction in world space depends on how the user placed the origin card on the ground
                 # we need to capture a number during calibration to relate these two.
-                pred_vector[1] *= -1 # invert Y
                 # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
                 distance_to_floor = 0.8 # TODO fix i2c bus problem with rangefinder
                 # and the FOV of the simulated image, which is sf_scale_factor * (camera module 3 fov)
-                half_virtual_fov = model_constants.rpi_cam_3_fov * sf_scale_factor / 2
+                half_virtual_fov = model_constants.rpi_cam_3_fov * sf_scale_factor / 2 * (np.pi/180)
+                print(f'half_virtual_fov={half_virtual_fov}')
                 # lateral distance to object
                 lateral_vector = np.sin(pred_vector * half_virtual_fov) * distance_to_floor
+                print(f'lateral_vector={lateral_vector}')
                 # lateral distance in meters
                 lateral_distance = np.linalg.norm(lateral_vector)
+                print(f'lateral_distance={lateral_distance}')
                 # speed to travel that lateral distance in CENTERING_SEC
                 lateral_speed = lateral_distance / CENTERING_SEC
-                await self.move_direction_speed([lateral_vector[0],lateral_vector[1],0], lateral_speed)
-                await asyncio.sleep(CENTERING_SEC)
+                print(f'lateral_speed={lateral_speed}')
+                await self.move_direction_speed([lateral_vector[0],lateral_vector[1],downward_speed])
 
-            print('move gripper down until laser rangefinder shows about 5cm or IMU shows tipping or timeout elapsed')
+                try:
+                    # the normal sleep on this loop would be 0.5s, but if tip is detected
+                    # we want to stop immediately.
+                    await asyncio.wait_for(self.pe.tip_over.wait(), 0.5)
+                    print('detected tip over, must be floor')
+                    break
+                except TimeoutError:
+                    pass
+
+            self.slow_stop_all_spools()
             self.pe.tip_over.clear()
-            await self.move_direction_speed([0,0,-1], 0.05, downward_bias=0)
-            try:
-                await asyncio.wait_for(self.pe.tip_over.wait(), 4)
-            except TimeoutError:
-                pass
-            finally:
-                self.slow_stop_all_spools()
+
             print('close gripper')
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': CLOSED}))
+            await self.gripper_client.send_commands({'set_finger_angle': CLOSED})
             print('wait up to 2 seconds for pad to sense object.')
             try:
                 await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), 2)
                 self.pe.finger_pressure_rising.clear()
             except TimeoutError:
                 print('did not detect a successful hold, open and hop.')
-                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.1]])
+                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.06]])
                 await self.move_direction_speed(direction, 0.05)
                 await asyncio.sleep(3.0)
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
@@ -1283,6 +1296,12 @@ class AsyncObserver:
             return True
         print('Gave up on grasp after a few attempts')
         return False
+
+    async def collect_images(self):
+        while True:
+            rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
+            capture_gripper_image(rgb_image)
+            await asyncio.sleep(0.5)
 
 def start_observation(to_ui_q, to_ob_q):
     """
