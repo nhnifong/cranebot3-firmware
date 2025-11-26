@@ -207,15 +207,10 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         await self.command_and_check({'jog': jog_value}, check, 0.1)
 
     async def test_send_length_plan(self):
-        length_plan = [
-            [1745592964.2, 0.4],
-            [1745592965.2, 0.45],
-            [1745592966.2, 0.5],
-        ]
+        length = 0.4
         def check(resp):
-            pass
-            self.mock_spooler.setPlan.assert_called_once_with(length_plan)
-        await self.command_and_check({'length_plan': length_plan}, check, 0.1)
+            self.mock_spooler.setTargetLength.assert_called_once_with(length)
+        await self.command_and_check({'length_set': length}, check, 0.1)
 
     async def test_tighten(self):
         # make a local variable to contain a tight or not tight bool

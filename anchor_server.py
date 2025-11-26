@@ -179,8 +179,8 @@ class RobotComponentServer:
             message = await websocket.recv()
             update = json.loads(message)
 
-            if 'length_plan' in update:
-                self.spooler.setPlan(update['length_plan'])
+            if 'length_set' in update:
+                self.spooler.setTargetLength(update['length_set'])
             if 'aim_speed' in update:
                 self.spooler.setAimSpeed(update['aim_speed'])
             if 'host_time' in update:

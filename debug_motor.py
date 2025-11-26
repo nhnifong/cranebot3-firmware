@@ -31,7 +31,7 @@ class DebugMotor():
         return (True, 0)
 
     def getMaxSpeed(self):
-        return 20.0
+        return 200.0
 
     def setAccelLimit(self, limit):
         self.accelLimit = limit
