@@ -172,8 +172,8 @@ class Gripper(Entity):
                 Text(text="Use buttons or Up/Down arrow keys to control spool."),
                 # Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
                 #     on_click=partial(self.reel_manual, -0.05)),
-                # Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                #     on_click=partial(self.reel_manual, 0.05)),
+                Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
+                    on_click=partial(self.reel_manual, 0.05)),
             ),
             popup=True,
         )

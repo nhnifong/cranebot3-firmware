@@ -48,8 +48,6 @@ class TestSpoolControllerInit(unittest.TestCase):
         expected_zero_angle = self.debug_motor.position * -1 - 6/(diameter_mm*0.001*pi)
         spooler.setReferenceLength(4)
 
-        # Although averaging of zero angles always occurs, when there is only one measurement, we should expect it to be the one calculated
-        # from the reference length we just profided
         self.assertAlmostEqual(expected_zero_angle, spooler.sc.zero_angle, 5)
 
         # expect the current length to be what we just set the current reference length to be
@@ -68,59 +66,116 @@ class TestSpoolControllerInit(unittest.TestCase):
 class TestSpoolControllerTracking(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        self.debug_motor = DebugMotor()
-        self.debug_motor.position = 0
+        self.motor = DebugMotor()
+        self.motor.position = 0
         self.conf = default_anchor_conf.copy()
-        self.spooler = SpoolController(self.debug_motor, empty_diameter=20, full_diameter=20, full_length=10, conf=self.conf)
+        # Set start length to 0 for simplicity (empty spool logic depends on calc, 
+        # but we'll just trust the motor pos 0 aligns with calculator for these tests)
+        self.spooler = SpoolController(self.motor, empty_diameter=20, full_diameter=20, full_length=100, conf=self.conf)
+        # override for faster test
+        self.spooler.conf['CRUISE_SPEED'] = 0.5
+        self.spooler.conf['LOOP_DELAY_S'] = 0.01
+        self.spooler.conf['MAX_ACCEL'] = 1.5
+        
+        
+        # Force start at 10m so we have room to reel in or out
+        self.spooler.setReferenceLength(10.0)
 
-        # start tracking loop
-        self.spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
-        await asyncio.sleep(0.1)
-    
+        # Start the tracking loop in a background thread
+        self.spooler.run_spool_loop = True
+        self.loop_thread = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
+
     async def asyncTearDown(self):
         self.spooler.fastStop()
-        result = await self.spool_task
+        try:
+            await self.loop_thread
+        except:
+            pass
 
-    async def test_spool_tracks_plan(self):
-        # make debug motor throw an exception if its speed changes too fast
-        self.debug_motor.setAccelLimit(self.conf['MAX_ACCEL'] / (0.02*pi))
-        self.assertEqual(0, self.debug_motor.speed)
-        self.spooler.setReferenceLength(1)
-        self.assertAlmostEqual(0, self.debug_motor.position, 6)
-        self.spooler.setPlan([
-            (time.time()+1, 1),
-            (time.time()+2, 1.3),
-            (time.time()+3, 1.6),
-        ])
-        await asyncio.sleep(0.5)
-        self.assertEqual(0, self.debug_motor.speed)
-        self.assertAlmostEqual(0, self.debug_motor.position, 6)
-        await asyncio.sleep(1.5)
+    async def test_position_accuracy_move_out(self):
+        """Test moving from 10m to 12m"""
+        target = 12.0
+        self.spooler.setTargetLength(target)
+        
+        # Allow time to travel 2 meters. 
+        # at 0.5m/s (cruise) it takes 4s. Add buffer for accel.
+        await asyncio.sleep(8) 
+        
+        _, current_len = self.spooler.currentLineLength()
+        print(f"Move Out: Target {target}, Actual {current_len}")
+        
+        # Verify 10cm accuracy (0.1m)
+        self.assertAlmostEqual(current_len, target, delta=0.1)
+        
+        # Verify motor stopped
+        self.assertAlmostEqual(self.motor.speed, 0, delta=0.1)
 
-        # TODO assertions of position find that the tracking algorithm oveshoots by 1 or 2 revs in this case.
-        # but we can still assert that it stopped the motor eventually.
+    async def test_position_accuracy_reel_in(self):
+        """Test moving from 10m to 8m"""
+        target = 8.0
+        self.spooler.setTargetLength(target)
+        
+        await asyncio.sleep(8) 
+        
+        _, current_len = self.spooler.currentLineLength()
+        print(f"Reel In: Target {target}, Actual {current_len}")
+        
+        self.assertAlmostEqual(current_len, target, delta=0.1)
 
-        # self.assertAlmostEqual(0.3 / (0.02 * pi), self.debug_motor.position, 1)
+    async def test_jog_relative(self):
+        """Test jogging +1 meter"""
+        start_target = self.spooler.target_length
+        self.spooler.jogRelativeLen(1.0)
+        
+        self.assertAlmostEqual(self.spooler.target_length, start_target + 1.0, delta=1e-4)
+        
+        await asyncio.sleep(4)
+        _, current_len = self.spooler.currentLineLength()
+        self.assertAlmostEqual(current_len, start_target + 1.0, delta=0.1)
+
+    async def test_speed_tracking_mode(self):
+        """Test raw speed control"""
+        self.spooler.setAimSpeed(0.2) # 0.2 m/s
+        
+        # Wait for acceleration
         await asyncio.sleep(1)
-        # self.assertAlmostEqual(0.6 / (0.02 * pi), self.debug_motor.position, 1)
-        await asyncio.sleep(1)
-        # self.assertAlmostEqual(0.6 / (0.02 * pi), self.debug_motor.position, 1)
-        self.assertEqual(0, self.debug_motor.speed)
+        
+        # Check internal state matches request
+        self.assertEqual(self.spooler.tracking_mode, 'speed')
+        
+        # Check actual speed calculation
+        # Motor revs/sec * meters/rev approx = 0.2
+        estimated_speed = self.motor.speed * self.spooler.meters_per_rev
+        self.assertAlmostEqual(estimated_speed, 0.2, delta=0.05)
 
-    async def test_spool_speed(self):
-        # make debug motor throw an exception if its speed changes too fast
-        self.conf['MAX_ACCEL'] = 0.5 # meters per second^2
-        self.debug_motor.setAccelLimit(self.conf['MAX_ACCEL'] / (0.02*pi))
-        self.spooler.setReferenceLength(1)
-        aimSpeed = 0.5
-        self.spooler.setAimSpeed(aimSpeed)
-        await asyncio.sleep(0.9)
-        self.assertLessEqual(self.debug_motor.speed, aimSpeed/(0.02*pi))
-        await asyncio.sleep(1.1)
-        self.assertAlmostEqual(self.debug_motor.speed, aimSpeed/(0.02*pi), 4)
-        self.spooler.setAimSpeed(0)
-        await asyncio.sleep(1.1)
-        self.assertEqual(self.debug_motor.speed, 0)
+        # Test reversal
+        self.spooler.setAimSpeed(-0.2)
+        await asyncio.sleep(2) # Wait for decel and accel
+        estimated_speed = self.motor.speed * self.spooler.meters_per_rev
+        self.assertAlmostEqual(estimated_speed, -0.2, delta=0.05)
+
+    async def test_pop_measurements(self):
+        """Verify data recording works in position mode"""
+        self.spooler.setTargetLength(15.0)
+        await asyncio.sleep(1)
+        
+        data = self.spooler.popMeasurements()
+        
+        # Should have data
+        self.assertGreater(len(data), 0)
+        
+        # Check row structure: (time, length, speed) or (time, length, speed, tight)
+        # Since tight_check_fn is None in setUp:
+        first_row = data[0]
+        self.assertEqual(len(first_row), 3) 
+        self.assertIsInstance(first_row[0], float) # time
+        self.assertIsInstance(first_row[1], float) # length
+        self.assertIsInstance(first_row[2], float) # speed
+
+        # Verify clearing behavior
+        data_second = self.spooler.popMeasurements()
+        # Might be 0 or very few depending on thread timing, but definitely cleared old ones
+        self.assertLess(len(data_second), len(data))
 
 class TestSpiralCalulator(unittest.TestCase):
     def testDirection(self):

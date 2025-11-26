@@ -44,19 +44,6 @@ gripper_service_name = 'cranebot-gripper-service'
 N_ANCHORS = 4
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
 
-def figure_8_coords(t):
-    """
-    Calculates the (x, y) coordinates for a figure-8.
-    figure fits within a box from -2 to +2
-    Args:
-        t: The input parameter (angle in radians, from 0 to 2*pi).
-    Returns:
-        A tuple (x, y) representing the position on the figure-8.
-    """
-    x = 2 * np.sin(t)
-    y = 2 * np.sin(2 * t)
-    return (x, y)
-
 # Manager of multiple tasks running clients connected to each robot component
 # The job of this class in a nutshell is to discover four anchors and a gripper on the network,
 # connect to them, and forward data between them and the position estimator, shape tracker, and UI.
@@ -107,8 +94,6 @@ class AsyncObserver:
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
-            'future_anchor_lines': self._handle_future_anchor_lines,
-            'future_winch_line': self._handle_future_winch_line,
             'set_run_mode': self.set_run_mode,
             'do_line_calibration': self.sendReferenceLengths,
             'tension_lines': self.tension_lines,
@@ -118,7 +103,6 @@ class AsyncObserver:
             'toggle_previews': self._handle_toggle_previews,
             'gantry_dir_sp': self._handle_gantry_dir_sp,
             'gantry_goal_pos': self._handle_gantry_goal_pos,
-            'fig_8': lambda _: self.invoke_motion_task(self.move_in_figure_8()),
             'set_grip': self._handle_set_grip,
             'slow_stop_one': self._handle_slow_stop_one,
             'slow_stop_all': self.stop_all,
@@ -164,22 +148,6 @@ class AsyncObserver:
                     print(f"Warning: No handler found for command '{command}'")
         except Exception:
             traceback.print_exc(file=sys.stderr)
-
-    async def _handle_future_anchor_lines(self, fal_data: dict):
-        """Handles sending future line plans to anchors."""
-        if not (fal_data.get('sender') == 'pe' and self.calmode != 'run'):
-            for client in self.anchors:
-                message = {'length_plan': fal_data['data'][client.anchor_num].tolist()}
-                if 'host_time' in fal_data:
-                    message['host_time'] = fal_data['host_time']
-                asyncio.create_task(client.send_commands(message))
-
-    async def _handle_future_winch_line(self, fwl_data: dict):
-        """Handles sending future winch line plans to the gripper."""
-        if not (fwl_data.get('sender') == 'pe' and self.calmode != 'run'):
-            if self.gripper_client:
-                message = {'length_plan': fwl_data['data']}
-                await self.gripper_client.send_commands(message)
 
     async def _handle_jog_spool(self, jog_data: dict):
         """Handles manually jogging a spool motor."""
@@ -693,7 +661,6 @@ class AsyncObserver:
         self.run_command_loop = False
         self.stat.run = False
         self.pe.run = False
-        self.fig_8 = False
         self.pe_task.cancel()
         tasks = [self.pe_task]
         if self.grpc_server is not None:
@@ -978,47 +945,6 @@ class AsyncObserver:
         self.pe.record_commanded_vel(velocity)
         return velocity
 
-    async def move_in_figure_8(self):
-        """
-        Move in a figure-8 pattern until interrupted by some other input.
-        This is a motion task.
-        """
-        PATTERN_HEIGHT = 1.5 # meters
-        GANTRY_SPEED_MPS = 0.2 # m/s
-        CIRCUIT_DISTANCE_M = 18.85 # meters
-        PLAN_SEND_INTERVAL_S = 1.0 # seconds
-        PLAN_DURATION_S = 1.3 # seconds
-        PLAN_STEP_INTERVAL_S = 1/30 # seconds
-        
-        # move to starting position (over origin)
-        try:
-            self.gantry_goal_pos = np.array([0,0,PATTERN_HEIGHT])
-            await self.invoke_motion_task(self.seek_gantry_goal())
-            
-            circuit_time = CIRCUIT_DISTANCE_M / GANTRY_SPEED_MPS
-            # multiply time.time by this to get a term that increases by 2pi every circuit_time seconds.
-            time_scaler = 2*np.pi / circuit_time
-            start_time = time.time()
-
-            while True:
-                now = time.time()
-                times = [now + PLAN_STEP_INTERVAL_S * i for i in range(int(PLAN_DURATION_S / PLAN_STEP_INTERVAL_S))]
-                xy_positions = np.array([figure_8_coords((t - start_time) * time_scaler) for t in times])
-                positions = np.column_stack([xy_positions, np.repeat(PATTERN_HEIGHT,len(xy_positions))])
-                # calculate all line lengths in one statement
-                distances = np.linalg.norm(self.pe.anchor_points[:, np.newaxis, :] - positions[np.newaxis, :, :], axis=2)
-
-                for client in self.anchors:
-                    plan = np.column_stack([times, distances[client.anchor_num]])
-                    message = {'length_plan' : plan.tolist()}
-                    asyncio.create_task(client.send_commands(message))
-
-                await asyncio.sleep(PLAN_SEND_INTERVAL_S)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self.slow_stop_all_spools()
-
     def get_last_frame(self, camera_key):
         """gets the last frame of video from the given camera if possible
         camera_key should be one of 'g' 0, 1, 2, 3
@@ -1186,7 +1112,7 @@ class AsyncObserver:
                 # if we are far enough away from the basket
                 if np.linalg.norm(self.pe.gant_pos - (self.named_positions['hamper'] + np.array([0,0,0.8]))) > 0.7:
                     # set winch for ideal pickup length
-                    await self.gripper_client.send_commands({'length_plan': [[time.time()+1, PICK_WINCH_LENGTH]]})
+                    await self.gripper_client.send_commands({'length_set': PICK_WINCH_LENGTH})
 
                 # gantry is now heading for a position over next_target
                 # wait only one second for it to arrive.
@@ -1214,7 +1140,7 @@ class AsyncObserver:
                 # tension now just in case.
                 # await self.tension_and_wait()
 
-                await self.gripper_client.send_commands({'length_plan': [[time.time()+1, DROP_WINCH_LENGTH]]})
+                await self.gripper_client.send_commands({'length_set': DROP_WINCH_LENGTH})
 
                 # fly to to drop point
                 self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.8])

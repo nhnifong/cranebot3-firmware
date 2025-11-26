@@ -192,6 +192,7 @@ class TestEstimateGripper(unittest.TestCase):
         # Setup default mock returns
         self.pe.datastore.imu_quat.getLast.return_value = [self.ts] + self.valid_quat
         self.pe.datastore.winch_line_record.getLast.return_value = [self.ts, self.winch_length, self.winch_speed]
+        self.pe.datastore.range_record.getLast.return_value = [self.ts, 0.4]
 
     def test_normal_operation_real_data(self):
         self.pe.tip_over.clear()
@@ -215,6 +216,7 @@ class TestEstimateGripper(unittest.TestCase):
         # Create a raw reading that corresponds to 110 degrees X (90 neutral + 20 tip)
         r_tipped = Rotation.from_euler('x', 110, degrees=True)
         
+        self.pe.datastore.range_record.getLast.return_value = [self.ts, 0.1]
         self.pe.datastore.imu_quat.getLast.return_value = [self.ts] + list(r_tipped.as_quat())
         self.pe.tip_over.clear() 
 
