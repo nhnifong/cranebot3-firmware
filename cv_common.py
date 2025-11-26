@@ -62,12 +62,17 @@ def locate_markers(im):
     if detections:
         # These are the 3D corner points of a generic marker of size 1x1 meter.
         # We will scale this based on the actual marker size.
-        marker_points_z_out = np.array([
+        marker_points = np.array([
             [-0.5, -0.5, 0], # Index 0: Bottom-Left
             [ 0.5, -0.5, 0], # Index 1: Bottom-Right
             [ 0.5,  0.5, 0], # Index 2: Top-Right
             [-0.5,  0.5, 0]  # Index 3: Top-Left
         ], dtype=np.float32)
+
+        # marker_points = np.array([[-0.5, 0.5, 0],
+        #                   [0.5, 0.5, 0],
+        #                   [0.5, -0.5, 0],
+        #                   [-0.5, -0.5, 0]], dtype=np.float32)
 
         for detection in detections:
             marker_id = detection.tag_id

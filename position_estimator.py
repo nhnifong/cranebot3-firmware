@@ -9,7 +9,7 @@ import asyncio
 import scipy.optimize as optimize
 from math import pi, sqrt, sin, cos
 from config import Config
-from cv_common import compose_poses
+from cv_common import compose_poses, gripper_imu_inv
 import model_constants
 from scipy.spatial.transform import Rotation
 from kalman_filter import KalmanFilter
@@ -500,15 +500,16 @@ class Positioner2:
         """Estimate attributes of the gripper that depend on its IMU reading"""
         last_imu = self.datastore.imu_quat.getLast()
         ts = last_imu[0]
-        try:
-            rotation = Rotation.from_quat(last_imu[1:])
-        except ValueError:
-            rotation = Rotation.identity()
+        if not ts:
+            return
+        rotation = Rotation.from_quat(last_imu[1:])
+        # back out mounting position of IMU
+        rotation = rotation * Rotation.from_euler('xyz', [-90, 0, 0], degrees=True)
 
         # Detect Tipping
-        THRESHOLD_RADIANS = 0.174533
-        euler = rotation.as_euler('xyz')
-        if abs(euler[0]) > THRESHOLD_RADIANS or abs(euler[1]) > THRESHOLD_RADIANS:
+        THRESHOLD_DEGREES = 10
+        euler = rotation.as_euler('xyz', degrees=True)
+        if abs(euler[0]) > THRESHOLD_DEGREES or abs(euler[1]) > THRESHOLD_DEGREES:
             self.tip_over.set()
 
         # feed angle to frequency estimator

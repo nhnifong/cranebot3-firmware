@@ -666,6 +666,10 @@ class ControlPanelUI:
         if 'gp_pos' in updates:
             self.floor.set_gp_pos(updates['gp_pos'])
 
+        if 'grip_lat' in updates:
+            self.cam_views[None].set_prediction_vector(updates['grip_lat'])
+
+
     def start(self):
         self.app.run()
 

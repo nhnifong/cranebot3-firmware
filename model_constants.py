@@ -1,7 +1,6 @@
 import numpy as np
 from math import pi, sqrt
 import cv2
-from scipy.spatial.transform import Rotation as R
 
 # data obtained manually from onshape
 # poses are specified as tuples of (rvec, tvec) # ROTATION IS FIRST
@@ -42,7 +41,7 @@ anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035]
 
 # rotation and translation vectors of the 'gantry' april tag in the gantry reference frame.
 # gantry_april = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105], dtype=float))
-gantry_april = (np.array([-pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055], dtype=float))
+gantry_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055], dtype=float))
 
 # position of the gantry keyring point in the gantry reference frame
 gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
