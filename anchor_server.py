@@ -283,6 +283,7 @@ class RobotComponentServer:
             ip = self.get_wifi_ip()
 
         logging.info(f'zeroconf instance advertising on {ip}')
+        await asyncio.sleep(1)
         info = zeroconf.ServiceInfo(
             service_type,
             name + "." + service_type,
