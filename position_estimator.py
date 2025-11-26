@@ -506,11 +506,12 @@ class Positioner2:
         # back out mounting position of IMU
         rotation = rotation * Rotation.from_euler('xyz', [-90, 0, 0], degrees=True)
 
-        # Detect Tipping
-        THRESHOLD_DEGREES = 10
-        euler = rotation.as_euler('xyz', degrees=True)
-        if abs(euler[0]) > THRESHOLD_DEGREES or abs(euler[1]) > THRESHOLD_DEGREES:
-            self.tip_over.set()
+        # When distance to floor is less than 12cm, Detect Tipping
+        if self.datastore.range_record.getLast()[1] < 0.12:
+            THRESHOLD_DEGREES = 9
+            euler = rotation.as_euler('xyz', degrees=True)
+            if abs(euler[0]) > THRESHOLD_DEGREES or abs(euler[1]) > THRESHOLD_DEGREES:
+                self.tip_over.set()
 
         # feed angle to frequency estimator
         rotvec = rotation.as_rotvec()

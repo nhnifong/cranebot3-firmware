@@ -12,6 +12,7 @@ MODEL_PATH = "trainer/models/sock_tracker.pth"
 CAMERA_KEY = "observation.images.anchor_camera_0"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 IMAGE_RES = (640, 360)
+MINIMUM_CONFIDENCE = 0.95
 
 import cv2
 import numpy as np
@@ -66,7 +67,8 @@ def extract_targets_from_heatmap(heatmap: np.ndarray, top_n: int = 10, threshold
         norm_x = c[0] / width
         norm_y = c[1] / height
         confidence = c[2]
-        results.append((norm_x, norm_y, confidence))
+        if confidence > MINIMUM_CONFIDENCE:
+            results.append((norm_x, norm_y, confidence))
 
     return np.array(results)
 

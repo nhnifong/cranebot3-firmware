@@ -385,8 +385,8 @@ class AsyncObserver:
         if mode == "run":
             self.calmode = mode
             print("run mode")
-            # await self.invoke_motion_task(self.pick_and_place_loop())
-            await self.invoke_motion_task(self.execute_grasp())
+            await self.invoke_motion_task(self.pick_and_place_loop())
+            # await self.invoke_motion_task(self.execute_grasp())
 
         elif mode == "pause":
             self.calmode = mode
@@ -863,7 +863,7 @@ class AsyncObserver:
         This is a motion task
         """
         GOAL_PROXIMITY_M = 0.07 # meters
-        GANTRY_SPEED_MPS = 0.2 # m/s
+        GANTRY_SPEED_MPS = 0.24 # m/s
         LOOP_SLEEP_S = 0.2 # seconds
         
         try:
@@ -1137,6 +1137,7 @@ class AsyncObserver:
 
     def select_target(self):
         # TODO select the next target from the user's queue.
+        print(f'select target from {self.floor_targets}')
 
         # if the user's queue is empty, pick one from the targets identified by dobby.
         if len(self.floor_targets) == 0:
@@ -1162,14 +1163,18 @@ class AsyncObserver:
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
-        PICK_WINCH_LENGTH = 0.8
-        DROP_WINCH_LENGTH = 0.4
+        PICK_WINCH_LENGTH = 0.7
+        DROP_WINCH_LENGTH = 0.2
 
         try:
             gtask = None
             while self.run_command_loop:
                 next_target = self.select_target()
                 if next_target is None:
+                    print('no target was found, be still')
+                    if gtask is not None:
+                        gtask.cancel()
+                    self.gantry_goal_pos = None
                     # TODO park on the saddle.
                     await asyncio.sleep(0.5)
                     continue
@@ -1178,8 +1183,10 @@ class AsyncObserver:
                 goal_pos = np.array([next_target[0], next_target[1], 1.2])
                 self.gantry_goal_pos = goal_pos
 
-                # set winch for ideal pickup length (0.8m?)
-                await self.gripper_client.send_commands({'length_plan': [time.time(), PICK_WINCH_LENGTH]})
+                # if we are far enough away from the basket
+                if np.linalg.norm(self.pe.gant_pos - (self.named_positions['hamper'] + np.array([0,0,0.8]))) > 0.7:
+                    # set winch for ideal pickup length
+                    await self.gripper_client.send_commands({'length_plan': [[time.time()+1, PICK_WINCH_LENGTH]]})
 
                 # gantry is now heading for a position over next_target
                 # wait only one second for it to arrive.
@@ -1187,8 +1194,10 @@ class AsyncObserver:
                     if gtask is None or gtask.done():
                         gtask = asyncio.create_task(self.seek_gantry_goal())
                     await asyncio.wait_for(gtask, 1)
+                    print('arrived at target')
                 except TimeoutError:
                     # if doesn't arrive in one second, run target selection again since a better one might have appeared or the user might have put one in their queue
+                    print('did not arrive yet')
                     continue
 
                 if self.gripper_client is None:
@@ -1205,14 +1214,16 @@ class AsyncObserver:
                 # tension now just in case.
                 # await self.tension_and_wait()
 
-                await self.gripper_client.send_commands({'length_plan': [time.time(), DROP_WINCH_LENGTH]})
+                await self.gripper_client.send_commands({'length_plan': [[time.time()+1, DROP_WINCH_LENGTH]]})
 
                 # fly to to drop point
-                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.5])
+                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.8])
                 await self.seek_gantry_goal()
                 # open gripper
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))
-
+                # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
+                # TODO train network on more data containing examples of this, so it knows that only socks on the floor count.
+                await asyncio.sleep(0.6)
                 # keep score
 
 
@@ -1229,9 +1240,10 @@ class AsyncObserver:
         """Try to grasp whatever is directly below the gripper"""
         OPEN = -30
         CLOSED = 85
-        CENTERING_SEC = 2.5
+        FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
+        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * sf_scale_factor / 2 * (np.pi/180)
 
-        attempts = 4
+        attempts = 2
         while not self.pe.holding and attempts > 0:
             attempts -= 1
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
@@ -1241,28 +1253,33 @@ class AsyncObserver:
             # at the same time, move downward until tip is detected.
 
             downward_speed = -0.07
-
-            while self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set():
-                # determine which direction we'd have to move laterally to center the object
-                # you get a normalized u,v coordinate in the [-1,1] range
-                pred_vector = self.predicted_lateral_vector
-                # for now assume that the up direction in the gripper image is -Y in world space 
-                # stabilize_frame produced this direction and I think it depends on the compass.
-                # the direction in world space depends on how the user placed the origin card on the ground
-                # we need to capture a number during calibration to relate these two.
-                # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
-                distance_to_floor = 0.8 # TODO fix i2c bus problem with rangefinder
-                # and the FOV of the simulated image, which is sf_scale_factor * (camera module 3 fov)
-                half_virtual_fov = model_constants.rpi_cam_3_fov * sf_scale_factor / 2 * (np.pi/180)
-                print(f'half_virtual_fov={half_virtual_fov}')
-                # lateral distance to object
-                lateral_vector = np.sin(pred_vector * half_virtual_fov) * distance_to_floor
-                print(f'lateral_vector={lateral_vector}')
-                # lateral distance in meters
-                lateral_distance = np.linalg.norm(lateral_vector)
-                print(f'lateral_distance={lateral_distance}')
-                # speed to travel that lateral distance in CENTERING_SEC
-                lateral_speed = lateral_distance / CENTERING_SEC
+            self.pe.tip_over.clear()
+            while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
+                distance_to_floor = self.datastore.range_record.getLast()[1]
+                if distance_to_floor < FINGER_LENGTH:
+                    break
+                # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
+                lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-downward_speed)*0.75
+                print(distance_to_floor, lat_travel_seconds)
+                if lat_travel_seconds > 0:
+                    # determine which direction we'd have to move laterally to center the object
+                    # you get a normalized u,v coordinate in the [-1,1] range
+                    # for now assume that the up direction in the gripper image is -Y in world space 
+                    # stabilize_frame produced this direction and I think it depends on the compass.
+                    # the direction in world space depends on how the user placed the origin card on the ground
+                    # we need to capture a number during calibration to relate these two.
+                    # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
+                    pred_vector = self.predicted_lateral_vector
+                    # lateral distance to object
+                    lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * distance_to_floor
+                    # lateral distance in meters
+                    lateral_distance = np.linalg.norm(lateral_vector)
+                    print(f'lateral_distance={lateral_distance}')
+                    # speed to travel that lateral distance in lat_travel_seconds
+                    lateral_speed = lateral_distance / lat_travel_seconds
+                else:
+                    # once we get too close, go straight down, stop relying on the camera
+                    lateral_speed = [0,0]
                 print(f'lateral_speed={lateral_speed}')
                 await self.move_direction_speed([lateral_vector[0],lateral_vector[1],downward_speed])
 
@@ -1285,11 +1302,13 @@ class AsyncObserver:
                 await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), 2)
                 self.pe.finger_pressure_rising.clear()
             except TimeoutError:
-                print('did not detect a successful hold, open and hop.')
-                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.06]])
-                await self.move_direction_speed(direction, 0.05)
-                await asyncio.sleep(3.0)
+                print('did not detect a successful hold, open and go back up high enough to get a view of the object')
+                await self.move_direction_speed([0,0,0.04])
+                await asyncio.sleep(1.0)
+                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.1]])
+                await self.move_direction_speed(direction)
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+                await asyncio.sleep(2.0)
                 self.slow_stop_all_spools()
                 continue
             print('Successful grasp')
