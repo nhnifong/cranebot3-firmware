@@ -267,15 +267,17 @@ K_new = np.array([
 ])
 
 
-def stabilize_frame(frame, quat, K=mtx):
+def stabilize_frame(frame, quat, room_spin=0, K=mtx):
     """
     Warp a video frame to a stationary perspective based on rotation.
 
     Args:
         frame: The source image (numpy array). must be in the size used above to calculate ratios
         quat: gripper rotation quaternion
+        room_spin: radians of offset in z rotation between the origin card (world reference frame) and the IMU's zero, which is compass derived.
         K: Camera intrinsic matrix (3x3).
     """
+    R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
     r_imu = Rotation.from_quat(quat)
     R_world_to_imu = r_imu.as_matrix().T
     R_imu_to_cam = np.array([
@@ -284,7 +286,7 @@ def stabilize_frame(frame, quat, K=mtx):
         [0, -1,  0]
     ])
     R_world_to_cam = R_imu_to_cam @ R_world_to_imu
-    R_relative = R_world_to_cam.T
+    R_relative = R_room_spin @ R_world_to_cam.T
     H = K_new @ R_relative @ np.linalg.inv(starting_K)
 
     # Warp the perspective.

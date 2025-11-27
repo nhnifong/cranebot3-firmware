@@ -17,8 +17,9 @@ from zeroconf.asyncio import (
 from multiprocessing import Pool
 import numpy as np
 import scipy.optimize as optimize
+from scipy.spatial.transform import Rotation
 from data_store import DataStore
-from raspi_anchor_client import RaspiAnchorClient, max_origin_detections
+from raspi_anchor_client import RaspiAnchorClient, max_origin_detections, pose_from_det
 from raspi_gripper_client import RaspiGripperClient
 from random import random
 from config import Config
@@ -461,7 +462,33 @@ class AsyncObserver:
 
             await self.half_auto_calibration()
 
-            # TODO raise gantry to about 1 meter from floor and induce a small swing. then perform half cal again.
+            # move over the origin card
+            self.gantry_goal_pos = np.array([0,0,1.5])
+            await self.seek_gantry_goal()
+
+            # there should be some swing when we get there. 
+            await self.half_auto_calibration()
+
+            # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
+            # when the stabilization is done without any existing z rotation term
+            self.gripper_client.calibrating_room_spin = True
+            origin_card_pose = [None]
+            def special_handle_det(self, detections, timestamp):
+                for d in detections:
+                    if d['n'] == 'origin':
+                        # a pose of the origin card in the frame of reference of the stabilized gripper cam.
+                        origin_card_pose[0] = pose_from_det(d)
+            while origin_card_pose[0] is None:
+                async_result = self.pool.apply_async(
+                    locate_markers,
+                    (self.gripper_client.last_frame_resized,),
+                    callback=partial(self.special_handle_det, timestamp=time.time()))
+                detections = async_result.get(timeout=5)
+            roomspin = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('xyz')[2]
+            self.config.gripper_frame_room_spin = roomspin
+            self.config.write()
+            self.gripper_client.calibrating_room_spin = False
+
 
             # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
             self.to_ui_q.put({'pop_message':'Calibration complete. Cards can be removed from the floor.'})
