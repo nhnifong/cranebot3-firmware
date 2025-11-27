@@ -88,11 +88,10 @@ print('IMU readings appear normal')
 rangefinder = VL53L1X(i2c)
 rangefinder.distance_mode = 2 # LONG. results returned in centimeters.
 rangefinder.start_ranging()
-start_dist = rangefinder.distance
-assert start_dist!=0, "rangefinder distance appears to be zero"
 print('Please put your hand in front of the rangefinger...')
 count = 100
-while count>0 and abs(rangefinder.distance-start_dist) < 1:
+# note that rangefinder distance is none when exceeding it's range
+while count>0 and rangefinder.distance is None or abs(rangefinder.distance) < 1:
     count-=1
     time.sleep(0.05)
 assert count!=0, "Timed out waiting for change in observed distance from rangefinder. Rangefinger may not be functioning."

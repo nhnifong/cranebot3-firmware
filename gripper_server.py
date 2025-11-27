@@ -17,6 +17,11 @@ import adafruit_bno08x
 from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X
 
+# the rpi zero 2w's hardware i2c bus may not play nice with the bno085
+# but this can be avoided with a software i2c bus
+# dtparam=i2c_arm=off
+# dtoverlay=i2c-gpio,bus=1,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=2
+
 # this will require a different calibration matrix
 half_res_stream_command = """
 /usr/bin/rpicam-vid -t 0

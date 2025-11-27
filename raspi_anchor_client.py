@@ -54,7 +54,7 @@ class ComponentClient:
         self.frame = None # last frame of video seen
         self.last_frame_cap_time = None
 
-        # things used by jpeg thread for training mode
+        # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
         # This condition variable signals the worker when a new frame is ready
         self.new_frame_condition = threading.Condition(self.frame_lock)
@@ -62,7 +62,7 @@ class ComponentClient:
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
-        self.ref_rvec =None
+        self.calibrating_room_spin = False # set to true momentarily during auto calibration
 
         config = Config()
         self.preferred_cameras = config.preferred_cameras
@@ -111,16 +111,17 @@ class ComponentClient:
                 last_time = now
 
                 # send frame to apriltag detector
-                try:
-                    if self.stat.pending_frames_in_pool < 60:
-                        self.stat.pending_frames_in_pool += 1
-                        self.pool.apply_async(locate_markers, (self.frame,), callback=partial(self.handle_detections, timestamp=timestamp))
-                    else:
-                        pass
-                        # print(f'Dropping frame because there are already too many pending.')
-                        # TODO record fraction of frames which are dropped in stat collector
-                except ValueError:
-                    break # the pool is not running
+                if self.anchor_num is not None:
+                    try:
+                        if self.stat.pending_frames_in_pool < 60:
+                            self.stat.pending_frames_in_pool += 1
+                            self.pool.apply_async(locate_markers, (self.frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                        else:
+                            pass
+                            # print(f'Dropping frame because there are already too many pending.')
+                            # TODO record fraction of frames which are dropped in stat collector
+                    except ValueError:
+                        break # the pool is not running
 
                 # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
                 # handle_detections runs in this process, but in a thread managed by the pool.
@@ -172,7 +173,11 @@ class ComponentClient:
                     # 3. start recording these stabilized frames along with the gantry velocity and IMU just in case it is needed later.
                     # 4. train a network to predict the gantry velocity from the frame.
                     gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time)[1:]
-                    self.last_frame_resized = stabilize_frame(self.last_frame_resized, gripper_quat)
+                    if self.calibrating_room_spin:
+                        roomspin = 0
+                    else:
+                        roomspin = self.config.gripper_frame_room_spin
+                    self.last_frame_resized = stabilize_frame(self.last_frame_resized, gripper_quat, roomspin)
 
                 if self.anchor_num in self.preferred_cameras:
                     img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)

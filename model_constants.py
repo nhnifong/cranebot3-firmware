@@ -1,6 +1,5 @@
 import numpy as np
 from math import pi, sqrt
-import cv2
 
 # data obtained manually from onshape
 # poses are specified as tuples of (rvec, tvec) # ROTATION IS FIRST

@@ -17,7 +17,7 @@ class Config:
         self.anchors = [Anchor(i) for i in range(4)]
         self.anchor_num_map = {}
         # default configuration
-        self.resolution = (2304, 1296) # half the native resolution of the raspberry pi camera module 3
+        self.resolution = (1920, 1080) # half the native resolution of the raspberry pi camera module 3
         self.intrinsic_matrix = np.array(
             [[1691.33070175,    0.        , 1163.88476871],
              [   0.        , 1697.39780074,  633.90347492],
@@ -26,7 +26,8 @@ class Config:
             [[0.021986, 0.160533, -0.003378, 0.002640, -0.356843]])
         self.commmon_anchor_vars = {}
         self.gripper_vars = {}
-        self.preferred_cameras = [0,2,None]
+        self.preferred_cameras = [0,2,None] # todo this is not written anywhere
+        self.gripper_frame_room_spin = 50/180*np.pi # todo this is not written anywhere
         try:
             self.reload()
         except FileNotFoundError:
