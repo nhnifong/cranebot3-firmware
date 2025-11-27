@@ -289,8 +289,15 @@ def stabilize_frame(frame, quat, room_spin=0, K=mtx):
     R_relative = R_room_spin @ R_world_to_cam.T
     H = K_new @ R_relative @ np.linalg.inv(starting_K)
 
+    flip_vertical = np.array([
+        [1,  0,             0],
+        [0, -1, expected_shape[1]], 
+        [0,  0,             1]
+    ])
+    H_final = flip_vertical @ H
+
     # Warp the perspective.
-    return cv2.warpPerspective(frame, H, expected_shape, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
+    return cv2.warpPerspective(frame, H_final, expected_shape, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)

@@ -13,6 +13,7 @@ class RaspiGripperClient(ComponentClient):
         self.conn_status = {'gripper': True}
         self.anchor_num = None
         self.pe = pe
+        self.config = Config()
 
     def handle_update_from_ws(self, update):
         if 'line_record' in update:

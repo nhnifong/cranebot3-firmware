@@ -199,16 +199,6 @@ class ControlPanelUI:
     def _create_hud_panels(self):
         self.split = 0.75
 
-        # Setup the Right UI Panel Background
-        # self.right_ui_panel = Entity(
-        #     parent=camera.ui,
-        #     model='quad',
-        #     texture='panel_grad',
-        #     origin=(0.5, 0.5),      # Anchor to top-right
-        #     position=window.top_right,
-        #     z=3
-        # )
-
         # Flow management for right panel
         self.right_panel_items = []
         # y position of next item to be added to right panel
@@ -238,6 +228,20 @@ class ControlPanelUI:
             self.add_side_panel_item(c)
             self.cam_views[key] = c
         self.update_layout()
+
+        # start pickup button
+        self.start_pickup_button = Button(
+            text="Start Pickup",
+            parent=camera.ui,
+            color=rgb(0.027, 0.530, 0.256),
+            text_color=color.black,
+            origin=(-0.5, 0.5),      # Anchor to top-left
+            position=window.top_left + (0.021, -0.1),
+            scale=(.15, .033),
+            on_click=partial(self.set_mode, 'run'))
+
+        # left panel (action list)
+        self.action_list = ActionList()
 
         # Setup the Bottom UI Panel Background
         self.bottom_ui_panel = Entity(
@@ -391,7 +395,6 @@ class ControlPanelUI:
             DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, 'tension_lines')),
             DropdownMenuButton('Run Full Calibration', on_click=self.run_full_cal),
             DropdownMenuButton('Run Quick Calibration', on_click=partial(self.simple_command, 'half_cal')),
-            DropdownMenuButton('Figure-8 motion test', on_click=partial(self.simple_command, 'fig-8')),
             DropdownMenu('Simulated Data', buttons=(
                 DropdownMenuButton('Disable', on_click=partial(self.set_simulated_data_mode, 'disable')),
                 DropdownMenuButton('Circle', on_click=partial(self.set_simulated_data_mode, 'circle')),
@@ -530,6 +533,7 @@ class ControlPanelUI:
 
     def on_stop_button(self):
         self.to_ob_q.put({'slow_stop_all':None})
+        self.set_mode('pause')
 
     def render_gantry_ob(self, row, color):
         self.go_quads.add(partial(update_go_quad, row, color))
