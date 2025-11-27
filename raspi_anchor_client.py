@@ -62,7 +62,7 @@ class ComponentClient:
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
-        self.calibrating_room_spin = False # set to true momentarily during auto calibration
+        self.calibrating_room_spin = True # set to true momentarily during auto calibration
 
         config = Config()
         self.preferred_cameras = config.preferred_cameras
@@ -174,7 +174,7 @@ class ComponentClient:
                     # 4. train a network to predict the gantry velocity from the frame.
                     gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time)[1:]
                     if self.calibrating_room_spin:
-                        roomspin = 0
+                        roomspin = 15/180*np.pi
                     else:
                         roomspin = self.config.gripper_frame_room_spin
                     self.last_frame_resized = stabilize_frame(self.last_frame_resized, gripper_quat, roomspin)

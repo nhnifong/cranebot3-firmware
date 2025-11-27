@@ -1133,13 +1133,13 @@ class AsyncObserver:
                     continue
 
                 # pick Z position for gantry
-                goal_pos = np.array([next_target[0], next_target[1], 1.2])
+                goal_pos = np.array([next_target[0], next_target[1], 1.4])
                 self.gantry_goal_pos = goal_pos
 
                 # if we are far enough away from the basket
-                if np.linalg.norm(self.pe.gant_pos - (self.named_positions['hamper'] + np.array([0,0,0.8]))) > 0.7:
-                    # set winch for ideal pickup length
-                    await self.gripper_client.send_commands({'length_set': PICK_WINCH_LENGTH})
+                # if np.linalg.norm(self.pe.gant_pos - (self.named_positions['hamper'] + np.array([0,0,0.8]))) > 0.7:
+                #     # set winch for ideal pickup length
+                #     await self.gripper_client.send_commands({'length_set': PICK_WINCH_LENGTH})
 
                 # gantry is now heading for a position over next_target
                 # wait only one second for it to arrive.
@@ -1167,10 +1167,10 @@ class AsyncObserver:
                 # tension now just in case.
                 # await self.tension_and_wait()
 
-                await self.gripper_client.send_commands({'length_set': DROP_WINCH_LENGTH})
+                # await self.gripper_client.send_commands({'length_set': DROP_WINCH_LENGTH})
 
                 # fly to to drop point
-                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.6])
+                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.9])
                 await self.seek_gantry_goal()
                 # open gripper
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))
@@ -1223,6 +1223,7 @@ class AsyncObserver:
                     # we need to capture a number during calibration to relate these two.
                     # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
                     pred_vector = self.predicted_lateral_vector
+                    pred_vector[1] *= -1
                     # lateral distance to object
                     lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * distance_to_floor
                     # lateral distance in meters

@@ -11,6 +11,7 @@ from scipy.spatial.transform import Rotation
 from functools import partial
 import time
 from PIL import Image
+from ssh_launch import launch_ssh_terminal
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -154,8 +155,8 @@ class Gripper(Entity):
         title=f"Gripper at {self.ip_address}",
         content=(
             Button(text='Open (Space)', color=color.gold, text_color=color.black),
-            Button(text='Show video feed', color=color.gold, text_color=color.black,
-                on_click=self.toggle_vid_feed),
+            Button(text='Open SSH Terminal', color=color.gold, text_color=color.black,
+                on_click=partial(launch_ssh_terminal, self.ip_address)),
             Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
             Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
                 on_click=self.open_manual_spool_control),
@@ -172,8 +173,8 @@ class Gripper(Entity):
                 Text(text="Use buttons or Up/Down arrow keys to control spool."),
                 # Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
                 #     on_click=partial(self.reel_manual, -0.05)),
-                Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                    on_click=partial(self.reel_manual, 0.05)),
+                # Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
+                #     on_click=partial(self.reel_manual, 0.05)),
             ),
             popup=True,
         )
@@ -228,9 +229,6 @@ class Gripper(Entity):
         self.left_finger.rotation = (0,0,phys_angle)
         self.right_finger.rotation = (0,0,-phys_angle)
 
-    def toggle_vid_feed(self):
-        pass # todo make this toggle the window in the main app
-
 
 anchor_color = (0.8, 0.8, 0.8, 1.0)
 anchor_color_selected = (0.9, 0.9, 1.0, 1.0)
@@ -284,8 +282,8 @@ class Anchor(Entity):
         self.wp = WindowPanel(
         title=f"Anchor {self.num} at {self.ip_address}",
         content=(
-            Button(text='Show video feed', color=color.gold, text_color=color.black,
-                on_click=self.toggle_vid_feed),
+            Button(text='Open SSH Terminal', color=color.gold, text_color=color.black,
+                on_click=partial(launch_ssh_terminal, self.ip_address)),
             Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
                 on_click=self.open_manual_spool_control),
             # Add: tighten, stream logs 
@@ -908,3 +906,90 @@ class CamPreview(Entity):
         # Only allow locking if this is an anchor (not generic/gripper) AND not already locked
         if self.anchor and not self.floor.locked:
             self.floor.lock_target()
+
+
+class ActionList(Entity):
+    def __init__(self):
+        super().__init__()
+        self.task_name = None
+        self.target_list = []
+
+        self.background = Entity(
+            parent=camera.ui,
+            model=Quad(radius=0.02, aspect=0.5),
+            texture='panel_grad',
+            origin=(-0.58, 0.7),      # Anchor to top-left with padding
+            color=(0.1,0.1,0.1, 0.3), # translucent
+            scale=(0.3, 0.73),
+            position=window.top_left,
+            z=3
+        )
+
+        self.cursor_pos = window.top_left + (0.052, -0.2)
+
+        self.task_label = Text(
+            parent=camera.ui,
+            text="Task: None",
+            origin=(-0.5, -0.5),              # Anchor: Bottom Left of text
+            position=self.cursor_pos,
+            scale=0.7,                          # Text scale (relative to parent)
+            color=color.white,
+            # z=2
+        )
+        self.cursor_pos[1] -= self.task_label.height
+
+        self.targets_label = Text(
+            parent=camera.ui,
+            text="Targets: User 0 AI 0",
+            origin=(-0.5, -0.5),              # Anchor: Bottom Left of text
+            position=self.cursor_pos,
+            scale=0.7,                          # Text scale (relative to parent)
+            color=color.white,
+            # z=2
+        )
+        self.cursor_pos[1] -= self.targets_label.height
+        self.cursor_pos[1] -= 0.03 # blank line
+        # self.cursor_pos[0] += 0.05 # indent
+        self.list_start_cursor_pos = self.cursor_pos
+
+        self.target_labels = []
+        self.set_target_list([
+            {'name':'selected object (0.00, 1.00)', 'requestor':'user', 'status':'active'},
+            {'name':'black sock at (-1.44, 1.22)', 'requestor':'ai', 'status':'pending'},
+            {'name':'black sock at (-1.22, 1.11)', 'requestor':'ai', 'status':'pending'},
+            {'name':'black sock at (-1.33, 1.00)', 'requestor':'ai', 'status':'pending'},
+        ])
+
+    def set_task_name(self, name):
+        self.task_name = names
+        self.task_label.text = f"Task: {name}"
+
+    def set_target_list(self, targets):
+        """
+        expects a list of dicts with keys
+        name, requestor, status
+        already sorted in priority order
+        """
+        for tl in self.target_labels:
+            destroy(tl)
+        self.target_list = targets
+
+        count_user = 0
+        count_ai = 0
+        self.cursor_pos = self.list_start_cursor_pos
+        for i, target in enumerate(self.target_list):
+            if target['requestor'] == 'user':
+                count_user += 1
+            else:
+                count_ai += 1
+            tl = Text(
+                parent=camera.ui,
+                text=f"({target['requestor']}) {target['name']}",
+                origin=(-0.5, -0.5),              # Anchor: Bottom Left of text
+                position=self.cursor_pos,
+                scale=0.6,                          # Text scale (relative to parent)
+                color=color.gold if target['status'] == 'active' else color.white,
+            )
+            self.cursor_pos[1] -= tl.height
+
+        self.targets_label.text = f'Targets: user {count_user} ai {count_ai}'
