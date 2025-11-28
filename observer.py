@@ -1065,15 +1065,15 @@ class AsyncObserver:
                     with torch.no_grad():
                         pred_vec, pred_valid, pred_grip = self.centering_model(gripper_image_tensor)
                         vec = pred_vec[0].cpu().numpy()
-                        p_valid = pred_valid[0].item()
-                        p_grip = pred_grip[0].item()
+                        self.gripper_sees_target = pred_valid[0].item()
+                        self.gripper_sees_holding = pred_grip[0].item()
 
                         # you get a normalized u,v coordinate in the [-1,1] range
-                        self.predicted_lateral_vector = vec if p_valid > 0.5 else np.zeros(2)
+                        self.predicted_lateral_vector = vec if self.gripper_sees_target > 0.5 else np.zeros(2)
                         self.to_ui_q.put({'grip_pred': {
                             'vec': self.predicted_lateral_vector,
-                            'valid': p_valid,
-                            'hold': p_grip,
+                            'valid': self.gripper_sees_target,
+                            'hold': self.gripper_sees_holding,
                         }})
 
             if counter < RUN_DOBBY_EVERY:
@@ -1164,7 +1164,7 @@ class AsyncObserver:
                     continue
 
                 # pick Z position for gantry
-                goal_pos = np.array([next_target[0], next_target[1], 1.4])
+                goal_pos = np.array([next_target[0], next_target[1], 1.2])
                 self.gantry_goal_pos = goal_pos
 
                 # if we are far enough away from the basket
@@ -1201,7 +1201,7 @@ class AsyncObserver:
                 # await self.gripper_client.send_commands({'length_set': DROP_WINCH_LENGTH})
 
                 # fly to to drop point
-                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.9])
+                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.8])
                 await self.seek_gantry_goal()
                 # open gripper
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))
@@ -1237,11 +1237,20 @@ class AsyncObserver:
             # at the same time, move downward until tip is detected.
 
             downward_speed = -0.07
+            nothing_seen_countdown = 15
             self.pe.tip_over.clear()
             while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
                 distance_to_floor = self.datastore.range_record.getLast()[1]
                 if distance_to_floor < FINGER_LENGTH:
                     break
+
+                # prediction unreliable under 30cm. TODO collect more data of this type
+                if self.gripper_sees_target < 0.1 and distance_to_floor > 0.3:
+                    nothing_seen_countdown -= 1
+                    if nothing_seen_countdown == 0:
+                        break
+                else:
+                    nothing_seen_countdown = 3
                 # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
                 lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-downward_speed)*0.75
                 print(distance_to_floor, lat_travel_seconds)
@@ -1261,7 +1270,7 @@ class AsyncObserver:
                     lateral_distance = np.linalg.norm(lateral_vector)
                     print(f'lateral_distance={lateral_distance}')
                     # speed to travel that lateral distance in lat_travel_seconds
-                    lateral_speed = lateral_distance / lat_travel_seconds
+                    lateral_speed = lateral_distance / lat_travel_seconds * 0.85
                 else:
                     # once we get too close, go straight down, stop relying on the camera
                     lateral_speed = [0,0]
@@ -1271,7 +1280,7 @@ class AsyncObserver:
                 try:
                     # the normal sleep on this loop would be 0.5s, but if tip is detected
                     # we want to stop immediately.
-                    await asyncio.wait_for(self.pe.tip_over.wait(), 0.5)
+                    await asyncio.wait_for(self.pe.tip_over.wait(), 0.1)
                     print('detected tip over, must be floor')
                     break
                 except TimeoutError:
@@ -1279,6 +1288,9 @@ class AsyncObserver:
 
             self.slow_stop_all_spools()
             self.pe.tip_over.clear()
+
+            if nothing_seen_countdown == 0:
+                continue # find new target?
 
             print('close gripper')
             await self.gripper_client.send_commands({'set_finger_angle': CLOSED})
