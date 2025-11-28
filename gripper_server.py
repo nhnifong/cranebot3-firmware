@@ -199,8 +199,9 @@ class RaspiGripperServer(RobotComponentServer):
 
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
-        asyncio.create_task(self.fingerLoop())
-        asyncio.create_task(self.saveOffsets())
+        t1 = asyncio.create_task(self.fingerLoop())
+        t2 = asyncio.create_task(self.saveOffsets())
+        return [t1, t2]
 
     async def saveOffsets(self):
         """Periodically save winch length and finger position to disk so we don't recal after power out"""
