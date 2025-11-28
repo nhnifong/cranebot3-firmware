@@ -162,22 +162,22 @@ class ComponentClient:
             # Do the actual work outside the lock
             # This lets the receive_video loop add the next frame without waiting for the encode.
             if frame_to_encode is not None:
-                # return the size lerobot is expecting. it's faster to do this resize before encoding.
-                dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
-                self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
-
                 if self.anchor_num is None:
-                    # create a method of capturing data for a network that centers the gripper over objects.
-                    # 1. go to a location predicted by the dobby network.
-                    # 2. switch to manual control
-                    # 3. start recording these stabilized frames along with the gantry velocity and IMU just in case it is needed later.
-                    # 4. train a network to predict the gantry velocity from the frame.
-                    gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time)[1:]
+                    # gripper
+                    # stabilize and resize for centering network input
+                    temp_image = cv2.resize(frame_to_encode, sf_input_shape, interpolation=cv2.INTER_AREA)
+                    fudge_latency =  0.3
+                    gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
                     if self.calibrating_room_spin:
                         roomspin = 15/180*np.pi
                     else:
                         roomspin = self.config.gripper_frame_room_spin
-                    self.last_frame_resized = stabilize_frame(self.last_frame_resized, gripper_quat, roomspin)
+                    self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, roomspin)
+                else:
+                    # anchors
+                    # resize for dobby network input
+                    dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
+                    self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
 
                 if self.anchor_num in self.preferred_cameras:
                     img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)

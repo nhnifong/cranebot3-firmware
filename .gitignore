@@ -16,4 +16,5 @@ tests/last_dataset
 dataset_heatmap/
 laundry_spots_data/
 gant_pos.npy
-gripper_spots_data/
+square_centering_data_unlabled/
+square_centering_data/

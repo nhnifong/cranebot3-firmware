@@ -251,53 +251,66 @@ def project_floor_to_pixels(floor_points, pose, K=mtx, D=distortion, image_shape
 
     return normalized_pixels
 
-expected_shape = (640, 360) # image dimensions that will be passed to stabilize_frame
-calibration_shape = (1920, 1080) # image dimensions that were used to calibrate camera
-sf_image_ratio = 1/3 # scale ratio between those two dimensioms
-sf_scale_factor=0.9 # amount to zoom in or out the stabilized image
+# Configuration for stabilize_frame
+sf_input_shape = (960, 540)      # Size of the raw frame coming from camera
+sf_target_shape = (384, 384)     # Size of the final neural net input (Square)
+sf_calibration_shape = (1920, 1080) 
+
+# Scale Logic
+sf_image_ratio = sf_input_shape[0] / sf_calibration_shape[0] # Ratio to scale intrinsics (approx 1/3)
+sf_scale_factor = 1.4  # Zoom factor (values less than 1 zoom in)
+
+# Scale the Original Intrinsics to match the input video resolution
 starting_K = mtx.copy()
 starting_K[0, 0] *= sf_image_ratio  # Scale fx
 starting_K[1, 1] *= sf_image_ratio  # Scale fy
 starting_K[0, 2] *= sf_image_ratio  # Scale cx
 starting_K[1, 2] *= sf_image_ratio  # Scale cy
+
+# Define Virtual Camera Intrinsics (K_new)
+# The optical center (cx, cy) is set to half of the target shape (384/2),
+# not the input shape. This forces the center of the projection to be the center of the square.
 K_new = np.array([
-    [starting_K[0, 0] / sf_scale_factor, 0,                                   expected_shape[0] / 2.0],
-    [0,                                  starting_K[1, 1] / sf_scale_factor,  expected_shape[1] / 2.0],
-    [0,                                  0,                                   1                      ]
+    [starting_K[0, 0] / sf_scale_factor, 0,                                  sf_target_shape[0] / 2.0], # cx = 192
+    [0,                                  starting_K[1, 1] / sf_scale_factor, sf_target_shape[1] / 2.0], # cy = 192
+    [0,                                  0,                                  1                    ]
 ])
 
-
-def stabilize_frame(frame, quat, room_spin=0, K=mtx):
+def stabilize_frame(frame, quat, room_spin=0, K=starting_K):
     """
     Warp a video frame to a stationary perspective based on rotation.
-
-    Args:
-        frame: The source image (numpy array). must be in the size used above to calculate ratios
-        quat: gripper rotation quaternion
-        room_spin: radians of offset in z rotation between the origin card (world reference frame) and the IMU's zero, which is compass derived.
-        K: Camera intrinsic matrix (3x3).
     """
+    # Standard Rotation Math
     R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
     r_imu = Rotation.from_quat(quat)
+    
+    # Quaternion Conjugate (Implicit Transpose) logic
     R_world_to_imu = r_imu.as_matrix().T
+    
+    # Static transforms (IMU->Cam with the fudge built in)
     R_imu_to_cam = np.array([
         [-1, 0,  0],
         [0,  0, -1],
         [0, -1,  0]
     ])
+    
     R_world_to_cam = R_imu_to_cam @ R_world_to_imu
     R_relative = R_room_spin @ R_world_to_cam.T
-    H = K_new @ R_relative @ np.linalg.inv(starting_K)
+    
+    # Base Homography
+    H = K_new @ R_relative @ np.linalg.inv(K)
 
+    # Vertical Flip Matrix
     flip_vertical = np.array([
-        [1,  0,             0],
-        [0, -1, expected_shape[1]], 
-        [0,  0,             1]
+        [1,  0,  0],
+        [0, -1,  sf_target_shape[1]], 
+        [0,  0,  1]
     ])
+    
     H_final = flip_vertical @ H
 
-    # Warp the perspective.
-    return cv2.warpPerspective(frame, H_final, expected_shape, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
+    # Warp Perspective
+    return cv2.warpPerspective(frame, H_final, sf_target_shape, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)

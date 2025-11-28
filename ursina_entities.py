@@ -722,9 +722,14 @@ class CamPreview(Entity):
         self.heatmap = None
 
         # 16:9 aspect ratio for the camera content
-        self.aspect_ratio = 1.777777
-        self.total_width = cam_scale
-        self.total_height = cam_scale / self.aspect_ratio
+        if self.anchor is None:
+            self.aspect_ratio = 1.0
+            self.total_width = cam_scale / 1.777777
+            self.total_height = cam_scale / 1.777777
+        else:
+            self.aspect_ratio = 1.777777
+            self.total_width = cam_scale
+            self.total_height = cam_scale / self.aspect_ratio
 
         # These ratios come from the size of the hole in the rounded frame texture
         self.content_width = self.total_width * (618 / 640)
@@ -781,20 +786,45 @@ class CamPreview(Entity):
             model='arrow',
             color=color.cyan,
             enabled=False,
-            position=(0,0,-0.2), # Slightly in front of little_point
+            position=(0,0,-0.2),
             # Initialize scale to thin proportions, Z will be overridden by magnitude
             scale=(0.015, 0.015, 1)
+        )
+
+        self.target_in_view = Entity(
+            parent=self.label,
+            model='quad',
+            color=color.black,
+            position=(0.25, 0.01, 0),
+            scale=(0.05, 0.02),
+            enabled=(self.anchor is None),
+        )
+
+        self.holding_something = Entity(
+            parent=self.label,
+            model='quad',
+            color=color.gold,
+            position=(0.32, 0.01, 0),
+            scale=(0.05, 0.02),
+            enabled=(self.anchor is None),
         )
 
         # indicates whether the texture has been allocated
         self.haveSetImage = False
 
-    def set_prediction_vector(self, vec):
+    def set_predictions(self, data_dict):
         """
         Takes a 2D vector in [-1, 1] range (e.g. from a joystick) and draws 
         a thin arrow from the center of the view.
         If vec is None or magnitude is ~0, hides the arrow.
         """
+        vec = data_dict['vec']
+        valid_target_in_view = data_dict['valid']
+        gripper_holding = data_dict['hold'] # purely visual estimate of whether the gripper is holding somehting.
+
+        self.target_in_view.alpha = valid_target_in_view
+        self.holding_something.alpha = gripper_holding
+
         if vec is None:
             self.prediction_arrow.enabled = False
             return
