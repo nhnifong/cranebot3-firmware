@@ -155,9 +155,9 @@ class RaspiGripperServer(RobotComponentServer):
         self.service_name = 'cranebot-gripper-service.' + unique
 
         self.last_finger_angle = 0
+        self.desired_finger_angle = 0
+        self.finger_speed = 0 # degrees per second
         self.past_val_rates = deque(maxlen=self.conf['UPDATE_RATE'])
-        self.holding = False
-        self.holdPressure = False
         self.stream_command = half_res_stream_command
 
         # try to read the physical positions of winch and finger last written to disk.
@@ -167,6 +167,7 @@ class RaspiGripperServer(RobotComponentServer):
                 winch, finger = pickle.load(f)
                 self.spooler.setReferenceLength(winch)
                 self.last_finger_angle = finger
+                self.desired_finger_angle =finger
         except FileNotFoundError:
             pass
         except EOFError: # corruption
@@ -212,112 +213,28 @@ class RaspiGripperServer(RobotComponentServer):
                 with open('offsets.pickle', 'wb') as f:
                     f.write(pickle.dumps((self.spooler.last_length, self.last_finger_angle)))
 
-    async def holdPressurePid(self, target_v):
-        """
-        control the hand servo to hold the voltage on the pressure pin at the target
-        """
-        voltage_pid = PID(self.conf['POS_KP'], self.conf['POS_KI'], self.conf['POS_KD'], 1/self.conf['UPDATE_RATE'])
-        voltage_pid.setpoint = target_v
-        pos = self.conf['OPEN']
-        while self.holdPressure and self.tryHold:
-            # get the current pressure
-            voltage = self.hat.gpio_pin_value(PRESSURE_PIN)
-            # run pid calcucaltion. it tells you how much to move
-            val = voltage_pid.calculate(voltage)
-            logging.info(f'calculated pid value {val}, servo pos = {pos}')
-            # set servo position
-            pos = clamp(pos+val,-90,90)
-            self.hand_servo.value(pos)
-            # record the absolute value change to know if it is stabilizing
-            self.past_val_rates.append(abs(pos - self.last_finger_angle))
-            self.last_finger_angle = pos
-            await asyncio.sleep(1/self.conf['UPDATE_RATE'])
-
-    async def readStableFingerValue(self):
-        # wait for value to stabilize
-        # todo, what if the client commands tryHold=False while we are in this loop
-        # this might also need a timeout.
-        logging.debug(f'mean rate of change in finger servo position = {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]}')
-        timeout = 5
-        while sum(self.past_val_rates)/self.conf['UPDATE_RATE'] > self.conf['MEAN_SERVO_VAL_CHANGE_THRESHOLD'] and timeout > 0:
-            await asyncio.sleep(0.25)
-            timeout -= 0.25
-        return self.last_finger_angle
-
-
     async def fingerLoop(self):
         """
         Main control loop for fingers.
-
-        The gripper has explicit states, open and trying to hold something.
-        In the trying to hold something state, called 'hold' for short, the grip will repeatedly alternate between two more states,
-        closing to maintain a pressure, and opening again
-            during the maintain pressure state, set the desired grip pressure to maybe 500g.
-            A pid loop then attempts to find the servo value that results in this pressure.
-            In this loop. when we see the servo value stabilize,
-            If it is low, like 65, this means something is held. we always report whether somethig is held back to the client on the websocket.
-            stay in this state.
-            if it was high, like 85, this means no object was grasped and the fingers are pressing against eachother.
-            pause the pressure pid loop, and set to fully open, sleeping long enough for it to fully open.
-            wait up to a certain timeout for the object to be in the sweet spot, and reenter the hold pressure mode.
-        
-        TODO: the camera may also be a way of determining whether somehting is held.
-        Either by doing something in opencv with a reference image of a closed, empty gripper,
-        or by looking at the output tensor of the AI camera 
+        Makes finger angle more smoothly track a target.
+        We know the angle can't change faster than about 90 deg/s
+        We both want self.last_finger_angle to be an accurate reflection of where it is, 
+        and we want to apply some acceleration limit
         """
+        running_delay = 0.03
+        max_accel = 40 # degrees per second squared
         while self.run_server:
             if not self.use_finger_loop:
                 await asyncio.sleep(0.2)
                 continue
-            # repeatedly try to grasp the object
-            while self.tryHold:
-                logging.debug(f'tryHold={self.tryHold} holding={self.holding}')
-                if not self.holding:
-                    # wait for the target to be in the sweet spot
-                    pass
-                    # Start gripping
-                    logging.info(f'Close grip and maintain pressure')
-                    self.holdPressure = True
-                    asyncio.create_task(self.holdPressurePid(self.conf['TARGET_HOLDING_PRESSURE']))
-                    await asyncio.sleep(0.5)
-                finger_val = await self.readStableFingerValue()
-                logging.info(f'Finger stable at {finger_val} with mean absolute change of {sum(self.past_val_rates)/self.conf["UPDATE_RATE"]} over the last second')
-                logging.debug(f'pressure pad voltage = {self.hat.gpio_pin_value(PRESSURE_PIN)}')
-                # look where it stabilized
-                if finger_val < self.conf['FINGER_TOUCH']:
-                    # object is present
-                    # putting anything in the self.update dict means it will get flushed to the websocket
-                    self.holding = True
-                    self.update['holding'] = True
-                    await asyncio.sleep(0.25)
-                    # stay in the loop, checking stable finger position
-                else:
-                    # grasped nothing. stop the pid loop, open the grip, and wait one second.
-                    # We also reach this if the object slipped out, and the value restabilized with the fingers touching.
-                    logging.info(f'Fingers closed on nothing. self.holding was {self.holding}')
-                    self.holdPressure = False
-                    self.hand_servo.value(self.conf['OPEN'])
-                    self.holding = False
-                    self.update['holding'] = False
-                    # consider sending a count of the number of times we failed to grasp.
-                    # by the time we wake, we expect the fingers to be open, and the estimator to have decided whether tryHold should still be true
-                    await asyncio.sleep(2.0)
-
-            else:
-                # the else condition runs if the loop completes without a break statement or an exception
-                # this should occur only when a websocket update was received setting self.tryHold to false.
-                # open completely.
-                logging.info(f'Grip commanded open.')
-                self.hand_servo.value(self.conf['OPEN'])
-                # do not leave the station until the passengers have fully departed.
-                while self.hat.gpio_pin_value(PRESSURE_PIN) > self.conf['PRESSURE_MIN']:
-                    await asyncio.sleep(0.05)\
-                # now you can tell the controller its ok to move to the next destination.
-                self.update['holding'] = False
-                # stay in this state until commanded to do otherwise.
-                await self.tryHoldChanged.wait()
-                self.tryHoldChanged.clear()
-                self.holding = False
+            # smoothly track desired finger angle
+            angle_error = self.desired_finger_angle - self.last_finger_angle
+            want_speed = clamp(angle_error * 0.5, -100, 100)
+            speed_error = want_speed - self.finger_speed
+            self.finger_speed += clamp(speed_error, -max_accel*running_delay, max_accel*running_delay)
+            self.last_finger_angle += clamp(self.finger_speed * running_delay, -90, 90)
+            self.hand_servo.value(self.last_finger_angle)
+            time.sleep(running_delay)
 
     async def performZeroWinchLine(self):
         logging.info(f'Zeroing winch line {self.hat.gpio_pin_value(LIMIT_SWITCH_PIN)}')
@@ -352,9 +269,8 @@ class RaspiGripperServer(RobotComponentServer):
         if 'zero_winch_line' in update:
             tg.create_task(self.performZeroWinchLine())
         if 'set_finger_angle' in update:
-            self.use_finger_loop = False
-            self.last_finger_angle = clamp(float(update['set_finger_angle']), -90, 90)
-            self.hand_servo.value(self.last_finger_angle)
+            self.use_finger_loop = True
+            self.desired_finger_angle = clamp(float(update['set_finger_angle']), -90, 90)
 
 if __name__ == "__main__":
     logging.basicConfig(
