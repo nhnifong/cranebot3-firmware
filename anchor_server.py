@@ -67,6 +67,7 @@ class RobotComponentServer:
         self.rpicam_process = None
         self.zc = None # zerconf instance.
         self.mock_camera_port = None
+        self.extra_tasks = []
 
     async def stream_measurements(self, ws):
         """
@@ -237,7 +238,8 @@ class RobotComponentServer:
 
         # Call a function which subclasses implement to start tasks at startup that should remain running even if clients disconnect.
         # tasks started this way should run only while self.run_server is true
-        self.startOtherTasks()
+        # should return a list of any tasks it started
+        self.extra_tasks.extend(self.startOtherTasks())
 
         async with websockets.serve(self.handler, "0.0.0.0", port):
             logging.info("Websocket server started")
@@ -251,6 +253,8 @@ class RobotComponentServer:
         await self.zc.async_unregister_all_services()
         logging.info("Service unregistered")
         result = await spool_task
+        if len(self.extra_tasks) > 0:
+            result = await asyncio.gather(self.extra_tasks)
 
 
     def shutdown(self):
@@ -376,7 +380,7 @@ class RaspiAnchorServer(RobotComponentServer):
             self.update['last_raw_encoder'] = self.spooler.last_angle
 
     def startOtherTasks(self):
-        pass
+        return []
 
     async def tighten(self):
         """
