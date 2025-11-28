@@ -235,7 +235,7 @@ class RaspiGripperServer(RobotComponentServer):
             self.finger_speed += clamp(speed_error, -max_accel*running_delay, max_accel*running_delay)
             self.last_finger_angle += clamp(self.finger_speed * running_delay, -90, 90)
             self.hand_servo.value(self.last_finger_angle)
-            time.sleep(running_delay)
+            await asyncio.sleep(running_delay)
 
     async def performZeroWinchLine(self):
         logging.info(f'Zeroing winch line {self.hat.gpio_pin_value(LIMIT_SWITCH_PIN)}')
