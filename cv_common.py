@@ -35,8 +35,9 @@ special_sizes = {
     'cal_assist_1': 0.1640, # shouldn't these have printed with the same dimensions as the origin card?
     'cal_assist_2': 0.1640,
     'cal_assist_3': 0.1640,
+    'gantry':       0.0915
 }
-default_marker_size = 0.0868 # The default side length of markers in meters
+default_marker_size = 0.08948 # The default side length of markers in meters
 
 # The 'tag36h11' family is a good general-purpose choice.
 # Other options include 'tag16h5', 'tag25h9', 'tagCircle21h7', etc.
