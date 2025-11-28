@@ -223,14 +223,14 @@ class RaspiGripperServer(RobotComponentServer):
         and we want to apply some acceleration limit
         """
         running_delay = 0.03
-        max_accel = 40 # degrees per second squared
+        max_accel = 800 # degrees per second squared
         while self.run_server:
             if not self.use_finger_loop:
                 await asyncio.sleep(0.2)
                 continue
             # smoothly track desired finger angle
             angle_error = self.desired_finger_angle - self.last_finger_angle
-            want_speed = clamp(angle_error * 0.5, -100, 100)
+            want_speed = clamp(angle_error, -10, 10) * 15 # 150 deg/sec max speed
             speed_error = want_speed - self.finger_speed
             self.finger_speed += clamp(speed_error, -max_accel*running_delay, max_accel*running_delay)
             self.last_finger_angle += clamp(self.finger_speed * running_delay, -90, 90)
