@@ -402,7 +402,8 @@ class ControlPanelUI:
                 )),
             DropdownMenuButton('Zero Gripper Winch Line', on_click=partial(self.simple_command, 'zero_winch')),
             DropdownMenuButton('Horizontal Move Test', on_click=partial(self.simple_command, 'horizontal_task')),
-            DropdownMenuButton('Gamepad Controls', on_click=self.toggle_gamepad_window)
+            DropdownMenuButton('Gamepad Controls', on_click=self.toggle_gamepad_window),
+            DropdownMenuButton('Collect Gripper Images', on_click=partial(self.simple_command, 'collect_images')),
             ))
 
     def run_full_cal(self):
@@ -670,8 +671,8 @@ class ControlPanelUI:
         if 'gp_pos' in updates:
             self.floor.set_gp_pos(updates['gp_pos'])
 
-        if 'grip_lat' in updates:
-            self.cam_views[None].set_prediction_vector(updates['grip_lat'])
+        if 'grip_pred' in updates:
+            self.cam_views[None].set_predictions(updates['grip_pred'])
 
 
     def start(self):

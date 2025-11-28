@@ -34,8 +34,8 @@ import pickle
 from collections import deque, defaultdict
 from trainer.control_service import start_robot_control_server
 from trainer.stringman_record_loop import record_until_disconnected
-from trainer.centering_labler import capture_gripper_image
 import multiprocessing
+import uuid
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -44,6 +44,27 @@ gripper_service_name = 'cranebot-gripper-service'
 
 N_ANCHORS = 4
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
+
+UNPROCESSED_DIR = "square_centering_data_unlabeled"
+
+def capture_gripper_image(ndimage, gripper_occupied=False):
+    """
+    Saves an image to the unprocessed directory. 
+    Encodes gripper state in filename: {uuid}_g{1|0}.jpg
+    """
+    if not os.path.exists(UNPROCESSED_DIR):
+        os.makedirs(UNPROCESSED_DIR)
+    
+    h, w = ndimage.shape[:2]
+        
+    state_str = "g1" if gripper_occupied else "g0"
+    file_id = str(uuid.uuid4())
+    img_filename = f"{file_id}_{state_str}.jpg"
+    img_full_path = os.path.join(UNPROCESSED_DIR, img_filename)
+    
+    # Save (ensure RGB/BGR consistency)
+    cv2.imwrite(img_full_path, ndimage)
+    print(f"Captured: {img_filename} (Gripper: {gripper_occupied})")
 
 # Manager of multiple tasks running clients connected to each robot component
 # The job of this class in a nutshell is to discover four anchors and a gripper on the network,
@@ -115,6 +136,7 @@ class AsyncObserver:
             'episode_ctrl': self._handle_add_episode_control_event,
             'avg_named_pos': self._handle_avg_named_pos,
             'lost_conn': self._handle_lost_conn,
+            'collect_images': self._handle_collect_images,
         }
 
     def listen_queue_updates(self, loop):
@@ -1005,10 +1027,11 @@ class AsyncObserver:
         Store target candidates and confidence.
         """
         DOBBY_MODEL_PATH = "trainer/models/sock_tracker.pth"
-        CENTERING_MODEL_PATH = "trainer/models/sock_gripper.pth"
+        CENTERING_MODEL_PATH = "trainer/models/square_centering.pth"
         IMAGE_RES = (640, 360)
         DEVICE = "cpu"
-        LOOP_DELAY = 0.5
+        LOOP_DELAY = 0.1
+        RUN_DOBBY_EVERY = 5
 
         if self.dobby_model is None:
             import torch
@@ -1030,63 +1053,71 @@ class AsyncObserver:
             self.centering_model.eval()
 
         config = Config()
-
+        counter = 0
         while self.run_command_loop:
             await asyncio.sleep(LOOP_DELAY)
+            counter += 1
+
+            if self.gripper_client is not None and self.gripper_client.last_frame_resized is not None:
+                gripper_image_tensor = torch.from_numpy(self.gripper_client.last_frame_resized).permute(2, 0, 1).float() / 255.0
+                if gripper_image_tensor is not None:
+                    gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
+                    with torch.no_grad():
+                        pred_vec, pred_valid, pred_grip = self.centering_model(gripper_image_tensor)
+                        vec = pred_vec[0].cpu().numpy()
+                        p_valid = pred_valid[0].item()
+                        p_grip = pred_grip[0].item()
+
+                        # you get a normalized u,v coordinate in the [-1,1] range
+                        self.predicted_lateral_vector = vec if p_valid > 0.5 else np.zeros(2)
+                        self.to_ui_q.put({'grip_pred': {
+                            'vec': self.predicted_lateral_vector,
+                            'valid': p_valid,
+                            'hold': p_grip,
+                        }})
+
+            if counter < RUN_DOBBY_EVERY:
+                continue
+            counter = 0
 
             # collect images from any anchors that have one
             valid_anchor_clients = []
             img_tensors = []
-            gripper_image_tensor = None
-            for client in self.bot_clients.values():
+            for client in self.anchors:
                 if client.last_frame_resized is None or client.anchor_num not in config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
                 img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0
-                if client.anchor_num is not None:
-                    img_tensors.append(img_tensor)
-                    valid_anchor_clients.append(client)
-                else:
-                    gripper_image_tensor = img_tensor
-            
-            if gripper_image_tensor is not None:
-                gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
+                img_tensors.append(img_tensor)
+                valid_anchor_clients.append(client)
+            if img_tensors:
+                # run batch inference on GPU and get targets
+                all_floor_target_arrs = []
+                batch = torch.stack(img_tensors).to(DEVICE)
                 with torch.no_grad():
-                    # you get a normalized u,v coordinate in the [-1,1] range
-                    self.predicted_lateral_vector = self.centering_model(gripper_image_tensor).cpu().squeeze().numpy()
-                    self.to_ui_q.put({'grip_lat': self.predicted_lateral_vector})
+                    heatmaps_out = self.dobby_model(batch)
 
-            if not img_tensors:
-                # no anchor images to process right now. cameras are probably still connecting.
-                continue
+                # Shape: (Batch, 1, H, W) -> (Batch, H, W)
+                heatmaps_np = heatmaps_out.squeeze(1).cpu().numpy() # this is the blocking call
+                for i, heatmap_np in enumerate(heatmaps_np):
+                    client = valid_anchor_clients[i]
+                    results = extract_targets_from_heatmap(heatmap_np)
+                    if len(results) > 0:
+                        targets2d = results[:,:2] # the third number is confidence
+                        # if this is an anchor, project points to floor using anchor's specific pose
+                        floor_points = project_pixels_to_floor(targets2d, client.camera_pose)
+                        all_floor_target_arrs.append(floor_points)
+                    
+                    # create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
+                    heatmap_vis = (heatmap_np * 255).astype(np.uint8)
+                    heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+                    self.to_ui_q.put({'heatmap': {'anchor_num':valid_anchor_clients[i].anchor_num, 'image':heatmap_color}})
 
-            # run batch inference on GPU and get targets
-            all_floor_target_arrs = []
-            batch = torch.stack(img_tensors).to(DEVICE)
-            with torch.no_grad():
-                heatmaps_out = self.dobby_model(batch)
-
-            # Shape: (Batch, 1, H, W) -> (Batch, H, W)
-            heatmaps_np = heatmaps_out.squeeze(1).cpu().numpy() # this is the blocking call
-            for i, heatmap_np in enumerate(heatmaps_np):
-                client = valid_anchor_clients[i]
-                results = extract_targets_from_heatmap(heatmap_np)
-                if len(results) > 0:
-                    targets2d = results[:,:2] # the third number is confidence
-                    # if this is an anchor, project points to floor using anchor's specific pose
-                    floor_points = project_pixels_to_floor(targets2d, client.camera_pose)
-                    all_floor_target_arrs.append(floor_points)
-                
-                # create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
-                heatmap_vis = (heatmap_np * 255).astype(np.uint8)
-                heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
-                self.to_ui_q.put({'heatmap': {'anchor_num':valid_anchor_clients[i].anchor_num, 'image':heatmap_color}})
-
-            if len(all_floor_target_arrs) == 0:
-                continue
-
-            # filter out targets that are not inside the work area.
-            self.floor_targets = np.array([p for p in np.concatenate(all_floor_target_arrs) if self.pe.point_inside_work_area_2d(p)])
+                if len(all_floor_target_arrs) > 0:
+                    # filter out targets that are not inside the work area.
+                    self.floor_targets = np.array([p for p in np.concatenate(all_floor_target_arrs) if self.pe.point_inside_work_area_2d(p)])
+                else:
+                    self.floor_targets = []
 
     def select_target(self):
         # TODO select the next target from the user's queue.
@@ -1197,7 +1228,7 @@ class AsyncObserver:
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * sf_scale_factor / 2 * (np.pi/180)
 
         attempts = 2
-        while not self.pe.holding and attempts > 0:
+        while not self.pe.holding and attempts > 0 and self.run_command_loop:
             attempts -= 1
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
             # await asyncio.sleep(0.7) # wait for fingers to get out of the way of the camera
@@ -1270,10 +1301,13 @@ class AsyncObserver:
         print('Gave up on grasp after a few attempts')
         return False
 
+    async def _handle_collect_images(self, _):
+        asyncio.create_task(self.collect_images())
+
     async def collect_images(self):
-        while True:
+        while self.run_command_loop:
             rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
-            capture_gripper_image(rgb_image)
+            capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
             await asyncio.sleep(0.5)
 
 def start_observation(to_ui_q, to_ob_q):
