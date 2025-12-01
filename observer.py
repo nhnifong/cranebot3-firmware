@@ -1164,7 +1164,7 @@ class AsyncObserver:
                     continue
 
                 # pick Z position for gantry
-                goal_pos = np.array([next_target[0], next_target[1], 1.2])
+                goal_pos = np.array([next_target[0], next_target[1], 1.0])
                 self.gantry_goal_pos = goal_pos
 
                 # if we are far enough away from the basket
@@ -1201,7 +1201,7 @@ class AsyncObserver:
                 # await self.gripper_client.send_commands({'length_set': DROP_WINCH_LENGTH})
 
                 # fly to to drop point
-                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.8])
+                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.5])
                 await self.seek_gantry_goal()
                 # open gripper
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))

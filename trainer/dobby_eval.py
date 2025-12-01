@@ -96,6 +96,12 @@ def main(uri):
     print("SPACE: Next random frame")
     print("Q:     Quit")
 
+    # Initialize window with NORMAL flag to allow resizing
+    window_name = "Sock Heatmap"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    # Set initial size to double the processing resolution (1280x720)
+    cv2.resizeWindow(window_name, IMAGE_RES[0] * 2, IMAGE_RES[1] * 2)
+
     while True:
         if uri:
             ret, frame = cap.read()
@@ -118,7 +124,7 @@ def main(uri):
         
         img_np = img_tensor.permute(1, 2, 0).numpy()
         img_display = (img_np * 255).astype(np.uint8)
-        img_display = cv2.cvtColor(img_display, cv2.COLOR_RGB2BGR)
+        # img_display = cv2.cvtColor(img_display, cv2.COLOR_RGB2BGR)
         
         heatmap_vis = (heatmap_np * 255).astype(np.uint8)
         heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
