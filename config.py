@@ -26,7 +26,7 @@ class Config:
             [[0.021986, 0.160533, -0.003378, 0.002640, -0.356843]])
         self.commmon_anchor_vars = {}
         self.gripper_vars = {}
-        self.preferred_cameras = [2,3,None] # todo this is not written anywhere
+        self.preferred_cameras = [0,3,None] # todo this is not written anywhere
         self.gripper_frame_room_spin = 50/180*np.pi # todo this is not written anywhere
         try:
             self.reload()
