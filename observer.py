@@ -1149,6 +1149,11 @@ class AsyncObserver:
         """
         PICK_WINCH_LENGTH = 1.0
         DROP_WINCH_LENGTH = 0.2
+        GANTRY_HEIGHT_OVER_TARGET = 1.0
+        GANTRY_HEIGHT_OVER_DROPOFF = 0.5
+        RELAXED_OPEN = 0 # enough to drop something
+        DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
+        LOOP_DELAY = 0.5
 
         try:
             gtask = None
@@ -1160,11 +1165,11 @@ class AsyncObserver:
                         gtask.cancel()
                     self.gantry_goal_pos = None
                     # TODO park on the saddle.
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(LOOP_DELAY)
                     continue
 
                 # pick Z position for gantry
-                goal_pos = np.array([next_target[0], next_target[1], 1.0])
+                goal_pos = np.array([next_target[0], next_target[1], GANTRY_HEIGHT_OVER_TARGET])
                 self.gantry_goal_pos = goal_pos
 
                 # if we are far enough away from the basket
@@ -1192,7 +1197,7 @@ class AsyncObserver:
                 success = await self.execute_grasp()
                 if not success:
                     # just pick another target, but consider downranking this object or something.
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(LOOP_DELAY)
                     continue
 
                 # tension now just in case.
@@ -1201,13 +1206,13 @@ class AsyncObserver:
                 # await self.gripper_client.send_commands({'length_set': DROP_WINCH_LENGTH})
 
                 # fly to to drop point
-                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,0.5])
+                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF])
                 await self.seek_gantry_goal()
                 # open gripper
-                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -10}))
+                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': RELAXED_OPEN}))
                 # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
                 # TODO train network on more data containing examples of this, so it knows that only socks on the floor count.
-                await asyncio.sleep(0.6)
+                await asyncio.sleep(DELAY_AFTER_DROP)
                 # keep score
 
 
@@ -1226,17 +1231,22 @@ class AsyncObserver:
         CLOSED = 85
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * sf_scale_factor / 2 * (np.pi/180)
+        DOWNWARD_SPEED = -0.07
+        VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
+        COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
+        LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
+        LAT_SPEED_ADJUSTMENT = 0.85 # final adjustment to lateral speed
+        LOOP_DELAY = 0.1
+        PRESSURE_SENSE_WAIT = 2.0
 
         attempts = 2
         while not self.pe.holding and attempts > 0 and self.run_command_loop:
             attempts -= 1
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-            # await asyncio.sleep(0.7) # wait for fingers to get out of the way of the camera
 
             # move laterally until target is centered
             # at the same time, move downward until tip is detected.
 
-            downward_speed = -0.07
             nothing_seen_countdown = 15
             self.pe.tip_over.clear()
             while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
@@ -1245,14 +1255,14 @@ class AsyncObserver:
                     break
 
                 # prediction unreliable under 30cm. TODO collect more data of this type
-                if self.gripper_sees_target < 0.1 and distance_to_floor > 0.3:
+                if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and distance_to_floor > COMMIT_HEIGHT:
                     nothing_seen_countdown -= 1
                     if nothing_seen_countdown == 0:
                         break
                 else:
-                    nothing_seen_countdown = 3
+                    nothing_seen_countdown = 15
                 # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
-                lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-downward_speed)*0.75
+                lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
                 print(distance_to_floor, lat_travel_seconds)
                 if lat_travel_seconds > 0:
                     # determine which direction we'd have to move laterally to center the object
@@ -1270,17 +1280,17 @@ class AsyncObserver:
                     lateral_distance = np.linalg.norm(lateral_vector)
                     print(f'lateral_distance={lateral_distance}')
                     # speed to travel that lateral distance in lat_travel_seconds
-                    lateral_speed = lateral_distance / lat_travel_seconds * 0.85
+                    lateral_speed = lateral_distance / lat_travel_seconds * LAT_SPEED_ADJUSTMENT
                 else:
                     # once we get too close, go straight down, stop relying on the camera
                     lateral_speed = [0,0]
                 print(f'lateral_speed={lateral_speed}')
-                await self.move_direction_speed([lateral_vector[0],lateral_vector[1],downward_speed])
+                await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
 
                 try:
-                    # the normal sleep on this loop would be 0.5s, but if tip is detected
+                    # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
                     # we want to stop immediately.
-                    await asyncio.wait_for(self.pe.tip_over.wait(), 0.1)
+                    await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
                     print('detected tip over, must be floor')
                     break
                 except TimeoutError:
@@ -1294,15 +1304,17 @@ class AsyncObserver:
 
             print('close gripper')
             await self.gripper_client.send_commands({'set_finger_angle': CLOSED})
-            print('wait up to 2 seconds for pad to sense object.')
+            print(f'wait up to {PRESSURE_SENSE_WAIT} seconds for pad to sense object.')
             try:
-                await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), 2)
+                await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), PRESSURE_SENSE_WAIT)
                 self.pe.finger_pressure_rising.clear()
             except TimeoutError:
                 print('did not detect a successful hold, open and go back up high enough to get a view of the object')
+                # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
                 await self.move_direction_speed([0,0,0.04])
                 await asyncio.sleep(1.0)
-                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.1]])
+                # now move up a little faster in a slightly random direction
+                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
                 await self.move_direction_speed(direction)
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
                 await asyncio.sleep(2.0)
@@ -1317,6 +1329,7 @@ class AsyncObserver:
         asyncio.create_task(self.collect_images())
 
     async def collect_images(self):
+        """Collects data for the centering network"""
         while self.run_command_loop:
             rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
             capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
