@@ -333,6 +333,7 @@ class RaspiAnchorServer(RobotComponentServer):
             motor = mock_motor
         else:
             motor = MKSSERVO42C()
+            motor.runConstantSpeed(0) # just in case
         if power_anchor:
             # A power anchor spool has a thicker line
             self.spooler = SpoolController(

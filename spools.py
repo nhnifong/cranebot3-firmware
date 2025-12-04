@@ -100,7 +100,8 @@ class SpoolController:
         self.speed = 0
         
         # Mode switching: 'position' tracks target_length, 'speed' tracks aim_line_speed
-        self.tracking_mode = 'position' 
+        # must start in speed mode or we might zoom upon turning on.
+        self.tracking_mode = 'speed' 
         
         # Position tracking state
         self.target_length = 3.0 # Meters
@@ -141,6 +142,8 @@ class SpoolController:
             if abs(self.last_length - length) > 0.5: 
                 self.target_length = length 
                 self.last_length = length
+            # force tracking mode to speed so we don't zoom
+            self.tracking_mode = 'speed'
 
     def _commandSpeed(self, speed):
         """ Command a specific speed from the motor. """
