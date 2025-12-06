@@ -916,7 +916,6 @@ class CamPreview(Entity):
                             other_cam.render_projected_point(uv_coords[0])
 
     def on_mouse_exit(self):
-        print(f'{self} on_mouse_exit')
         if not self.floor.locked:
             if self.anchor is not None:
                 # Cleanup lines

@@ -658,7 +658,6 @@ class AsyncObserver:
                             result = await task
                             del connection_tasks[key]
                             self.remove_service(None, key)
-                    print(f'still waiting for task {key}')
 
             await asyncio.sleep(0.5)
         for task in connection_tasks.values():
@@ -754,6 +753,7 @@ class AsyncObserver:
             except asyncio.exceptions.CancelledError:
                 pass
             await self.async_close()
+
 
     async def async_close(self) -> None:
         result = await self.stop_all()
