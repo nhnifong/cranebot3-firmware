@@ -20,6 +20,23 @@ import time
 from zeroconf import IPVersion
 from zeroconf.asyncio import AsyncZeroconf
 
+# Todo, automate the following tests
+# 
+# start observer, turn on bot, wait for all good, close observer
+#     pass
+# start observer, turn on bot, before all connections succeed, close observer
+#     pass
+# turn on bot, start observer, wait for all good, close observer
+#     pass
+# start observer, turn on bot, wait for all good, kill bot, close observer
+#     observer hangs
+# turn on bot, start observer, wait for all good, kill bot, close observer
+#     observer hangs
+# start observer, turn on bot, wait for all good, kill bot, power up bot, wait for all good, close observer.
+#     observer recconnects like it should
+# turn on bot, start observer, wait for all good, kill bot, power up bot, wait for all good, close observer.
+#     observer recconnects like it should
+
 class TestObserver(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):

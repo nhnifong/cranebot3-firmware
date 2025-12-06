@@ -36,6 +36,8 @@ from trainer.control_service import start_robot_control_server
 from trainer.stringman_record_loop import record_until_disconnected
 import multiprocessing
 import uuid
+from target_queue import TargetQueue, TargetStatus
+import json
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -108,9 +110,11 @@ class AsyncObserver:
         self.episode_control_events = set()
         self.named_positions = {}
         self.dobby_model = None
-        self.floor_targets = []
         self.centering_model = None
         self.predicted_lateral_vector = None
+        # targets
+        self.target_queue = TargetQueue()
+        self.last_snapshot_hash = None # to spare the UI from too many updates
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -629,8 +633,7 @@ class AsyncObserver:
             # is everything up the way we want it to be?
             if len([b for b in self.bot_clients.values() if b.connected])==5:
                 await asyncio.sleep(0.5)
-                print('all good')
-                continue # everything is up.
+                continue # All websocket connections are up.
 
             # make sure we have either a live connection to, or an ongoing attempt to connect to every component we know about.
             for cpt in [self.config.gripper, *self.config.anchors]:
@@ -1070,6 +1073,14 @@ class AsyncObserver:
         for k in data:
             self.episode_control_events.add(str(k))
 
+    def send_tq_to_ui(self):
+        snapshot = self.target_queue.get_queue_snapshot()
+        # Create a deterministic hash
+        current_hash = hash(json.dumps(snapshot, sort_keys=True, default=str))
+        if current_hash != self.last_snapshot_hash:
+            self.to_ui_q.put({'target_list': snapshot})
+            self.last_snapshot_hash = current_hash
+
     async def run_perception(self):
         """
         Run the dobby network on preferred cameras at a modest rate.
@@ -1165,33 +1176,16 @@ class AsyncObserver:
 
                 if len(all_floor_target_arrs) > 0:
                     # filter out targets that are not inside the work area.
-                    self.floor_targets = np.array([p for p in np.concatenate(all_floor_target_arrs) if self.pe.point_inside_work_area_2d(p)])
+                    floor_targets = [
+                        {'position': np.array([p[0], p[1], 0]), 'dropoff': 'hamper'}
+                        for p in np.concatenate(all_floor_target_arrs)
+                        if self.pe.point_inside_work_area_2d(p)
+                    ]
                 else:
-                    self.floor_targets = []
-
-    def select_target(self):
-        # TODO select the next target from the user's queue.
-        print(f'select target from {self.floor_targets}')
-
-        # if the user's queue is empty, pick one from the targets identified by dobby.
-        if len(self.floor_targets) == 0:
-            return None
-
-        # pick closest point to gantry as next target
-        gantry2d = self.pe.gant_pos[:2]
-        dist_sq = np.sum((self.floor_targets - gantry2d)**2, axis=1)
-        closest_idx = np.argmin(dist_sq)
-        next_target = self.floor_targets[closest_idx]
-
-        # no calibration is perfect, and usually what's wrong is that the scale of the room is off, the height of the anchor is off, or the tilt of the camera is off.
-        # the yaw though is always bang on. So, instead of just projecting points onto the floor, it might be better to project a line onto the floor.
-        # in other words, add some small offset vertically above and below the point in pixel space and project both of these, then  draw a segment between them on the floor.
-        # then find the spot where lines from multiple cameras come closest to intersecting.
-
-        # however, this isn't actually going to produce good results unless you are doing it for the same object in both views, which you just have to guess at.
-
-        print(f'selected object at floor position {next_target}')
-        return next_target
+                    floor_targets = []
+                # add any floor targets dicovered during this batch to the target queue.
+                self.target_queue.add_ai_targets(floor_targets)
+                self.send_tq_to_ui()
 
     async def pick_and_place_loop(self):
         """
@@ -1208,7 +1202,7 @@ class AsyncObserver:
         try:
             gtask = None
             while self.run_command_loop:
-                next_target = self.select_target()
+                next_target = self.target_queue.get_best_target()
                 if next_target is None:
                     print('no target was found, be still')
                     if gtask is not None:
@@ -1218,8 +1212,11 @@ class AsyncObserver:
                     await asyncio.sleep(LOOP_DELAY)
                     continue
 
+                self.target_queue.set_target_status(next_target.id, TargetStatus.SELECTED)
+                self.send_tq_to_ui()
+
                 # pick Z position for gantry
-                goal_pos = np.array([next_target[0], next_target[1], GANTRY_HEIGHT_OVER_TARGET])
+                goal_pos = next_target.position + np.array([0, 0, GANTRY_HEIGHT_OVER_TARGET])
                 self.gantry_goal_pos = goal_pos
 
                 # if we are far enough away from the basket
@@ -1247,23 +1244,28 @@ class AsyncObserver:
                 success = await self.execute_grasp()
                 if not success:
                     # just pick another target, but consider downranking this object or something.
+                    self.target_queue.set_target_status(next_target.id, TargetStatus.SEEN)
+                    self.send_tq_to_ui()
                     await asyncio.sleep(LOOP_DELAY)
                     continue
+                else:
+                    self.target_queue.set_target_status(next_target.id, TargetStatus.PICKED_UP)
+                    self.send_tq_to_ui()
 
                 # tension now just in case.
                 # await self.tension_and_wait()
 
-                # await self.gripper_client.send_commands({'length_set': DROP_WINCH_LENGTH})
-
                 # If user specified drop point...
-                # otherwise go for hamper
-                if 'hamper' in self.named_positions:
-                    drop_point = self.named_positions['hamper']
+                if not isinstance(next_target.dropoff, str):
+                    drop_point = next_target.dropoff
+                # otherwise go to the named drop point
+                if next_target.dropoff in self.named_positions:
+                    drop_point = self.named_positions[next_target.dropoff]
                 else:
                     # otherwise use the origin as a drop point :/
                     # TODO this is not ideal, as we will continue to pick things up from this spot most likely now that we are close to it.
                     # either need to drop it somewhere we know we won't ever see it again, or have a sign for this drop point so we don't touch things inside it.
-                    print("Can't see the hamper april tag, using (0,0) as a drop point")
+                    print("No drop point specified, using (0,0,0) as a drop point")
                     drop_point = np.zeros(3)
 
                 # fly to to drop point
@@ -1274,6 +1276,8 @@ class AsyncObserver:
                 # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
                 # TODO train network on more data containing examples of this, so it knows that only socks on the floor count.
                 await asyncio.sleep(DELAY_AFTER_DROP)
+                self.target_queue.set_target_status(next_target.id, TargetStatus.DROPPED)
+                self.send_tq_to_ui()
                 # keep score
 
 
