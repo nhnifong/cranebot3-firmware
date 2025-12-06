@@ -105,7 +105,7 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
 
         # if gripper_client is going to use the configs in configuration.json, then so will we.
         config = Config()
-        self.receiver.update.assert_called_with({'set_config_vars': config.gripper_vars})
+        self.receiver.update.assert_called_with({'set_config_vars': config.gripper.vars})
 
     async def test_line_record(self):
         """

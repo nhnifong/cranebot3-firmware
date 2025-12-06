@@ -87,8 +87,6 @@ class AsyncObserver:
         self.anchors = []
         # convenience reference to gripper client
         self.gripper_client = None
-        # The index of the anchor with the power-delivering line
-        self.power_spool_index = None
         # read a mapping of server names to anchor numbers from the config file
         self.config = Config()
         self.config.write()
@@ -549,123 +547,171 @@ class AsyncObserver:
                 pass
 
     async def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
-        """Starts a client to connect to the indicated service"""
+        """Records the information about a discovered service in the config"""
         info = AsyncServiceInfo(service_type, name)
         await info.async_request(zc, INFO_REQUEST_TIMEOUT_MS)
         if not info or info.server is None or info.server == '':
             return None;
-        print(f"Service {name} added, service info: {info}, type: {service_type}")
-        address = socket.inet_ntoa(info.addresses[0])
-        name_component = name.split('.')[1]
+        namesplit = name.split('.')
+        kind = namesplit[1]
+        key  = ".".join(namesplit[:3])
 
-        is_power_anchor = name_component == anchor_power_service_name
-        is_standard_anchor = name_component == anchor_service_name
-        is_standard_gripper = name_component == gripper_service_name
+        print(f"Service discovered: {info}")
+        address = socket.inet_ntoa(info.addresses[0])
+
+        is_power_anchor = kind == anchor_power_service_name
+        is_standard_anchor = kind == anchor_service_name
+        is_standard_gripper = kind == gripper_service_name
 
         if is_power_anchor or is_standard_anchor:
             # the number of anchors is decided ahead of time (in main.py)
             # but they are assigned numbers as we find them on the network
             # and the chosen numbers are persisted in configuration.json
-
-            if info.server in self.config.anchor_num_map:
-                anchor_num = self.config.anchor_num_map[info.server]
+            if key in self.config.anchor_num_map:
+                anchor_num = self.config.anchor_num_map[key]
             else:
                 anchor_num = len(self.config.anchor_num_map)
                 if anchor_num >= N_ANCHORS:
                     # we do not support yet multiple crane bot assemblies on a single network
-                    print(f"Discovered another anchor server on the network, but we already know of 4 {info.server} {address}")
+                    print(f"Discovered another anchor server on the network, but we already know of 4 {key} {address}")
                     print(f"existing anchors: {self.config.anchor_num_map.keys()}")
                     return None
-                self.config.anchor_num_map[info.server] = anchor_num
-                self.config.anchors[anchor_num].service_name = info.server
+            self.config.anchor_num_map[key] = anchor_num
+            self.config.anchors[anchor_num].service_name = key
+            self.config.anchors[anchor_num].address = address
+            self.config.anchors[anchor_num].port = info.port
+            self.config.write()
+
+        elif kind == gripper_service_name:
+            # a gripper has been discovered, assume it is ours only if we have never seen one before
+            if self.config.gripper.service_name is None:
+                self.config.gripper.service_name = key
+                self.config.gripper.address = address
+                self.config.gripper.port = info.port
                 self.config.write()
-            
-            # If this is the power anchor, record its index.
-            if is_power_anchor:
-                if self.power_spool_index is not None:
-                    print(f"ERROR: Discovered a second power spool anchor ({info.server}) but one is already registered (anchor #{self.power_spool_index}). Ignoring.")
-                else:
-                    self.power_spool_index = anchor_num
-                    print(f"Power spool anchor discovered and assigned to anchor number {anchor_num}")
-
-
-            ac = RaspiAnchorClient(address, info.port, anchor_num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat)
-            self.bot_clients[info.server] = ac
-            self.anchors.append(ac)
-            print('appending anchor client to list and starting server')
-            # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
-            abnormal_close = await ac.startup()
-            if abnormal_close:
-                self.to_ui_q.put({'pop_message': f'lost connection to {name}'})
-                await self.remove_service(service_type, name)
-                await self.stop_all()
-                # TODO: if recording training data, abort current episode
-
-        elif name_component == gripper_service_name:
-            # a gripper has been discovered, connect immediately.
-            print(f'Connecting to "{info.server}" as gripper')
-            assert(self.gripper_client is None)
-            await self.connect_to_gripper(address, info.port, info.server)
-
-    async def connect_to_gripper(self, address, port, key):
-        gc = RaspiGripperClient(address, port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
-        self.gripper_client_connected.clear()
-        gc.connection_established_event = self.gripper_client_connected
-        self.bot_clients[key] = gc
-        self.gripper_client = gc
-        # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
-        abnormal_close = await gc.startup()
-        if abnormal_close:
-            self.to_ui_q.put({'pop_message': f'lost connection to {key}'})
-            self.gripper_client = None
-            del self.bot_clients[key]
-            await gc.shutdown()
-            await self.stop_all()
-            # TODO: if recording training data, abort current episode
+                print(f'Discovered gripper at "{address}" and adopted it as the gripper for this robot')
+            elif address != self.config.gripper.address:
+                print(f'Discovered gripper at "{address}" and ignored it because ours is at {self.config.gripper.address}')
 
     async def update_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
-        # this occurs when a component goes down abnormally and comes back up.
-        # nothing is expected to have changed, and we should already be disconnected from it, but make sure.
-        namesplit = name.split('.')
-        name_component = namesplit[1]
-        key  = ".".join(namesplit[:3])+'.'
-        # see if we already have this loaded
-        if key in self.bot_clients:
-            # we do not expect a service to change without having gone down first
-            # however it could simply be that it went down so recently that we're not done closing the client.
-            await asyncio.sleep(5)
-            if key in self.bot_clients:
-                return
-        # reconnect
-        await self.add_service(zc, service_type, name)
+        # when zerconf has detected a change in address or port
+        pass
 
     async def remove_service(self, service_type: str, name: str) -> None:
         """
         Finds if we have a client connected to this service. if so, ends the task if it is running, and deletes the client
         """
         namesplit = name.split('.')
-        name_component = namesplit[1]
-        key  = ".".join(namesplit[:3])+'.'
+        kind = namesplit[1]
+        key  = ".".join(namesplit[:3])
         print(f'Removing service {key} from {self.bot_clients.keys()}')
 
         # only in this dict if we are connected to it.
         if key in self.bot_clients:
             client = self.bot_clients[key]
             await client.shutdown()
-            if name_component == anchor_service_name or name_component == anchor_power_service_name:
+            if kind == anchor_service_name or kind == anchor_power_service_name:
                 self.anchors.remove(client)
-            elif name_component == gripper_service_name:
+            elif kind == gripper_service_name:
                 self.gripper_client = None
             del self.bot_clients[key]
+
+    async def keep_robot_connected(self):
+        """
+        Keep a connection open to every robot component known in the config
+        components are keyed by their service name which is the first three components of info.name, eg
+        123.cranebot-anchor-service.2ccf67bc3fc4
+        """
+        # last attempt to connect, keyed by service name
+        connection_tasks: dict[str, asyncio.Task] = {}
+        while self.run_command_loop:
+
+            # is everything up the way we want it to be?
+            if len([b for b in self.bot_clients.values() if b.connected])==5:
+                await asyncio.sleep(0.5)
+                print('all good')
+                continue # everything is up.
+
+            # make sure we have either a live connection to, or an ongoing attempt to connect to every component we know about.
+            for cpt in [self.config.gripper, *self.config.anchors]:
+                # assume only the common attributes between those two types
+                key = cpt.service_name
+                if key is None or cpt.address is None or cpt.port is None:
+                    # we have not discovered how to connect to this yet, but it's in our config.
+                    # can only occur with manual config editing
+                    print(f'{key} in config but we dont have the address')
+                    continue
+
+                if key not in connection_tasks:
+                    connection_tasks[key] = asyncio.create_task(self.connect_component(key))
+                else:
+                    connected = key in self.bot_clients and self.bot_clients[key].connected
+                    task = connection_tasks[key]
+
+                    if task.done():
+                        # retrieve any exception
+                        result = await task
+                        del connection_tasks[key]
+                    elif not connected:
+                        # the task is still running, but it's not connected, is it trying or did it fail?
+                        if key in self.bot_clients and self.bot_clients[key].failed_to_connect:
+                            result = await task
+                            del connection_tasks[key]
+                            self.remove_service(None, key)
+                    print(f'still waiting for task {key}')
+
+            await asyncio.sleep(0.5)
+        for task in connection_tasks.values():
+            task.cancel()
+        result = await asyncio.gather(*connection_tasks.values())
+
+    async def connect_component(self, service_name):
+        """Connect to the component with the given name using the address stored in the config."""
+        name_component = service_name.split('.')[1]
+
+        is_power_anchor = name_component == anchor_power_service_name
+        is_standard_anchor = name_component == anchor_service_name
+        is_standard_gripper = name_component == gripper_service_name
+
+        if is_standard_gripper:
+            gc = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
+            self.gripper_client_connected.clear()
+            gc.connection_established_event = self.gripper_client_connected
+            self.bot_clients[service_name] = gc
+            self.gripper_client = gc
+            # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
+            abnormal_close = await gc.startup()
+            if abnormal_close:
+                self.to_ui_q.put({'pop_message': f'lost connection to gripper at {self.config.gripper.address}'})
+                result = await self.remove_service(None, service_name)
+                await self.stop_all()
+        else:
+            for a in self.config.anchors:
+                if a.service_name != service_name:
+                    continue
+
+                ac = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat)
+                self.bot_clients[service_name] = ac
+                self.anchors.append(ac)
+                # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
+                abnormal_close = await ac.startup()
+                if abnormal_close:
+                    self.to_ui_q.put({'pop_message': f'lost connection to anchor {ac.anchor_num} at {a.address}'})
+                    print(f'await remove_service {service_name}')
+                    result = await self.remove_service(None, service_name)
+                    print(f'await stop_all {service_name}')
+                    await self.stop_all()
+                print(f'end connect anchor {service_name}')
+
 
     async def main(self) -> None:
         self.to_ui_q.cancel_join_thread()
         self.to_ob_q.cancel_join_thread()
 
-        POOL_PROCESSES = 8
-        # main process loop
-        with Pool(processes=POOL_PROCESSES) as pool:
+        # main process must own pool, and there's only one. multiple subprocesses may submit work.
+        with Pool(processes=8) as pool:
             self.pool = pool
+            # the only reason it might not be none is if a unit test set before calling main.
             if self.aiozc is None:
                 self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=InterfaceChoice.All)
 
@@ -682,7 +728,7 @@ class AsyncObserver:
                 await self.aiozc.async_close()
                 return
 
-            # this task is blocking an runs in it's own thread, but needs a reference to the running loop to start tasks.
+            # this task is blocking and runs in it's own thread, but needs a reference to the running loop to start tasks.
             print("start observer's queue listener task")
             self.ob_queue_task = asyncio.create_task(asyncio.to_thread(self.listen_queue_updates, loop=asyncio.get_running_loop()))
 
@@ -696,8 +742,12 @@ class AsyncObserver:
 
             # A task that continuously estimates the position of the gantry
             self.pe_task = asyncio.create_task(self.pe.main())
+
+            # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
+            # Start a task to connect and reconnect to all known robot components.
+            self.keeper = asyncio.create_task(self.keep_robot_connected())
             
-            # await something that will end when the program closes that to keep zeroconf alive and discovering services.
+            # await something that will end when the program closes to keep zeroconf alive and discovering services.
             try:
                 # tasks started with to_thread must use result = await or exceptions that occur within them are silenced.
                 result = await self.ob_queue_task
@@ -711,7 +761,7 @@ class AsyncObserver:
         self.stat.run = False
         self.pe.run = False
         self.pe_task.cancel()
-        tasks = [self.pe_task]
+        tasks = [self.pe_task, self.keeper]
         if self.grpc_server is not None:
             tasks.append(self.grpc_server.stop(grace=5))
         if self.aiobrowser is not None:
@@ -1205,8 +1255,19 @@ class AsyncObserver:
 
                 # await self.gripper_client.send_commands({'length_set': DROP_WINCH_LENGTH})
 
+                # If user specified drop point...
+                # otherwise go for hamper
+                if 'hamper' in self.named_positions:
+                    drop_point = self.named_positions['hamper']
+                else:
+                    # otherwise use the origin as a drop point :/
+                    # TODO this is not ideal, as we will continue to pick things up from this spot most likely now that we are close to it.
+                    # either need to drop it somewhere we know we won't ever see it again, or have a sign for this drop point so we don't touch things inside it.
+                    print("Can't see the hamper april tag, using (0,0) as a drop point")
+                    drop_point = np.zeros(3)
+
                 # fly to to drop point
-                self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF])
+                self.gantry_goal_pos = drop_point + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF])
                 await self.seek_gantry_goal()
                 # open gripper
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': RELAXED_OPEN}))

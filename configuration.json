@@ -11,7 +11,9 @@
         -0.01965195146730642,
         -0.8916558279212138
       ],
-      "service_name": "123.cranebot-anchor-service.2ccf67bc3fc4.",
+      "service_name": "123.cranebot-anchor-service.2ccf67bc3fc4",
+      "address": "192.168.1.151",
+      "port": 8765,
       "num": 0,
       "vars": {
         "disable_switch": false
@@ -28,7 +30,9 @@
         -0.0962256015454013,
         -2.3733855199496694
       ],
-      "service_name": "123.cranebot-anchor-service.2ccf67befc13.",
+      "service_name": "123.cranebot-anchor-service.2ccf67befc13",
+      "address": "192.168.1.157",
+      "port": 8765,
       "num": 1,
       "vars": {
         "switch_tight_val": 0,
@@ -46,7 +50,9 @@
         0.07215398692774376,
         0.8007898021618509
       ],
-      "service_name": "123.cranebot-anchor-power-service.2ccf67cb3898.",
+      "service_name": "123.cranebot-anchor-power-service.2ccf67d37ce0",
+      "address": "192.168.1.191",
+      "port": 8765,
       "num": 2,
       "vars": {
         "disable_switch": false
@@ -63,7 +69,9 @@
         0.2152928520157901,
         2.290037432586852
       ],
-      "service_name": "123.cranebot-anchor-service.2ccf67bf171a.",
+      "service_name": "123.cranebot-anchor-service.2ccf67bf171a",
+      "address": "192.168.1.154",
+      "port": 8765,
       "num": 3,
       "vars": {
         "disable_switch": false
@@ -108,8 +116,10 @@
     "RUNNING_WS_DELAY": 0.03
   },
   "gripper": {
-    "MAX_ACCEL": 0.9,
-    "TARGET_HOLDING_PRESSURE": 1.1,
-    "CRUISE_SPEED": 0.1
+    "service_name": "123.cranebot-gripper-service.2ccf67b11a6c",
+    "address": "192.168.1.177",
+    "port": 8765,
+    "frame_room_spin": null,
+    "vars": {}
   }
 }

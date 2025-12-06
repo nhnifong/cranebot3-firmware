@@ -63,9 +63,9 @@ class RaspiGripperClient(ComponentClient):
 
     async def send_config(self):
         config = Config()
-        if len(config.gripper_vars) > 0:
+        if len(config.gripper.vars) > 0:
             await self.websocket.send(json.dumps({
-                'set_config_vars': config.gripper_vars,
+                'set_config_vars': config.gripper.vars,
                 }))
 
     async def zero_winch(self):

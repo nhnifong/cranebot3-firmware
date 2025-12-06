@@ -16,6 +16,7 @@ from config import Config
 import os
 from trainer.stringman_pilot import IMAGE_SHAPE
 from collections import defaultdict, deque
+from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHandshake, ConnectionClosedOK
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -53,6 +54,8 @@ class ComponentClient:
         self.connection_established_event = None
         self.frame = None # last frame of video seen
         self.last_frame_cap_time = None
+        self.heartbeat_receipt = asyncio.Event()
+        self.safety_task = None
 
         # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
@@ -198,32 +201,31 @@ class ComponentClient:
         self.conn_status['video'] = 'none'
         self.conn_status['ip_address'] = self.address
         self.to_ui_q.put({'connection_status': self.conn_status})
-        abnormal_shutdown = False
+        self.abnormal_shutdown = False # indicating we had a connection and then lost it unexpectedly
+        self.failed_to_connect = False # indicating we failed to ever make a connection
         ws_uri = f"ws://{self.address}:{self.port}"
         print(f"Connecting to {ws_uri}...")
         try:
-            # connect() can be used as an infinite asynchronous iterator to reconnect automatically on errors
-            # It re-raises any error which it would not retry on. Some are expected on normal disconnects.
-            async for websocket in websockets.connect(ws_uri, max_size=None, open_timeout=10):
+            async with websockets.connect(ws_uri, max_size=None, open_timeout=10) as websocket:
                 self.connected = True
                 print(f"Connected to {ws_uri}.")
                 # TODO Set an event that the observer is waiting on.
                 if self.connection_established_event is not None:
                     self.connection_established_event.set()
                 await self.receive_loop(websocket)
-        except asyncio.exceptions.CancelledError:
-            print("Cancelling connection")
-        except websockets.exceptions.ConnectionClosedOK:
-            print("Client closing connection")
+        except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
+            pass # normal close
         except websockets.exceptions.ConnectionClosedError as e:
             print(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
-            abnormal_shutdown = True
+            self.abnormal_shutdown = True
+        except (OSError, TimeoutError, InvalidURI, InvalidHandshake) as e:
+            print(f"Component server anum={self.anchor_num}: {e}")
+            self.failed_to_connect = True
         finally:
             self.connected = False
-        return abnormal_shutdown
+        return self.abnormal_shutdown
 
     async def receive_loop(self, websocket):
-        print('receive loop')
         self.conn_status['websocket'] = 'connected'
         self.to_ui_q.put({'connection_status': self.conn_status})
         # loop of a single websocket connection.
@@ -235,6 +237,8 @@ class ComponentClient:
         encoder_thread.start()
         # send configuration to robot component to override default.
         asyncio.create_task(self.send_config())
+        # start task to watch heartbeat event
+        self.safety_task = asyncio.create_task(self.safety_monitor())
         vid_thread = None
         # Loop until disconnected
         while self.connected:
@@ -250,6 +254,8 @@ class ComponentClient:
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
                     vid_thread.start()
+                # this event is used to detect an un-responsive state.
+                self.heartbeat_receipt.set() 
                 self.handle_update_from_ws(update)
 
                 # do this here because we seemingly can't do it in receive_video
@@ -267,7 +273,7 @@ class ComponentClient:
                 self.conn_status['websocket'] = 'none'
                 self.conn_status['video'] = 'none'
                 self.to_ui_q.put({'connection_status': self.conn_status})
-                raise e
+                raise e # TODO figure out if this causes the abnormal shutdown return value in connect_websocket like it should
                 break
         if vid_thread is not None:
             # vid_thread should stop because self.connected is False
@@ -278,28 +284,30 @@ class ComponentClient:
     async def send_commands(self, update):
         if self.connected:
             x = json.dumps(update)
-            # print(f'send commands {x}')
-            await self.websocket.send(x)
-        # just discard the update if not connected.
+            # by trying to get the result out of the future, you force any exception in the task to be raised
+            # since this could be a websockets.exceptions.ConnectionClosedError it's important not to let it disappar
+            result = await self.websocket.send(x)
 
     async def slow_stop_spool(self):
         # spool will decelerate at the rate allowed by the config file.
         # tracking mode will switch to 'speed'
-        await self.send_commands({'aim_speed': 0})
+        result = await self.send_commands({'aim_speed': 0})
 
     async def startup(self):
         self.ct = asyncio.create_task(self.connect_websocket())
         return await self.ct
 
     async def shutdown(self):
-        print("\nWait for client shutdown")
+        if self.safety_task is not None:
+            self.safety_task.cancel()
+            result = await self.safety_task
         if self.connected:
             self.connected = False
-            if self.websocket:
-                await self.websocket.close()
+            if not self.abnormal_shutdown and self.websocket:
+                result = await self.websocket.close()
         elif self.ct:
             self.ct.cancel()
-        print("Finished client shutdown")
+        print(f"Finished client {self.anchor_num} shutdown")
 
     def shutdown_sync(self):
         # this might get called twice
@@ -311,6 +319,35 @@ class ComponentClient:
         elif self.ct:
             self.ct.cancel()
 
+    async def safety_monitor(self):
+        """Notifies observer if this anchor stops sending line record updates for some time"""
+        TIMEOUT=1 # seconds
+        last_update = time.time()
+        while self.connected:
+            try:
+                result = await asyncio.wait_for(self.heartbeat_receipt.wait(), TIMEOUT)
+                # if you see the event within the timeout, all is well, clear it and wait again
+                self.heartbeat_receipt.clear()
+                last_update = time.time()
+            except TimeoutError:
+                print(f'No line record update sent from {self.anchor_num} in {TIMEOUT} seconds. it may have gone offline. sending ping')
+                try:
+                    pong_future = await self.websocket.ping()
+                    latency = await asyncio.wait_for(pong_future, TIMEOUT)
+                    # some hiccup on the server raspi made it unable to send anything for some time but it's not down.
+                    print(f'Pong received in {latency}s, must have been my imagination.')
+                    continue
+                except (ConnectionClosedError, TimeoutError):
+                    # it's no longer running, either because it lost power, or the server crashed.
+                    print(f'Anchor {self.anchor_num} confirmed down. hasn\'t been seen in {time.time() - last_update} seconds.')
+                    self.connected = False
+                    # immediately trigger the "abnormal shutdown" return from the connect_websocket task
+                    # this is how the observer is actually notified. follow the control flow by looking at `if abnormal_close:` in observer.py
+                    if self.websocket and self.websocket.transport:
+                        self.websocket.transport.close()
+                except ConnectionClosedOK:
+                    return
+
 class RaspiAnchorClient(ComponentClient):
     def __init__(self, address, port, anchor_num, datastore, to_ui_q, to_ob_q, pool, stat):
         super().__init__(address, port, datastore, to_ui_q, to_ob_q, pool, stat)
@@ -318,7 +355,6 @@ class RaspiAnchorClient(ComponentClient):
         self.conn_status = {'anchor_num': self.anchor_num}
         self.last_raw_encoder = None
         self.raw_gant_poses = []
-        self.line_record_receipt = asyncio.Event()
 
         config = Config()
         self.anchor_pose = config.anchors[anchor_num].pose
@@ -336,10 +372,6 @@ class RaspiAnchorClient(ComponentClient):
             # this is the event that is set when *any* anchor sends a line record.
             # used by the position estimator to immedately recalculate the hang point
             self.datastore.anchor_line_record_event.set()
-
-            # this event is set only for this specific anchor
-            # it is used to detect an un-responsive state.
-            self.line_record_receipt.set() 
 
         if 'last_raw_encoder' in update:
             self.last_raw_encoder = update['last_raw_encoder']
@@ -396,31 +428,6 @@ class RaspiAnchorClient(ComponentClient):
         anchor_config_vars = config.vars_for_anchor(self.anchor_num)
         if len(anchor_config_vars) > 0:
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
-
-        # Arm the unresponsiveness safety check
-        self.safety_task = asyncio.create_task(self.safety_monitor())
-
-    async def safety_monitor(self):
-        """Notifies observer if this anchor stops sending line record updates for some time"""
-        TIMEOUT=1 # seconds
-        last_update = time.time()
-        while self.connected:
-            try:
-                await asyncio.wait_for(self.line_record_receipt.wait(), TIMEOUT)
-                # if you see the event within the timeout, all is well, clear it and wait again
-                self.line_record_receipt.clear()
-                last_update = time.time()
-            except TimeoutError:
-                try:
-                    latency = await asyncio.wait_for(websocket.ping(), TIMEOUT)
-                    # if the pong arrives, everything is fine, false alarm, resume the loop
-                    # some hiccup on the server raspi made it unable to send anything for some time but it's not down.
-                    continue
-                except (ConnectionClosedError, TimeoutError):
-                    # it's no longer running, either because it lost power, or the server crashed.
-                    print(f'Anchor {self.anchor_num} has not sent a line record update in {time.time() - last_update} seconds.')
-                    # immediately trigger the "abnormal shutdown" return from the connect_websocket task
-                    await self.websocket.close(code=1101)
 
 
 if __name__ == "__main__":
