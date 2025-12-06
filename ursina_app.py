@@ -674,6 +674,10 @@ class ControlPanelUI:
         if 'grip_pred' in updates:
             self.cam_views[None].set_predictions(updates['grip_pred'])
 
+        if 'target_list' in updates:
+            # use this to re-write the panel on the left that indicates active targets
+            self.action_list.set_target_list(updates['target_list'])
+
 
     def start(self):
         self.app.run()

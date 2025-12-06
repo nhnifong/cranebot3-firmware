@@ -979,15 +979,15 @@ class ActionList(Entity):
         self.cursor_pos[1] -= self.targets_label.height
         self.cursor_pos[1] -= 0.03 # blank line
         # self.cursor_pos[0] += 0.05 # indent
-        self.list_start_cursor_pos = self.cursor_pos
+        self.list_start_cursor_pos = Vec2(self.cursor_pos) # deep copy
 
         self.target_labels = []
-        self.set_target_list([
-            {'name':'selected object (0.00, 1.00)', 'requestor':'user', 'status':'active'},
-            {'name':'black sock at (-1.44, 1.22)', 'requestor':'ai', 'status':'pending'},
-            {'name':'black sock at (-1.22, 1.11)', 'requestor':'ai', 'status':'pending'},
-            {'name':'black sock at (-1.33, 1.00)', 'requestor':'ai', 'status':'pending'},
-        ])
+        # self.set_target_list([
+        #     {'id':'123456, position: (0.00, 1.00)', 'source':'user', 'status':'active'},
+        #     {'name':'black sock at (-1.44, 1.22)', 'source':'ai', 'status':'pending'},
+        #     {'name':'black sock at (-1.22, 1.11)', 'source':'ai', 'status':'pending'},
+        #     {'name':'black sock at (-1.33, 1.00)', 'source':'ai', 'status':'pending'},
+        # ])
 
     def set_task_name(self, name):
         self.task_name = names
@@ -996,29 +996,40 @@ class ActionList(Entity):
     def set_target_list(self, targets):
         """
         expects a list of dicts with keys
-        name, requestor, status
+        id, position, dropoff, status, source,
         already sorted in priority order
+        see get_queue_snapshot() in target_queue.py for source
         """
+        print(f'setting a list of {len(targets)} targets')
         for tl in self.target_labels:
             destroy(tl)
+        self.target_labels = []
         self.target_list = targets
+
+        status_colors = {
+            'seen': color.white,
+            'selected': color.green,
+            'picked_up': color.gold,
+        }
 
         count_user = 0
         count_ai = 0
-        self.cursor_pos = self.list_start_cursor_pos
+        self.cursor_pos = Vec2(self.list_start_cursor_pos)
         for i, target in enumerate(self.target_list):
-            if target['requestor'] == 'user':
+            if target['source'] == 'user':
                 count_user += 1
             else:
                 count_ai += 1
+            x, y, z = target['position']
             tl = Text(
                 parent=camera.ui,
-                text=f"({target['requestor']}) {target['name']}",
+                text=f"({target['source']}) {target['id'][:6]} at ({x:0.2f}, {y:0.2f})",
                 origin=(-0.5, -0.5),              # Anchor: Bottom Left of text
                 position=self.cursor_pos,
                 scale=0.6,                          # Text scale (relative to parent)
-                color=color.gold if target['status'] == 'active' else color.white,
+                color=status_colors.get(target['status'], color.white),
             )
             self.cursor_pos[1] -= tl.height
+            self.target_labels.append(tl)
 
         self.targets_label.text = f'Targets: user {count_user} ai {count_ai}'

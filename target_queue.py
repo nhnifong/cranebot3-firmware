@@ -8,7 +8,8 @@ import numpy as np
 # Using an Enum for status makes state transitions explicit and easier to debug
 # than string comparisons.
 class TargetStatus(Enum):
-    PENDING = "pending"
+    SEEN = "seen"
+    SELECTED = "selected"
     PICKED_UP = "picked_up"
     DROPPED = "dropped"
 
@@ -22,7 +23,7 @@ class Target:
     dropoff: Union[np.ndarray, str]
     source: str  # 'user' or 'ai'
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    status: TargetStatus = TargetStatus.PENDING
+    status: TargetStatus = TargetStatus.SEEN
 
     def distance_to(self, other_pos: np.ndarray) -> float:
         return float(np.linalg.norm(self.position - other_pos))
@@ -35,7 +36,6 @@ class TargetQueue:
         """
         self._queue: List[Target] = []
         self._duplicate_threshold = duplicate_threshold
-        # Since UI, AI, and Robot are independent threads/processes, we need a lock
         # to prevent race conditions (e.g., UI removing a target while Robot is selecting it).
         self._lock = threading.RLock()
 
@@ -81,10 +81,10 @@ class TargetQueue:
             matched_ids = set()
             new_targets = []
 
-            # 1. Process all incoming AI suggestions
+            # Process all incoming AI suggestions
             for data in targets_data:
                 pos = np.array(data['position'], dtype=np.float64)
-                
+
                 dropoff_raw = data.get('dropoff', 'default_drop')
                 if not isinstance(dropoff_raw, str):
                     dropoff_val = np.array(dropoff_raw, dtype=np.float64)
@@ -123,7 +123,7 @@ class TargetQueue:
                     )
                     new_targets.append(new_target)
 
-            # 2. Rebuild queue: Keep Users + Matched AI + New AI
+            # Rebuild queue: Keep Users + Matched AI + New AI
             # This logic effectively deletes unmatched (stale) AI targets
             # while preserving the order of existing items.
             self._queue = [
