@@ -192,8 +192,6 @@ class ComponentClient:
                         # Store the result. This is an atomic operation in Python.
                         if is_success:
                             self.lerobot_jpeg_bytes = buffer.tobytes()
-            
-        print("Encoder thread exiting.")
 
     async def connect_websocket(self):
         # main client loop
@@ -252,7 +250,7 @@ class ComponentClient:
                     # if self.anchor_num in self.preferred_cameras:
                     self.stream_start_ts = float(update['video_ready'][1])
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
-                    vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port})
+                    vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
                     vid_thread.start()
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set() 
