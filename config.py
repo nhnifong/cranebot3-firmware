@@ -2,14 +2,27 @@ import json
 import numpy as np
 from pathlib import Path # Import pathlib
 
+# why is this not a protobuf? I wanted it to be human readable
+
 DEFAULT_CONFIG_PATH = Path(__file__).parent / 'configuration.json'
 
 class Anchor:
     def __init__(self, num):
-        self.num = num
-        self.service_name = None
-        self.pose = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
+        self.num = num # the anchor index 0 to 4
+        self.service_name = None # 123.cranebot-anchor-service.2ccf67bc3fc4
+        self.pose = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float)) # rvec, tvec
+        self.address = None # IP address and port where last seen
+        self.port = None
+
         # config vars specific to each anchor, merged with common anchor vars and sent
+        self.vars = {}
+
+class Gripper:
+    def __init__(self):
+        self.service_name = None
+        self.address = None # IP address and port where last seen
+        self.port = None
+        self.frame_room_spin = 50/180*np.pi # todo this is not written anywhere
         self.vars = {}
 
 class Config:
@@ -25,9 +38,8 @@ class Config:
         self.distortion_coeff = np.array(
             [[0.021986, 0.160533, -0.003378, 0.002640, -0.356843]])
         self.commmon_anchor_vars = {}
-        self.gripper_vars = {}
+        self.gripper = Gripper()
         self.preferred_cameras = [0,3,None] # todo this is not written anywhere
-        self.gripper_frame_room_spin = 50/180*np.pi # todo this is not written anywhere
         try:
             self.reload()
         except FileNotFoundError:
@@ -44,7 +56,9 @@ class Config:
         self.anchor_num_map = {} # convenience map from service name to num
         for a in conf['anchors']:
             self.anchors[a['num']].pose = (np.array(a['rotation'], dtype=float), np.array(a['position'], dtype=float))
-            self.anchors[a['num']].service_name = a['service_name']
+            self.anchors[a['num']].service_name = a.get('service_name', None)
+            self.anchors[a['num']].address = a.get('address', None)
+            self.anchors[a['num']].port = a.get('port', None)
             if a['service_name']:
                 self.anchor_num_map[a['service_name']] = a['num']
             try:
@@ -56,7 +70,13 @@ class Config:
         self.intrinsic_matrix = np.array(cam['intrinsic_matrix'])
         self.distortion_coeff = np.array(cam['distortion_coeff'])
         self.commmon_anchor_vars = conf.get('common_anchor_vars', {})
-        self.gripper_vars = conf.get('gripper', {})
+
+        self.gripper.service_name = conf['gripper'].get('service_name', None)
+        self.gripper.address = conf['gripper'].get('address', None)
+        self.gripper.port = conf['gripper'].get('port', None)
+        self.gripper.frame_room_spin = conf['gripper'].get('frame_room_spin', None)
+        self.gripper.vars = conf['gripper'].get('vars', {})
+
 
     def write(self):
         outf = open(DEFAULT_CONFIG_PATH, 'w')
@@ -66,6 +86,8 @@ class Config:
                     'position': a.pose[1].tolist(),
                     'rotation': a.pose[0].tolist(),
                     'service_name': a.service_name,
+                    'address': a.address,
+                    'port': a.port,
                     'num': a.num,
                     'vars': a.vars,
                 }
@@ -76,7 +98,13 @@ class Config:
                 'intrinsic_matrix': self.intrinsic_matrix.tolist(),
             },
             'common_anchor_vars': self.commmon_anchor_vars,
-            'gripper': self.gripper_vars,
+            'gripper': {
+                'service_name': self.gripper.service_name,
+                'address': self.gripper.address,
+                'port': self.gripper.port,
+                'frame_room_spin': self.gripper.frame_room_spin,
+                'vars': self.gripper.vars,
+            },
         }
         outf.write(json.dumps(conf, indent=2))
         outf.close()
