@@ -124,20 +124,18 @@ class AsyncObserver:
             'full_cal': lambda _: self.invoke_motion_task(self.full_auto_calibration()),
             'half_cal': lambda _: self.invoke_motion_task(self.half_auto_calibration()),
             'jog_spool': self._handle_jog_spool,
-            'toggle_previews': self._handle_toggle_previews,
-            'gantry_dir_sp': self._handle_gantry_dir_sp,
+            'toggle_previews': self._handle_toggle_previews, # to be obviated by new video->frontend path
+            'gantry_dir_sp': self._handle_gantry_dir_sp, # obviated by gamepad command
             'gantry_goal_pos': self._handle_gantry_goal_pos,
-            'set_grip': self._handle_set_grip,
             'slow_stop_one': self._handle_slow_stop_one,
             'slow_stop_all': self.stop_all,
             'set_simulated_data_mode': self.set_simulated_data_mode,
             'zero_winch': self._handle_zero_winch_line,
             'horizontal_task': lambda _: self.invoke_motion_task(self.horizontal_line_task()),
-            'winch_and_finger': self._handle_send_winch_finger,
+            'winch_and_finger': self._handle_send_winch_finger, # obviated by gamepad command
             'gamepad': self._handle_gamepad_action,
             'episode_ctrl': self._handle_add_episode_control_event,
-            'avg_named_pos': self._handle_avg_named_pos,
-            'lost_conn': self._handle_lost_conn,
+            'avg_named_pos': self._handle_avg_named_pos,   # anchor client should communicate this by other means such as calling a method directly on observer
             'collect_images': self._handle_collect_images,
         }
 
@@ -201,12 +199,6 @@ class AsyncObserver:
         self.gantry_goal_pos = goal_pos
         await self.invoke_motion_task(self.seek_gantry_goal())
 
-    async def _handle_set_grip(self, grip_closed: bool):
-        """Handles opening or closing the gripper."""
-        if self.gripper_client:
-            command = 'closed' if grip_closed else 'open'
-            asyncio.create_task(self.gripper_client.send_commands({'grip': command}))
-
     async def _handle_slow_stop_one(self, stop_data: dict):
         """Handles stopping a single spool motor."""
         if stop_data.get('id') == 'gripper' and self.gripper_client:
@@ -237,12 +229,6 @@ class AsyncObserver:
             # UI needs to know about this one
             p2 = self.named_positions['gamepad'][:2] # only x and y
             self.to_ui_q.put({'gp_pos': p2})
-
-    async def _handle_lost_conn(self, data):
-        anchor_num = data
-        name = f'anchor {anchor_num}' if anchor_num is not None else 'gripper'
-        self.to_ui_q.put({'pop_message': f'lost connection to {name}'})
-
 
     async def invoke_motion_task(self, coro):
         """

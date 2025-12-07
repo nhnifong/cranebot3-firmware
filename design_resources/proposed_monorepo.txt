@@ -1,0 +1,72 @@
+nf-monorepo/
+├── shared_protos/              # [SOURCE OF TRUTH]
+│   └── robot.proto             # The interface definition
+│
+├── nf_robot/                   # [PYTHON PACKAGE] The Robot/Desktop Client
+│   ├── pyproject.toml          # Defines 'nf_robot' package & optional deps
+│   ├── MANIFEST.in             # Excludes desktop assets from Pi wheels
+│   ├── src/
+│   │   └── nf_robot/           # The actual importable package
+│   └── bin/                    # Entry points (start_desktop.py, etc.)
+│
+├── nf_website/                 # [CLOUD MONOLITH] Control Plane + Frontend
+│   ├── backend/                # FastAPI / Cloud Run
+│   ├── frontend/               # React / HTML
+│   └── Dockerfile              # For Cloud Run deployment
+│
+└── tools/                      # [DEVOPS]
+├── build_protos.sh         # Generates python/TS code for all packages
+└── package_desktop.sh      # PyInstaller script for shipping to users
+
+
+nf_robot/
+├── pyproject.toml
+│   # [project.optional-dependencies]
+│   # pi = ["RPi.GPIO", "smbus2"]
+│   # desktop = ["ursina", "torch", "opencv-python"]
+│
+├── assets/                     # Runtime Data
+│   ├── config/                 # [COMMON] JSON configs
+│   └── ui_assets/              # [DESKTOP ONLY] Heavy files (excluded on Pi)
+│
+├── src/
+│   └── nf_robot/
+│       ├── init.py
+│       │
+│       ├── core/               # [COMMON] Pure Logic
+│       │   ├── observer.py
+│       │   ├── state.py        # Uses generated protobuf classes
+│       │   └── generated/      # <--- PROTOC OUTPUT LANDS HERE
+│       │       └── robot_pb2.py
+│       │
+│       ├── firmware/           # [PI ONLY] Component Servers
+│       │   ├── server.py       # logic for anchor/gripper servers
+│       │   └── ...
+│       │
+│       ├── drivers/            # [PI ONLY] Hardware Drivers
+│       │   ├── motors.py
+│       │   └── ...
+│       │
+│       ├── ui/                 # [DESKTOP ONLY] Ursina App
+│       │   ├── app.py          # Imports 'ursina' (crashes if no desktop deps)
+│       │   └── ...
+│       │
+│       └── networking/         # [COMMON]
+│           └── cloud.py        # Websocket client using Protobufs
+│
+└── bin/                        # Scripts that you run
+├── start_desktop.py        # Imports nf_robot.ui.app
+├── start_firmware.py       # Imports nf_robot.firmware.server
+└── ...
+
+
+nf_website/
+├── backend/
+│   ├── main.py                 # FastAPI / Websocket Endpoint
+│   └── generated/              # <--- PROTOC OUTPUT LANDS HERE TOO
+│       └── robot_pb2.py
+│
+└── frontend/                   # React / TypeScript
+├── src/
+└── generated/              # <--- PROTOC (JS/TS) OUTPUT LANDS HERE
+└── robot.ts
