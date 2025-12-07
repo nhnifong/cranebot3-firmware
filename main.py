@@ -3,7 +3,6 @@ import numpy as np
 import time
 import argparse
 
-from data_store import DataStore
 from observer import start_observation
 from ursina_app import start_ui
 

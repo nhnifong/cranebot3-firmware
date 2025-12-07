@@ -1419,7 +1419,7 @@ if __name__ == "__main__":
         print("\nwait for clean observer shutdown")
         to_ob_q.put({'STOP':None})
     async def main():
-        runner = AsyncObserver(datastore, to_ui_q, to_ob_q)
+        runner = AsyncObserver(to_ui_q, to_ob_q)
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
         result = await runner.main()
