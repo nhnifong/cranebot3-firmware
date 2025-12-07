@@ -131,11 +131,6 @@ class RaspiGripperServer(RobotComponentServer):
         self.rangefinder.distance_mode = 2 # LONG. results returned in centimeters.
         self.rangefinder.start_ranging()
 
-        # when false, open and release the object
-        # when true, repeatedly try to grasp the object
-        self.tryHold = False
-        self.tryHoldChanged = asyncio.Event()
-
         if mock_motor is not None:
             self.motor = mock_motor
         else:
@@ -259,14 +254,6 @@ class RaspiGripperServer(RobotComponentServer):
             self.spooler.resumeTrackingLoop()
 
     async def processOtherUpdates(self, update, tg):
-        if 'grip' in update:
-            self.use_finger_loop = True
-            logging.info(f'setting grip {update["grip"]}')
-            if update['grip'] == 'open':
-                self.tryHold = False
-            elif update['grip'] == 'closed':
-                self.tryHold = True
-                self.tryHoldChanged.set()
         if 'zero_winch_line' in update:
             tg.create_task(self.performZeroWinchLine())
         if 'set_finger_angle' in update:

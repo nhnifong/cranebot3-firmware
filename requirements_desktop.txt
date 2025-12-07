@@ -12,3 +12,4 @@ pupil-apriltags==1.0.4.post11
 av==15.1.0
 lerobot==0.3.3
 teleop==0.1.2
+betterproto2_compiler==0.9.0
