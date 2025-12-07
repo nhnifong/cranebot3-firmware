@@ -386,7 +386,7 @@ class ControlPanelUI:
 
     def _create_menus(self):
         # Setup the DropdownMenu
-        DropdownMenu('Menu', buttons=(
+        DropdownMenu('Menu', z=-10, buttons=(
             DropdownMenu('Mode', buttons=tuple([
                     DropdownMenuButton(mode, on_click=partial(self.set_mode, mode))
                     for mode in mode_names.keys()
