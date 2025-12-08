@@ -36,10 +36,8 @@ message GantrySightings {
 
 // Send by the observer to UIs when calibration or config file reading has set the anchor poses
 message AnchorPoses {
-	nf.common.Pose anchor_pose_0 = 1;
-	nf.common.Pose anchor_pose_1 = 2;
-	nf.common.Pose anchor_pose_2 = 3;
-	nf.common.Pose anchor_pose_3 = 4;
+	// always send all four poses in order of anchor num
+	repeated nf.common.Pose poses = 1;
 }
 
 enum ConnStatus {
@@ -68,7 +66,8 @@ message VidStats {
 // Position of a named object that UI might want to visually represent.
 // only sent when it moves
 message NamedObjectPosition {
-	nf.common.Vec3 position = 1;
+	// if position is unset, the UI should hide the indicator. 
+	optional nf.common.Vec3 position = 1;
 	// Name of the object
 	// Could be the name of a tag like 'hamper' or 'gamepad'
 	// When the observer is moving the gantry to a particular goal position, it gives this position with the name 'gantry_goal'
