@@ -5,7 +5,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import unittest
 import numpy as np
-from target_queue import TargetQueue, TargetStatus
+from target_queue import TargetQueue
+from generated.nf.telemetry import TargetStatus
+from generated.nf.common import Vec3
+from util import *
 
 class TestTargetQueue(unittest.TestCase):
     def setUp(self):
@@ -17,24 +20,12 @@ class TestTargetQueue(unittest.TestCase):
         id1 = self.queue.add_user_target([10, 0, 0], "bin_a")
         id2 = self.queue.add_user_target([20, 0, 0], "bin_b")
 
-        snapshot = self.queue.get_queue_snapshot()
+        snapshot = self.queue.get_queue_snapshot().targets
         
         # Expecting LIFO behavior for user additions based on "insert(0, ...)" logic
-        self.assertEqual(snapshot[0]['id'], id2)
-        self.assertEqual(snapshot[1]['id'], id1)
-        self.assertEqual(snapshot[0]['source'], 'user')
-
-    def test_numpy_conversion_and_handling(self):
-        # Verify that inputs (lists/tuples) are correctly converted to numpy arrays internally
-        pos_input = [1.5, 2.5, 3.5]
-        drop_input = (10.0, 10.0, 10.0)
-        
-        t_id = self.queue.add_user_target(pos_input, drop_input)
-        
-        info = self.queue.get_target_info(t_id)
-        self.assertIsInstance(info['position'], np.ndarray)
-        self.assertIsInstance(info['dropoff'], np.ndarray)
-        np.testing.assert_array_equal(info['position'], np.array(pos_input))
+        self.assertEqual(snapshot[0].id, id2)
+        self.assertEqual(snapshot[1].id, id1)
+        self.assertEqual(snapshot[0].source, 'user')
 
     def test_ai_target_addition_and_pruning(self):
         # 1. Add an initial batch of AI targets
@@ -44,9 +35,9 @@ class TestTargetQueue(unittest.TestCase):
         ]
         self.queue.add_ai_targets(batch_1)
         
-        snapshot_1 = self.queue.get_queue_snapshot()
+        snapshot_1 = self.queue.get_queue_snapshot().targets
         self.assertEqual(len(snapshot_1), 2)
-        ids_1 = {t['id'] for t in snapshot_1}
+        ids_1 = {t.id for t in snapshot_1}
 
         # 2. Add a second batch that is completely different
         # The previous targets should be pruned because they are not in this new batch
@@ -55,12 +46,12 @@ class TestTargetQueue(unittest.TestCase):
         ]
         self.queue.add_ai_targets(batch_2)
         
-        snapshot_2 = self.queue.get_queue_snapshot()
+        snapshot_2 = self.queue.get_queue_snapshot().targets
         self.assertEqual(len(snapshot_2), 1)
         
         # Verify that the old IDs are gone and we have a new ID
-        self.assertNotIn(snapshot_2[0]['id'], ids_1)
-        np.testing.assert_array_equal(snapshot_2[0]['position'], [30, 30, 0])
+        self.assertNotIn(snapshot_2[0].id, ids_1)
+        np.testing.assert_array_equal(tonp(snapshot_2[0].position), [30, 30, 0])
 
     def test_ai_reconciliation_update_existing(self):
         # Test that if AI submits a target close to an existing AI target, we update it rather than replace it
@@ -69,19 +60,19 @@ class TestTargetQueue(unittest.TestCase):
         self.queue.add_ai_targets([
             {'position': [10.0, 10.0, 0.0], 'dropoff': 'old_drop'}
         ])
-        original_id = self.queue.get_queue_snapshot()[0]['id']
+        original_id = self.queue.get_queue_snapshot().targets[0].id
 
         # New batch with a target very close (within threshold 0.5)
         self.queue.add_ai_targets([
             {'position': [10.1, 10.0, 0.0], 'dropoff': 'new_drop'}
         ])
         
-        snapshot = self.queue.get_queue_snapshot()
+        snapshot = self.queue.get_queue_snapshot().targets
         self.assertEqual(len(snapshot), 1)
-        self.assertEqual(snapshot[0]['id'], original_id, "ID should be preserved for updates")
-        self.assertEqual(snapshot[0]['dropoff'], 'new_drop', "Dropoff should be updated")
+        self.assertEqual(snapshot[0].id, original_id, "ID should be preserved for updates")
+        self.assertEqual(snapshot[0].tag, 'new_drop', "Dropoff should be updated")
         # Position should reflect the fresh sensor data
-        np.testing.assert_array_almost_equal(snapshot[0]['position'], [10.1, 10.0, 0.0])
+        np.testing.assert_array_almost_equal(tonp(snapshot[0].position), [10.1, 10.0, 0.0])
 
     def test_ai_cannot_override_user_target(self):
         # If a User target exists, AI seeing the same object should not modify it or remove it
@@ -95,15 +86,15 @@ class TestTargetQueue(unittest.TestCase):
             {'position': ai_pos, 'dropoff': 'ai_drop'}
         ])
 
-        snapshot = self.queue.get_queue_snapshot()
+        snapshot = self.queue.get_queue_snapshot().targets
         
         self.assertEqual(len(snapshot), 1, "Should reconcile to a single target")
-        self.assertEqual(snapshot[0]['id'], user_id, "User ID must be preserved")
-        self.assertEqual(snapshot[0]['source'], 'user', "Source must remain 'user'")
-        self.assertEqual(snapshot[0]['dropoff'], 'user_drop', "User dropoff preference must be preserved")
+        self.assertEqual(snapshot[0].id, user_id, "User ID must be preserved")
+        self.assertEqual(snapshot[0].source, 'user', "Source must remain 'user'")
+        self.assertEqual(snapshot[0].tag, 'user_drop', "User dropoff preference must be preserved")
         
         # Crucially, the position should NOT update to the AI's noisy reading
-        np.testing.assert_array_equal(snapshot[0]['position'], user_pos)
+        np.testing.assert_array_equal(tonp(snapshot[0].position), user_pos)
 
     def test_user_targets_survive_ai_pruning(self):
         # AI batches prune unmatched AI targets, but they should never touch User targets
@@ -114,9 +105,9 @@ class TestTargetQueue(unittest.TestCase):
         # This should clear any AI targets (none here) but leave User targets alone.
         self.queue.add_ai_targets([])
         
-        snapshot = self.queue.get_queue_snapshot()
+        snapshot = self.queue.get_queue_snapshot().targets
         self.assertEqual(len(snapshot), 1)
-        self.assertEqual(snapshot[0]['source'], 'user')
+        self.assertEqual(snapshot[0].source, 'user')
 
     def test_get_best_target_logic(self):
         # Should return first PENDING target
@@ -140,13 +131,13 @@ class TestTargetQueue(unittest.TestCase):
         # Test transition to PICKED_UP
         self.queue.set_target_status(t_id, TargetStatus.PICKED_UP)
         info = self.queue.get_target_info(t_id)
-        self.assertEqual(info['status'], 'picked_up')
+        self.assertEqual(info.status, TargetStatus.PICKED_UP)
 
         # Test transition to DROPPED (should remove from queue)
         self.queue.set_target_status(t_id, TargetStatus.DROPPED)
         
         self.assertIsNone(self.queue.get_target_info(t_id))
-        self.assertEqual(len(self.queue.get_queue_snapshot()), 0)
+        self.assertEqual(len(self.queue.get_queue_snapshot().targets), 0)
 
     def test_reordering(self):
         # Setup: [C, B, A] (User adds to front)
@@ -154,32 +145,18 @@ class TestTargetQueue(unittest.TestCase):
         id_b = self.queue.add_user_target([2,0,0], "B")
         id_c = self.queue.add_user_target([3,0,0], "C")
 
-        initial_snapshot = self.queue.get_queue_snapshot()
-        self.assertEqual(initial_snapshot[0]['id'], id_c)
-        self.assertEqual(initial_snapshot[1]['id'], id_b)
-        self.assertEqual(initial_snapshot[2]['id'], id_a)
+        initial_snapshot = self.queue.get_queue_snapshot().targets
+        self.assertEqual(initial_snapshot[0].id, id_c)
+        self.assertEqual(initial_snapshot[1].id, id_b)
+        self.assertEqual(initial_snapshot[2].id, id_a)
 
         # Move A (currently index 2) to front (index 0)
         self.queue.reorder_target(id_a, 0)
         
-        new_snapshot = self.queue.get_queue_snapshot()
-        self.assertEqual(new_snapshot[0]['id'], id_a)
-        self.assertEqual(new_snapshot[1]['id'], id_c)
-        self.assertEqual(new_snapshot[2]['id'], id_b)
-
-    def test_snapshot_json_compatibility(self):
-        # Ensure the snapshot doesn't contain numpy types which break standard json.dumps
-        self.queue.add_user_target(np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0]))
-        
-        snapshot = self.queue.get_queue_snapshot()
-        target_data = snapshot[0]
-        
-        self.assertIsInstance(target_data['position'], list)
-        self.assertIsInstance(target_data['dropoff'], list)
-        self.assertIsInstance(target_data['position'][0], float)
-        
-        # Ensure we aren't leaking numpy scalars
-        self.assertNotIsInstance(target_data['position'][0], np.float64)
+        new_snapshot = self.queue.get_queue_snapshot().targets
+        self.assertEqual(new_snapshot[0].id, id_a)
+        self.assertEqual(new_snapshot[1].id, id_c)
+        self.assertEqual(new_snapshot[2].id, id_b)
 
 if __name__ == '__main__':
     unittest.main()

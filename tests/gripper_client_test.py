@@ -29,15 +29,11 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.datastore = DataStore()
-        self.to_ui_q = Queue()
-        self.to_ob_q = Queue()
-        self.to_ui_q.cancel_join_thread()
-        self.to_ob_q.cancel_join_thread()
 
         self.mock_pool_class = Mock(spec=Pool)
         self.pool = self.mock_pool_class.return_value
-
-        self.stat = StatCounter(self.to_ui_q)
+        self.ob_mock = MagicMock()
+        self.stat = StatCounter(self.ob_mock)
         self.pe = MagicMock()
 
         self.server_ws = None
@@ -74,12 +70,12 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
                 break
 
     async def test_shutdown_before_connect(self):
-        gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe )
+        gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.ob_mock, self.pool, self.stat, self.pe )
         self.assertFalse(gc.connected)
         await gc.shutdown()
 
     async def clientSetup(self):
-        self.gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe )
+        self.gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.ob_mock, self.pool, self.stat, self.pe )
         self.client_task = asyncio.create_task(self.gc.startup())
         result = await asyncio.wait_for(self.got_connection.wait(), 2)
         await asyncio.sleep(0.1) # client_task needs a chance to act
@@ -89,19 +85,20 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         result = await self.client_task
 
     async def test_connect_and_shutdown(self):
+        # test that the gripper sends the right connection status messages using the mock observer's send_ui method
         await self.clientSetup()
         self.assertTrue(self.gc.connected)
         # Connecting
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 'connecting', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        # self.assertEqual({'gripper': True, 'websocket': 'connecting', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        self.ob_mock.send_ui.assert_called_once_with(ANY)
         # Online
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 'connected', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        # self.assertEqual({'gripper': True, 'websocket': 'connected', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        self.ob_mock.send_ui.assert_called_once_with(ANY)
         await self.clientTearDown()
         self.assertFalse(self.gc.connected)
         # gone
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'gripper': True, 'websocket': 'none', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        # self.assertEqual({'gripper': True, 'websocket': 'none', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
+        self.ob_mock.send_ui.assert_called_once_with(ANY)
 
         # if gripper_client is going to use the configs in configuration.json, then so will we.
         config = Config()

@@ -50,12 +50,6 @@ INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
 
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 
-def tonp(vec: common.Vec3):
-    return np.array([vec.x, vec.y, vec.z], dtype=float)
-
-def clamp(x,small,big):
-    return max(min(x,big),small)
-
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
     Saves an image to the unprocessed directory. 
