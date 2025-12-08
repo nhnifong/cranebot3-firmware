@@ -13,8 +13,8 @@ class RaspiGripperClient(ComponentClient):
         super().__init__(address, port, datastore, ob, pool, stat)
         self.conn_status = telemetry.ComponentConnStatus(
             is_gripper=True,
-            websocket_status=telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED,
-            video_status=telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED,
+            websocket_status=telemetry.ConnStatus.NOT_DETECTED,
+            video_status=telemetry.ConnStatus.NOT_DETECTED,
         )
         self.anchor_num = None
         self.pe = pe

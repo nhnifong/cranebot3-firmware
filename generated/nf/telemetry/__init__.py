@@ -332,6 +332,11 @@ class PositionEstimate(betterproto2.Message):
     the wall time in seconds since the epoch UTC when the robot was at this position
     """
 
+    slack: "list[bool]" = betterproto2.field(5, betterproto2.TYPE_BOOL, repeated=True)
+    """
+    an array of bools for each anchor. true meaning the line should be drawn with a droop
+    """
+
 
 default_message_pool.register_message(
     "nf.telemetry", "PositionEstimate", PositionEstimate

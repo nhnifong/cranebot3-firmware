@@ -17,6 +17,8 @@ message PositionEstimate {
 	nf.common.Vec3 gantry_velocity = 2;
 	nf.common.Pose gripper_pose = 3; // in world space
 	double data_ts = 4; // the wall time in seconds since the epoch UTC when the robot was at this position
+	// an array of bools for each anchor. true meaning the line should be drawn with a droop
+	repeated bool slack = 5;
 }
 
 // Diagnostic information about factors used in estimating the robot's positon

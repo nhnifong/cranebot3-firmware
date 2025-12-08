@@ -37,6 +37,8 @@ from trainer.stringman_record_loop import record_until_disconnected
 import uuid
 from target_queue import TargetQueue
 from generated.nf import telemetry, control, common
+import websockets
+from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -50,6 +52,9 @@ UNPROCESSED_DIR = "square_centering_data_unlabeled"
 
 def tonp(vec: common.Vec3):
     return np.array([vec.x, vec.y, vec.z], dtype=float)
+
+def clamp(x,small,big):
+    return max(min(x,big),small)
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
@@ -117,6 +122,7 @@ class AsyncObserver:
         self.last_snapshot_hash = None # to spare the UI from too many updates
         # websockets to locally connected UIs
         self.connected_local_clients = set()
+        self.telemetry_buffer = deque(maxlen=100)
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -137,6 +143,8 @@ class AsyncObserver:
         try:
             async for message in websocket:
                 r = await self.handle_command(message) # Handle 'ControlBatchUpdate'
+                # warning, any uncaught exception here will kill this websocket connection
+                # but the observer would go on running, possibly in a bad state.
         finally:
             self.connected_local_clients.remove(websocket)
             if len(self.connected_local_clients) == 0 and self.terminate_with_ui:
@@ -164,7 +172,7 @@ class AsyncObserver:
 
         # Movement Vector (Gamepad/AI Policy)
         elif item.move:
-            self._handle_movement(item.move)
+            r = await self._handle_movement(item.move)
 
         # Setting gantry goal
         elif item.gantry_goal_pos:
@@ -172,7 +180,7 @@ class AsyncObserver:
 
         # Manual Spool Control
         elif item.jog_spool:
-            self._handle_jog(item.jog_spool)
+            r = await self._handle_jog(item.jog_spool)
 
         # Lerobot Episode Control (Start/Stop Recording)
         elif item.episode_control:
@@ -181,34 +189,25 @@ class AsyncObserver:
     async def _handle_common_command(self, cmd: control.Command):
         # betterproto Enums are IntEnums, comparable directly
         match cmd:
-            case control.Command.COMMAND_STOP_ALL:
+            case control.Command.STOP_ALL:
                 r = await self.stop_all()
-            
-            case control.Command.COMMAND_TIGHTEN_LINES:
+            case control.Command.TIGHTEN_LINES:
                 r = await self.tension_lines()
-
-            case control.Command.COMMAND_ZERO_WINCH:
+            case control.Command.ZERO_WINCH:
                 asyncio.create_task(self._handle_zero_winch_line())
-
-            case control.Command.COMMAND_HALF_CAL:
+            case control.Command.HALF_CAL:
                 r = await self.invoke_motion_task(self.half_auto_calibration())
-
-            case control.Command.COMMAND_FULL_CAL:
+            case control.Command.FULL_CAL:
                 r = await self.invoke_motion_task(self.full_auto_calibration())
-            
-            case control.Command.COMMAND_ENABLE_LEROBOT:
+            case control.Command.ENABLE_LEROBOT:
                 self.training_task = asyncio.create_task(self.begin_training_mode())
-            
-            case control.Command.COMMAND_PICK_AND_DROP:
+            case control.Command.PICK_AND_DROP:
                 r = await self.invoke_motion_task(self.pick_and_place_loop())
-                
-            case control.Command.COMMAND_HORIZONTAL_CHECK:
+            case control.Command.HORIZONTAL_CHECK:
                 r = await self.invoke_motion_task(self.horizontal_line_task())
-
-            case control.Command.COMMAND_COLLECT_GRIPPER_IMAGES:
+            case control.Command.COLLECT_GRIPPER_IMAGES:
                 self._handle_collect_images()
-
-            case control.Command.COMMAND_SHUTDOWN:
+            case control.Command.SHUTDOWN:
                 # end the task main() awaits during normal operation
                 self.run_command_loop = False
 
@@ -245,7 +244,7 @@ class AsyncObserver:
                 if client.anchor_num == stop_data.get('id'):
                     asyncio.create_task(client.slow_stop_spool())
 
-    async def _handle_zero_winch_line(self, data):
+    async def _handle_zero_winch_line(self):
         await self.gripper_client.zero_winch()
 
     async def _handle_movement(self, move: control.CombinedMove):
@@ -359,6 +358,9 @@ class AsyncObserver:
             self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
     async def stop_all(self):
+        # If lerobot scripts are connected this must also stop them
+        self.episode_control_events.add('stop_recording')
+
         # Cancel any active motion task
         if self.motion_task is not None:
             # Store the handle and clear the class attribute immediately.
@@ -533,7 +535,7 @@ class AsyncObserver:
         Attempt to move the gantry in a perfectly horizontal line. How hard could this be?
         This is a motion task
         """
-        await asyncio.gather([self.gripper_client.zero_winch(), self.tension_and_wait()])
+        await asyncio.gather(self.gripper_client.zero_winch(), self.tension_and_wait())
         await asyncio.sleep(1)
         range_at_start = self.datastore.range_record.getLast()[1]
         result = await self.move_direction_speed([1,0,0], 0.2, downward_bias=0)
@@ -735,11 +737,16 @@ class AsyncObserver:
         """
         batch = telemetry.TelemetryBatchUpdate(
             robot_id="0",
-            events=self.telemetry_buffer
+            updates=self.telemetry_buffer
         )
         to_send = bytes(batch)
+        # TODO prevent RuntimeError: Set changed size during iteration
         for ui_websocket in self.connected_local_clients:
-            await ui_websocket.send(to_send)
+            try:
+                await ui_websocket.send(to_send)
+            except (ConnectionClosedOK, ConnectionClosedError) as e:
+                pass
+        self.telemetry_buffer.clear()
         # TODO send to cloud as well if connected
 
     async def main(self) -> None:
@@ -779,15 +786,13 @@ class AsyncObserver:
             self.keeper = asyncio.create_task(self.keep_robot_connected())
 
             # start a websocket server to accept incoming connection from local ursian UI process
-            self.observer_local_server = asyncio.create_task(websockets.serve(
-                self.handle_local_client, "0.0.0.0", 4245
-            ))
-            
-            # await something that will end when the program closes to keep zeroconf alive and discovering services.
-            try:
-                result = await self.keeper
-            except asyncio.exceptions.CancelledError:
-                pass
+            async with websockets.serve(self.handle_local_client, "0.0.0.0", 4245):
+                # await something that will end when the program closes to keep serving and
+                # keep zeroconf alive and discovering services.
+                try:
+                    result = await self.keeper
+                except asyncio.exceptions.CancelledError:
+                    pass
             await self.async_close()
 
     async def async_close(self) -> None:
@@ -946,12 +951,12 @@ class AsyncObserver:
         # if last_length < 0.02 or last_length > 1.9:
         #     print('winch too short')
         #     line_speed = 0
-        finger_angle = clamp(finger_angle, -90, 90)
-        update = {
-            'aim_speed': line_speed,
-            'set_finger_angle': finger_angle,
-        }
-        if self.gripper_client is not None:
+        update = {}
+        if line_speed is not None:
+            update['aim_speed'] = line_speed
+        if finger_angle is not None:
+            update['set_finger_angle'] = clamp(finger_angle, -90, 90)
+        if update and self.gripper_client is not None:
             asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_angle
 
@@ -1246,7 +1251,7 @@ class AsyncObserver:
                     await asyncio.sleep(LOOP_DELAY)
                     continue
 
-                self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.TARGETSTATUS_SELECTED)
+                self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
                 self.send_tq_to_ui()
 
                 # pick Z position for gantry
@@ -1278,12 +1283,12 @@ class AsyncObserver:
                 success = await self.execute_grasp()
                 if not success:
                     # just pick another target, but consider downranking this object or something.
-                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.TARGETSTATUS_SEEN)
+                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
                     self.send_tq_to_ui()
                     await asyncio.sleep(LOOP_DELAY)
                     continue
                 else:
-                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.TARGETSTATUS_PICKED_UP)
+                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.PICKED_UP)
                     self.send_tq_to_ui()
 
                 # tension now just in case.
@@ -1310,7 +1315,7 @@ class AsyncObserver:
                 # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
                 # TODO train network on more data containing examples of this, so it knows that only socks on the floor count.
                 await asyncio.sleep(DELAY_AFTER_DROP)
-                self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.TARGETSTATUS_DROPPED)
+                self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.DROPPED)
                 self.send_tq_to_ui()
                 # keep score
 
@@ -1423,7 +1428,7 @@ class AsyncObserver:
         print('Gave up on grasp after a few attempts')
         return False
 
-    async def _handle_collect_images(self, _):
+    async def _handle_collect_images(self):
         asyncio.create_task(self.collect_images())
 
     async def collect_images(self):
@@ -1441,10 +1446,10 @@ def start_observation(terminate_with_ui=False):
 
 if __name__ == "__main__":
     async def main():
-        runner = AsyncObserver()
+        runner = AsyncObserver(False)
         # when running as a standalone process (debug only, linux only), register signal handler
         def stop():
-            print("\nwait for clean observer shutdown")
+            # Must be idempotent, may be called multiple times
             runner.run_command_loop = False
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
