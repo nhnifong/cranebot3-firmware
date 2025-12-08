@@ -5,17 +5,22 @@ from scipy.spatial.transform import Rotation
 from cv_common import compose_poses
 import model_constants
 from config import Config
-import json 
+import json
+from generated.nf import telemetry, common
 
 class RaspiGripperClient(ComponentClient):
-    def __init__(self, address, port, datastore, to_ui_q, to_ob_q, pool, stat, pe):
-        super().__init__(address, port, datastore, to_ui_q, to_ob_q, pool, stat)
-        self.conn_status = {'gripper': True}
+    def __init__(self, address, port, datastore, ob, pool, stat, pe):
+        super().__init__(address, port, datastore, ob, pool, stat)
+        self.conn_status = telemetry.ComponentConnStatus(
+            is_gripper=True,
+            websocket_status=telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED,
+            video_status=telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED,
+        )
         self.anchor_num = None
         self.pe = pe
         self.config = Config()
 
-    def handle_update_from_ws(self, update):
+    async def handle_update_from_ws(self, update):
         if 'line_record' in update:
             self.datastore.winch_line_record.insertList(update['line_record'])
 
@@ -40,7 +45,11 @@ class RaspiGripperClient(ComponentClient):
             voltage = float(gs['fing_v'])
 
             self.datastore.finger.insert([timestamp, angle, voltage])
-            self.to_ui_q.put({'grip_sensors': (distance_measurement, angle, voltage)})
+            self.ob.send_ui(grip_sensors=GripperSensors(
+                range = distance_measurement,
+                angle = angle,
+                pressure = voltage,
+            ))
             
         if 'holding' in update:
             # expect a bool. Forward it to the position estimator

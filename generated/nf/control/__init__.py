@@ -55,6 +55,11 @@ class Command(betterproto2.Enum):
     Begin accepting connections from lerobot teleoperation or data collection tools
     """
 
+    PICK_AND_DROP = 9
+    """
+    Begin performing automated pick and drop of targets in queue
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -67,6 +72,11 @@ class Command(betterproto2.Enum):
     Begin saving images of the gripper camera at regular intervals in a local directory
     """
 
+    SHUTDOWN = 8
+    """
+    Shuts down the observer process. robot components remain on.
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -76,8 +86,10 @@ class Command(betterproto2.Enum):
             3: "COMMAND_ZERO_WINCH",
             4: "COMMAND_STOP_ALL",
             5: "COMMAND_ENABLE_LEROBOT",
+            9: "COMMAND_PICK_AND_DROP",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
+            8: "COMMAND_SHUTDOWN",
         }
 
     @classmethod
@@ -89,8 +101,10 @@ class Command(betterproto2.Enum):
             "COMMAND_ZERO_WINCH": 3,
             "COMMAND_STOP_ALL": 4,
             "COMMAND_ENABLE_LEROBOT": 5,
+            "COMMAND_PICK_AND_DROP": 9,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
+            "COMMAND_SHUTDOWN": 8,
         }
 
 
@@ -215,7 +229,7 @@ class EpControl(betterproto2.Message):
     When lerobot is connected, this is how a teleoperator can start or stop an episode during recording
     """
 
-    event: "list[str]" = betterproto2.field(1, betterproto2.TYPE_STRING, repeated=True)
+    events: "list[str]" = betterproto2.field(1, betterproto2.TYPE_STRING, repeated=True)
 
 
 default_message_pool.register_message("nf.control", "EpControl", EpControl)

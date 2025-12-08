@@ -15,6 +15,7 @@ from scipy.spatial.transform import Rotation
 from kalman_filter import KalmanFilter
 import cv2
 from frequency_estimator import SwingFrequencyEstimator
+from generated.nf import telemetry, common
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -247,7 +248,7 @@ def linear_move_cost_fn(model_params, starting_time, times, observed_positions):
 
 
 class Positioner2:
-    def __init__(self, datastore, to_ui_q, observer):
+    def __init__(self, datastore, observer):
         """
         continuous position estimation
         recalculates hang point only when the data affecting it changes and consideres it a measurement'
@@ -261,7 +262,6 @@ class Positioner2:
         """
         self.run = False # false until main is called
         self.datastore = datastore
-        self.to_ui_q = to_ui_q
         self.ob = observer
         self.config = Config()
         self.n_cables = len(self.config.anchors)
@@ -401,7 +401,7 @@ class Positioner2:
             self.predict_time_taken = time.time()-start_time
             self.estimate_gripper()
             self.detect_grip()
-            self.send_positions()
+            await self.send_positions()
 
     async def update_visual(self):
         while self.run:
@@ -466,26 +466,13 @@ class Positioner2:
             if sum(speeds) == 0:
                 self.hang_vel = np.zeros(3)
                 self.kf.update(self.hang_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
-            # else:
-            #     self.stop_cutoff = None
-            #     # repeat for a position some small increment in the future to get the gantry velocity
-            #     increment = 0.1 # seconds
-            #     lengths += speeds * increment
-            #     result = find_hang_point(self.anchor_points, lengths)
-            #     if result is None:
-            #         # print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
-            #         self.hang_vel = np.zeros((3,))
-            #     else:
-            #         self.hang_vel = result[0] - self.hang_pos
-            #         self.hang_vel = self.hang_vel / increment
 
             self.hang_time_taken = time.time()-start_time
 
     def record_commanded_vel(self, vel):
-        self.to_ui_q.put({'last_commanded_vel': vel})
         self.commanded_vel = vel
         self.commanded_vel_ts = time.time()
-        self.to_ui_q.put({'last_commanded_vel': vel})
+        self.ob.send_ui(last_commanded_vel=telemetry.CommandedVelocity(velocity=common.Vec3(*vel)))
 
     async def update_commanded_vel(self):
         """provide an observation to the filter based on the commanded velocity"""
@@ -549,30 +536,25 @@ class Positioner2:
 
     def send_positions(self):
         # send position factors to UI for visualization
-        update_for_ui = {
-            'pos_estimate': {
-                'gantry_pos': self.gant_pos,
-                'gantry_vel': self.gant_vel,
-                'gripper_pose': self.grip_pose,
-                'slack_lines': self.slack_lines,
-                },
-            'minimizer_stats': {
-                'data_ts': self.data_ts,
-                'kalman_prediction_rate': self.predict_time_taken,
-                'visual_update_rate': self.visual_time_taken,
-                'hang_update_rate': self.hang_time_taken,
-                },
-            'pos_factors_debug': {
-                # position as esimated by visual observations
-                'visual_pos': self.visual_pos,
-                'visual_vel': self.visual_vel,
-                # position as estimated by line length only
-                'hang_pos': self.hang_pos,
-                'hang_vel': self.hang_vel,
-                },
-            # 'goal_points': self.des_grip_locations, # each goal is a time and a position
-        }
-        self.to_ui_q.put(update_for_ui)
+
+        # no longer being sent but available for debug
+        # 'kalman_prediction_rate': self.predict_time_taken,
+        # 'visual_update_rate': self.visual_time_taken,
+        # 'hang_update_rate': self.hang_time_taken,
+
+        self.ob.send_ui(pos_estimate=telemetry.PositionEstimate(
+            data_ts=self.data_ts,
+            gantry_position=common.Vec3(*self.gant_pos),
+            gantry_velocity=common.Vec3(*self.gant_vel),
+            gripper_pose=common.Pose(rotation=common.Vec3(*self.grip_pose[0]), position=common.Vec3(*self.grip_pose[1])),
+        ))
+        self.ob.send_ui(pos_factors_debug=telemetry.PositionFactors(
+            visual_pos=common.Vec3(*self.visual_pos),
+            visual_vel=common.Vec3(*self.visual_vel),
+            hanging_pos=common.Vec3(*self.hang_pos),
+            hanging_vel=common.Vec3(*self.hang_vel),
+        ))
+        await self.ob.flush_tele_buffer()
 
     def notify_update(self, update):
         if 'holding' in update:

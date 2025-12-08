@@ -19,6 +19,8 @@ from ursina.shaders import (
 )
 from ursina.prefabs.dropdown_menu import DropdownMenu, DropdownMenuButton
 from ursina_entities import * # my ursina objects
+import websockets
+from generated.nf import telemetry, control, common
 
 window.borderless = False
 
@@ -80,13 +82,12 @@ def update_go_quad(position, color, e):
     e.color = color
 
 class ControlPanelUI:
-    def __init__(self, to_ob_q):
+    def __init__(self):
         self.app = Ursina(
             fullscreen=False,
             borderless=False,
             title="Stringman Control Panel",
         )
-        self.to_ob_q = to_ob_q
         
         # --- Core State ---
         self.config = Config()
@@ -392,18 +393,13 @@ class ControlPanelUI:
                     for mode in mode_names.keys()
                 ])),
             DropdownMenuButton('Estimate line lengths', on_click=self.calibrate_lines),
-            DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, 'tension_lines')),
+            DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, control.Command.COMMAND_TIGHTEN_LINES)),
             DropdownMenuButton('Run Full Calibration', on_click=self.run_full_cal),
-            DropdownMenuButton('Run Quick Calibration', on_click=partial(self.simple_command, 'half_cal')),
-            DropdownMenu('Simulated Data', buttons=(
-                DropdownMenuButton('Disable', on_click=partial(self.set_simulated_data_mode, 'disable')),
-                DropdownMenuButton('Circle', on_click=partial(self.set_simulated_data_mode, 'circle')),
-                DropdownMenuButton('Point to Point', on_click=partial(self.set_simulated_data_mode, 'point2point')),
-                )),
-            DropdownMenuButton('Zero Gripper Winch Line', on_click=partial(self.simple_command, 'zero_winch')),
-            DropdownMenuButton('Horizontal Move Test', on_click=partial(self.simple_command, 'horizontal_task')),
+            DropdownMenuButton('Run Quick Calibration', on_click=partial(self.simple_command, control.Command.COMMAND_HALF_CAL)),
+            DropdownMenuButton('Zero Gripper Winch Line', on_click=partial(self.simple_command, control.Command.COMMAND_ZERO_WINCH)),
+            DropdownMenuButton('Horizontal Move Test', on_click=partial(self.simple_command, control.Command.COMMAND_HORIZONTAL_CHECK)),
             DropdownMenuButton('Gamepad Controls', on_click=self.toggle_gamepad_window),
-            DropdownMenuButton('Collect Gripper Images', on_click=partial(self.simple_command, 'collect_images')),
+            DropdownMenuButton('Collect Gripper Images', on_click=partial(self.simple_command, control.Command.COMMAND_COLLECT_GRIPPER_IMAGES)),
             ))
 
     def run_full_cal(self):
@@ -411,12 +407,6 @@ class ControlPanelUI:
 
     def toggle_gamepad_window(self):
         self.gamepad_window.enabled = not self.gamepad_window.enabled
-
-    def set_simulated_data_mode(self, mode):
-        self.to_ob_q.put({'set_simulated_data_mode': mode})
-
-    def simple_command(self, command):
-        self.to_ob_q.put({command: None})
 
     def redraw_walls(self):
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
@@ -539,43 +529,54 @@ class ControlPanelUI:
     def render_gantry_ob(self, row, color):
         self.go_quads.add(partial(update_go_quad, row, color))
 
-    def notify_connected_bots_change(self, available_bots={}):
-        offs = 0
-        for server,info in available_bots.items():
-            text_entity = Text(server, world_scale=16, position=(-0.1, -0.4 + offs))
-            offs -= 0.03
+    def send_ob(self, **kwargs):
+        """
+        Ensure that the given control item is sent to every connected UI
+        keyword args are passed directly to control item, so you can construct one like this
+        """
+        batch = control.ControlBatchUpdate(
+            robot_id="0",
+            events=[control.ControlItem(**kwargs)]
+        )
+        to_send = bytes(batch)
+        # synchronous, and we're on a different thread, but I'm pretty sure websockets does this in thread safe way
+        self.websocket.send(to_send)
 
-    def receive_updates(self, min_to_ui_q):
-        while True:
-            try:
-                # queue.get has to happen in a thread, because it blocks
-                updates = min_to_ui_q.get()
-                # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
-                invoke(self.process_update, updates, delay=0.0001)
-            except (OSError, EOFError, TypeError):
-                # sometimes when closing the app, this thread gets left hanging because that queue is gone
-                return
+    def simple_command(self, cmd: control.Command):
+        self.send_ob(command=control.CommonCommand(name=cmd))
 
+    def receive_updates(self):
+        # threading websocket api used because asyncio loop incompatible with ursina
+        with websockets.sync.client.connect('localhost:4245') as websocket:
+            self.websocket = websocket
+            # iterator ends when websocket closes.
+            for message in websocket:
+                batch = telemetry.TelemetryBatchUpdate().parse(message)
+                self.robot_id = batch.robot_id
+                for update in batch.updates:
+                    # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
+                    invoke(self.process_update, update, delay=0.0001)
+        print('UI has disconnected from robot')
 
-    def process_update(self, updates):
-        if 'STOP' in updates:
-            application.quit()
+    def process_update(self, item: telemetry.TelemetryItem):
+        # if 'minimizer_stats' in updates:
+        #     estimate_age = time.time() - updates['minimizer_stats']['data_ts']
+        #     self.estimate_age_text.text = estimate_age_format_str.format(val=estimate_age)
 
-        if 'minimizer_stats' in updates:
-            estimate_age = time.time() - updates['minimizer_stats']['data_ts']
-            self.estimate_age_text.text = estimate_age_format_str.format(val=estimate_age)
+        # if 'pos_estimate' in updates:
+        #     p = updates['pos_estimate']
+        #     self.gantry.set_position_velocity(p['gantry_pos'], p['gantry_vel'])
+        #     self.gantry.set_slack_vis(p['slack_lines'])
+        #     self.gripper.setPose(p['gripper_pose'])
+        #     # p['slack_lines']
 
-        if 'pos_estimate' in updates:
-            p = updates['pos_estimate']
-            self.gantry.set_position_velocity(p['gantry_pos'], p['gantry_vel'])
-            self.gantry.set_slack_vis(p['slack_lines'])
-            self.gripper.setPose(p['gripper_pose'])
-            # p['slack_lines']
+        # if 'pos_factors_debug' in updates:
+        #     p = updates['pos_factors_debug']
+        #     self.debug_indicator_visual.set_position_velocity(p['visual_pos'], p['visual_vel'])
+        #     self.debug_indicator_hang.set_position_velocity(p['hang_pos'], p['hang_vel'])
 
-        if 'pos_factors_debug' in updates:
-            p = updates['pos_factors_debug']
-            self.debug_indicator_visual.set_position_velocity(p['visual_pos'], p['visual_vel'])
-            self.debug_indicator_hang.set_position_velocity(p['hang_pos'], p['hang_vel'])
+        if item.pos_estimate:
+            self._handle_pos_estimate(item.pos_estimate)
 
         if 'gantry_observation' in updates:
             invoke(self.render_gantry_ob, swap_yz(updates['gantry_observation']), color.white, delay=0.0001)
@@ -682,32 +683,32 @@ class ControlPanelUI:
     def start(self):
         self.app.run()
 
-def start_ui(to_ui_q, to_ob_q, register_input):
+    def end_update_thread(self):
+        if self.websocket:
+            self.websocket.close()
+
+def start_ui(register_input):
     """
     Entry point to be used when starting this from main.py with multiprocessing
     """
-    cpui = ControlPanelUI(to_ob_q)
+    cpui = ControlPanelUI()
     register_input(cpui)
 
     # use simple threading here. ursina has it's own loop that conflicts with asyncio
-    receive_updates_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
+    receive_updates_thread = threading.Thread(target=cpui.receive_updates, daemon=True)
     receive_updates_thread.start()
 
-    def stop_other_processes():
-        print("UI window closed. stopping other processes")
-        to_ui_q.put({'STOP':None}) # stop our own listening thread too
-        to_ob_q.put({'STOP':None})
+    def stop_others():
+        cpui.end_update_thread()
+        # print("UI window closed. stopping other processes")
 
     # ursina has no way to tell us when the window is closed. but this python module can do it.
-    atexit.register(stop_other_processes)
+    atexit.register(stop_others)
 
     cpui.start()
 
 if __name__ == "__main__":
-    from multiprocessing import Queue
-    to_ui_q = Queue()
-    to_ob_q = Queue()
     def register_input_2(cpui):
         global input
         input = cpui.input
-    start_ui(to_ui_q, to_ob_q, register_input_2)
+    start_ui(register_input_2)

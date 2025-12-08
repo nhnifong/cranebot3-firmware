@@ -91,21 +91,12 @@ class AnchorPoses(betterproto2.Message):
     Send by the observer to UIs when calibration or config file reading has set the anchor poses
     """
 
-    anchor_pose_0: "_common__.Pose | None" = betterproto2.field(
-        1, betterproto2.TYPE_MESSAGE, optional=True
+    poses: "list[_common__.Pose]" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, repeated=True
     )
-
-    anchor_pose_1: "_common__.Pose | None" = betterproto2.field(
-        2, betterproto2.TYPE_MESSAGE, optional=True
-    )
-
-    anchor_pose_2: "_common__.Pose | None" = betterproto2.field(
-        3, betterproto2.TYPE_MESSAGE, optional=True
-    )
-
-    anchor_pose_3: "_common__.Pose | None" = betterproto2.field(
-        4, betterproto2.TYPE_MESSAGE, optional=True
-    )
+    """
+    always send all four poses in order of anchor num
+    """
 
 
 default_message_pool.register_message("nf.telemetry", "AnchorPoses", AnchorPoses)
@@ -241,6 +232,9 @@ class NamedObjectPosition(betterproto2.Message):
     position: "_common__.Vec3 | None" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, optional=True
     )
+    """
+    if position is unset, the UI should hide the indicator. 
+    """
 
     name: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
     """

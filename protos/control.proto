@@ -21,6 +21,8 @@ enum Command {
   COMMAND_STOP_ALL = 4;
   // Begin accepting connections from lerobot teleoperation or data collection tools
   COMMAND_ENABLE_LEROBOT = 5;
+  // Begin performing automated pick and drop of targets in queue
+  COMMAND_PICK_AND_DROP = 9;
 
   // =====  Commands intended only for diagnostics =====
 
@@ -28,6 +30,8 @@ enum Command {
   COMMAND_HORIZONTAL_CHECK = 6;
   // Begin saving images of the gripper camera at regular intervals in a local directory
   COMMAND_COLLECT_GRIPPER_IMAGES = 7;
+  // Shuts down the observer process. robot components remain on.
+  COMMAND_SHUTDOWN = 8;
 }
 
 // Start one of several common tasks which take no arguments.
@@ -77,7 +81,7 @@ message CombinedMove {
 // Adds the named episode control events to a set
 // When lerobot is connected, this is how a teleoperator can start or stop an episode during recording
 message EpControl {
-  repeated string event = 1;
+  repeated string events = 1;
 }
 
 // A single kind of update that a UI, ursina or web, is providing to Observer

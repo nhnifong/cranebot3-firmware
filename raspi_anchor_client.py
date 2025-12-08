@@ -17,6 +17,7 @@ import os
 from trainer.stringman_pilot import IMAGE_SHAPE
 from collections import defaultdict, deque
 from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHandshake, ConnectionClosedOK
+from generated.nf import telemetry, common
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -34,13 +35,12 @@ def pose_from_det(det):
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
-    def __init__(self, address, port, datastore, to_ui_q, to_ob_q, pool, stat):
+    def __init__(self, address, port, datastore, ob, pool, stat):
         self.address = address
         self.port = port
         self.origin_poses = defaultdict(lambda: deque(maxlen=max_origin_detections))
         self.datastore = datastore
-        self.to_ui_q = to_ui_q
-        self.to_ob_q = to_ob_q
+        self.ob = ob # instance of observer. mocks only need the update_avg_named_pos and send_ui methods
         self.websocket = None
         self.connected = False  # status of connection to websocket
         self.receive_task = None  # Task for receiving messages from websocket
@@ -70,11 +70,17 @@ class ComponentClient:
         config = Config()
         self.preferred_cameras = config.preferred_cameras
 
+        self.conn_status = None # subclass needs to set this in init
+
+    def send_conn_status():
+        self.ob.send_ui(component_conn_status=self.conn_status)
+
     def receive_video(self, port):
         video_uri = f'tcp://{self.address}:{port}'
         print(f'Connecting to {video_uri}')
-        self.conn_status['video'] = 'connecting'
-        self.to_ui_q.put({'connection_status': self.conn_status})
+        self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_CONNECTING
+        # cannot send here, not in event loop
+        self.notify_video = True
 
         options = {
             'rtsp_transport': 'tcp',
@@ -89,7 +95,7 @@ class ComponentClient:
             stream.thread_type = "SLICE"
 
             print(f'video connection successful')
-            self.conn_status['video'] = 'connected'
+            self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_CONNECTED
             self.notify_video = True
             lastSam = time.time()
             last_time = time.time()
@@ -132,7 +138,7 @@ class ComponentClient:
 
         except av.error.TimeoutError:
             print('no video stream available')
-            self.conn_status['video'] = 'none'
+            self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED
             self.notify_video = True
             return
 
@@ -184,7 +190,8 @@ class ComponentClient:
 
                 if self.anchor_num in self.preferred_cameras:
                     img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
-                    self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':img_preview}})
+                    # TODO send images on side channel
+                    # self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':img_preview}})
 
                     if self.lerobot_mode:
                         params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
@@ -195,10 +202,11 @@ class ComponentClient:
 
     async def connect_websocket(self):
         # main client loop
-        self.conn_status['websocket'] = 'connecting'
-        self.conn_status['video'] = 'none'
-        self.conn_status['ip_address'] = self.address
-        self.to_ui_q.put({'connection_status': self.conn_status})
+        self.conn_status.websocket_status = telemetry.ConnStatus.CONNSTATUS_CONNECTING
+        self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED
+        self.conn_status.ip_address = self.address
+        self.send_conn_status()
+
         self.abnormal_shutdown = False # indicating we had a connection and then lost it unexpectedly
         self.failed_to_connect = False # indicating we failed to ever make a connection
         ws_uri = f"ws://{self.address}:{self.port}"
@@ -224,8 +232,8 @@ class ComponentClient:
         return self.abnormal_shutdown
 
     async def receive_loop(self, websocket):
-        self.conn_status['websocket'] = 'connected'
-        self.to_ui_q.put({'connection_status': self.conn_status})
+        self.conn_status.websocket_status = telemetry.ConnStatus.CONNSTATUS_CONNECTED
+        self.send_conn_status()
         # loop of a single websocket connection.
         # save a reference to this for send_commands
         self.websocket = websocket
@@ -254,11 +262,11 @@ class ComponentClient:
                     vid_thread.start()
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set() 
-                self.handle_update_from_ws(update)
+                await self.handle_update_from_ws(update)
 
                 # do this here because we seemingly can't do it in receive_video
                 if self.notify_video:
-                    self.to_ui_q.put({'connection_status': self.conn_status})
+                    self.send_conn_status()
                     self.notify_video = False
 
             except Exception as e:
@@ -268,9 +276,9 @@ class ComponentClient:
                 print(f"Connection to {self.address} closed.")
                 self.connected = False
                 self.websocket = None
-                self.conn_status['websocket'] = 'none'
-                self.conn_status['video'] = 'none'
-                self.to_ui_q.put({'connection_status': self.conn_status})
+                self.conn_status.websocket_status = telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED
+                self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED
+                self.send_conn_status()
                 raise e # TODO figure out if this causes the abnormal shutdown return value in connect_websocket like it should
                 break
         if vid_thread is not None:
@@ -347,10 +355,15 @@ class ComponentClient:
                     return
 
 class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, port, anchor_num, datastore, to_ui_q, to_ob_q, pool, stat):
-        super().__init__(address, port, datastore, to_ui_q, to_ob_q, pool, stat)
+    def __init__(self, address, port, anchor_num, datastore, ob, pool, stat):
+        super().__init__(address, port, datastore, ob, pool, stat)
         self.anchor_num = anchor_num # which anchor are we connected to
-        self.conn_status = {'anchor_num': self.anchor_num}
+        self.conn_status = telemetry.ComponentConnStatus(
+            is_gripper=False,
+            anchor_num=self.anchor_num,
+            websocket_status=telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED,
+            video_status=telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED,
+        )
         self.last_raw_encoder = None
         self.raw_gant_poses = []
 
@@ -360,10 +373,11 @@ class RaspiAnchorClient(ComponentClient):
             self.anchor_pose,
             model_constants.anchor_camera,
         ]))
-        self.to_ui_q.put({'anchor_pose': (self.anchor_num, self.anchor_pose)})
+        self.gantry_pos_sightings = deque(maxlen=100)
+        self.gantry_pos_sightings_lock = threading.RLock()
 
-    def handle_update_from_ws(self, update):
-        # TODO if we are not regularly receiving line_record, display this as a server problem status
+
+    async def handle_update_from_ws(self, update):
         if 'line_record' in update:
             self.datastore.anchor_line_record[self.anchor_num].insertList(np.array(update['line_record']))
 
@@ -373,6 +387,13 @@ class RaspiAnchorClient(ComponentClient):
 
         if 'last_raw_encoder' in update:
             self.last_raw_encoder = update['last_raw_encoder']
+
+        if len(self.gantry_pos_sightings) > 0:
+            with self.gantry_pos_sightings_lock:
+                self.ob.send_ui(gantry_sightings=telemetry.GantrySightings(
+                    sightings=[common.Vec3(*position) for position in self.gantry_pos_sightings]
+                ))
+                self.gantry_pos_sightings.clear()
 
     def handle_detections(self, detections, timestamp):
         """
@@ -405,7 +426,9 @@ class RaspiAnchorClient(ComponentClient):
                 self.datastore.gantry_pos_event.set()
 
                 self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
-                self.to_ui_q.put({'gantry_observation': position})
+                with self.gantry_pos_sightings_lock:
+                    self.gantry_pos_sightings.append(position)
+
                 if self.save_raw:
                     self.raw_gant_poses.append(pose_from_det(detection))
 
@@ -419,27 +442,10 @@ class RaspiAnchorClient(ComponentClient):
                 ]))
                 position = pose.reshape(6)[3:]
                 # save the position of this object for use in various planning tasks.
-                self.to_ob_q.put({'avg_named_pos': (detection['n'], position)})
+                self.ob.update_avg_named_pos(detection['n'], position)
 
     async def send_config(self):
         config = Config()
         anchor_config_vars = config.vars_for_anchor(self.anchor_num)
         if len(anchor_config_vars) > 0:
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
-
-
-if __name__ == "__main__":
-    from multiprocessing import Queue
-    from data_store import DataStore
-    datastore = DataStore(horizon_s=10, n_cables=4)
-    to_ui_q = Queue()
-    to_ob_q = Queue()
-    to_ui_q.cancel_join_thread()
-    to_ob_q.cancel_join_thread()
-
-    async def main():
-        ac = RaspiAnchorClient("127.0.0.1", 0, datastore, to_ui_q, None)
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(getattr(signal, 'SIGINT'), ac.shutdown_sync)
-        await ac.startup()
-    asyncio.run(main())
