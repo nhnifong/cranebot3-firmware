@@ -401,7 +401,8 @@ class Positioner2:
             self.predict_time_taken = time.time()-start_time
             self.estimate_gripper()
             self.detect_grip()
-            await self.send_positions()
+            self.send_positions()
+            await self.ob.flush_tele_buffer()
 
     async def update_visual(self):
         while self.run:
@@ -547,6 +548,7 @@ class Positioner2:
             gantry_position=common.Vec3(*self.gant_pos),
             gantry_velocity=common.Vec3(*self.gant_vel),
             gripper_pose=common.Pose(rotation=common.Vec3(*self.grip_pose[0]), position=common.Vec3(*self.grip_pose[1])),
+            slack=self.slack_lines,
         ))
         self.ob.send_ui(pos_factors_debug=telemetry.PositionFactors(
             visual_pos=common.Vec3(*self.visual_pos),
@@ -554,7 +556,6 @@ class Positioner2:
             hanging_pos=common.Vec3(*self.hang_pos),
             hanging_vel=common.Vec3(*self.hang_vel),
         ))
-        await self.ob.flush_tele_buffer()
 
     def notify_update(self, update):
         if 'holding' in update:

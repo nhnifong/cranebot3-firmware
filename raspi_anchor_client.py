@@ -72,13 +72,13 @@ class ComponentClient:
 
         self.conn_status = None # subclass needs to set this in init
 
-    def send_conn_status():
+    def send_conn_status(self):
         self.ob.send_ui(component_conn_status=self.conn_status)
 
     def receive_video(self, port):
         video_uri = f'tcp://{self.address}:{port}'
         print(f'Connecting to {video_uri}')
-        self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_CONNECTING
+        self.conn_status.video_status = telemetry.ConnStatus.CONNECTING
         # cannot send here, not in event loop
         self.notify_video = True
 
@@ -95,7 +95,7 @@ class ComponentClient:
             stream.thread_type = "SLICE"
 
             print(f'video connection successful')
-            self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_CONNECTED
+            self.conn_status.video_status = telemetry.ConnStatus.CONNECTED
             self.notify_video = True
             lastSam = time.time()
             last_time = time.time()
@@ -138,7 +138,7 @@ class ComponentClient:
 
         except av.error.TimeoutError:
             print('no video stream available')
-            self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED
+            self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
             self.notify_video = True
             return
 
@@ -202,8 +202,8 @@ class ComponentClient:
 
     async def connect_websocket(self):
         # main client loop
-        self.conn_status.websocket_status = telemetry.ConnStatus.CONNSTATUS_CONNECTING
-        self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED
+        self.conn_status.websocket_status = telemetry.ConnStatus.CONNECTING
+        self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
         self.conn_status.ip_address = self.address
         self.send_conn_status()
 
@@ -232,7 +232,7 @@ class ComponentClient:
         return self.abnormal_shutdown
 
     async def receive_loop(self, websocket):
-        self.conn_status.websocket_status = telemetry.ConnStatus.CONNSTATUS_CONNECTED
+        self.conn_status.websocket_status = telemetry.ConnStatus.CONNECTED
         self.send_conn_status()
         # loop of a single websocket connection.
         # save a reference to this for send_commands
@@ -276,8 +276,8 @@ class ComponentClient:
                 print(f"Connection to {self.address} closed.")
                 self.connected = False
                 self.websocket = None
-                self.conn_status.websocket_status = telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED
-                self.conn_status.video_status = telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED
+                self.conn_status.websocket_status = telemetry.ConnStatus.NOT_DETECTED
+                self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
                 self.send_conn_status()
                 raise e # TODO figure out if this causes the abnormal shutdown return value in connect_websocket like it should
                 break
@@ -361,8 +361,8 @@ class RaspiAnchorClient(ComponentClient):
         self.conn_status = telemetry.ComponentConnStatus(
             is_gripper=False,
             anchor_num=self.anchor_num,
-            websocket_status=telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED,
-            video_status=telemetry.ConnStatus.CONNSTATUS_NOT_DETECTED,
+            websocket_status=telemetry.ConnStatus.NOT_DETECTED,
+            video_status=telemetry.ConnStatus.NOT_DETECTED,
         )
         self.last_raw_encoder = None
         self.raw_gant_poses = []

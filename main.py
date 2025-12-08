@@ -26,10 +26,9 @@ if __name__ == "__main__":
     try:
         # allow Ursina to be the main process. it doesn't work as a subprocess.
         start_ui(register_input)
-        else:
-            # Keep the main process alive
-            while True:
-                time.sleep(1)
+        # Keep the main process alive
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         print("Terminate both UI and observer")
         application.quit()

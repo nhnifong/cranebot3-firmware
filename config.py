@@ -40,6 +40,7 @@ class Config:
         self.commmon_anchor_vars = {}
         self.gripper = Gripper()
         self.preferred_cameras = [0,3,None] # todo this is not written anywhere
+        self.robot_id = '0' # todo this is not written anywhere
         try:
             self.reload()
         except FileNotFoundError:

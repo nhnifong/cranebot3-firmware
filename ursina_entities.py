@@ -12,6 +12,7 @@ from functools import partial
 import time
 from PIL import Image
 from ssh_launch import launch_ssh_terminal
+from generated.nf import telemetry, control, common
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -42,10 +43,9 @@ MAX_JOG_SPEED = 0.3
 gripper_color = (0.9, 0.20, 0.34, 1.0)
 
 class Gantry(Entity):
-    def __init__(self, ui, to_ob_q, **kwargs):
+    def __init__(self, ui, **kwargs):
         super().__init__(**kwargs)
         self.ui = ui
-        self.to_ob_q = to_ob_q
         self.last_update_t = time.time()
 
         # position and velocity in the z up coordinate space, not the ursina space
@@ -78,7 +78,7 @@ class Gantry(Entity):
         self.ui.vert_line.model = draw_line(self.ui.gripper.position, self.position)
 
 class Gripper(Entity):
-    def __init__(self, ui, to_ob_q, **kwargs):
+    def __init__(self, ui, **kwargs):
         super().__init__(
             collider='box', # for mouse interaction
             model='gripper_body',
@@ -87,7 +87,6 @@ class Gripper(Entity):
             **kwargs
         )
         self.ui = ui,
-        self.to_ob_q = to_ob_q
         self.closed = False
         self.label_offset = (0.00, 0.04)
         self.label = Text(
@@ -130,6 +129,7 @@ class Gripper(Entity):
         self.jog_speed = 0
         self.vid_visible = False
         self.ip_address = None
+        self.open = True
 
     def setStatus(self, status):
         self.label.text = f"Gripper\n{status}"
@@ -154,10 +154,8 @@ class Gripper(Entity):
         self.wp = WindowPanel(
         title=f"Gripper at {self.ip_address}",
         content=(
-            Button(text='Open (Space)', color=color.gold, text_color=color.black),
             Button(text='Open SSH Terminal', color=color.gold, text_color=color.black,
                 on_click=partial(launch_ssh_terminal, self.ip_address)),
-            Button(text='Stop Spool Motor', color=color.gold, text_color=color.black),
             Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
                 on_click=self.open_manual_spool_control),
             ),
@@ -197,7 +195,7 @@ class Gripper(Entity):
                 self.reel_manual(-self.jog_speed)
             elif mkey == 'up arrow up':
                 self.jog_speed = 0.1
-                self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
+                self.ui.send_ob(jog_spool.JogSpool(is_gripper=True, speed=0))
 
 
             elif mkey == 'down arrow':
@@ -208,16 +206,10 @@ class Gripper(Entity):
                 self.reel_manual(self.jog_speed)
             elif mkey == 'down arrow up':
                 self.jog_speed = 0.1
-                self.to_ob_q.put({'slow_stop_one':{'id':'gripper'}})
+                self.ui.send_ob(jog_spool.JogSpool(is_gripper=True, speed=0))
 
     def reel_manual(self, metersPerSecond):
-        print(f'jog speed {metersPerSecond}')
-        self.to_ob_q.put({'jog_spool':{'gripper':None, 'speed':metersPerSecond}})
-
-
-    def toggleClosed(self):
-        self.closed = not self.closed
-        self.to_ob_q.put({'set_grip': self.closed})
+        self.ui.send_ob(jog_spool.JogSpool(is_gripper=True, speed=metersPerSecond))
 
     def setFingerAngle(self, commanded_angle):
         """
@@ -229,11 +221,16 @@ class Gripper(Entity):
         self.left_finger.rotation = (0,0,phys_angle)
         self.right_finger.rotation = (0,0,-phys_angle)
 
+    def toggle_closed(self):
+        """ Send a command to open or close the gripper """
+        self.open = not self.open
+        self.ui.send_ob(move=control.CombinedMove(finger = -30 if self.open else 85))
+
 
 anchor_color = (0.8, 0.8, 0.8, 1.0)
 anchor_color_selected = (0.9, 0.9, 1.0, 1.0)
 class Anchor(Entity):
-    def __init__(self, num, to_ob_q, pose):
+    def __init__(self, num, ui, pose):
         super().__init__(
             position=swap_yz(pose[1]),
             rotation=to_ursina_rotation(pose[0]),
@@ -245,7 +242,7 @@ class Anchor(Entity):
         )
         self.num = num
         self.label_offset = (0.00, 0.04)
-        self.to_ob_q = to_ob_q
+        self.ui = ui
         self.pose = pose # we expect caller to just set this for us.
         self.anchor_cam_pose = compose_poses([pose, model_constants.anchor_camera])
         self.ip_address = None
@@ -313,7 +310,7 @@ class Anchor(Entity):
                 self.reel_manual(-self.jog_speed)
             elif key == 'up arrow up':
                 self.jog_speed = 0.1
-                self.to_ob_q.put({'slow_stop_one':{'id':self.num}})
+                self.ui.send_ob(jog_spool.JogSpool(is_gripper=False, anchor_num=self.num, speed=0))
 
 
             elif key == 'down arrow':
@@ -324,13 +321,12 @@ class Anchor(Entity):
                 self.reel_manual(self.jog_speed)
             elif key == 'down arrow up':
                 self.jog_speed = 0.1
-                self.to_ob_q.put({'slow_stop_one':{'id':self.num}})
+                self.ui.send_ob(jog_spool.JogSpool(is_gripper=False, anchor_num=self.num, speed=0))
 
 
     def reel_manual(self, metersPerSecond):
         self.wp.enabled = False
-        print(f'jog speed {metersPerSecond}')
-        self.to_ob_q.put({'jog_spool':{'anchor':self.num, 'speed':metersPerSecond}})
+        self.ui.send_ob(jog_spool.JogSpool(is_gripper=False, anchor_num=self.num, speed=metersPerSecond))
 
     def toggle_vid_feed(self):
         pass # todo make this toggle the window in the main app
@@ -439,9 +435,7 @@ class Floor(Entity):
             self.cancel_btn = None
 
     def button_confirm(self):
-        print(f"Goal Confirmed: {self.target.position}")
-        if self.app.to_ob_q:
-            self.app.to_ob_q.put({'add_floor_target': swap_yz(self.target.world_position)})
+        # TODO add target to queue at swap_yz(self.target.world_position)
         self.unlock_target()
 
     def update_buttons(self):
@@ -460,6 +454,8 @@ class Floor(Entity):
                 self.target.position = mouse.world_point
         else:
             self.update_buttons()
+
+        events = [] # control events
 
         #  =========== collect input from attatched gamepad ===========
         # these are available from the update function of any enabled entity, the floor just happens to be a singular always enabled entity.
@@ -518,40 +514,35 @@ class Floor(Entity):
         # Start - start/stop recording episode. detect rising edge
         start_held = bool(held_keys['gamepad start'])
         if start_held and start_held != self.start_was_held:
-            self.app.to_ob_q.put({'episode_ctrl': ['episode_start_stop']})
+            events.append(control.ControlItem(episode_control=control.EpControl(events=['episode_start_stop'])))
         self.start_was_held = start_held
 
         # D pad up - tension all lines and recalibrate lenths. detect rising edge
         dpad_up_held = bool(held_keys['gamepad dpad up'])
         if dpad_up_held and dpad_up_held != self.dpad_up_was_held:
             print('tension lines command from gamepad')
-            self.app.to_ob_q.put({'tension_lines': None})
+            events.append(control.ControlItem(command=control.CommonCommand(name=control.Command.TIGHTEN_LINES)))
         self.dpad_up_was_held = dpad_up_held
 
         # D pad left - Run quick calibration. detect rising edge
         dpad_left_held = bool(held_keys['gamepad dpad left'])
         if dpad_left_held and dpad_left_held != self.dpad_left_was_held:
-            self.app.to_ob_q.put({'half_cal': None})
+            events.append(control.ControlItem(command=control.CommonCommand(name=control.Command.HALF_CAL)))
         self.dpad_left_was_held = dpad_left_held
 
         act = np.array([*vector, speed, self.smooth_winch_speed, self.finger_angle])
         if not np.array_equal(act, self.last_action) or (now > (self.last_send_t + 0.2) and np.linalg.norm(vector) > 1e-3):
-            self.app.to_ob_q.put({
-                'gamepad': {
-                    'winch': self.smooth_winch_speed,
-                    'finger': self.finger_angle,
-                    'dir': vector,
-                    'speed': speed,
-                }
-            })
+            events.append(control.ControlItem(move=control.CombinedMove(
+                direction = vector,
+                speed = speed,
+                finger = self.finger_angle,
+                winch = self.smooth_winch_speed,
+            )))
             self.last_action = act
             self.last_send_t = now
 
-    def button_confirm(self):
-        self.button.enabled = False
-        self.button = None
-        gantry_goal = swap_yz(self.circle.world_position)
-        self.app.to_ob_q.put({'gantry_goal_pos': gantry_goal})
+        if len(events)>0:
+            self.app.send_ob(events=events)
 
 class GoalPoint(Entity):
     def __init__(self, position, **kwargs):
@@ -812,15 +803,15 @@ class CamPreview(Entity):
         # indicates whether the texture has been allocated
         self.haveSetImage = False
 
-    def set_predictions(self, data_dict):
+    def set_predictions(self, data: telemetry.GripCamPredictions):
         """
         Takes a 2D vector in [-1, 1] range (e.g. from a joystick) and draws 
         a thin arrow from the center of the view.
         If vec is None or magnitude is ~0, hides the arrow.
         """
-        vec = data_dict['vec']
-        valid_target_in_view = data_dict['valid']
-        gripper_holding = data_dict['hold'] # purely visual estimate of whether the gripper is holding somehting.
+        vec = [data.move_x, data.move_y]
+        valid_target_in_view = data.prob_target_in_view
+        gripper_holding = data.prob_holding # purely visual estimate of whether the gripper is holding somehting.
 
         self.target_in_view.alpha = valid_target_in_view
         self.holding_something.alpha = gripper_holding
@@ -936,12 +927,17 @@ class CamPreview(Entity):
         if self.anchor and not self.floor.locked:
             self.floor.lock_target()
 
-
 class ActionList(Entity):
     def __init__(self):
         super().__init__()
         self.task_name = None
         self.target_list = []
+
+        self.status_colors = {
+            telemetry.TargetStatus.SEEN: color.white,
+            telemetry.TargetStatus.SELECTED: color.green,
+            telemetry.TargetStatus.PICKED_UP: color.gold,
+        }
 
         self.background = Entity(
             parent=camera.ui,
@@ -980,54 +976,38 @@ class ActionList(Entity):
         self.cursor_pos[1] -= 0.03 # blank line
         # self.cursor_pos[0] += 0.05 # indent
         self.list_start_cursor_pos = Vec2(self.cursor_pos) # deep copy
-
         self.target_labels = []
-        # self.set_target_list([
-        #     {'id':'123456, position: (0.00, 1.00)', 'source':'user', 'status':'active'},
-        #     {'name':'black sock at (-1.44, 1.22)', 'source':'ai', 'status':'pending'},
-        #     {'name':'black sock at (-1.22, 1.11)', 'source':'ai', 'status':'pending'},
-        #     {'name':'black sock at (-1.33, 1.00)', 'source':'ai', 'status':'pending'},
-        # ])
 
     def set_task_name(self, name):
         self.task_name = names
         self.task_label.text = f"Task: {name}"
 
-    def set_target_list(self, targets):
+    def set_target_list(self, targetlist: telemetry.TargetList):
         """
-        expects a list of dicts with keys
-        id, position, dropoff, status, source,
-        already sorted in priority order
-        see get_queue_snapshot() in target_queue.py for source
+        see get_queue_snapshot() in target_queue.py for source data format
         """
-        print(f'setting a list of {len(targets)} targets')
         for tl in self.target_labels:
             destroy(tl)
         self.target_labels = []
-        self.target_list = targets
-
-        status_colors = {
-            'seen': color.white,
-            'selected': color.green,
-            'picked_up': color.gold,
-        }
+        self.target_list = targetlist.targets
 
         count_user = 0
         count_ai = 0
         self.cursor_pos = Vec2(self.list_start_cursor_pos)
         for i, target in enumerate(self.target_list):
-            if target['source'] == 'user':
+            if target.source == 'user':
                 count_user += 1
             else:
                 count_ai += 1
-            x, y, z = target['position']
+            x = target.position.x
+            y = target.position.y
             tl = Text(
                 parent=camera.ui,
-                text=f"({target['source']}) {target['id'][:6]} at ({x:0.2f}, {y:0.2f})",
+                text=f"({target.source}) {target.id[:6]} at ({x:0.2f}, {y:0.2f})",
                 origin=(-0.5, -0.5),              # Anchor: Bottom Left of text
                 position=self.cursor_pos,
                 scale=0.6,                          # Text scale (relative to parent)
-                color=status_colors.get(target['status'], color.white),
+                color=self.status_colors.get(target.status, color.white),
             )
             self.cursor_pos[1] -= tl.height
             self.target_labels.append(tl)

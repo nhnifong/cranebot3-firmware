@@ -16,7 +16,7 @@ class Target:
     dropoff: Union[np.ndarray, str]
     source: str  # 'user' or 'ai'
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    status: telemetry.TargetStatus = telemetry.TargetStatus.TARGETSTATUS_SEEN
+    status: telemetry.TargetStatus = telemetry.TargetStatus.SEEN
 
     def distance_to(self, other_pos: np.ndarray) -> float:
         return float(np.linalg.norm(self.position - other_pos))
@@ -169,7 +169,7 @@ class TargetQueue:
         Proximity logic removed: simply returns the first PENDING target in the queue.
         """
         with self._lock:
-            return next((t for t in self._queue if t.status == telemetry.TargetStatus.TARGETSTATUS_SEEN), None)
+            return next((t for t in self._queue if t.status == telemetry.TargetStatus.SEEN), None)
 
     def set_target_status(self, target_id: str, status: telemetry.TargetStatus) -> bool:
         """
@@ -177,7 +177,7 @@ class TargetQueue:
         If status is DROPPED, the target is removed from the queue.
         """
         with self._lock:
-            if status == telemetry.TargetStatus.TARGETSTATUS_DROPPED:
+            if status == telemetry.TargetStatus.DROPPED:
                 return self.remove_target(target_id)
             
             target = self._get_by_id(target_id)
