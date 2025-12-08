@@ -21,6 +21,7 @@ from ursina.prefabs.dropdown_menu import DropdownMenu, DropdownMenuButton
 from ursina_entities import * # my ursina objects
 from websockets.sync.client import connect as websocket_connect_sync
 from generated.nf import telemetry, control, common
+from util import *
 
 window.borderless = False
 
@@ -69,13 +70,6 @@ key_behavior = {
 def input(key):
     pass
 
-def update_from_trimesh(tm, entity):
-    entity.model = Mesh(vertices=tm.vertices[:, [0, 2, 1]].tolist(), triangles=tm.faces.tolist())
-
-def update_from_trimesh_with_color(color, tm, entity):
-    entity.color = color
-    update_from_trimesh(tm, entity)
-
 # what color to show a solid depending on how many cameras it was seen by
 solid_colors = {
     2: (1.0, 0.951, 0.71, 1.0),
@@ -86,9 +80,6 @@ solid_colors = {
 def update_go_quad(position, color, e):
     e.position = position
     e.color = color
-
-def tonp(vec: common.Vec3):
-    return np.array([vec.x, vec.y, vec.z], dtype=float)
 
 class ControlPanelUI:
     def __init__(self):
