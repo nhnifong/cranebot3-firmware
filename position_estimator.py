@@ -16,6 +16,7 @@ from kalman_filter import KalmanFilter
 import cv2
 from frequency_estimator import SwingFrequencyEstimator
 from generated.nf import telemetry, common
+from util import *
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -473,7 +474,7 @@ class Positioner2:
     def record_commanded_vel(self, vel):
         self.commanded_vel = vel
         self.commanded_vel_ts = time.time()
-        self.ob.send_ui(last_commanded_vel=telemetry.CommandedVelocity(velocity=common.Vec3(*vel)))
+        self.ob.send_ui(last_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(vel)))
 
     async def update_commanded_vel(self):
         """provide an observation to the filter based on the commanded velocity"""
@@ -543,18 +544,20 @@ class Positioner2:
         # 'visual_update_rate': self.visual_time_taken,
         # 'hang_update_rate': self.hang_time_taken,
 
+        print(f'slack lines {self.slack_lines}')
+
         self.ob.send_ui(pos_estimate=telemetry.PositionEstimate(
-            data_ts=self.data_ts,
-            gantry_position=common.Vec3(*self.gant_pos),
-            gantry_velocity=common.Vec3(*self.gant_vel),
-            gripper_pose=common.Pose(rotation=common.Vec3(*self.grip_pose[0]), position=common.Vec3(*self.grip_pose[1])),
-            slack=self.slack_lines,
+            data_ts=float(self.data_ts),
+            gantry_position=fromnp(self.gant_pos),
+            gantry_velocity=fromnp(self.gant_vel),
+            gripper_pose=common.Pose(rotation=fromnp(self.grip_pose[0]), position=fromnp(self.grip_pose[1])),
+            slack=list(map(bool, self.slack_lines)),
         ))
         self.ob.send_ui(pos_factors_debug=telemetry.PositionFactors(
-            visual_pos=common.Vec3(*self.visual_pos),
-            visual_vel=common.Vec3(*self.visual_vel),
-            hanging_pos=common.Vec3(*self.hang_pos),
-            hanging_vel=common.Vec3(*self.hang_vel),
+            visual_pos=fromnp(self.visual_pos),
+            visual_vel=fromnp(self.visual_vel),
+            hanging_pos=fromnp(self.hang_pos),
+            hanging_vel=fromnp(self.hang_vel),
         ))
 
     def notify_update(self, update):

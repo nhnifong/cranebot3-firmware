@@ -12,6 +12,8 @@
         -0.7853981633974483
       ],
       "service_name": "123.cranebot-anchor-service.test_0.",
+      "address": null,
+      "port": null,
       "num": 0,
       "vars": {}
     },
@@ -27,6 +29,8 @@
         -2.356194490192345
       ],
       "service_name": "123.cranebot-anchor-service.test_1.",
+      "address": null,
+      "port": null,
       "num": 1,
       "vars": {}
     },
@@ -42,6 +46,8 @@
         0.7853981633974483
       ],
       "service_name": "123.cranebot-anchor-service.test_2.",
+      "address": null,
+      "port": null,
       "num": 2,
       "vars": {}
     },
@@ -57,6 +63,8 @@
         2.356194490192345
       ],
       "service_name": "123.cranebot-anchor-service.test_3.",
+      "address": null,
+      "port": null,
       "num": 3,
       "vars": {}
     }
@@ -97,6 +105,10 @@
     "MAX_ACCEL": 0.9
   },
   "gripper": {
-    "TARGET_HOLDING_PRESSURE": 1.1
+    "service_name": "123.cranebot-gripper-service.test",
+    "address": "127.0.0.1",
+    "port": 8765,
+    "frame_room_spin": null,
+    "vars": {}
   }
 }
