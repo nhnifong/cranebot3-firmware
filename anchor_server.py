@@ -254,7 +254,7 @@ class RobotComponentServer:
         logging.info("Service unregistered")
         result = await spool_task
         if len(self.extra_tasks) > 0:
-            result = await asyncio.gather(self.extra_tasks)
+            result = await asyncio.gather(*self.extra_tasks)
 
 
     def shutdown(self):

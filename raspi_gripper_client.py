@@ -45,7 +45,7 @@ class RaspiGripperClient(ComponentClient):
             voltage = float(gs['fing_v'])
 
             self.datastore.finger.insert([timestamp, angle, voltage])
-            self.ob.send_ui(grip_sensors=GripperSensors(
+            self.ob.send_ui(grip_sensors=telemetry.GripperSensors(
                 range = distance_measurement,
                 angle = angle,
                 pressure = voltage,

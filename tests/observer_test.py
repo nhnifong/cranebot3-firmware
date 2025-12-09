@@ -88,7 +88,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             p.start()
 
         # Zeroconf will attempt to discover services .
-        self.ob = AsyncObserver(self.to_ui_q, self.to_ob_q)
+        self.ob = AsyncObserver(False)
         # before starting, set it's zeroconf instance to a special version that searches on localhost only
         self.zc = AsyncZeroconf(ip_version=IPVersion.All)
         self.ob.aiozc = self.zc

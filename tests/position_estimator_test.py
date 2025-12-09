@@ -21,10 +21,8 @@ class TestPositionEstimator(unittest.TestCase):
 
     def setUp(self):
         self.datastore = DataStore(size=200)
-        to_ui_q = Queue()
-        to_ui_q.cancel_join_thread()
         self.mock_observer = MagicMock()
-        self.pe = Positioner2(self.datastore, to_ui_q, self.mock_observer)
+        self.pe = Positioner2(self.datastore, self.mock_observer)
 
     def test_sphere_intersection(self):
         sphere1 = (np.array([0, 0, 0]), 5)
@@ -149,12 +147,8 @@ class TestPositionEstimator(unittest.TestCase):
 class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        to_ui_q = Queue()
-        to_ob_q = Queue()
-        to_ui_q.cancel_join_thread()
-        to_ob_q.cancel_join_thread()
         # make an instance of observer just to use it's simulated data function.
-        self.ob = AsyncObserver(to_ui_q, to_ob_q)
+        self.ob = AsyncObserver(terminate_with_ui=False)
         self.datastore = self.ob.datastore
 
     async def test_positioner_main(self):
@@ -172,10 +166,9 @@ class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 class TestEstimateGripper(unittest.TestCase):
     def setUp(self):
         self.mock_datastore = MagicMock()
-        self.to_ui_q = MagicMock()
         self.mock_observer = MagicMock()
         
-        self.pe = Positioner2(self.mock_datastore, self.to_ui_q, self.mock_observer)
+        self.pe = Positioner2(self.mock_datastore, self.mock_observer)
         self.pe.swing_est = MagicMock()
         
         # Set gantry position

@@ -18,6 +18,7 @@ from trainer.stringman_pilot import IMAGE_SHAPE
 from collections import defaultdict, deque
 from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHandshake, ConnectionClosedOK
 from generated.nf import telemetry, common
+import copy
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -73,7 +74,7 @@ class ComponentClient:
         self.conn_status = None # subclass needs to set this in init
 
     def send_conn_status(self):
-        self.ob.send_ui(component_conn_status=self.conn_status)
+        self.ob.send_ui(component_conn_status=copy.deepcopy(self.conn_status))
 
     def receive_video(self, port):
         video_uri = f'tcp://{self.address}:{port}'
@@ -229,6 +230,9 @@ class ComponentClient:
             self.failed_to_connect = True
         finally:
             self.connected = False
+        self.conn_status.websocket_status = telemetry.ConnStatus.NOT_DETECTED
+        self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
+        self.send_conn_status()
         return self.abnormal_shutdown
 
     async def receive_loop(self, websocket):
@@ -242,7 +246,7 @@ class ComponentClient:
         encoder_thread = threading.Thread(target=self.jpeg_encoder_loop, daemon=True)
         encoder_thread.start()
         # send configuration to robot component to override default.
-        asyncio.create_task(self.send_config())
+        r = await self.send_config()
         # start task to watch heartbeat event
         self.safety_task = asyncio.create_task(self.safety_monitor())
         vid_thread = None
@@ -276,9 +280,9 @@ class ComponentClient:
                 print(f"Connection to {self.address} closed.")
                 self.connected = False
                 self.websocket = None
-                self.conn_status.websocket_status = telemetry.ConnStatus.NOT_DETECTED
-                self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
-                self.send_conn_status()
+                # self.conn_status.websocket_status = telemetry.ConnStatus.NOT_DETECTED
+                # self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
+                # self.send_conn_status()
                 raise e # TODO figure out if this causes the abnormal shutdown return value in connect_websocket like it should
                 break
         if vid_thread is not None:
@@ -353,6 +357,8 @@ class ComponentClient:
                         self.websocket.transport.close()
                 except ConnectionClosedOK:
                     return
+            except asyncio.exceptions.CancelledError:
+                return
 
 class RaspiAnchorClient(ComponentClient):
     def __init__(self, address, port, anchor_num, datastore, ob, pool, stat):

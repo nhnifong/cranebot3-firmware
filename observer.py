@@ -39,6 +39,7 @@ from target_queue import TargetQueue
 from generated.nf import telemetry, control, common
 import websockets
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
+from util import *
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -131,7 +132,7 @@ class AsyncObserver:
 
         # send anything that it would need up-front
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
-            poses=[common.Pose(rotation=common.Vec3(*a.pose[0]), position=common.Vec3(*a.pose[1])) for a in self.config.anchors]
+            poses=[common.Pose(rotation=fromnp(a.pose[0]), position=fromnp(a.pose[1])) for a in self.config.anchors]
         ))
 
         try:
@@ -260,7 +261,7 @@ class AsyncObserver:
         self.named_positions[key] = self.named_positions[key] * 0.75 + position * 0.25
 
         pos = self.named_positions['gamepad']
-        self.send_ui(named_position=telemetry.NamedObjectPosition(position=common.Vec3(*pos), name=key))
+        self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(pos), name=key))
 
     async def invoke_motion_task(self, coro):
         """
@@ -480,7 +481,7 @@ class AsyncObserver:
             config.write()
             # inform UI
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
-                common.Pose(rotation=common.Vec3(*p[0]), position=common.Vec3(*p[1]))
+                common.Pose(rotation=fromnp(p[0]), position=fromnp(p[1]))
                 for p in anchor_poses
             ]))
             # inform position estimator
@@ -831,7 +832,7 @@ class AsyncObserver:
                     anum = anchor_num = np.random.randint(4)
                     dp = gantry_real_pos + np.array([t, anum, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE])
                     self.datastore.gantry_pos.insert(dp)
-                    self.send_ui(gantry_sightings=telemetry.GantrySightings(sightings=[common.Vec3(*dp[1:])]))
+                    self.send_ui(gantry_sightings=telemetry.GantrySightings(sightings=[fromnp(dp[1:])]))
                 # winch line always 1 meter
                 self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
                 # range always perfect
@@ -906,7 +907,7 @@ class AsyncObserver:
                         dp = pending_obs.pop()
                         self.datastore.gantry_pos.insert(dp)
                         self.datastore.gantry_pos_event.set()
-                        self.send_ui(gantry_sightings=telemetry.GantrySightings(sightings=[common.Vec3(*dp[2:])]))
+                        self.send_ui(gantry_sightings=telemetry.GantrySightings(sightings=[fromnp(dp[2:])]))
                 
                 # winch line always 1 meter
                 self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
@@ -968,7 +969,7 @@ class AsyncObserver:
         LOOP_SLEEP_S = 0.2 # seconds
         
         try:
-            self.send_ui(named_position=telemetry.NamedObjectPosition(position=common.Vec3(*self.gantry_goal_pos), name='gantry_goal_marker'))
+            self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.gantry_goal_pos), name='gantry_goal_marker'))
             while self.gantry_goal_pos is not None:
                 vector = self.gantry_goal_pos - self.pe.gant_pos
                 dist = np.linalg.norm(vector)
@@ -990,7 +991,7 @@ class AsyncObserver:
         GANTRY_SPEED_MPS = 0.25 # m/s
         
         try:
-            self.send_ui(named_position=telemetry.NamedObjectPosition(position=common.Vec3(*self.gantry_goal_pos), name='gantry_goal_marker'))
+            self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.gantry_goal_pos), name='gantry_goal_marker'))
             vector = self.gantry_goal_pos - self.pe.gant_pos
             dist = np.linalg.norm(vector)
             if dist > 0:
