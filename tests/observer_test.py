@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import asyncio
 import unittest
-from unittest.mock import patch, Mock, ANY
+from unittest.mock import patch, Mock, ANY, MagicMock
 from multiprocessing import Pool, Queue
 import numpy as np
 from observer import AsyncObserver
@@ -71,6 +71,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client.shutdown = self.event_shutdown
         self.mock_gripper_client.slow_stop_spool = self.instant_nothing
         self.mock_gripper_client.connection_established_event = asyncio.Event()
+        self.mock_gripper_client.last_frame_resized = None
         self.patchers.append(patch('observer.RaspiGripperClient', self.mock_gripper_client_class))
 
         # Create four mock anchor clients
@@ -81,6 +82,16 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             client.slow_stop_spool = self.instant_nothing
             client.anchor_num = i
 
+        # Patch AsyncZeroconfServiceTypes to prevent network scan hang
+        # This is the critical fix for the regression you noticed.
+        self.mock_zc_types_patch = patch('observer.AsyncZeroconfServiceTypes')
+        self.mock_zc_types = self.mock_zc_types_patch.start()
+        # Mock the async_find method to return an empty list immediately
+        f = asyncio.Future()
+        f.set_result([])
+        self.mock_zc_types.async_find.return_value = f
+        self.patchers.append(self.mock_zc_types_patch)
+
         # The side_effect makes it so each call to the constructor returns the next mock
         self.patchers.append(patch('observer.RaspiAnchorClient', side_effect=self.mock_anchor_clients))
 
@@ -90,10 +101,11 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # Zeroconf will attempt to discover services .
         self.ob = AsyncObserver(False)
         # before starting, set it's zeroconf instance to a special version that searches on localhost only
-        self.zc = AsyncZeroconf(ip_version=IPVersion.All)
+        # self.zc = AsyncZeroconf(ip_version=IPVersion.All)
+        self.zc = MagicMock()
         self.ob.aiozc = self.zc
         self.ob_task = asyncio.create_task(self.ob.main())
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(self.ob.startup_complete.wait(), 20)
 
     async def asyncTearDown(self):
         # this should have the effect of making the update listener task stop, which the main task is awaiting.

@@ -118,6 +118,7 @@ class AsyncObserver:
         # websockets to locally connected UIs
         self.connected_local_clients = set()
         self.telemetry_buffer = deque(maxlen=100)
+        self.startup_complete = asyncio.Event()
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -497,25 +498,28 @@ class AsyncObserver:
             # there should be some swing when we get there. 
             await self.half_auto_calibration()
 
-            # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
-            # when the stabilization is done without any existing z rotation term
-            self.gripper_client.calibrating_room_spin = True
-            origin_card_pose = [None]
-            def special_handle_det(self, detections, timestamp):
-                for d in detections:
-                    if d['n'] == 'origin':
-                        # a pose of the origin card in the frame of reference of the stabilized gripper cam.
-                        origin_card_pose[0] = pose_from_det(d)
-            while origin_card_pose[0] is None:
-                async_result = self.pool.apply_async(
-                    locate_markers,
-                    (self.gripper_client.last_frame_resized,),
-                    callback=partial(self.special_handle_det, timestamp=time.time()))
-                detections = async_result.get(timeout=5)
-            roomspin = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('xyz')[2]
-            self.config.gripper_frame_room_spin = roomspin
-            self.config.write()
-            self.gripper_client.calibrating_room_spin = False
+            if self.gripper_client.last_frame_resized is not None:
+                # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
+                # when the stabilization is done without any existing z rotation term
+                self.gripper_client.calibrating_room_spin = True
+                origin_card_pose = [None]
+                def special_handle_det(self, detections, timestamp):
+                    for d in detections:
+                        if d['n'] == 'origin':
+                            # a pose of the origin card in the frame of reference of the stabilized gripper cam.
+                            origin_card_pose[0] = pose_from_det(d)
+                while origin_card_pose[0] is None:
+                    async_result = self.pool.apply_async(
+                        locate_markers,
+                        (self.gripper_client.last_frame_resized,),
+                        callback=partial(self.special_handle_det, timestamp=time.time()))
+                    detections = async_result.get(timeout=5)
+                roomspin = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('xyz')[2]
+                self.config.gripper_frame_room_spin = roomspin
+                self.config.write()
+                self.gripper_client.calibrating_room_spin = False
+            else:
+                print('Warning, cannot calibrate the relationship between gripper IMU zero angle and camera if gripper camera is offline!')
 
             # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
             self.send_ui(pop_message=telemetry.Popup(
@@ -745,6 +749,7 @@ class AsyncObserver:
         # TODO send to cloud as well if connected
 
     async def main(self) -> None:
+        self.startup_complete.clear()
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
         with Pool(processes=8) as pool:
             self.pool = pool
@@ -755,7 +760,7 @@ class AsyncObserver:
             try:
                 print("get services list")
                 services = list(
-                    await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
+                    r = await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
                 )
                 print("start service browser")
                 self.aiobrowser = AsyncServiceBrowser(
@@ -785,6 +790,7 @@ class AsyncObserver:
                 # await something that will end when the program closes to keep serving and
                 # keep zeroconf alive and discovering services.
                 try:
+                    self.startup_complete.set()
                     result = await self.keeper
                 except asyncio.exceptions.CancelledError:
                     pass
