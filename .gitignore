@@ -20,3 +20,4 @@ square_centering_data_unlabled/
 square_centering_data/
 multi_view_data/
 trainer/models/multiview_4cam.pth
+configuration.json
