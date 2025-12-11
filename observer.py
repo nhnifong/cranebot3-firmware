@@ -462,6 +462,8 @@ class AsyncObserver:
             if len(self.anchors) < N_ANCHORS:
                 print('Cannot run full calibration until all anchors are connected')
                 return
+            elif len(self.anchors) > N_ANCHORS:
+                print(f'Too many anchors, what is going on here\n{self.anchors}')
             self.anchors.sort(key=lambda x: x.anchor_num)
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
@@ -516,6 +518,7 @@ class AsyncObserver:
                     detections = async_result.get(timeout=5)
                 roomspin = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('xyz')[2]
                 self.config.gripper_frame_room_spin = roomspin
+                self.config.has_been_calibrated = True
                 self.config.write()
                 self.gripper_client.calibrating_room_spin = False
             else:
@@ -649,12 +652,11 @@ class AsyncObserver:
                 # assume only the common attributes between those two types
                 key = cpt.service_name
                 if key is None or cpt.address is None or cpt.port is None:
-                    # we have not discovered how to connect to this yet, but it's in our config.
-                    # can only occur with manual config editing
-                    print(f'{key} in config but we dont have the address')
+                    # we have not discovered how to connect to this yet, but it's in our config. (config defaults)
                     continue
 
                 if key not in connection_tasks:
+                    print(f'Connecting to {key} because not in {connection_tasks.keys()}')
                     connection_tasks[key] = asyncio.create_task(self.connect_component(key))
                 else:
                     connected = key in self.bot_clients and self.bot_clients[key].connected
