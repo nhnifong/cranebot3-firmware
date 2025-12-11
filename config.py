@@ -40,7 +40,8 @@ class Config:
         self.commmon_anchor_vars = {}
         self.gripper = Gripper()
         self.preferred_cameras = [0,3,None] # todo this is not written anywhere
-        self.robot_id = '0' # todo this is not written anywhere
+        self.robot_id = '0'
+        self.has_been_calibrated = False
         try:
             self.reload()
         except FileNotFoundError:
@@ -78,6 +79,9 @@ class Config:
         self.gripper.frame_room_spin = conf['gripper'].get('frame_room_spin', None)
         self.gripper.vars = conf['gripper'].get('vars', {})
 
+        self.robot_id = conf['robot_id']
+        self.has_been_calibrated = conf['has_been_calibrated']
+
 
     def write(self):
         outf = open(DEFAULT_CONFIG_PATH, 'w')
@@ -106,6 +110,8 @@ class Config:
                 'frame_room_spin': self.gripper.frame_room_spin,
                 'vars': self.gripper.vars,
             },
+            'robot_id': self.robot_id,
+            'has_been_calibrated': self.has_been_calibrated,
         }
         outf.write(json.dumps(conf, indent=2))
         outf.close()
