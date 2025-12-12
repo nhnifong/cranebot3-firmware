@@ -22,7 +22,7 @@ from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient, max_origin_detections, pose_from_det
 from raspi_gripper_client import RaspiGripperClient
 from random import random
-from config import Config
+from config_loader import *
 from stats import StatCounter
 from position_estimator import Positioner2
 from cv_common import *
@@ -89,9 +89,8 @@ class AsyncObserver:
         self.anchors = []
         # convenience reference to gripper client
         self.gripper_client = None
-        # read a mapping of server names to anchor numbers from the config file
-        self.config = Config()
-        self.config.write()
+        # TODO allow a command line argument to override the config file path
+        self.config = load_config()
         self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -133,7 +132,7 @@ class AsyncObserver:
 
         # send anything that it would need up-front
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
-            poses=[common.Pose(rotation=fromnp(a.pose[0]), position=fromnp(a.pose[1])) for a in self.config.anchors]
+            poses=[poseTupleToProto(a.pose) for a in self.config.anchors]
         ))
 
         try:
@@ -476,15 +475,16 @@ class AsyncObserver:
             
             anchor_poses = self.locate_anchors()
 
+            # reload just in case
+            self.config = load_config()
             # Use the optimization output to update anchor poses and spool params
-            config = Config()
-            for i, client in enumerate(self.anchors):
-                config.anchors[client.anchor_num].pose = anchor_poses[client.anchor_num]
+            for client in self.anchors:
+                self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
                 client.anchor_pose = anchor_poses[client.anchor_num]
-            config.write()
+            save_config(self.config)
             # inform UI
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
-                common.Pose(rotation=fromnp(p[0]), position=fromnp(p[1]))
+                poseTupleToProto(p)
                 for p in anchor_poses
             ]))
             # inform position estimator
@@ -519,7 +519,7 @@ class AsyncObserver:
                 roomspin = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('xyz')[2]
                 self.config.gripper_frame_room_spin = roomspin
                 self.config.has_been_calibrated = True
-                self.config.write()
+                save_config(self.config)
                 self.gripper_client.calibrating_room_spin = False
             else:
                 print('Warning, cannot calibrate the relationship between gripper IMU zero angle and camera if gripper camera is offline!')
@@ -548,7 +548,7 @@ class AsyncObserver:
         print(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
 
 
-    def async_on_service_state_change(self, 
+    def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
     ) -> None:
         if 'cranebot' in name:
@@ -583,20 +583,23 @@ class AsyncObserver:
             # the number of anchors is decided ahead of time (in main.py)
             # but they are assigned numbers as we find them on the network
             # and the chosen numbers are persisted in configuration.json
-            if key in self.config.anchor_num_map:
-                anchor_num = self.config.anchor_num_map[key]
+            anchor_num_map = {a.service_name: a.num for a in self.config.anchors if a.service_name is not None}
+            if key in anchor_num_map:
+                anchor_num = anchor_num_map[key]
             else:
-                anchor_num = len(self.config.anchor_num_map)
+                anchor_num = len(anchor_num_map)
                 if anchor_num >= N_ANCHORS:
-                    # we do not support yet multiple crane bot assemblies on a single network
+                    # Discovering more that four anchors could be a sign that another robot in the same network is turned on.
+                    # We need a way to know that, but for now, you'll have to make sure only one is one at a time while discovering.
+                    # After discovery, it should be ok to have more than one on at a time.
                     print(f"Discovered another anchor server on the network, but we already know of 4 {key} {address}")
                     print(f"existing anchors: {self.config.anchor_num_map.keys()}")
                     return None
-            self.config.anchor_num_map[key] = anchor_num
+            self.config.anchors[anchor_num].num = anchor_num
             self.config.anchors[anchor_num].service_name = key
             self.config.anchors[anchor_num].address = address
             self.config.anchors[anchor_num].port = info.port
-            self.config.write()
+            save_config(self.config)
 
         elif kind == gripper_service_name:
             # a gripper has been discovered, assume it is ours only if we have never seen one before
@@ -604,7 +607,7 @@ class AsyncObserver:
                 self.config.gripper.service_name = key
                 self.config.gripper.address = address
                 self.config.gripper.port = info.port
-                self.config.write()
+                save_config(self.config)
                 print(f'Discovered gripper at "{address}" and adopted it as the gripper for this robot')
             elif address != self.config.gripper.address:
                 print(f'Discovered gripper at "{address}" and ignored it because ours is at {self.config.gripper.address}')
@@ -666,12 +669,13 @@ class AsyncObserver:
                         # retrieve any exception
                         result = await task
                         del connection_tasks[key]
+                        r = await self.remove_service(None, key)
                     elif not connected:
                         # the task is still running, but it's not connected, is it trying or did it fail?
                         if key in self.bot_clients and self.bot_clients[key].failed_to_connect:
                             result = await task
                             del connection_tasks[key]
-                            self.remove_service(None, key)
+                            r = await self.remove_service(None, key)
 
             await asyncio.sleep(0.5)
         for task in connection_tasks.values():
@@ -762,16 +766,17 @@ class AsyncObserver:
             try:
                 print("get services list")
                 services = list(
-                    r = await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
+                    await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
                 )
                 print("start service browser")
                 self.aiobrowser = AsyncServiceBrowser(
-                    self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
+                    self.aiozc.zeroconf, services, handlers=[self.on_service_state_change]
                 )
             except asyncio.exceptions.CancelledError:
                 await self.aiozc.async_close()
                 return
 
+            print('do the rest')
             # statistic counter - measures things like average camera frame latency
             asyncio.create_task(self.stat.stat_main())
 
@@ -1152,7 +1157,6 @@ class AsyncObserver:
             self.centering_model.load_state_dict(torch.load(CENTERING_MODEL_PATH, map_location=DEVICE))
             self.centering_model.eval()
 
-        config = Config()
         counter = 0
         while self.run_command_loop:
             await asyncio.sleep(LOOP_DELAY)

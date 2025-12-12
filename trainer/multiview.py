@@ -17,7 +17,7 @@ from scipy.optimize import linear_sum_assignment
 # Assuming lerobot is installed for the labeler's source data
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from huggingface_hub import HfApi, create_repo
-from config import Config
+from config_loader import load_config
 
 DEFAULT_REPO_ID = "naavox/multiview-dataset"
 DEFAULT_MODEL_PATH = "trainer/models/multiview.pth"
@@ -33,13 +33,13 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # load actual calibration and pose data from current robot configuration
 CAM_CALIBRATIONS = []
-config = Config()
+cfg = load_config()
 for i in range(4):
     CAM_CALIBRATIONS.append({
-        "matrix":config.intrinsic_matrix,
-        "dist":config.distortion_coeff,
-        "rvec":config.anchors[i].pose[0],
-        "tvec":config.anchors[i].pose[1],
+        "matrix":np.array(cfg.camera_cal.intrinsic_matrix).reshape((3,3)),
+        "dist":np.array(cfg.camera_cal.distortion_coeff),
+        "rvec":np.array(config.anchors[i].pose.rotation),
+        "tvec":np.array(config.anchors[i].pose.position),
     })
 
 # this mapping can be used to map the camera numbers in the merged-5 dataset to the cameras described by CAM_CALIBRATIONS

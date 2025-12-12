@@ -10,7 +10,7 @@ import atexit
 from panda3d.core import LQuaternionf, Point2
 from cv_common import average_pose, compose_poses
 import model_constants
-from config import Config
+from config_loader import *
 
 from ursina import *
 from ursina.shaders import (
@@ -90,8 +90,9 @@ class ControlPanelUI:
         )
         
         # --- Core State ---
-        self.config = Config()
-        self.n_anchors = len(self.config.anchors)
+        # TODO ursina UI needs to obtain this from the observer it is connected to
+        self.nfconfig = load_config()
+        self.n_anchors = len(self.nfconfig.anchors)
         self.direction = np.zeros(3, dtype=float) # direction of currently commanded keyboard movement
         self.websocket = None
 
@@ -133,9 +134,8 @@ class ControlPanelUI:
     def _create_robot_entities(self):
         # Create gantry, gripper, anchors, lines, etc.
         self.anchors = []
-        for i, a in enumerate(self.config.anchors):
-            anch = Anchor(i, self, pose=a.pose)
-            anch.pose = a.pose
+        for i, a in enumerate(self.nfconfig.anchors):
+            anch = Anchor(i, self, pose=poseProtoToTuple(a.pose))
             self.anchors.append(anch)
 
         self.gantry = Gantry(
@@ -162,7 +162,7 @@ class ControlPanelUI:
 
         # lines representing the mouse cursor projected from a camera to the floor
         self.camlines = {}
-        for key in self.config.preferred_cameras:
+        for key in self.nfconfig.preferred_cameras:
             self.camlines[key] = Entity(model=draw_line([0,0,0], [1,1,1]), color=color.green, shader=unlit_shader, enabled=False)
 
         # debug indicators of the visual and hang based position and velocity estimates
@@ -216,7 +216,7 @@ class ControlPanelUI:
 
         self.cam_views = {}
         cam_scale = 0.4
-        for key in self.config.preferred_cameras: # show only two anchors and the gripper for now
+        for key in self.nfconfig.preferred_cameras: # show only two anchors and the gripper for now
             c = CamPreview(
                 cam_scale=0.4,
                 name=(f'Anchor {key} camera' if key is not None else 'Gripper camera'),
@@ -496,20 +496,26 @@ class ControlPanelUI:
 
     def receive_updates(self):
         # threading websocket api used because asyncio loop incompatible with ursina
-        try:
-            print('Connecting to local observer process')
-            with websocket_connect_sync('ws://localhost:4245') as websocket:
-                self.websocket = websocket
-                # iterator ends when websocket closes.
-                for message in websocket:
-                    batch = telemetry.TelemetryBatchUpdate().parse(message)
-                    self.robot_id = batch.robot_id
-                    for update in batch.updates:
-                        # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
-                        invoke(self.process_update, update, delay=0.0001)
-        except ConnectionRefusedError:
-            print('Connection refused at ws://localhost:4245 Local observer not running.\nRun with main.py to start both observer and UI')
-            invoke(application.quit, delay=0.0001)
+
+        attempts = 10
+        while attempts > 0:
+            try:
+                print('Connecting to local observer process')
+                with websocket_connect_sync('ws://localhost:4245') as websocket:
+                    self.websocket = websocket
+                    # iterator ends when websocket closes.
+                    for message in websocket:
+                        batch = telemetry.TelemetryBatchUpdate().parse(message)
+                        self.robot_id = batch.robot_id
+                        for update in batch.updates:
+                            # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
+                            invoke(self.process_update, update, delay=0.0001)
+            except ConnectionRefusedError:
+                print('Connection refused at ws://localhost:4245 Local observer not running.\nRun with main.py to start both observer and UI')
+                time.sleep(2)
+                attempts -= 1
+                continue
+        invoke(application.quit, delay=0.0001)
 
     def process_update(self, item: telemetry.TelemetryItem):
         if item.pos_estimate:

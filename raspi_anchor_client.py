@@ -12,7 +12,8 @@ import numpy as np
 import model_constants
 from functools import partial
 import threading
-from config import Config
+from config_loader import *
+from util import *
 import os
 from trainer.stringman_pilot import IMAGE_SHAPE
 from collections import defaultdict, deque
@@ -68,8 +69,7 @@ class ComponentClient:
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
         self.calibrating_room_spin = True # set to true momentarily during auto calibration
 
-        config = Config()
-        self.preferred_cameras = config.preferred_cameras
+        self.config = load_config()
 
         self.conn_status = None # subclass needs to set this in init
 
@@ -189,7 +189,7 @@ class ComponentClient:
                     dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
                     self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
 
-                if self.anchor_num in self.preferred_cameras:
+                if self.anchor_num in self.config.preferred_cameras:
                     img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
                     # TODO send images on side channel
                     # self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':img_preview}})
@@ -259,7 +259,6 @@ class ComponentClient:
                 if 'video_ready' in update:
                     print(f'got a video ready update {update}')
                     port = int(update['video_ready'][0])
-                    # if self.anchor_num in self.preferred_cameras:
                     self.stream_start_ts = float(update['video_ready'][1])
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
@@ -372,9 +371,7 @@ class RaspiAnchorClient(ComponentClient):
         )
         self.last_raw_encoder = None
         self.raw_gant_poses = []
-
-        config = Config()
-        self.anchor_pose = config.anchors[anchor_num].pose
+        self.anchor_pose = poseProtoToTuple(self.config.anchors[anchor_num].pose)
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
             model_constants.anchor_camera,
@@ -451,7 +448,10 @@ class RaspiAnchorClient(ComponentClient):
                 self.ob.update_avg_named_pos(detection['n'], position)
 
     async def send_config(self):
-        config = Config()
-        anchor_config_vars = config.vars_for_anchor(self.anchor_num)
+        anchor_config_vars = {
+            "MAX_ACCEL": self.config.max_accel,
+            "REC_MOD": self.config.rec_mod,
+            "RUNNING_WS_DELAY": self.config.running_ws_delay,
+        }
         if len(anchor_config_vars) > 0:
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))

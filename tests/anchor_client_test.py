@@ -23,7 +23,6 @@ import json
 from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient
 from stats import StatCounter
-from config import Config
 from generated.nf import telemetry, control, common
 
 ws_port = 8765
@@ -108,10 +107,6 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
                 anchor_num=1, websocket_status=telemetry.ConnStatus.CONNECTED, ip_address='127.0.0.1')),
         ])
         self.ob_mock.reset_mock()
-
-        # if gripper_client is going to use the configs in configuration.json, then so will we.
-        config = Config()
-        self.receiver.update.assert_called_with({'set_config_vars': config.vars_for_anchor(1)})
 
     async def test_server_closes(self):
         """
