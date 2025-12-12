@@ -9,3 +9,9 @@ def fromnp(arr: np.ndarray):
 
 def clamp(x,small,big):
     return max(min(x,big),small)
+
+def poseTupleToProto(p):
+    return common.Pose(rotation=fromnp(p[0]), position=fromnp(p[1]))
+
+def poseProtoToTuple(p):
+    return (np.array([p.rotation.x, p.rotation.y, p.rotation.z]), np.array([p.position.x, p.position.y, p.position.z]))

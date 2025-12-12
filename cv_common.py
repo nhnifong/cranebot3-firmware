@@ -4,14 +4,15 @@ from pupil_apriltags import Detector
 import numpy as np
 import time
 from functools import lru_cache
-from config import Config
+from config_loader import *
 import model_constants
 from scipy.spatial.transform import Rotation
 
 # --- Configuration ---
-config = Config()
-mtx = config.intrinsic_matrix
-distortion = config.distortion_coeff
+cfg = load_config()
+mtx = np.array(cfg.camera_cal.intrinsic_matrix).reshape((3,3))
+distortion = np.array(cfg.camera_cal.distortion_coeff)
+sf_calibration_shape = (1920, 1080) 
 
 # The marker IDs will correspond to the index in this list.
 marker_names = [
@@ -203,7 +204,7 @@ def project_pixels_to_floor(normalized_pixels, pose, K=mtx, D=distortion):
     make sure you use the camera pose, not just the anchor pose!
     """
     # Undistort Points
-    pts = np.array(normalized_pixels, dtype=np.float64) * [1920, 1200]
+    pts = np.array(normalized_pixels, dtype=np.float64) * sf_calibration_shape
     uv = cv2.undistortPoints(pts.reshape(-1, 1, 2), K, D).reshape(-1, 2).T
 
     # Rotate Rays to World Frame
@@ -218,7 +219,7 @@ def project_pixels_to_floor(normalized_pixels, pose, K=mtx, D=distortion):
     mask = (s > 0) & (np.abs(rays[2]) > 1e-6)
     return (tvec + s[mask] * rays[:, mask])[:2].T
 
-def project_floor_to_pixels(floor_points, pose, K=mtx, D=distortion, image_shape=(1920, 1200)):
+def project_floor_to_pixels(floor_points, pose, K=mtx, D=distortion, image_shape=sf_calibration_shape):
     """
     Project world coordinates on the floor (z=0) back to normalized pixel coordinates.
     """
@@ -255,7 +256,6 @@ def project_floor_to_pixels(floor_points, pose, K=mtx, D=distortion, image_shape
 # Configuration for stabilize_frame
 sf_input_shape = (960, 540)      # Size of the raw frame coming from camera
 sf_target_shape = (384, 384)     # Size of the final neural net input (Square)
-sf_calibration_shape = (1920, 1080) 
 
 # Scale Logic
 sf_image_ratio = sf_input_shape[0] / sf_calibration_shape[0] # Ratio to scale intrinsics (approx 1/3)

@@ -4,7 +4,6 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from cv_common import compose_poses
 import model_constants
-from config import Config
 import json
 from generated.nf import telemetry, common
 
@@ -18,7 +17,6 @@ class RaspiGripperClient(ComponentClient):
         )
         self.anchor_num = None
         self.pe = pe
-        self.config = Config()
 
     async def handle_update_from_ws(self, update):
         if 'line_record' in update:
@@ -71,11 +69,7 @@ class RaspiGripperClient(ComponentClient):
         self.stat.pending_frames_in_pool -= 1
 
     async def send_config(self):
-        config = Config()
-        if len(config.gripper.vars) > 0:
-            await self.websocket.send(json.dumps({
-                'set_config_vars': config.gripper.vars,
-                }))
+        pass
 
     async def zero_winch(self):
         """Send the command to zero the winch line and wait for it to complete"""

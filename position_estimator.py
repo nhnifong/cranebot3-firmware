@@ -8,7 +8,7 @@ import numpy as np
 import asyncio
 import scipy.optimize as optimize
 from math import pi, sqrt, sin, cos
-from config import Config
+from config_loader import *
 from cv_common import compose_poses, gripper_imu_inv
 import model_constants
 from scipy.spatial.transform import Rotation
@@ -264,7 +264,7 @@ class Positioner2:
         self.run = False # false until main is called
         self.datastore = datastore
         self.ob = observer
-        self.config = Config()
+        self.config = load_config()
         self.n_cables = len(self.config.anchors)
         self.work_area = None
         self.anchor_points = np.array([
@@ -274,7 +274,7 @@ class Positioner2:
             [ -2,-2, 2],
         ], dtype=float)
         # save grommet points
-        anchor_points = np.array([compose_poses([a.pose, model_constants.anchor_grommet])[1] for a in self.config.anchors])
+        anchor_points = np.array([compose_poses([poseProtoToTuple(a.pose), model_constants.anchor_grommet])[1] for a in self.config.anchors])
         self.set_anchor_points(anchor_points)
         self.data_ts = time.time()
 
@@ -543,8 +543,6 @@ class Positioner2:
         # 'kalman_prediction_rate': self.predict_time_taken,
         # 'visual_update_rate': self.visual_time_taken,
         # 'hang_update_rate': self.hang_time_taken,
-
-        print(f'slack lines {self.slack_lines}')
 
         self.ob.send_ui(pos_estimate=telemetry.PositionEstimate(
             data_ts=float(self.data_ts),

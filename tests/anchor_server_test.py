@@ -17,7 +17,6 @@ import asyncio
 from anchor_server import RaspiAnchorServer
 import websockets
 import json
-from config import Config
 from debug_motor import DebugMotor
 from spools import SpoolController  # Import the class to be mocked
 import time
@@ -183,15 +182,6 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
             except asyncio.TimeoutError:
                 check(None) # Allow check function to handle timeouts if needed
             await ws.close()
-
-    async def test_send_config(self):
-        config = Config()
-        anchor_config_vars = config.vars_for_anchor(0)
-        anchor_config_vars['SPECIAL'] = 'NAT'
-
-        def check(resp):
-            self.assertEqual('NAT', self.server.conf['SPECIAL'])
-        await self.command_and_check({'set_config_vars': anchor_config_vars}, check, 0.1)
 
     async def test_send_reference_length(self):
         self.mock_spooler.setReferenceLength.reset_mock()

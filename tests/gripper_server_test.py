@@ -13,7 +13,6 @@ from gripper_server import RaspiGripperServer
 from debug_motor import DebugMotor
 import websockets
 import json
-from config import Config
 from spools import SpoolController
 from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2
 from adafruit_bno08x.i2c import BNO08X_I2C

@@ -21,7 +21,6 @@ import json
 from data_store import DataStore
 from raspi_gripper_client import RaspiGripperClient
 from stats import StatCounter
-from config import Config
 from generated.nf import telemetry, control, common
 
 ws_port = 8765
@@ -176,7 +175,6 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
     async def test_zero_winch(self):
         # common client setup
         await self.clientSetup()
-        config = Config()
 
         # code under test
         task = asyncio.create_task(self.gc.zero_winch())
