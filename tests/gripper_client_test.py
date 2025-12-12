@@ -22,6 +22,7 @@ from data_store import DataStore
 from raspi_gripper_client import RaspiGripperClient
 from stats import StatCounter
 from generated.nf import telemetry, control, common
+from config_loader import create_default_config
 
 ws_port = 8765
 
@@ -33,6 +34,7 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         self.mock_pool_class = Mock(spec=Pool)
         self.pool = self.mock_pool_class.return_value
         self.ob_mock = MagicMock()
+        self.ob_mock.config = create_default_config()
         self.stat = StatCounter(self.ob_mock)
         self.pe = MagicMock()
 

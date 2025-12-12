@@ -273,6 +273,7 @@ class Positioner2:
             [ -2,-2, 2],
         ], dtype=float)
         # save grommet points
+        print(f'before {self.config.anchors[0].pose} after {poseProtoToTuple(self.config.anchors[0].pose)}')
         anchor_points = np.array([compose_poses([poseProtoToTuple(a.pose), model_constants.anchor_grommet])[1] for a in self.config.anchors])
         self.set_anchor_points(anchor_points)
         self.data_ts = time.time()

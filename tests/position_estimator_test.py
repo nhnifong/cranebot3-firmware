@@ -16,12 +16,14 @@ import time
 from random import random
 from observer import AsyncObserver
 from scipy.spatial.transform import Rotation
+from config_loader import create_default_config
 
 class TestPositionEstimator(unittest.TestCase):
 
     def setUp(self):
         self.datastore = DataStore(size=200)
         self.mock_observer = MagicMock()
+        self.mock_observer.config = create_default_config()
         self.pe = Positioner2(self.datastore, self.mock_observer)
 
     def test_sphere_intersection(self):
@@ -148,7 +150,7 @@ class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         # make an instance of observer just to use it's simulated data function.
-        self.ob = AsyncObserver(terminate_with_ui=False)
+        self.ob = AsyncObserver(terminate_with_ui=False, robot_config=create_default_config())
         self.datastore = self.ob.datastore
 
     async def test_positioner_main(self):
@@ -167,6 +169,7 @@ class TestEstimateGripper(unittest.TestCase):
     def setUp(self):
         self.mock_datastore = MagicMock()
         self.mock_observer = MagicMock()
+        self.mock_observer.config = create_default_config()
         
         self.pe = Positioner2(self.mock_datastore, self.mock_observer)
         self.pe.swing_est = MagicMock()
