@@ -70,11 +70,30 @@ def capture_gripper_image(ndimage, gripper_occupied=False):
     cv2.imwrite(img_full_path, ndimage)
     print(f"Captured: {img_filename} (Gripper: {gripper_occupied})")
 
-# Manager of multiple tasks running clients connected to each robot component
-# The job of this class in a nutshell is to discover four anchors and a gripper on the network,
-# connect to them, and forward data between them and the position estimator, shape tracker, and UI.
 class AsyncObserver:
-    def __init__(self, terminate_with_ui) -> None:
+    """
+    Manager of multiple tasks running clients connected to each robot component
+    The job of this class in a nutshell is to discover four anchors and a gripper on the network,
+    connect to them, and forward data between them and the position estimator, shape tracker, and UI.
+
+    It reads from the config file to find any components it already knows about.
+    It starts zeroconf to discover any components it doesn't know about and add them to the config.
+    it starts keep_robot_connected to continually reconnect to all known components.
+    It starts position_estimator to continually run kalman filters on the observed variables.
+    It starts run_perception to continually run inference on the camera feeds.
+    It starts a websocket server to accept connections from local UIs 
+
+    It starts a websocket server to accept connections from local UIs 
+    It reads from the config file to find any components it already knows about.
+    It starts zeroconf to discover any components it doesn't know about and add them to the config.
+    As soon as a component in the config has a known address, it starts keep_robot_connected to continually reconnect to all known components.
+    As soon as the first component websocket is connected, It starts position_estimator to continually run kalman filters on the observed variables.
+    As soon as a feed from the first preferred camera is up, It starts run_perception to continually run inference on the camera feeds.
+
+    Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
+    various actions like calibration and the pick and place routine.
+    """
+    def __init__(self, terminate_with_ui, robot_config) -> None:
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
@@ -90,7 +109,7 @@ class AsyncObserver:
         # convenience reference to gripper client
         self.gripper_client = None
         # TODO allow a command line argument to override the config file path
-        self.config = load_config()
+        self.config = robot_config
         self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -118,6 +137,7 @@ class AsyncObserver:
         self.connected_local_clients = set()
         self.telemetry_buffer = deque(maxlen=100)
         self.startup_complete = asyncio.Event()
+        self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
@@ -203,7 +223,6 @@ class AsyncObserver:
             case control.Command.COLLECT_GRIPPER_IMAGES:
                 self._handle_collect_images()
             case control.Command.SHUTDOWN:
-                # end the task main() awaits during normal operation
                 self.run_command_loop = False
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
@@ -475,8 +494,6 @@ class AsyncObserver:
             
             anchor_poses = self.locate_anchors()
 
-            # reload just in case
-            self.config = load_config()
             # Use the optimization output to update anchor poses and spool params
             for client in self.anchors:
                 self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
@@ -546,7 +563,6 @@ class AsyncObserver:
         await asyncio.sleep(1)
         range_at_end = self.datastore.range_record.getLast()[1]
         print(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
-
 
     def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
@@ -641,8 +657,13 @@ class AsyncObserver:
         components are keyed by their service name which is the first three components of info.name, eg
         123.cranebot-anchor-service.2ccf67bc3fc4
         """
+        # sleep until there is something to do
+        if not config_has_any_address(self.config) and self.run_command_loop:
+            await asyncio.sleep(0.5)
+        print('Config not empty, beging connected to discovered components')
+
         # last attempt to connect, keyed by service name
-        connection_tasks: dict[str, asyncio.Task] = {}
+        self.connection_tasks: dict[str, asyncio.Task] = {}
         while self.run_command_loop:
 
             # is everything up the way we want it to be?
@@ -655,75 +676,57 @@ class AsyncObserver:
                 # assume only the common attributes between those two types
                 key = cpt.service_name
                 if key is None or cpt.address is None or cpt.port is None:
-                    # we have not discovered how to connect to this yet, but it's in our config. (config defaults)
                     continue
 
-                if key not in connection_tasks:
-                    print(f'Connecting to {key} because not in {connection_tasks.keys()}')
-                    connection_tasks[key] = asyncio.create_task(self.connect_component(key))
-                else:
-                    connected = key in self.bot_clients and self.bot_clients[key].connected
-                    task = connection_tasks[key]
-
-                    if task.done():
-                        # retrieve any exception
-                        result = await task
-                        del connection_tasks[key]
-                        r = await self.remove_service(None, key)
-                    elif not connected:
-                        # the task is still running, but it's not connected, is it trying or did it fail?
-                        if key in self.bot_clients and self.bot_clients[key].failed_to_connect:
-                            result = await task
-                            del connection_tasks[key]
-                            r = await self.remove_service(None, key)
+                if key not in self.connection_tasks:
+                    # Start a connection to this component. connect_component will also remove it when it completes regardless of success or failure.
+                    self.connection_tasks[key] = asyncio.create_task(self.connect_component(key))
 
             await asyncio.sleep(0.5)
-        for task in connection_tasks.values():
+        for task in self.connection_tasks.values():
             task.cancel()
-        result = await asyncio.gather(*connection_tasks.values())
+        result = await asyncio.gather(*self.connection_tasks.values())
 
     async def connect_component(self, service_name):
         """Connect to the component with the given name using the address stored in the config."""
-        name_component = service_name.split('.')[1]
+        client = None
+        try:
+            name_component = service_name.split('.')[1]
+        except IndexError:
+            print(f'invalid service name "{service_name}"')
+            return
 
         is_power_anchor = name_component == anchor_power_service_name
         is_standard_anchor = name_component == anchor_service_name
         is_standard_gripper = name_component == gripper_service_name
 
         if is_standard_gripper:
-            gc = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe)
+            client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe)
             self.gripper_client_connected.clear()
-            gc.connection_established_event = self.gripper_client_connected
-            self.bot_clients[service_name] = gc
-            self.gripper_client = gc
-            # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
-            abnormal_close = await gc.startup()
-            if abnormal_close:
-                self.send_ui(pop_message=telemetry.Popup(
-                    message=f'lost connection to gripper at {self.config.gripper.address}'
-                ))
-                result = await self.remove_service(None, service_name)
-                await self.stop_all()
+            client.connection_established_event = self.gripper_client_connected
+            self.gripper_client = client
         else:
             for a in self.config.anchors:
                 if a.service_name != service_name:
                     continue
+                client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat)
+                client.connection_established_event = self.any_anchor_connected
+                self.anchors.append(client)
 
-                ac = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat)
-                self.bot_clients[service_name] = ac
-                self.anchors.append(ac)
-                # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
-                abnormal_close = await ac.startup()
-                if abnormal_close:
-                    self.send_ui(pop_message=telemetry.Popup(
-                        message=f'lost connection to anchor {ac.anchor_num} at {a.address}'
-                    ))
-
-                    print(f'await remove_service {service_name}')
-                    result = await self.remove_service(None, service_name)
-                    print(f'await stop_all {service_name}')
-                    await self.stop_all()
-                print(f'end connect anchor {service_name}')
+        if client:
+            self.bot_clients[service_name] = client
+            # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
+            abnormal_close = await client.startup()
+            print('observer: client.startup() has returned')
+            # remove client
+            r = await self.remove_service(None, service_name)
+            if abnormal_close:
+                self.send_ui(pop_message=telemetry.Popup(
+                    message=f'lost connection to {service_name}'
+                ))
+                await self.stop_all()
+            # delete this task from the dict as it ends, so keep_robot_connected will try agian. 
+            del self.connection_tasks[service_name]
 
     def send_ui(self, **kwargs):
         """
@@ -754,6 +757,10 @@ class AsyncObserver:
         self.telemetry_buffer.clear()
         # TODO send to cloud as well if connected
 
+    async def start_pe_when_ready(self):
+        await self.any_anchor_connected.wait()
+        self.pe.main()
+
     async def main(self) -> None:
         self.startup_complete.clear()
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
@@ -776,24 +783,23 @@ class AsyncObserver:
                 await self.aiozc.async_close()
                 return
 
-            print('do the rest')
             # statistic counter - measures things like average camera frame latency
             asyncio.create_task(self.stat.stat_main())
 
             # perception model
+            # task remains in a lightweight sleep until frames arrive.
             asyncio.create_task(self.run_perception())
 
-            # self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
-
             # A task that continuously estimates the position of the gantry
-            self.pe_task = asyncio.create_task(self.pe.main())
+            # remains asleep until at least one anchor connects.
+            self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
-            # Start a task to connect and reconnect to all known robot components.
+            # start a task to connect and reconnect to all known robot components.
             self.keeper = asyncio.create_task(self.keep_robot_connected())
 
-            # start a websocket server to accept incoming connection from local ursian UI process
-            async with websockets.serve(self.handle_local_client, "0.0.0.0", 4245):
+            # start a websocket server to accept incoming connection from local ursia UI process
+            async with websockets.serve(self.handle_local_client, "127.0.0.1", 4245):
                 # await something that will end when the program closes to keep serving and
                 # keep zeroconf alive and discovering services.
                 try:
@@ -1138,6 +1144,16 @@ class AsyncObserver:
         LOOP_DELAY = 0.1
         RUN_DOBBY_EVERY = 5
 
+        # do nothing until at least one camera from the preferred set is producing frames
+        have_gripper_frames = False
+        have_anchor_frames = False
+        while not (have_gripper_frames or have_anchor_frames):
+            await asyncio.sleep(1)
+            have_gripper_frames = self.gripper_client is not None and self.gripper_client.last_frame_resized is not None
+            for client in self.anchors:
+                if client.anchor_num in self.config.preferred_cameras and client.last_frame_resized is not None:
+                    have_anchor_frames = True
+
         if self.dobby_model is None:
             import torch
             from trainer.dobby import DobbyNet
@@ -1447,13 +1463,13 @@ class AsyncObserver:
 
 def start_observation(terminate_with_ui=False):
     """Entry point to be used when starting this from main.py with multiprocessing."""
-    ob = AsyncObserver(terminate_with_ui)
+    ob = AsyncObserver(terminate_with_ui, load_config())
     asyncio.run(ob.main())
     # set ob.run_command_loop = False or kill or connect to websocket and send shutdown command
 
 if __name__ == "__main__":
     async def main():
-        runner = AsyncObserver(False)
+        runner = AsyncObserver(False, load_config())
         # when running as a standalone process (debug only, linux only), register signal handler
         def stop():
             # Must be idempotent, may be called multiple times

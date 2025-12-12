@@ -8,7 +8,6 @@ import numpy as np
 import asyncio
 import scipy.optimize as optimize
 from math import pi, sqrt, sin, cos
-from config_loader import *
 from cv_common import compose_poses, gripper_imu_inv
 import model_constants
 from scipy.spatial.transform import Rotation
@@ -264,7 +263,7 @@ class Positioner2:
         self.run = False # false until main is called
         self.datastore = datastore
         self.ob = observer
-        self.config = load_config()
+        self.config = observer.config
         self.n_cables = len(self.config.anchors)
         self.work_area = None
         self.anchor_points = np.array([

@@ -32,7 +32,9 @@ class Anchor(betterproto2.Message):
     Index of the anchor in the system (0 to 4).
     """
 
-    service_name: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    service_name: "str | None" = betterproto2.field(
+        2, betterproto2.TYPE_STRING, optional=True
+    )
     """
     123.cranebot-anchor-service.2ccf67bc3fc4
     """
@@ -44,7 +46,9 @@ class Anchor(betterproto2.Message):
     Pose composed of rvec and tvec (standard OpenCV format)
     """
 
-    address: "str" = betterproto2.field(4, betterproto2.TYPE_STRING)
+    address: "str | None" = betterproto2.field(
+        4, betterproto2.TYPE_STRING, optional=True
+    )
     """
     IP address where last seen
     """
@@ -97,9 +101,13 @@ default_message_pool.register_message(
 
 @dataclass(eq=False, repr=False)
 class Gripper(betterproto2.Message):
-    service_name: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    service_name: "str | None" = betterproto2.field(
+        1, betterproto2.TYPE_STRING, optional=True
+    )
 
-    address: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    address: "str | None" = betterproto2.field(
+        2, betterproto2.TYPE_STRING, optional=True
+    )
 
     port: "int" = betterproto2.field(3, betterproto2.TYPE_UINT32)
 

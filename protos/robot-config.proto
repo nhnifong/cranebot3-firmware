@@ -10,19 +10,19 @@ message Anchor {
   uint32 num = 1;
   
   // 123.cranebot-anchor-service.2ccf67bc3fc4
-  string service_name = 2;
+  optional string service_name = 2;
   
   // Pose composed of rvec and tvec (standard OpenCV format)
   common.Pose pose = 3;
   
   // IP address where last seen
-  string address = 4;
+  optional string address = 4;
   uint32 port = 5;
 }
 
 message Gripper {
-  string service_name = 1;
-  string address = 2;
+  optional string service_name = 1;
+  optional string address = 2;
   uint32 port = 3;
   
   // Rotation in radians
