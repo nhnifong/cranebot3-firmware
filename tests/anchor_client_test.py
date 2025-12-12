@@ -24,6 +24,7 @@ from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient
 from stats import StatCounter
 from generated.nf import telemetry, control, common
+from config_loader import create_default_config
 
 ws_port = 8765
 
@@ -32,6 +33,7 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.datastore = DataStore()
         self.ob_mock = MagicMock()
+        self.ob_mock.config = create_default_config()
         self.mock_pool_class = Mock(spec=Pool)
         self.pool = self.mock_pool_class.return_value
 
