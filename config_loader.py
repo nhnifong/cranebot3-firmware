@@ -91,6 +91,10 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
         save_config(config, path)
         return config
 
+def config_has_any_address(config: nf_config.StringmanPilotConfig):
+    """Return true if this config has the address of at least one component"""
+    return any([c.address is not None for c in [config.gripper, *config.anchors]])
+
 if __name__ == "__main__":
     cfg = load_config(DEFAULT_CONFIG_PATH)
     print(f"Loaded config for robot: {cfg.robot_id}")

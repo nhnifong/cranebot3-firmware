@@ -69,7 +69,7 @@ class ComponentClient:
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
         self.calibrating_room_spin = True # set to true momentarily during auto calibration
 
-        self.config = load_config()
+        self.config = ob.config
 
         self.conn_status = None # subclass needs to set this in init
 

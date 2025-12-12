@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch, Mock, ANY, MagicMock, AsyncMock
 from multiprocessing import Pool, Queue
 import numpy as np
+from functools import partial
 from observer import AsyncObserver
 from position_estimator import Positioner2
 from raspi_anchor_client import RaspiAnchorClient
@@ -18,6 +19,7 @@ import model_constants
 import time
 from zeroconf import IPVersion, ServiceStateChange
 from zeroconf.asyncio import AsyncZeroconf
+from config_loader import create_default_config, config_has_any_address
 
 # Todo, automate the following tests
 # with a blank config, start observer, allow it to discover the bots, assert it wrote the addresses in the config.
@@ -34,11 +36,6 @@ from zeroconf.asyncio import AsyncZeroconf
 class TestObserver(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        self.to_ui_q = Queue()
-        self.to_ob_q = Queue()
-        self.to_ui_q.cancel_join_thread()
-        self.to_ob_q.cancel_join_thread()
-
         self.anchor_points = np.array([
             [-2,  3, 2],
             [ 2,  3, 2],
@@ -47,7 +44,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         ], dtype=float)
 
         self.patchers = []
-        self.watchable_startup_event = asyncio.Event()
+        self.watchable_startup_events = [asyncio.Event() for i in range(5)] # index=4 is gripper
         self.watchable_shutdown_event = asyncio.Event()
 
         self.mock_pe_class = Mock(spec=Positioner2)
@@ -59,22 +56,30 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_pe.gant_pos = np.array([0.4, 0.5, 0.6])
         self.patchers.append(patch('observer.Positioner2', self.mock_pe_class))
 
+        self.clients_refuse_connections = False
+        self.clients_disconnect_abnormally = False
+        self.kill_clients = asyncio.Event()
+
         self.mock_gripper_client_class = Mock(spec=RaspiGripperClient)
         self.mock_gripper_client = self.mock_gripper_client_class.return_value
-        self.mock_gripper_client.startup = self.event_startup
+        self.mock_gripper_client.startup = partial(self.event_startup, 4)
         self.mock_gripper_client.shutdown = self.event_shutdown
         self.mock_gripper_client.slow_stop_spool = self.instant_nothing
         self.mock_gripper_client.connection_established_event = asyncio.Event()
         self.mock_gripper_client.last_frame_resized = None
+        self.mock_gripper_client.connected = False
+
         self.patchers.append(patch('observer.RaspiGripperClient', self.mock_gripper_client_class))
 
         # Create four mock anchor clients
         self.mock_anchor_clients = [Mock(spec=RaspiAnchorClient) for _ in range(4)]
         for i, client in enumerate(self.mock_anchor_clients):
-            client.startup = self.event_startup
+            client.startup = partial(self.event_startup, i)
             client.shutdown = self.event_shutdown
             client.slow_stop_spool = self.instant_nothing
             client.anchor_num = i
+            client.last_frame_resized = None
+            client.connected = False
 
         self.async_service_browser_mock = MagicMock()
         d = MagicMock()
@@ -89,8 +94,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.patchers.append(self.mock_zc_types_patch)
 
 
-        # The side_effect makes it so each call to the constructor returns the next mock
-        self.patchers.append(patch('observer.RaspiAnchorClient', side_effect=self.mock_anchor_clients))
+        # The side_effect makes it so that the correct mock anchor client is returned
+        self.patchers.append(patch('observer.RaspiAnchorClient', side_effect=lambda a, b, num, d, e, f, g, : self.mock_anchor_clients[num]))
 
         self.mock_pool = MagicMock()
         self.mock_pool.__enter__.return_value = self.mock_pool
@@ -99,10 +104,10 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         for p in self.patchers:
             p.start()
 
-        # Zeroconf will attempt to discover services .
-        self.ob = AsyncObserver(False)
-        # before starting, set it's zeroconf instance to a special version that searches on localhost only
-        # self.zc = AsyncZeroconf(ip_version=IPVersion.All)
+        # Create observer with test default config (no components are known)
+        cfg = create_default_config()
+        self.ob = AsyncObserver(False, cfg)
+        # before running main, set it's zeroconf instance to a mock
         self.zc = MagicMock()
         self.zc.async_close = self.instant_nothing
         self.ob.aiozc = self.zc
@@ -114,23 +119,28 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         return []
 
     async def asyncTearDown(self):
-        # this should have the effect of making the update listener task stop, which the main task is awaiting.
-        # it should then run it's own async_close method, which runs the async shutdown methods on zeroconf
-        # and any connected clients.
-        # print('test teardown is unregistering all services')
-        # await self.ob.aiozc.async_unregister_all_services()
-        self.to_ob_q.put({'STOP':None})
-        # allow up to 10 seconds for shutdown.
-        await asyncio.wait_for(self.ob_task, 10)
+        self.kill_clients.set()
+        self.ob.run_command_loop = False
+        # allow up to 2 seconds for shutdown.
+        await asyncio.wait_for(self.ob_task, 2)
         for p in self.patchers:
             p.stop()
 
-    async def event_startup(self):
+    async def event_startup(self, i):
         """Mock client startup function"""
-        print('client startup called')
+        # the event our unit test uses
+        self.watchable_startup_events[i].set()
+        print(f'client {i} startup called')
+        if self.clients_refuse_connections:
+            return
+        if i<4:
+            self.mock_anchor_clients[i].connected = True
+        elif i==4:
+            self.mock_gripper_client.connected = True
+        # the event the observer is watching
         self.mock_gripper_client.connection_established_event.set()
-        self.watchable_startup_event.set()
-        return False
+        await self.kill_clients.wait()
+        return self.clients_disconnect_abnormally
 
     async def event_shutdown(self):
         """Mock client shutdown function"""
@@ -155,12 +165,13 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # you can then run this one in isolation.
         self.assertFalse(self.ob_task.done())
 
-    async def advertise_service(self, name, service_type, port, properties={}):
+    async def advertise_service(self, name, properties={}):
         """
         Manually triggers the observer's on_service_state_change callback.
         Patches AsyncServiceInfo so that when observer calls add_service, 
         it receives the mock data we define here.
         """
+        service_type = "_http._tcp.local."
         full_name = f"{name}.{service_type}"
         
         # Mock the AsyncServiceInfo that observer.add_service will instantiate
@@ -170,7 +181,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             
             # Setup the data that observer.py expects to find on the info object
             mock_instance.server = name
-            mock_instance.port = port
+            mock_instance.port = 8765
             # addresses is a list of bytes
             mock_instance.addresses = [b'\x7f\x00\x00\x01'] # 127.0.0.1
             mock_instance.properties = properties
@@ -182,47 +193,151 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             self.ob.on_service_state_change(self.zc, service_type, full_name, state)
             
             # Yield to event loop so the task created by on_service_state_change can run
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)
             
             return mock_instance
 
+    async def observer_accepts_local_ui_connection_test(self):
+        """observer should listen for local UI at localhost:4245"""
+        async with websockets.connect("ws://127.0.0.1:4245") as ws:
+            await asyncio.sleep(0.01)
+            self.assertFalse(self.ob_task.done(), "Server should still be running after getting a connection")
+            await ws.close()
+            # the observer in this test was specifically initialized with terminate_with_ui=False
+            self.assertFalse(self.ob_task.done(), "Server should still be running after losing a connection")
+
+    async def test_keep_robot_connected_waits(self):
+        """With a blank config, the observer should sleep and just wait for zeroconf"""
+        self.assertFalse(config_has_any_address(self.ob.config))
+        await asyncio.sleep(1.01) # one tick from keep_robot_connected
+        self.assertIsNone(self.ob.gripper_client)
+        self.assertEqual(0, len(self.ob.anchors))
+        self.assertEqual(0, len(self.ob.connection_tasks))
+        self.assertEqual(0, len(self.ob.bot_clients))
+
     async def test_discover_gripper(self):
-        # advertise a service on localhost that matches a gripper.
+        # advertise a service that matches a gripper.
         # it does not matter that we are running no such service.
         # when the observer creates a gripper client, it will create a mock object
-        # gripper client to server communication is tested in gripper_client_test. 
-        await self.advertise_service(f"123.cranebot-gripper-service.test", "_http._tcp.local.", 8765)
-        # by default zeroconf checks for advertized services every 10 seconds
-        # so if the timeout is raised, then it means observer didn't discover the service.
-        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
-        self.assertFalse(self.ob_task.done())
+        name = "123.cranebot-gripper-service.test"
+        await self.advertise_service(name)
+        # since we are immediately calling the observer's add_service callback, it should add this to the config immediately
+        self.assertTrue(config_has_any_address(self.ob.config))
+        self.assertEqual(name, self.ob.config.gripper.service_name)
+        self.assertEqual('127.0.0.1', self.ob.config.gripper.address)
+        self.assertEqual(8765, self.ob.config.gripper.port)
+
+        # After half second, keep_robot_connected should wake up and start a client to connect to the gripper
+        await asyncio.wait_for(self.watchable_startup_events[4].wait(), 0.51)
         self.assertTrue(self.ob.gripper_client is not None)
+        self.assertEqual(1, len(self.ob.connection_tasks))
+        # assert the client task is running.
+        self.assertFalse(self.ob.connection_tasks[name].done())
+
+    async def test_discover_anchor(self):
+        # advertise a service that matches an anchor.
+        name = "123.cranebot-anchor-service.test"
+        await self.advertise_service(name)
+        # since we are immediately calling the observer's add_service callback, it should add this to the config immediately
+        self.assertTrue(config_has_any_address(self.ob.config))
+        # the observer should assign the first anchor it discovers num=0
+        self.assertEqual(name, self.ob.config.anchors[0].service_name)
+        self.assertEqual('127.0.0.1', self.ob.config.anchors[0].address)
+        self.assertEqual(8765, self.ob.config.anchors[0].port)
+
+        # After half second, keep_robot_connected should wake up and start a client to connect to the gripper
+        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
+        self.assertTrue(self.ob.anchors[0] is not None)
+        self.assertEqual(1, len(self.ob.connection_tasks))
+        # assert the client task is running.
+        self.assertFalse(self.ob.connection_tasks[name].done())
 
     async def test_anchor_connect_familiar(self):
-        """Confirm that we can connnect to an anchor that advertises a name we recognize from our configuration"""
-        await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
-        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
-        self.assertFalse(self.ob_task.done())
-        self.assertEqual(len(self.ob.anchors), 1)
-
-    async def test_anchor_reconnect(self):
-        """Confirm that if an anchor server shuts down cleanly and restarts, that we reconnect to it.
-        In this test, we are neither running a real websocket server, or client. the client is a mock and the server doesn't exist.
-        all we are confirming here is that if the MDNS advertisement for the services goes down and back up, that we start the client task again.
         """
-        info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
-        await asyncio.wait_for(self.watchable_startup_event.wait(), 10)
-        self.assertFalse(self.ob_task.done())
-        self.assertEqual(len(self.ob.anchors), 1)
+        Confirm that if observer is started with a non_blank configuration, it will connect to an anchor in that config
+        In this test, the connection immediately succeeds
+        """
+        name = "123.cranebot-anchor-service.test"
+        # name, address, and port must be set for observer to attempt a connection
+        self.ob.config.anchors[0].service_name = name
+        self.ob.config.anchors[0].address = '127.0.0.1'
+        self.ob.config.anchors[0].port = 8765
 
-        await self.ob.aiozc.async_unregister_service(info)
-        await asyncio.sleep(2)
-        self.assertEqual(len(self.ob.anchors), 0)
-        print('observer removed anchor client correctly, re-advertising service')
+        # After half second, keep_robot_connected should wake up and start a client to connect to the anchor
+        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
+        self.assertTrue(self.ob.anchors[0] is not None)
+        self.assertEqual(1, len(self.ob.connection_tasks))
+        # assert the client task is running.
+        self.assertFalse(self.ob.connection_tasks[name].done())
 
-        self.watchable_startup_event.clear()
-        await asyncio.sleep(0.01) # it is necessary to reliquish control of the event loop after calling clear or it may not have the intended effect
+    async def test_anchor_connect_familiar_late(self):
+        """
+        Confirm that if observer is started with a non_blank configuration,
+        and attempts to connect to an anchor in that config
+        and the connection is initially refused, but later works,
+        The observer will still have only one connection task, one anchor, and it will be connected.
+        """
+        self.clients_refuse_connections = True
 
-        info = await self.advertise_service(f"123.cranebot-anchor-service.test_0", "_http._tcp.local.", 8765)
-        await asyncio.wait_for(self.watchable_startup_event.wait(), 20)
-        self.assertEqual(len(self.ob.anchors), 1)
+        name = "123.cranebot-anchor-service.test"
+        # name, address, and port must be set for observer to attempt a connection
+        self.ob.config.anchors[0].service_name = name
+        self.ob.config.anchors[0].address = '127.0.0.1'
+        self.ob.config.anchors[0].port = 8765
+        self.assertTrue(config_has_any_address(self.ob.config))
+
+        # After half second, keep_robot_connected should wake up and start a client to connect to the gripper
+        # but it will return immediately, which is how the real clients behave when a connection is refused.
+        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
+        # client appeared to startup and refuse the connection. now make sure it was removed
+        self.assertEqual(0, len(self.ob.anchors))
+        self.assertEqual(0, len(self.ob.connection_tasks))
+
+        # clients will now accept connections (startup() task will run indefinitely)
+        self.watchable_startup_events[0].clear()
+        self.clients_refuse_connections = False
+
+        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
+        self.assertTrue(self.ob.anchors[0] is not None)
+        self.assertEqual(1, len(self.ob.connection_tasks))
+        # assert the client task is running.
+        self.assertFalse(self.ob.connection_tasks[name].done())
+
+    async def test_anchor_connection_lost_reconnect(self):
+        """Confirm that if observer loses a connection to an anchor that it reconnects as soon as possible."""
+
+    async def test_anchor_connection_lost_abnormal_reconnect(self):
+        """Confirm that if observer has a connection to an anchor abnormally,
+        that it sends an appropriate message to a connected UI,
+        and  that it reconnects to the anchor as soon as possible.
+        """
+
+    async def test_connect_all_components(self):
+        """Confirm that when the observer has a properly filled out config, it connects to all components.
+        Confirm that the ob.all_components_connected event is set within 1 second of the config being populated.
+        """
+        self.clients_refuse_connections = False
+        names = []
+        for i in range(4):
+            name = f"123.cranebot-anchor-service.{i}"
+            names.append(name)
+            self.ob.config.anchors[i].service_name = name
+            self.ob.config.anchors[i].address = '127.0.0.1'
+            self.ob.config.anchors[i].port = 8765
+
+        gripper_name = "123.cranebot-gripper-service.test"
+        names.append(gripper_name)
+        self.ob.config.gripper.service_name = gripper_name
+        self.ob.config.gripper.address = '127.0.0.1'
+        self.ob.config.gripper.port = 8765
+
+        # After half second, keep_robot_connected should wake up and start a client to connect to all these components.
+        # all mock components are pointing a the same startup event, and we're not going to both distinguishing between them.
+        await asyncio.wait_for(asyncio.gather(*[e.wait() for e in self.watchable_startup_events]), 0.55)
+        for i in range(4):
+            self.assertTrue(self.ob.anchors[i] is not None)
+        self.assertTrue(self.ob.gripper_client is not None)
+        self.assertEqual(5, len(self.ob.connection_tasks))
+        # assert the client task is running.
+        for name in names:
+            self.assertFalse(self.ob.connection_tasks[name].done())
