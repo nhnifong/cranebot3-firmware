@@ -136,6 +136,7 @@ class AsyncObserver:
         # websockets to locally connected UIs
         self.connected_local_clients = set()
         self.telemetry_buffer = deque(maxlen=100)
+        self.telemetry_buffer_lock = threading.RLock()
         self.startup_complete = asyncio.Event()
         self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
 
@@ -736,17 +737,20 @@ class AsyncObserver:
         self.send_ui(pop_message=telemetry.Popup('hello'))
         """
         # Add item to batch
-        self.telemetry_buffer.append(telemetry.TelemetryItem(**kwargs))
+        with self.telemetry_buffer_lock:
+            self.telemetry_buffer.append(telemetry.TelemetryItem(**kwargs))
 
     async def flush_tele_buffer(self):
         """
         Flush the teloperation buffer. sending all data to all UI clients.
         Normally called within position estimator's 60hz loop
         """
-        batch = telemetry.TelemetryBatchUpdate(
-            robot_id="0",
-            updates=self.telemetry_buffer
-        )
+        with self.telemetry_buffer_lock:
+            batch = telemetry.TelemetryBatchUpdate(
+                robot_id="0",
+                updates=self.telemetry_buffer
+            )
+            self.telemetry_buffer.clear()
         to_send = bytes(batch)
         # TODO prevent RuntimeError: Set changed size during iteration
         for ui_websocket in self.connected_local_clients:
@@ -754,7 +758,6 @@ class AsyncObserver:
                 await ui_websocket.send(to_send)
             except (ConnectionClosedOK, ConnectionClosedError) as e:
                 pass
-        self.telemetry_buffer.clear()
         # TODO send to cloud as well if connected
 
     async def start_pe_when_ready(self):
@@ -1205,7 +1208,7 @@ class AsyncObserver:
             valid_anchor_clients = []
             img_tensors = []
             for client in self.anchors:
-                if client.last_frame_resized is None or client.anchor_num not in config.preferred_cameras:
+                if client.last_frame_resized is None or client.anchor_num not in self.config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
                 img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0

@@ -189,6 +189,8 @@ class ComponentClient:
                     dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
                     self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
 
+                # send self.last_frame_resized to the UI process
+
                 if self.anchor_num in self.config.preferred_cameras:
                     img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
                     # TODO send images on side channel
