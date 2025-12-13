@@ -152,7 +152,7 @@ class AsyncObserver:
 
         # send anything that it would need up-front
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
-            poses=[poseTupleToProto(a.pose) for a in self.config.anchors]
+            poses=[a.pose for a in self.config.anchors]
         ))
 
         try:

@@ -665,6 +665,7 @@ def start_ui(register_input):
     atexit.register(stop_others)
 
     cpui.start()
+    return cpui
 
 if __name__ == "__main__":
     def register_input_2(cpui):
