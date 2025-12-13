@@ -1,5 +1,6 @@
 import multiprocessing
 import time
+import sys
 
 from observer import start_observation
 from ursina_app import start_ui
@@ -25,10 +26,11 @@ if __name__ == "__main__":
 
     try:
         # allow Ursina to be the main process. it doesn't work as a subprocess.
-        start_ui(register_input)
+        ui = start_ui(register_input)
         # Keep the main process alive
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         print("Terminate both UI and observer")
-        application.quit()
+        # TODO it seems to take two ctrl-c to kill this
+        ui.end_update_thread()
