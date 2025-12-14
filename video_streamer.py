@@ -4,11 +4,12 @@ import time
 import logging
 import atexit
 import numpy as np
+import socket
 
 logger = logging.getLogger(__name__)
 
 class VideoStreamer:
-    def __init__(self, rtmp_url, width=640, height=480, fps=30, local_udp_port=None):
+    def __init__(self, width=640, height=480, fps=30, rtmp_url=None, local_udp_port=None):
         self.rtmp_url = rtmp_url
         self.width = width
         self.height = height
@@ -17,7 +18,7 @@ class VideoStreamer:
         self.process = None
         self.connection_status = 'ok'
         
-        # find a free port
+        # find a free local port
         if local_udp_port == None:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.bind(('127.0.0.1', 0))
@@ -29,7 +30,7 @@ class VideoStreamer:
 
     def _calculate_bitrate(self):
         # Estimate bitrate based on resolution and fps
-        raw_bitrate = int(self.width * self.height * self.fps * 0.1)
+        raw_bitrate = int(self.width * self.height * self.fps * 0.5)
         target_bitrate = max(200000, min(raw_bitrate, 2500000))
         return f"{target_bitrate // 1000}k"
 
@@ -67,25 +68,27 @@ class VideoStreamer:
             '-preset', 'ultrafast', # Prioritize speed over compression ratio
             '-tune', 'zerolatency',
             '-g', str(gop_size), # Force keyframe every 2 seconds
-            '-b:v', bitrate, # Calculated bitrate
-            
-            # Output format 1: Cloud RTMP
-            '-f', 'flv', 
-            self.rtmp_url
+            # '-b:v', "1200k", # Calculated bitrate
         ]
+            
+        # If streaming to a remote server over RTMP is requested, add that output
+        if self.rtmp_url:
+            command.extend([
+                '-f', 'flv', self.rtmp_url
+            ])
+        
 
         # If a local port is requested, add the second output
         if self.local_udp_port:
             command.extend([
-                '-f', 'mpegts',
-                f'udp://127.0.0.1:{self.local_udp_port}?pkt_size=1316'
+                '-f', 'mpegts', f'udp://127.0.0.1:{self.local_udp_port}?pkt_size=1316'
             ])
 
         #  redirect stderr to PIPE so we can log errors if it crashes,
         self.process = subprocess.Popen(
             command, 
             stdin=subprocess.PIPE,
-            # stderr=subprocess.PIPE
+            stderr=subprocess.PIPE
         )
         logger.info(f"FFmpeg streamer started to {self.rtmp_url}")
         if self.local_udp_port:
@@ -169,7 +172,7 @@ if __name__ == "__main__":
     # 3. Start Streamer
     # We pass local_udp_port=0 to test the auto-selection logic. 
     # Check stdout to see which port it picked.
-    streamer = VideoStreamer(rtmp_endpoint, width=width, height=height, fps=fps, local_udp_port=0)
+    streamer = VideoStreamer(width=width, height=height, fps=fps, rtmp_url=None, local_udp_port=4647)
     streamer.start()
 
     frame_count = 0

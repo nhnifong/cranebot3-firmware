@@ -21,6 +21,7 @@ __all__ = (
     "TelemetryBatchUpdate",
     "TelemetryItem",
     "VidStats",
+    "VideoReady",
 )
 
 from dataclasses import dataclass
@@ -470,8 +471,49 @@ class TelemetryItem(betterproto2.Message):
         12, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    video_ready: "VideoReady | None" = betterproto2.field(
+        13, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.telemetry", "TelemetryItem", TelemetryItem)
+
+
+@dataclass(eq=False, repr=False)
+class VideoReady(betterproto2.Message):
+    """
+    Indicates the availability of a video stream
+    """
+
+    is_gripper: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+    """
+    is this the gripper camera?
+    """
+
+    anchor_num: "int | None" = betterproto2.field(
+        2, betterproto2.TYPE_UINT32, optional=True
+    )
+    """
+    Camera anchor num 
+    """
+
+    local_uri: "str | None" = betterproto2.field(
+        3, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    for local UI's connect at this address
+    udp:127.0.0.1:1234
+    """
+
+    remote_uri: "str | None" = betterproto2.field(
+        4, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    for remote UI's connect at this addfress
+    """
+
+
+default_message_pool.register_message("nf.telemetry", "VideoReady", VideoReady)
 
 
 @dataclass(eq=False, repr=False)

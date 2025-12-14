@@ -138,6 +138,22 @@ message TargetList {
 	repeated OneTarget targets = 1;
 }
 
+// Indicates the availability of a video stream
+message VideoReady {
+	// is this the gripper camera?
+	bool is_gripper = 1;
+
+	// Camera anchor num 
+	optional uint32 anchor_num = 2;
+
+	// for local UI's connect at this address
+	// udp:127.0.0.1:1234
+	optional string local_uri = 3;
+
+	// for remote UI's connect at this addfress
+	optional string remote_uri = 4;
+}
+
 // A single kind of update that the observer is providing to an external UI
 // Typically about the robot's state such as it's position
 message TelemetryItem {
@@ -154,6 +170,7 @@ message TelemetryItem {
 		GripperSensors grip_sensors = 10;
 		GripCamPredictions grip_cam_preditions = 11;
 		TargetList target_list = 12;
+		VideoReady video_ready = 13;
   }
 }
 

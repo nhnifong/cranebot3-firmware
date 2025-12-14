@@ -155,12 +155,21 @@ class AsyncObserver:
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
             poses=[a.pose for a in self.config.anchors]
         ))
+        for client in self.bot_clients.values():
+            if client.local_udp_port is not None and client.anchor_num in [None, *self.config.preferred_cameras]:
+                self.send_ui(video_ready=telemetry.VideoReady(
+                    is_gripper=client.anchor_num is None,
+                    anchor_num=client.anchor_num,
+                    local_uri=f'udp://127.0.0.1:{client.local_udp_port}'
+                ))
 
         try:
             async for message in websocket:
                 r = await self.handle_command(message) # Handle 'ControlBatchUpdate'
                 # warning, any uncaught exception here will kill this websocket connection
                 # but the observer would go on running, possibly in a bad state.
+        except (ConnectionClosedError, ConnectionClosedOK) as e:
+            pass
         finally:
             self.connected_local_clients.remove(websocket)
             if len(self.connected_local_clients) == 0 and self.terminate_with_ui:
@@ -274,7 +283,7 @@ class AsyncObserver:
         # the saved values will be what we return from GetLastAction
         self.last_gp_action = (commanded_vel, winch, finger)
 
-    async def update_avg_named_pos(self, key: str, postion: np.ndarry):
+    def update_avg_named_pos(self, key: str, position: np.ndarry):
         """Update the running average of the named position"""
         if key not in self.named_positions:
             self.named_positions[key] = position
@@ -748,7 +757,7 @@ class AsyncObserver:
         with self.telemetry_buffer_lock:
             batch = telemetry.TelemetryBatchUpdate(
                 robot_id="0",
-                updates=self.telemetry_buffer
+                updates=list(self.telemetry_buffer)
             )
             self.telemetry_buffer.clear()
         to_send = bytes(batch)
@@ -762,7 +771,7 @@ class AsyncObserver:
 
     async def start_pe_when_ready(self):
         await self.any_anchor_connected.wait()
-        self.pe.main()
+        r = await self.pe.main()
 
     async def main(self) -> None:
         self.startup_complete.clear()
