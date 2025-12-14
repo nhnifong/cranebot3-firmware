@@ -34,7 +34,7 @@ sam_rate = 1.0 # per second
 sam_confidence_cutoff = 0.75
 
 def pose_from_det(det):
-    return (np.array(det['r'], dtype=float), np.array(det['t'], dtype=float))
+    return (np.array(det['r'], dtype=float).reshape((3,)), np.array(det['t'], dtype=float).reshape((3,)))
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
@@ -69,7 +69,7 @@ class ComponentClient:
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
-        self.calibrating_room_spin = True # set to true momentarily during auto calibration
+        self.calibrating_room_spin = False # set to true momentarily during auto calibration
 
         self.config = ob.config
 
@@ -216,10 +216,11 @@ class ComponentClient:
                 temp_image = cv2.resize(frame_to_encode, sf_input_shape, interpolation=cv2.INTER_AREA)
                 fudge_latency =  0.3
                 gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
-                if self.calibrating_room_spin:
-                    roomspin = 15/180*np.pi
+                if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
+                    # roomspin = 15/180*np.pi
+                    roomspin = 0
                 else:
-                    roomspin = self.config.gripper_frame_room_spin
+                    roomspin = self.config.gripper.frame_room_spin
                 self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, roomspin)
             else:
                 # anchors
