@@ -4,14 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Union, Tuple
 import numpy as np
-
-# Using an Enum for status makes state transitions explicit and easier to debug
-# than string comparisons.
-class TargetStatus(Enum):
-    SEEN = "seen"
-    SELECTED = "selected"
-    PICKED_UP = "picked_up"
-    DROPPED = "dropped"
+from generated.nf import telemetry, common
 
 @dataclass
 class Target:
@@ -23,10 +16,23 @@ class Target:
     dropoff: Union[np.ndarray, str]
     source: str  # 'user' or 'ai'
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    status: TargetStatus = TargetStatus.SEEN
+    status: telemetry.TargetStatus = telemetry.TargetStatus.SEEN
 
     def distance_to(self, other_pos: np.ndarray) -> float:
         return float(np.linalg.norm(self.position - other_pos))
+
+    def as_proto(self) -> telemetry.OneTarget:
+        tp = telemetry.OneTarget(
+            id = self.id,
+            position = common.Vec3(*self.position),
+            status = self.status,
+            source = self.source,
+        )
+        if isinstance(self.dropoff, np.ndarray):
+            tp.coords = common.Vec3(*self.dropoff)
+        else:
+            tp.tag = self.dropoff
+        return tp
 
 class TargetQueue:
     def __init__(self, duplicate_threshold: float = 0.05):
@@ -163,15 +169,15 @@ class TargetQueue:
         Proximity logic removed: simply returns the first PENDING target in the queue.
         """
         with self._lock:
-            return next((t for t in self._queue if t.status == TargetStatus.PENDING), None)
+            return next((t for t in self._queue if t.status == telemetry.TargetStatus.SEEN), None)
 
-    def set_target_status(self, target_id: str, status: TargetStatus) -> bool:
+    def set_target_status(self, target_id: str, status: telemetry.TargetStatus) -> bool:
         """
         Updates the status of a target. 
         If status is DROPPED, the target is removed from the queue.
         """
         with self._lock:
-            if status == TargetStatus.DROPPED:
+            if status == telemetry.TargetStatus.DROPPED:
                 return self.remove_target(target_id)
             
             target = self._get_by_id(target_id)
@@ -180,41 +186,24 @@ class TargetQueue:
                 return True
             return False
 
-    def get_queue_snapshot(self) -> List[dict]:
+    def get_queue_snapshot(self) -> telemetry.TargetList:
         """
-        Returns the whole queue as a list of dicts for UI visualization.
+        Returns the whole queue as a telemetry.TargetList for UI visualization.
         """
-        snapshot = []
+        targets = []
         with self._lock:
             for target in self._queue:
-                # Convert numpy arrays to lists for JSON serialization
-                pos_list = target.position.tolist()
-                dropoff_val = target.dropoff
-                if isinstance(dropoff_val, np.ndarray):
-                    dropoff_val = dropoff_val.tolist()
+                targets.append(target.as_proto())
+        return telemetry.TargetList(targets=targets)
 
-                snapshot.append({
-                    "id": target.id,
-                    "position": pos_list,
-                    "dropoff": dropoff_val,
-                    "status": target.status.value,
-                    "source": target.source
-                })
-        return snapshot
-
-    def get_target_info(self, target_id: str) -> Optional[dict]:
+    def get_target_info(self, target_id: str) -> Optional[telemetry.OneTarget]:
         """
         Robot may query this to check if a target it was pursuing was deleted from the queue.
         """
         with self._lock:
             target = self._get_by_id(target_id)
             if target:
-                return {
-                    "id": target.id,
-                    "position": target.position,
-                    "dropoff": target.dropoff,
-                    "status": target.status.value
-                }
+                return target.as_proto()
             return None
 
     def _is_duplicate(self, pos: np.ndarray) -> bool:

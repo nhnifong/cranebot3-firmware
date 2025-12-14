@@ -17,6 +17,8 @@ message PositionEstimate {
 	nf.common.Vec3 gantry_velocity = 2;
 	nf.common.Pose gripper_pose = 3; // in world space
 	double data_ts = 4; // the wall time in seconds since the epoch UTC when the robot was at this position
+	// an array of bools for each anchor. true meaning the line should be drawn with a droop
+	repeated bool slack = 5;
 }
 
 // Diagnostic information about factors used in estimating the robot's positon
@@ -36,10 +38,8 @@ message GantrySightings {
 
 // Send by the observer to UIs when calibration or config file reading has set the anchor poses
 message AnchorPoses {
-	nf.common.Pose anchor_pose_0 = 1;
-	nf.common.Pose anchor_pose_1 = 2;
-	nf.common.Pose anchor_pose_2 = 3;
-	nf.common.Pose anchor_pose_3 = 4;
+	// always send all four poses in order of anchor num
+	repeated nf.common.Pose poses = 1;
 }
 
 enum ConnStatus {
@@ -68,7 +68,8 @@ message VidStats {
 // Position of a named object that UI might want to visually represent.
 // only sent when it moves
 message NamedObjectPosition {
-	nf.common.Vec3 position = 1;
+	// if position is unset, the UI should hide the indicator. 
+	optional nf.common.Vec3 position = 1;
 	// Name of the object
 	// Could be the name of a tag like 'hamper' or 'gamepad'
 	// When the observer is moving the gantry to a particular goal position, it gives this position with the name 'gantry_goal'
@@ -137,6 +138,22 @@ message TargetList {
 	repeated OneTarget targets = 1;
 }
 
+// Indicates the availability of a video stream
+message VideoReady {
+	// is this the gripper camera?
+	bool is_gripper = 1;
+
+	// Camera anchor num 
+	optional uint32 anchor_num = 2;
+
+	// for local UI's connect at this address
+	// udp:127.0.0.1:1234
+	optional string local_uri = 3;
+
+	// for remote UI's connect at this addfress
+	optional string remote_uri = 4;
+}
+
 // A single kind of update that the observer is providing to an external UI
 // Typically about the robot's state such as it's position
 message TelemetryItem {
@@ -153,6 +170,7 @@ message TelemetryItem {
 		GripperSensors grip_sensors = 10;
 		GripCamPredictions grip_cam_preditions = 11;
 		TargetList target_list = 12;
+		VideoReady video_ready = 13;
   }
 }
 

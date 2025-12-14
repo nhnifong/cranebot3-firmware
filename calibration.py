@@ -4,7 +4,7 @@ import numpy as np
 import scipy.optimize as optimize
 import time
 import glob
-from config import Config
+from config_loader import *
 from cv_common import *
 import model_constants
 from spools import SpiralCalculator
@@ -12,7 +12,7 @@ from itertools import combinations
 from position_estimator import find_hang_point
 import argparse
 import logging
-
+from generated.nf import config
 # Set up logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -160,11 +160,11 @@ class CalibrationInteractive:
 
     def save(self): 
         logging.info('Saving data to configuration.json...')
-        config = Config()
-        config.intrinsic_matrix = self.intrinsic_matrix
-        config.distortion_coeff = self.distCoeff
-        config.resolution = (self.image_shape[1], self.image_shape[0])
-        config.write()
+        cfg = load_config()
+        cfg.intrinsic_matrix = self.intrinsic_matrix.flatten().tolist()
+        cfg.distortion_coeff = self.distCoeff.flatten().tolist()
+        cfg.resolution = config.CameraCalibration.Resolution(width=self.image_shape[1], height=self.image_shape[0])
+        save_config(cfg)
 
 # calibrate from files locally
 def calibrate_from_files():

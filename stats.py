@@ -1,10 +1,11 @@
 import asyncio
 import numpy as np
 import time
+from generated.nf.telemetry import VidStats
 
 class StatCounter:
-    def __init__(self, to_ui_q):
-        self.to_ui_q = to_ui_q
+    def __init__(self, ob):
+        self.ob = ob
         self.detection_count = 0
         self.pending_frames_in_pool = 0
         self.latency = []
@@ -27,10 +28,9 @@ class StatCounter:
             self.latency = []
             self.framerate = []
             self.detection_count = 0
-            self.to_ui_q.put({'vid_stats':{
-                'detection_rate':detection_rate,
-                'video_latency':self.mean_latency,
-                'video_framerate':mean_framerate,
-                'pending_frames': self.pending_frames_in_pool,
-                }})
+            self.ob.send_ui(vid_stats=VidStats(
+                detection_rate=detection_rate,
+                video_latency=self.mean_latency,
+                video_framerate=mean_framerate,
+            ))
             await asyncio.sleep(0.5)

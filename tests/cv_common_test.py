@@ -14,6 +14,8 @@ from math import pi
 import cv2
 from cv_common import *
 import model_constants
+from config_loader import load_config
+from util import *
 
 
 def p(l): # make a numpy array of floats out of the given list. for brevity
@@ -158,10 +160,9 @@ class TestPoseFunctions(unittest.TestCase):
         np.testing.assert_array_almost_equal(result[1], expected[1]) # position
 
     def test_project_pixels_to_floor(self):
-        from config import Config
-        config = Config()
+        config = load_config()
 
-        anchor_pose = config.anchors[0].pose
+        anchor_pose = poseProtoToTuple(config.anchors[0].pose)
         anchor_camera_pose = np.array(compose_poses([
             anchor_pose,
             model_constants.anchor_camera,
@@ -185,7 +186,7 @@ class TestPoseFunctions(unittest.TestCase):
         """
         
         # override intrinsics with something simple (Simple pinhole, no distortion)
-        W, H = 1920, 1200
+        W, H = 1920, 1080
         cx, cy = W / 2.0, H / 2.0 # Principal point is exactly center
         
         K = np.array([
@@ -220,7 +221,7 @@ class TestPoseFunctions(unittest.TestCase):
         )
 
     def test_project_floor_to_pixels(self):
-        W, H = 1920, 1200
+        W, H = 1920, 1080
         cx, cy = W / 2.0, H / 2.0 # Principal point is exactly center
         
         K = np.array([

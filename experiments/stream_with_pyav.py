@@ -13,7 +13,8 @@ options = {
     'fast': '1',
 }
 
-container = av.open(f"tcp://192.168.1.{sys.argv[1]}:8888", options=options, mode='r')
+# container = av.open(f"tcp://192.168.1.{sys.argv[1]}:8888", options=options, mode='r')
+container = av.open(f"udp://127.0.0.1:36182", options=options, mode='r')
 stream = next(s for s in container.streams if s.type == 'video')
 stream.thread_type = "SLICE"
 fnum = 59 
