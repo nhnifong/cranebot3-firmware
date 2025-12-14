@@ -124,7 +124,7 @@ def main(uri):
         
         img_np = img_tensor.permute(1, 2, 0).numpy()
         img_display = (img_np * 255).astype(np.uint8)
-        # img_display = cv2.cvtColor(img_display, cv2.COLOR_RGB2BGR)
+        img_display = cv2.cvtColor(img_display, cv2.COLOR_RGB2BGR)
         
         heatmap_vis = (heatmap_np * 255).astype(np.uint8)
         heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)

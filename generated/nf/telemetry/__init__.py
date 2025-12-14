@@ -21,6 +21,7 @@ __all__ = (
     "TelemetryBatchUpdate",
     "TelemetryItem",
     "VidStats",
+    "VideoReady",
 )
 
 from dataclasses import dataclass
@@ -91,21 +92,12 @@ class AnchorPoses(betterproto2.Message):
     Send by the observer to UIs when calibration or config file reading has set the anchor poses
     """
 
-    anchor_pose_0: "_common__.Pose | None" = betterproto2.field(
-        1, betterproto2.TYPE_MESSAGE, optional=True
+    poses: "list[_common__.Pose]" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, repeated=True
     )
-
-    anchor_pose_1: "_common__.Pose | None" = betterproto2.field(
-        2, betterproto2.TYPE_MESSAGE, optional=True
-    )
-
-    anchor_pose_2: "_common__.Pose | None" = betterproto2.field(
-        3, betterproto2.TYPE_MESSAGE, optional=True
-    )
-
-    anchor_pose_3: "_common__.Pose | None" = betterproto2.field(
-        4, betterproto2.TYPE_MESSAGE, optional=True
-    )
+    """
+    always send all four poses in order of anchor num
+    """
 
 
 default_message_pool.register_message("nf.telemetry", "AnchorPoses", AnchorPoses)
@@ -241,6 +233,9 @@ class NamedObjectPosition(betterproto2.Message):
     position: "_common__.Vec3 | None" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, optional=True
     )
+    """
+    if position is unset, the UI should hide the indicator. 
+    """
 
     name: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
     """
@@ -336,6 +331,11 @@ class PositionEstimate(betterproto2.Message):
     data_ts: "float" = betterproto2.field(4, betterproto2.TYPE_DOUBLE)
     """
     the wall time in seconds since the epoch UTC when the robot was at this position
+    """
+
+    slack: "list[bool]" = betterproto2.field(5, betterproto2.TYPE_BOOL, repeated=True)
+    """
+    an array of bools for each anchor. true meaning the line should be drawn with a droop
     """
 
 
@@ -471,8 +471,49 @@ class TelemetryItem(betterproto2.Message):
         12, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    video_ready: "VideoReady | None" = betterproto2.field(
+        13, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.telemetry", "TelemetryItem", TelemetryItem)
+
+
+@dataclass(eq=False, repr=False)
+class VideoReady(betterproto2.Message):
+    """
+    Indicates the availability of a video stream
+    """
+
+    is_gripper: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+    """
+    is this the gripper camera?
+    """
+
+    anchor_num: "int | None" = betterproto2.field(
+        2, betterproto2.TYPE_UINT32, optional=True
+    )
+    """
+    Camera anchor num 
+    """
+
+    local_uri: "str | None" = betterproto2.field(
+        3, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    for local UI's connect at this address
+    udp:127.0.0.1:1234
+    """
+
+    remote_uri: "str | None" = betterproto2.field(
+        4, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    for remote UI's connect at this addfress
+    """
+
+
+default_message_pool.register_message("nf.telemetry", "VideoReady", VideoReady)
 
 
 @dataclass(eq=False, repr=False)

@@ -37,6 +37,10 @@ default_message_pool.register_message("nf.common", "Pose", Pose)
 
 @dataclass(eq=False, repr=False)
 class Vec3(betterproto2.Message):
+    """
+    When representing robot world space, Z is up
+    """
+
     x: "float" = betterproto2.field(1, betterproto2.TYPE_FLOAT)
 
     y: "float" = betterproto2.field(2, betterproto2.TYPE_FLOAT)

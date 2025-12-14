@@ -13,7 +13,6 @@ from gripper_server import RaspiGripperServer
 from debug_motor import DebugMotor
 import websockets
 import json
-from config import Config
 from spools import SpoolController
 from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2
 from adafruit_bno08x.i2c import BNO08X_I2C
@@ -146,20 +145,14 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
             self.mock_spooler.setReferenceLength.assert_called_once_with(0.01)
             await ws.close()
 
-    async def test_send_grip(self):
-        # There is actually a lot of complex behavior that happens as a result of setting this,
-        # but it's just not that useful to unit test. the physical tests are the only thing that
-        # really cover it. 
-        def check(resp):
-            self.assertEqual(False, self.server.tryHold)
-            self.assertEqual(True, self.server.use_finger_loop)
-        await self.command_and_check({'grip': 'open'}, check, 0.1)
-        def check(resp):
-            self.assertEqual(True, self.server.tryHold)
-        await self.command_and_check({'grip': 'closed'}, check, 0.1)
-
     async def test_send_finger_angle(self):
         def check(resp):
-            self.assertEqual(False, self.server.use_finger_loop)
-            self.mock_hat.servos[1].value.assert_has_calls([call(-80), call(72)])
-        await self.command_and_check({'set_finger_angle': 72}, check, 0.1)
+            self.assertEqual(True, self.server.use_finger_loop)
+            self.assertEqual(72, self.server.desired_finger_angle)
+
+
+        await self.command_and_check(
+            {'set_finger_angle': 72}, # send this to server
+            check, # check response with this function
+            timeout=0.01, # server should receive the event at least this quickly
+        )

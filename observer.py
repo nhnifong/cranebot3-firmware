@@ -22,7 +22,7 @@ from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient, max_origin_detections, pose_from_det
 from raspi_gripper_client import RaspiGripperClient
 from random import random
-from config import Config
+from config_loader import *
 from stats import StatCounter
 from position_estimator import Positioner2
 from cv_common import *
@@ -34,10 +34,12 @@ import pickle
 from collections import deque, defaultdict
 from trainer.control_service import start_robot_control_server
 from trainer.stringman_record_loop import record_until_disconnected
-import multiprocessing
 import uuid
-from target_queue import TargetQueue, TargetStatus
-import json
+from target_queue import TargetQueue
+from generated.nf import telemetry, control, common
+import websockets
+from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
+from util import *
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -68,20 +70,37 @@ def capture_gripper_image(ndimage, gripper_occupied=False):
     cv2.imwrite(img_full_path, ndimage)
     print(f"Captured: {img_filename} (Gripper: {gripper_occupied})")
 
-# Manager of multiple tasks running clients connected to each robot component
-# The job of this class in a nutshell is to discover four anchors and a gripper on the network,
-# connect to them, and forward data between them and the position estimator, shape tracker, and UI.
 class AsyncObserver:
-    def __init__(self, to_ui_q, to_ob_q) -> None:
+    """
+    Manager of multiple tasks running clients connected to each robot component
+    The job of this class in a nutshell is to discover four anchors and a gripper on the network,
+    connect to them, and forward data between them and the position estimator, shape tracker, and UI.
+
+    It reads from the config file to find any components it already knows about.
+    It starts zeroconf to discover any components it doesn't know about and add them to the config.
+    it starts keep_robot_connected to continually reconnect to all known components.
+    It starts position_estimator to continually run kalman filters on the observed variables.
+    It starts run_perception to continually run inference on the camera feeds.
+    It starts a websocket server to accept connections from local UIs 
+
+    It starts a websocket server to accept connections from local UIs 
+    It reads from the config file to find any components it already knows about.
+    It starts zeroconf to discover any components it doesn't know about and add them to the config.
+    As soon as a component in the config has a known address, it starts keep_robot_connected to continually reconnect to all known components.
+    As soon as the first component websocket is connected, It starts position_estimator to continually run kalman filters on the observed variables.
+    As soon as a feed from the first preferred camera is up, It starts run_perception to continually run inference on the camera feeds.
+
+    Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
+    various actions like calibration and the pick and place routine.
+    """
+    def __init__(self, terminate_with_ui, robot_config) -> None:
+        self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
         self.run_command_loop = True
-        self.calmode = "pause"
         self.detection_count = 0
         self.datastore = DataStore()
-        self.to_ui_q = to_ui_q
-        self.to_ob_q = to_ob_q
         self.pool = None
         # all clients by server name
         self.bot_clients = {}
@@ -89,14 +108,13 @@ class AsyncObserver:
         self.anchors = []
         # convenience reference to gripper client
         self.gripper_client = None
-        # read a mapping of server names to anchor numbers from the config file
-        self.config = Config()
-        self.config.write()
-        self.stat = StatCounter(self.to_ui_q)
+        # TODO allow a command line argument to override the config file path
+        self.config = robot_config
+        self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
         # Position Estimator. this used to be a seperate process so it's still somewhat independent.
-        self.pe = Positioner2(self.datastore, self.to_ui_q, self)
+        self.pe = Positioner2(self.datastore, self)
         self.sim_task = None
         self.locate_anchor_task = None
         # only one motion task can be active at a time
@@ -115,84 +133,126 @@ class AsyncObserver:
         # targets
         self.target_queue = TargetQueue()
         self.last_snapshot_hash = None # to spare the UI from too many updates
+        # websockets to locally connected UIs
+        self.connected_local_clients = set()
+        self.telemetry_buffer = deque(maxlen=100)
+        self.telemetry_buffer_lock = threading.RLock()
+        self.startup_complete = asyncio.Event()
+        self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
 
         # Command dispatcher maps command strings to handler methods
         self.command_handlers = {
-            'set_run_mode': self.set_run_mode,
             'do_line_calibration': self.sendReferenceLengths,
-            'tension_lines': self.tension_lines,
-            'full_cal': lambda _: self.invoke_motion_task(self.full_auto_calibration()),
-            'half_cal': lambda _: self.invoke_motion_task(self.half_auto_calibration()),
-            'jog_spool': self._handle_jog_spool,
-            'toggle_previews': self._handle_toggle_previews, # to be obviated by new video->frontend path
-            'gantry_dir_sp': self._handle_gantry_dir_sp, # obviated by gamepad command
-            'gantry_goal_pos': self._handle_gantry_goal_pos,
-            'slow_stop_one': self._handle_slow_stop_one,
-            'slow_stop_all': self.stop_all,
             'set_simulated_data_mode': self.set_simulated_data_mode,
-            'zero_winch': self._handle_zero_winch_line,
-            'horizontal_task': lambda _: self.invoke_motion_task(self.horizontal_line_task()),
-            'winch_and_finger': self._handle_send_winch_finger, # obviated by gamepad command
-            'gamepad': self._handle_gamepad_action,
-            'episode_ctrl': self._handle_add_episode_control_event,
-            'avg_named_pos': self._handle_avg_named_pos,   # anchor client should communicate this by other means such as calling a method directly on observer
-            'collect_images': self._handle_collect_images,
         }
 
-    def listen_queue_updates(self, loop):
-        """
-        Receive any updates on our process input queue
+    async def handle_local_client(self, websocket):
+        # Called when Ursina connects to a websocket that is opened to accept control commands
+        self.connected_local_clients.add(websocket)
+        print('Connection received from local UI process')
 
-        this thread doesn't actually have a running event loop.
-        so run any coroutines back in the main thread with asyncio.run_coroutine_threadsafe
-        """
-        while self.run_command_loop:
-            updates = self.to_ob_q.get()
-            if 'STOP' in updates:
-                print('Observer shutdown')
-                break
-            else:
-                asyncio.run_coroutine_threadsafe(self.process_update(updates), loop)
+        # send anything that it would need up-front
+        self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
+            poses=[a.pose for a in self.config.anchors]
+        ))
+        for client in self.bot_clients.values():
+            if client.local_udp_port is not None and client.anchor_num in [None, *self.config.preferred_cameras]:
+                self.send_ui(video_ready=telemetry.VideoReady(
+                    is_gripper=client.anchor_num is None,
+                    anchor_num=client.anchor_num,
+                    local_uri=f'udp://127.0.0.1:{client.local_udp_port}'
+                ))
 
-    async def process_update(self, updates: dict):
-        """
-        Processes incoming commands from the input queue using a dispatch table.
-        This iterates through all commands in the 'updates' dictionary.
-        """
         try:
-            for command, data in updates.items():
-                handler = self.command_handlers.get(command)
-                if handler:
-                    # The await handles both regular functions and coroutines
-                    result = handler(data)
-                    if asyncio.iscoroutine(result):
-                        await result
-                else:
-                    print(f"Warning: No handler found for command '{command}'")
-        except Exception:
-            traceback.print_exc(file=sys.stderr)
+            async for message in websocket:
+                r = await self.handle_command(message) # Handle 'ControlBatchUpdate'
+                # warning, any uncaught exception here will kill this websocket connection
+                # but the observer would go on running, possibly in a bad state.
+        except (ConnectionClosedError, ConnectionClosedOK) as e:
+            pass
+        finally:
+            self.connected_local_clients.remove(websocket)
+            if len(self.connected_local_clients) == 0 and self.terminate_with_ui:
+                # The only local UI has disconnected and we were asked to shutdown when it disconnects
+                self.run_command_loop = False
 
-    async def _handle_jog_spool(self, jog_data: dict):
+    async def handle_command(self, message: bytes):
+        """ Decodes a binary batch of commands """
+        # betterproto .parse() returns a standard python dataclass
+        batch = control.ControlBatchUpdate().parse(message)
+        # Safety check: Ignore commands meant for other robots
+        if batch.robot_id and batch.robot_id != self.config.robot_id:
+            print(f'warning: UI is sending commands identified as being for robot {batch.robot_id} to robot {self.config.robot_id}')
+            return
+        for update in batch.updates:
+            r = await self._dispatch_update(update)
+
+    async def _dispatch_update(self, item: control.ControlItem):
+        # In betterproto, 'oneof' fields appear as attributes. 
+        # Only one will be non-None.
+        
+        # Standard Commands (Stop, Calibrate, Zero)
+        if item.command:
+            r = await self._handle_common_command(item.command.name)
+
+        # Movement Vector (Gamepad/AI Policy)
+        elif item.move:
+            r = await self._handle_movement(item.move)
+
+        # Setting gantry goal
+        elif item.gantry_goal_pos:
+            r = await self._handle_gantry_goal_pos(tonp(item.gantry_goal_pos.pos))
+
+        # Manual Spool Control
+        elif item.jog_spool:
+            r = await self._handle_jog(item.jog_spool)
+
+        # Lerobot Episode Control (Start/Stop Recording)
+        elif item.episode_control:
+            self._handle_add_episode_control_events(item.episode_control)
+
+    async def _handle_common_command(self, cmd: control.Command):
+        # betterproto Enums are IntEnums, comparable directly
+        match cmd:
+            case control.Command.STOP_ALL:
+                r = await self.stop_all()
+            case control.Command.TIGHTEN_LINES:
+                r = await self.tension_lines()
+            case control.Command.ZERO_WINCH:
+                asyncio.create_task(self._handle_zero_winch_line())
+            case control.Command.HALF_CAL:
+                r = await self.invoke_motion_task(self.half_auto_calibration())
+            case control.Command.FULL_CAL:
+                r = await self.invoke_motion_task(self.full_auto_calibration())
+            case control.Command.ENABLE_LEROBOT:
+                self.training_task = asyncio.create_task(self.begin_training_mode())
+            case control.Command.PICK_AND_DROP:
+                r = await self.invoke_motion_task(self.pick_and_place_loop())
+            case control.Command.HORIZONTAL_CHECK:
+                r = await self.invoke_motion_task(self.horizontal_line_task())
+            case control.Command.COLLECT_GRIPPER_IMAGES:
+                self._handle_collect_images()
+            case control.Command.SHUTDOWN:
+                self.run_command_loop = False
+
+    async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
-        if 'anchor' in jog_data:
-            for client in self.anchors:
-                if client.anchor_num == jog_data['anchor']:
-                    asyncio.create_task(client.send_commands({'aim_speed': jog_data['speed']}))
-        elif 'gripper' in jog_data and self.gripper_client:
-            asyncio.create_task(self.gripper_client.send_commands({'aim_speed': jog_data['speed']}))
 
-    async def _handle_toggle_previews(self, preview_data: dict):
-        """Handles turning camera previews on or off."""
-        if 'anchor' in preview_data:
-            for client in self.anchors:
-                if client.anchor_num == preview_data['anchor']:
-                    client.sendPreviewToUi = preview_data['status']
-        elif 'gripper' in preview_data and self.gripper_client:
-            self.gripper_client.sendPreviewToUi = preview_data['status']
+        # identify the client we need to send the command to
+        client = None
+        if jog.is_gripper:
+            client = self.gripper_client
+        else:
+            for c in self.anchors:
+                if c.anchor_num == jog.anchor_num:
+                    client = c
 
-    async def _handle_gantry_dir_sp(self, dir_sp_data: dict):
-        """Handles a direct directional move command, cancelling other motion tasks."""
-        await self.invoke_motion_task(self.move_direction_speed(dir_sp_data['direction'], dir_sp_data['speed']))
+        # send the right kind of jog command
+        if client is not None:
+            if jog.speed is not None:
+                asyncio.create_task(client.send_commands({'aim_speed': jog.speed}))
+            elif jog.offset is not None:
+                asyncio.create_task(client.send_commands({'jog': jog.offset}))
 
     async def _handle_gantry_goal_pos(self, goal_pos: np.ndarray):
         """Handles moving the gantry to a specific goal position."""
@@ -208,27 +268,29 @@ class AsyncObserver:
                 if client.anchor_num == stop_data.get('id'):
                     asyncio.create_task(client.slow_stop_spool())
 
-    async def _handle_zero_winch_line(self, data):
+    async def _handle_zero_winch_line(self):
         await self.gripper_client.zero_winch()
 
-    async def _handle_gamepad_action(self, data):
+    async def _handle_movement(self, move: control.CombinedMove):
         # if we have to clip these values to legal limits, save what they were clipped to
-        winch, finger = await self.send_winch_and_finger(data['winch'], data['finger'])
-        commanded_vel = await self.move_direction_speed(data['dir'], data['speed'])
+        winch, finger = await self.send_winch_and_finger(move.winch, move.finger)
+
+        direction = np.zeros(3)
+        if move.direction:
+            direction = tonp(move.direction)
+        commanded_vel = await self.move_direction_speed(direction, move.speed)
+
         # the saved values will be what we return from GetLastAction
         self.last_gp_action = (commanded_vel, winch, finger)
 
-    async def _handle_avg_named_pos(self, data):
-        """Keep running averages of named positions"""
-        (key, position) = data
+    def update_avg_named_pos(self, key: str, position: np.ndarry):
+        """Update the running average of the named position"""
         if key not in self.named_positions:
             self.named_positions[key] = position
         self.named_positions[key] = self.named_positions[key] * 0.75 + position * 0.25
 
-        if key=='gamepad':
-            # UI needs to know about this one
-            p2 = self.named_positions['gamepad'][:2] # only x and y
-            self.to_ui_q.put({'gp_pos': p2})
+        pos = self.named_positions['gamepad']
+        self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(pos), name=key))
 
     async def invoke_motion_task(self, coro):
         """
@@ -261,7 +323,7 @@ class AsyncObserver:
         self.motion_task = asyncio.create_task(coro)
         self.motion_task.set_name(coro.__name__)
 
-    async def tension_lines(self, _=None):
+    async def tension_lines(self):
         """Request all anchors to reel in all lines until tight.
         This is a fire and forget function"""
         for client in self.anchors:
@@ -319,7 +381,10 @@ class AsyncObserver:
         elif mode == 'point2point':
             self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
-    async def stop_all(self, _=None):
+    async def stop_all(self):
+        # If lerobot scripts are connected this must also stop them
+        self.episode_control_events.add('stop_recording')
+
         # Cancel any active motion task
         if self.motion_task is not None:
             # Store the handle and clear the class attribute immediately.
@@ -353,34 +418,13 @@ class AsyncObserver:
             asyncio.create_task(client.slow_stop_spool())
         self.pe.record_commanded_vel(np.zeros(3))
 
-    async def set_run_mode(self, mode):
-        """Sets the robot mode."""
-
-        # exit previous mode
-        if self.calmode == "train":
-            if self.grpc_server is not None:
-                await self.grpc_server.stop(grace=5)
-
-        if mode == "run":
-            self.calmode = mode
-            print("run mode")
-            await self.invoke_motion_task(self.pick_and_place_loop())
-            # await self.invoke_motion_task(self.execute_grasp())
-
-        elif mode == "pause":
-            self.calmode = mode
-            await self.stop_all()
-        elif mode == 'train':
-            self.training_task = asyncio.create_task(self.begin_training_mode())
-
     async def begin_training_mode(self):
         """Begin allowing the robot to be controlled from the grpc server
         movement could occur at any time while the server is running"""
         try:
-            self.calmode = 'training'
             # begin allowing requests from self.grpc_server
             self.grpc_server = await start_robot_control_server(self)
-            # Start child process to run the dataset manager
+            # Start child process to run the dataset manager?
             # dataset_process = multiprocessing.Process(target=record_until_disconnected, name='lerobot_record')
             # dataset_process.daemon = False
             # dataset_process.start()
@@ -446,6 +490,8 @@ class AsyncObserver:
             if len(self.anchors) < N_ANCHORS:
                 print('Cannot run full calibration until all anchors are connected')
                 return
+            elif len(self.anchors) > N_ANCHORS:
+                print(f'Too many anchors, what is going on here\n{self.anchors}')
             self.anchors.sort(key=lambda x: x.anchor_num)
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
@@ -459,13 +505,15 @@ class AsyncObserver:
             anchor_poses = self.locate_anchors()
 
             # Use the optimization output to update anchor poses and spool params
-            config = Config()
-            for i, client in enumerate(self.anchors):
-                config.anchors[client.anchor_num].pose = anchor_poses[client.anchor_num]
-                self.to_ui_q.put({'anchor_pose': (client.anchor_num, anchor_poses[client.anchor_num])})
+            for client in self.anchors:
+                self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
                 client.anchor_pose = anchor_poses[client.anchor_num]
-                # await client.send_commands({'set_zero_angle': zero_angles[client.anchor_num]})
-            config.write()
+            save_config(self.config)
+            # inform UI
+            self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
+                poseTupleToProto(p)
+                for p in anchor_poses
+            ]))
             # inform position estimator
             anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
             self.pe.set_anchor_points(anchor_points)
@@ -479,29 +527,34 @@ class AsyncObserver:
             # there should be some swing when we get there. 
             await self.half_auto_calibration()
 
-            # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
-            # when the stabilization is done without any existing z rotation term
-            self.gripper_client.calibrating_room_spin = True
-            origin_card_pose = [None]
-            def special_handle_det(self, detections, timestamp):
-                for d in detections:
-                    if d['n'] == 'origin':
-                        # a pose of the origin card in the frame of reference of the stabilized gripper cam.
-                        origin_card_pose[0] = pose_from_det(d)
-            while origin_card_pose[0] is None:
-                async_result = self.pool.apply_async(
-                    locate_markers,
-                    (self.gripper_client.last_frame_resized,),
-                    callback=partial(self.special_handle_det, timestamp=time.time()))
-                detections = async_result.get(timeout=5)
-            roomspin = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('xyz')[2]
-            self.config.gripper_frame_room_spin = roomspin
-            self.config.write()
-            self.gripper_client.calibrating_room_spin = False
-
+            if self.gripper_client.last_frame_resized is not None:
+                # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
+                # when the stabilization is done without any existing z rotation term
+                self.gripper_client.calibrating_room_spin = True
+                origin_card_pose = [None]
+                def special_handle_det(self, detections, timestamp):
+                    for d in detections:
+                        if d['n'] == 'origin':
+                            # a pose of the origin card in the frame of reference of the stabilized gripper cam.
+                            origin_card_pose[0] = pose_from_det(d)
+                while origin_card_pose[0] is None:
+                    async_result = self.pool.apply_async(
+                        locate_markers,
+                        (self.gripper_client.last_frame_resized,),
+                        callback=partial(self.special_handle_det, timestamp=time.time()))
+                    detections = async_result.get(timeout=5)
+                roomspin = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('xyz')[2]
+                self.config.gripper_frame_room_spin = roomspin
+                self.config.has_been_calibrated = True
+                save_config(self.config)
+                self.gripper_client.calibrating_room_spin = False
+            else:
+                print('Warning, cannot calibrate the relationship between gripper IMU zero angle and camera if gripper camera is offline!')
 
             # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
-            self.to_ui_q.put({'pop_message':'Calibration complete. Cards can be removed from the floor.'})
+            self.send_ui(pop_message=telemetry.Popup(
+                message='Calibration complete. Cards can be removed from the floor.'
+            ))
 
         except asyncio.CancelledError:
             raise
@@ -511,7 +564,7 @@ class AsyncObserver:
         Attempt to move the gantry in a perfectly horizontal line. How hard could this be?
         This is a motion task
         """
-        await asyncio.gather([self.gripper_client.zero_winch(), self.tension_and_wait()])
+        await asyncio.gather(self.gripper_client.zero_winch(), self.tension_and_wait())
         await asyncio.sleep(1)
         range_at_start = self.datastore.range_record.getLast()[1]
         result = await self.move_direction_speed([1,0,0], 0.2, downward_bias=0)
@@ -521,8 +574,7 @@ class AsyncObserver:
         range_at_end = self.datastore.range_record.getLast()[1]
         print(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
 
-
-    def async_on_service_state_change(self, 
+    def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
     ) -> None:
         if 'cranebot' in name:
@@ -557,20 +609,23 @@ class AsyncObserver:
             # the number of anchors is decided ahead of time (in main.py)
             # but they are assigned numbers as we find them on the network
             # and the chosen numbers are persisted in configuration.json
-            if key in self.config.anchor_num_map:
-                anchor_num = self.config.anchor_num_map[key]
+            anchor_num_map = {a.service_name: a.num for a in self.config.anchors if a.service_name is not None}
+            if key in anchor_num_map:
+                anchor_num = anchor_num_map[key]
             else:
-                anchor_num = len(self.config.anchor_num_map)
+                anchor_num = len(anchor_num_map)
                 if anchor_num >= N_ANCHORS:
-                    # we do not support yet multiple crane bot assemblies on a single network
+                    # Discovering more that four anchors could be a sign that another robot in the same network is turned on.
+                    # We need a way to know that, but for now, you'll have to make sure only one is one at a time while discovering.
+                    # After discovery, it should be ok to have more than one on at a time.
                     print(f"Discovered another anchor server on the network, but we already know of 4 {key} {address}")
                     print(f"existing anchors: {self.config.anchor_num_map.keys()}")
                     return None
-            self.config.anchor_num_map[key] = anchor_num
+            self.config.anchors[anchor_num].num = anchor_num
             self.config.anchors[anchor_num].service_name = key
             self.config.anchors[anchor_num].address = address
             self.config.anchors[anchor_num].port = info.port
-            self.config.write()
+            save_config(self.config)
 
         elif kind == gripper_service_name:
             # a gripper has been discovered, assume it is ours only if we have never seen one before
@@ -578,7 +633,7 @@ class AsyncObserver:
                 self.config.gripper.service_name = key
                 self.config.gripper.address = address
                 self.config.gripper.port = info.port
-                self.config.write()
+                save_config(self.config)
                 print(f'Discovered gripper at "{address}" and adopted it as the gripper for this robot')
             elif address != self.config.gripper.address:
                 print(f'Discovered gripper at "{address}" and ignored it because ours is at {self.config.gripper.address}')
@@ -612,8 +667,13 @@ class AsyncObserver:
         components are keyed by their service name which is the first three components of info.name, eg
         123.cranebot-anchor-service.2ccf67bc3fc4
         """
+        # sleep until there is something to do
+        if not config_has_any_address(self.config) and self.run_command_loop:
+            await asyncio.sleep(0.5)
+        print('Config not empty, beging connected to discovered components')
+
         # last attempt to connect, keyed by service name
-        connection_tasks: dict[str, asyncio.Task] = {}
+        self.connection_tasks: dict[str, asyncio.Task] = {}
         while self.run_command_loop:
 
             # is everything up the way we want it to be?
@@ -626,76 +686,95 @@ class AsyncObserver:
                 # assume only the common attributes between those two types
                 key = cpt.service_name
                 if key is None or cpt.address is None or cpt.port is None:
-                    # we have not discovered how to connect to this yet, but it's in our config.
-                    # can only occur with manual config editing
-                    print(f'{key} in config but we dont have the address')
                     continue
 
-                if key not in connection_tasks:
-                    connection_tasks[key] = asyncio.create_task(self.connect_component(key))
-                else:
-                    connected = key in self.bot_clients and self.bot_clients[key].connected
-                    task = connection_tasks[key]
-
-                    if task.done():
-                        # retrieve any exception
-                        result = await task
-                        del connection_tasks[key]
-                    elif not connected:
-                        # the task is still running, but it's not connected, is it trying or did it fail?
-                        if key in self.bot_clients and self.bot_clients[key].failed_to_connect:
-                            result = await task
-                            del connection_tasks[key]
-                            self.remove_service(None, key)
+                if key not in self.connection_tasks:
+                    # Start a connection to this component. connect_component will also remove it when it completes regardless of success or failure.
+                    self.connection_tasks[key] = asyncio.create_task(self.connect_component(key))
 
             await asyncio.sleep(0.5)
-        for task in connection_tasks.values():
+        for task in self.connection_tasks.values():
             task.cancel()
-        result = await asyncio.gather(*connection_tasks.values())
+        result = await asyncio.gather(*self.connection_tasks.values())
 
     async def connect_component(self, service_name):
         """Connect to the component with the given name using the address stored in the config."""
-        name_component = service_name.split('.')[1]
+        client = None
+        try:
+            name_component = service_name.split('.')[1]
+        except IndexError:
+            print(f'invalid service name "{service_name}"')
+            return
 
         is_power_anchor = name_component == anchor_power_service_name
         is_standard_anchor = name_component == anchor_service_name
         is_standard_gripper = name_component == gripper_service_name
 
         if is_standard_gripper:
-            gc = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat, self.pe)
+            client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe)
             self.gripper_client_connected.clear()
-            gc.connection_established_event = self.gripper_client_connected
-            self.bot_clients[service_name] = gc
-            self.gripper_client = gc
-            # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
-            abnormal_close = await gc.startup()
-            if abnormal_close:
-                self.to_ui_q.put({'pop_message': f'lost connection to gripper at {self.config.gripper.address}'})
-                result = await self.remove_service(None, service_name)
-                await self.stop_all()
+            client.connection_established_event = self.gripper_client_connected
+            self.gripper_client = client
         else:
             for a in self.config.anchors:
                 if a.service_name != service_name:
                     continue
+                client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat)
+                client.connection_established_event = self.any_anchor_connected
+                self.anchors.append(client)
 
-                ac = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat)
-                self.bot_clients[service_name] = ac
-                self.anchors.append(ac)
-                # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
-                abnormal_close = await ac.startup()
-                if abnormal_close:
-                    self.to_ui_q.put({'pop_message': f'lost connection to anchor {ac.anchor_num} at {a.address}'})
-                    print(f'await remove_service {service_name}')
-                    result = await self.remove_service(None, service_name)
-                    print(f'await stop_all {service_name}')
-                    await self.stop_all()
-                print(f'end connect anchor {service_name}')
+        if client:
+            self.bot_clients[service_name] = client
+            # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
+            abnormal_close = await client.startup()
+            print('observer: client.startup() has returned')
+            # remove client
+            r = await self.remove_service(None, service_name)
+            if abnormal_close:
+                self.send_ui(pop_message=telemetry.Popup(
+                    message=f'lost connection to {service_name}'
+                ))
+                await self.stop_all()
+            # delete this task from the dict as it ends, so keep_robot_connected will try agian. 
+            del self.connection_tasks[service_name]
 
+    def send_ui(self, **kwargs):
+        """
+        Ensure that the given telemetry item is sent to every connected UI
+        keyword args are passed directly to telemetry item, so you can construct one like this
+
+        self.send_ui(pop_message=telemetry.Popup('hello'))
+        """
+        # Add item to batch
+        with self.telemetry_buffer_lock:
+            self.telemetry_buffer.append(telemetry.TelemetryItem(**kwargs))
+
+    async def flush_tele_buffer(self):
+        """
+        Flush the teloperation buffer. sending all data to all UI clients.
+        Normally called within position estimator's 60hz loop
+        """
+        with self.telemetry_buffer_lock:
+            batch = telemetry.TelemetryBatchUpdate(
+                robot_id="0",
+                updates=list(self.telemetry_buffer)
+            )
+            self.telemetry_buffer.clear()
+        to_send = bytes(batch)
+        # TODO prevent RuntimeError: Set changed size during iteration
+        for ui_websocket in self.connected_local_clients:
+            try:
+                await ui_websocket.send(to_send)
+            except (ConnectionClosedOK, ConnectionClosedError) as e:
+                pass
+        # TODO send to cloud as well if connected
+
+    async def start_pe_when_ready(self):
+        await self.any_anchor_connected.wait()
+        r = await self.pe.main()
 
     async def main(self) -> None:
-        self.to_ui_q.cancel_join_thread()
-        self.to_ob_q.cancel_join_thread()
-
+        self.startup_complete.clear()
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
         with Pool(processes=8) as pool:
             self.pool = pool
@@ -710,39 +789,37 @@ class AsyncObserver:
                 )
                 print("start service browser")
                 self.aiobrowser = AsyncServiceBrowser(
-                    self.aiozc.zeroconf, services, handlers=[self.async_on_service_state_change]
+                    self.aiozc.zeroconf, services, handlers=[self.on_service_state_change]
                 )
             except asyncio.exceptions.CancelledError:
                 await self.aiozc.async_close()
                 return
 
-            # this task is blocking and runs in it's own thread, but needs a reference to the running loop to start tasks.
-            print("start observer's queue listener task")
-            self.ob_queue_task = asyncio.create_task(asyncio.to_thread(self.listen_queue_updates, loop=asyncio.get_running_loop()))
-
             # statistic counter - measures things like average camera frame latency
             asyncio.create_task(self.stat.stat_main())
 
             # perception model
+            # task remains in a lightweight sleep until frames arrive.
             asyncio.create_task(self.run_perception())
 
-            # self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
-
             # A task that continuously estimates the position of the gantry
-            self.pe_task = asyncio.create_task(self.pe.main())
+            # remains asleep until at least one anchor connects.
+            self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
-            # Start a task to connect and reconnect to all known robot components.
+            # start a task to connect and reconnect to all known robot components.
             self.keeper = asyncio.create_task(self.keep_robot_connected())
-            
-            # await something that will end when the program closes to keep zeroconf alive and discovering services.
-            try:
-                # tasks started with to_thread must use result = await or exceptions that occur within them are silenced.
-                result = await self.ob_queue_task
-            except asyncio.exceptions.CancelledError:
-                pass
-            await self.async_close()
 
+            # start a websocket server to accept incoming connection from local ursia UI process
+            async with websockets.serve(self.handle_local_client, "127.0.0.1", 4245):
+                # await something that will end when the program closes to keep serving and
+                # keep zeroconf alive and discovering services.
+                try:
+                    self.startup_complete.set()
+                    result = await self.keeper
+                except asyncio.exceptions.CancelledError:
+                    pass
+            await self.async_close()
 
     async def async_close(self) -> None:
         result = await self.stop_all()
@@ -786,7 +863,7 @@ class AsyncObserver:
                     anum = anchor_num = np.random.randint(4)
                     dp = gantry_real_pos + np.array([t, anum, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE])
                     self.datastore.gantry_pos.insert(dp)
-                    self.to_ui_q.put({'gantry_observation': dp[1:]})
+                    self.send_ui(gantry_sightings=telemetry.GantrySightings(sightings=[fromnp(dp[1:])]))
                 # winch line always 1 meter
                 self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
                 # range always perfect
@@ -861,7 +938,7 @@ class AsyncObserver:
                         dp = pending_obs.pop()
                         self.datastore.gantry_pos.insert(dp)
                         self.datastore.gantry_pos_event.set()
-                        self.to_ui_q.put({'gantry_observation': dp[2:]})
+                        self.send_ui(gantry_sightings=telemetry.GantrySightings(sightings=[fromnp(dp[2:])]))
                 
                 # winch line always 1 meter
                 self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
@@ -889,9 +966,6 @@ class AsyncObserver:
             result[client.anchor_num] = client.last_gantry_frame_coords
         return result
 
-    async def _handle_send_winch_finger(self, data):
-        await self.send_winch_and_finger(**data)
-
     async def send_winch_and_finger(self, line_speed, finger_angle):
         """Command the gripper's motors in one update.
         command the winch to change line length at the given speed.
@@ -903,14 +977,18 @@ class AsyncObserver:
         # if last_length < 0.02 or last_length > 1.9:
         #     print('winch too short')
         #     line_speed = 0
-        finger_angle = clamp(finger_angle, -90, 90)
-        update = {
-            'aim_speed': line_speed,
-            'set_finger_angle': finger_angle,
-        }
-        if self.gripper_client is not None:
+        update = {}
+        if line_speed is not None:
+            update['aim_speed'] = line_speed
+        if finger_angle is not None:
+            update['set_finger_angle'] = clamp(finger_angle, -90, 90)
+        if update and self.gripper_client is not None:
             asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_angle
+
+    async def clear_gantry_goal(self):
+        self.gantry_goal_pos = None
+        self.send_ui(named_position=telemetry.NamedObjectPosition(name='gantry_goal_marker')) # not setting position causes it to be hidden
 
     async def seek_gantry_goal(self):
         """
@@ -922,7 +1000,7 @@ class AsyncObserver:
         LOOP_SLEEP_S = 0.2 # seconds
         
         try:
-            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+            self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.gantry_goal_pos), name='gantry_goal_marker'))
             while self.gantry_goal_pos is not None:
                 vector = self.gantry_goal_pos - self.pe.gant_pos
                 dist = np.linalg.norm(vector)
@@ -935,8 +1013,7 @@ class AsyncObserver:
             raise
         finally:
             self.slow_stop_all_spools()
-            self.gantry_goal_pos = None
-            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+            await self.clear_gantry_goal()
 
     async def blind_move_to_goal(self):
         """Only measures current position once, then moves in the right direction
@@ -945,7 +1022,7 @@ class AsyncObserver:
         GANTRY_SPEED_MPS = 0.25 # m/s
         
         try:
-            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+            self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.gantry_goal_pos), name='gantry_goal_marker'))
             vector = self.gantry_goal_pos - self.pe.gant_pos
             dist = np.linalg.norm(vector)
             if dist > 0:
@@ -955,8 +1032,7 @@ class AsyncObserver:
             raise
         finally:
             self.slow_stop_all_spools()
-            self.gantry_goal_pos = None
-            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+            await self.clear_gantry_goal()
 
     async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04):
         """Move in the direction of the given unit vector at the given speed.
@@ -1055,16 +1131,16 @@ class AsyncObserver:
         self.episode_control_events.clear()
         return e
 
-    def _handle_add_episode_control_event(self, data):
-        for k in data:
+    def _handle_add_episode_control_events(self, data: control.EpControl):
+        for k in data.events:
             self.episode_control_events.add(str(k))
 
     def send_tq_to_ui(self):
         snapshot = self.target_queue.get_queue_snapshot()
         # Create a deterministic hash
-        current_hash = hash(json.dumps(snapshot, sort_keys=True, default=str))
+        current_hash = hash(bytes(snapshot))
         if current_hash != self.last_snapshot_hash:
-            self.to_ui_q.put({'target_list': snapshot})
+            self.send_ui(target_list=snapshot)
             self.last_snapshot_hash = current_hash
 
     async def run_perception(self):
@@ -1079,6 +1155,16 @@ class AsyncObserver:
         DEVICE = "cpu"
         LOOP_DELAY = 0.1
         RUN_DOBBY_EVERY = 5
+
+        # do nothing until at least one camera from the preferred set is producing frames
+        have_gripper_frames = False
+        have_anchor_frames = False
+        while not (have_gripper_frames or have_anchor_frames):
+            await asyncio.sleep(1)
+            have_gripper_frames = self.gripper_client is not None and self.gripper_client.last_frame_resized is not None
+            for client in self.anchors:
+                if client.anchor_num in self.config.preferred_cameras and client.last_frame_resized is not None:
+                    have_anchor_frames = True
 
         if self.dobby_model is None:
             import torch
@@ -1099,7 +1185,6 @@ class AsyncObserver:
             self.centering_model.load_state_dict(torch.load(CENTERING_MODEL_PATH, map_location=DEVICE))
             self.centering_model.eval()
 
-        config = Config()
         counter = 0
         while self.run_command_loop:
             await asyncio.sleep(LOOP_DELAY)
@@ -1117,11 +1202,12 @@ class AsyncObserver:
 
                         # you get a normalized u,v coordinate in the [-1,1] range
                         self.predicted_lateral_vector = vec if self.gripper_sees_target > 0.5 else np.zeros(2)
-                        self.to_ui_q.put({'grip_pred': {
-                            'vec': self.predicted_lateral_vector,
-                            'valid': self.gripper_sees_target,
-                            'hold': self.gripper_sees_holding,
-                        }})
+                        self.send_ui(grip_cam_preditions=telemetry.GripCamPredictions(
+                            move_x = self.predicted_lateral_vector[0],
+                            move_y = self.predicted_lateral_vector[1],
+                            prob_target_in_view = self.gripper_sees_target,
+                            prob_holding = self.gripper_sees_holding,
+                        ))
 
             if counter < RUN_DOBBY_EVERY:
                 continue
@@ -1131,7 +1217,7 @@ class AsyncObserver:
             valid_anchor_clients = []
             img_tensors = []
             for client in self.anchors:
-                if client.last_frame_resized is None or client.anchor_num not in config.preferred_cameras:
+                if client.last_frame_resized is None or client.anchor_num not in self.config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
                 img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0
@@ -1158,7 +1244,9 @@ class AsyncObserver:
                     # create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
                     heatmap_vis = (heatmap_np * 255).astype(np.uint8)
                     heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
-                    self.to_ui_q.put({'heatmap': {'anchor_num':valid_anchor_clients[i].anchor_num, 'image':heatmap_color}})
+
+                    # TODO we need to send heatmaps on video side channel?
+                    # self.to_ui_q.put({'heatmap': {'anchor_num':valid_anchor_clients[i].anchor_num, 'image':heatmap_color}})
 
                 if len(all_floor_target_arrs) > 0:
                     # filter out targets that are not inside the work area.
@@ -1198,7 +1286,7 @@ class AsyncObserver:
                     await asyncio.sleep(LOOP_DELAY)
                     continue
 
-                self.target_queue.set_target_status(next_target.id, TargetStatus.SELECTED)
+                self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
                 self.send_tq_to_ui()
 
                 # pick Z position for gantry
@@ -1230,12 +1318,12 @@ class AsyncObserver:
                 success = await self.execute_grasp()
                 if not success:
                     # just pick another target, but consider downranking this object or something.
-                    self.target_queue.set_target_status(next_target.id, TargetStatus.SEEN)
+                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
                     self.send_tq_to_ui()
                     await asyncio.sleep(LOOP_DELAY)
                     continue
                 else:
-                    self.target_queue.set_target_status(next_target.id, TargetStatus.PICKED_UP)
+                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.PICKED_UP)
                     self.send_tq_to_ui()
 
                 # tension now just in case.
@@ -1262,7 +1350,7 @@ class AsyncObserver:
                 # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
                 # TODO train network on more data containing examples of this, so it knows that only socks on the floor count.
                 await asyncio.sleep(DELAY_AFTER_DROP)
-                self.target_queue.set_target_status(next_target.id, TargetStatus.DROPPED)
+                self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.DROPPED)
                 self.send_tq_to_ui()
                 # keep score
 
@@ -1273,8 +1361,7 @@ class AsyncObserver:
             if gtask is not None:
                 gtask.cancel()
             self.slow_stop_all_spools()
-            self.gantry_goal_pos = None
-            self.to_ui_q.put({'gantry_goal_marker': self.gantry_goal_pos})
+            await self.clear_gantry_goal()
 
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
@@ -1376,7 +1463,7 @@ class AsyncObserver:
         print('Gave up on grasp after a few attempts')
         return False
 
-    async def _handle_collect_images(self, _):
+    async def _handle_collect_images(self):
         asyncio.create_task(self.collect_images())
 
     async def collect_images(self):
@@ -1386,26 +1473,19 @@ class AsyncObserver:
             capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
             await asyncio.sleep(0.5)
 
-def start_observation(to_ui_q, to_ob_q):
-    """
-    Entry point to be used when starting this from main.py with multiprocessing
-    """
-    ob = AsyncObserver(to_ui_q, to_ob_q)
+def start_observation(terminate_with_ui=False):
+    """Entry point to be used when starting this from main.py with multiprocessing."""
+    ob = AsyncObserver(terminate_with_ui, load_config())
     asyncio.run(ob.main())
+    # set ob.run_command_loop = False or kill or connect to websocket and send shutdown command
 
 if __name__ == "__main__":
-    from multiprocessing import Queue
-    to_ui_q = Queue()
-    to_ob_q = Queue()
-    to_ui_q.cancel_join_thread()
-    to_ob_q.cancel_join_thread()
-
-    # when running as a standalone process (debug only, linux only), register signal handler
-    def stop():
-        print("\nwait for clean observer shutdown")
-        to_ob_q.put({'STOP':None})
     async def main():
-        runner = AsyncObserver(to_ui_q, to_ob_q)
+        runner = AsyncObserver(False, load_config())
+        # when running as a standalone process (debug only, linux only), register signal handler
+        def stop():
+            # Must be idempotent, may be called multiple times
+            runner.run_command_loop = False
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
         result = await runner.main()

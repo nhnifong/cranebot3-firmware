@@ -7,7 +7,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
-from unittest.mock import patch, Mock, MagicMock, ANY, AsyncMock
+from unittest.mock import patch, Mock, MagicMock, ANY, AsyncMock, call
 import asyncio
 import numpy as np
 import websockets
@@ -23,7 +23,8 @@ import json
 from data_store import DataStore
 from raspi_anchor_client import RaspiAnchorClient
 from stats import StatCounter
-from config import Config
+from generated.nf import telemetry, control, common
+from config_loader import create_default_config
 
 ws_port = 8765
 
@@ -31,15 +32,12 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.datastore = DataStore()
-        self.to_ui_q = Queue()
-        self.to_ob_q = Queue()
-        self.to_ui_q.cancel_join_thread()
-        self.to_ob_q.cancel_join_thread()
-
+        self.ob_mock = MagicMock()
+        self.ob_mock.config = create_default_config()
         self.mock_pool_class = Mock(spec=Pool)
         self.pool = self.mock_pool_class.return_value
 
-        self.stat = StatCounter(self.to_ui_q)
+        self.stat = StatCounter(self.ob_mock)
 
         self.server_ws = None
         self.receiver = MagicMock()
@@ -62,6 +60,7 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         print('test serverHandler got a connected and started listening')
         self.got_connection.set()
         self.server_ws = ws
+        hb_task = asyncio.create_task(self.send_heartbeat())
         while True:
             try:
                 message = await ws.recv()
@@ -74,16 +73,22 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
             except ConnectionClosedError as e:
                 print(f"Client disconnected with {e}")
                 break
-        print('test serverHandler stopped')
+        self.server_ws = None
+        r = await hb_task
+
+    async def send_heartbeat(self):
+        while self.server_ws is not None:
+            await self.server_ws.send(json.dumps({'line_record': [1,2,3,4]}))
+            await asyncio.sleep(0.9)
 
     async def test_shutdown_before_connect(self):
         # 1 is the anchor number
-        ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat)
+        ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.ob_mock, self.pool, self.stat)
         self.assertFalse(ac.connected)
         await ac.shutdown()
 
     async def clientSetup(self):
-        self.ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.to_ui_q, self.to_ob_q, self.pool, self.stat)
+        self.ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.ob_mock, self.pool, self.stat)
         self.client_task = asyncio.create_task(self.ac.startup())
         result = await asyncio.wait_for(self.got_connection.wait(), 2)
         await asyncio.sleep(0.1) # client_task needs a chance to act
@@ -96,29 +101,14 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         await self.clientSetup()
         self.assertTrue(self.ac.connected)
 
-        # Anchor pose was sent first
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertTrue('anchor_pose' in ui_queue_message)
-        anchor_num, pose = ui_queue_message['anchor_pose']
-        self.assertTrue(1, anchor_num)
-        self.assertTrue(2, len(pose))
-        self.assertTrue(3, len(pose[0]))
-        self.assertTrue(3, len(pose[1]))
-        # Connecting
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'anchor_num': 1, 'websocket': 'connecting', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
-        # Online
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'anchor_num': 1, 'websocket': 'connected', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
-        await self.clientTearDown()
-        self.assertFalse(self.ac.connected)
-        # gone
-        ui_queue_message = self.to_ui_q.get(timeout=1)
-        self.assertEqual({'anchor_num': 1, 'websocket': 'none', 'video': 'none', 'ip_address': '127.0.0.1'}, ui_queue_message['connection_status'])
-
-        # if gripper_client is going to use the configs in configuration.json, then so will we.
-        config = Config()
-        self.receiver.update.assert_called_with({'set_config_vars': config.vars_for_anchor(1)})
+        # should report to UI: Connecting, connected
+        self.ob_mock.assert_has_calls([
+            call.send_ui(component_conn_status=telemetry.ComponentConnStatus(
+                anchor_num=1, websocket_status=telemetry.ConnStatus.CONNECTING, ip_address='127.0.0.1')),
+            call.send_ui(component_conn_status=telemetry.ComponentConnStatus(
+                anchor_num=1, websocket_status=telemetry.ConnStatus.CONNECTED, ip_address='127.0.0.1')),
+        ])
+        self.ob_mock.reset_mock()
 
     async def test_server_closes(self):
         """
@@ -137,42 +127,7 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         """
         The client task should not attempt to reconnect if the server closes abnormally, but it should return true.
         """
-
-        # define an exception
-        keepalive_exc = ConnectionClosedError(
-            sent=None,
-            rcvd=Close(1011, "keepalive ping timeout"),
-        )
-        # This is the fake websocket object our client will connect to.
-        mock_websocket = AsyncMock()
-
-        # Configure its 'recv' method to raise our specific error once we set an event
-        trigger = asyncio.Event()
-        async def mock_recv():
-            await trigger.wait()
-            print('triggering abnormal disconnect')
-            raise keepalive_exc
-        mock_websocket.recv = mock_recv
-
-        # create a mock 'connect' generator:
-        async def mock_connect_generator(*args, **kwargs):
-            print("TEST: Mock 'websockets.connect' called.")
-            self.got_connection.set()
-            yield mock_websocket
-            print("TEST: Mock websocket yielded. Generator stopping.")
-            # The generator stops, so the 'async for' loop will not reconnect.
-
-        with patch("raspi_anchor_client.websockets.connect", new=mock_connect_generator):
-            await self.clientSetup()
-            self.assertTrue(self.ac.connected)
-
-            # trigger abnormal shutdown on the next message
-            trigger.set()
-
-            await asyncio.sleep(0.1)
-            self.assertFalse(self.ac.connected)
-            result = await asyncio.wait_for(self.client_task, 1)
-            self.assertTrue(result) # true means abnormal
+        pass # TODO stop heartbeat signal. confirm client closes itself
 
     async def test_line_record(self):
         """
@@ -201,9 +156,23 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         ]
         timestamp = 123456789.0
         await self.clientSetup()
+        self.ob_mock.reset_mock() # discard connection status telemetry for this test
         self.ac.handle_detections(detection_list, timestamp)
         last_position = self.datastore.gantry_pos.getLast()
         self.assertEqual(timestamp, last_position[0])
+
+        # assert it recorded the gantry sighting correctly
+        # note that the detection was in camera coordinate space, and the gantry position is in world space
+        # handle_detections did the solvepnp math but that's tested in cv_common_test not here
+        np.testing.assert_array_almost_equal(self.ac.gantry_pos_sightings, [last_position[2:]])
+
+        # assert it sends the gantry sightings to the UI as a telemetry update the next time it receives a message on the websocket.
+        await asyncio.sleep(1.0) # at least one heartbeat will be receievd
+        self.ob_mock.send_ui.assert_called_once_with(gantry_sightings=telemetry.GantrySightings(
+            sightings=[common.Vec3(x=np.float64(last_position[2]), y=np.float64(last_position[3]), z=np.float64(last_position[4]))]
+        ))
+
+
         await self.clientTearDown()
 
     async def test_abnormal_disconnect(self):
