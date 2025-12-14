@@ -40,6 +40,7 @@ from generated.nf import telemetry, control, common
 import websockets
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 from util import *
+from functools import partial
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -182,8 +183,9 @@ class AsyncObserver:
         batch = control.ControlBatchUpdate().parse(message)
         # Safety check: Ignore commands meant for other robots
         if batch.robot_id and batch.robot_id != self.config.robot_id:
-            print(f'warning: UI is sending commands identified as being for robot {batch.robot_id} to robot {self.config.robot_id}')
-            return
+            pass
+            # print(f'warning: UI is sending commands identified as being for robot {batch.robot_id} to robot {self.config.robot_id}')
+            # return
         for update in batch.updates:
             r = await self._dispatch_update(update)
 
@@ -444,7 +446,8 @@ class AsyncObserver:
         for client in self.anchors:
             # average each list of detections, but leave them in the camera's reference frame.
             for marker in markers:
-                averages[marker][client.anchor_num] = average_pose(list(client.origin_poses[marker]))
+                # averages[marker][client.anchor_num] = average_pose(list(client.origin_poses[marker]))
+                averages[marker][client.anchor_num] = list(client.origin_poses[marker])
 
         # run optimization in pool
         async_result = self.pool.apply_async(optimize_anchor_poses, (dict(averages),))
@@ -521,7 +524,7 @@ class AsyncObserver:
             await self.half_auto_calibration()
 
             # move over the origin card
-            self.gantry_goal_pos = np.array([0,0,1.5])
+            self.gantry_goal_pos = np.array([0,0,1.2])
             await self.seek_gantry_goal()
 
             # there should be some swing when we get there. 
@@ -532,19 +535,21 @@ class AsyncObserver:
                 # when the stabilization is done without any existing z rotation term
                 self.gripper_client.calibrating_room_spin = True
                 origin_card_pose = [None]
-                def special_handle_det(self, detections, timestamp):
+                def special_handle_det(timestamp, detections):
                     for d in detections:
                         if d['n'] == 'origin':
                             # a pose of the origin card in the frame of reference of the stabilized gripper cam.
                             origin_card_pose[0] = pose_from_det(d)
                 while origin_card_pose[0] is None:
                     async_result = self.pool.apply_async(
-                        locate_markers,
+                        locate_markers_gripper,
                         (self.gripper_client.last_frame_resized,),
-                        callback=partial(self.special_handle_det, timestamp=time.time()))
+                        callback=partial(special_handle_det, time.time()))
                     detections = async_result.get(timeout=5)
-                roomspin = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('xyz')[2]
-                self.config.gripper_frame_room_spin = roomspin
+                euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
+                print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
+                roomspin = euler_rot[0]
+                self.config.gripper.frame_room_spin = roomspin
                 self.config.has_been_calibrated = True
                 save_config(self.config)
                 self.gripper_client.calibrating_room_spin = False
@@ -776,7 +781,7 @@ class AsyncObserver:
     async def main(self) -> None:
         self.startup_complete.clear()
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
-        with Pool(processes=8) as pool:
+        with Pool(processes=12) as pool:
             self.pool = pool
             # the only reason it might not be none is if a unit test set before calling main.
             if self.aiozc is None:

@@ -487,9 +487,13 @@ class ControlPanelUI:
             robot_id="0",
             updates=events
         )
-        to_send = bytes(batch)
+        try:
+            to_send = bytes(batch)
+        except Exception as e:
+            print(f'Cannot serialize control message batch {e}\n{batch}')
         # synchronous, and we're on a different thread, but I'm pretty sure websockets does this in thread safe way
-        self.websocket.send(to_send)
+        if self.websocket:
+            self.websocket.send(to_send)
 
     def simple_command(self, cmd: control.Command):
         self.send_ob(command=control.CommonCommand(name=cmd))

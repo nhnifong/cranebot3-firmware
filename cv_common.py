@@ -45,7 +45,7 @@ default_marker_size = 0.08948 # The default side length of markers in meters
 # increase quad_decimate to improve speed at the cost of distance
 detector = Detector(families="tag36h11", quad_decimate=1.0)
 
-def locate_markers(im):
+def locate_markers(im, mxx=mtx):
     """
     Detects AprilTags in an image and estimates their pose.
     
@@ -100,7 +100,7 @@ def locate_markers(im):
             # The coordinate system has the origin at the camera center. The z-axis points from the camera center out the camera lens.
             # The x-axis is to the right in the image taken by the camera, and y is down. The tag's coordinate frame is centered at the center of the tag.
             # From the viewer's perspective, the x-axis is to the right, y-axis down, and z-axis is out of the tag.
-            _, r, t = cv2.solvePnP(mp, corners, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
+            _, r, t = cv2.solvePnP(mp, corners, mxx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
             
             # Append the result in a JSON-serializable format
             results.append({
@@ -312,6 +312,9 @@ def stabilize_frame(frame, quat, room_spin=0, K=starting_K):
 
     # Warp Perspective
     return cv2.warpPerspective(frame, H_final, sf_target_shape, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
+
+def locate_markers_gripper(im):
+    return locate_markers(im, mxx=K_new)
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)

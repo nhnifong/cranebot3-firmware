@@ -209,19 +209,20 @@ def multi_card_residuals(x, averages):
         # Calculate world positions for all cameras that saw this marker
         valid_sightings = []
         
-        for anchor_idx, marker_pose_cam in enumerate(sightings):
-            if marker_pose_cam is None:
-                continue
-            
-            # Chain: Anchor -> Camera -> Marker
-            pose_in_room = compose_poses([
-                anchor_poses[anchor_idx],
-                model_constants.anchor_camera,
-                marker_pose_cam
-            ])
-            
-            # Extract translation (tvec is index 1)
-            valid_sightings.append(pose_in_room[1])
+        for anchor_idx, marker_pose_cams in enumerate(sightings):
+            for marker_pose_cam in marker_pose_cams:
+                if marker_pose_cam is None:
+                    continue
+                
+                # Chain: Anchor -> Camera -> Marker
+                pose_in_room = compose_poses([
+                    anchor_poses[anchor_idx],
+                    model_constants.anchor_camera,
+                    marker_pose_cam
+                ])
+                
+                # Extract translation (tvec is index 1)
+                valid_sightings.append(pose_in_room[1])
 
         if not valid_sightings:
             continue
@@ -282,7 +283,7 @@ def optimize_anchor_poses(averages):
     origin_sightings = averages['origin']
     
     for i in range(4):
-        origin_marker_pose = origin_sightings[i]
+        origin_marker_pose = origin_sightings[i][0]
         
         # Calculate anchor pose relative to room by inverting the chain from origin
         # Anchor = Inverse(Origin_in_Cam + Room_relative_to_Origin + Cam_offset)

@@ -535,7 +535,7 @@ class Floor(Entity):
         act = np.array([*vector, speed, self.smooth_winch_speed, self.finger_angle])
         if not np.array_equal(act, self.last_action) or (now > (self.last_send_t + 0.2) and np.linalg.norm(vector) > 1e-3):
             events.append(control.ControlItem(move=control.CombinedMove(
-                direction = vector,
+                direction = fromnp(vector),
                 speed = speed,
                 finger = self.finger_angle,
                 winch = self.smooth_winch_speed,
