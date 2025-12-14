@@ -20,6 +20,7 @@ from collections import defaultdict, deque
 from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHandshake, ConnectionClosedOK
 from generated.nf import telemetry, common
 import copy
+from video_streamer import VideoStreamer
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -58,6 +59,7 @@ class ComponentClient:
         self.last_frame_cap_time = None
         self.heartbeat_receipt = asyncio.Event()
         self.safety_task = None
+        self.local_udp_port = None
 
         # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
@@ -94,6 +96,12 @@ class ComponentClient:
             container = av.open(video_uri, options=options, mode='r')
             stream = next(s for s in container.streams if s.type == 'video')
             stream.thread_type = "SLICE"
+
+            # start thread for frame risize and forwarding
+            encoder_thread = None
+            if self.anchor_num in [None, *self.config.preferred_cameras]:
+                encoder_thread = threading.Thread(target=self.frame_resizer_loop, daemon=True)
+                encoder_thread.start()
 
             print(f'video connection successful')
             self.conn_status.video_status = telemetry.ConnStatus.CONNECTED
@@ -137,6 +145,9 @@ class ComponentClient:
                 # handle_detections runs in this process, but in a thread managed by the pool.
                 time.sleep(0.005)
 
+            if encoder_thread is not None:
+                encoder_thread.join()
+
         except av.error.TimeoutError:
             print('no video stream available')
             self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
@@ -147,17 +158,37 @@ class ComponentClient:
             if 'container' in locals():
                 container.close()
 
-    def jpeg_encoder_loop(self):
+    def frame_resizer_loop(self):
         """
         This runs in a dedicated thread. It waits for a signal that a new
-        frame is available, then encodes it and stores the bytes.
-        These bytes are intended to be returnd by the GRPC lerobot connects with
-        so this only needs to be running when that is connected.
+        frame is available, resizes it, and stabilizes it in the gripper case.
+        The the frame is written to an ffmpeg subprocess that is sending the video
+        to the ui over UDP or RTMP depending on where it is.
 
-        The purpose of this method is to have a frame ready to return to lerobot as fast as possible.
+        The purpose of this method is to have a frame ready to send as fast as possible,
+        As well as to present resized frames for inference networks to use.
+
+        For the sake of performance, the UIs are made to consume a resolution identcal to the models,
+        but if they needed to be different, we could just to two different resize ops.
+
         Numpy functions such as those used by cv2.resize actually release the GIL
         which is why this is a thread not a task (main loop can run faster this way)
         """
+
+        # TODO allow these to changes when in a teleop mode
+        if self.anchor_num is None:
+            final_shape = sf_target_shape # resize for centering network input
+            final_fps = 10
+        else:   
+            final_shape = (IMAGE_SHAPE[1], IMAGE_SHAPE[0]) # resize for dobby network input
+            final_fps = 10
+
+        vs = VideoStreamer(width=final_shape[1], height=final_shape[0], fps=final_fps, rtmp_url=None)
+        vs.start()
+
+        frames_sent = 0
+        time_last_frame_taken = time.time()-1
+
         while self.connected:
             with self.new_frame_condition:
                 # Wait until the main receive_video loop signals us.
@@ -166,42 +197,46 @@ class ComponentClient:
                 signaled = self.new_frame_condition.wait(timeout=1.0)
                 if not signaled:
                     continue
+                # only take every nth frame based on framerate target
+                now = time.time()
+                if now < (time_last_frame_taken + 1/final_fps):
+                    continue
+                time_last_frame_taken = now
                 # We were woken up, so copy the frame pointer while we have the lock
                 frame_to_encode = self.frame
 
+            if frame_to_encode is None:
+                continue
+
             # Do the actual work outside the lock
             # This lets the receive_video loop add the next frame without waiting for the encode.
-            if frame_to_encode is not None:
-                if self.anchor_num is None:
-                    # gripper
-                    # stabilize and resize for centering network input
-                    temp_image = cv2.resize(frame_to_encode, sf_input_shape, interpolation=cv2.INTER_AREA)
-                    fudge_latency =  0.3
-                    gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
-                    if self.calibrating_room_spin:
-                        roomspin = 15/180*np.pi
-                    else:
-                        roomspin = self.config.gripper_frame_room_spin
-                    self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, roomspin)
+            if self.anchor_num is None:
+                # gripper
+                # stabilize and resize for centering network input
+                temp_image = cv2.resize(frame_to_encode, sf_input_shape, interpolation=cv2.INTER_AREA)
+                fudge_latency =  0.3
+                gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
+                if self.calibrating_room_spin:
+                    roomspin = 15/180*np.pi
                 else:
-                    # anchors
-                    # resize for dobby network input
-                    dsize = (IMAGE_SHAPE[1], IMAGE_SHAPE[0])
-                    self.last_frame_resized = cv2.resize(frame_to_encode, dsize, interpolation=cv2.INTER_AREA)
+                    roomspin = self.config.gripper_frame_room_spin
+                self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, roomspin)
+            else:
+                # anchors
+                self.last_frame_resized = cv2.resize(frame_to_encode, final_shape, interpolation=cv2.INTER_AREA)
 
-                # send self.last_frame_resized to the UI process
+            # send self.last_frame_resized to the UI process
+            vs.send_frame(self.last_frame_resized)
+            frames_sent += 1
+            if frames_sent == 20:
+                self.local_udp_port = vs.local_udp_port
+                self.ob.send_ui(video_ready=telemetry.VideoReady(
+                    is_gripper=self.anchor_num is None,
+                    anchor_num=self.anchor_num,
+                    local_uri=f'udp://127.0.0.1:{vs.local_udp_port}'
+                ))
 
-                if self.anchor_num in self.config.preferred_cameras:
-                    img_preview = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_RGB2BGR)
-                    # TODO send images on side channel
-                    # self.to_ui_q.put({'preview_image': {'anchor_num':self.anchor_num, 'image':img_preview}})
-
-                    if self.lerobot_mode:
-                        params = [int(cv2.IMWRITE_JPEG_QUALITY), 99]
-                        is_success, buffer = cv2.imencode(".jpg", self.last_frame_resized, params)
-                        # Store the result. This is an atomic operation in Python.
-                        if is_success:
-                            self.lerobot_jpeg_bytes = buffer.tobytes()
+        vs.stop()
 
     async def connect_websocket(self):
         # main client loop
@@ -218,7 +253,7 @@ class ComponentClient:
             async with websockets.connect(ws_uri, max_size=None, open_timeout=10) as websocket:
                 self.connected = True
                 print(f"Connected to {ws_uri}.")
-                # TODO Set an event that the observer is waiting on.
+                # Set an event that the observer is waiting on.
                 if self.connection_established_event is not None:
                     self.connection_established_event.set()
                 await self.receive_loop(websocket)
@@ -244,9 +279,6 @@ class ComponentClient:
         # save a reference to this for send_commands
         self.websocket = websocket
         self.notify_video = False
-        # start thread for lerobot jpeg encoding
-        encoder_thread = threading.Thread(target=self.jpeg_encoder_loop, daemon=True)
-        encoder_thread.start()
         # send configuration to robot component to override default.
         r = await self.send_config()
         # start task to watch heartbeat event
@@ -259,7 +291,6 @@ class ComponentClient:
                 # print(f'received message of length {len(message)}')
                 update = json.loads(message)
                 if 'video_ready' in update:
-                    print(f'got a video ready update {update}')
                     port = int(update['video_ready'][0])
                     self.stream_start_ts = float(update['video_ready'][1])
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
@@ -289,8 +320,6 @@ class ComponentClient:
         if vid_thread is not None:
             # vid_thread should stop because self.connected is False
             vid_thread.join()
-        if encoder_thread is not None:
-            encoder_thread.join()
 
     async def send_commands(self, update):
         if self.connected:

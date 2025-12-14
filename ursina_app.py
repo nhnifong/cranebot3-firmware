@@ -216,7 +216,7 @@ class ControlPanelUI:
 
         self.cam_views = {}
         cam_scale = 0.4
-        for key in self.nfconfig.preferred_cameras: # show only two anchors and the gripper for now
+        for key in [*self.nfconfig.preferred_cameras, None]: # show only two anchors and the gripper for now
             c = CamPreview(
                 cam_scale=0.4,
                 name=(f'Anchor {key} camera' if key is not None else 'Gripper camera'),
@@ -500,7 +500,6 @@ class ControlPanelUI:
         attempts = 10
         while attempts > 0:
             try:
-                print('Connecting to local observer process')
                 with websocket_connect_sync('ws://localhost:4245') as websocket:
                     self.websocket = websocket
                     # iterator ends when websocket closes.
@@ -511,7 +510,7 @@ class ControlPanelUI:
                             # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
                             invoke(self.process_update, update, delay=0.0001)
             except ConnectionRefusedError:
-                print('Connection refused at ws://localhost:4245 Local observer not running.\nRun with main.py to start both observer and UI')
+                print('Connection refused at ws://localhost:4245 Local observer not running. Run with main.py to start both observer and UI')
                 time.sleep(2)
                 attempts -= 1
                 continue
@@ -542,6 +541,8 @@ class ControlPanelUI:
             self._handle_grip_cam_preditions(item.grip_cam_preditions)
         if item.target_list:
             self._handle_target_list(item.target_list)
+        if item.video_ready:
+            self._handle_video_ready(item.video_ready)
 
         # if 'preview_image' in updates:
         #     pili = updates['preview_image']
@@ -629,8 +630,8 @@ class ControlPanelUI:
         self.pop_message.show_message(item.message)
 
     def _handle_grip_sensors(self, item: telemetry.GripperSensors):
-        self.gripper.setLaserRange(item.grip_sensors.range)
-        self.gripper.setFingerAngle(item.grip_sensors.angle)
+        self.gripper.setLaserRange(item.range)
+        self.gripper.setFingerAngle(item.angle)
 
     def _handle_grip_cam_preditions(self, item: telemetry.GripCamPredictions):
         self.cam_views[None].set_predictions(item)
@@ -638,6 +639,13 @@ class ControlPanelUI:
     def _handle_target_list(self, item: telemetry.TargetList):
         # use this to re-write the panel on the left that indicates active targets
         self.action_list.set_target_list(item)
+
+    def _handle_video_ready(self, item: telemetry.VideoReady):
+        # connect to the video at the local address
+        print(f'_handle_video_ready {item}')
+        receive_video_thread = threading.Thread(
+            target=self.cam_views[item.anchor_num].connect_to_stream, args=(item.local_uri,), daemon=True)
+        receive_video_thread.start()
 
     def start(self):
         self.app.run()

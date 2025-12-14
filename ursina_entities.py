@@ -14,6 +14,7 @@ from PIL import Image
 from ssh_launch import launch_ssh_terminal
 from generated.nf import telemetry, control, common
 from util import *
+import av
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -927,6 +928,30 @@ class CamPreview(Entity):
         # Only allow locking if this is an anchor (not generic/gripper) AND not already locked
         if self.anchor and not self.floor.locked:
             self.floor.lock_target()
+
+    def connect_to_stream(self, uri):
+        """
+        Connect to a stream that provides the base video frames
+        Must be run in it's own thread.
+        """
+
+        options = {
+            'rtsp_transport': 'udp',
+            'fflags': 'nobuffer',
+            'flags': 'low_delay',
+            'fast': '1',
+        }
+        print(f'connecting to {uri}')
+        try:
+            container = av.open(uri, options=options, mode='r')
+            stream = next(s for s in container.streams if s.type == 'video')
+            stream.thread_type = "SLICE"
+            for packet in container.demux(stream):
+                for frame in packet.decode():
+                    arr = frame.to_ndarray(format='rgb24')
+                    invoke(self.setImage, arr, delay=0.0001)
+        except Exception as e:
+            print(f'unable to connect to {uri} {e}')
 
 class ActionList(Entity):
     def __init__(self):
