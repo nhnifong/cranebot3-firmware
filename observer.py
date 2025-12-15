@@ -236,6 +236,10 @@ class AsyncObserver:
                 self._handle_collect_images()
             case control.Command.SHUTDOWN:
                 self.run_command_loop = False
+            case control.Command.PARK:
+                r = await self.invoke_motion_task(self.park())
+            case control.Command.UNPARK:
+                r = await self.invoke_motion_task(self.unpark())
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
@@ -523,6 +527,9 @@ class AsyncObserver:
 
             await self.half_auto_calibration()
 
+            # open grip enough that we can see an unobstructed view from the palm camera
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
+
             # move over the origin card
             self.gantry_goal_pos = np.array([0,0,1.2])
             await self.seek_gantry_goal()
@@ -578,6 +585,45 @@ class AsyncObserver:
         await asyncio.sleep(1)
         range_at_end = self.datastore.range_record.getLast()[1]
         print(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
+
+    async def park(self):
+        """
+        Drop item and park on the saddle for safe power down. 
+        
+        This procedure is absolutely naieve and never going to work reliably with feedback at every step.
+        Probably a specific network can be trained on the gripper camera to produce the needed feedback.
+        """
+        # open gripper
+        asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
+
+        # move over saddle.
+        # TODO Since the saddle can be high and close to the wall, we may want to slow down signifigantly before we get there.
+        winch_len = self.datastore.winch_line_record.getLast()[1]
+        self.gantry_goal_pos = fromnp(self.config.saddle_position) + np.array([0,0, winch_len + 0.1])
+        await self.seek_gantry_goal()
+
+        # slowly lower onto saddle. How do we know when we hit it?
+        # gripper camera goes black
+        r = await self.move_direction_speed(np.array([0,0,-0.05]))
+        await asyncio.sleep(0.1)
+        await self.stop_all()
+
+        # close gripper enough to clamp onto saddle
+        asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': 10}))
+
+
+    async def unpark(self):
+        """ Unpark from the saddle and move clear of it. """
+        pass
+        # tighten all
+
+        # open grip
+
+        # move up
+
+        # move about a meter towards origin while extending winch to operating length
+
+        # half cal
 
     def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange

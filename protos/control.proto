@@ -23,6 +23,10 @@ enum Command {
   COMMAND_ENABLE_LEROBOT = 5;
   // Begin performing automated pick and drop of targets in queue
   COMMAND_PICK_AND_DROP = 9;
+  // Drop everything and auto park on the saddle
+  COMMAND_PARK = 10;
+  // Unpark from the saddle and move clear of it.
+  COMMAND_UNPARK = 11;
 
   // =====  Commands intended only for diagnostics =====
 
