@@ -49,7 +49,7 @@ gripper_service_name = 'cranebot-gripper-service'
 
 N_ANCHORS = 4
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
-
+CONTROL_PLANE = "localhost:8080"
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
@@ -141,18 +141,8 @@ class AsyncObserver:
         self.startup_complete = asyncio.Event()
         self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
 
-        # Command dispatcher maps command strings to handler methods
-        self.command_handlers = {
-            'do_line_calibration': self.sendReferenceLengths,
-            'set_simulated_data_mode': self.set_simulated_data_mode,
-        }
-
-    async def handle_local_client(self, websocket):
-        # Called when Ursina connects to a websocket that is opened to accept control commands
-        self.connected_local_clients.add(websocket)
-        print('Connection received from local UI process')
-
-        # send anything that it would need up-front
+    async def send_setup_telemetry(self):
+        # TODO this ought to send to a particular UI not everyone.
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
             poses=[a.pose for a in self.config.anchors]
         ))
@@ -163,7 +153,15 @@ class AsyncObserver:
                     anchor_num=client.anchor_num,
                     local_uri=f'udp://127.0.0.1:{client.local_udp_port}'
                 ))
+        await self.flush_tele_buffer()
 
+    async def handle_local_client(self, websocket):
+        # Called when Ursina connects to a websocket that is opened to accept control commands
+        self.connected_local_clients.add(websocket)
+        print('Connection received from local UI process')
+
+        # send anything that it would need up-front
+        await self.send_setup_telemetry()
         try:
             async for message in websocket:
                 r = await self.handle_command(message) # Handle 'ControlBatchUpdate'
@@ -721,7 +719,7 @@ class AsyncObserver:
         # sleep until there is something to do
         if not config_has_any_address(self.config) and self.run_command_loop:
             await asyncio.sleep(0.5)
-        print('Config not empty, beging connected to discovered components')
+        print('Config not empty, begin connecting to discovered components')
 
         # last attempt to connect, keyed by service name
         self.connection_tasks: dict[str, asyncio.Task] = {}
@@ -789,6 +787,26 @@ class AsyncObserver:
             # delete this task from the dict as it ends, so keep_robot_connected will try agian. 
             del self.connection_tasks[service_name]
 
+    async def connect_cloud_telemetry(self):
+        try:
+            async with websockets.connect(f"ws://{CONTROL_PLANE}/telemetry/{self.config.robot_id}", max_size=None, open_timeout=10) as websocket:
+                self.cloud_telem_websocket = websocket
+                print(f'connected to control_plane {websocket}')
+                # send anything that it would need up-front
+                await self.send_setup_telemetry()
+                try:
+                    async for message in websocket:
+                        r = await self.handle_command(message)
+                        if not self.run_command_loop:
+                            websocket.close()
+                except (ConnectionClosedError, ConnectionClosedOK) as e:
+                    pass
+                finally:
+                    print(f'disconnected from control_plane {websocket}')
+                    self.cloud_telem_websocket = None
+        except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
+            pass # normal close
+
     def send_ui(self, **kwargs):
         """
         Ensure that the given telemetry item is sent to every connected UI
@@ -812,13 +830,15 @@ class AsyncObserver:
             )
             self.telemetry_buffer.clear()
         to_send = bytes(batch)
-        # TODO prevent RuntimeError: Set changed size during iteration
-        for ui_websocket in self.connected_local_clients:
+        # copy list to prevent RuntimeError: Set changed size during iteration
+        connected_clients = self.connected_local_clients
+        if self.cloud_telem_websocket:
+            connected_clients.add(self.cloud_telem_websocket)
+        for ui_websocket in connected_clients:
             try:
                 await ui_websocket.send(to_send)
             except (ConnectionClosedOK, ConnectionClosedError) as e:
-                pass
-        # TODO send to cloud as well if connected
+                pass # stale connection
 
     async def start_pe_when_ready(self):
         await self.any_anchor_connected.wait()
@@ -861,6 +881,8 @@ class AsyncObserver:
             # start a task to connect and reconnect to all known robot components.
             self.keeper = asyncio.create_task(self.keep_robot_connected())
 
+            self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())
+
             # start a websocket server to accept incoming connection from local ursia UI process
             async with websockets.serve(self.handle_local_client, "127.0.0.1", 4245):
                 # await something that will end when the program closes to keep serving and
@@ -878,7 +900,7 @@ class AsyncObserver:
         self.stat.run = False
         self.pe.run = False
         self.pe_task.cancel()
-        tasks = [self.pe_task, self.keeper]
+        tasks = [self.pe_task, self.keeper, self.cloud_telem]
         if self.grpc_server is not None:
             tasks.append(self.grpc_server.stop(grace=5))
         if self.aiobrowser is not None:
