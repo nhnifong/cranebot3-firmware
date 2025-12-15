@@ -60,6 +60,16 @@ class Command(betterproto2.Enum):
     Begin performing automated pick and drop of targets in queue
     """
 
+    PARK = 10
+    """
+    Drop everything and auto park on the saddle
+    """
+
+    UNPARK = 11
+    """
+    Unpark from the saddle and move clear of it.
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -87,6 +97,8 @@ class Command(betterproto2.Enum):
             4: "COMMAND_STOP_ALL",
             5: "COMMAND_ENABLE_LEROBOT",
             9: "COMMAND_PICK_AND_DROP",
+            10: "COMMAND_PARK",
+            11: "COMMAND_UNPARK",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -102,6 +114,8 @@ class Command(betterproto2.Enum):
             "COMMAND_STOP_ALL": 4,
             "COMMAND_ENABLE_LEROBOT": 5,
             "COMMAND_PICK_AND_DROP": 9,
+            "COMMAND_PARK": 10,
+            "COMMAND_UNPARK": 11,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,

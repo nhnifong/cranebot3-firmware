@@ -388,13 +388,15 @@ class ControlPanelUI:
     def _create_menus(self):
         # Setup the DropdownMenu
         DropdownMenu('Menu', z=-10, buttons=(
-            DropdownMenuButton('Tension all lines (D-up)', on_click=partial(self.simple_command, control.Command.TIGHTEN_LINES)),
-            DropdownMenuButton('Run Full Calibration', on_click=partial(self.simple_command, control.Command.FULL_CAL)),
+            DropdownMenuButton('Tension all lines (D-up)',       on_click=partial(self.simple_command, control.Command.TIGHTEN_LINES)),
+            DropdownMenuButton('Run Full Calibration',           on_click=partial(self.simple_command, control.Command.FULL_CAL)),
             DropdownMenuButton('Run Quick Calibration (D-left)', on_click=partial(self.simple_command, control.Command.HALF_CAL)),
-            DropdownMenuButton('Zero Gripper Winch Line', on_click=partial(self.simple_command, control.Command.ZERO_WINCH)),
-            DropdownMenuButton('Horizontal Move Test', on_click=partial(self.simple_command, control.Command.HORIZONTAL_CHECK)),
-            DropdownMenuButton('Gamepad Controls', on_click=self.toggle_gamepad_window),
-            DropdownMenuButton('Collect Gripper Images', on_click=partial(self.simple_command, control.Command.COLLECT_GRIPPER_IMAGES)),
+            DropdownMenuButton('Zero Gripper Winch Line',        on_click=partial(self.simple_command, control.Command.ZERO_WINCH)),
+            DropdownMenuButton('Horizontal Move Test',           on_click=partial(self.simple_command, control.Command.HORIZONTAL_CHECK)),
+            DropdownMenuButton('Gamepad Controls',               on_click=self.toggle_gamepad_window),
+            DropdownMenuButton('Collect Gripper Images',         on_click=partial(self.simple_command, control.Command.COLLECT_GRIPPER_IMAGES)),
+            DropdownMenuButton('Park',                           on_click=partial(self.simple_command, control.Command.PARK)),
+            DropdownMenuButton('UnPark',                         on_click=partial(self.simple_command, control.Command.UNPARK)),
             ))
 
     def toggle_gamepad_window(self):
