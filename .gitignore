@@ -13,3 +13,11 @@ mks42c_expected_err.cal
 zero-angles.txt
 tests/last_dataset
 *_dataset
+dataset_heatmap/
+laundry_spots_data/
+gant_pos.npy
+square_centering_data_unlabled/
+square_centering_data/
+multi_view_data/
+trainer/models/multiview_4cam.pth
+configuration.json

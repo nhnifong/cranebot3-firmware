@@ -11,7 +11,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import unittest
 import numpy as np
 from math import pi
-from cv_common import compose_poses, invert_pose, average_pose
+import cv2
+from cv_common import *
+import model_constants
+from config_loader import load_config
+from util import *
 
 
 def p(l): # make a numpy array of floats out of the given list. for brevity
@@ -154,3 +158,91 @@ class TestPoseFunctions(unittest.TestCase):
         result = compose_poses(poses)
         np.testing.assert_array_almost_equal(result[0], expected[0]) # rotation
         np.testing.assert_array_almost_equal(result[1], expected[1]) # position
+
+    def test_project_pixels_to_floor(self):
+        config = load_config()
+
+        anchor_pose = poseProtoToTuple(config.anchors[0].pose)
+        anchor_camera_pose = np.array(compose_poses([
+            anchor_pose,
+            model_constants.anchor_camera,
+        ]))
+
+        pixels = np.array([
+            (0.5, 0.4),
+            (0.5, 0.5),
+            (0.5, 0.6),
+        ])
+        floor_pos = project_pixels_to_floor(pixels, anchor_camera_pose)
+        print(floor_pos)
+        assert(floor_pos is not None)
+        self.assertEqual((3, 2), floor_pos.shape)
+
+    def test_project_center_pixel_from_corner(self):
+        """
+        Scenario: Camera is up in a corner (2m, 2m, 2m).
+        Target: It is looking directly at the World Origin (0,0,0).
+        Test: The CENTER pixel of the image MUST map to (0,0) on the floor.
+        """
+        
+        # override intrinsics with something simple (Simple pinhole, no distortion)
+        W, H = 1920, 1080
+        cx, cy = W / 2.0, H / 2.0 # Principal point is exactly center
+        
+        K = np.array([
+            [1000, 0, cx],
+            [0, 1000, cy],
+            [0, 0, 1]
+        ], dtype=float)
+        D = np.zeros(5)
+        
+        cam_position = [2.0, 2.0, 2.0] # 2 meters up/out in corner
+        target_point = [0.0, 0.0, 0.0] # World Origin
+        
+        pose = create_lookat_pose(cam_position, target_point)
+        center_pixel = (0.5, 0.5) 
+        
+        floor_pts = project_pixels_to_floor(np.array([center_pixel]), pose, K, D)
+        
+        print(f"\nTest Configuration:")
+        print(f"  Camera Pos: {cam_position}")
+        print(f"  Looking At: {target_point}")
+        print(f"  Pixel Input: {center_pixel}")
+        print(f"  Projected Floor Point: {floor_pts[0]}")
+        
+        self.assertIsNotNone(floor_pts, "Projection returned None (ray missed floor?)")
+        
+        # We expect 0.0, 0.0. Allow small float tolerance.
+        np.testing.assert_allclose(
+            floor_pts, 
+            [target_point[:2]], # (0,0)
+            atol=0.01,        # 1cm tolerance
+            err_msg="The center pixel did not project to the world origin!"
+        )
+
+    def test_project_floor_to_pixels(self):
+        W, H = 1920, 1080
+        cx, cy = W / 2.0, H / 2.0 # Principal point is exactly center
+        
+        K = np.array([
+            [1000, 0, cx],
+            [0, 1000, cy],
+            [0, 0, 1]
+        ], dtype=float)
+        D = np.zeros(5)
+        
+        cam_position = [2.0, 2.0, 2.0] # 2 meters up/out in corner
+        target_point = [0.0, 0.0, 0.0] # World Origin
+        
+        pose = create_lookat_pose(cam_position, target_point)
+        pixels = np.array([
+            (0.5, 0.4),
+            (0.5, 0.5),
+            (0.5, 0.6),
+        ])
+        
+        floor_pts = project_pixels_to_floor(pixels, pose, K, D)
+
+        # round trip
+        out_pixels = project_floor_to_pixels(floor_pts, pose, K, D)
+        np.testing.assert_array_almost_equal(out_pixels, pixels)

@@ -2,17 +2,17 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 import scipy.optimize as optimize
-from time import time, sleep
+import time
 import glob
-from config import Config
-from cv_common import compose_poses, gantry_april_inv
+from config_loader import *
+from cv_common import *
 import model_constants
 from spools import SpiralCalculator
 from itertools import combinations
 from position_estimator import find_hang_point
 import argparse
 import logging
-
+from generated.nf import config
 # Set up logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -45,12 +45,12 @@ def collect_images_locally_raspi(num_images, resolution_str):
     picam2.start()
     picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 0.000001, "AfSpeed": controls.AfSpeedEnum.Fast}) 
     logging.info("Started Pi camera.")
-    sleep(1)
+    time.sleep(1)
     for i in range(num_images):
-        sleep(1)
+        time.sleep(1)
         im = picam2.capture_array()
         cv2.imwrite(f"images/cal/cap_{i}.jpg", im)
-        sleep(1)
+        time.sleep(1)
         logging.info(f'Collected ({i+1}/{num_images}) images.')
 
 def collect_images_stream(address, num_images):
@@ -64,19 +64,19 @@ def collect_images_stream(address, num_images):
     logging.info(f'Connecting to {address}...')
     cap = cv2.VideoCapture(address)
     logging.debug(f'Video capture object: {cap}')
-    last_cap_time = time()
+    last_cap_time = time.time()
     i = 0
     while i < num_images:
         ret, frame = cap.read()
         if not ret:
             logging.warning("Failed to capture frame from stream. Retrying...")
             return
-        if time() > last_cap_time+1:
-            fpath = f'images/cal/cap_{i}.jpg'
+        if time.time() > last_cap_time+1:
+            fpath = f'images/cal2/cap_{i}.png'
             cv2.imwrite(fpath, frame)
             i += 1
             logging.info(f'Saved frame to {fpath}')
-            last_cap_time = time()
+            last_cap_time = time.time()
 
 def is_blurry(image, threshold=6.0):
     """
@@ -160,16 +160,16 @@ class CalibrationInteractive:
 
     def save(self): 
         logging.info('Saving data to configuration.json...')
-        config = Config()
-        config.intrinsic_matrix = self.intrinsic_matrix
-        config.distortion_coeff = self.distCoeff
-        config.resolution = (self.image_shape[1], self.image_shape[0])
-        config.write()
+        cfg = load_config()
+        cfg.intrinsic_matrix = self.intrinsic_matrix.flatten().tolist()
+        cfg.distortion_coeff = self.distCoeff.flatten().tolist()
+        cfg.resolution = config.CameraCalibration.Resolution(width=self.image_shape[1], height=self.image_shape[0])
+        save_config(cfg)
 
 # calibrate from files locally
 def calibrate_from_files():
     ce = CalibrationInteractive()
-    for filepath in glob.glob('images/cal/*.jpg'):
+    for filepath in glob.glob('images/cal/*.png'):
         logging.info(f"Analyzing {filepath}")
         image = cv2.imread(filepath)
         ce.addImage(image)
@@ -192,386 +192,137 @@ def calibrate_from_stream(address):
 
 ### the following functions pertain to calibration of the entire assembled robot, not just one camera ###
 
-def params_consistent_with_move(
-    starting_pos_visual, ending_pos_visual,
-    encoder_lengths1, encoder_lengths2,
-    anchor_points):
+def multi_card_residuals(x, averages):
     """
-    Return a score measuring how well params predict an observed move.
+    Computes the vector of residuals (differences) for least_squares.
+    
+    Returns:
+        1D numpy array of floats. The optimizer minimizes sum(residuals**2).
+        We return raw differences (meters), not squared errors.
     """
-    # Calculate the apparent move based only on the visual observations
-    # This uses the mean gantry position from each position
-    vis_move = starting_pos_visual - ending_pos_visual
-
-    # Calculate a hypothetical hang point for the start and ending encoder values
-    hang_points = []
-    for encoder_based_lengths in [encoder_lengths1, encoder_lengths2]:
-        hp_result = find_hang_point(anchor_points, encoder_based_lengths)
-        if hp_result is None:
-            return 1 # 1 meter
-        hang_points.append(hp_result[0]) # element 0 is position, element 1 is predicted line tightness.
-
-    # Calculate the apparent move based on hang points only
-    hang_move = hang_points[1] - hang_points[0]
-
-    # The error is the magnitude of the difference between the two moves
-    return np.linalg.norm(vis_move - hang_move)
-
-
-def calibration_cost_fn(params, observations, spools, mode='full', fixed_poses=None):
-    """
-    Return the mean squared error for the calibration parameters.
-
-    This function can operate in two modes:
-    - 'full': Optimizes anchor poses (rotation, x, y) and zero angles.
-      `params` is a flat array of 24 values (4 anchors * 6 params).
-    - 'zero_angles_only': Optimizes only the zero angles, using pre-calculated poses.
-      `params` is a flat array of 4 zero angles. `fixed_poses` must be provided.
-    """
-    # Unpack parameters based on the operating mode
-    if mode == 'full':
-        # The incoming `params` is a flat array of 24 elements.
-        # Reshape it to our logical (4 anchors, 6 params) structure.
-        params_matrix = params.reshape((4, 6))
-        # Explicitly unpack each part of the matrix into named variables.
-        rodrigues_vectors = params_matrix[:, 0:3]  # Columns 0, 1, 2 are rotation
-        positions_xy = params_matrix[:, 3:5]      # Columns 3, 4 are position X, Y
-        zero_angles = params_matrix[:, 5]         # Column 5 is the zero angle
-
-        # construct the anchor_poses array.
-        anchor_poses = np.zeros((4, 2, 3))
-        # Fill the rotation part
-        anchor_poses[:, 0, :] = rodrigues_vectors
-        # Fill the position part
-        anchor_poses[:, 1, 0:2] = positions_xy
-        anchor_poses[:, 1, 2] = 2.5  # Set a constant Z value directly
-
-    elif mode == 'zero_angles_only':
-        # In 'zero_angles_only' mode, params are just the zero angles
-        assert fixed_poses is not None, "fixed_poses must be provided in 'zero_angles_only' mode."
-        zero_angles = params
-        anchor_poses = fixed_poses
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-
-    for i in range(4):
-        spools[i].set_zero_angle(zero_angles[i])
-
-    # Proceed with cost calculation
-    anchor_grommets = np.array([compose_poses([p, model_constants.anchor_grommet])[1] for p in anchor_poses])
-
-    all_length_errs = []
-    all_consistency_errs = []
-
-    # save some results during the first loop for the move consistency calculation.
-    intermediate_data = []
-
-    for sample in observations:
-        encoder_based_lengths = np.array([spools[i].get_unspooled_length(sample['encoders'][i]) for i in range(4)])
-        # meters from the bottom of the gripper to the floor (or furniture)
-        # laser_range = sample['laser_range']
-
-        gantry_positions_by_anchor = [[] for _ in range(4)]
-        for anchor_num, obs_list in enumerate(sample['visuals']):
-            for pose in obs_list:
-                global_gantry_pose = compose_poses([
-                    anchor_poses[anchor_num],
+    anchor_poses = x.reshape((4, 2, 3))
+    residuals = []
+    
+    # Iterate over every marker (Origin and Cal Assists)
+    for marker_name, sightings in averages.items():
+        
+        # Calculate world positions for all cameras that saw this marker
+        valid_sightings = []
+        
+        for anchor_idx, marker_pose_cams in enumerate(sightings):
+            for marker_pose_cam in marker_pose_cams:
+                if marker_pose_cam is None:
+                    continue
+                
+                # Chain: Anchor -> Camera -> Marker
+                pose_in_room = compose_poses([
+                    anchor_poses[anchor_idx],
                     model_constants.anchor_camera,
-                    pose,
-                    gantry_april_inv,
+                    marker_pose_cam
                 ])
-                gantry_positions_by_anchor[anchor_num].append(global_gantry_pose[1])
+                
+                # Extract translation (tvec is index 1)
+                valid_sightings.append(pose_in_room[1])
 
-        # Position consistency error (only relevant in full mode)
-        if mode == 'full':
-            gantry_positions_by_anchor_np = [np.array(positions) for positions in gantry_positions_by_anchor]
-            for i, j in combinations(range(4), 2):
-                pos_i = gantry_positions_by_anchor_np[i]
-                pos_j = gantry_positions_by_anchor_np[j]
-                if pos_i.size > 0 and pos_j.size > 0:
-                    diffs = pos_i[:, np.newaxis, :] - pos_j[np.newaxis, :, :]
-                    distances = np.linalg.norm(diffs, axis=2)
-                    all_consistency_errs.append(distances.flatten())
-
-        gantry_positions = np.array([pos for sublist in gantry_positions_by_anchor for pos in sublist])
-        if len(gantry_positions) == 0:
-            continue # This point should not have even been recorded.
-
-        # Encoder to visual error
-        visual_based_lengths = np.linalg.norm(
-            anchor_grommets.reshape(1, 4, 3) - gantry_positions.reshape(gantry_positions.shape[0], 1, 3),
-            axis=-1
-        )
-        errors_per_sample = (visual_based_lengths - encoder_based_lengths.reshape(1, 4)).flatten()
-        all_length_errs.append(errors_per_sample)
-
-        intermediate_data.append({
-            'mean_gantry_pos': np.mean(gantry_positions, axis=0),
-            'encoder_lengths': encoder_based_lengths
-        })
-
-        # todo: add another error term to constrain scale and z offset.
-        # take readings of gripper winch line and laser rangefidner with each sample point.
-        # Every gantry position implies a certain floor z level. all of these should be equal.
-        # these measurements however would be invalid if the sample point were over a piece of furniture,
-        # so this error term may only be done for positions over the origin card.
-        # however, we could place more cards on the floor, which has other benefits too.
-
-    # Calculate move consistency error between consecutive points ---
-    all_move_consistency_errs = []
-    for i in range(1, len(intermediate_data)):
-        point1 = intermediate_data[i-1]
-        point2 = intermediate_data[i]
+        if not valid_sightings:
+            continue
+            
+        projected_positions = np.array(valid_sightings)
         
-        # Ensure both consecutive points had valid visual data
-        if point1 and point2:
-            err = params_consistent_with_move(
-                starting_pos_visual=point1['mean_gantry_pos'],
-                ending_pos_visual=point2['mean_gantry_pos'],
-                encoder_lengths1=point1['encoder_lengths'],
-                encoder_lengths2=point2['encoder_lengths'],
-                anchor_points=anchor_grommets
-            )
-            all_move_consistency_errs.append(err)
-
-    # Combine errors and return final cost
-    all_errors_combined = []
-    if all_length_errs:
-        all_errors_combined.append(np.concatenate(all_length_errs))
-    if all_consistency_errs:
-        all_errors_combined.append(np.concatenate(all_consistency_errs) * 0.5)
-    if all_move_consistency_errs:
-        all_errors_combined.append(np.array(all_move_consistency_errs) * 0.3)
-
-    if all_errors_combined:
-        final_errs_array = np.concatenate(all_errors_combined)
-        return np.mean(final_errs_array**2)
-    else:
-        return 0.0
+        # Calculate Residuals based on marker type
+        if marker_name == 'origin':
+            # constraint 1: Origin must be at [0,0,0]
+            # Residual = Position_Calculated - [0,0,0]
+            # We add 3 residuals (dx, dy, dz) per sighting
+            
+            origin_weight = 5.0 # tune this to to make origin errors more expensive
+            current_residuals = (projected_positions - np.zeros(3)) * origin_weight
+            residuals.extend(current_residuals.flatten())
+            
+        elif len(projected_positions) > 1:
+            # constraint 2: Consistency
+            # Residual = Position_Calculated - Average_Position
+            
+            # Calculate the centroid of where the anchors currently "think" the marker is
+            centroid = np.mean(projected_positions, axis=0)
+            
+            # The error is the distance of each sighting from that shared centroid
+            current_residuals = projected_positions - centroid
+            residuals.extend(current_residuals.flatten())
 
 
-def find_cal_params(current_anchor_poses, observations, large_spool_index, mode='full', maxiter=10000):
+        # constrain anchors to a flat plane in the z axis.
+        if True:
+            # Extract Z coordinates from all 4 anchors
+            anchor_zs = anchor_poses[:, 1, 2]
+            
+            # Calculate the average Z plane
+            avg_z = np.mean(anchor_zs)
+            
+            # Penalize deviation from the average plane
+            z_weight = 100.0
+            z_residuals = (anchor_zs - avg_z) * z_weight
+            residuals.extend(z_residuals)
+
+    return np.array(residuals)
+
+def optimize_anchor_poses(averages):
+    """Finds optimal anchor poses
+    Args:
+        averages: dict keyed by marker names. each value is a list of four poses corresponding to the four anchors.
+            poses represent the pose of the marker in the camera's referene frame.
     """
-    Find optimal calibration parameters based on previously collected data.
 
-    This function can be called in two modes:
-    - mode='full': Optimizes anchor poses (rotation, x, y) and zero angles.
-    - mode='zero_angles_only': Uses the provided `current_anchor_poses` as
-      fixed values and only optimizes the zero angles.
-    """
-    spools = []
-    average_z = np.mean(current_anchor_poses[:, 1, 2])
+    # the detection of the origin marker alone is not sufficient to constrain anchor poses with enough accuracy.
+    # using the average pose of each marker from each camera,
+    # minimize the error between the room position of markers from different perspectives.
+    # while also minimizing the error between the origin marker room positions and [0,0,0]
+
+    initial_guesses = []
+    # We rely on 'origin' being fully populated to seed the initial guess.
+    origin_sightings = averages['origin']
+    
     for i in range(4):
-        full_diameter = model_constants.full_spool_diameter_power_line if i == large_spool_index else model_constants.full_spool_diameter_fishing_line
-        spools.append(SpiralCalculator(
-            empty_diameter=model_constants.empty_spool_diameter,
-            full_diameter=full_diameter,
-            full_length=model_constants.assumed_full_line_length,
-            gear_ratio=20/51,
-            motor_orientation=-1
-        ))
-
-    if mode == 'full':
-        initial_guess = []
-        bounds = []
-        for apose in current_anchor_poses:
-            guess = [
-                *apose[0],    # xyz rotation component
-                apose[1][0],  # x position component
-                apose[1][1],  # y position component
-                -150,          # initial guess of zero angle
-            ]
-            initial_guess.append(guess)
-            bounds.append([
-                (guess[0] - 0.2, guess[0] + 0.2),
-                (guess[1] - 0.2, guess[1] + 0.2),
-                (guess[2] - 0.2, guess[2] + 0.2),
-                (-8, 8),
-                (-8, 8),
-                (-400, 400),
-            ])
+        origin_marker_pose = origin_sightings[i][0]
         
-        initial_guess = np.array(initial_guess).flatten()
-        bounds = np.array(bounds).reshape((len(initial_guess), 2))
-        args = (observations, spools, 'full', None)
-        logging.info(f"Number of observations: {len(observations)}")
+        # Calculate anchor pose relative to room by inverting the chain from origin
+        # Anchor = Inverse(Origin_in_Cam + Room_relative_to_Origin + Cam_offset)
+        guess = invert_pose(compose_poses([
+            model_constants.anchor_camera,
+            origin_marker_pose,
+        ]))
+        
+        initial_guesses.append(guess)
 
-    elif mode == 'zero_angles_only':
-        initial_guess = np.array([-150.0] * 4)
-        bounds = [(-400, 400)] * 4
-        # Pass the fixed poses to the cost function via args
-        args = (observations, spools, 'zero_angles_only', current_anchor_poses)
-
-    else:
-        raise ValueError(f"Unknown optimization mode: {mode}")
-
-    result = optimize.minimize(
-        calibration_cost_fn,
-        initial_guess,
-        args=args,
-        method='SLSQP',
-        bounds=bounds,
-        options={'disp': False, 'maxiter': maxiter}
+    # 'lm' (Levenberg-Marquardt) is standard for unconstrained least squares
+    print('running least squares optimization')
+    result = optimize.least_squares(
+        multi_card_residuals,
+        np.array(initial_guesses).flatten(),
+        args=(averages,),
+        method='lm', 
+        max_nfev=1000,
+        verbose=0
     )
 
-    # --- Process and return results based on the mode ---
-    try:
-        assert result.success
-        if mode == 'full':
-            # Unpack the full 24-parameter result
-            params = result.x.reshape((4, 6))
-            zero_angles = params[:, 5].copy()
-            # Reconstruct poses and set the fixed average Z
-            poses = params.reshape((4, 2, 3))
-            poses[:, 1, 2] = average_z
-        else: # mode == 'zero_angles_only'
-            # The poses are the ones we passed in, and the result is the zero angles
-            poses = current_anchor_poses
-            zero_angles = result.x
-        
-        return poses, zero_angles
-    except AssertionError:
-        logging.error(f"Optimization failed. Result:\n{result}")
-        return None, None
+    if not result.success:
+        logging.error(f"Optimization failed. Status: {result.status}, Msg: {result.message}")
+        return None
 
-def order_points_for_low_travel(points):
-    """
-    Orders a list of 3D points to achieve a low total travel distance
-    using an Greedy Bidirectional Nearest Neighbor heuristic.
-
-    This algorithm starts at an arbitrary point, then at each step, it
-    finds the closest unvisited point to both the current beginning and end
-    of the path. It extends the path from the end that has a shorter
-    connection to an unvisited point.
-
-    Args:
-        points (np.ndarray): A NumPy array of shape (N, 3) where N is the
-                            number of points, and each row is an (x, y, z)
-                            coordinate.
-
-    Returns:
-        tuple: A tuple containing:
-            - ordered_points (np.ndarray): The points reordered along the path.
-            - total_distance (float): The total Euclidean distance of the path.
-                                     Returns (empty array, 0.0) if input is empty.
-
-    Function written by AI
-    """
-    if points.shape[0] == 0:
-        logging.warning("Input points array is empty. Returning empty ordered_points and 0.0 distance.")
-        return np.array([]), 0.0
-    if points.shape[0] == 1:
-        logging.warning("Only one point provided. Returning the point and 0.0 distance.")
-        return points, 0.0
-
-    num_points = points.shape[0]
-    
-    # Keep track of visited points using a boolean array for efficiency
-    visited = np.zeros(num_points, dtype=bool)
-    
-    # Start with the first point (arbitrary initial choice)
-    start_index = 0
-    
-    # The path is maintained as a deque or by managing head and tail indices
-    # We'll use a list and manage head/tail pointers
-    ordered_indices = [start_index]
-    visited[start_index] = True
-    
-    current_head_idx = start_index # Index of the point at the current beginning of the path
-    current_tail_idx = start_index # Index of the point at the current end of the path
-    
-    total_distance = 0.0
-
-    # Loop until all points are visited (num_points - 1 connections to make)
-    for _ in range(num_points - 1):
-        min_dist_head = float('inf')
-        nearest_to_head_idx = -1
-        
-        min_dist_tail = float('inf')
-        nearest_to_tail_idx = -1
-        
-        # Find the nearest unvisited neighbor for the current head and tail
-        for i in range(num_points):
-            if not visited[i]:
-                # Distance from current head to candidate point i
-                dist_from_head = np.linalg.norm(points[current_head_idx] - points[i])
-                if dist_from_head < min_dist_head:
-                    min_dist_head = dist_from_head
-                    nearest_to_head_idx = i
-                
-                # Distance from current tail to candidate point i
-                dist_from_tail = np.linalg.norm(points[current_tail_idx] - points[i])
-                if dist_from_tail < min_dist_tail:
-                    min_dist_tail = dist_from_tail
-                    nearest_to_tail_idx = i
-        
-        # Decide which end to extend based on the shorter distance
-        # Ensure a valid neighbor was found for at least one end
-        if nearest_to_head_idx == -1 and nearest_to_tail_idx == -1:
-            # This should only happen if all points are visited, but a safety break
-            break
-
-        if nearest_to_head_idx != -1 and (nearest_to_tail_idx == -1 or min_dist_head <= min_dist_tail):
-            # Extend from the head
-            ordered_indices.insert(0, nearest_to_head_idx) # Prepend to the list
-            visited[nearest_to_head_idx] = True
-            total_distance += min_dist_head
-            current_head_idx = nearest_to_head_idx
-        elif nearest_to_tail_idx != -1: # min_dist_tail < min_dist_head
-            # Extend from the tail
-            ordered_indices.append(nearest_to_tail_idx) # Append to the list
-            visited[nearest_to_tail_idx] = True
-            total_distance += min_dist_tail
-            current_tail_idx = nearest_to_tail_idx
-        else:
-            # Fallback for unexpected scenarios (e.g., if only one end had a valid neighbor)
-            # This logic should cover all cases, but a print for debugging if needed
-            logging.warning("Neither head nor tail could find a valid next point. Breaking loop.")
-            break
-            
-    # Convert the list of ordered indices to an array of points
-    ordered_points = points[ordered_indices]
-    
-    return ordered_points, total_distance
-
-def calibrate_poses_from_data():
-    import pickle
-    with open('collected_cal_data.pickle', 'rb') as f:
-        ap, data = pickle.load(f)
-    logging.info(f'Anchor poses that were assumed during data collection:\n{ap}')
-    poses, zero_a = find_cal_params(ap, data, 2)
-    if poses is not None:
-        logging.info(f"Optimized poses:\n{poses}")
-        logging.info(f"Optimized zero angles:\n{zero_a}")
-
-        bedroom_side_len = 5.334
-        side_len = np.linalg.norm( poses[0][1] - poses[2][1] )
-        #ideal here meaning the actual length I measured between these two anchors in my bedroom with a tape measure
-        # while this is a crude indication, the best test in my experience of the quality of a calibration is the robot's
-        # ability to move in cardinal directions while very close to a wall.
-        logging.info(f"Side length = {side_len:.3f}m ({(side_len/bedroom_side_len)*100:.2f}% of ideal)")
-
-        config = Config()
-        for i, anchor in enumerate(config.anchors):
-            anchor.pose = poses[i]
-        config.write()
-        logging.info('Wrote new anchor poses to configuration.json.')
-    else:
-        logging.error("Failed to find calibration parameters.")
-
+    # Reshape back to (4 anchors, 2 vectors, 3 coords)
+    poses = result.x.reshape((4, 2, 3))
+    return poses
 
 def main():
     parser = argparse.ArgumentParser(description='Run robot calibration functions. Use --help for more details on each command.')
     parser.add_argument('--mode', type=str, choices=[
         'collect-images-stream',
         'calibrate-from-files',
-        'calibrate-poses-from-data',
         'collect-images-locally-raspi',
         'calibrate-from-stream'
     ], required=True, help='Choose the calibration function to run:\n \
             "collect-images-stream" to capture a specified number of images from a network stream; \
             "calibrate-from-files" to run camera calibration on a local set of images; \
-            "calibrate-poses-from-data" to optimize robot poses and zero angles from pre-collected data; \
             "collect-images-locally-raspi" to capture a specified number of images from a connected camera on a Raspberry Pi; \
             "calibrate-from-stream" to run camera calibration directly from a network stream until 20 images are collected.')
     parser.add_argument('--address', type=str, default='tcp://192.168.1.151:8888',
@@ -589,8 +340,6 @@ def main():
         collect_images_stream(args.address, args.num_images)
     elif args.mode == 'calibrate-from-files':
         calibrate_from_files()
-    elif args.mode == 'calibrate-poses-from-data':
-        calibrate_poses_from_data()
     elif args.mode == 'calibrate-from-stream':
         calibrate_from_stream(args.address)
 

@@ -34,7 +34,8 @@ stream_command = [
     "--codec", "libav",
     "--libav-format", "mpegts",
     "--vflip", "--hflip",
-    "--autofocus-mode", "continuous",
+    "--autofocus-mode", "manual",
+    "--lens-position", "0.1",
     "--low-latency",
     "--bitrate", "1200kbps"
 ]
@@ -66,6 +67,7 @@ class RobotComponentServer:
         self.rpicam_process = None
         self.zc = None # zerconf instance.
         self.mock_camera_port = None
+        self.extra_tasks = []
 
     async def stream_measurements(self, ws):
         """
@@ -178,8 +180,8 @@ class RobotComponentServer:
             message = await websocket.recv()
             update = json.loads(message)
 
-            if 'length_plan' in update:
-                self.spooler.setPlan(update['length_plan'])
+            if 'length_set' in update:
+                self.spooler.setTargetLength(update['length_set'])
             if 'aim_speed' in update:
                 self.spooler.setAimSpeed(update['aim_speed'])
             if 'host_time' in update:
@@ -236,7 +238,8 @@ class RobotComponentServer:
 
         # Call a function which subclasses implement to start tasks at startup that should remain running even if clients disconnect.
         # tasks started this way should run only while self.run_server is true
-        self.startOtherTasks()
+        # should return a list of any tasks it started
+        self.extra_tasks.extend(self.startOtherTasks())
 
         async with websockets.serve(self.handler, "0.0.0.0", port):
             logging.info("Websocket server started")
@@ -250,6 +253,8 @@ class RobotComponentServer:
         await self.zc.async_unregister_all_services()
         logging.info("Service unregistered")
         result = await spool_task
+        if len(self.extra_tasks) > 0:
+            result = await asyncio.gather(*self.extra_tasks)
 
 
     def shutdown(self):
@@ -282,6 +287,7 @@ class RobotComponentServer:
             ip = self.get_wifi_ip()
 
         logging.info(f'zeroconf instance advertising on {ip}')
+        await asyncio.sleep(1)
         info = zeroconf.ServiceInfo(
             service_type,
             name + "." + service_type,
@@ -319,7 +325,7 @@ except RuntimeError:
 SWITCH_PIN = 18
 
 class RaspiAnchorServer(RobotComponentServer):
-    def __init__(self, power_anchor=False, flat=False, mock_motor=None):
+    def __init__(self, power_anchor=False, mock_motor=None):
         super().__init__()
         self.conf.update(default_anchor_conf)
         ratio = 20/51 # 20 drive gear teeth, 51 spool teeth.
@@ -327,6 +333,7 @@ class RaspiAnchorServer(RobotComponentServer):
             motor = mock_motor
         else:
             motor = MKSSERVO42C()
+            motor.runConstantSpeed(0) # just in case
         if power_anchor:
             # A power anchor spool has a thicker line
             self.spooler = SpoolController(
@@ -374,7 +381,7 @@ class RaspiAnchorServer(RobotComponentServer):
             self.update['last_raw_encoder'] = self.spooler.last_angle
 
     def startOtherTasks(self):
-        pass
+        return []
 
     async def tighten(self):
         """
@@ -426,8 +433,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--power", action="store_true",
                         help="Configures this anchor as the one which has the power line")
-    parser.add_argument("--flat", action="store_true",
-                        help="Configures this anchor as one of the old direct drive type")
     args = parser.parse_args()
 
     ras = RaspiAnchorServer(args.power)

@@ -11,19 +11,23 @@ default_conf = {
     # number of records of length to keep
     'DATA_LEN': 1000,
     # factor controlling how much positon error matters in the tracking loop.
-    'PE_TERM': 1.5,
+    'PE_TERM': 2.0,
     # maximum acceleration in meters of line per second squared
     'MAX_ACCEL': 0.8,
     # sleep delay of tracking loop
     'LOOP_DELAY_S': 0.03,
     # record line length every x iterations of tracking loop
     'REC_MOD': 3,
+    # default cruise speed in meters/sec for position moves
+    'CRUISE_SPEED': 0.3,
+    # deadband in meters to prevent jitter when close to target
+    'DEADBAND': 0.005,
 }
 
 class SpiralCalculator:
     def __init__(self, empty_diameter, full_diameter, full_length, gear_ratio, motor_orientation):
         self.empty_diameter = empty_diameter * 0.001 # millimeter to meters
-        self.gear_ratio = gear_ratio # encoder rotations per spool rotation 
+        self.gear_ratio = gear_ratio # spool rotations per encoder rotation 
         # a negative motor orientation means that negative speeds make the line shorter.
         self.motor_orientation = motor_orientation
         self.zero_angle = 0
@@ -82,7 +86,7 @@ class SpoolController:
         full_diameter is the diameter in mm of the bulk of wrapped line when full_length meters of line are wrapped.
         line_capacity_m is the length of line in meters that is attached to this spool.
             if all of it were reeled in, the object at the end would reach the limit switch, if there is one.
-        gear_ratio refers to how many rotations the spool makes for one rotation of the motor shaft.
+        gear_ratio refers to how many rotations the spool makes for one rotation of the encoder.
         tight_check_fn a function that can return true when the line is tight and false when it is slack
         """
         self.motor = motor
@@ -94,17 +98,25 @@ class SpoolController:
         
         # last commanded motor speed in revs/sec
         self.speed = 0
-        # speed of line change in meters/sec last sent from controller.
+        
+        # Mode switching: 'position' tracks target_length, 'speed' tracks aim_line_speed
+        # must start in speed mode or we might zoom upon turning on.
+        self.tracking_mode = 'speed' 
+        
+        # Position tracking state
+        self.target_length = 3.0 # Meters
+        self.cruise_speed = self.conf['CRUISE_SPEED']  # Meters/sec (max speed during position moves)
+        
+        # Speed tracking state (meters/sec)
         self.aim_line_speed = 0
-        # whether to track a length plan 'plan' or use aim_line_speed 'speed'
-        self.tracking_mode = 'plan'
+
+        # Current state
         self.last_length = 3.0
         self.last_angle = 0.0
         self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
+        
+        # Recording and Loops
         self.record = []
-        # plan of desired line lengths
-        self.desired_line = []
-        self.last_index = 0
         self.run_spool_loop = True
         self.rec_loop_counter = 0
 
@@ -112,9 +124,7 @@ class SpoolController:
         self.spoolPause = False
 
     def setReferenceLength(self, length):
-        """
-        Provide an external observation of the current unspooled line length
-        """
+        """ Provide an external observation of the current unspooled line length """
         if self.tight_check_fn is not None and not self.tight_check_fn():
             return # gantry position has no relationship to spool zero angle if the line is slack.
         success = False
@@ -128,21 +138,29 @@ class SpoolController:
             logging.debug(f'Zero angle estimate={za} revs. current value of {angle}, using reference length {length} m')
             # this affects the estimated current amount of wrapped wire
             self.meters_per_rev = self.sc.get_unspool_rate(angle)
+            # Sync target to reality to prevent sudden movement upon init
+            if abs(self.last_length - length) > 0.5: 
+                self.target_length = length 
+                self.last_length = length
+            # force tracking mode to speed so we don't zoom
+            self.tracking_mode = 'speed'
 
     def _commandSpeed(self, speed):
-        """command a specific speed from the motor."""
+        """ Command a specific speed from the motor. """
         if self.speed == speed:
             return
         self.speed = speed
         self.motor.runConstantSpeed(self.speed)
 
-    def setPlan(self, plan):
+    def setTargetLength(self, length, cruise_speed=None):
         """
-        Swith to plan tracking mode and set the plan to an array of tuples of time and length
+        Switch to position tracking mode.
+        The spool will move to 'length' at 'cruise_speed', constrained by MAX_ACCEL.
         """
-        self.tracking_mode = 'plan'
-        self.desired_line = plan
-        self.last_index = 0
+        self.tracking_mode = 'position'
+        self.target_length = length
+        if cruise_speed is not None:
+            self.cruise_speed = abs(cruise_speed)
 
     def setAimSpeed(self, lineSpeed):
         """Switch to speed tracking mode and set the aim speed in meters of line per second.
@@ -152,11 +170,14 @@ class SpoolController:
         self.aim_line_speed = lineSpeed
 
     def jogRelativeLen(self, rel):
+        """
+        Switch to position tracking mode
+        and add a relative distance to the current target length.
+        """
+        self.tracking_mode = 'position'
         new_l = self.last_length + rel
-        self.setPlan([
-            (time.time(), self.last_length),
-            (time.time()+2, new_l),
-        ])
+        # Keep existing cruise speed, just update target
+        self.setTargetLength(new_l)
 
     def popMeasurements(self):
         """Return up to DATA_LEN measurements. newest at the end."""
@@ -207,39 +228,9 @@ class SpoolController:
     def resumeTrackingLoop(self):
         self.spoolPause = False
 
-    def getAimSpeedFromPlan(self, t):
-        """Compute a speed to aim for based on our position in the length plan
-
-        Combines speed error with positional error to get a speed to aim for (pre-enforcement of max accel)
-        """
-        targetLen = self.desired_line[self.last_index][1]
-        position_err = targetLen - self.last_length
-        if abs(position_err) < 0.001:
-            return 0
-
-        # What would the speed be between the two datapoints tha straddle the present?
-        # Positive values mean line is lengthening
-        # result is in meters of line per second
-        # if there is only one desired length, we can't find two that straddle the present and have to use current length and time
-        if self.last_index == 0:
-            time_A = t
-            len_A = self.last_length
-        else:
-            time_A = self.desired_line[self.last_index-1][0]
-            len_A = self.desired_line[self.last_index-1][1]
-        targetSpeed = ((self.desired_line[self.last_index][1] - len_A) / (self.desired_line[self.last_index][0] - time_A))
-        speed_err = targetSpeed - self.speed * self.meters_per_rev
-
-        # If our positional error was zero, we could go exactly that speed.
-        # if our position was behind the targetLen (line is lengthening, and we are shorter than targetLen),
-        # (or line is shortening and we are longer than target len) then we need to go faster than targetSpeed to catch up
-        # ideally we want to catch up in one step, but we have max acceleration constraints.
-        return targetSpeed + position_err * self.conf['PE_TERM']; # meters of line per second
-
     def trackingLoop(self):
         """
-        Constantly try to match the position and speed given in an array
-
+        Constantly try to match the position or speed targets.
         """
         while self.run_spool_loop:
             if self.spoolPause:
@@ -247,36 +238,37 @@ class SpoolController:
                 continue
             try:
                 t, currentLen = self.currentLineLength()
+                
+                # Determine the desired line speed based on mode
+                aimSpeed = 0
 
-                # change in line length in meters per second
-                if self.tracking_mode == 'plan':
-                    # Find the earliest entry in desired_line that is still in the future.
-                    while self.last_index < len(self.desired_line) and self.desired_line[self.last_index][0] <= t:
-                        self.last_index += 1
-                    # slow stop when there is no data to track
-                    if self.last_index >= len(self.desired_line):
-                        if abs(self.speed) > 0:
-                            newspeed = self.speed * 0.9
-                            if abs(newspeed) < 0.2:
-                                newspeed = 0
-                            logging.debug(f'Slow stopping {newspeed}')
-                            self._commandSpeed(newspeed)
-                        time.sleep(self.conf['LOOP_DELAY_S'])
-                        continue
-                    aimSpeed = self.getAimSpeedFromPlan(t)
+                if self.tracking_mode == 'position':
+                    position_err = self.target_length - self.last_length
+                    
+                    # deadband to prevent jitter when extremely close to target
+                    if abs(position_err) < self.conf['DEADBAND']: 
+                        aimSpeed = 0
+                    else:
+                        # Simple Proportional controller clamped to cruise_speed.
+                        # As we get closer (error decreases), the speed decreases (deceleration).
+                        # PE_TERM determines how aggressively we brake. 
+                        # High PE_TERM = Late braking, Low PE_TERM = Early braking.
+                        calc_speed = position_err * self.conf['PE_TERM']
+                        aimSpeed = np.clip(calc_speed, -self.cruise_speed, self.cruise_speed)
+
                 elif self.tracking_mode == 'speed':
                     aimSpeed = self.aim_line_speed
-                else:
-                    aimSpeed = 0
 
-                # stop outspooling of line when not tight and switch is available (anchors hardware 4.5.5 and later)
+                # Stop outspooling of line when not tight and switch is available
+                # This overrides both position and speed commands
                 if aimSpeed > 0 and (self.tight_check_fn is not None) and (not self.tight_check_fn()):
-                    logging.warning(f"would unspool at speed={aimSpeed} but switch shows line is not tight, and unspooling could slacken or tangle line.")
+                    logging.warning(f"would unspool at speed={aimSpeed} but switch shows line is not tight.")
                     aimSpeed = 0
 
-                # limit the acceleration of the line
+                # limit the acceleration of the line (Physics constraint)
                 currentSpeed = self.speed * self.meters_per_rev
                 wouldAccel = (aimSpeed - currentSpeed) / self.conf['LOOP_DELAY_S']
+                
                 if wouldAccel > self.conf['MAX_ACCEL']:
                     aimSpeed = self.conf['MAX_ACCEL'] * self.conf['LOOP_DELAY_S'] + currentSpeed
                 elif wouldAccel < -self.conf['MAX_ACCEL']:
@@ -286,8 +278,11 @@ class SpoolController:
 
                 # convert speed to revolutions per second
                 cspeed = np.clip(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
+                
+                # Minimum motor speed check so we go full quiet.
                 if abs(cspeed) < 0.02:
                     cspeed = 0
+                    
                 self._commandSpeed(cspeed)
 
                 time.sleep(self.conf['LOOP_DELAY_S'])

@@ -1,4 +1,5 @@
 pytest
+pytest-cov
 
 -r ../requirements_raspi.txt
 
@@ -14,3 +15,4 @@ grpcio-tools==1.75.1
 pupil-apriltags==1.0.4.post11
 av==15.1.0
 lerobot==0.3.3
+betterproto2==0.9.1

@@ -17,7 +17,6 @@ import asyncio
 from anchor_server import RaspiAnchorServer
 import websockets
 import json
-from config import Config
 from debug_motor import DebugMotor
 from spools import SpoolController  # Import the class to be mocked
 import time
@@ -63,12 +62,12 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         self.patcher2.stop()
 
         # make sure we didn't leave and subprocesses running
-        command = 'ps aux | grep "sleep infinity" | grep -v "grep sleep infinity"'
+        command = 'ps aux | grep "sleep infinity" | grep -v grep'
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         # stdout should be empty if no 'sleep infinity' processes are left
         self.assertTrue(
             result.stdout.strip() == '',
-            f"Found orphaned processes running after test teardown: {result.stdout}"
+            f"Found orphaned processes running after test teardown: {repr(result.stdout)}"
         )
 
     def assertLastAimSpeed(self, speed):
@@ -184,15 +183,6 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
                 check(None) # Allow check function to handle timeouts if needed
             await ws.close()
 
-    async def test_send_config(self):
-        config = Config()
-        anchor_config_vars = config.vars_for_anchor(0)
-        anchor_config_vars['SPECIAL'] = 'NAT'
-
-        def check(resp):
-            self.assertEqual('NAT', self.server.conf['SPECIAL'])
-        await self.command_and_check({'set_config_vars': anchor_config_vars}, check, 0.1)
-
     async def test_send_reference_length(self):
         self.mock_spooler.setReferenceLength.reset_mock()
         reference_length = 0.3
@@ -207,15 +197,10 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         await self.command_and_check({'jog': jog_value}, check, 0.1)
 
     async def test_send_length_plan(self):
-        length_plan = [
-            [1745592964.2, 0.4],
-            [1745592965.2, 0.45],
-            [1745592966.2, 0.5],
-        ]
+        length = 0.4
         def check(resp):
-            pass
-            self.mock_spooler.setPlan.assert_called_once_with(length_plan)
-        await self.command_and_check({'length_plan': length_plan}, check, 0.1)
+            self.mock_spooler.setTargetLength.assert_called_once_with(length)
+        await self.command_and_check({'length_set': length}, check, 0.1)
 
     async def test_tighten(self):
         # make a local variable to contain a tight or not tight bool

@@ -9,8 +9,8 @@ class FrequencyEstimator:
     Estimates the frequency of a single low-frequency signal from timestamped
     measurements using an efficient "online" algorithm.
 
-    This version is highly memory-efficient as it does not store a window of
-    historical data. It processes measurements as they arrive and uses an
+    it does not store a window of historical data.
+    It processes measurements as they arrive and uses an
     exponential moving average to smooth the frequency estimate for stability.
     """
 

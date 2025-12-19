@@ -10,8 +10,11 @@ from math import pi, sqrt
 gripper_camera = (np.array([pi/2,0,0], dtype=float), np.array([0,0.004,-0.026], dtype=float))
 
 # rotation and translation vectors of the gripper IMU in the gripper reference frame
+# the BNO085 is mounted in the gripper with it's y axis up, x axis out of the grippers right ear, and X axis pointing out of the back of it's head.
+# to translate it into the reference frame of the gripper
 hpi = sqrt(2*pi**2)/2 # half hypoteneuse of a right triangle with legs=pi
 gripper_imu = (np.array([0., -hpi, -hpi], dtype=float), np.array([0.022, 0.03, 0.029], dtype=float))
+# gripper_imu = (np.array([pi/2, 0, 0], dtype=float), np.array([0, 0, 0], dtype=float))
 
 # position of the gripper grommet point in the reference frame of the gripper. rotation is irrelevant
 gripper_grommet = (np.array([0,0,0], dtype=float), np.array([0,0.115,0.013], dtype=float))
@@ -28,23 +31,28 @@ laser_offset = 0.14 # meters
 # 	(np.array([0,pi,0], dtype=float), np.array([0.054, -0.038, 0.017], dtype=float)), # the camera is mounted upside down
 #     (np.array([(90-tilt)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float)),
 # ])
-anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -0.038,  0.017], dtype=float))
+# anchor_camera = (np.array([ 0.        ,  2.57344204, -1.80194352], dtype=float), np.array([ 0.054, -0.038,  0.017], dtype=float)) # 20
+anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -0.038,  0.017], dtype=float)) # 28
+# anchor_camera = (np.array([ 0.        ,  2.79917955, -1.42625322], dtype=float), np.array([ 0.054, -0.038,  0.017], dtype=float)) # 36
 
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
 
 # rotation and translation vectors of the 'gantry' april tag in the gantry reference frame.
 # gantry_april = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105], dtype=float))
-gantry_april = (np.array([-pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055], dtype=float))
+gantry_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055], dtype=float))
 
 # position of the gantry keyring point in the gantry reference frame
 gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
 
-# The way I made myself understand this was to think of the room being mounted on the origin card with a certain rotation.
-room_relative_to_origin_card = (np.array([pi,0,0], dtype=float), np.array([0,0,0], dtype=float))
+# position in front of a basket marker where objects should be dropped
+basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.2], dtype=float))
+basket_offset_inv = (np.array([0,0,0], dtype=float), np.array([0,0,-0.2], dtype=float))
 
 # spool parameters
 empty_spool_diameter = 22.9
 assumed_full_line_length = 7.5 # meters
 full_spool_diameter_fishing_line = 27.5
 full_spool_diameter_power_line = 43.7
+
+rpi_cam_3_fov = np.array([66, 41])

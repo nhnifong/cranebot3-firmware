@@ -7,11 +7,10 @@ from functools import partial
 from cv_common import invert_pose, compose_poses
 from math import pi
 import atexit
-from panda3d.core import LQuaternionf
+from panda3d.core import LQuaternionf, Point2
 from cv_common import average_pose, compose_poses
 import model_constants
-from PIL import Image
-from config import Config
+from config_loader import *
 
 from ursina import *
 from ursina.shaders import (
@@ -20,6 +19,9 @@ from ursina.shaders import (
 )
 from ursina.prefabs.dropdown_menu import DropdownMenu, DropdownMenuButton
 from ursina_entities import * # my ursina objects
+from websockets.sync.client import connect as websocket_connect_sync
+from generated.nf import telemetry, control, common
+from util import *
 
 window.borderless = False
 
@@ -28,19 +30,25 @@ line_color = color.black
 
 # user readable mode names
 mode_names = {
-    'run':   'Run Normally',
+    'run':   'Run Pick-and-Drop',
     'pause': 'Pause/Observe',
-    'train': 'Record Training Data',
+    'train': 'Accept Teleop Connections',
 }
 mode_descriptions = {
-    'run':   'Movement continuously follows the green spline. Goal positions are selected automatically or can be added with the mouse',
-    'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Spline fitting from observation occurs but has no effect.',
-    'train': 'Use gamepad to record episodes to LeRobot dataset.',
+    'run':   'Continuously alternate between seeking out an object to grab and dropping it int the marked bin.',
+    'pause': 'WASD-QE moves the gantry, RF moves the winch line. Space toggles the grip. Run calibration in this mode.',
+    'train': 'Use gamepad to record episodes to LeRobot dataset or start and stop policy-driven modement.',
 }
 detections_format_str = 'Detections/sec {val:.2f}'
 video_latency_format_str = 'Video latency {val:.2f} s'
 video_framerate_format_str = 'Avg framerate {val:.2f} fps'
 estimate_age_format_str = 'Position est. latency {val:.2f} s'
+
+conn_status_strings = {
+    telemetry.ConnStatus.NOT_DETECTED: 'Not Detected',
+    telemetry.ConnStatus.CONNECTING: 'Connecting...',
+    telemetry.ConnStatus.CONNECTED: 'Online',
+}
 
 key_behavior = {
     # key: (axis, speed)
@@ -62,13 +70,6 @@ key_behavior = {
 def input(key):
     pass
 
-def update_from_trimesh(tm, entity):
-    entity.model = Mesh(vertices=tm.vertices[:, [0, 2, 1]].tolist(), triangles=tm.faces.tolist())
-
-def update_from_trimesh_with_color(color, tm, entity):
-    entity.color = color
-    update_from_trimesh(tm, entity)
-
 # what color to show a solid depending on how many cameras it was seen by
 solid_colors = {
     2: (1.0, 0.951, 0.71, 1.0),
@@ -81,15 +82,19 @@ def update_go_quad(position, color, e):
     e.color = color
 
 class ControlPanelUI:
-    def __init__(self, to_ob_q):
-        self.app = Ursina(fullscreen=False, borderless=False)
-        self.to_ob_q = to_ob_q
+    def __init__(self):
+        self.app = Ursina(
+            fullscreen=False,
+            borderless=False,
+            title="Stringman Control Panel",
+        )
         
         # --- Core State ---
-        self.config = Config()
-        self.n_anchors = len(self.config.anchors)
-        self.calibration_mode = 'pause'
+        # TODO ursina UI needs to obtain this from the observer it is connected to
+        self.nfconfig = load_config()
+        self.n_anchors = len(self.nfconfig.anchors)
         self.direction = np.zeros(3, dtype=float) # direction of currently commanded keyboard movement
+        self.websocket = None
 
         # --- Setup Methods ---
         self._setup_scene_and_lighting()
@@ -98,12 +103,23 @@ class ControlPanelUI:
         self._create_hud_panels()
         self._create_menus()
 
+    def update_layout(self):
+        # Calculate dimensions for the UI panel
+        panel_width = window.aspect_ratio * (1 - self.split)
+        
+        # Update horizontal position of all panel items
+        # Center of panel = (Right Edge) - (Half Panel Width)
+        center_x = (window.aspect_ratio / 2) - (panel_width / 2)
+        
+        for item in self.right_panel_items:
+            item.x = center_x
+
     def _setup_scene_and_lighting(self):
         Sky(color=color.light_gray)
         # the color of this light is how you control the brightness
         DirectionalLight(position=(2, 20, 1), shadows=True, rotation=(35, -5, 5), color=(0.8,0.8,0.8,1))
         AmbientLight(color=(0.8,0.8,0.8,1))
-        EditorCamera()
+        EditorCamera(position=(1.8804024, 0.66652613, -0.1954718), rotation=(30.175781, 18.576408, 0))
         # Show a large floor. this is an active entity that moves a reticule with mouse input
         self.floor = Floor(
             app=self,
@@ -118,14 +134,12 @@ class ControlPanelUI:
     def _create_robot_entities(self):
         # Create gantry, gripper, anchors, lines, etc.
         self.anchors = []
-        for i, a in enumerate(self.config.anchors):
-            anch = Anchor(i, self.to_ob_q, position=swap_yz(a.pose[1]), rotation=to_ursina_rotation(a.pose[0]))
-            anch.pose = a.pose
+        for i, a in enumerate(self.nfconfig.anchors):
+            anch = Anchor(i, self, pose=poseProtoToTuple(a.pose))
             self.anchors.append(anch)
 
         self.gantry = Gantry(
             ui=self,
-            to_ob_q=self.to_ob_q,
             model='gantry',
             color=(0.9, 0.9, 0.9, 1.0),
             scale=0.001,
@@ -136,16 +150,20 @@ class ControlPanelUI:
 
         self.gripper = Gripper(
             ui=self,
-            to_ob_q=self.to_ob_q,
             position=(0,0.3,1),
             shader=lit_with_shadows_shader,
         )
 
-        # TODO consider moving this into the gantry entity code since it's already responsible for redrawing them in redraw_wires
+        # lines representing the fishing line and tether that connect the anchors to the gantry
         self.lines = []
         for a in self.anchors:
             self.lines.append(Entity(model=draw_line(a.position, self.gantry.position), color=line_color, shader=unlit_shader))
         self.vert_line = Entity(model=draw_line(self.gantry.position, self.gripper.position), color=line_color, shader=unlit_shader)
+
+        # lines representing the mouse cursor projected from a camera to the floor
+        self.camlines = {}
+        for key in self.nfconfig.preferred_cameras:
+            self.camlines[key] = Entity(model=draw_line([0,0,0], [1,1,1]), color=color.green, shader=unlit_shader, enabled=False)
 
         # debug indicators of the visual and hang based position and velocity estimates
         self.debug_indicator_visual = IndicatorSphere(color=color.red)
@@ -172,13 +190,70 @@ class ControlPanelUI:
                 color=color.white, scale=(0.03),
                 shader=unlit_shader))
 
+    def toggle_heatmaps(self):
+        self.show_heatmap = not self.show_heatmap
+        self.heatmap_button.color = color.gold if self.show_heatmap else color.gray
+        self.heatmap_button.highlight_color = self.heatmap_button.color.tint(.2) 
+
     def _create_hud_panels(self):
-        # Create the main status panel, text elements, buttons
-        self.modePanel = Panel(model='quad', z=99, 
+        self.split = 0.75
+
+        # Flow management for right panel
+        self.right_panel_items = []
+        # y position of next item to be added to right panel
+        self.cursor_y = 0.4
+
+        self.show_heatmap = True
+        self.heatmap_button = Button(
+            text="Heatmaps",
+            color=color.gray,
+            text_color=color.black,
+            scale=(.15, .033),
+            on_click=self.toggle_heatmaps
+        )
+        self.add_side_panel_item(self.heatmap_button)
+        self.cursor_y -= 0.1
+
+        self.cam_views = {}
+        cam_scale = 0.4
+        for key in [*self.nfconfig.preferred_cameras, None]: # show only two anchors and the gripper for now
+            c = CamPreview(
+                cam_scale=0.4,
+                name=(f'Anchor {key} camera' if key is not None else 'Gripper camera'),
+                anchor=(self.anchors[key] if key is not None else None),
+                floor=self.floor,
+                app=self,
+            )
+            self.add_side_panel_item(c)
+            self.cam_views[key] = c
+        self.update_layout()
+
+        # start pickup button
+        self.start_pickup_button = Button(
+            text="Start Pickup",
+            parent=camera.ui,
+            color=rgb(0.027, 0.530, 0.256),
+            text_color=color.black,
+            origin=(-0.5, 0.5),      # Anchor to top-left
+            position=window.top_left + (0.021, -0.1),
+            scale=(.15, .033),
+            on_click=partial(self.simple_command, control.Command.PICK_AND_DROP))
+
+        # left panel (action list)
+        self.action_list = ActionList()
+
+        # Setup the Bottom UI Panel Background
+        self.bottom_ui_panel = Entity(
+            parent=camera.ui,
+            model='quad',
             color=(0.1,0.1,0.1,1.0),
+            # origin=(0.5, 0.5),
+            # position=window.top_right,
             position=(0,-0.48),
             scale=(3,0.1),
+            z=2
         )
+
         self.modePanelLine1y = -0.44
         self.modePanelLine2y = -0.46
         self.modePanelLine3y = -0.48
@@ -191,10 +266,12 @@ class ControlPanelUI:
             enabled=False,
         )
 
+        # TODO use this and mode description to describe the current status instead of mode, which no longer exists
+        # status could be "Preparing" "Ready" and "Cleanup"
         self.mode_text = Text(
             color=(0.0,1.0,0.3,1.0),
             position=(-0.1,self.modePanelLine1y),
-            text=mode_names[self.calibration_mode],
+            text=mode_names['pause'],
             scale=0.7,
             enabled=True,
         )
@@ -202,7 +279,7 @@ class ControlPanelUI:
         self.mode_descrip_text = Text(
             color=(0.9,0.9,0.9,1.0),
             position=(-0.45,self.modePanelLine2y),
-            text=mode_descriptions[self.calibration_mode],
+            text=mode_descriptions['pause'],
             scale=0.6,
             enabled=True,
         )
@@ -244,11 +321,13 @@ class ControlPanelUI:
         y = -0.483
         offx = 0.042
         offy = 0.037
-        self.vid_status = [Panel(model='quad', z=91, 
+        self.vid_status = [Panel(
+            model='quad',
             color=color.white,
             texture='vid_out.png',
             position=position,
             scale=(0.01998,0.01498),
+            z=1
         ) for position in [(x,y), (x+offx,y), (x,y+offy), (x+offx,y+offy), ((x+offx/2,y+offy/2))]]
         for i,vs_panel in enumerate(self.vid_status):
             vs_panel.numbertext = Text(
@@ -270,7 +349,7 @@ class ControlPanelUI:
         # panel for showing the gamepad controls
         self.gamepad_window = Sprite(
             parent=camera.ui,
-            texture='gamepad.png',
+            texture='gamepad_diagram.png',
             origin=(0, 0),
             ppu=800,
             # z=0,
@@ -279,7 +358,23 @@ class ControlPanelUI:
             on_click=self.toggle_gamepad_window,
         )
 
-        self.calibration_feedback = CalFeedback(self)
+    def add_side_panel_item(self, item, padding=0.027):
+        # Parent to the screen, not the panel, to avoid distortion
+        item.parent = camera.ui
+        item.origin = (0, 0)
+        item.z = -1  # Ensure it renders in front of the panel
+        
+        # Set vertical position based on cursor
+        item.y = self.cursor_y
+        
+        # Move cursor down for the next item
+        height = item.scale[1]
+        if hasattr(item, 'total_height'):
+            height = item.total_height
+        self.cursor_y -= (height + padding)
+        
+        # Store for horizontal alignment updates
+        self.right_panel_items.append(item)
 
     def _create_shape_tracker_entities(self):
         # create entities that are used to visualize the internal state of the shape tracker and 3d hull contruction.
@@ -292,38 +387,20 @@ class ControlPanelUI:
 
     def _create_menus(self):
         # Setup the DropdownMenu
-        DropdownMenu('Menu', buttons=(
-            DropdownMenu('Mode', buttons=tuple([
-                    DropdownMenuButton(mode, on_click=partial(self.set_mode, mode))
-                    for mode in mode_names.keys()
-                ])),
-            DropdownMenuButton('Estimate line lengths', on_click=self.calibrate_lines),
-            DropdownMenuButton('Tension all lines', on_click=partial(self.simple_command, 'tension_lines')),
-            DropdownMenuButton('Run Full Calibration', on_click=self.run_full_cal),
-            DropdownMenuButton('Run Quick Calibration', on_click=partial(self.simple_command, 'half_cal')),
-            DropdownMenuButton('Figure-8 motion test', on_click=partial(self.simple_command, 'fig-8')),
-            DropdownMenu('Simulated Data', buttons=(
-                DropdownMenuButton('Disable', on_click=partial(self.set_simulated_data_mode, 'disable')),
-                DropdownMenuButton('Circle', on_click=partial(self.set_simulated_data_mode, 'circle')),
-                DropdownMenuButton('Point to Point', on_click=partial(self.set_simulated_data_mode, 'point2point')),
-                )),
-            DropdownMenuButton('Zero Gripper Winch Line', on_click=partial(self.simple_command, 'zero_winch')),
-            DropdownMenuButton('Horizontal Move Test', on_click=partial(self.simple_command, 'horizontal_task')),
-            DropdownMenuButton('Gamepad Controls', on_click=self.toggle_gamepad_window)
+        DropdownMenu('Menu', z=-10, buttons=(
+            DropdownMenuButton('Tension all lines (D-up)',       on_click=partial(self.simple_command, control.Command.TIGHTEN_LINES)),
+            DropdownMenuButton('Run Full Calibration',           on_click=partial(self.simple_command, control.Command.FULL_CAL)),
+            DropdownMenuButton('Run Quick Calibration (D-left)', on_click=partial(self.simple_command, control.Command.HALF_CAL)),
+            DropdownMenuButton('Zero Gripper Winch Line',        on_click=partial(self.simple_command, control.Command.ZERO_WINCH)),
+            DropdownMenuButton('Horizontal Move Test',           on_click=partial(self.simple_command, control.Command.HORIZONTAL_CHECK)),
+            DropdownMenuButton('Gamepad Controls',               on_click=self.toggle_gamepad_window),
+            DropdownMenuButton('Collect Gripper Images',         on_click=partial(self.simple_command, control.Command.COLLECT_GRIPPER_IMAGES)),
+            DropdownMenuButton('Park',                           on_click=partial(self.simple_command, control.Command.PARK)),
+            DropdownMenuButton('UnPark',                         on_click=partial(self.simple_command, control.Command.UNPARK)),
             ))
-
-    def run_full_cal(self):
-        self.calibration_feedback.start()
-        self.simple_command('full_cal')
 
     def toggle_gamepad_window(self):
         self.gamepad_window.enabled = not self.gamepad_window.enabled
-
-    def set_simulated_data_mode(self, mode):
-        self.to_ob_q.put({'set_simulated_data_mode': mode})
-
-    def simple_command(self, command):
-        self.to_ob_q.put({command: None})
 
     def redraw_walls(self):
         # draw the robot work area boundaries with walls that have a gradient that reaches up from the ground and fades to transparent.
@@ -352,7 +429,7 @@ class ControlPanelUI:
 
     def input(self, key):
         if key == 'space':
-            self.gripper.toggleClosed()
+            self.gripper.toggle_closed()
         elif key == 'c':
             self.simple_command('half_cal')
         elif key == 'escape' and self.gamepad_window.enabled:
@@ -367,16 +444,16 @@ class ControlPanelUI:
             print(f'key = "{key}" direction = {self.direction}')
             if sum(self.direction) == 0:
                 # immediately cancel whatever remains of the movement
-                self.to_ob_q.put({'slow_stop_all': None})
+                self.send_ob(command=control.CommonCommand(name=control.Command.STOP_ALL))
             else:
                 # normalize and send
                 vector = self.direction
                 vector = vector / np.linalg.norm(vector)
-                self.to_ob_q.put({
-                    'gantry_dir_sp': {
-                        'direction':vector,
-                        'speed':0.25,
-                    }})
+                self.send_ob(move=control.CombinedMove(
+                    direction=common.Vec3(*vector),
+                    speed=0.25,
+                ))
+
                 # a move has been initiated. but sometimes ursina doesn't get the up key that would end the move.
                 # this can be destructive for a CDPR, so we must ensure every move stops eventually.
                 self.last_positive_input_time = time.time()
@@ -386,7 +463,7 @@ class ControlPanelUI:
         if time.time()-2 > self.last_positive_input_time:
             print('Ending direct move with a timeout because ursina missed a key-up')
             self.direction = np.zeros(3, dtype=float)
-            self.to_ob_q.put({'slow_stop_all': None})
+            self.send_ob(command=control.CommonCommand(name=control.Command.STOP_ALL))
 
     def show_error(self, error):
         self.error.text = error
@@ -395,222 +472,225 @@ class ControlPanelUI:
     def clear_error(self):
         self.error.enabled = False
 
-    def set_mode(self, mode):
-        self.calibration_mode = mode
-        self.mode_text.text = mode_names[mode]
-        self.mode_descrip_text.text = mode_descriptions[mode]
-        self.to_ob_q.put({'set_run_mode': self.calibration_mode})
-
-    def calibrate_lines(self):
-        # calibrate line lengths
-        # Assume we have been stopped for a while.
-        if self.calibration_mode != 'pause':
-            self.error.text = "Line calibration can only be performed while in Pause/Observe mode"
-            self.error.enabled = True
-            return
-        print('Do line calibration')
-        # use visual gantry position.
-        gantry_position = self.debug_indicator_visual.zup_pos
-        lengths = [3.79,4.94,2.95,4.08] 
-        for i, anchor in enumerate(self.anchors):
-            # index 1 in a pose tuple is the position.
-            lengths[i] = np.linalg.norm(anchor.pose[1] - gantry_position)
-        # display a confirmation dialog
-        fmt = '{:.3f}'
-        self.line_cal_confirm = WindowPanel(
-            title=f"Calculated Anchor Line Lengths",
-            content=(
-                Text(text='Distances in meters'),
-                InputField(default_value=fmt.format(lengths[0])),
-                InputField(default_value=fmt.format(lengths[1])),
-                InputField(default_value=fmt.format(lengths[2])),
-                InputField(default_value=fmt.format(lengths[3])),
-                Button(text='Confirm', color=color.azure,  on_click=self.finish_calibration),
-                ),
-            popup=True
-            )
-
-    def finish_calibration(self):
-        # read the lengths that the user may have modified
-        try:
-            lengths = [float(self.line_cal_confirm.content[1+i].text) for i in range(4)]
-        except ValueError:
-            return
-        self.to_ob_q.put({'do_line_calibration': lengths})
-        self.line_cal_confirm.enabled = False
-
     def on_stop_button(self):
-        self.to_ob_q.put({'slow_stop_all':None})
+        self.send_ob(command=control.CommonCommand(name=control.Command.STOP_ALL))
 
     def render_gantry_ob(self, row, color):
         self.go_quads.add(partial(update_go_quad, row, color))
 
-    def notify_connected_bots_change(self, available_bots={}):
-        offs = 0
-        for server,info in available_bots.items():
-            text_entity = Text(server, world_scale=16, position=(-0.1, -0.4 + offs))
-            offs -= 0.03
+    def send_ob(self, events=None, **kwargs):
+        """
+        Ensure that the given control item is sent to every connected UI
+        keyword args are passed directly to control item, so you can construct one like this
+        """
+        to_send = None
+        if events is None:
+            events = [control.ControlItem(**kwargs)]
+        batch = control.ControlBatchUpdate(
+            robot_id="0",
+            updates=events
+        )
+        try:
+            to_send = bytes(batch)
+        except Exception as e:
+            print(f'Cannot serialize control message batch {e}\n{batch}')
+        # synchronous, and we're on a different thread, but I'm pretty sure websockets does this in thread safe way
+        if self.websocket and to_send:
+            self.websocket.send(to_send)
 
-    def receive_updates(self, min_to_ui_q):
-        while True:
+    def simple_command(self, cmd: control.Command):
+        self.send_ob(command=control.CommonCommand(name=cmd))
+
+    def receive_updates(self):
+        # threading websocket api used because asyncio loop incompatible with ursina
+
+        attempts = 10
+        while attempts > 0:
             try:
-                # queue.get has to happen in a thread, because it blocks
-                updates = min_to_ui_q.get()
-                # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
-                invoke(self.process_update, updates, delay=0.0001)
-            except (OSError, EOFError, TypeError):
-                # sometimes when closing the app, this thread gets left hanging because that queue is gone
-                return
+                with websocket_connect_sync('ws://localhost:4245') as websocket:
+                    self.websocket = websocket
+                    # iterator ends when websocket closes.
+                    for message in websocket:
+                        batch = telemetry.TelemetryBatchUpdate().parse(message)
+                        self.robot_id = batch.robot_id
+                        for update in batch.updates:
+                            # but processing the update needs to happen in the ursina loop, because it will modify a bunch of entities.
+                            invoke(self.process_update, update, delay=0.0001)
+            except ConnectionRefusedError:
+                print('Connection refused at ws://localhost:4245 Local observer not running. Run with main.py to start both observer and UI')
+                time.sleep(2)
+                attempts -= 1
+                continue
+        invoke(application.quit, delay=0.0001)
 
+    def process_update(self, item: telemetry.TelemetryItem):
+        if item.pos_estimate:
+            self._handle_pos_estimate(item.pos_estimate)
+        if item.pos_factors_debug:
+            self._handle_pos_factors(item.pos_factors_debug)
+        if item.gantry_sightings:
+            self._handle_gantry_sightings(item.gantry_sightings)
+        if item.new_anchor_poses:
+            self._handle_new_anchor_poses(item.new_anchor_poses)
+        if item.component_conn_status:
+            self._handle_component_conn_status(item.component_conn_status)
+        if item.vid_stats:
+            self._handle_vid_stats(item.vid_stats)
+        if item.named_position:
+            self._handle_named_position(item.named_position)
+        if item.last_commanded_vel:
+            self._handle_last_commanded_vel(item.last_commanded_vel)
+        if item.pop_message:
+            self._handle_pop_message(item.pop_message)
+        if item.grip_sensors:
+            self._handle_grip_sensors(item.grip_sensors)
+        if item.grip_cam_preditions:
+            self._handle_grip_cam_preditions(item.grip_cam_preditions)
+        if item.target_list:
+            self._handle_target_list(item.target_list)
+        if item.video_ready:
+            self._handle_video_ready(item.video_ready)
 
-    def process_update(self, updates):
-        if 'STOP' in updates:
-            application.quit()
+        # if 'preview_image' in updates:
+        #     pili = updates['preview_image']
+        #     # note that self.cam_views is a dict keyd by anchor num and 'None' is the key of the gripper cam view
+        #     self.cam_views[pili['anchor_num']].setImage(pili['image'])
 
-        if 'minimizer_stats' in updates:
-            estimate_age = time.time() - updates['minimizer_stats']['data_ts']
-            self.estimate_age_text.text = estimate_age_format_str.format(val=estimate_age)
+        # if 'heatmap' in updates:
+        #     pili = updates['heatmap']
+        #     self.cam_views[pili['anchor_num']].setHeatmap(pili['image'])
 
-        if 'pos_estimate' in updates:
-            p = updates['pos_estimate']
-            self.gantry.set_position_velocity(p['gantry_pos'], p['gantry_vel'])
-            self.gantry.set_slack_vis(p['slack_lines'])
-            self.gripper.setPose(p['gripper_pose'])
-            # p['slack_lines']
+    def _handle_pos_estimate(self, item: telemetry.PositionEstimate):
+        self.gantry.set_position_velocity(tonp(item.gantry_position), tonp(item.gantry_velocity))
+        self.gripper.setPose((tonp(item.gripper_pose.rotation), tonp(item.gripper_pose.position)))
+        estimate_age = time.time() - item.data_ts
+        self.estimate_age_text.text = estimate_age_format_str.format(val=estimate_age)
+        self.gantry.set_slack_vis(item.slack)
 
-        if 'pos_factors_debug' in updates:
-            p = updates['pos_factors_debug']
-            self.debug_indicator_visual.set_position_velocity(p['visual_pos'], p['visual_vel'])
-            self.debug_indicator_hang.set_position_velocity(p['hang_pos'], p['hang_vel'])
+    def _handle_pos_factors(self, item: telemetry.PositionFactors):
+        self.debug_indicator_visual.set_position_velocity(tonp(item.visual_pos), tonp(item.visual_vel))
+        self.debug_indicator_hang.set_position_velocity(tonp(item.hanging_pos), tonp(item.hanging_vel))
 
-        if 'gantry_observation' in updates:
-            invoke(self.render_gantry_ob, swap_yz(updates['gantry_observation']), color.white, delay=0.0001)
+    def _handle_gantry_sightings(self, item: telemetry.GantrySightings):
+        for s in item.sightings:
+            self.render_gantry_ob((s.x, s.z, s.y), color.white)
 
-        if 'anchor_pose' in updates:
-            apose = updates['anchor_pose']
-            anchor_num = apose[0]
+    def _handle_new_anchor_poses(self, item: telemetry.AnchorPoses):
+        for anchor_num, pose in enumerate(item.poses):
+            apose = (tonp(pose.rotation), tonp(pose.position))
             self.anchors[anchor_num].enabled = True
-            self.anchors[anchor_num].pose = apose[1]
-            self.anchors[anchor_num].position = swap_yz(apose[1][1])
-            self.anchors[anchor_num].rotation = to_ursina_rotation(apose[1][0])
-            self.gantry.redraw_wires()
-            self.redraw_walls()
+            self.anchors[anchor_num].pose = apose
+            self.anchors[anchor_num].position = swap_yz(apose[1])
+            self.anchors[anchor_num].rotation = to_ursina_rotation(apose[0])
+        self.gantry.redraw_wires()
+        self.redraw_walls()
 
-        if 'preview_image' in updates:
-            pili = updates['preview_image']
-            if pili['anchor_num'] is not None:
-                ent = self.anchors[pili['anchor_num']]
-            else:
-                ent = self.floor # gripper cam
-            if ent.hasSetImage:
-                ent.camview.texture._texture.setRamImage(pili['image'])
-            else:
-                # we only need to do this the first time, so the allocated texture is the right size
-                # even though this method of updating a texture exists, it's horribly slow.
-                ent.camview.texture = Texture(Image.fromarray(pili['image']))
-                ent.hasSetImage = True
+    def _handle_component_conn_status(self, item: telemetry.ComponentConnStatus):
+        user_status_str = conn_status_strings.get(item.websocket_status, 'Unknown')
 
-        if 'connection_status' in updates:
-            status = updates['connection_status']
-            print(status)
-            if status['websocket'] == 'none':
-                user_status_str = 'Not Detected'
-            elif status['websocket'] == 'connecting':
-                user_status_str = 'Connecting...'
-            elif  status['websocket'] == 'connected':
-                user_status_str = 'Online'
-            else:
-                user_status_str = 'Unknown'
+        if item.video_status == telemetry.ConnStatus.CONNECTED:
+            vidstatus_tex = 'vid_ok.png'
+            number_color = color.black
+        elif item.video_status == telemetry.ConnStatus.CONNECTING:
+            user_status_str += '\nConnecting to video...'
+            vidstatus_tex = 'vid_out.png'
+            number_color = color.white
+        else:
+            vidstatus_tex = 'vid_out.png'
+            number_color = color.white
 
-            if status['video'] == 'connected':
-                vidstatus_tex = 'vid_ok.png'
-                number_color = color.black
-            elif status['video'] == 'connecting':
-                user_status_str += '\nConnecting to video...'
-                vidstatus_tex = 'vid_out.png'
-                number_color = color.white
-            else:
-                vidstatus_tex = 'vid_out.png'
-                number_color = color.white
+        if item.is_gripper:
+            self.gripper.setStatus(user_status_str)
+            self.vid_status[4].texture = vidstatus_tex
+            self.vid_status[4].numbertext.color = number_color
+            self.gripper.ip_address = item.ip_address
+        else:
+            self.anchors[item.anchor_num].setStatus(user_status_str)
+            self.vid_status[item.anchor_num].texture = vidstatus_tex
+            self.vid_status[item.anchor_num].numbertext.color = number_color
+            self.anchors[item.anchor_num].ip_address = item.ip_address
 
-            if 'anchor_num' in status:
-                num = int(status['anchor_num'])
-                self.anchors[num].setStatus(user_status_str)
-                self.vid_status[num].texture = vidstatus_tex
-                self.vid_status[num].numbertext.color = number_color
-                if 'ip_address' in status:
-                    self.anchors[num].ip_address = status['ip_address']
-            elif 'gripper' in status:
-                self.gripper.setStatus(user_status_str)
-                self.vid_status[4].texture = vidstatus_tex
-                self.vid_status[4].numbertext.color = number_color
-                if 'ip_address' in status:
-                    self.gripper.ip_address = status['ip_address']
+    def _handle_vid_stats(self, item: telemetry.VidStats):
+        self.detections_text.text = detections_format_str.format(val=item.detection_rate)
+        self.video_latency_text.text = video_latency_format_str.format(val=item.video_latency)
+        self.video_framerate_text.text = video_framerate_format_str.format(val=item.video_framerate)
 
-        if 'vid_stats' in updates:
-            stats = updates['vid_stats']
-            self.detections_text.text = detections_format_str.format(val=stats['detection_rate'])
-            self.video_latency_text.text = video_latency_format_str.format(val=stats['video_latency'])
-            self.video_framerate_text.text = video_framerate_format_str.format(val=stats['video_framerate'])
-
-        if 'gantry_goal_marker' in updates:
-            pos = updates['gantry_goal_marker']
-            if pos is not None:
-                self.goal_marker.position = swap_yz(pos)
+    def _handle_named_position(self, item: telemetry.NamedObjectPosition):
+        # gantry_goal_pos - blue map pin
+        # gamepad - red cube
+        # hamper - yellow cube
+        # TODO use more intuitive models for these
+        if 'gantry_goal_marker' == item.name:
+            if item.position is not None:
+                s = item.position
+                self.goal_marker.position = (s.x, s.z, s.y)
                 self.goal_marker.enabled = True
             else:
                 self.goal_marker.enabled = False
+        if 'gamepad' == item.name:
+            self.floor.set_gp_pos(tonp(item.position))
 
-        if 'origin_poses' in updates:
-            o_poses = updates['origin_poses']
-            # list of poses of detected origin cards from all anchors
-            # (anchor_num, (rvec, tvec))
-            for anum, pose in o_poses:
-                self.origin_cards.add(partial(update_origin_card, anum, pose))
+    def _handle_last_commanded_vel(self, item: telemetry.CommandedVelocity):
+        self.commanded_velocity_indicator.set_velocity(tonp(item.velocity))
 
-        if 'last_commanded_vel' in updates:
-            self.commanded_velocity_indicator.set_velocity(updates['last_commanded_vel'])
+    def _handle_pop_message(self, item: telemetry.Popup):
+        self.pop_message.show_message(item.message)
 
-        if 'pop_message' in updates:
-            self.pop_message.show_message(updates['pop_message'])
+    def _handle_grip_sensors(self, item: telemetry.GripperSensors):
+        self.gripper.setLaserRange(item.range)
+        self.gripper.setFingerAngle(item.angle)
 
-        if 'grip_sensors' in updates:
-            l_range, f_angle, pressure = updates['grip_sensors'] 
-            self.gripper.setLaserRange(l_range)
-            self.gripper.setFingerAngle(f_angle)
+    def _handle_grip_cam_preditions(self, item: telemetry.GripCamPredictions):
+        self.cam_views[None].set_predictions(item)
 
-        if 'cal_progress' in updates:
-            self.calibration_feedback.handle_message(updates['cal_progress'])
+    def _handle_target_list(self, item: telemetry.TargetList):
+        # use this to re-write the panel on the left that indicates active targets
+        self.action_list.set_target_list(item)
+        # Draw mutliple representations of each target. when one is hovered, all become highlighted.
+        # each target is represented in
+        # * the action list
+        # * the 3d view
+        # * on each video feed (if in that cam's view)
+        for view in self.cam_views.values():
+            view.set_target_points(item)
+
+    def _handle_video_ready(self, item: telemetry.VideoReady):
+        # connect to the video at the local address
+        print(f'_handle_video_ready {item}')
+        receive_video_thread = threading.Thread(
+            target=self.cam_views[item.anchor_num].connect_to_stream, args=(item.local_uri,), daemon=True)
+        receive_video_thread.start()
 
     def start(self):
         self.app.run()
 
-def start_ui(to_ui_q, to_ob_q, register_input):
+    def end_update_thread(self):
+        if self.websocket:
+            self.websocket.close()
+
+def start_ui(register_input):
     """
     Entry point to be used when starting this from main.py with multiprocessing
     """
-    cpui = ControlPanelUI(to_ob_q)
+    cpui = ControlPanelUI()
     register_input(cpui)
 
     # use simple threading here. ursina has it's own loop that conflicts with asyncio
-    receive_updates_thread = threading.Thread(target=cpui.receive_updates, args=(to_ui_q, ), daemon=True)
+    receive_updates_thread = threading.Thread(target=cpui.receive_updates, daemon=True)
     receive_updates_thread.start()
 
-    def stop_other_processes():
-        print("UI window closed. stopping other processes")
-        to_ui_q.put({'STOP':None}) # stop our own listening thread too
-        to_ob_q.put({'STOP':None})
+    def stop_others():
+        cpui.end_update_thread()
+        # print("UI window closed. stopping other processes")
 
     # ursina has no way to tell us when the window is closed. but this python module can do it.
-    atexit.register(stop_other_processes)
+    atexit.register(stop_others)
 
     cpui.start()
+    return cpui
 
 if __name__ == "__main__":
-    from multiprocessing import Queue
-    to_ui_q = Queue()
-    to_ob_q = Queue()
     def register_input_2(cpui):
         global input
         input = cpui.input
-    start_ui(to_ui_q, to_ob_q, register_input_2)
+    start_ui(register_input_2)

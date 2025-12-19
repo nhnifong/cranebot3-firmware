@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package nf.config;
+
+import "common.proto";
+
+// Configuration of an Anchor
+message Anchor {
+  // Index of the anchor in the system (0 to 4).
+  uint32 num = 1;
+  
+  // 123.cranebot-anchor-service.2ccf67bc3fc4
+  optional string service_name = 2;
+  
+  // Pose composed of rvec and tvec (standard OpenCV format)
+  common.Pose pose = 3;
+  
+  // IP address where last seen
+  optional string address = 4;
+  uint32 port = 5;
+}
+
+message Gripper {
+  optional string service_name = 1;
+  optional string address = 2;
+  uint32 port = 3;
+  
+  // Rotation in radians
+  double frame_room_spin = 4;
+}
+
+message CameraCalibration {
+  message Resolution {
+    uint32 width = 1;
+    uint32 height = 2;
+  }
+  Resolution resolution = 1;
+  
+  // Flattened 3x3 matrix (row-major)
+  // [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+  repeated double intrinsic_matrix = 2;
+  
+  // 1x5 distortion coefficients
+  // [k1, k2, p1, p2, k3]
+  repeated double distortion_coeff = 3;
+}
+
+// Message representing the configuration read and written by observer
+message StringmanPilotConfig {
+  repeated Anchor anchors = 1;
+  
+  CameraCalibration camera_cal = 2;
+  
+  // Max acceleration of anchor line in meters per second squarted
+  double max_accel = 3;
+
+  // record line length every nth iteration of the main anchor loop
+  int32 rec_mod = 4;
+
+  // running delay of main anchor loop in seconds.
+  double running_ws_delay = 5;
+  
+  Gripper gripper = 6;
+  
+  // List of anchor nums of preferred anchor cameras.
+  repeated int32 preferred_cameras = 7;
+  
+  string robot_id = 8;
+  bool has_been_calibrated = 9;
+}

@@ -1,0 +1,107 @@
+/*
+Description of the wire format used to remotelty manage a stringman robot from a UI or web tool
+*/
+
+syntax = "proto3";
+
+package nf.control;
+
+import "common.proto";
+
+enum Command {
+  // Reel every line until tight (by switch)
+  COMMAND_TIGHTEN_LINES = 0;
+  // Perform fast calibration (takes about 2 seconds)
+  COMMAND_HALF_CAL = 1;
+  // Perform full calibration sequence. (requires setup of cards on the floor)
+  COMMAND_FULL_CAL = 2;
+  // Zero the winch line in the gripper by reeling it in until it hits the limit switch
+  COMMAND_ZERO_WINCH = 3;
+  // Stop all spool motion (while respecting deceleration limits)
+  COMMAND_STOP_ALL = 4;
+  // Begin accepting connections from lerobot teleoperation or data collection tools
+  COMMAND_ENABLE_LEROBOT = 5;
+  // Begin performing automated pick and drop of targets in queue
+  COMMAND_PICK_AND_DROP = 9;
+  // Drop everything and auto park on the saddle
+  COMMAND_PARK = 10;
+  // Unpark from the saddle and move clear of it.
+  COMMAND_UNPARK = 11;
+
+  // =====  Commands intended only for diagnostics =====
+
+  // A horizontal move paralell to the floor that measures the quality of calibration
+  COMMAND_HORIZONTAL_CHECK = 6;
+  // Begin saving images of the gripper camera at regular intervals in a local directory
+  COMMAND_COLLECT_GRIPPER_IMAGES = 7;
+  // Shuts down the observer process. robot components remain on.
+  COMMAND_SHUTDOWN = 8;
+}
+
+// Start one of several common tasks which take no arguments.
+message CommonCommand {
+  Command name = 1;
+}
+
+// Used for direct control of a single spool during installation or maintenence
+// not for typical robot movement
+message JogSpool {
+  bool is_gripper = 1;
+  uint32 anchor_num = 2; // only set for anchors
+  oneof var {
+    float speed = 3; // lengthen the line by this many meters per second until told to stop
+    float offset = 4; // change the length of unspooled line by this many meters at a fixed and safe speed.
+  }
+}
+
+// Set the given goal position for the gantry, it will begin moving there.
+message GantryGoalPos {
+  nf.common.Vec3 pos = 1;
+}
+
+// A movement command typically sent from a gamepad or policy
+message CombinedMove {
+  // Direction in which to move gantry
+  // When unset, gantry continues moving according to it's last command
+  // when unset, speed is ignored
+  optional nf.common.Vec3 direction = 1;
+  
+  // Speed to move gantry
+  // if speed is set, direction is normalized to a unit vector and multiplied by speed.
+  // if speed is unset, direction is assumed to be a velocity vector
+  optional float speed = 2; // meters per second
+
+  // Set the finger servo angle
+  // Range [-90,90]
+  // When unset, finger command will not be issued, finger continues tracking previously commanded angle.
+  optional float finger = 3;
+
+  // Set the winch line speed
+  // Line lengthening speed in meters per second
+  // when unset, winch spool continues at previously commanded speed.
+  optional float winch = 4;
+}
+
+// Adds the named episode control events to a set
+// When lerobot is connected, this is how a teleoperator can start or stop an episode during recording
+message EpControl {
+  repeated string events = 1;
+}
+
+// A single kind of update that a UI, ursina or web, is providing to Observer
+// Typically to control the robot
+message ControlItem {
+  oneof payload {
+    CommonCommand command = 1;
+    JogSpool jog_spool = 2;
+    CombinedMove move = 3;
+    GantryGoalPos gantry_goal_pos = 4;
+    EpControl episode_control = 5;
+  }
+}
+
+// the frame sent over the wire
+message ControlBatchUpdate {
+  string robot_id = 1;
+  repeated ControlItem updates = 2;
+}

@@ -1,0 +1,181 @@
+/*
+Description of the wire format used when obsever sends robot state to a UI or web backend.
+It's whatever the control_plane in the cloud needs to know or forward to drivers and spectators of a robot in order to render the web based interface.
+
+Note that video streams are sent over a different protocol for efficiency even if some control signals about them are sent over this interface
+*/
+
+syntax = "proto3";
+
+package nf.telemetry;
+
+import "common.proto";
+
+// estimate of the robot's position
+message PositionEstimate {
+	nf.common.Vec3 gantry_position = 1;
+	nf.common.Vec3 gantry_velocity = 2;
+	nf.common.Pose gripper_pose = 3; // in world space
+	double data_ts = 4; // the wall time in seconds since the epoch UTC when the robot was at this position
+	// an array of bools for each anchor. true meaning the line should be drawn with a droop
+	repeated bool slack = 5;
+}
+
+// Diagnostic information about factors used in estimating the robot's positon
+message PositionFactors {
+	// Visually determined (apriltags) position and velocity
+	nf.common.Vec3 visual_pos = 1;
+	nf.common.Vec3 visual_vel = 2;
+	// Encoder determined position and velocity of hang point
+	nf.common.Vec3 hanging_pos = 3;
+	nf.common.Vec3 hanging_vel = 4;
+}
+
+// Individual sightings of the gantry by apriltag
+message GantrySightings {
+	repeated nf.common.Vec3 sightings = 1;
+}
+
+// Send by the observer to UIs when calibration or config file reading has set the anchor poses
+message AnchorPoses {
+	// always send all four poses in order of anchor num
+	repeated nf.common.Pose poses = 1;
+}
+
+enum ConnStatus {
+  CONNSTATUS_NOT_DETECTED = 0;
+  CONNSTATUS_CONNECTING = 1;
+  CONNSTATUS_CONNECTED = 2;
+}
+
+// Update about the status of the connection between observer and a robot component such as an anchor or gripper
+message ComponentConnStatus {
+	bool is_gripper = 1;
+	uint32 anchor_num = 2; // will be set only for anchors
+	ConnStatus websocket_status = 3;
+	ConnStatus video_status = 4;
+	string ip_address = 5; // On the wifi network in the house where the robot is.
+}
+
+// Info on the throughput and latency of video connections and apriltag processing
+message VidStats {
+	float detection_rate = 1; // tags detected per second summed accross all cameras
+	float video_latency = 2; // seconds between when frames are captured and when the observer can process them.
+	float video_framerate = 3; // average framerate across all cameras
+}
+
+
+// Position of a named object that UI might want to visually represent.
+// only sent when it moves
+message NamedObjectPosition {
+	// if position is unset, the UI should hide the indicator. 
+	optional nf.common.Vec3 position = 1;
+	// Name of the object
+	// Could be the name of a tag like 'hamper' or 'gamepad'
+	// When the observer is moving the gantry to a particular goal position, it gives this position with the name 'gantry_goal'
+	string name = 2; 
+}
+
+// When the gantry has been commanded to move with a velocity eitehr by AI or human, it gives this velocity to the UI for visualization.
+message CommandedVelocity {
+	nf.common.Vec3 velocity = 1;
+}
+
+// A connected UI should immediately display this message in a popup with an OK button.
+message Popup {
+	string message = 1;
+}
+
+// Latest state of sensors in the gripper
+message GripperSensors {
+	// measured laser range from palm to obstacle in meters. Unset when infinite
+	float range = 1;
+	// the value commanded of the finger servo [-90,90].
+	// map this to [0,60] to get the angle in degrees of the first finger bone.
+	// the second bone is a deterministic function of the first one, but I don't know the function.
+	float angle = 2;
+	// The voltage on the sensing finger pad, higher is more pressure. [0,3.3]
+	float pressure = 3;
+}
+
+// values predicted by model using the gripper camera provided to UI for diagnostic visualization
+message GripCamPredictions {
+	// prediction motion vector to center gripper over target
+	float move_x = 1;
+	float move_y = 2;
+	// probability a target is in view
+	float prob_target_in_view = 3; 
+	// probability an object is held in the gripper (visual only)
+	float prob_holding = 4;
+}
+
+enum TargetStatus {
+	TARGETSTATUS_SEEN = 0;
+	TARGETSTATUS_SELECTED = 1;
+	TARGETSTATUS_PICKED_UP = 2;
+	TARGETSTATUS_DROPPED = 3;
+}
+
+message OneTarget {
+	// stable target identifier
+	string id = 1;
+	// position in world space
+	nf.common.Vec3 position = 2;
+	// intended dropoff location
+	oneof dropoff {
+		nf.common.Vec3 coords = 3;
+		string tag = 4;
+	}
+	// status of target
+	TargetStatus status = 5;
+	// the entity that submitted the target to the observer.
+	string source = 6;
+}
+
+// A full snapshot of the list of targets known to the observer and their statuses. replace previous
+message TargetList {
+	// order of targets is the order in which the observer will try to pick them up
+	repeated OneTarget targets = 1;
+}
+
+// Indicates the availability of a video stream
+message VideoReady {
+	// is this the gripper camera?
+	bool is_gripper = 1;
+
+	// Camera anchor num 
+	optional uint32 anchor_num = 2;
+
+	// for local UI's connect at this address
+	// udp:127.0.0.1:1234
+	optional string local_uri = 3;
+
+	// for remote UI's connect at this addfress
+	optional string remote_uri = 4;
+}
+
+// A single kind of update that the observer is providing to an external UI
+// Typically about the robot's state such as it's position
+message TelemetryItem {
+  oneof payload {
+    PositionEstimate pos_estimate = 1;
+    PositionFactors pos_factors_debug = 2;
+    GantrySightings gantry_sightings = 3;
+    AnchorPoses new_anchor_poses = 4;
+    ComponentConnStatus component_conn_status = 5;
+    VidStats vid_stats = 6;
+    NamedObjectPosition named_position = 7;
+    CommandedVelocity last_commanded_vel = 8;
+    Popup pop_message = 9;
+		GripperSensors grip_sensors = 10;
+		GripCamPredictions grip_cam_preditions = 11;
+		TargetList target_list = 12;
+		VideoReady video_ready = 13;
+  }
+}
+
+// the frame sent over the wire
+message TelemetryBatchUpdate {
+  string robot_id = 1;
+  repeated TelemetryItem updates = 2;
+}

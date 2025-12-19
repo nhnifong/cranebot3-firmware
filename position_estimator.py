@@ -8,13 +8,14 @@ import numpy as np
 import asyncio
 import scipy.optimize as optimize
 from math import pi, sqrt, sin, cos
-from config import Config
-from cv_common import compose_poses
+from cv_common import compose_poses, gripper_imu_inv
 import model_constants
 from scipy.spatial.transform import Rotation
 from kalman_filter import KalmanFilter
 import cv2
 from frequency_estimator import SwingFrequencyEstimator
+from generated.nf import telemetry, common
+from util import *
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -247,7 +248,7 @@ def linear_move_cost_fn(model_params, starting_time, times, observed_positions):
 
 
 class Positioner2:
-    def __init__(self, datastore, to_ui_q, observer):
+    def __init__(self, datastore, observer):
         """
         continuous position estimation
         recalculates hang point only when the data affecting it changes and consideres it a measurement'
@@ -261,9 +262,8 @@ class Positioner2:
         """
         self.run = False # false until main is called
         self.datastore = datastore
-        self.to_ui_q = to_ui_q
         self.ob = observer
-        self.config = Config()
+        self.config = observer.config
         self.n_cables = len(self.config.anchors)
         self.work_area = None
         self.anchor_points = np.array([
@@ -273,7 +273,8 @@ class Positioner2:
             [ -2,-2, 2],
         ], dtype=float)
         # save grommet points
-        anchor_points = np.array([compose_poses([a.pose, model_constants.anchor_grommet])[1] for a in self.config.anchors])
+        print(f'before {self.config.anchors[0].pose} after {poseProtoToTuple(self.config.anchors[0].pose)}')
+        anchor_points = np.array([compose_poses([poseProtoToTuple(a.pose), model_constants.anchor_grommet])[1] for a in self.config.anchors])
         self.set_anchor_points(anchor_points)
         self.data_ts = time.time()
 
@@ -289,14 +290,25 @@ class Positioner2:
         self.visual_pos = np.zeros(3, dtype=float)
         self.visual_vel = np.zeros(3, dtype=float)
 
+        # try:
+        #     self.gant_pos = np.load('gant_pos.npy')
+        # except:
+        #     pass
+
         # the time at which all reported line speeds became zero.
         # If some nonzero speed was occuring on any line at the last update, this will be None
         self.stop_cutoff = time.time()
 
         # last estimate of the gripper pose
         self.grip_pose = (np.zeros(3), np.zeros(3))
+
         # last information on whether the gripper is thought to be holding something
         self.holding = False
+        self.finger_pressure_rising = asyncio.Event()
+        self.finger_pressure_falling = asyncio.Event()
+
+        # event coupled to gripper tipping from vertical
+        self.tip_over = asyncio.Event()
 
         # hang point based prediction of slack lines (currently unused)
         self.slack_lines = [False, False, False, False]
@@ -345,10 +357,15 @@ class Positioner2:
         angles = np.arctan2(anchor_2d[:, 1] - centroid[1], anchor_2d[:, 0] - centroid[0])
         self.work_area = anchor_2d[np.argsort(angles)].astype(np.float32)
 
-    def point_inside_work_area(self, point):
+    def point_inside_work_area_2d(self, point):
+        return True 
         if self.work_area is None:
             return False
         in_2d = cv2.pointPolygonTest(self.work_area, (float(point[0]), float(point[1])), False) > 0
+
+    def point_inside_work_area(self, point):
+        return True # todo seems broken
+        in_2d = self.point_inside_work_area_2d(point)
         min_anchor_z = np.min(self.anchor_points[:, 2])
         in_z = 0 < point[2] < min_anchor_z
         return in_2d and in_z
@@ -384,7 +401,9 @@ class Positioner2:
             self.gant_vel = self.kf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
             self.estimate_gripper()
+            self.detect_grip()
             self.send_positions()
+            await self.ob.flush_tele_buffer()
 
     async def update_visual(self):
         while self.run:
@@ -449,26 +468,13 @@ class Positioner2:
             if sum(speeds) == 0:
                 self.hang_vel = np.zeros(3)
                 self.kf.update(self.hang_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
-            # else:
-            #     self.stop_cutoff = None
-            #     # repeat for a position some small increment in the future to get the gantry velocity
-            #     increment = 0.1 # seconds
-            #     lengths += speeds * increment
-            #     result = find_hang_point(self.anchor_points, lengths)
-            #     if result is None:
-            #         # print(f'estimate failed to calc a hang point the second time from lengths {lengths}')
-            #         self.hang_vel = np.zeros((3,))
-            #     else:
-            #         self.hang_vel = result[0] - self.hang_pos
-            #         self.hang_vel = self.hang_vel / increment
 
             self.hang_time_taken = time.time()-start_time
 
     def record_commanded_vel(self, vel):
-        self.to_ui_q.put({'last_commanded_vel': vel})
         self.commanded_vel = vel
         self.commanded_vel_ts = time.time()
-        self.to_ui_q.put({'last_commanded_vel': vel})
+        self.ob.send_ui(last_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(vel)))
 
     async def update_commanded_vel(self):
         """provide an observation to the filter based on the commanded velocity"""
@@ -480,52 +486,77 @@ class Positioner2:
         return self.swing_est.get_pendulum_length()
 
     def estimate_gripper(self):
-        """Place the gripper under the gantry by the winch line length, tilted according to the IMU"""
-        # get the last IMU reading from the gripper
-        t_rot = self.datastore.imu_rotvec.getLast()
-        ts = t_rot[0]
-        last_rotvec = t_rot[1:]
-        grv = Rotation.from_rotvec(last_rotvec).as_euler('xyz')
+        """Estimate attributes of the gripper that depend on its IMU reading"""
+        last_imu = self.datastore.imu_quat.getLast()
+        ts = last_imu[0]
+        if not ts:
+            return
+        rotation = Rotation.from_quat(last_imu[1:])
+        # back out mounting position of IMU
+        rotation = rotation * Rotation.from_euler('xyz', [-90, 0, 0], degrees=True)
+
+        # When distance to floor is less than 12cm, Detect Tipping
+        if self.datastore.range_record.getLast()[1] < 0.12:
+            THRESHOLD_DEGREES = 9
+            euler = rotation.as_euler('xyz', degrees=True)
+            if abs(euler[0]) > THRESHOLD_DEGREES or abs(euler[1]) > THRESHOLD_DEGREES:
+                self.tip_over.set()
 
         # feed angle to frequency estimator
-        self.swing_est.add_rotation_vector(ts, last_rotvec)
-        # calculated_length = self.swing_est.get_pendulum_length()
+        rotvec = rotation.as_rotvec()
+        self.swing_est.add_rotation_vector(ts, rotvec)
 
-        # get the winch line length
+        # get the encoder based winch line length
         _, length, speed = self.datastore.winch_line_record.getLast()
 
         self.grip_pose = compose_poses([
-            (grv, self.gant_pos),
+            (rotvec, self.gant_pos),
             (np.zeros(3), np.array([0,0,-length], dtype=float)),
         ])
+
+    def detect_grip(self):
+        """
+        Watch for the rising and falling edge in grip pressure and set corresponding asyncio events
+        may set self.finger_pressure_rising or self.finger_pressure_falling
+        """
+        THRESHOLD = 0.4
+        HYSTERESIS = 0.04
+        pressure = self.datastore.finger.getLast()[2]
+
+        # Detect Rising Edge
+        # Only trigger if we aren't currently holding to ensure we capture the
+        # transition event rather than the continuous state of being compressed.
+        if not self.holding and pressure >= THRESHOLD:
+            self.holding = True
+            self.finger_pressure_rising.set()
+
+        # Detect Falling Edge
+        elif self.holding and pressure <= (THRESHOLD - HYSTERESIS):
+            self.holding = False
+            self.finger_pressure_falling.set()
 
 
     def send_positions(self):
         # send position factors to UI for visualization
-        update_for_ui = {
-            'pos_estimate': {
-                'gantry_pos': self.gant_pos,
-                'gantry_vel': self.gant_vel,
-                'gripper_pose': self.grip_pose,
-                'slack_lines': self.slack_lines,
-                },
-            'minimizer_stats': {
-                'data_ts': self.data_ts,
-                'kalman_prediction_rate': self.predict_time_taken,
-                'visual_update_rate': self.visual_time_taken,
-                'hang_update_rate': self.hang_time_taken,
-                },
-            'pos_factors_debug': {
-                # position as esimated by visual observations
-                'visual_pos': self.visual_pos,
-                'visual_vel': self.visual_vel,
-                # position as estimated by line length only
-                'hang_pos': self.hang_pos,
-                'hang_vel': self.hang_vel,
-                },
-            # 'goal_points': self.des_grip_locations, # each goal is a time and a position
-        }
-        self.to_ui_q.put(update_for_ui)
+
+        # no longer being sent but available for debug
+        # 'kalman_prediction_rate': self.predict_time_taken,
+        # 'visual_update_rate': self.visual_time_taken,
+        # 'hang_update_rate': self.hang_time_taken,
+
+        self.ob.send_ui(pos_estimate=telemetry.PositionEstimate(
+            data_ts=float(self.data_ts),
+            gantry_position=fromnp(self.gant_pos),
+            gantry_velocity=fromnp(self.gant_vel),
+            gripper_pose=common.Pose(rotation=fromnp(self.grip_pose[0]), position=fromnp(self.grip_pose[1])),
+            slack=list(map(bool, self.slack_lines)),
+        ))
+        self.ob.send_ui(pos_factors_debug=telemetry.PositionFactors(
+            visual_pos=fromnp(self.visual_pos),
+            visual_vel=fromnp(self.visual_vel),
+            hanging_pos=fromnp(self.hang_pos),
+            hanging_vel=fromnp(self.hang_vel),
+        ))
 
     def notify_update(self, update):
         if 'holding' in update:
@@ -543,4 +574,5 @@ class Positioner2:
                 
         except asyncio.exceptions.CancelledError:
             pass
+        np.save('gant_pos.npy', self.gant_pos)
         print('All position estimator tasks finished')

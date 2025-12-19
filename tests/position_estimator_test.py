@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import unittest
 from position_estimator import *
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import time
 from multiprocessing import Queue
 from data_store import DataStore
@@ -15,15 +15,16 @@ from math import pi, sqrt, sin, cos
 import time
 from random import random
 from observer import AsyncObserver
+from scipy.spatial.transform import Rotation
+from config_loader import create_default_config
 
 class TestPositionEstimator(unittest.TestCase):
 
     def setUp(self):
         self.datastore = DataStore(size=200)
-        to_ui_q = Queue()
-        to_ui_q.cancel_join_thread()
         self.mock_observer = MagicMock()
-        self.pe = Positioner2(self.datastore, to_ui_q, self.mock_observer)
+        self.mock_observer.config = create_default_config()
+        self.pe = Positioner2(self.datastore, self.mock_observer)
 
     def test_sphere_intersection(self):
         sphere1 = (np.array([0, 0, 0]), 5)
@@ -148,12 +149,8 @@ class TestPositionEstimator(unittest.TestCase):
 class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        to_ui_q = Queue()
-        to_ob_q = Queue()
-        to_ui_q.cancel_join_thread()
-        to_ob_q.cancel_join_thread()
         # make an instance of observer just to use it's simulated data function.
-        self.ob = AsyncObserver(to_ui_q, to_ob_q)
+        self.ob = AsyncObserver(terminate_with_ui=False, robot_config=create_default_config())
         self.datastore = self.ob.datastore
 
     async def test_positioner_main(self):
@@ -167,3 +164,73 @@ class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
         task.cancel()
         result = await asyncio.wait_for(task, 1)
         result = await asyncio.wait_for(sim_task, 1)
+
+class TestEstimateGripper(unittest.TestCase):
+    def setUp(self):
+        self.mock_datastore = MagicMock()
+        self.mock_observer = MagicMock()
+        self.mock_observer.config = create_default_config()
+        
+        self.pe = Positioner2(self.mock_datastore, self.mock_observer)
+        self.pe.swing_est = MagicMock()
+        
+        # Set gantry position
+        self.pe.gant_pos = np.array([10.0, 5.0, 20.0], dtype=float)
+        
+        # Common valid data setup
+        self.ts = 123456789.0
+        self.winch_length = 5.0
+        self.winch_speed = 0.1
+
+        # Real-world "Neutral" data
+        self.valid_quat = [3.94042969e-01, -5.91979980e-01, -5.81420898e-01, 3.95324707e-01]
+
+        # Setup default mock returns
+        self.pe.datastore.imu_quat.getLast.return_value = [self.ts] + self.valid_quat
+        self.pe.datastore.winch_line_record.getLast.return_value = [self.ts, self.winch_length, self.winch_speed]
+        self.pe.datastore.range_record.getLast.return_value = [self.ts, 0.4]
+
+    def test_normal_operation_real_data(self):
+        self.pe.tip_over.clear()
+        self.pe.estimate_gripper()
+
+        # Raw data is 90deg, but corrected is 0deg. Should NOT tip.
+        self.assertFalse(self.pe.tip_over.is_set(), "Tipping should not trigger for neutral hanging (corrected) pose")
+
+        # Should receive corrected vector (approx 0,0,0)
+        self.pe.swing_est.add_rotation_vector.assert_called_once()
+        call_args = self.pe.swing_est.add_rotation_vector.call_args
+        # Allow small floating point margin around 0
+        np.testing.assert_array_almost_equal(call_args[0][1], [0, 0, -2], decimal=1)
+
+        # Should be hanging straight down from Gantry ([10, 5, 20] -> [10, 5, 15])
+        rvec, tvec = self.pe.grip_pose
+        np.testing.assert_array_almost_equal(tvec, [10.0, 5.0, 15.0], decimal=1)
+
+    def test_tipping_trigger(self):
+        """Verify tip_over.set() is called when rotation is tipped relative to neutral."""
+        # Create a raw reading that corresponds to 110 degrees X (90 neutral + 20 tip)
+        r_tipped = Rotation.from_euler('x', 110, degrees=True)
+        
+        self.pe.datastore.range_record.getLast.return_value = [self.ts, 0.1]
+        self.pe.datastore.imu_quat.getLast.return_value = [self.ts] + list(r_tipped.as_quat())
+        self.pe.tip_over.clear() 
+
+        self.pe.estimate_gripper()
+
+        self.assertTrue(self.pe.tip_over.is_set(), "Should trigger tipping for 110deg raw input (20deg corrected)")
+
+    def test_pose_math(self):
+        """
+        Test mathematical correctness of pose composition.
+        """
+        # CASE 1: Real Neutral Input (~90 deg X)
+        # Corrected: 0 deg (Vertical)
+        # Expected: Gantry [10, 5, 20] + Down 5m = [10, 5, 15]
+        r_neutral = Rotation.from_euler('x', 90, degrees=True)
+        self.pe.datastore.imu_quat.getLast.return_value = [self.ts] + list(r_neutral.as_quat())
+        
+        self.pe.estimate_gripper()
+        
+        _, tvec = self.pe.grip_pose
+        np.testing.assert_array_almost_equal(tvec, [10.0, 5.0, 15.0])
