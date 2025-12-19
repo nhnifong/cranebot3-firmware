@@ -44,6 +44,13 @@ MAX_JOG_SPEED = 0.3
 
 gripper_color = (0.9, 0.20, 0.34, 1.0)
 
+# color scheme of targets based on status
+STATUS_COLORS = {
+    telemetry.TargetStatus.SEEN: color.white,
+    telemetry.TargetStatus.SELECTED: color.azure,
+    telemetry.TargetStatus.PICKED_UP: color.gold,
+}
+
 class Gantry(Entity):
     def __init__(self, ui, **kwargs):
         super().__init__(**kwargs)
@@ -802,6 +809,22 @@ class CamPreview(Entity):
             enabled=(self.anchor is None),
         )
 
+        if self.anchor is not None:
+            # visualization of identified targets as stroked squares
+            self.target_squares = [Entity(
+                parent=self,
+                model=Mesh( # you must make a different mesh for each one
+                    vertices=[(-0.5, -0.5, 0), (0.5, -0.5, 0), (0.5, 0.5, 0), (-0.5, 0.5, 0), (-0.5, -0.5, 0)],
+                    mode='line',
+                    thickness=1
+                ),
+                color=color.yellow,
+                scale=(0.01, 0.01),
+                enabled=False,
+                z=-1,
+            ) for i in range(20)]
+
+
         # indicates whether the texture has been allocated
         self.haveSetImage = False
 
@@ -924,6 +947,31 @@ class CamPreview(Entity):
         self.little_point.x = mapval(clamp(uv_point[0], 0, 1), 0, 1, -self.content_width/2, self.content_width/2)
         self.little_point.y = mapval(clamp(uv_point[1], 0, 1), 1, 0, -self.content_height/2, self.content_height/2)
 
+    def set_target_points(self, item: telemetry.TargetList):
+        """
+        Given a list of targets, project them to this camera's view,
+        and any that would be visible draw them as squares of the appropriate color
+        """
+        if self.anchor is None:
+            return
+        ts_index = 0
+        for target in item.targets:
+            floor_pos = np.array([[target.position.x, target.position.y]])
+            # in any other cameras which are enabled, project that floor position back into their UV coords
+            uv_coords = project_floor_to_pixels(floor_pos, self.anchor.anchor_cam_pose)
+            if len(uv_coords) == 1:
+                uv = uv_coords[0]
+                ts = self.target_squares[ts_index]
+                ts.color = STATUS_COLORS.get(target.status, color.white)
+                ts.x=mapval(clamp(uv[0], 0, 1), 0, 1, -self.content_width/2, self.content_width/2)
+                ts.y=mapval(clamp(uv[1], 0, 1), 1, 0, -self.content_height/2, self.content_height/2)
+                ts.enabled = True
+                ts_index += 1
+        # disable the rest
+        while ts_index < len(self.target_squares):
+            self.target_squares[ts_index].enabled = False
+            ts_index += 1
+
     def vid_clicked(self):
         # Only allow locking if this is an anchor (not generic/gripper) AND not already locked
         if self.anchor and not self.floor.locked:
@@ -958,12 +1006,6 @@ class ActionList(Entity):
         super().__init__()
         self.task_name = None
         self.target_list = []
-
-        self.status_colors = {
-            telemetry.TargetStatus.SEEN: color.white,
-            telemetry.TargetStatus.SELECTED: color.green,
-            telemetry.TargetStatus.PICKED_UP: color.gold,
-        }
 
         self.background = Entity(
             parent=camera.ui,
@@ -1033,7 +1075,7 @@ class ActionList(Entity):
                 origin=(-0.5, -0.5),              # Anchor: Bottom Left of text
                 position=self.cursor_pos,
                 scale=0.6,                          # Text scale (relative to parent)
-                color=self.status_colors.get(target.status, color.white),
+                color=STATUS_COLORS.get(target.status, color.white),
             )
             self.cursor_pos[1] -= tl.height
             self.target_labels.append(tl)

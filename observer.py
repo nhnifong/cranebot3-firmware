@@ -140,6 +140,7 @@ class AsyncObserver:
         self.telemetry_buffer_lock = threading.RLock()
         self.startup_complete = asyncio.Event()
         self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
+        self.cloud_telem_websocket = None
 
     async def send_setup_telemetry(self):
         # TODO this ought to send to a particular UI not everyone.
@@ -668,7 +669,7 @@ class AsyncObserver:
                     # We need a way to know that, but for now, you'll have to make sure only one is one at a time while discovering.
                     # After discovery, it should be ok to have more than one on at a time.
                     print(f"Discovered another anchor server on the network, but we already know of 4 {key} {address}")
-                    print(f"existing anchors: {self.config.anchor_num_map.keys()}")
+                    print(f"existing anchors: {config.anchor_num_map.keys()}")
                     return None
             self.config.anchors[anchor_num].num = anchor_num
             self.config.anchors[anchor_num].service_name = key
@@ -806,6 +807,8 @@ class AsyncObserver:
                     self.cloud_telem_websocket = None
         except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
             pass # normal close
+        except ConnectionRefusedError:
+            print(f'Connection to control plane refused')
 
     def send_ui(self, **kwargs):
         """
@@ -831,7 +834,7 @@ class AsyncObserver:
             self.telemetry_buffer.clear()
         to_send = bytes(batch)
         # copy list to prevent RuntimeError: Set changed size during iteration
-        connected_clients = self.connected_local_clients
+        connected_clients = self.connected_local_clients.copy()
         if self.cloud_telem_websocket:
             connected_clients.add(self.cloud_telem_websocket)
         for ui_websocket in connected_clients:
@@ -1313,13 +1316,7 @@ class AsyncObserver:
                         # if this is an anchor, project points to floor using anchor's specific pose
                         floor_points = project_pixels_to_floor(targets2d, client.camera_pose)
                         all_floor_target_arrs.append(floor_points)
-                    
-                    # create a visual diagnostic image in the same manner as dobby_eval and pass it to the UI
-                    heatmap_vis = (heatmap_np * 255).astype(np.uint8)
-                    heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
-
-                    # TODO we need to send heatmaps on video side channel?
-                    # self.to_ui_q.put({'heatmap': {'anchor_num':valid_anchor_clients[i].anchor_num, 'image':heatmap_color}})
+                        # TODO retain information about the original image coordinates of targets for display in UI
 
                 if len(all_floor_target_arrs) > 0:
                     # filter out targets that are not inside the work area.
