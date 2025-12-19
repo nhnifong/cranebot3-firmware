@@ -483,6 +483,7 @@ class ControlPanelUI:
         Ensure that the given control item is sent to every connected UI
         keyword args are passed directly to control item, so you can construct one like this
         """
+        to_send = None
         if events is None:
             events = [control.ControlItem(**kwargs)]
         batch = control.ControlBatchUpdate(
@@ -494,7 +495,7 @@ class ControlPanelUI:
         except Exception as e:
             print(f'Cannot serialize control message batch {e}\n{batch}')
         # synchronous, and we're on a different thread, but I'm pretty sure websockets does this in thread safe way
-        if self.websocket:
+        if self.websocket and to_send:
             self.websocket.send(to_send)
 
     def simple_command(self, cmd: control.Command):
@@ -645,6 +646,13 @@ class ControlPanelUI:
     def _handle_target_list(self, item: telemetry.TargetList):
         # use this to re-write the panel on the left that indicates active targets
         self.action_list.set_target_list(item)
+        # Draw mutliple representations of each target. when one is hovered, all become highlighted.
+        # each target is represented in
+        # * the action list
+        # * the 3d view
+        # * on each video feed (if in that cam's view)
+        for view in self.cam_views.values():
+            view.set_target_points(item)
 
     def _handle_video_ready(self, item: telemetry.VideoReady):
         # connect to the video at the local address

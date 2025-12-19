@@ -28,7 +28,7 @@ class TestTargetQueue(unittest.TestCase):
         self.assertEqual(snapshot[0].source, 'user')
 
     def test_ai_target_addition_and_pruning(self):
-        # 1. Add an initial batch of AI targets
+        # Add an initial batch of AI targets
         batch_1 = [
             {'position': [10, 10, 0], 'dropoff': 'bin_a'},
             {'position': [20, 20, 0], 'dropoff': 'bin_b'}
@@ -39,7 +39,7 @@ class TestTargetQueue(unittest.TestCase):
         self.assertEqual(len(snapshot_1), 2)
         ids_1 = {t.id for t in snapshot_1}
 
-        # 2. Add a second batch that is completely different
+        # Add a second batch that is completely different
         # The previous targets should be pruned because they are not in this new batch
         batch_2 = [
             {'position': [30, 30, 0], 'dropoff': 'bin_c'}
@@ -108,6 +108,36 @@ class TestTargetQueue(unittest.TestCase):
         snapshot = self.queue.get_queue_snapshot().targets
         self.assertEqual(len(snapshot), 1)
         self.assertEqual(snapshot[0].source, 'user')
+
+    def test_batch_deduplication(self):
+        # Threshold is 0.5
+        # Scenario: 
+        # A and B are duplicates (dist 0.04). 
+        # C is distinct (dist > 0.5 from others).
+        
+        batch = [
+            {'position': [10.0, 0.0, 0.0], 'dropoff': 'drop'},   # A
+            {'position': [10.04, 0.0, 0.0], 'dropoff': 'drop'},  # B (dist 0.04 < 0.5)
+            {'position': [20.0, 0.0, 0.0], 'dropoff': 'drop'}    # C
+        ]
+        
+        # Call the private method directly
+        deduped_batch = self.queue._deduplicate_batch(batch)
+        
+        # Should result in 2 targets (A/B merged, C separate)
+        self.assertEqual(len(deduped_batch), 2)
+        
+        # Extract positions as numpy arrays for comparison
+        positions = [np.array(t['position'], dtype=np.float64) for t in deduped_batch]
+        
+        # Check for C
+        has_c = any(np.allclose(p, [20.0, 0.0, 0.0]) for p in positions)
+        self.assertTrue(has_c, "Target C should be present")
+        
+        # Check for A (or B merged into A)
+        # Since logic keeps first, we expect ~10.0
+        has_a = any(np.allclose(p, [10.0, 0.0, 0.0]) for p in positions)
+        self.assertTrue(has_a, "Target A should be present (absorbing B)")
 
     def test_get_best_target_logic(self):
         # Should return first PENDING target

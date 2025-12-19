@@ -35,7 +35,7 @@ class Target:
         return tp
 
 class TargetQueue:
-    def __init__(self, duplicate_threshold: float = 0.05):
+    def __init__(self, duplicate_threshold: float = 0.1):
         """
         :param duplicate_threshold: The distance in meters under which two targets
                                     are considered the same object.
@@ -68,9 +68,48 @@ class TargetQueue:
             self._queue.insert(0, target)
             return target.id
 
+    def _deduplicate_batch(self, targets_data: List[dict]) -> List[dict]:
+        """
+        Merges pairs within the batch that are closer than duplicate_threshold.
+        Greedy approach: Only one pair is merged per pass to avoid collapsing chains.
+        """
+        merged_targets = []
+        skip_indices = set()
+        n = len(targets_data)
+        
+        # Helper to safely extract numpy position for distance calc
+        def _extract_pos(d):
+            p = d['position']
+            return np.array(p, dtype=np.float64)
+
+        for i in range(n):
+            if i in skip_indices:
+                continue
+            
+            pos_i = _extract_pos(targets_data[i])
+            
+            for j in range(i + 1, n):
+                if j in skip_indices:
+                    continue
+                
+                pos_j = _extract_pos(targets_data[j])
+                dist = float(np.linalg.norm(pos_i - pos_j))
+                
+                if dist < self._duplicate_threshold:
+                    # Found a duplicate in the batch.
+                    # We keep 'i' and drop 'j'.
+                    skip_indices.add(j)
+                    # We stop looking for matches for 'i' to satisfy "only pairs can combine in one pass"
+                    break
+            
+            merged_targets.append(targets_data[i])
+            
+        return merged_targets
+
     def add_ai_targets(self, targets_data: List[dict]):
         """
         Batch processes AI suggestions with specific reconciliation logic:
+        0. Deduplicate batch
         1. Syncs with existing targets:
            - If match found (dist < threshold):
              - If existing is USER: Keep User data, ignore AI update.
@@ -84,11 +123,12 @@ class TargetQueue:
         go sometimes betweneen the wash and dry cycle.
         """
         with self._lock:
+            targets_to_process = self._deduplicate_batch(targets_data)
             matched_ids = set()
             new_targets = []
 
             # Process all incoming AI suggestions
-            for data in targets_data:
+            for data in targets_to_process:
                 pos = np.array(data['position'], dtype=np.float64)
 
                 dropoff_raw = data.get('dropoff', 'default_drop')
