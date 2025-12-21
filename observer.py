@@ -141,6 +141,7 @@ class AsyncObserver:
         self.startup_complete = asyncio.Event()
         self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
         self.cloud_telem_websocket = None
+        self.gip_task = None
 
     async def send_setup_telemetry(self):
         # TODO this ought to send to a particular UI not everyone.
@@ -294,7 +295,7 @@ class AsyncObserver:
             self.named_positions[key] = position
         self.named_positions[key] = self.named_positions[key] * 0.75 + position * 0.25
 
-        pos = self.named_positions['gamepad']
+        pos = self.named_positions[key]
         self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(pos), name=key))
 
     async def invoke_motion_task(self, coro):
@@ -444,13 +445,17 @@ class AsyncObserver:
 
     def locate_anchors(self):
         """using the record of recent origin detections and cal_assist marker detections, estimate the pose of each anchor."""
-        markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3']
+        markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3', 'gantry']
         averages = defaultdict(lambda: [None]*4)
         for client in self.anchors:
             # average each list of detections, but leave them in the camera's reference frame.
             for marker in markers:
                 # averages[marker][client.anchor_num] = average_pose(list(client.origin_poses[marker]))
-                averages[marker][client.anchor_num] = list(client.origin_poses[marker])
+                if marker == 'gantry':
+                    averages[marker][client.anchor_num] = list(client.raw_gant_poses)
+                else:
+                    averages[marker][client.anchor_num] = list(client.origin_poses[marker])
+                print(f'anchor {client.anchor_num} has {len(averages[marker][client.anchor_num])} observations of {marker}')
 
         # run optimization in pool
         async_result = self.pool.apply_async(optimize_anchor_poses, (dict(averages),))
@@ -502,13 +507,18 @@ class AsyncObserver:
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
             #   it is only necessary to ensure enough have been collected from each client and average them.
-            num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors]
+            for a in self.anchors:
+                a.save_raw = True
+            num_o_dets = []
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
                 print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors]
             
             anchor_poses = self.locate_anchors()
+
+            for a in self.anchors:
+                a.save_raw = False
 
             # Use the optimization output to update anchor poses and spool params
             for client in self.anchors:
@@ -540,6 +550,7 @@ class AsyncObserver:
                 # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
                 # when the stabilization is done without any existing z rotation term
                 self.gripper_client.calibrating_room_spin = True
+                await asyncio.sleep(0.1)
                 origin_card_pose = [None]
                 def special_handle_det(timestamp, detections):
                     for d in detections:
@@ -554,7 +565,7 @@ class AsyncObserver:
                     detections = async_result.get(timeout=5)
                 euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
                 print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
-                roomspin = euler_rot[0]
+                roomspin = -euler_rot[0]
                 self.config.gripper.frame_room_spin = roomspin
                 self.config.has_been_calibrated = True
                 save_config(self.config)
@@ -913,8 +924,10 @@ class AsyncObserver:
         if self.sim_task is not None:
             tasks.append(self.sim_task)
         if self.locate_anchor_task is not None:
-
             tasks.append(self.locate_anchor_task)
+        if self.gip_task is not None:
+            tasks.append(self.gip_task)
+
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         try:
             result = await asyncio.gather(*tasks)
@@ -1267,7 +1280,10 @@ class AsyncObserver:
             counter += 1
 
             if self.gripper_client is not None and self.gripper_client.last_frame_resized is not None:
-                gripper_image_tensor = torch.from_numpy(self.gripper_client.last_frame_resized).permute(2, 0, 1).float() / 255.0
+
+                # seems to work better this way. TODO if the network was trained on BGR, flip it. train it on RGB so we don't have to do this here.
+                rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
+                gripper_image_tensor = torch.from_numpy(rgb_image).permute(2, 0, 1).float() / 255.0
                 if gripper_image_tensor is not None:
                     gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
                     with torch.no_grad():
@@ -1356,6 +1372,8 @@ class AsyncObserver:
                     await asyncio.sleep(LOOP_DELAY)
                     continue
 
+                print(f'selected target {next_target.id}')
+
                 self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
                 self.send_tq_to_ui()
 
@@ -1378,6 +1396,7 @@ class AsyncObserver:
                 except TimeoutError:
                     # if doesn't arrive in one second, run target selection again since a better one might have appeared or the user might have put one in their queue
                     print('did not arrive yet')
+                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
                     continue
 
                 if self.gripper_client is None:
@@ -1533,15 +1552,16 @@ class AsyncObserver:
         print('Gave up on grasp after a few attempts')
         return False
 
-    async def _handle_collect_images(self):
-        asyncio.create_task(self.collect_images())
+    def _handle_collect_images(self):
+        self.gip_task = asyncio.create_task(self.collect_images())
 
     async def collect_images(self):
         """Collects data for the centering network"""
         while self.run_command_loop:
+            print(self.gripper_client.last_frame_resized.shape)
             rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
             capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
 
 def start_observation(terminate_with_ui=False):
     """Entry point to be used when starting this from main.py with multiprocessing."""

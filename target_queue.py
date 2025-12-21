@@ -209,7 +209,10 @@ class TargetQueue:
         Proximity logic removed: simply returns the first PENDING target in the queue.
         """
         with self._lock:
-            return next((t for t in self._queue if t.status == telemetry.TargetStatus.SEEN), None)
+            return next((
+                t for t in self._queue
+                if (t.status == telemetry.TargetStatus.SELECTED or t.status == telemetry.TargetStatus.SEEN)
+                ), None)
 
     def set_target_status(self, target_id: str, status: telemetry.TargetStatus) -> bool:
         """
