@@ -21,6 +21,7 @@ from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHand
 from generated.nf import telemetry, common
 import copy
 from video_streamer import VideoStreamer
+import traceback
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -391,6 +392,9 @@ class ComponentClient:
             except asyncio.exceptions.CancelledError:
                 return
 
+CAL_MARKERS = set(['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'])
+OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'gamepad-back', 'hamper-back', 'trash-back'])
+
 class RaspiAnchorClient(ComponentClient):
     def __init__(self, address, port, anchor_num, datastore, ob, pool, stat):
         super().__init__(address, port, datastore, ob, pool, stat)
@@ -402,7 +406,7 @@ class RaspiAnchorClient(ComponentClient):
             video_status=telemetry.ConnStatus.NOT_DETECTED,
         )
         self.last_raw_encoder = None
-        self.raw_gant_poses = []
+        self.raw_gant_poses = deque(maxlen=12)
         self.anchor_pose = poseProtoToTuple(self.config.anchors[anchor_num].pose)
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
@@ -434,50 +438,54 @@ class RaspiAnchorClient(ComponentClient):
         """
         handle a list of aruco detections from the pool
         """
-        self.stat.pending_frames_in_pool -= 1
-        self.stat.detection_count += len(detections)
+        try:
+            self.stat.pending_frames_in_pool -= 1
+            self.stat.detection_count += len(detections)
 
-        for detection in detections:
+            for detection in detections:
 
-            if detection['n'] in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3']:
-                # save all the detections of the origin for later analysis
-                self.origin_poses[detection['n']].append(pose_from_det(detection))
+                if detection['n'] in CAL_MARKERS:
+                    # save all the detections of the origin for later analysis
+                    self.origin_poses[detection['n']].append(pose_from_det(detection))
 
-            if detection['n'] == 'gantry':
-                # rotate and translate to where that object's origin would be
-                # given the position and rotation of the camera that made this observation (relative to the origin)
-                # store the time and that position in the appropriate measurement array in observer.
-                # you have the pose of gantry_front relative to a particular anchor camera
-                # convert it to a pose relative to the origin
-                pose = np.array(compose_poses([
-                    self.anchor_pose, # obtained from calibration
-                    model_constants.anchor_camera, # constant
-                    pose_from_det(detection), # the pose obtained just now
-                    gantry_april_inv, # constant
-                ]))
-                position = pose.reshape(6)[3:]
-                self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position])) # take only the position
-                # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
-                self.datastore.gantry_pos_event.set()
+                if detection['n'] == 'gantry':
+                    # rotate and translate to where that object's origin would be
+                    # given the position and rotation of the camera that made this observation (relative to the origin)
+                    # store the time and that position in the appropriate measurement array in observer.
+                    # you have the pose of gantry_front relative to a particular anchor camera
+                    # convert it to a pose relative to the origin
+                    pose = np.array(compose_poses([
+                        self.anchor_pose, # obtained from calibration
+                        model_constants.anchor_camera, # constant
+                        pose_from_det(detection), # the pose obtained just now
+                        gantry_april_inv, # constant
+                    ]))
+                    position = pose.reshape(6)[3:]
+                    self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position])) # take only the position
+                    # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
+                    self.datastore.gantry_pos_event.set()
 
-                self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
-                with self.gantry_pos_sightings_lock:
-                    self.gantry_pos_sightings.append(position)
+                    self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
+                    with self.gantry_pos_sightings_lock:
+                        self.gantry_pos_sightings.append(position)
 
-                if self.save_raw:
-                    self.raw_gant_poses.append(pose_from_det(detection))
+                    if self.save_raw:
+                        self.raw_gant_poses.append(pose_from_det(detection))
 
-            if detection['n'] in ['gamepad', 'hamper', 'trash', 'gamepad-back', 'hamper-back', 'trash-back']:
-                offset = model_constants.basket_offset_inv if detection['n'].endswith('back') else model_constants.basket_offset
-                pose = np.array(compose_poses([
-                    self.anchor_pose,
-                    model_constants.anchor_camera, # constant
-                    pose_from_det(detection), # the pose obtained just now
-                    offset, # the named location is out in front of the tag.
-                ]))
-                position = pose.reshape(6)[3:]
-                # save the position of this object for use in various planning tasks.
-                self.ob.update_avg_named_pos(detection['n'], position)
+                if detection['n'] in OTHER_MARKERS:
+                    offset = model_constants.basket_offset_inv if detection['n'].endswith('back') else model_constants.basket_offset
+                    pose = np.array(compose_poses([
+                        self.anchor_pose,
+                        model_constants.anchor_camera, # constant
+                        pose_from_det(detection), # the pose obtained just now
+                        offset, # the named location is out in front of the tag.
+                    ]))
+                    position = pose.reshape(6)[3:]
+                    # save the position of this object for use in various planning tasks.
+                    self.ob.update_avg_named_pos(detection['n'], position)
+        except Exception: # <--- CATCH AND PRINT TRACE
+            print(f"CRASH processing detection '{detection.get('n', 'UNKNOWN')}'")
+            traceback.print_exc()
 
     async def send_config(self):
         anchor_config_vars = {

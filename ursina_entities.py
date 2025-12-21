@@ -480,7 +480,7 @@ class Floor(Entity):
             # left stick x orbits the seat clockwise
             # left stick y moves away from the seat
             gantry_pos_xy = np.array(self.app.gantry.zup_pos[:2])
-            vec_to_object = gantry_pos_xy - self.gp_pos
+            vec_to_object = gantry_pos_xy - self.gp_pos[:2]
             distance = np.linalg.norm(vec_to_object)
             # We can only orbit if we aren't at the exact center.
             if distance > 1e-6:
@@ -720,6 +720,7 @@ class CamPreview(Entity):
         self.floor = floor
         self.app = app
         self.heatmap = None
+        self.cam_scale = cam_scale
 
         # 16:9 aspect ratio for the camera content
         if self.anchor is None:
@@ -847,13 +848,11 @@ class CamPreview(Entity):
 
         # Map normalized [-1,1] input to local physical dimensions of the content view
         # Assuming vec[0] is X (Right+) and vec[1] is Y (Up+)
-        # target_x = vec[0] * (self.content_width / 2)
-        # target_y = -vec[1] * (self.content_height / 2)
         target_x = mapval(clamp(vec[0], -1, 1), -1, 1, -self.content_width/2, self.content_width/2)
         target_y = mapval(clamp(vec[1], -1, 1), 1, -1, -self.content_height/2, self.content_height/2)
 
         # Vector length in local physical units
-        physical_magnitude = Vec2(target_x, target_y).length()
+        physical_magnitude = Vec2(target_x, target_y).length() * 0.5
 
         if physical_magnitude < 1e-3:
             self.prediction_arrow.enabled = False

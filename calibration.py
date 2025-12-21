@@ -215,11 +215,14 @@ def multi_card_residuals(x, averages):
                     continue
                 
                 # Chain: Anchor -> Camera -> Marker
-                pose_in_room = compose_poses([
+                pose_list = [
                     anchor_poses[anchor_idx],
                     model_constants.anchor_camera,
                     marker_pose_cam
-                ])
+                ]
+                if marker_name == 'gantry':
+                    pose_list.append(gantry_april_inv)
+                pose_in_room = compose_poses(pose_list)
                 
                 # Extract translation (tvec is index 1)
                 valid_sightings.append(pose_in_room[1])
@@ -235,7 +238,7 @@ def multi_card_residuals(x, averages):
             # Residual = Position_Calculated - [0,0,0]
             # We add 3 residuals (dx, dy, dz) per sighting
             
-            origin_weight = 5.0 # tune this to to make origin errors more expensive
+            origin_weight = 1.5 # tune this to to make origin errors more expensive
             current_residuals = (projected_positions - np.zeros(3)) * origin_weight
             residuals.extend(current_residuals.flatten())
             
@@ -301,7 +304,7 @@ def optimize_anchor_poses(averages):
         np.array(initial_guesses).flatten(),
         args=(averages,),
         method='lm', 
-        max_nfev=1000,
+        # max_nfev=1000,
         verbose=0
     )
 
