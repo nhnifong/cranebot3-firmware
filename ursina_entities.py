@@ -995,7 +995,7 @@ class CamPreview(Entity):
             stream.thread_type = "SLICE"
             for packet in container.demux(stream):
                 for frame in packet.decode():
-                    arr = frame.to_ndarray(format='rgb24')
+                    arr = frame.to_ndarray(format='bgr24')
                     invoke(self.setImage, arr, delay=0.0001)
         except Exception as e:
             print(f'unable to connect to {uri} {e}')

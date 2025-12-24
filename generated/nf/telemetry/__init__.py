@@ -505,11 +505,12 @@ class VideoReady(betterproto2.Message):
     udp:127.0.0.1:1234
     """
 
-    remote_uri: "str | None" = betterproto2.field(
+    stream_path: "str | None" = betterproto2.field(
         4, betterproto2.TYPE_STRING, optional=True
     )
     """
-    for remote UI's connect at this addfress
+    for remote UI's construct a url using this stream path
+    for example http://localhost:8889/${streamPath}/whep
     """
 
 

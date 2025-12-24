@@ -150,8 +150,9 @@ message VideoReady {
 	// udp:127.0.0.1:1234
 	optional string local_uri = 3;
 
-	// for remote UI's connect at this addfress
-	optional string remote_uri = 4;
+	// for remote UI's construct a url using this stream path
+	// for example http://localhost:8889/${streamPath}/whep
+	optional string stream_path = 4;
 }
 
 // A single kind of update that the observer is providing to an external UI

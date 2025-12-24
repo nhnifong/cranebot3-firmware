@@ -145,6 +145,7 @@ class AsyncObserver:
 
     async def send_setup_telemetry(self):
         # TODO this ought to send to a particular UI not everyone.
+        print('Sending setup telemetry')
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
             poses=[a.pose for a in self.config.anchors]
         ))
@@ -801,7 +802,8 @@ class AsyncObserver:
 
     async def connect_cloud_telemetry(self):
         try:
-            async with websockets.connect(f"ws://{CONTROL_PLANE}/telemetry/{self.config.robot_id}", max_size=None, open_timeout=10) as websocket:
+            use_id = 0 # self.config.robot_id
+            async with websockets.connect(f"ws://{CONTROL_PLANE}/telemetry/{use_id}", max_size=None, open_timeout=10) as websocket:
                 self.cloud_telem_websocket = websocket
                 print(f'connected to control_plane {websocket}')
                 # send anything that it would need up-front
@@ -828,6 +830,15 @@ class AsyncObserver:
 
         self.send_ui(pop_message=telemetry.Popup('hello'))
         """
+        has_content = False
+        for msg in kwargs.values():
+            # if message is equal to a default instance of itself, dont send it.
+            if msg != type(msg)():
+                has_content = True
+                break
+        if not has_content:
+            return
+
         # Add item to batch
         with self.telemetry_buffer_lock:
             self.telemetry_buffer.append(telemetry.TelemetryItem(**kwargs))
@@ -914,6 +925,8 @@ class AsyncObserver:
         self.stat.run = False
         self.pe.run = False
         self.pe_task.cancel()
+        if self.cloud_telem:
+            self.cloud_telem.cancel()
         tasks = [self.pe_task, self.keeper, self.cloud_telem]
         if self.grpc_server is not None:
             tasks.append(self.grpc_server.stop(grace=5))

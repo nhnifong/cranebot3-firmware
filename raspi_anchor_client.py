@@ -100,8 +100,9 @@ class ComponentClient:
 
             # start thread for frame risize and forwarding
             encoder_thread = None
-            if self.anchor_num in [None, *self.config.preferred_cameras]:
-                encoder_thread = threading.Thread(target=self.frame_resizer_loop, daemon=True)
+            components_to_stream = [None, *self.config.preferred_cameras]
+            if self.anchor_num in components_to_stream:
+                encoder_thread = threading.Thread(target=self.frame_resizer_loop, kwargs={"cam_num": components_to_stream.index(self.anchor_num)}, daemon=True)
                 encoder_thread.start()
 
             print(f'video connection successful')
@@ -159,7 +160,7 @@ class ComponentClient:
             if 'container' in locals():
                 container.close()
 
-    def frame_resizer_loop(self):
+    def frame_resizer_loop(self, cam_num):
         """
         This runs in a dedicated thread. It waits for a signal that a new
         frame is available, resizes it, and stabilizes it in the gripper case.
@@ -174,6 +175,8 @@ class ComponentClient:
 
         Numpy functions such as those used by cv2.resize actually release the GIL
         which is why this is a thread not a task (main loop can run faster this way)
+
+        cam_num identifies which of the preferred cameras this is. 0 is the gripper, 1 and 2 are the two overhead cams.
         """
 
         # TODO allow these to changes when in a teleop mode
@@ -184,7 +187,10 @@ class ComponentClient:
             final_shape = (IMAGE_SHAPE[1], IMAGE_SHAPE[0]) # resize for dobby network input
             final_fps = 10
 
-        vs = VideoStreamer(width=final_shape[1], height=final_shape[0], fps=final_fps, rtmp_url=None)
+        host = 'localhost'
+        path = f'stringman/{self.config.robot_id}/{cam_num}'
+        rtmp = f'rtmp://{host}:1935/{path}?user=user&pass=pass'
+        vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
         vs.start()
 
         frames_sent = 0
@@ -235,7 +241,8 @@ class ComponentClient:
                 self.ob.send_ui(video_ready=telemetry.VideoReady(
                     is_gripper=self.anchor_num is None,
                     anchor_num=self.anchor_num,
-                    local_uri=f'udp://127.0.0.1:{vs.local_udp_port}'
+                    local_uri=f'udp://127.0.0.1:{vs.local_udp_port}',
+                    stream_path=path,
                 ))
 
         vs.stop()
