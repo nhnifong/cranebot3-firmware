@@ -38,6 +38,9 @@ anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
 
+# position in the anchor model where the two walls and top surface meet. rotation is irrelevant
+anchor_wall_corner = (np.array([0,0,0], dtype=float), np.array([0.005978, 0.089425, 0.042], dtype=float))
+
 # rotation and translation vectors of the 'gantry' april tag in the gantry reference frame.
 # gantry_april = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105], dtype=float))
 gantry_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055], dtype=float))

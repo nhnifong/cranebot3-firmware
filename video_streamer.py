@@ -58,7 +58,7 @@ class VideoStreamer:
 
             '-f', 'rawvideo', # Input format
             '-vcodec', 'rawvideo',
-            '-pix_fmt', 'bgr24', # OpenCV uses BGR
+            '-pix_fmt', 'rgb24',
             '-s', f'{self.width}x{self.height}', # Input resolution
             '-i', '-', # Read from STDIN
             
@@ -101,10 +101,6 @@ class VideoStreamer:
         """
         if not self.process:
             return
-
-        # Ensure the frame is the correct size
-        if frame.shape[1] != self.width or frame.shape[0] != self.height:
-            frame = cv2.resize(frame, (self.width, self.height))
 
         try:
             # Write raw bytes to ffmpeg's stdin
