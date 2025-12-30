@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nf_robot"
+version = "0.1.0"
+description = "Robot control system for Stringman"
+authors = [{name = "Nathaniel Nifong", email = "naavox@gmail.com"}]
+requires-python = ">=3.9"
+readme = "README.md"
+license = {text = "Apache 2.0"}
+
+dependencies = [
+    "numpy>=2.0",
+    "opencv-contrib-python>=4.0", 
+    "scipy",
+    "zeroconf",
+    "asyncio",
+    "websockets",
+    "python-fcl",
+    "pupil-apriltags",
+    "av",
+    "lerobot",
+    "betterproto==2.0.0b6", # Ensure version matches generated code expectations
+]
+
+[project.optional-dependencies]
+ui = [
+    "ursina>=7.0.0",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+pi = [
+    # On Pi, we might prefer headless opencv to avoid GUI deps
+    "opencv-contrib-python-headless>=4.0", 
+    "pyserial",
+    "getmac",
+    "inventorhatmini",
+    "gpiodevice",
+    "Adafruit-Blinka",
+    "adafruit-circuitpython-bno08x",
+    "adafruit-circuitpython-vl53l1x",
+    "RPi.GPIO",
+]
+
+[project.scripts]
+# Main Applications
+robot-server = "nf_robot.robot.component_server:main"
+observer = "nf_robot.host.observer:main"
+robot-ui = "nf_robot.ui.main:main" 
+
+# QA Tools
+qa-anchor = "nf_robot.qa.anchor_eval:main"
+qa-gripper = "nf_robot.qa.gripper_eval:main"
+
+[tool.setuptools.package-data]
+"nf_robot.ui" = ["assets/**/*", "assets/*"]
+"nf_robot.scripts" = ["*.sh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
