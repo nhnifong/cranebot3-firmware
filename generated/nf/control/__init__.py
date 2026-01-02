@@ -12,6 +12,7 @@ __all__ = (
     "EpControl",
     "GantryGoalPos",
     "JogSpool",
+    "ScaleRoom",
 )
 
 from dataclasses import dataclass
@@ -70,6 +71,11 @@ class Command(betterproto2.Enum):
     Unpark from the saddle and move clear of it.
     """
 
+    GRASP = 12
+    """
+    Execute an automated grasp at the current position.
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -99,6 +105,7 @@ class Command(betterproto2.Enum):
             9: "COMMAND_PICK_AND_DROP",
             10: "COMMAND_PARK",
             11: "COMMAND_UNPARK",
+            12: "COMMAND_GRASP",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -116,6 +123,7 @@ class Command(betterproto2.Enum):
             "COMMAND_PICK_AND_DROP": 9,
             "COMMAND_PARK": 10,
             "COMMAND_UNPARK": 11,
+            "COMMAND_GRASP": 12,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,
@@ -232,6 +240,10 @@ class ControlItem(betterproto2.Message):
         5, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    scale_room: "ScaleRoom | None" = betterproto2.field(
+        6, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
@@ -296,6 +308,18 @@ class JogSpool(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.control", "JogSpool", JogSpool)
+
+
+@dataclass(eq=False, repr=False)
+class ScaleRoom(betterproto2.Message):
+    """
+    message used to tweak calibration by scaling all the anchor positions towards or away from the origin
+    """
+
+    scale: "float" = betterproto2.field(1, betterproto2.TYPE_FLOAT)
+
+
+default_message_pool.register_message("nf.control", "ScaleRoom", ScaleRoom)
 
 
 from .. import common as _common__

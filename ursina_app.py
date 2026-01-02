@@ -426,6 +426,8 @@ class ControlPanelUI:
             self.walls[i].scale = (width, height)
             self.walls[i].look_at(center+right);
 
+    def scale_room(self, amount):
+        self.send_ob(scale_room=control.ScaleRoom(scale=amount))
 
     def input(self, key):
         if key == 'space':
@@ -434,6 +436,10 @@ class ControlPanelUI:
             self.simple_command('half_cal')
         elif key == 'escape' and self.gamepad_window.enabled:
             self.gamepad_window.enabled = False
+        elif key == '+':
+            self.scale_room(1.005)
+        elif key == '-':
+            self.scale_room(0.995)
 
         was_dir = self.direction
 
@@ -580,6 +586,7 @@ class ControlPanelUI:
             apose = (tonp(pose.rotation), tonp(pose.position))
             self.anchors[anchor_num].enabled = True
             self.anchors[anchor_num].pose = apose
+            self.anchors[anchor_num].anchor_cam_pose = compose_poses([apose, model_constants.anchor_camera])
             self.anchors[anchor_num].position = swap_yz(apose[1])
             self.anchors[anchor_num].rotation = to_ursina_rotation(apose[0])
         self.gantry.redraw_wires()

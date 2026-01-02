@@ -155,6 +155,10 @@ message VideoReady {
 	optional string stream_path = 4;
 }
 
+message UplinkStatus {
+	bool online = 1;
+}
+
 // A single kind of update that the observer is providing to an external UI
 // Typically about the robot's state such as it's position
 message TelemetryItem {
@@ -172,7 +176,13 @@ message TelemetryItem {
 		GripCamPredictions grip_cam_preditions = 11;
 		TargetList target_list = 12;
 		VideoReady video_ready = 13;
+		UplinkStatus uplink_status = 15; // only sent from control plane
   }
+
+  // If set, the Control Plane will cache this item using this string as the key.
+  // When a new UI connects, it receives the latest item for every unique key.
+  // e.g., "anchor_poses", "conn_status_anchor_0", "conn_status_gripper"
+  optional string retain_key = 14;
 }
 
 // the frame sent over the wire

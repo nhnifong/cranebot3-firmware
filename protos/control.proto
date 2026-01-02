@@ -27,6 +27,8 @@ enum Command {
   COMMAND_PARK = 10;
   // Unpark from the saddle and move clear of it.
   COMMAND_UNPARK = 11;
+  // Execute an automated grasp at the current position.
+  COMMAND_GRASP = 12;
 
   // =====  Commands intended only for diagnostics =====
 
@@ -88,6 +90,11 @@ message EpControl {
   repeated string events = 1;
 }
 
+// message used to tweak calibration by scaling all the anchor positions towards or away from the origin
+message ScaleRoom {
+  float scale = 1;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -97,6 +104,7 @@ message ControlItem {
     CombinedMove move = 3;
     GantryGoalPos gantry_goal_pos = 4;
     EpControl episode_control = 5;
+    ScaleRoom scale_room = 6;
   }
 }
 

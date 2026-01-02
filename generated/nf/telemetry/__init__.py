@@ -20,6 +20,7 @@ __all__ = (
     "TargetStatus",
     "TelemetryBatchUpdate",
     "TelemetryItem",
+    "UplinkStatus",
     "VidStats",
     "VideoReady",
 )
@@ -475,8 +476,32 @@ class TelemetryItem(betterproto2.Message):
         13, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    uplink_status: "UplinkStatus | None" = betterproto2.field(
+        15, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+    """
+    only sent from control plane
+    """
+
+    retain_key: "str | None" = betterproto2.field(
+        14, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    If set, the Control Plane will cache this item using this string as the key.
+    When a new UI connects, it receives the latest item for every unique key.
+    e.g., "anchor_poses", "conn_status_anchor_0", "conn_status_gripper"
+    """
+
 
 default_message_pool.register_message("nf.telemetry", "TelemetryItem", TelemetryItem)
+
+
+@dataclass(eq=False, repr=False)
+class UplinkStatus(betterproto2.Message):
+    online: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+
+
+default_message_pool.register_message("nf.telemetry", "UplinkStatus", UplinkStatus)
 
 
 @dataclass(eq=False, repr=False)

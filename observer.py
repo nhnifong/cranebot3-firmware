@@ -156,7 +156,7 @@ class AsyncObserver:
                     anchor_num=client.anchor_num,
                     local_uri=f'udp://127.0.0.1:{client.local_udp_port}'
                 ))
-        await self.flush_tele_buffer()
+        r = await self.flush_tele_buffer()
 
     async def handle_local_client(self, websocket):
         # Called when Ursina connects to a websocket that is opened to accept control commands
@@ -164,7 +164,7 @@ class AsyncObserver:
         print('Connection received from local UI process')
 
         # send anything that it would need up-front
-        await self.send_setup_telemetry()
+        r = await self.send_setup_telemetry()
         try:
             async for message in websocket:
                 r = await self.handle_command(message) # Handle 'ControlBatchUpdate'
@@ -214,6 +214,29 @@ class AsyncObserver:
         elif item.episode_control:
             self._handle_add_episode_control_events(item.episode_control)
 
+        elif item.scale_room:
+            self._handle_scale_room(item.scale_room)
+
+    def _handle_scale_room(self, item: control.ScaleRoom):
+        if item.scale:
+            # move positions of anchors towards or away from origin
+            print(f'scaling by {item.scale}')
+            anchor_poses = [(client.anchor_pose[0], client.anchor_pose[1]*item.scale) for client in self.anchors]
+
+            # update everything
+            for client in self.anchors:
+                self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
+                client.updatePose(anchor_poses[client.anchor_num])
+            save_config(self.config)
+            # inform UI
+            self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
+                poseTupleToProto(p)
+                for p in anchor_poses
+            ]))
+            # inform position estimator
+            anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
+            self.pe.set_anchor_points(anchor_points)
+
     async def _handle_common_command(self, cmd: control.Command):
         # betterproto Enums are IntEnums, comparable directly
         match cmd:
@@ -241,6 +264,8 @@ class AsyncObserver:
                 r = await self.invoke_motion_task(self.park())
             case control.Command.UNPARK:
                 r = await self.invoke_motion_task(self.unpark())
+            case control.Command.GRASP:
+                r = await self.invoke_motion_task(self.execute_grasp())
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
@@ -524,7 +549,7 @@ class AsyncObserver:
             # Use the optimization output to update anchor poses and spool params
             for client in self.anchors:
                 self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
-                client.anchor_pose = anchor_poses[client.anchor_num]
+                client.updatePose(anchor_poses[client.anchor_num])
             save_config(self.config)
             # inform UI
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
@@ -830,18 +855,25 @@ class AsyncObserver:
 
         self.send_ui(pop_message=telemetry.Popup('hello'))
         """
-        has_content = False
-        for msg in kwargs.values():
-            # if message is equal to a default instance of itself, dont send it.
-            if msg != type(msg)():
-                has_content = True
-                break
-        if not has_content:
+        if len(kwargs.keys()) != 1:
+            raise ValueError
+        key, msg = list(kwargs.items())[0]
+        # if message is equal to a default instance of itself, dont send it.
+        if msg == type(msg)():
             return
+
+        # mark certain messages with a retain key. the server will resend them to new UIs
+        item = telemetry.TelemetryItem(**kwargs)
+        if key == 'new_anchor_poses':
+            item.retain_key = 'new_anchor_poses'
+        if key == 'component_conn_status':
+            item.retain_key = f'component_conn_status_{msg.anchor_num}'
+        if key == 'video_ready':
+            item.retain_key = f'video_ready_{msg.anchor_num}'
 
         # Add item to batch
         with self.telemetry_buffer_lock:
-            self.telemetry_buffer.append(telemetry.TelemetryItem(**kwargs))
+            self.telemetry_buffer.append(item)
 
     async def flush_tele_buffer(self):
         """
@@ -1367,7 +1399,7 @@ class AsyncObserver:
         PICK_WINCH_LENGTH = 1.0
         DROP_WINCH_LENGTH = 0.2
         GANTRY_HEIGHT_OVER_TARGET = 1.0
-        GANTRY_HEIGHT_OVER_DROPOFF = 0.5
+        GANTRY_HEIGHT_OVER_DROPOFF = 0.65
         RELAXED_OPEN = 0 # enough to drop something
         DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
         LOOP_DELAY = 0.5
@@ -1385,7 +1417,7 @@ class AsyncObserver:
                     await asyncio.sleep(LOOP_DELAY)
                     continue
 
-                print(f'selected target {next_target.id}')
+                print(f'selected target {next_target.id} with dropoff {next_target.dropoff}')
 
                 self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
                 self.send_tq_to_ui()
@@ -1471,99 +1503,107 @@ class AsyncObserver:
         CLOSED = 85
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * sf_scale_factor / 2 * (np.pi/180)
-        DOWNWARD_SPEED = -0.07
+        DOWNWARD_SPEED = -0.06
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 0.85 # final adjustment to lateral speed
+        LAT_SPEED_ADJUSTMENT = 2.50 # final adjustment to lateral speed
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 2.0
 
-        attempts = 2
-        while not self.pe.holding and attempts > 0 and self.run_command_loop:
-            attempts -= 1
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+        smoothed_lateral = np.zeros(2)
 
-            # move laterally until target is centered
-            # at the same time, move downward until tip is detected.
-
-            nothing_seen_countdown = 15
-            self.pe.tip_over.clear()
-            while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
-                distance_to_floor = self.datastore.range_record.getLast()[1]
-                if distance_to_floor < FINGER_LENGTH:
-                    break
-
-                # prediction unreliable under 30cm. TODO collect more data of this type
-                if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and distance_to_floor > COMMIT_HEIGHT:
-                    nothing_seen_countdown -= 1
-                    if nothing_seen_countdown == 0:
-                        break
-                else:
-                    nothing_seen_countdown = 15
-                # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
-                lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
-                print(distance_to_floor, lat_travel_seconds)
-                if lat_travel_seconds > 0:
-                    # determine which direction we'd have to move laterally to center the object
-                    # you get a normalized u,v coordinate in the [-1,1] range
-                    # for now assume that the up direction in the gripper image is -Y in world space 
-                    # stabilize_frame produced this direction and I think it depends on the compass.
-                    # the direction in world space depends on how the user placed the origin card on the ground
-                    # we need to capture a number during calibration to relate these two.
-                    # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
-                    pred_vector = self.predicted_lateral_vector
-                    pred_vector[1] *= -1
-                    # lateral distance to object
-                    lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * distance_to_floor
-                    # lateral distance in meters
-                    lateral_distance = np.linalg.norm(lateral_vector)
-                    print(f'lateral_distance={lateral_distance}')
-                    # speed to travel that lateral distance in lat_travel_seconds
-                    lateral_speed = lateral_distance / lat_travel_seconds * LAT_SPEED_ADJUSTMENT
-                else:
-                    # once we get too close, go straight down, stop relying on the camera
-                    lateral_speed = [0,0]
-                print(f'lateral_speed={lateral_speed}')
-                await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
-
-                try:
-                    # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
-                    # we want to stop immediately.
-                    await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
-                    print('detected tip over, must be floor')
-                    break
-                except TimeoutError:
-                    pass
-
-            self.slow_stop_all_spools()
-            self.pe.tip_over.clear()
-
-            if nothing_seen_countdown == 0:
-                continue # find new target?
-
-            print('close gripper')
-            await self.gripper_client.send_commands({'set_finger_angle': CLOSED})
-            print(f'wait up to {PRESSURE_SENSE_WAIT} seconds for pad to sense object.')
-            try:
-                await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), PRESSURE_SENSE_WAIT)
-                self.pe.finger_pressure_rising.clear()
-            except TimeoutError:
-                print('did not detect a successful hold, open and go back up high enough to get a view of the object')
-                # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
-                await self.move_direction_speed([0,0,0.04])
-                await asyncio.sleep(1.0)
-                # now move up a little faster in a slightly random direction
-                direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
-                await self.move_direction_speed(direction)
+        try:
+            attempts = 3
+            while not self.pe.holding and attempts > 0 and self.run_command_loop:
+                attempts -= 1
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-                await asyncio.sleep(2.0)
+
+                # move laterally until target is centered
+                # at the same time, move downward until tip is detected.
+
+                nothing_seen_countdown = 15
+                self.pe.tip_over.clear()
+                while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
+                    distance_to_floor = self.datastore.range_record.getLast()[1]
+                    if distance_to_floor < FINGER_LENGTH:
+                        break
+
+                    # prediction unreliable under 30cm. TODO collect more data of this type
+                    if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and distance_to_floor > COMMIT_HEIGHT:
+                        nothing_seen_countdown -= 1
+                        if nothing_seen_countdown == 0:
+                            break
+                    else:
+                        nothing_seen_countdown = 15
+                    # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
+                    lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
+                    if lat_travel_seconds > 0:
+                        # determine which direction we'd have to move laterally to center the object
+                        # you get a normalized u,v coordinate in the [-1,1] range
+                        # for now assume that the up direction in the gripper image is -Y in world space 
+                        # stabilize_frame produced this direction and I think it depends on the compass.
+                        # the direction in world space depends on how the user placed the origin card on the ground
+                        # we need to capture a number during calibration to relate these two.
+                        # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
+                        pred_vector = self.predicted_lateral_vector
+                        pred_vector[1] *= -1
+                        # lateral distance to object
+                        lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * distance_to_floor
+                        # lateral distance in meters
+                        lateral_distance = np.linalg.norm(lateral_vector)
+                        # speed to travel that lateral distance in lat_travel_seconds
+                        lateral_speed = lateral_distance / lat_travel_seconds * LAT_SPEED_ADJUSTMENT
+                    else:
+                        # once we get too close, go straight down, stop relying on the camera
+                        lateral_speed = 0
+                    lateral_vector *= lateral_speed
+
+                    await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
+
+                    try:
+                        # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
+                        # we want to stop immediately.
+                        await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
+                        print('detected tip over, must be floor')
+                        break
+                    except TimeoutError:
+                        pass
+
                 self.slow_stop_all_spools()
-                continue
-            print('Successful grasp')
-            return True
-        print('Gave up on grasp after a few attempts')
-        return False
+                self.pe.tip_over.clear()
+
+                if nothing_seen_countdown == 0:
+                    continue # find new target?
+
+                print('close gripper')
+                await self.gripper_client.send_commands({'set_finger_angle': CLOSED})
+                print(f'wait up to {PRESSURE_SENSE_WAIT} seconds for pad to sense object.')
+                try:
+                    await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), PRESSURE_SENSE_WAIT)
+                    self.pe.finger_pressure_rising.clear()
+                except TimeoutError:
+                    print('did not detect a successful hold, open and go back up high enough to get a view of the object')
+                    # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
+                    await self.move_direction_speed([0,0,0.04])
+                    await asyncio.sleep(1.0)
+                    # now move up a little faster in a slightly random direction
+                    direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
+                    await self.move_direction_speed(direction)
+                    asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+                    await asyncio.sleep(2.0)
+                    self.slow_stop_all_spools()
+                    continue
+                print('Successful grasp')
+                return True
+            print('Gave up on grasp after a few attempts')
+            return False
+
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+            return False
 
     def _handle_collect_images(self):
         self.gip_task = asyncio.create_task(self.collect_images())
