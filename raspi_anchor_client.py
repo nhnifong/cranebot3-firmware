@@ -228,7 +228,10 @@ class ComponentClient:
                     roomspin = 0
                 else:
                     roomspin = self.config.gripper.frame_room_spin
-                self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, roomspin)
+                range_to_object = self.datastore.range_record.getLast()[1]
+                # self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, roomspin)
+                self.last_frame_resized = stabilize_frame_offset(temp_image, gripper_quat, roomspin, range_dist=range_to_object)
+
             else:
                 # anchors
                 self.last_frame_resized = cv2.resize(frame_to_encode, final_shape, interpolation=cv2.INTER_AREA)
@@ -414,14 +417,16 @@ class RaspiAnchorClient(ComponentClient):
         )
         self.last_raw_encoder = None
         self.raw_gant_poses = deque(maxlen=12)
-        self.anchor_pose = poseProtoToTuple(self.config.anchors[anchor_num].pose)
+        self.updatePose(poseProtoToTuple(self.config.anchors[anchor_num].pose))
+        self.gantry_pos_sightings = deque(maxlen=100)
+        self.gantry_pos_sightings_lock = threading.RLock()
+
+    def updatePose(self, pose):
+        self.anchor_pose = pose
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
             model_constants.anchor_camera,
         ]))
-        self.gantry_pos_sightings = deque(maxlen=100)
-        self.gantry_pos_sightings_lock = threading.RLock()
-
 
     async def handle_update_from_ws(self, update):
         if 'line_record' in update:

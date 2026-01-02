@@ -392,6 +392,8 @@ class Floor(Entity):
         self.start_was_held = False
         self.dpad_up_was_held = False
         self.dpad_left_was_held = False
+        self.dpad_down_was_held = False
+        self.dpad_right_was_held = False
         self.seat_orbit_mode = True
         # assumed position of the person holding the gamepad. updated regularly with messages to ui_q using apriltag
         self.gp_pos = np.array([-1.3, 1.9])
@@ -538,6 +540,18 @@ class Floor(Entity):
         if dpad_left_held and dpad_left_held != self.dpad_left_was_held:
             events.append(control.ControlItem(command=control.CommonCommand(name=control.Command.HALF_CAL)))
         self.dpad_left_was_held = dpad_left_held
+
+        # D pad right - grasp
+        dpad_right_held = bool(held_keys['gamepad dpad right'])
+        if dpad_right_held and dpad_right_held != self.dpad_right_was_held:
+            events.append(control.ControlItem(command=control.CommonCommand(name=control.Command.GRASP)))
+        self.dpad_right_was_held = dpad_right_held
+
+        # D pad down - stop
+        dpad_down_held = bool(held_keys['gamepad dpad down'])
+        if dpad_down_held and dpad_down_held != self.dpad_down_was_held:
+            events.append(control.ControlItem(command=control.CommonCommand(name=control.Command.STOP_ALL)))
+        self.dpad_down_was_held = dpad_down_held
 
         act = np.array([*vector, speed, self.smooth_winch_speed, self.finger_angle])
         if not np.array_equal(act, self.last_action) or (now > (self.last_send_t + 0.2) and np.linalg.norm(vector) > 1e-3):

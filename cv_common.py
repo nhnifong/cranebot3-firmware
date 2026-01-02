@@ -11,6 +11,7 @@ from scipy.spatial.transform import Rotation
 # --- Configuration ---
 cfg = load_config()
 mtx = np.array(cfg.camera_cal.intrinsic_matrix).reshape((3,3))
+print(mtx)
 distortion = np.array(cfg.camera_cal.distortion_coeff)
 sf_calibration_shape = (1920, 1080) 
 
@@ -200,7 +201,7 @@ def create_lookat_pose(cam_pos, target_pos):
 
 def project_pixels_to_floor(normalized_pixels, pose, K=mtx, D=distortion):
     """
-    batch project normalized pixel coordinates from a camera's point of view to the floor
+    batch project normalized [0,1] pixel coordinates from a camera's point of view to the floor
     make sure you use the camera pose, not just the anchor pose!
     """
     # Undistort Points
@@ -279,16 +280,13 @@ K_new = np.array([
 
 def stabilize_frame(frame, quat, room_spin=0, K=starting_K):
     """
-    Warp a video frame to a stationary perspective based on rotation.
+    Warp a gripper video frame to a stationary perspective based on rotation.
     """
-    # Standard Rotation Math
     R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
     r_imu = Rotation.from_quat(quat)
-    
-    # Quaternion Conjugate (Implicit Transpose) logic
     R_world_to_imu = r_imu.as_matrix().T
     
-    # Static transforms (IMU->Cam with the fudge built in)
+    # Static transforms (IMU->Cam)
     R_imu_to_cam = np.array([
         [-1, 0,  0],
         [0,  0, -1],
@@ -321,3 +319,112 @@ gantry_april_inv = invert_pose(model_constants.gantry_april)
 anchor_cam_inv = invert_pose(model_constants.anchor_camera)
 gripper_imu_inv = invert_pose(model_constants.gripper_imu)
 
+def get_rotation_to_center_ray(K, u, v, image_shape):
+    """
+    Calculates the rotation matrix required to rotate the camera such that
+    the ray passing through pixel (u, v) becomes the optical axis (0, 0, 1).
+    """
+    fx = K[0, 0]
+    fy = K[1, 1]
+    cx = K[0, 2]
+    cy = K[1, 2]
+    
+    # 1. Back-project pixel to normalized vector in Camera Frame
+    # UV coordinates (0..1) to Pixel coordinates
+    px = u * image_shape[0]
+    py = (1.0 - v) * image_shape[1] # Flip V to match OpenCV Y-down
+    
+    vec_x = (px - cx) / fx
+    vec_y = (py - cy) / fy
+    vec_z = 1.0
+    
+    # 2. Create the Target Vector and Source Vector (Optical Axis)
+    target_vec = np.array([vec_x, vec_y, vec_z])
+    target_vec = target_vec / np.linalg.norm(target_vec) # Normalize
+    
+    source_vec = np.array([0, 0, 1]) # We want target_vec to end up here
+    
+    # 3. Calculate Rotation (Axis-Angle)
+    # Rotation axis is perpendicular to both
+    rot_axis = np.cross(target_vec, source_vec)
+    axis_len = np.linalg.norm(rot_axis)
+    
+    if axis_len < 1e-6:
+        # Vectors are already aligned
+        return np.eye(3)
+        
+    rot_axis = rot_axis / axis_len
+    
+    # Angle is arccos(dot product)
+    angle = np.arccos(np.dot(target_vec, source_vec))
+    
+    # Create Matrix using Rodrigues
+    r_vec = rot_axis * angle
+    R_fix, _ = cv2.Rodrigues(r_vec)
+    return R_fix
+
+def stabilize_frame_offset(frame, quat, room_spin=0, range_dist=None, axis_uv_linear=(-0.3182, 0.9845), axis_uv_x_linear=None, K=starting_K):
+    """
+    Warp a video frame to a stationary, centered perspective.
+    
+    Args:
+        frame: Input image
+        quat: BNO085 quaternion
+        room_spin: Z-axis offset for room alignment
+        range_dist: Distance from camera to floor (meters).
+        axis_uv_linear: (slope, intercept) for Y-axis target.
+        axis_uv_x_linear: Optional (slope, intercept) for X-axis target. Defaults to Center (0.5).
+        K: Camera Matrix.
+    """
+    h, w = frame.shape[:2]
+
+    # Physics Rotation (World -> Camera)
+    R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
+    r_imu = Rotation.from_quat(quat)
+    R_world_to_imu = r_imu.as_matrix().T
+    
+    R_imu_to_cam = np.array([
+        [-1, 0,  0], 
+        [0,  0, -1], 
+        [0, -1,  0]  
+    ])
+    
+    R_world_to_cam = R_imu_to_cam @ R_world_to_imu
+    # R_relative un-rotates the camera to align with World Frame
+    R_relative = R_room_spin @ R_world_to_cam.T
+    
+    # Axis Centering (Rotation Fix) ---
+    R_fix = np.eye(3)
+    
+    if range_dist is not None:
+        # Y-Axis Logic
+        slope_y, intercept_y = axis_uv_linear
+        target_v = slope_y * range_dist + intercept_y
+        
+        # X-Axis Logic (Default to 0.5/Center if not provided)
+        if axis_uv_x_linear is not None:
+            slope_x, intercept_x = axis_uv_x_linear
+            target_u = slope_x * range_dist + intercept_x
+        else:
+            target_u = 0.5
+            
+        # Calculate the corrective rotation
+        # This rotation maps the Target Ray to the Optical Axis (Z)
+        R_fix = get_rotation_to_center_ray(K, target_u, target_v, (w, h))
+
+    # Final Homography ---
+    # Chain: K_new @ R_relative @ R_fix @ K_inv
+    # We apply R_fix FIRST (closest to K_inv) to align the target vector to Z-axis in Camera Frame.
+    # Then R_relative aligns that Z-axis (now containing the target) to World Down.
+    H = K_new @ R_relative @ R_fix @ np.linalg.inv(K)
+
+    # Vertical Flip Matrix
+    flip_vertical = np.array([
+        [1,  0,  0],
+        [0, -1,  sf_target_shape[1]], 
+        [0,  0,  1]
+    ])
+    
+    H_final = flip_vertical @ H
+
+    return cv2.warpPerspective(frame, H_final, sf_target_shape, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
