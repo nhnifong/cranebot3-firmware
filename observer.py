@@ -6,6 +6,7 @@ import threading
 import time
 import socket
 import asyncio
+import argparse
 from zeroconf import IPVersion, ServiceStateChange, Zeroconf
 from zeroconf.asyncio import (
     AsyncServiceBrowser,
@@ -94,7 +95,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, robot_config) -> None:
+    def __init__(self, terminate_with_ui, config_path, local_telemetry) -> None:
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
@@ -109,7 +110,9 @@ class AsyncObserver:
         # convenience reference to gripper client
         self.gripper_client = None
         # TODO allow a command line argument to override the config file path
-        self.config = robot_config
+        self.config_path = config_path
+        self.config = load_config(config_path)
+        self.local_telemetry = local_telemetry
         self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -142,6 +145,8 @@ class AsyncObserver:
         self.cloud_telem_websocket = None
         self.gip_task = None
         self.cloud_telem = None
+        # instance of vision tools used for locate_markers and projecting to floor
+        self.vt = VisionTools(self.config)
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -226,7 +231,7 @@ class AsyncObserver:
             for client in self.anchors:
                 self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
                 client.updatePose(anchor_poses[client.anchor_num])
-            save_config(self.config)
+            save_config(self.config, self.config_path)
             # inform UI
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
                 poseTupleToProto(p)
@@ -549,7 +554,7 @@ class AsyncObserver:
             for client in self.anchors:
                 self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
                 client.updatePose(anchor_poses[client.anchor_num])
-            save_config(self.config)
+            save_config(self.config, self.config_path)
             # inform UI
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
                 poseTupleToProto(p)
@@ -584,7 +589,7 @@ class AsyncObserver:
                             origin_card_pose[0] = pose_from_det(d)
                 while origin_card_pose[0] is None:
                     async_result = self.pool.apply_async(
-                        locate_markers_gripper,
+                        self.vt.locate_markers_gripper,
                         (self.gripper_client.last_frame_resized,),
                         callback=partial(special_handle_det, time.time()))
                     detections = async_result.get(timeout=5)
@@ -593,7 +598,7 @@ class AsyncObserver:
                 roomspin = -euler_rot[0]
                 self.config.gripper.frame_room_spin = roomspin
                 self.config.has_been_calibrated = True
-                save_config(self.config)
+                save_config(self.config, self.config_path)
                 self.gripper_client.calibrating_room_spin = False
             else:
                 print('Warning, cannot calibrate the relationship between gripper IMU zero angle and camera if gripper camera is offline!')
@@ -711,7 +716,7 @@ class AsyncObserver:
             self.config.anchors[anchor_num].service_name = key
             self.config.anchors[anchor_num].address = address
             self.config.anchors[anchor_num].port = info.port
-            save_config(self.config)
+            save_config(self.config, self.config_path)
 
         elif kind == gripper_service_name:
             # a gripper has been discovered, assume it is ours only if we have never seen one before
@@ -719,7 +724,7 @@ class AsyncObserver:
                 self.config.gripper.service_name = key
                 self.config.gripper.address = address
                 self.config.gripper.port = info.port
-                save_config(self.config)
+                save_config(self.config, self.config_path)
                 print(f'Discovered gripper at "{address}" and adopted it as the gripper for this robot')
             elif address != self.config.gripper.address:
                 print(f'Discovered gripper at "{address}" and ignored it because ours is at {self.config.gripper.address}')
@@ -797,7 +802,7 @@ class AsyncObserver:
         is_standard_gripper = name_component == gripper_service_name
 
         if is_standard_gripper:
-            client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe)
+            client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.local_telemetry)
             self.gripper_client_connected.clear()
             client.connection_established_event = self.gripper_client_connected
             self.gripper_client = client
@@ -805,7 +810,7 @@ class AsyncObserver:
             for a in self.config.anchors:
                 if a.service_name != service_name:
                     continue
-                client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat)
+                client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.local_telemetry)
                 client.connection_established_event = self.any_anchor_connected
                 self.anchors.append(client)
 
@@ -893,7 +898,7 @@ class AsyncObserver:
         # copy list to prevent RuntimeError: Set changed size during iteration
         connected_clients = self.connected_local_clients.copy()
         if self.cloud_telem_websocket:
-            connected_clients.add(self.cloud_telem_websocket)
+            connected_clients.add(self.cloud_telem_websocket) # will only be connected when self.local_telemetry is False
         for ui_websocket in connected_clients:
             try:
                 await ui_websocket.send(to_send)
@@ -907,7 +912,7 @@ class AsyncObserver:
     async def main(self) -> None:
         self.startup_complete.clear()
 
-        if self.config.connect_cloud_telemetry:
+        if not self.local_telemetry:
             self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())
 
         # statistic counter - measures things like average camera frame latency
@@ -1381,7 +1386,7 @@ class AsyncObserver:
                     if len(results) > 0:
                         targets2d = results[:,:2] # the third number is confidence
                         # if this is an anchor, project points to floor using anchor's specific pose
-                        floor_points = project_pixels_to_floor(targets2d, client.camera_pose)
+                        floor_points = self.vt.project_pixels_to_floor(targets2d, client.camera_pose)
                         all_floor_target_arrs.append(floor_points)
                         # TODO retain information about the original image coordinates of targets for display in UI
 
@@ -1622,20 +1627,27 @@ class AsyncObserver:
             capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
             await asyncio.sleep(1)
 
-def start_observation(terminate_with_ui=False):
+def start_observation(terminate_with_ui=False, config_path='configuration.json'):
     """Entry point to be used when starting this from main.py with multiprocessing."""
-    ob = AsyncObserver(terminate_with_ui, load_config())
+    ob = AsyncObserver(terminate_with_ui, config_path, local_telemetry=True)
     asyncio.run(ob.main())
     # set ob.run_command_loop = False or kill or connect to websocket and send shutdown command
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CenteringNet System")
+    parser.add_argument("--config", type=str, default='configuration.json')
+
+    args = parser.parse_args()
+
     async def main():
-        runner = AsyncObserver(False, load_config())
-        # when running as a standalone process (debug only, linux only), register signal handler
+        runner = AsyncObserver(False, args.config, local_telemetry=False)
+
+        # when running as a standalone process, register signal handler
         def stop():
             # Must be idempotent, may be called multiple times
             runner.run_command_loop = False
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
         result = await runner.main()
+
     asyncio.run(main())

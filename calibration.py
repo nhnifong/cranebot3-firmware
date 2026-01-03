@@ -1,5 +1,4 @@
 import cv2
-import cv2.aruco as aruco
 import numpy as np
 import scipy.optimize as optimize
 import time
@@ -88,7 +87,7 @@ def is_blurry(image, threshold=6.0):
 
 # calibrate interactively
 class CalibrationInteractive:
-    def __init__(self):
+    def __init__(self, config_file):
         #Initializing variables
         board_n = board_w * board_h
         self.opts = []
@@ -96,6 +95,7 @@ class CalibrationInteractive:
         self.intrinsic_matrix = np.zeros((3, 3), np.float32)
         self.distCoeffs = np.zeros((5, 1), np.float32)
         self.criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.1)
+        self.config_file = config_file
 
         # prepare object points based on the actual dimensions of the calibration board
         # like (0,0,0), (25,0,0), (50,0,0) ....,(200,125,0)
@@ -159,16 +159,16 @@ class CalibrationInteractive:
         logging.info(f"Total reprojection error: {terr}")
 
     def save(self): 
-        logging.info('Saving data to configuration.json...')
-        cfg = load_config()
+        logging.info(f'Saving data to {config_file}...')
+        cfg = load_config(path=self.config_file)
         cfg.intrinsic_matrix = self.intrinsic_matrix.flatten().tolist()
         cfg.distortion_coeff = self.distCoeff.flatten().tolist()
         cfg.resolution = config.CameraCalibration.Resolution(width=self.image_shape[1], height=self.image_shape[0])
-        save_config(cfg)
+        save_config(cfg, self.config_file)
 
 # calibrate from files locally
-def calibrate_from_files():
-    ce = CalibrationInteractive()
+def calibrate_from_files(config_file):
+    ce = CalibrationInteractive(config_file)
     for filepath in glob.glob('images/cal/*.png'):
         logging.info(f"Analyzing {filepath}")
         image = cv2.imread(filepath)
@@ -176,11 +176,11 @@ def calibrate_from_files():
     ce.calibrate()
     ce.save()
 
-def calibrate_from_stream(address):
+def calibrate_from_stream(address, config_file):
     logging.info(f'Connecting to {address}...')
     cap = cv2.VideoCapture(address)
     logging.debug(f'Video capture object: {cap}')
-    ce = CalibrationInteractive()
+    ce = CalibrationInteractive(config_file)
     i=0
     while ce.images_obtained < 20:
         ret, frame = cap.read()
@@ -334,6 +334,8 @@ def main():
                         help='The number of images to collect when using "collect-images-locally-raspi" or "collect-images-stream".')
     parser.add_argument('--resolution', type=str, default='4608x2592',
                         help='The resolution for the camera on the Raspberry Pi (e.g., "4608x2592"). Used with "collect-images-locally-raspi" mode.')
+    parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_PATH,
+                        help='Path of the config file to write/update with calibrated values.')
 
     args = parser.parse_args()
 
@@ -342,9 +344,9 @@ def main():
     elif args.mode == 'collect-images-stream':
         collect_images_stream(args.address, args.num_images)
     elif args.mode == 'calibrate-from-files':
-        calibrate_from_files()
+        calibrate_from_files(args.config)
     elif args.mode == 'calibrate-from-stream':
-        calibrate_from_stream(args.address)
+        calibrate_from_stream(args.address, args.config)
 
 if __name__ == "__main__":
     main()

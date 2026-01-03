@@ -6,7 +6,7 @@ from math import pi, sqrt
 # distances are in meters
 # rotation vectors are Rodrigues
 
-# rotation and translation vectors of the gripper camera (the frame of reference used in aruco detection) in the gripper reference frame
+# rotation and translation vectors of the gripper camera (the frame of reference used in marker detection) in the gripper reference frame
 gripper_camera = (np.array([pi/2,0,0], dtype=float), np.array([0,0.004,-0.026], dtype=float))
 
 # rotation and translation vectors of the gripper IMU in the gripper reference frame
@@ -25,7 +25,7 @@ gripper_cog = (np.array([0,0,0], dtype=float), np.array([0,0.055,0.011], dtype=f
 # z offset of the gripper laser rangefinder from the origin of the gantry when the winch is zeroed.
 laser_offset = 0.14 # meters
 
-# rotation and translation of the anchor camera (the frame of reference used in aruco detection) in the reference frame of the anchor
+# rotation and translation of the anchor camera (the frame of reference used in marker detection) in the reference frame of the anchor
 # tilt = 28 # camera look tilt downward from horizontal in degrees.
 # anchor_camera = compose_poses([
 # 	(np.array([0,pi,0], dtype=float), np.array([0.054, -0.038, 0.017], dtype=float)), # the camera is mounted upside down

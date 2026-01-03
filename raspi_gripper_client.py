@@ -8,8 +8,8 @@ import json
 from generated.nf import telemetry, common
 
 class RaspiGripperClient(ComponentClient):
-    def __init__(self, address, port, datastore, ob, pool, stat, pe):
-        super().__init__(address, port, datastore, ob, pool, stat)
+    def __init__(self, address, port, datastore, ob, pool, stat, pe, local_telemetry):
+        super().__init__(address, port, datastore, ob, pool, stat, local_telemetry)
         self.conn_status = telemetry.ComponentConnStatus(
             is_gripper=True,
             websocket_status=telemetry.ConnStatus.NOT_DETECTED,
