@@ -12,7 +12,6 @@ import numpy as np
 import model_constants
 from functools import partial
 import threading
-from config_loader import *
 from util import *
 import os
 from trainer.stringman_pilot import IMAGE_SHAPE
@@ -39,7 +38,7 @@ def pose_from_det(det):
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
-    def __init__(self, address, port, datastore, ob, pool, stat):
+    def __init__(self, address, port, datastore, ob, pool, stat, local_telemetry):
         self.address = address
         self.port = port
         self.origin_poses = defaultdict(lambda: deque(maxlen=max_origin_detections))
@@ -61,6 +60,7 @@ class ComponentClient:
         self.heartbeat_receipt = asyncio.Event()
         self.safety_task = None
         self.local_udp_port = None
+        self.local_telemetry = local_telemetry
 
         # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
@@ -73,6 +73,7 @@ class ComponentClient:
         self.calibrating_room_spin = False # set to true momentarily during auto calibration
 
         self.config = ob.config
+        self.vision_tools = VisionTools(self.config)
 
         self.conn_status = None # subclass needs to set this in init
 
@@ -135,7 +136,7 @@ class ComponentClient:
                     try:
                         if self.stat.pending_frames_in_pool < 60:
                             self.stat.pending_frames_in_pool += 1
-                            self.pool.apply_async(locate_markers, (self.frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                            self.pool.apply_async(self.vision_tools.locate_markers, (self.frame,), callback=partial(self.handle_detections, timestamp=timestamp))
                         else:
                             pass
                             # print(f'Dropping frame because there are already too many pending.')
@@ -181,7 +182,7 @@ class ComponentClient:
 
         # TODO allow these to changes when in a teleop mode
         if self.anchor_num is None:
-            final_shape = sf_target_shape # resize for centering network input
+            final_shape = SF_INPUT_SHAPE # resize for centering network input
             final_fps = 10
         else:   
             final_shape = (IMAGE_SHAPE[1], IMAGE_SHAPE[0]) # resize for dobby network input
@@ -190,6 +191,8 @@ class ComponentClient:
         host = 'localhost'
         path = f'stringman/{self.config.robot_id}/{cam_num}'
         rtmp = f'rtmp://{host}:1935/{path}?user=user&pass=pass'
+        if self.local_telemetry:
+            rtmp = None
         vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
         vs.start()
 
@@ -220,7 +223,7 @@ class ComponentClient:
             if self.anchor_num is None:
                 # gripper
                 # stabilize and resize for centering network input
-                temp_image = cv2.resize(frame_to_encode, sf_input_shape, interpolation=cv2.INTER_AREA)
+                temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
                 fudge_latency =  0.3
                 gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
                 if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
@@ -229,8 +232,7 @@ class ComponentClient:
                 else:
                     roomspin = self.config.gripper.frame_room_spin
                 range_to_object = self.datastore.range_record.getLast()[1]
-                # self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, roomspin)
-                self.last_frame_resized = stabilize_frame_offset(temp_image, gripper_quat, roomspin, range_dist=range_to_object)
+                self.last_frame_resized = self.vision_tools.stabilize_frame(temp_image, gripper_quat, roomspin, range_dist=range_to_object)
 
             else:
                 # anchors
@@ -406,8 +408,8 @@ CAL_MARKERS = set(['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'])
 OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'gamepad-back', 'hamper-back', 'trash-back'])
 
 class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, port, anchor_num, datastore, ob, pool, stat):
-        super().__init__(address, port, datastore, ob, pool, stat)
+    def __init__(self, address, port, anchor_num, datastore, ob, pool, stat, local_telemetry):
+        super().__init__(address, port, datastore, ob, pool, stat, local_telemetry)
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = telemetry.ComponentConnStatus(
             is_gripper=False,

@@ -82,7 +82,7 @@ def update_go_quad(position, color, e):
     e.color = color
 
 class ControlPanelUI:
-    def __init__(self):
+    def __init__(self, config_path):
         self.app = Ursina(
             fullscreen=False,
             borderless=False,
@@ -91,7 +91,7 @@ class ControlPanelUI:
         
         # --- Core State ---
         # TODO ursina UI needs to obtain this from the observer it is connected to
-        self.nfconfig = load_config()
+        self.nfconfig = load_config(config_path)
         self.n_anchors = len(self.nfconfig.anchors)
         self.direction = np.zeros(3, dtype=float) # direction of currently commanded keyboard movement
         self.websocket = None
@@ -675,11 +675,11 @@ class ControlPanelUI:
         if self.websocket:
             self.websocket.close()
 
-def start_ui(register_input):
+def start_ui(register_input, config_path):
     """
     Entry point to be used when starting this from main.py with multiprocessing
     """
-    cpui = ControlPanelUI()
+    cpui = ControlPanelUI(config_path)
     register_input(cpui)
 
     # use simple threading here. ursina has it's own loop that conflicts with asyncio

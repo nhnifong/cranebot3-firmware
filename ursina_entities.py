@@ -735,6 +735,7 @@ class CamPreview(Entity):
         self.app = app
         self.heatmap = None
         self.cam_scale = cam_scale
+        self.vt = VisionTools(app.nfconfig)
 
         # 16:9 aspect ratio for the camera content
         if self.anchor is None:
@@ -925,7 +926,7 @@ class CamPreview(Entity):
 
                 # we want to use this coordinate to indicate in the UI what this would look like in other views
                 # move the floor's reticule to the point where that ray intersects the floor
-                floor_pos = project_pixels_to_floor(np.array([[u, v]]), self.anchor.anchor_cam_pose)
+                floor_pos = self.vt.project_pixels_to_floor(np.array([[u, v]]), self.anchor.anchor_cam_pose)
                 if len(floor_pos) == 1:
                     pos2d = floor_pos[0]
                     self.floor.target.position = [pos2d[0], 0, pos2d[1]]
@@ -940,7 +941,7 @@ class CamPreview(Entity):
                         if key is None or other_cam is self:
                             continue
                         # in any other cameras which are enabled, project that floor position back into their UV coords
-                        uv_coords = project_floor_to_pixels(floor_pos, other_cam.anchor.anchor_cam_pose)
+                        uv_coords = self.vt.project_floor_to_pixels(floor_pos, other_cam.anchor.anchor_cam_pose)
                         if len(uv_coords) == 1:
                             other_cam.render_projected_point(uv_coords[0])
 
@@ -971,7 +972,7 @@ class CamPreview(Entity):
         for target in item.targets:
             floor_pos = np.array([[target.position.x, target.position.y]])
             # in any other cameras which are enabled, project that floor position back into their UV coords
-            uv_coords = project_floor_to_pixels(floor_pos, self.anchor.anchor_cam_pose)
+            uv_coords = self.vt.project_floor_to_pixels(floor_pos, self.anchor.anchor_cam_pose)
             if len(uv_coords) == 1:
                 uv = uv_coords[0]
                 ts = self.target_squares[ts_index]

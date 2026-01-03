@@ -22,14 +22,6 @@ from adafruit_vl53l1x import VL53L1X
 # dtparam=i2c_arm=off
 # dtoverlay=i2c-gpio,bus=1,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=2
 
-# this will require a different calibration matrix
-half_res_stream_command = """
-/usr/bin/rpicam-vid -t 0
-  --width=1920 --height=1080
-  --listen -o tcp://0.0.0.0:8888
-  --codec h264
-  --autofocus-mode continuous"""
-
 # the speed will not increase at settings beyond this value
 WINCH_MAX_SPEED = 43
 # at or below this the motor does not spin
@@ -153,7 +145,6 @@ class RaspiGripperServer(RobotComponentServer):
         self.desired_finger_angle = 0
         self.finger_speed = 0 # degrees per second
         self.past_val_rates = deque(maxlen=self.conf['UPDATE_RATE'])
-        self.stream_command = half_res_stream_command
 
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.

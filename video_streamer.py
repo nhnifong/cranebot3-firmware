@@ -9,22 +9,20 @@ import socket
 logger = logging.getLogger(__name__)
 
 class VideoStreamer:
-    def __init__(self, width=640, height=480, fps=30, rtmp_url=None, local_udp_port=None):
+    def __init__(self, width=640, height=480, fps=30, rtmp_url=None):
         self.rtmp_url = rtmp_url
         self.width = width
         self.height = height
         self.fps = fps # an estimate, nothing bad happens if you fail to call send_frame() exactly at this rate
-        self.local_udp_port = local_udp_port
         self.process = None
         self.connection_status = 'ok'
         
-        # find a free local port
-        if local_udp_port == None:
+        # if no rtmp url, only broadcast locally on UDP
+        # find a free local port for that.
+        if rtmp_url == None:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.bind(('127.0.0.1', 0))
                 self.local_udp_port = s.getsockname()[1]
-        else:
-            self.local_udp_port = local_udp_port
 
         atexit.register(self.stop)
 
