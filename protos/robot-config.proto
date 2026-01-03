@@ -67,4 +67,6 @@ message StringmanPilotConfig {
   
   string robot_id = 8;
   bool has_been_calibrated = 9;
+
+  bool connect_cloud_telemetry = 10;
 }
