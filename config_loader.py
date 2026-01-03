@@ -14,6 +14,7 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # once the robot tells the backend what this ID is, it has to stick to it, or the owner may see it disappear from their dashboard
     config.robot_id = str(uuid.uuid4())
     config.has_been_calibrated = False
+    config.connect_cloud_telemetry = False
 
     # Anchors
     # Defaults based on a square room setup, pointing towards center.

@@ -100,7 +100,6 @@ class AsyncObserver:
         self.aiobrowser: AsyncServiceBrowser | None = None
         self.aiozc: AsyncZeroconf | None = None
         self.run_command_loop = True
-        self.detection_count = 0
         self.datastore = DataStore()
         self.pool = None
         # all clients by server name
@@ -142,9 +141,9 @@ class AsyncObserver:
         self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
         self.cloud_telem_websocket = None
         self.gip_task = None
+        self.cloud_telem = None
 
     async def send_setup_telemetry(self):
-        # TODO this ought to send to a particular UI not everyone.
         print('Sending setup telemetry')
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
             poses=[a.pose for a in self.config.anchors]
@@ -826,27 +825,31 @@ class AsyncObserver:
             del self.connection_tasks[service_name]
 
     async def connect_cloud_telemetry(self):
-        try:
-            use_id = 0 # self.config.robot_id
-            async with websockets.connect(f"ws://{CONTROL_PLANE}/telemetry/{use_id}", max_size=None, open_timeout=10) as websocket:
-                self.cloud_telem_websocket = websocket
-                print(f'connected to control_plane {websocket}')
-                # send anything that it would need up-front
-                await self.send_setup_telemetry()
-                try:
-                    async for message in websocket:
-                        r = await self.handle_command(message)
-                        if not self.run_command_loop:
-                            websocket.close()
-                except (ConnectionClosedError, ConnectionClosedOK) as e:
-                    pass
-                finally:
-                    print(f'disconnected from control_plane {websocket}')
-                    self.cloud_telem_websocket = None
-        except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
-            pass # normal close
-        except ConnectionRefusedError:
-            print(f'Connection to control plane refused')
+        while self.run_command_loop:
+            try:
+                use_id = 0 # self.config.robot_id
+                async with websockets.connect(f"ws://{CONTROL_PLANE}/telemetry/{use_id}", max_size=None, open_timeout=10) as websocket:
+                    self.cloud_telem_websocket = websocket
+                    print(f'connected to control_plane {websocket}')
+                    # send anything that it would need up-front
+                    await self.send_setup_telemetry()
+                    try:
+                        async for message in websocket:
+                            r = await self.handle_command(message)
+                            if not self.run_command_loop:
+                                r = await websocket.close()
+                    except (ConnectionClosedError, ConnectionClosedOK) as e:
+                        pass
+                    finally:
+                        print(f'disconnected from control_plane {websocket}')
+                        self.cloud_telem_websocket = None
+            except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
+                pass # normal close
+            except ConnectionRefusedError:
+                print(f'Connection to control plane refused')
+            except websockets.exceptions.InvalidMessage:
+                print('Connection to control plane ended due to invalid message')
+            await asyncio.sleep(2)
 
     def send_ui(self, **kwargs):
         """
@@ -903,9 +906,25 @@ class AsyncObserver:
 
     async def main(self) -> None:
         self.startup_complete.clear()
+
+        if self.config.connect_cloud_telemetry:
+            self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())
+
+        # statistic counter - measures things like average camera frame latency
+        asyncio.create_task(self.stat.stat_main())
+
+        # A task that continuously estimates the position of the gantry
+        # remains asleep until at least one anchor connects.
+        self.pe_task = asyncio.create_task(self.start_pe_when_ready())
+
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
         with Pool(processes=12) as pool:
             self.pool = pool
+
+            # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
+            # start a task to connect and reconnect to all known robot components.
+            self.keeper = asyncio.create_task(self.keep_robot_connected())
+
             # the only reason it might not be none is if a unit test set before calling main.
             if self.aiozc is None:
                 self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=InterfaceChoice.All)
@@ -923,22 +942,9 @@ class AsyncObserver:
                 await self.aiozc.async_close()
                 return
 
-            # statistic counter - measures things like average camera frame latency
-            asyncio.create_task(self.stat.stat_main())
-
             # perception model
             # task remains in a lightweight sleep until frames arrive.
             asyncio.create_task(self.run_perception())
-
-            # A task that continuously estimates the position of the gantry
-            # remains asleep until at least one anchor connects.
-            self.pe_task = asyncio.create_task(self.start_pe_when_ready())
-
-            # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
-            # start a task to connect and reconnect to all known robot components.
-            self.keeper = asyncio.create_task(self.keep_robot_connected())
-
-            self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())
 
             # start a websocket server to accept incoming connection from local ursia UI process
             async with websockets.serve(self.handle_local_client, "127.0.0.1", 4245):

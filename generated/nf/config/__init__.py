@@ -164,6 +164,8 @@ class StringmanPilotConfig(betterproto2.Message):
 
     has_been_calibrated: "bool" = betterproto2.field(9, betterproto2.TYPE_BOOL)
 
+    connect_cloud_telemetry: "bool" = betterproto2.field(10, betterproto2.TYPE_BOOL)
+
 
 default_message_pool.register_message(
     "nf.config", "StringmanPilotConfig", StringmanPilotConfig
