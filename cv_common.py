@@ -3,10 +3,11 @@ import cv2
 from pupil_apriltags import Detector
 import numpy as np
 import time
-from functools import lru_cache
 from config_loader import *
 import model_constants
 from scipy.spatial.transform import Rotation
+from generated.nf import config as nf_config
+import functools
 
 # --- Pose functions ---
 
@@ -145,271 +146,275 @@ SPECIAL_OBJ_POINTS = {
 SF_INPUT_SHAPE = (960, 540)      # Size of the raw frame coming from gripper camera
 SF_TARGET_SHAPE = (384, 384)     # Size of the final neural net input (Square)
 
-class VisionTools:
-    """An instance of VisionTools runs locate_markers and related functions with a particular camera config"""
+saved_matrices = {}
 
-    def __init__(self, config):
-        self.config = config
+def gripper_stabilized_cal(camera_cal: nf_config.CameraCalibration):
+    mtx = np.array(camera_cal.intrinsic_matrix).reshape((3,3))
+    distortion = np.array(camera_cal.distortion_coeff)
+    calibration_shape = (camera_cal.resolution.width, camera_cal.resolution.height) # (1920, 1080)
+    # Derive other constants needed for stabilize_frame
+    sf_image_ratio = SF_INPUT_SHAPE[0] / calibration_shape[0] # Ratio to scale intrinsics (approx 1/3)
+    sf_scale_factor = 1.4  # Zoom factor (values less than 1 zoom in)
+    starting_K = mtx.copy() # if we being using the wide angle camera for the gripper, then this would no long be a copy of the anchor cam cal
+    starting_K[0, 0] *= sf_image_ratio  # Scale fx
+    starting_K[1, 1] *= sf_image_ratio  # Scale fy
+    starting_K[0, 2] *= sf_image_ratio  # Scale cx
+    starting_K[1, 2] *= sf_image_ratio  # Scale cy
 
-        # read camera data from config
-        self.mtx = np.array(self.config.camera_cal.intrinsic_matrix).reshape((3,3))
-        self.distortion = np.array(self.config.camera_cal.distortion_coeff)
-        self.calibration_shape = (self.config.camera_cal.resolution.width, self.config.camera_cal.resolution.height) # (1920, 1080)
+    # Define Virtual Camera Intrinsics for stabilized gripper frame
+    # The optical center (cx, cy) is set to half of the target shape (384/2),
+    # not the input shape. This forces the center of the projection to be the center of the square.
+    K_new = np.array([
+        [starting_K[0, 0] / sf_scale_factor, 0,                                  SF_TARGET_SHAPE[0] / 2.0], # cx = 192
+        [0,                                  starting_K[1, 1] / sf_scale_factor, SF_TARGET_SHAPE[1] / 2.0], # cy = 192
+        [0,                                  0,                                  1                    ]
+    ])
+    return starting_K, K_new
 
-        # Derive other constants needed for stabilize_frame
-        sf_image_ratio = SF_INPUT_SHAPE[0] / self.calibration_shape[0] # Ratio to scale intrinsics (approx 1/3)
-        sf_scale_factor = 1.4  # Zoom factor (values less than 1 zoom in)
-        self.starting_K = self.mtx.copy() # if we being using the wide angle camera for the gripper, then this would no long be a copy of the anchor cam cal
-        self.starting_K[0, 0] *= sf_image_ratio  # Scale fx
-        self.starting_K[1, 1] *= sf_image_ratio  # Scale fy
-        self.starting_K[0, 2] *= sf_image_ratio  # Scale cx
-        self.starting_K[1, 2] *= sf_image_ratio  # Scale cy
+# Stringman tags are from the 'tag36h11' family.
+# increase quad_decimate to improve speed at the cost of distance
+detector = Detector(families="tag36h11", quad_decimate=1.0)
 
-        # Define Virtual Camera Intrinsics for stabilized gripper frame
-        # The optical center (cx, cy) is set to half of the target shape (384/2),
-        # not the input shape. This forces the center of the projection to be the center of the square.
-        self.K_new = np.array([
-            [self.starting_K[0, 0] / sf_scale_factor, 0,                                  SF_TARGET_SHAPE[0] / 2.0], # cx = 192
-            [0,                                  self.starting_K[1, 1] / sf_scale_factor, SF_TARGET_SHAPE[1] / 2.0], # cy = 192
-            [0,                                  0,                                  1                    ]
-        ])
+def _locate_markers(im, K, D):
+    # AprilTag detection works on grayscale images.
+    gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+    detections = detector.detect(gray)
+    
+    if not detections:
+        return []
 
-        # Stringman tags are from the 'tag36h11' family.
-        # increase quad_decimate to improve speed at the cost of distance
-        self.detector = Detector(families="tag36h11", quad_decimate=1.0)
+    results = []
+    for detection in detections:
+        marker_id = detection.tag_id
+        corners = detection.corners
 
-    def locate_markers(self, im, mxx=None):
-        """
-        Detects AprilTags in an image and estimates their pose.
+        try:
+            name = MARKER_NAMES[marker_id]
+        except IndexError:
+            # Saw a tag that's not part of the defined system
+            print(f'Unknown AprilTag spotted with id {marker_id}')
+            continue
         
-        Args:
-            im: The input image
-
-        Returns:
-            A list of dictionaries, each containing the name, rotation vector (r),
-            and translation vector (t) of a detected marker.
-        """
-        if mxx is None:
-            mxx = self.mtx
-
-        # AprilTag detection works on grayscale images.
-        gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-        detections = detector.detect(gray)
+        # Look up the scaled object points specific to this tag
+        obj_points = SPECIAL_OBJ_POINTS.get(name, DEFAULT_OBJ_POINTS)
         
-        if not detections:
-            return []
+        # Use solvePnP to get the rotation and translation vectors (rvec, tvec)
+        # This gives the pose of the marker relative to the camera.
+        # The coordinate system has the origin at the camera center. The z-axis points from the camera center out the camera lens.
+        # The x-axis is to the right in the image taken by the camera, and y is down. The tag's coordinate frame is centered at the center of the tag.
+        # From the viewer's perspective, the x-axis is to the right, y-axis down, and z-axis is out of the tag.
+        _, r, t = cv2.solvePnP(obj_points, corners, K, D, False, cv2.SOLVEPNP_IPPE_SQUARE)
+        
+        results.append({
+            'n': name,
+            'p': (r, t), # pose tuple. numpy arrays. numpy supposedly has fast pickle hooks
+        })
+    return results
 
-        results = []
-        for detection in detections:
-            marker_id = detection.tag_id
-            corners = detection.corners
+def locate_markers(im, camera_cal: nf_config.CameraCalibration):
+    """
+    Detects AprilTags in an image and estimates their pose.
+    
+    Args:
+        im: The input image
+        camera_cal: 
 
-            try:
-                name = marker_names[marker_id]
-            except IndexError:
-                # Saw a tag that's not part of the defined system
-                print(f'Unknown AprilTag spotted with id {marker_id}')
-                continue
+    Returns:
+        A list of dictionaries, each containing the name, rotation vector (r),
+        and translation vector (t) of a detected marker.
+
+    TODO: use a cropped search window that uses slices like im[y:y+h, x:x+w] based on where tags were seen on
+    previous frames. search the whole image only if the tag was not seen on the previous frame.
+    """
+
+    # Use passed object for camera calibration. keeps function pure for multiprocessing
+    mtx = np.array(camera_cal.intrinsic_matrix).reshape((3,3))
+    distortion = np.array(camera_cal.distortion_coeff)
+    return _locate_markers(im, mtx, distortion)
+
+def locate_markers_gripper(im, camera_cal: nf_config.CameraCalibration):
+    """
+    Locate markers in the stabilized gripper frame
+    """
+    if 'K_new' not in saved_matrices:
+        saved_matrices['starting_K'], saved_matrices['K_new'] = gripper_stabilized_cal(camera_cal)
+    return _locate_markers(im, saved_matrices['K_new'], np.array(camera_cal.distortion_coeff))
+
+def project_pixels_to_floor(normalized_pixels, pose, camera_cal: nf_config.CameraCalibration):
+    """
+    batch project normalized [0,1] pixel coordinates from a camera's point of view to the floor
+    make sure you use the camera pose, not just the anchor pose!
+    """
+    # Use passed object for camera calibration.
+    K = np.array(camera_cal.intrinsic_matrix).reshape((3,3))
+    D = np.array(camera_cal.distortion_coeff)
+    image_shape = (camera_cal.resolution.width, camera_cal.resolution.height) # (1920, 1080)
+
+    # Undistort Points
+    pts = np.array(normalized_pixels, dtype=np.float64) * image_shape
+    uv = cv2.undistortPoints(pts.reshape(-1, 1, 2), K, D).reshape(-1, 2).T
+
+    # Rotate Rays to World Frame
+    rays = cv2.Rodrigues(np.array(pose[0]))[0] @ np.vstack((uv, np.ones(uv.shape[1])))
+
+    # Calculate Intersections with floor
+    tvec = np.array(pose[1], dtype=np.float64).reshape(3, 1)
+    with np.errstate(divide='ignore'): # Handle potential div/0
+        s = -tvec[2] / rays[2]
+
+    # Filter Valid Points and Return
+    mask = (s > 0) & (np.abs(rays[2]) > 1e-6)
+    return (tvec + s[mask] * rays[:, mask])[:2].T
+
+def project_floor_to_pixels(floor_points, pose, camera_cal: nf_config.CameraCalibration):
+    """
+    Project world coordinates on the floor (z=0) back to normalized pixel coordinates.
+    """
+    # Use passed object for camera calibration.
+    K = np.array(camera_cal.intrinsic_matrix).reshape((3,3))
+    D = np.array(camera_cal.distortion_coeff)
+    image_shape = (camera_cal.resolution.width, camera_cal.resolution.height) # (1920, 1080)
+
+    floor_points = np.array(floor_points, dtype=np.float64)
+    
+    # Create 3D world points by appending z=0
+    zeros = np.zeros((floor_points.shape[0], 1))
+    object_points = np.hstack((floor_points, zeros))
+
+    # Extract Camera-to-World rotation and translation
+    rvec_c2w = np.array(pose[0], dtype=np.float64)
+    tvec_c2w = np.array(pose[1], dtype=np.float64).reshape(3, 1)
+    
+    R_c2w, _ = cv2.Rodrigues(rvec_c2w)
+
+    # Calculate World-to-Camera transformation for cv2.projectPoints
+    R_w2c = R_c2w.T
+    tvec_w2c = -R_w2c @ tvec_c2w
+    
+    # Convert rotation matrix back to rvec for projectPoints
+    rvec_w2c, _ = cv2.Rodrigues(R_w2c)
+
+    # Project 3D points to 2D pixel coordinates
+    # projectPoints returns shape (N, 1, 2), so we reshape to (N, 2)
+    image_points, _ = cv2.projectPoints(object_points, rvec_w2c, tvec_w2c, K, D)
+    image_points = image_points.reshape(-1, 2)
+
+    # Normalize coordinates to [0, 1] range
+    # We divide by the image width and height provided in image_shape
+    normalized_pixels = image_points / image_shape
+
+    return normalized_pixels
+
+def get_rotation_to_center_ray(K, u, v, image_shape):
+    """
+    Calculates the rotation matrix required to rotate the camera such that
+    the ray passing through pixel (u, v) becomes the optical axis (0, 0, 1).
+    """
+    fx = K[0, 0]
+    fy = K[1, 1]
+    cx = K[0, 2]
+    cy = K[1, 2]
+    
+    # Back-project pixel to normalized vector in Camera Frame
+    # UV coordinates (0..1) to Pixel coordinates
+    px = u * image_shape[0]
+    py = (1.0 - v) * image_shape[1] # Flip V to match OpenCV Y-down
+    
+    vec_x = (px - cx) / fx
+    vec_y = (py - cy) / fy
+    vec_z = 1.0
+    
+    # Create the Target Vector and Source Vector (Optical Axis)
+    target_vec = np.array([vec_x, vec_y, vec_z])
+    target_vec = target_vec / np.linalg.norm(target_vec) # Normalize
+    
+    source_vec = np.array([0, 0, 1]) # We want target_vec to end up here
+    
+    # Calculate Rotation (Axis-Angle)
+    # Rotation axis is perpendicular to both
+    rot_axis = np.cross(target_vec, source_vec)
+    axis_len = np.linalg.norm(rot_axis)
+    
+    if axis_len < 1e-6:
+        # Vectors are already aligned
+        return np.eye(3)
+        
+    rot_axis = rot_axis / axis_len
+    
+    # Angle is arccos(dot product)
+    angle = np.arccos(np.dot(target_vec, source_vec))
+    
+    # Create Matrix using Rodrigues
+    r_vec = rot_axis * angle
+    R_fix, _ = cv2.Rodrigues(r_vec)
+    return R_fix
+
+def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_spin=0, range_dist=None, axis_uv_linear=(-0.3182, 0.9845), axis_uv_x_linear=None):
+    """
+    Warp a video frame to a stationary, centered perspective.
+    
+    Args:
+        frame: Input image
+        quat: BNO085 quaternion
+        camera_cal: camera calibration of 1920x1080 unstabilized "normal" image
+        room_spin: Z-axis offset for room alignment
+        range_dist: Distance from camera to floor (meters).
+        axis_uv_linear: (slope, intercept) for Y-axis target.
+        axis_uv_x_linear: Optional (slope, intercept) for X-axis target. Defaults to Center (0.5).
+    """
+
+    if 'K_new' not in saved_matrices:
+        saved_matrices['starting_K'], saved_matrices['K_new'] = gripper_stabilized_cal(camera_cal)
+
+    h, w = frame.shape[:2]
+
+    # Physics Rotation (World -> Camera)
+    R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
+    r_imu = Rotation.from_quat(quat)
+    R_world_to_imu = r_imu.as_matrix().T
+    
+    R_imu_to_cam = np.array([
+        [-1, 0,  0], 
+        [0,  0, -1], 
+        [0, -1,  0]
+    ])
+    
+    R_world_to_cam = R_imu_to_cam @ R_world_to_imu
+    # R_relative un-rotates the camera to align with World Frame
+    R_relative = R_room_spin @ R_world_to_cam.T
+    
+    # Axis Centering (Rotation Fix) ---
+    R_fix = np.eye(3)
+    
+    if range_dist is not None:
+        # Y-Axis Logic
+        slope_y, intercept_y = axis_uv_linear
+        target_v = slope_y * range_dist + intercept_y
+        
+        # X-Axis Logic (Default to 0.5/Center if not provided)
+        if axis_uv_x_linear is not None:
+            slope_x, intercept_x = axis_uv_x_linear
+            target_u = slope_x * range_dist + intercept_x
+        else:
+            target_u = 0.5
             
-            # Look up the scaled object points specific to this tag
-            obj_points = SPECIAL_OBJ_POINTS.get(name, DEFAULT_OBJ_POINTS)
-            
-            # Use solvePnP to get the rotation and translation vectors (rvec, tvec)
-            # This gives the pose of the marker relative to the camera.
-            # The coordinate system has the origin at the camera center. The z-axis points from the camera center out the camera lens.
-            # The x-axis is to the right in the image taken by the camera, and y is down. The tag's coordinate frame is centered at the center of the tag.
-            # From the viewer's perspective, the x-axis is to the right, y-axis down, and z-axis is out of the tag.
-            _, r, t = cv2.solvePnP(obj_points, corners, mxx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
-            
-            # Append the result in a JSON-serializable format
-            results.append({
-                'n': name,
-                'r': r.tolist(),
-                't': t.tolist()
-            })
-        return results
+        # Calculate the corrective rotation
+        # This rotation maps the Target Ray to the Optical Axis (Z)
+        R_fix = get_rotation_to_center_ray(saved_matrices['starting_K'], target_u, target_v, (w, h))
 
-    def project_pixels_to_floor(self, normalized_pixels, pose, K=None, D=None, image_shape=None):
-        """
-        batch project normalized [0,1] pixel coordinates from a camera's point of view to the floor
-        make sure you use the camera pose, not just the anchor pose!
-        """
-        if K is None:
-            K = self.mtx
-        if D is None:
-            D = self.distortion
-        if image_shape is None:
-            image_shape = self.calibration_shape
+    # Final Homography ---
+    # Chain: K_new @ R_relative @ R_fix @ K_inv
+    # We apply R_fix FIRST (closest to K_inv) to align the target vector to Z-axis in Camera Frame.
+    # Then R_relative aligns that Z-axis (now containing the target) to World Down.
+    H = saved_matrices['K_new'] @ R_relative @ R_fix @ np.linalg.inv(saved_matrices['starting_K'])
 
-        # Undistort Points
-        pts = np.array(normalized_pixels, dtype=np.float64) * image_shape
-        uv = cv2.undistortPoints(pts.reshape(-1, 1, 2), K, D).reshape(-1, 2).T
+    # Vertical Flip Matrix
+    flip_vertical = np.array([
+        [1,  0,  0],
+        [0, -1,  SF_TARGET_SHAPE[1]], 
+        [0,  0,  1]
+    ])
+    
+    H_final = flip_vertical @ H
 
-        # Rotate Rays to World Frame
-        rays = cv2.Rodrigues(np.array(pose[0]))[0] @ np.vstack((uv, np.ones(uv.shape[1])))
-
-        # Calculate Intersections with floor
-        tvec = np.array(pose[1], dtype=np.float64).reshape(3, 1)
-        with np.errstate(divide='ignore'): # Handle potential div/0
-            s = -tvec[2] / rays[2]
-
-        # Filter Valid Points and Return
-        mask = (s > 0) & (np.abs(rays[2]) > 1e-6)
-        return (tvec + s[mask] * rays[:, mask])[:2].T
-
-    def project_floor_to_pixels(self, floor_points, pose, K=None, D=None, image_shape=None):
-        """
-        Project world coordinates on the floor (z=0) back to normalized pixel coordinates.
-        """
-        if K is None:
-            K = self.mtx
-        if D is None:
-            D = self.distortion
-        if image_shape is None:
-            image_shape = self.calibration_shape
-
-        floor_points = np.array(floor_points, dtype=np.float64)
-        
-        # Create 3D world points by appending z=0
-        zeros = np.zeros((floor_points.shape[0], 1))
-        object_points = np.hstack((floor_points, zeros))
-
-        # Extract Camera-to-World rotation and translation
-        rvec_c2w = np.array(pose[0], dtype=np.float64)
-        tvec_c2w = np.array(pose[1], dtype=np.float64).reshape(3, 1)
-        
-        R_c2w, _ = cv2.Rodrigues(rvec_c2w)
-
-        # Calculate World-to-Camera transformation for cv2.projectPoints
-        R_w2c = R_c2w.T
-        tvec_w2c = -R_w2c @ tvec_c2w
-        
-        # Convert rotation matrix back to rvec for projectPoints
-        rvec_w2c, _ = cv2.Rodrigues(R_w2c)
-
-        # Project 3D points to 2D pixel coordinates
-        # projectPoints returns shape (N, 1, 2), so we reshape to (N, 2)
-        image_points, _ = cv2.projectPoints(object_points, rvec_w2c, tvec_w2c, K, D)
-        image_points = image_points.reshape(-1, 2)
-
-        # Normalize coordinates to [0, 1] range
-        # We divide by the image width and height provided in image_shape
-        normalized_pixels = image_points / image_shape
-
-        return normalized_pixels
-
-    def locate_markers_gripper(self, im):
-        return self.locate_markers(im, mxx=self.K_new)
-
-    def get_rotation_to_center_ray(self, K, u, v, image_shape):
-        """
-        Calculates the rotation matrix required to rotate the camera such that
-        the ray passing through pixel (u, v) becomes the optical axis (0, 0, 1).
-        """
-        fx = K[0, 0]
-        fy = K[1, 1]
-        cx = K[0, 2]
-        cy = K[1, 2]
-        
-        # Back-project pixel to normalized vector in Camera Frame
-        # UV coordinates (0..1) to Pixel coordinates
-        px = u * image_shape[0]
-        py = (1.0 - v) * image_shape[1] # Flip V to match OpenCV Y-down
-        
-        vec_x = (px - cx) / fx
-        vec_y = (py - cy) / fy
-        vec_z = 1.0
-        
-        # Create the Target Vector and Source Vector (Optical Axis)
-        target_vec = np.array([vec_x, vec_y, vec_z])
-        target_vec = target_vec / np.linalg.norm(target_vec) # Normalize
-        
-        source_vec = np.array([0, 0, 1]) # We want target_vec to end up here
-        
-        # Calculate Rotation (Axis-Angle)
-        # Rotation axis is perpendicular to both
-        rot_axis = np.cross(target_vec, source_vec)
-        axis_len = np.linalg.norm(rot_axis)
-        
-        if axis_len < 1e-6:
-            # Vectors are already aligned
-            return np.eye(3)
-            
-        rot_axis = rot_axis / axis_len
-        
-        # Angle is arccos(dot product)
-        angle = np.arccos(np.dot(target_vec, source_vec))
-        
-        # Create Matrix using Rodrigues
-        r_vec = rot_axis * angle
-        R_fix, _ = cv2.Rodrigues(r_vec)
-        return R_fix
-
-    def stabilize_frame(self, frame, quat, room_spin=0, range_dist=None, axis_uv_linear=(-0.3182, 0.9845), axis_uv_x_linear=None, K=None):
-        """
-        Warp a video frame to a stationary, centered perspective.
-        
-        Args:
-            frame: Input image
-            quat: BNO085 quaternion
-            room_spin: Z-axis offset for room alignment
-            range_dist: Distance from camera to floor (meters).
-            axis_uv_linear: (slope, intercept) for Y-axis target.
-            axis_uv_x_linear: Optional (slope, intercept) for X-axis target. Defaults to Center (0.5).
-            K: Camera Matrix.
-        """
-        if K is None:
-            K = self.starting_K
-
-        h, w = frame.shape[:2]
-
-        # Physics Rotation (World -> Camera)
-        R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
-        r_imu = Rotation.from_quat(quat)
-        R_world_to_imu = r_imu.as_matrix().T
-        
-        R_imu_to_cam = np.array([
-            [-1, 0,  0], 
-            [0,  0, -1], 
-            [0, -1,  0]  
-        ])
-        
-        R_world_to_cam = R_imu_to_cam @ R_world_to_imu
-        # R_relative un-rotates the camera to align with World Frame
-        R_relative = R_room_spin @ R_world_to_cam.T
-        
-        # Axis Centering (Rotation Fix) ---
-        R_fix = np.eye(3)
-        
-        if range_dist is not None:
-            # Y-Axis Logic
-            slope_y, intercept_y = axis_uv_linear
-            target_v = slope_y * range_dist + intercept_y
-            
-            # X-Axis Logic (Default to 0.5/Center if not provided)
-            if axis_uv_x_linear is not None:
-                slope_x, intercept_x = axis_uv_x_linear
-                target_u = slope_x * range_dist + intercept_x
-            else:
-                target_u = 0.5
-                
-            # Calculate the corrective rotation
-            # This rotation maps the Target Ray to the Optical Axis (Z)
-            R_fix = self.get_rotation_to_center_ray(K, target_u, target_v, (w, h))
-
-        # Final Homography ---
-        # Chain: K_new @ R_relative @ R_fix @ K_inv
-        # We apply R_fix FIRST (closest to K_inv) to align the target vector to Z-axis in Camera Frame.
-        # Then R_relative aligns that Z-axis (now containing the target) to World Down.
-        H = self.K_new @ R_relative @ R_fix @ np.linalg.inv(K)
-
-        # Vertical Flip Matrix
-        flip_vertical = np.array([
-            [1,  0,  0],
-            [0, -1,  SF_TARGET_SHAPE[1]], 
-            [0,  0,  1]
-        ])
-        
-        H_final = flip_vertical @ H
-
-        return cv2.warpPerspective(frame, H_final, SF_TARGET_SHAPE, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
+    return cv2.warpPerspective(frame, H_final, SF_TARGET_SHAPE, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))

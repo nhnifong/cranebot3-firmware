@@ -20,7 +20,6 @@ from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHand
 from generated.nf import telemetry, common
 import copy
 from video_streamer import VideoStreamer
-import traceback
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -32,9 +31,6 @@ max_origin_detections = 12
 # we are looking at a relatively static image.
 sam_rate = 1.0 # per second
 sam_confidence_cutoff = 0.75
-
-def pose_from_det(det):
-    return (np.array(det['r'], dtype=float).reshape((3,)), np.array(det['t'], dtype=float).reshape((3,)))
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
@@ -73,7 +69,6 @@ class ComponentClient:
         self.calibrating_room_spin = False # set to true momentarily during auto calibration
 
         self.config = ob.config
-        self.vision_tools = VisionTools(self.config)
 
         self.conn_status = None # subclass needs to set this in init
 
@@ -95,7 +90,17 @@ class ComponentClient:
         }
 
         try:
+
+            # attempt = 3 # sometimes it just takes longer than expected.
+            # while attempt>0:
+            #     try:
             container = av.open(video_uri, options=options, mode='r')
+            # except av.error.ConnectionRefusedError:
+            #     attempt-=1
+            #     if attempt==0:
+            #         raise
+            #     time.sleep(1.5)
+
             stream = next(s for s in container.streams if s.type == 'video')
             stream.thread_type = "SLICE"
 
@@ -111,6 +116,9 @@ class ComponentClient:
             self.notify_video = True
             lastSam = time.time()
             last_time = time.time()
+
+            def error_callback_func(error):
+                print(f"Error in pool worker: {error}")
 
             for av_frame in container.decode(stream):
                 if not self.connected:
@@ -136,7 +144,11 @@ class ComponentClient:
                     try:
                         if self.stat.pending_frames_in_pool < 60:
                             self.stat.pending_frames_in_pool += 1
-                            self.pool.apply_async(self.vision_tools.locate_markers, (self.frame,), callback=partial(self.handle_detections, timestamp=timestamp))
+                            self.pool.apply_async(
+                                locate_markers,
+                                (self.frame, self.config.camera_cal),
+                                callback=partial(self.handle_detections, timestamp=timestamp),
+                                error_callback=error_callback_func)
                         else:
                             pass
                             # print(f'Dropping frame because there are already too many pending.')
@@ -151,7 +163,7 @@ class ComponentClient:
             if encoder_thread is not None:
                 encoder_thread.join()
 
-        except av.error.TimeoutError:
+        except (av.error.TimeoutError, av.error.ConnectionRefusedError):
             print('no video stream available')
             self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
             self.notify_video = True
@@ -182,7 +194,7 @@ class ComponentClient:
 
         # TODO allow these to changes when in a teleop mode
         if self.anchor_num is None:
-            final_shape = SF_INPUT_SHAPE # resize for centering network input
+            final_shape = SF_TARGET_SHAPE # resize for centering network input
             final_fps = 10
         else:   
             final_shape = (IMAGE_SHAPE[1], IMAGE_SHAPE[0]) # resize for dobby network input
@@ -232,7 +244,7 @@ class ComponentClient:
                 else:
                     roomspin = self.config.gripper.frame_room_spin
                 range_to_object = self.datastore.range_record.getLast()[1]
-                self.last_frame_resized = self.vision_tools.stabilize_frame(temp_image, gripper_quat, roomspin, range_dist=range_to_object)
+                self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, self.config.camera_cal, roomspin, range_dist=range_to_object)
 
             else:
                 # anchors
@@ -452,54 +464,50 @@ class RaspiAnchorClient(ComponentClient):
         """
         handle a list of aruco detections from the pool
         """
-        try:
-            self.stat.pending_frames_in_pool -= 1
-            self.stat.detection_count += len(detections)
+        self.stat.pending_frames_in_pool -= 1
+        self.stat.detection_count += len(detections)
 
-            for detection in detections:
+        for detection in detections:
 
-                if detection['n'] in CAL_MARKERS:
-                    # save all the detections of the origin for later analysis
-                    self.origin_poses[detection['n']].append(pose_from_det(detection))
+            if detection['n'] in CAL_MARKERS:
+                # save all the detections of the origin for later analysis
+                self.origin_poses[detection['n']].append(detection['p'])
 
-                if detection['n'] == 'gantry':
-                    # rotate and translate to where that object's origin would be
-                    # given the position and rotation of the camera that made this observation (relative to the origin)
-                    # store the time and that position in the appropriate measurement array in observer.
-                    # you have the pose of gantry_front relative to a particular anchor camera
-                    # convert it to a pose relative to the origin
-                    pose = np.array(compose_poses([
-                        self.anchor_pose, # obtained from calibration
-                        model_constants.anchor_camera, # constant
-                        pose_from_det(detection), # the pose obtained just now
-                        gantry_april_inv, # constant
-                    ]))
-                    position = pose.reshape(6)[3:]
-                    self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position])) # take only the position
-                    # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
-                    self.datastore.gantry_pos_event.set()
+            if detection['n'] == 'gantry':
+                # rotate and translate to where that object's origin would be
+                # given the position and rotation of the camera that made this observation (relative to the origin)
+                # store the time and that position in the appropriate measurement array in observer.
+                # you have the pose of gantry_front relative to a particular anchor camera
+                # convert it to a pose relative to the origin
+                pose = np.array(compose_poses([
+                    self.anchor_pose, # obtained from calibration
+                    model_constants.anchor_camera, # constant
+                    detection['p'], # the pose obtained just now
+                    gantry_april_inv, # constant
+                ]))
+                position = pose.reshape(6)[3:]
+                self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position])) # take only the position
+                # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
+                self.datastore.gantry_pos_event.set()
 
-                    self.last_gantry_frame_coords = np.array(detection['t'], dtype=float)
-                    with self.gantry_pos_sightings_lock:
-                        self.gantry_pos_sightings.append(position)
+                self.last_gantry_frame_coords = detection['p'][1] # second item in pose tuple is position
+                with self.gantry_pos_sightings_lock:
+                    self.gantry_pos_sightings.append(position)
 
-                    if self.save_raw:
-                        self.raw_gant_poses.append(pose_from_det(detection))
+                if self.save_raw:
+                    self.raw_gant_poses.append(detection['p'])
 
-                if detection['n'] in OTHER_MARKERS:
-                    offset = model_constants.basket_offset_inv if detection['n'].endswith('back') else model_constants.basket_offset
-                    pose = np.array(compose_poses([
-                        self.anchor_pose,
-                        model_constants.anchor_camera, # constant
-                        pose_from_det(detection), # the pose obtained just now
-                        offset, # the named location is out in front of the tag.
-                    ]))
-                    position = pose.reshape(6)[3:]
-                    # save the position of this object for use in various planning tasks.
-                    self.ob.update_avg_named_pos(detection['n'], position)
-        except Exception: # <--- CATCH AND PRINT TRACE
-            print(f"CRASH processing detection '{detection.get('n', 'UNKNOWN')}'")
-            traceback.print_exc()
+            if detection['n'] in OTHER_MARKERS:
+                offset = model_constants.basket_offset_inv if detection['n'].endswith('back') else model_constants.basket_offset
+                pose = np.array(compose_poses([
+                    self.anchor_pose,
+                    model_constants.anchor_camera, # constant
+                    detection['p'], # the pose obtained just now
+                    offset, # the named location is out in front of the tag.
+                ]))
+                position = pose.reshape(6)[3:]
+                # save the position of this object for use in various planning tasks.
+                self.ob.update_avg_named_pos(detection['n'], position)
 
     async def send_config(self):
         anchor_config_vars = {
