@@ -20,7 +20,7 @@ import numpy as np
 import scipy.optimize as optimize
 from scipy.spatial.transform import Rotation
 from data_store import DataStore
-from raspi_anchor_client import RaspiAnchorClient, max_origin_detections, pose_from_det
+from raspi_anchor_client import RaspiAnchorClient, max_origin_detections
 from raspi_gripper_client import RaspiGripperClient
 from random import random
 from config_loader import *
@@ -145,8 +145,6 @@ class AsyncObserver:
         self.cloud_telem_websocket = None
         self.gip_task = None
         self.cloud_telem = None
-        # instance of vision tools used for locate_markers and projecting to floor
-        self.vt = VisionTools(self.config)
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -154,6 +152,7 @@ class AsyncObserver:
             poses=[a.pose for a in self.config.anchors]
         ))
         for client in self.bot_clients.values():
+            client.send_conn_status()
             if client.local_udp_port is not None and client.anchor_num in [None, *self.config.preferred_cameras]:
                 self.send_ui(video_ready=telemetry.VideoReady(
                     is_gripper=client.anchor_num is None,
@@ -586,11 +585,11 @@ class AsyncObserver:
                     for d in detections:
                         if d['n'] == 'origin':
                             # a pose of the origin card in the frame of reference of the stabilized gripper cam.
-                            origin_card_pose[0] = pose_from_det(d)
+                            origin_card_pose[0] = d['p']
                 while origin_card_pose[0] is None:
                     async_result = self.pool.apply_async(
-                        self.vt.locate_markers_gripper,
-                        (self.gripper_client.last_frame_resized,),
+                        locate_markers_gripper,
+                        (self.gripper_client.last_frame_resized, self.config.camera_cal),
                         callback=partial(special_handle_det, time.time()))
                     detections = async_result.get(timeout=5)
                 euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
@@ -901,7 +900,7 @@ class AsyncObserver:
             connected_clients.add(self.cloud_telem_websocket) # will only be connected when self.local_telemetry is False
         for ui_websocket in connected_clients:
             try:
-                await ui_websocket.send(to_send)
+                r = await ui_websocket.send(to_send)
             except (ConnectionClosedOK, ConnectionClosedError) as e:
                 pass # stale connection
 
@@ -923,7 +922,7 @@ class AsyncObserver:
         self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
-        with Pool(processes=12) as pool:
+        with Pool(processes=5) as pool:
             self.pool = pool
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
@@ -968,9 +967,10 @@ class AsyncObserver:
         self.stat.run = False
         self.pe.run = False
         self.pe_task.cancel()
+        tasks = [self.pe_task, self.keeper]
         if self.cloud_telem:
             self.cloud_telem.cancel()
-        tasks = [self.pe_task, self.keeper, self.cloud_telem]
+            tasks.append(self.cloud_telem)
         if self.grpc_server is not None:
             tasks.append(self.grpc_server.stop(grace=5))
         if self.aiobrowser is not None:
@@ -1386,7 +1386,7 @@ class AsyncObserver:
                     if len(results) > 0:
                         targets2d = results[:,:2] # the third number is confidence
                         # if this is an anchor, project points to floor using anchor's specific pose
-                        floor_points = self.vt.project_pixels_to_floor(targets2d, client.camera_pose)
+                        floor_points = project_pixels_to_floor(targets2d, client.camera_pose, self.config.camera_cal)
                         all_floor_target_arrs.append(floor_points)
                         # TODO retain information about the original image coordinates of targets for display in UI
 

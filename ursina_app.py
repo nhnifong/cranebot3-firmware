@@ -594,6 +594,7 @@ class ControlPanelUI:
 
     def _handle_component_conn_status(self, item: telemetry.ComponentConnStatus):
         user_status_str = conn_status_strings.get(item.websocket_status, 'Unknown')
+        print(f'UI reciving conn status {item}')
 
         if item.video_status == telemetry.ConnStatus.CONNECTED:
             vidstatus_tex = 'vid_ok.png'
