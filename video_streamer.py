@@ -16,6 +16,7 @@ class VideoStreamer:
         self.fps = fps # an estimate, nothing bad happens if you fail to call send_frame() exactly at this rate
         self.process = None
         self.connection_status = 'ok'
+        self.local_udp_port = None
         
         # if no rtmp url, only broadcast locally on UDP
         # find a free local port for that.
@@ -88,6 +89,13 @@ class VideoStreamer:
             stdin=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
+
+        # TODO read stderr and look for this line. it usually means the media server hung up on you (not authorized)
+        # ERROR:video_streamer:FFmpeg pipe broken: [Errno 32] Broken pipe
+        # if seen, call
+        # self.stop()
+        # self.connection_status = 'error'
+
         logger.info(f"FFmpeg streamer started to {self.rtmp_url}")
         if self.local_udp_port:
             logger.info(f"Also streaming locally to udp://127.0.0.1:{self.local_udp_port}")

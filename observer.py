@@ -50,7 +50,9 @@ gripper_service_name = 'cranebot-gripper-service'
 
 N_ANCHORS = 4
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
-CONTROL_PLANE = "localhost:8080"
+CONTROL_PLANE_PRODUCTION = "wss://neufangled.com"
+CONTROL_PLANE_STAGING = "wss://nf-site-monolith-staging-690802609278.us-east1.run.app"
+CONTROL_PLANE_LOCAL = "ws://localhost:8080"
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
@@ -95,7 +97,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, local_telemetry) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None) -> None:
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
@@ -112,7 +114,7 @@ class AsyncObserver:
         # TODO allow a command line argument to override the config file path
         self.config_path = config_path
         self.config = load_config(config_path)
-        self.local_telemetry = local_telemetry
+        self.telemetry_env = telemetry_env
         self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -801,7 +803,7 @@ class AsyncObserver:
         is_standard_gripper = name_component == gripper_service_name
 
         if is_standard_gripper:
-            client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.local_telemetry)
+            client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.telemetry_env)
             self.gripper_client_connected.clear()
             client.connection_established_event = self.gripper_client_connected
             self.gripper_client = client
@@ -809,7 +811,7 @@ class AsyncObserver:
             for a in self.config.anchors:
                 if a.service_name != service_name:
                     continue
-                client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.local_telemetry)
+                client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.telemetry_env)
                 client.connection_established_event = self.any_anchor_connected
                 self.anchors.append(client)
 
@@ -829,10 +831,18 @@ class AsyncObserver:
             del self.connection_tasks[service_name]
 
     async def connect_cloud_telemetry(self):
+        ws_protocol_and_host = CONTROL_PLANE_LOCAL
+        if self.telemetry_env == 'staging':
+            ws_protocol_and_host = CONTROL_PLANE_STAGING
+        if self.telemetry_env == 'production':
+            ws_protocol_and_host = CONTROL_PLANE_PRODUCTION
+
         while self.run_command_loop:
             try:
-                use_id = 0 # self.config.robot_id
-                async with websockets.connect(f"ws://{CONTROL_PLANE}/telemetry/{use_id}", max_size=None, open_timeout=10) as websocket:
+                use_id = self.config.robot_id
+                ws_path = f"{ws_protocol_and_host}/telemetry/{use_id}"
+                print(f"Connecting to control plane at {ws_path}")
+                async with websockets.connect(ws_path, max_size=None, open_timeout=10) as websocket:
                     self.cloud_telem_websocket = websocket
                     print(f'connected to control_plane {websocket}')
                     # send anything that it would need up-front
@@ -897,7 +907,7 @@ class AsyncObserver:
         # copy list to prevent RuntimeError: Set changed size during iteration
         connected_clients = self.connected_local_clients.copy()
         if self.cloud_telem_websocket:
-            connected_clients.add(self.cloud_telem_websocket) # will only be connected when self.local_telemetry is False
+            connected_clients.add(self.cloud_telem_websocket) # will only be connected when self.telemetry_env is not None
         for ui_websocket in connected_clients:
             try:
                 r = await ui_websocket.send(to_send)
@@ -911,7 +921,7 @@ class AsyncObserver:
     async def main(self) -> None:
         self.startup_complete.clear()
 
-        if not self.local_telemetry:
+        if self.telemetry_env is not None:
             self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())
 
         # statistic counter - measures things like average camera frame latency
@@ -1513,7 +1523,7 @@ class AsyncObserver:
         OPEN = -30
         CLOSED = 85
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * sf_scale_factor / 2 * (np.pi/180)
+        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.06
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
@@ -1629,18 +1639,39 @@ class AsyncObserver:
 
 def start_observation(terminate_with_ui=False, config_path='configuration.json'):
     """Entry point to be used when starting this from main.py with multiprocessing."""
-    ob = AsyncObserver(terminate_with_ui, config_path, local_telemetry=True)
+    ob = AsyncObserver(terminate_with_ui, config_path, telemetry_env=None)
     asyncio.run(ob.main())
     # set ob.run_command_loop = False or kill or connect to websocket and send shutdown command
 
 if __name__ == "__main__":
+    """
+    Run stringman in a headless manner
+
+    note that connecting to a local telemetry enviroment is distinct from lan mode
+    when observer.py is run directly it is always connecting to some telemetry server
+    even if it is the full stack running on the local machine
+    in contrast, LAN mode is enabled by running main.py which starts the Ursina UI and observer.py together
+    and where observer.py sends telemetry only to the ursina UI process.
+    the lan mode entrypoint is start_observation() above
+
+    typical run command for local testing
+
+    python3 observer.py --config=conf_bedroom.json local
+
+    """
     parser = argparse.ArgumentParser(description="CenteringNet System")
     parser.add_argument("--config", type=str, default='configuration.json')
-
+    parser.add_argument(
+            '--telemetry_env',
+            type=str,
+            choices=['local', 'staging', 'production'],
+            default='production',
+            help="The telemetry server to connect to (choices: local, staging, production) Used in development only"
+        )
     args = parser.parse_args()
 
     async def main():
-        runner = AsyncObserver(False, args.config, local_telemetry=False)
+        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env)
 
         # when running as a standalone process, register signal handler
         def stop():
