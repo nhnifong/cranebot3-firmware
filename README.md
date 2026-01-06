@@ -14,10 +14,13 @@ These instructions require python 3.11 or later.
     source venv/bin/activate
     pip3 install -r requirements_desktop.txt
 
-Start control panel with UI
+Start control panel with ursina UI in lan mode
 
     python host/main.py
 
+Or start headless in a mode that connects to remote telemetry
+
+    python observer.py
 
 requirements_desktop.txt includes the game engine, while requirements_raspi.txt is more lightweight and includes only the dependencies of the headless servers that run on the raspberry pi zeros
 

@@ -145,6 +145,7 @@ SPECIAL_OBJ_POINTS = {
 
 SF_INPUT_SHAPE = (960, 540)      # Size of the raw frame coming from gripper camera
 SF_TARGET_SHAPE = (384, 384)     # Size of the final neural net input (Square)
+SF_SCALE_FACTOR = 1.4  # Zoom factor (values less than 1 zoom in)
 
 saved_matrices = {}
 
@@ -154,7 +155,6 @@ def gripper_stabilized_cal(camera_cal: nf_config.CameraCalibration):
     calibration_shape = (camera_cal.resolution.width, camera_cal.resolution.height) # (1920, 1080)
     # Derive other constants needed for stabilize_frame
     sf_image_ratio = SF_INPUT_SHAPE[0] / calibration_shape[0] # Ratio to scale intrinsics (approx 1/3)
-    sf_scale_factor = 1.4  # Zoom factor (values less than 1 zoom in)
     starting_K = mtx.copy() # if we being using the wide angle camera for the gripper, then this would no long be a copy of the anchor cam cal
     starting_K[0, 0] *= sf_image_ratio  # Scale fx
     starting_K[1, 1] *= sf_image_ratio  # Scale fy
@@ -165,8 +165,8 @@ def gripper_stabilized_cal(camera_cal: nf_config.CameraCalibration):
     # The optical center (cx, cy) is set to half of the target shape (384/2),
     # not the input shape. This forces the center of the projection to be the center of the square.
     K_new = np.array([
-        [starting_K[0, 0] / sf_scale_factor, 0,                                  SF_TARGET_SHAPE[0] / 2.0], # cx = 192
-        [0,                                  starting_K[1, 1] / sf_scale_factor, SF_TARGET_SHAPE[1] / 2.0], # cy = 192
+        [starting_K[0, 0] / SF_SCALE_FACTOR, 0,                                  SF_TARGET_SHAPE[0] / 2.0], # cx = 192
+        [0,                                  starting_K[1, 1] / SF_SCALE_FACTOR, SF_TARGET_SHAPE[1] / 2.0], # cy = 192
         [0,                                  0,                                  1                    ]
     ])
     return starting_K, K_new

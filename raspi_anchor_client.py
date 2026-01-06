@@ -34,7 +34,7 @@ sam_confidence_cutoff = 0.75
 
 # the genertic client for a raspberri pi based robot component
 class ComponentClient:
-    def __init__(self, address, port, datastore, ob, pool, stat, local_telemetry):
+    def __init__(self, address, port, datastore, ob, pool, stat, telemetry_env):
         self.address = address
         self.port = port
         self.origin_poses = defaultdict(lambda: deque(maxlen=max_origin_detections))
@@ -56,7 +56,7 @@ class ComponentClient:
         self.heartbeat_receipt = asyncio.Event()
         self.safety_task = None
         self.local_udp_port = None
-        self.local_telemetry = local_telemetry
+        self.telemetry_env = telemetry_env
 
         # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
@@ -200,11 +200,19 @@ class ComponentClient:
             final_shape = (IMAGE_SHAPE[1], IMAGE_SHAPE[0]) # resize for dobby network input
             final_fps = 10
 
-        host = 'localhost'
         path = f'stringman/{self.config.robot_id}/{cam_num}'
-        rtmp = f'rtmp://{host}:1935/{path}?user=user&pass=pass'
-        if self.local_telemetry:
+
+        if self.telemetry_env is None:
+            rtmp = None # when in LAN mode do not upload ANYTHING to the cloud.
+        elif self.telemetry_env == "local":
+            rtmp = f'rtmp://localhost:1935/{path}?user=user&pass=pass'
+        elif self.telemetry_env == "staging":
+            rtmp = f'rtmp://media.neufangled.com:1935/{path}?user=user&pass=pass'
+        elif self.telemetry_env == "production":
+            rtmp = f'rtmp://media.neufangled.com:1935/{path}?user=user&pass=pass'
+        else:
             rtmp = None
+
         vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
         vs.start()
 
@@ -420,8 +428,8 @@ CAL_MARKERS = set(['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'])
 OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'gamepad-back', 'hamper-back', 'trash-back'])
 
 class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, port, anchor_num, datastore, ob, pool, stat, local_telemetry):
-        super().__init__(address, port, datastore, ob, pool, stat, local_telemetry)
+    def __init__(self, address, port, anchor_num, datastore, ob, pool, stat, telemetry_env):
+        super().__init__(address, port, datastore, ob, pool, stat, telemetry_env)
         self.anchor_num = anchor_num # which anchor are we connected to
         self.conn_status = telemetry.ComponentConnStatus(
             is_gripper=False,
