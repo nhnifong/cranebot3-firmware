@@ -130,6 +130,7 @@ class AsyncObserver:
         self.gripper_client_connected = asyncio.Event()
         self.grpc_server = None
         self.last_gp_action = None
+        self.last_user_move_time = time.time()
         self.episode_control_events = set()
         self.named_positions = {}
         self.dobby_model = None
@@ -147,6 +148,7 @@ class AsyncObserver:
         self.cloud_telem_websocket = None
         self.gip_task = None
         self.cloud_telem = None
+        self.passive_safety_task = None
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -319,6 +321,19 @@ class AsyncObserver:
 
         # the saved values will be what we return from GetLastAction
         self.last_gp_action = (commanded_vel, winch, finger)
+        self.last_user_move_time = time.time()
+
+    async def passive_safety(self):
+        """
+        This not only has the effect of stopping the robot if the user disappears mid-move,
+        but by feeding zeros to the kalman filter for commanded velocity every second, jitter is greatly reduced.
+        this task's action is suppressed whenever there is a motion task or the user is actually sending commands.
+        """
+        while self.run_command_loop:
+            if (self.motion_task is not None and not self.motion_task.done()) or (self.last_user_move_time > (time.time()-1)):
+                continue
+            self.slow_stop_all_spools()
+            await asyncio.sleep(1)
 
     def update_avg_named_pos(self, key: str, position: np.ndarry):
         """Update the running average of the named position"""
@@ -921,6 +936,8 @@ class AsyncObserver:
     async def main(self) -> None:
         self.startup_complete.clear()
 
+        self.passive_safety_task = asyncio.create_task(self.passive_safety())
+
         if self.telemetry_env is not None:
             self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())
 
@@ -977,7 +994,7 @@ class AsyncObserver:
         self.stat.run = False
         self.pe.run = False
         self.pe_task.cancel()
-        tasks = [self.pe_task, self.keeper]
+        tasks = [self.pe_task, self.keeper, self.passive_safety_task]
         if self.cloud_telem:
             self.cloud_telem.cancel()
             tasks.append(self.cloud_telem)
@@ -1339,6 +1356,13 @@ class AsyncObserver:
             self.centering_model = CenteringNet().to(DEVICE)
             self.centering_model.load_state_dict(torch.load(CENTERING_MODEL_PATH, map_location=DEVICE))
             self.centering_model.eval()
+
+        if self.telemetry_env == 'local':
+            print(f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}')
+        if self.telemetry_env == 'staging':
+            print(f'To control visit https://nf-site-monolith-staging-690802609278.us-east1.run.app/playroom?robotid={self.config.robot_id}')
+        if self.telemetry_env == 'production':
+            print(f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}')
 
         counter = 0
         while self.run_command_loop:
