@@ -42,6 +42,8 @@ import websockets
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 from util import *
 from functools import partial
+from pathlib import Path
+import json
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -54,6 +56,8 @@ CONTROL_PLANE_PRODUCTION = "wss://neufangled.com"
 CONTROL_PLANE_STAGING = "wss://nf-site-monolith-staging-690802609278.us-east1.run.app"
 CONTROL_PLANE_LOCAL = "ws://localhost:8080"
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
+USER_TARGETS_DIR = "user_targets_data"
+METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
@@ -200,6 +204,7 @@ class AsyncObserver:
     async def _dispatch_update(self, item: control.ControlItem):
         # In betterproto, 'oneof' fields appear as attributes. 
         # Only one will be non-None.
+        print(item)
         
         # Standard Commands (Stop, Calibrate, Zero)
         if item.command:
@@ -223,6 +228,70 @@ class AsyncObserver:
 
         elif item.scale_room:
             self._handle_scale_room(item.scale_room)
+
+        elif item.add_cam_target:
+            self._handle_add_cam_target(item.add_cam_target)
+
+        elif item.delete_target:
+            self._handle_delete_target(item.delete_target)
+
+    def _handle_delete_target(self, item: control.DeleteTarget):
+        if item.target_id is not None:
+            self.target_queue.remove_target(item.target_id);
+
+    def _handle_add_cam_target(self, item: control.AddTargetFromAnchorCam):
+        # Add the target
+        targets2d = [[item.img_norm_x, item.img_norm_y]]
+        floor_points = project_pixels_to_floor(targets2d, self.anchors[item.anchor_num].camera_pose, self.config.camera_cal)
+        if (len(floor_points) == 1):
+            if item.target_id is not None:
+                self.target_queue.set_target_position(item.target_id, floor_points[0])
+            else:   
+                new_id = self.target_queue.add_user_target(floor_points[0], dropoff='hamper')
+        self.send_tq_to_ui()
+
+    def submitTargets(self):
+        """snapshot any active cameras
+            project the targets from the floor to those camera's normalized image coords
+            save the data in the target dataset
+        """
+        targets = self.target_queue.get_targets_as_array()
+        if len(targets) == 0:
+            return
+
+        images = {}
+        for anchor in self.anchors:
+            if anchor.last_frame_resized is not None:
+                images[anchor.anchor_num] = (anchor.last_frame_resized.copy(), anchor.camera_pose)
+
+        def save_data(targets, images):
+            directory_path = Path(USER_TARGETS_DIR)
+            directory_path.mkdir(exist_ok=True, parents=True)
+            
+            with open(METADATA_PATH, 'a') as f:
+                for anchor_num, tup in images.items():
+                    img, cam_pose = tup
+
+                    # project the points. pass only x and y
+                    uv_coords = project_floor_to_pixels(targets[:,:2], cam_pose, self.config.camera_cal)                    
+                    if len(uv_coords) == 0:
+                        continue
+
+                    img_filename = f"{str(uuid.uuid4())}.jpg"
+
+                    # Format: {"file_name": "1.jpg", "points": [[x1,y1], [x2,y2]]}
+                    metadata_entry = {
+                        "file_name": img_filename,
+                        "points": uv_coords.tolist()
+                    }
+                    f.write(json.dumps(metadata_entry) + "\n")
+                    
+                    # write the image
+                    rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    img_full_path = directory_path / img_filename
+                    cv2.imwrite(str(img_full_path), img)
+
+        threading.Thread(target=save_data, args=(targets, images)).start()
 
     def _handle_scale_room(self, item: control.ScaleRoom):
         if item.scale:
@@ -273,6 +342,8 @@ class AsyncObserver:
                 r = await self.invoke_motion_task(self.unpark())
             case control.Command.GRASP:
                 r = await self.invoke_motion_task(self.execute_grasp())
+            case control.Command.SUBMIT_TARGETS_TO_DATASET:
+                self.submitTargets()
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
@@ -330,9 +401,8 @@ class AsyncObserver:
         this task's action is suppressed whenever there is a motion task or the user is actually sending commands.
         """
         while self.run_command_loop:
-            if (self.motion_task is not None and not self.motion_task.done()) or (self.last_user_move_time > (time.time()-1)):
-                continue
-            self.slow_stop_all_spools()
+            if not ((self.motion_task is not None and not self.motion_task.done()) or (self.last_user_move_time > (time.time()-1))):
+                self.slow_stop_all_spools()
             await asyncio.sleep(1)
 
     def update_avg_named_pos(self, key: str, position: np.ndarry):
@@ -936,6 +1006,7 @@ class AsyncObserver:
     async def main(self) -> None:
         self.startup_complete.clear()
 
+        # broken
         self.passive_safety_task = asyncio.create_task(self.passive_safety())
 
         if self.telemetry_env is not None:

@@ -21,3 +21,4 @@ square_centering_data/
 multi_view_data/
 trainer/models/multiview_4cam.pth
 conf*.json
+user_targets_data/

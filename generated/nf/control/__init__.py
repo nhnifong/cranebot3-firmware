@@ -4,11 +4,13 @@
 # This file has been @generated
 
 __all__ = (
+    "AddTargetFromAnchorCam",
     "CombinedMove",
     "Command",
     "CommonCommand",
     "ControlBatchUpdate",
     "ControlItem",
+    "DeleteTarget",
     "EpControl",
     "GantryGoalPos",
     "JogSpool",
@@ -76,6 +78,11 @@ class Command(betterproto2.Enum):
     Execute an automated grasp at the current position.
     """
 
+    SUBMIT_TARGETS_TO_DATASET = 13
+    """
+    Take the current set of targets as complete and correct and add entries to dataset
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -106,6 +113,7 @@ class Command(betterproto2.Enum):
             10: "COMMAND_PARK",
             11: "COMMAND_UNPARK",
             12: "COMMAND_GRASP",
+            13: "COMMAND_SUBMIT_TARGETS_TO_DATASET",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -124,10 +132,37 @@ class Command(betterproto2.Enum):
             "COMMAND_PARK": 10,
             "COMMAND_UNPARK": 11,
             "COMMAND_GRASP": 12,
+            "COMMAND_SUBMIT_TARGETS_TO_DATASET": 13,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,
         }
+
+
+@dataclass(eq=False, repr=False)
+class AddTargetFromAnchorCam(betterproto2.Message):
+    """
+    Add a new target by projecting the provided point from the given camera
+    and adds the current image and point to a dataset
+    """
+
+    anchor_num: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)
+
+    img_norm_x: "float" = betterproto2.field(2, betterproto2.TYPE_FLOAT)
+
+    img_norm_y: "float" = betterproto2.field(3, betterproto2.TYPE_FLOAT)
+
+    target_id: "str | None" = betterproto2.field(
+        4, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    If an id is set, this is interpreted as a move command, to set a new position for the given item.
+    """
+
+
+default_message_pool.register_message(
+    "nf.control", "AddTargetFromAnchorCam", AddTargetFromAnchorCam
+)
 
 
 @dataclass(eq=False, repr=False)
@@ -244,8 +279,24 @@ class ControlItem(betterproto2.Message):
         6, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    add_cam_target: "AddTargetFromAnchorCam | None" = betterproto2.field(
+        7, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
+    delete_target: "DeleteTarget | None" = betterproto2.field(
+        8, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteTarget(betterproto2.Message):
+    target_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message("nf.control", "DeleteTarget", DeleteTarget)
 
 
 @dataclass(eq=False, repr=False)

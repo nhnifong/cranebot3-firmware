@@ -9,7 +9,7 @@ from generated.nf import telemetry, common
 @dataclass
 class Target:
     """
-    Represents a single pick-and-place task.
+    Represents a single target. idendified by AI or user, with a given drop point.
     """
     position: np.ndarray
     # Dropoff can be a coordinate array or a named location (e.g., 'hamper')
@@ -41,6 +41,7 @@ class TargetQueue:
                                     are considered the same object.
         """
         self._queue: List[Target] = []
+        self._false_targets: List[Target] = []
         self._duplicate_threshold = duplicate_threshold
         # to prevent race conditions (e.g., UI removing a target while Robot is selecting it).
         self._lock = threading.RLock()
@@ -53,8 +54,10 @@ class TargetQueue:
 
         Returns the id of the newly added target.
         """
-        # Ensure position is a numpy array
+        # Ensure position is a numpy array representing a 3d coordinate
         pos_array = np.array(position, dtype=np.float64)
+        if len(pos_array) == 2:
+            pos_array = np.pad(pos_array, (0, 1))
         
         # Handle dropoff conversion if it's a coordinate
         if not isinstance(dropoff, str):
@@ -137,6 +140,17 @@ class TargetQueue:
                 else:
                     dropoff_val = dropoff_raw
 
+                # If this looks like something the user previously deleted, skip it
+                best_false_match = None
+                smalled_observed_false_dist = self._duplicate_threshold
+                for ft in self._false_targets:
+                    dist = ft.distance_to(pos)
+                    if dist < smalled_observed_false_dist:
+                        smalled_observed_false_dist = dist
+                        best_false_match = ft
+                if best_false_match:
+                    continue # Discard this target
+
                 # Find best matching existing target (closest within threshold)
                 best_match = None
                 min_dist = self._duplicate_threshold
@@ -185,6 +199,10 @@ class TargetQueue:
         with self._lock:
             for i, target in enumerate(self._queue):
                 if target.id == target_id:
+                    # we don't want it in the work queue anymore, but we don't want to forget about it.
+                    # wouldn't be any good if it just came back on its own after you delete it.
+                    # move it to another list so it can still sync with AI targets
+                    self._false_targets.append(self._queue[i])
                     del self._queue[i]
                     return True
             return False
@@ -229,6 +247,16 @@ class TargetQueue:
                 return True
             return False
 
+    def set_target_position(self, target_id: str, pos2d: np.ndarray):
+        """
+        Updates the position of a target.
+        """
+        with self._lock:
+            target = self._get_by_id(target_id)
+            if target:
+                target.position = np.pad(pos2d, (0, 1))
+                target.source = 'user'
+
     def get_queue_snapshot(self) -> telemetry.TargetList:
         """
         Returns the whole queue as a telemetry.TargetList for UI visualization.
@@ -238,6 +266,17 @@ class TargetQueue:
             for target in self._queue:
                 targets.append(target.as_proto())
         return telemetry.TargetList(targets=targets)
+
+    def get_targets_as_array(self) -> np.ndarray:
+        """
+        Returns all targets as an array of 3D coordinates.
+        """
+        targets = []
+        with self._lock:
+            for target in self._queue:
+                targets.append(target.position)
+        return np.array(targets)
+
 
     def get_target_info(self, target_id: str) -> Optional[telemetry.OneTarget]:
         """
