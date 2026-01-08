@@ -29,6 +29,8 @@ enum Command {
   COMMAND_UNPARK = 11;
   // Execute an automated grasp at the current position.
   COMMAND_GRASP = 12;
+  // Take the current set of targets as complete and correct and add entries to dataset
+  COMMAND_SUBMIT_TARGETS_TO_DATASET = 13;
 
   // =====  Commands intended only for diagnostics =====
 
@@ -95,6 +97,22 @@ message ScaleRoom {
   float scale = 1;
 }
 
+// Add a new target by projecting the provided point from the given camera
+// and adds the current image and point to a dataset
+message AddTargetFromAnchorCam {
+  uint32 anchor_num = 1;
+
+  float img_norm_x = 2;
+  float img_norm_y = 3;
+
+  // If an id is set, this is interpreted as a move command, to set a new position for the given item.
+  optional string target_id = 4;
+}
+
+message DeleteTarget {
+  string target_id = 1;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -105,6 +123,8 @@ message ControlItem {
     GantryGoalPos gantry_goal_pos = 4;
     EpControl episode_control = 5;
     ScaleRoom scale_room = 6;
+    AddTargetFromAnchorCam add_cam_target = 7;
+    DeleteTarget delete_target = 8;
   }
 }
 

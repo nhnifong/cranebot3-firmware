@@ -474,7 +474,6 @@ class Positioner2:
     def record_commanded_vel(self, vel):
         self.commanded_vel = vel
         self.commanded_vel_ts = time.time()
-        print(f'{time.time()} commanded vel = {vel}')
         self.ob.send_ui(last_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(vel)))
 
     async def update_commanded_vel(self):
