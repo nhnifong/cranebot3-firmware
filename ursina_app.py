@@ -429,6 +429,9 @@ class ControlPanelUI:
     def scale_room(self, amount):
         self.send_ob(scale_room=control.ScaleRoom(scale=amount))
 
+    def tilt_cams(self, amount):
+        self.send_ob(scale_room=control.ScaleRoom(tiltcams=amount))
+
     def input(self, key):
         if key == 'space':
             self.gripper.toggle_closed()
@@ -440,6 +443,10 @@ class ControlPanelUI:
             self.scale_room(1.005)
         elif key == '-':
             self.scale_room(0.995)
+        elif key == '*':
+            self.tilt_cams(0.25)
+        elif key == '/':
+            self.tilt_cams(-0.25)
 
         was_dir = self.direction
 

@@ -95,6 +95,7 @@ message EpControl {
 // message used to tweak calibration by scaling all the anchor positions towards or away from the origin
 message ScaleRoom {
   float scale = 1;
+  float tiltcams = 2;
 }
 
 // Add a new target by projecting the provided point from the given camera

@@ -204,7 +204,7 @@ class Gripper(Entity):
                 self.reel_manual(-self.jog_speed)
             elif mkey == 'up arrow up':
                 self.jog_speed = 0.1
-                self.ui.send_ob(control.JogSpool(is_gripper=True, speed=0))
+                self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=True, speed=0))
 
 
             elif mkey == 'down arrow':
@@ -215,10 +215,10 @@ class Gripper(Entity):
                 self.reel_manual(self.jog_speed)
             elif mkey == 'down arrow up':
                 self.jog_speed = 0.1
-                self.ui.send_ob(control.JogSpool(is_gripper=True, speed=0))
+                self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=True, speed=0))
 
     def reel_manual(self, metersPerSecond):
-        self.ui.send_ob(control.JogSpool(is_gripper=True, speed=metersPerSecond))
+        self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=True, speed=metersPerSecond))
 
     def setFingerAngle(self, commanded_angle):
         """
@@ -319,7 +319,7 @@ class Anchor(Entity):
                 self.reel_manual(-self.jog_speed)
             elif key == 'up arrow up':
                 self.jog_speed = 0.1
-                self.ui.send_ob(control.JogSpool(is_gripper=False, anchor_num=self.num, speed=0))
+                self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=False, anchor_num=self.num, speed=0))
 
 
             elif key == 'down arrow':
@@ -330,12 +330,12 @@ class Anchor(Entity):
                 self.reel_manual(self.jog_speed)
             elif key == 'down arrow up':
                 self.jog_speed = 0.1
-                self.ui.send_ob(control.JogSpool(is_gripper=False, anchor_num=self.num, speed=0))
+                self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=False, anchor_num=self.num, speed=0))
 
 
     def reel_manual(self, metersPerSecond):
         self.wp.enabled = False
-        self.ui.send_ob(control.JogSpool(is_gripper=False, anchor_num=self.num, speed=metersPerSecond))
+        self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=False, anchor_num=self.num, speed=metersPerSecond))
 
     def toggle_vid_feed(self):
         pass # todo make this toggle the window in the main app
@@ -918,9 +918,10 @@ class CamPreview(Entity):
 
                 dx = mouse.world_point.x - self.cam.world_position.x
                 dy = mouse.world_point.y - self.cam.world_position.y
+                # range from 0 to 1. origin is top left
                 u = clamp((dx / self.cam.world_scale_x) + 0.5, 0, 1)
                 v = clamp((-dy / self.cam.world_scale_y) + 0.5, 0, 1)
-                
+
                 self.render_projected_point((u, v))
 
                 # we want to use this coordinate to indicate in the UI what this would look like in other views

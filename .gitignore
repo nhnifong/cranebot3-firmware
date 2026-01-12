@@ -22,3 +22,5 @@ multi_view_data/
 trainer/models/multiview_4cam.pth
 conf*.json
 user_targets_data/
+target_heatmap_data/
+target_heatmap_data_unlabeled/

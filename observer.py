@@ -204,7 +204,6 @@ class AsyncObserver:
     async def _dispatch_update(self, item: control.ControlItem):
         # In betterproto, 'oneof' fields appear as attributes. 
         # Only one will be non-None.
-        print(item)
         
         # Standard Commands (Stop, Calibrate, Zero)
         if item.command:
@@ -220,7 +219,7 @@ class AsyncObserver:
 
         # Manual Spool Control
         elif item.jog_spool:
-            r = await self._handle_jog(item.jog_spool)
+            r = await self._handle_jog_spool(item.jog_spool)
 
         # Lerobot Episode Control (Start/Stop Recording)
         elif item.episode_control:
@@ -263,6 +262,9 @@ class AsyncObserver:
         for anchor in self.anchors:
             if anchor.last_frame_resized is not None:
                 images[anchor.anchor_num] = (anchor.last_frame_resized.copy(), anchor.camera_pose)
+            elif anchor.frame is not None:
+                resized = cv2.resize(anchor.frame, (640, 360), interpolation=cv2.INTER_AREA)
+                images[anchor.anchor_num] = (resized, anchor.camera_pose)
 
         def save_data(targets, images):
             directory_path = Path(USER_TARGETS_DIR)
@@ -289,7 +291,7 @@ class AsyncObserver:
                     # write the image
                     rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                     img_full_path = directory_path / img_filename
-                    cv2.imwrite(str(img_full_path), img)
+                    cv2.imwrite(str(img_full_path), rgb_image)
 
         threading.Thread(target=save_data, args=(targets, images)).start()
 
@@ -312,6 +314,13 @@ class AsyncObserver:
             # inform position estimator
             anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
             self.pe.set_anchor_points(anchor_points)
+
+        if item.tiltcams:
+            print(f'tilting cams inward by {item.tiltcams} deg')
+            for client in self.anchors:
+                client.extratilt += item.tiltcams
+                client.updatePose(client.anchor_pose)
+
 
     async def _handle_common_command(self, cmd: control.Command):
         # betterproto Enums are IntEnums, comparable directly
@@ -409,8 +418,8 @@ class AsyncObserver:
         """Update the running average of the named position"""
         if key not in self.named_positions:
             self.named_positions[key] = position
+        # exponential moving average
         self.named_positions[key] = self.named_positions[key] * 0.75 + position * 0.25
-
         pos = self.named_positions[key]
         self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(pos), name=key))
 
@@ -1306,10 +1315,10 @@ class AsyncObserver:
         # Enforce a height dependent speed limit.
         # the reason being that as gantry height approaches anchor height, the line tension increases exponentially,
         # and a slower speed is need to maintain enough torque from the stepper motors.
-        # The speed limit is proportional to how far the gantry hangs below a level 30cm below the average anchor.
+        # The speed limit is proportional to how far the gantry hangs below a level 10cm below the average anchor.
         # This makes the behavior consistent across installations of different heights.
         hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
-        speed_limit = clamp(0.3 * (hang_distance - 0.1), 0.01, 0.55)
+        speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.55)
         speed = min(speed, speed_limit)
 
         # when a very small speed is provided, clamp it to zero.
@@ -1515,7 +1524,7 @@ class AsyncObserver:
         PICK_WINCH_LENGTH = 1.0
         DROP_WINCH_LENGTH = 0.2
         GANTRY_HEIGHT_OVER_TARGET = 1.0
-        GANTRY_HEIGHT_OVER_DROPOFF = 0.65
+        GANTRY_HEIGHT_OVER_DROPOFF = 0.9
         RELAXED_OPEN = 0 # enough to drop something
         DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
         LOOP_DELAY = 0.5
@@ -1523,6 +1532,14 @@ class AsyncObserver:
         try:
             gtask = None
             while self.run_command_loop:
+
+                # hover over the hamper
+                # await asyncio.sleep(1)
+                # if 'hamper' in self.named_positions:
+                #     self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF])
+                #     await self.seek_gantry_goal()
+                # continue
+
                 next_target = self.target_queue.get_best_target()
                 if next_target is None:
                     print('no target was found, be still')
@@ -1565,7 +1582,10 @@ class AsyncObserver:
                     break
 
                 # when we reach this point we arrived over the item. commit to it unless it proves impossible to pick up.
+                print('attempt grasp')
+                start = time.time()
                 success = await self.execute_grasp()
+                print(f'grasp succeeded {success} took {time.time() - start}s')
                 if not success:
                     # just pick another target, but consider downranking this object or something.
                     self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
@@ -1575,6 +1595,7 @@ class AsyncObserver:
                 else:
                     self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.PICKED_UP)
                     self.send_tq_to_ui()
+                    print('object picked up')
 
                 # tension now just in case.
                 # await self.tension_and_wait()
@@ -1593,6 +1614,7 @@ class AsyncObserver:
                     drop_point = np.zeros(3)
 
                 # fly to to drop point
+                print(f'flying to drop point {drop_point}')
                 self.gantry_goal_pos = drop_point + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF])
                 await self.seek_gantry_goal()
                 # open gripper
@@ -1643,12 +1665,13 @@ class AsyncObserver:
                 while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
                     distance_to_floor = self.datastore.range_record.getLast()[1]
                     if distance_to_floor < FINGER_LENGTH:
+                        print(f'stop going down, distance to floor is {distance_to_floor}')
                         break
 
-                    # prediction unreliable under 30cm. TODO collect more data of this type
                     if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and distance_to_floor > COMMIT_HEIGHT:
                         nothing_seen_countdown -= 1
                         if nothing_seen_countdown == 0:
+                            print('print nothing seen during centering loop')
                             break
                     else:
                         nothing_seen_countdown = 15
@@ -1690,6 +1713,7 @@ class AsyncObserver:
                 self.pe.tip_over.clear()
 
                 if nothing_seen_countdown == 0:
+                    print('Nothing seen')
                     continue # find new target?
 
                 print('close gripper')
@@ -1712,14 +1736,13 @@ class AsyncObserver:
                     continue
                 print('Successful grasp')
                 return True
-            print('Gave up on grasp after a few attempts')
+            print(f'Gave up on grasp after {attempts} attempts. self.pe.holding={self.pe.holding}')
             return False
 
         except asyncio.CancelledError:
             raise
         finally:
             self.slow_stop_all_spools()
-            return False
 
     def _handle_collect_images(self):
         self.gip_task = asyncio.create_task(self.collect_images())

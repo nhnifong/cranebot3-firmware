@@ -6,8 +6,8 @@
 __all__ = (
     "Anchor",
     "CameraCalibration",
-    "CameraCalibrationResolution",
     "Gripper",
+    "Resolution",
     "StringmanPilotConfig",
 )
 
@@ -61,7 +61,7 @@ default_message_pool.register_message("nf.config", "Anchor", Anchor)
 
 @dataclass(eq=False, repr=False)
 class CameraCalibration(betterproto2.Message):
-    resolution: "CameraCalibrationResolution | None" = betterproto2.field(
+    resolution: "Resolution | None" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, optional=True
     )
 
@@ -88,18 +88,6 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
-class CameraCalibrationResolution(betterproto2.Message):
-    width: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)
-
-    height: "int" = betterproto2.field(2, betterproto2.TYPE_UINT32)
-
-
-default_message_pool.register_message(
-    "nf.config", "CameraCalibration.Resolution", CameraCalibrationResolution
-)
-
-
-@dataclass(eq=False, repr=False)
 class Gripper(betterproto2.Message):
     service_name: "str | None" = betterproto2.field(
         1, betterproto2.TYPE_STRING, optional=True
@@ -118,6 +106,16 @@ class Gripper(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.config", "Gripper", Gripper)
+
+
+@dataclass(eq=False, repr=False)
+class Resolution(betterproto2.Message):
+    width: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)
+
+    height: "int" = betterproto2.field(2, betterproto2.TYPE_UINT32)
+
+
+default_message_pool.register_message("nf.config", "Resolution", Resolution)
 
 
 @dataclass(eq=False, repr=False)

@@ -438,6 +438,7 @@ class RaspiAnchorClient(ComponentClient):
             video_status=telemetry.ConnStatus.NOT_DETECTED,
         )
         self.last_raw_encoder = None
+        self.extratilt = 0
         self.raw_gant_poses = deque(maxlen=12)
         self.updatePose(poseProtoToTuple(self.config.anchors[anchor_num].pose))
         self.gantry_pos_sightings = deque(maxlen=100)
@@ -448,6 +449,7 @@ class RaspiAnchorClient(ComponentClient):
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
             model_constants.anchor_camera,
+            (np.array([0,0,self.extratilt/180*np.pi], dtype=float), np.zeros(3, dtype=float)),
         ]))
 
     async def handle_update_from_ws(self, update):
