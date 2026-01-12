@@ -50,14 +50,14 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # This is calibrated for the standard FOV Raspberry Pi Camera module 3
     # with the autofocus set to a fixed lens position of 0.1
     intrinsic_np = np.array([
-        [1691.33070175,    0.        , 1163.88476871],
-        [   0.        , 1697.39780074,  633.90347492],
-        [   0.        ,    0.        ,    1.        ]
+        [1424.,    0., 960.],
+        [   0., 1424., 540.],
+        [   0.,    0.,   1.]
     ])
     config.camera_cal.intrinsic_matrix = intrinsic_np.flatten().tolist()
 
     # Default Distortion Coefficients
-    distortion_np = np.array([0.021986, 0.160533, -0.003378, 0.002640, -0.356843])
+    distortion_np = np.array([ 0.0115842, 0.18723804, -0.00126164, 0.00058383, -0.38807272])
     config.camera_cal.distortion_coeff = distortion_np.flatten().tolist()
 
     # Gripper

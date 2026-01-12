@@ -29,11 +29,12 @@ message Gripper {
   double frame_room_spin = 4;
 }
 
+message Resolution {
+  uint32 width = 1;
+  uint32 height = 2;
+}
+
 message CameraCalibration {
-  message Resolution {
-    uint32 width = 1;
-    uint32 height = 2;
-  }
   Resolution resolution = 1;
   
   // Flattened 3x3 matrix (row-major)

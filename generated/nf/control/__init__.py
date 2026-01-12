@@ -369,6 +369,8 @@ class ScaleRoom(betterproto2.Message):
 
     scale: "float" = betterproto2.field(1, betterproto2.TYPE_FLOAT)
 
+    tiltcams: "float" = betterproto2.field(2, betterproto2.TYPE_FLOAT)
+
 
 default_message_pool.register_message("nf.control", "ScaleRoom", ScaleRoom)
 

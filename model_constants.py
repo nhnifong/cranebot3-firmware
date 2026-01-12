@@ -49,8 +49,8 @@ gantry_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055],
 gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
 
 # position in front of a basket marker where objects should be dropped
-basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.2], dtype=float))
-basket_offset_inv = (np.array([0,0,0], dtype=float), np.array([0,0,-0.2], dtype=float))
+basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.25], dtype=float))
+basket_offset_inv = (np.array([0,0,0], dtype=float), np.array([0,0,-0.25], dtype=float))
 
 # spool parameters
 empty_spool_diameter = 22.9

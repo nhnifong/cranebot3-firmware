@@ -138,8 +138,29 @@ class CalibrationInteractive:
             raise RuntimeError(f'Obtained {self.images_obtained} images of checkerboard. Required 20')
 
         logging.info('Running calibrations...')
+        # ret, self.intrinsic_matrix, self.distCoeff, rvecs, tvecs = cv2.calibrateCamera(
+        #     self.opts, self.ipts, self.image_shape, None, None)
+
+        # Initialize the Matrix with the Image Center
+        # This tells OpenCV: "Start assuming the lens is perfectly centered"
+        w, h = self.image_shape
+        self.intrinsic_matrix = np.array([
+            [1000.0, 0.0,    w / 2.0], # f_x estimate, 0, c_x
+            [0.0,    1000.0, h / 2.0], # 0, f_y estimate, c_y
+            [0.0,    0.0,    1.0    ]
+        ], dtype=np.float32)
+
+        # Use Flags to Lock the Center
+        # CALIB_USE_INTRINSIC_GUESS: Use the matrix above as the starting point
+        # CALIB_FIX_PRINCIPAL_POINT: Do NOT move c_x and c_y during optimization
+        flags = cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_PRINCIPAL_POINT
+
         ret, self.intrinsic_matrix, self.distCoeff, rvecs, tvecs = cv2.calibrateCamera(
-            self.opts, self.ipts, self.image_shape, None, None)
+            self.opts, self.ipts, self.image_shape, 
+            self.intrinsic_matrix, # Pass our initialized matrix
+            None, 
+            flags=flags # Pass our locking flags
+        )
 
         #Save matrices
         logging.info(f"Camera calibration performed with image resolution: {self.image_shape[0]}x{self.image_shape[1]}.")
@@ -159,11 +180,12 @@ class CalibrationInteractive:
         logging.info(f"Total reprojection error: {terr}")
 
     def save(self): 
-        logging.info(f'Saving data to {config_file}...')
+        logging.info(f'Saving data to {self.config_file}...')
         cfg = load_config(path=self.config_file)
-        cfg.intrinsic_matrix = self.intrinsic_matrix.flatten().tolist()
-        cfg.distortion_coeff = self.distCoeff.flatten().tolist()
-        cfg.resolution = config.CameraCalibration.Resolution(width=self.image_shape[1], height=self.image_shape[0])
+        cfg.camera_cal.intrinsic_matrix = self.intrinsic_matrix.flatten().tolist()
+        cfg.camera_cal.distortion_coeff = self.distCoeff.flatten().tolist()
+        cfg.camera_cal.resolution.width = self.image_shape[0]
+        cfg.camera_cal.resolution.height = self.image_shape[1]
         save_config(cfg, self.config_file)
 
 # calibrate from files locally
@@ -238,7 +260,7 @@ def multi_card_residuals(x, averages):
             # Residual = Position_Calculated - [0,0,0]
             # We add 3 residuals (dx, dy, dz) per sighting
             
-            origin_weight = 1.5 # tune this to to make origin errors more expensive
+            origin_weight = 0.1 # tune this to to make origin errors more expensive
             current_residuals = (projected_positions - np.zeros(3)) * origin_weight
             residuals.extend(current_residuals.flatten())
             
@@ -263,7 +285,7 @@ def multi_card_residuals(x, averages):
             avg_z = np.mean(anchor_zs)
             
             # Penalize deviation from the average plane
-            z_weight = 100.0
+            z_weight = 10.0
             z_residuals = (anchor_zs - avg_z) * z_weight
             residuals.extend(z_residuals)
 

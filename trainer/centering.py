@@ -260,13 +260,13 @@ def train(args):
             
             pred_vec, pred_valid, pred_grip = model(imgs)
             
-            # 1. Target Valid Loss (Binary)
+            # Target Valid Loss (Binary)
             loss_valid = criterion_bce(pred_valid, gt_valid)
             
-            # 2. Gripper Occupied Loss (Binary)
+            # Gripper Occupied Loss (Binary)
             loss_grip = criterion_bce(pred_grip, gt_grip)
             
-            # 3. Vector Loss (Masked - only if target exists)
+            # Vector Loss (Masked - only if target exists)
             raw_mse = criterion_mse(pred_vec, gt_vec).mean(dim=1) # Average over x,y
             # gt_valid is (Batch, 1), squeeze to (Batch)
             masked_mse = (raw_mse * gt_valid.squeeze()).mean()

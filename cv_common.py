@@ -207,7 +207,7 @@ def _locate_markers(im, K, D):
         
         results.append({
             'n': name,
-            'p': (r, t), # pose tuple. numpy arrays. numpy supposedly has fast pickle hooks
+            'p': (r.reshape((3,)), t.reshape((3,))), # pose tuple. numpy arrays. numpy supposedly has fast pickle hooks
         })
     return results
 
@@ -244,6 +244,7 @@ def project_pixels_to_floor(normalized_pixels, pose, camera_cal: nf_config.Camer
     """
     batch project normalized [0,1] pixel coordinates from a camera's point of view to the floor
     make sure you use the camera pose, not just the anchor pose!
+    anchor 3 z rot 2.356194490192345
     """
     # Use passed object for camera calibration.
     K = np.array(camera_cal.intrinsic_matrix).reshape((3,3))
