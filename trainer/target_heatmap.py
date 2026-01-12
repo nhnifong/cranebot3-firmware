@@ -196,6 +196,7 @@ def train(args):
     print(f"Downloading/Loading dataset from {args.dataset_id}...")
     dataset_path = snapshot_download(repo_id=args.dataset_id, repo_type="dataset")
     print(f"Dataset available at: {dataset_path}")
+    # dataset_path = LOCAL_DATASET_ROOT
 
     dataset = DobbyDataset(dataset_path)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
@@ -433,13 +434,13 @@ def label_mode(args):
             
             # Write Metadata
             entry = {
-                "file_name": fn,
+                "file_name": new_fn,
                 "points": current_clicks
             }
             with open(METADATA_PATH, 'a') as f:
                 f.write(json.dumps(entry) + "\n")
             
-            print(f"Saved {len(current_clicks)} points -> {fn}")
+            print(f"Saved {len(current_clicks)} points -> {new_fn}")
 
 def upload_prompt(args):
     if not os.path.exists(LOCAL_DATASET_ROOT): return

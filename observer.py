@@ -805,7 +805,7 @@ class AsyncObserver:
                     # We need a way to know that, but for now, you'll have to make sure only one is one at a time while discovering.
                     # After discovery, it should be ok to have more than one on at a time.
                     print(f"Discovered another anchor server on the network, but we already know of 4 {key} {address}")
-                    print(f"existing anchors: {config.anchor_num_map.keys()}")
+                    print(f"existing anchors: {self.config.anchor_num_map.keys()}")
                     return None
             self.config.anchors[anchor_num].num = anchor_num
             self.config.anchors[anchor_num].service_name = key
@@ -1645,11 +1645,9 @@ class AsyncObserver:
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 2.50 # final adjustment to lateral speed
+        LAT_SPEED_ADJUSTMENT = 5.00 # final adjustment to lateral speed
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 2.0
-
-        smoothed_lateral = np.zeros(2)
 
         try:
             attempts = 3
@@ -1725,7 +1723,7 @@ class AsyncObserver:
                 except TimeoutError:
                     print('did not detect a successful hold, open and go back up high enough to get a view of the object')
                     # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
-                    await self.move_direction_speed([0,0,0.04])
+                    await self.move_direction_speed([0,0,0.06])
                     await asyncio.sleep(1.0)
                     # now move up a little faster in a slightly random direction
                     direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
