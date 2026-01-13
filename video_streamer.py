@@ -9,7 +9,7 @@ import socket
 logger = logging.getLogger(__name__)
 
 class VideoStreamer:
-    def __init__(self, width=640, height=480, fps=30, rtmp_url=None):
+    def __init__(self, width, height, fps=30, rtmp_url=None):
         self.rtmp_url = rtmp_url
         self.width = width
         self.height = height

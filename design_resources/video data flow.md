@@ -5,12 +5,12 @@ The robot must know when it is being teleoperated vs just being controlled with 
 target resolution and framerate for anchor cameras
  - for apriltag detection: 1920x1080 30fps
  - for teleoperation: 1920x1080 30fps
- - for UI's both local and remote: 640x360 2fps
- - for inference with object recognizer such as dobby: 640x360 2fps
+ - for UI's both local and remote: 960x544 2fps
+ - for inference with object recognizer such as dobby: 960x544 2fps
 
 summary of anchor video pipline:
  1. detect aruco markers in frame.
- 2. every 15th frame, resize down to 640x360, send to UI,
+ 2. every 15th frame, resize down to 960x544, send to UI,
  3. send to dobby, take heatmap from dobby, also send that to UI
 
 target resolution and framerate for gripper camera

@@ -28,7 +28,7 @@ from .robot_control_service_pb2_grpc import RobotControlServiceStub
 class StringmanConfig(RobotConfig):
     grpc_addr: str
 
-IMAGE_SHAPE = (360, 640, 3)
+# IMAGE_SHAPE = (360, 640, 3)
 
 def decode_image(jpeg_bytes):
     try:

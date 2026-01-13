@@ -14,7 +14,7 @@ from functools import partial
 import threading
 from util import *
 import os
-from trainer.stringman_pilot import IMAGE_SHAPE
+from trainer.target_heatmap import HM_IMAGE_RES
 from collections import defaultdict, deque
 from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHandshake, ConnectionClosedOK
 from generated.nf import telemetry, common
@@ -192,12 +192,12 @@ class ComponentClient:
         cam_num identifies which of the preferred cameras this is. 0 is the gripper, 1 and 2 are the two overhead cams.
         """
 
-        # TODO allow these to changes when in a teleop mode
+        # TODO allow these to change when in a teleop mode
         if self.anchor_num is None:
             final_shape = SF_TARGET_SHAPE # resize for centering network input
             final_fps = 10
         else:   
-            final_shape = (IMAGE_SHAPE[1], IMAGE_SHAPE[0]) # resize for dobby network input
+            final_shape = HM_IMAGE_RES # resize for target heatmap network input
             final_fps = 10
 
         path = f'stringman/{self.config.robot_id}/{cam_num}'

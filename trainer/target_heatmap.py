@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import cv2
@@ -18,21 +19,27 @@ import shutil
 DEFAULT_REPO_ID = "naavox/target-heatmap-dataset"
 DEFAULT_MODEL_PATH = "trainer/models/target_heatmap.pth"
 LOCAL_DATASET_ROOT = "target_heatmap_data"
-UNPROCESSED_DIR = "target_heatmap_data_unlabeled"
+HEATMAP_UNPROCESSED_DIR = "target_heatmap_data_unlabeled"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-IMAGE_RES = (640, 360)
+
+# Network Input Resolution
+# 960x544 is divisible by 32 (standard for CNNs), ensuring perfect alignment 
+# through pooling and upsampling layers without rounding errors.
+HM_IMAGE_RES = (960, 544) 
+
+# Labeling Source Resolution
+SOURCE_RES = (1920, 1080)
+
 MINIMUM_CONFIDENCE = 0.95 # during eval
 
 # ==========================================
 # MODEL DEFINITION
 # ==========================================
 
-class DobbyNet(nn.Module):
+class TargetHeatmapNet(nn.Module):
     """
-    Learns a heatmap from images that have one or more labeled points
-    The points are the locations of socks, hence the name.
-
-    Input images are 640x360
+    Learns a heatmap from images that have one or more labeled points.
+    Input images are expected to be 960x544.
     """
 
     def __init__(self):
@@ -49,6 +56,7 @@ class DobbyNet(nn.Module):
         self.bottleneck = self.conv_block(128, 256)
         
         # Decoder
+        # Since input is divisible by 8 (2^3), we can use standard fixed Upsample layers
         self.up3 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.dec3 = self.conv_block(256 + 128, 128)
         self.up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
@@ -71,10 +79,14 @@ class DobbyNet(nn.Module):
         e1 = self.enc1(x)
         e2 = self.enc2(self.pool1(e1))
         e3 = self.enc3(self.pool2(e2))
+        
         b = self.bottleneck(self.pool3(e3))
+        
+        # Dimensions align perfectly with 960x544 input
         d3 = self.dec3(torch.cat([self.up3(b), e3], dim=1))
         d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))
         d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
+        
         return torch.sigmoid(self.final(d1))
 
 # ==========================================
@@ -103,9 +115,6 @@ class DobbyDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        """
-        Return an image and heatmap made from the stored points associated with the image
-        """
         item = self.samples[idx]
         img_path = os.path.join(self.data_dir, item["file_name"])
         
@@ -136,46 +145,27 @@ class DobbyDataset(Dataset):
 def extract_targets_from_heatmap(heatmap: np.ndarray, top_n: int = 10, threshold: float = 0.5):
     """
     Extracts the centers of high-confidence blobs from a heatmap.
-
-    Args:
-        heatmap (np.ndarray): 2D array of probabilities (0.0 to 1.0). Shape (H, W).
-        top_n (int): Maximum number of targets to return.
-        threshold (float): Minimum confidence value to consider a blob.
-
-    Returns:
-        np.ndarray(3,n): A list of (norm_x, norm_y, confidence), sorted by confidence.
-                     Coordinates are normalized [0.0, 1.0].
+    Returns sorted list of (norm_x, norm_y, confidence).
     """
-    # Threshold to find "hot" regions
-    # Convert to uint8 mask (0 or 255)
     mask = (heatmap > threshold).astype(np.uint8) * 255
 
-    # Find blobs (contours)
-    # We use RETR_EXTERNAL because we only care about distinct outer blobs, not holes inside them.
+    # RETR_EXTERNAL to ignore holes inside blobs
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     candidates = []
     for contour in contours:
-        # Create a mask for just this blob to ensure we don't pick a peak outside it
-        # (Simple bounding box ROI is usually sufficient and much faster)
         x, y, w, h = cv2.boundingRect(contour)
         
-        # Extract the ROI from the heatmap
         roi = heatmap[y:y+h, x:x+w]
-        
-        # Find the max value and its location within this specific ROI
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(roi)
         
-        # Convert local ROI coordinates to global image coordinates
         global_x = x + max_loc[0]
         global_y = y + max_loc[1]
         
         candidates.append((global_x, global_y, max_val))
 
-    # Sort by confidence (highest first)
     candidates.sort(key=lambda k: k[2], reverse=True)
 
-    # Normalize coordinates and slice top N
     height, width = heatmap.shape
     results = []
     
@@ -196,16 +186,14 @@ def train(args):
     print(f"Downloading/Loading dataset from {args.dataset_id}...")
     dataset_path = snapshot_download(repo_id=args.dataset_id, repo_type="dataset")
     print(f"Dataset available at: {dataset_path}")
-    # dataset_path = LOCAL_DATASET_ROOT
 
     dataset = DobbyDataset(dataset_path)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
     
     os.makedirs(os.path.dirname(args.model_path), exist_ok=True)
-    model = DobbyNet().to(DEVICE)
+    model = TargetHeatmapNet().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     
-    # Use BCEWithLogitsLoss for pixel-wise heatmap regression
     criterion = nn.BCEWithLogitsLoss() 
 
     print(f"Starting training on {len(dataset)} images for {args.epochs} epochs...")
@@ -235,82 +223,120 @@ def train(args):
 # EVALUATION TOOL
 # ==========================================
 
+def run_inference(model, img_bgr):
+    """
+    Helper to run model on a single BGR image and return overlay.
+    """
+    img_tensor = torch.from_numpy(img_bgr).permute(2, 0, 1).float() / 255.0
+    batch = img_tensor.unsqueeze(0).to(DEVICE)
+
+    with torch.no_grad():
+        heatmap_out = model(batch)
+    heatmap_np = heatmap_out.squeeze().cpu().numpy()
+    
+    # img_bgr is used directly for background (no channel swap needed)
+    img_display = img_bgr.copy()
+    
+    heatmap_vis = (heatmap_np * 255).astype(np.uint8)
+    heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+    
+    overlay = cv2.addWeighted(img_display, 0.8, heatmap_color, 0.4, 0)
+
+    targets = extract_targets_from_heatmap(heatmap_np)
+    
+    for x, y, confidence in targets:
+        x = int(x * HM_IMAGE_RES[0])
+        y = int(y * HM_IMAGE_RES[1])
+        
+        box_size = 20
+        top_left =     (x - box_size, y - box_size)
+        bottom_right = (x + box_size, y + box_size)
+        cv2.rectangle(overlay, top_left, bottom_right, (0, 255, 0), 2)
+        conf_text = f"{confidence:.2f}"
+        cv2.putText(overlay, conf_text, (x - 10, y - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+    return overlay
+
 def eval_mode(args):
     print(f"Loading model from {args.model_path}...")
-    model = DobbyNet().to(DEVICE)
-    try:
-        model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
-    except FileNotFoundError:
-        print("Model file not found.")
-        return
+    model = TargetHeatmapNet().to(DEVICE)
+    model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
     model.eval()
-
-    print(f"Downloading dataset {args.dataset_id} for samples...")
-    dataset_path = snapshot_download(repo_id=args.dataset_id, repo_type="dataset")
-    
-    # Eval command now explicitly uses 'eval' folder
-    data_dir = os.path.join(dataset_path, "eval")
-    metadata_path = os.path.join(data_dir, "metadata.jsonl")
-    
-    if not os.path.exists(metadata_path):
-        print(f"No eval metadata found at {metadata_path}. Did you run 'split' on the dataset?")
-        return
-
-    # Load metadata
-    samples = []
-    with open(metadata_path, 'r') as f:
-        for line in f:
-            if line.strip(): samples.append(json.loads(line))
-            
-    print(f"Loaded {len(samples)} evaluation samples.")
-    print("Controls: [SPACE] Next, [Q] Quit")
 
     window_name = "Target Heatmap"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    # Set initial size to double the processing resolution (1280x720)
-    cv2.resizeWindow(window_name, IMAGE_RES[0] * 2, IMAGE_RES[1] * 2)
-
-    while True:
-        sample = random.choice(samples)
-        img_path = os.path.join(data_dir, sample["file_name"])
-        img_input = cv2.imread(img_path)
+    
+    # Mode 1: Video Stream
+    if args.uri:
+        source = args.uri
+        # Convert to int if user passed a webcam index (e.g. "0")
+        if source.isdigit():
+            source = int(source)
+            
+        print(f"Opening video source: {source}")
+        cap = cv2.VideoCapture(source)
         
-        if img_input is None: 
-            continue
+        if not cap.isOpened():
+            print(f"Error: Could not open video source {source}")
+            return
 
-        img_tensor = torch.from_numpy(img_input).permute(2, 0, 1).float() / 255.0
-        batch = img_tensor.unsqueeze(0).to(DEVICE)
+        cv2.resizeWindow(window_name, HM_IMAGE_RES[0], HM_IMAGE_RES[1])
+        print("Controls: [Q] Quit")
 
-        with torch.no_grad():
-            heatmap_out = model(batch)
-        heatmap_np = heatmap_out.squeeze().cpu().numpy()
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("End of stream.")
+                break
+            
+            # Ensure frame matches network input size
+            frame_resized = cv2.resize(frame, HM_IMAGE_RES)
+            
+            overlay = run_inference(model, frame_resized)
+            
+            cv2.imshow(window_name, overlay)
+            
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
         
-        img_np = img_tensor.permute(1, 2, 0).numpy()
-        img_display = (img_np * 255).astype(np.uint8)
-        img_display = cv2.cvtColor(img_display, cv2.COLOR_RGB2BGR)
+        cap.release()
         
-        heatmap_vis = (heatmap_np * 255).astype(np.uint8)
-        heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+    # Mode 2: Dataset Evaluation
+    else:
+        print(f"Downloading dataset {args.dataset_id} for samples...")
+        dataset_path = snapshot_download(repo_id=args.dataset_id, repo_type="dataset")
         
-        overlay = cv2.addWeighted(img_display, 0.8, heatmap_color, 0.4, 0)
+        data_dir = os.path.join(dataset_path, "eval")
+        metadata_path = os.path.join(data_dir, "metadata.jsonl")
+        
+        if not os.path.exists(metadata_path):
+            print(f"No eval metadata found at {metadata_path}. Did you run 'split' on the dataset?")
+            return
 
-        targets = extract_targets_from_heatmap(heatmap_np)
-        print(f'targets=\n{targets}')
+        samples = []
+        with open(metadata_path, 'r') as f:
+            for line in f:
+                if line.strip(): samples.append(json.loads(line))
+                
+        print(f"Loaded {len(samples)} evaluation samples.")
+        print("Controls: [SPACE] Next, [Q] Quit")
+        
+        cv2.resizeWindow(window_name, HM_IMAGE_RES[0] * 2, HM_IMAGE_RES[1] * 2)
 
-        for x, y, confidence in targets:
-            x = int(x * IMAGE_RES[0])
-            y = int(y * IMAGE_RES[1])
-            if confidence > 0.1: # Only draw if confidence is somewhat high
-                box_size = 20
-                top_left =     (x - box_size, y - box_size)
-                bottom_right = (x + box_size, y + box_size)
-                cv2.rectangle(overlay, top_left, bottom_right, (0, 255, 0), 2)
-                conf_text = f"Max Conf: {confidence:.2f}"
-                cv2.putText(overlay, conf_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        while True:
+            sample = random.choice(samples)
+            img_path = os.path.join(data_dir, sample["file_name"])
+            img_input = cv2.imread(img_path)
+            
+            if img_input is None: 
+                continue
 
-        cv2.imshow("Target Heatmap", overlay)
-        if cv2.waitKey(0) & 0xFF == ord('q'):
-            break
+            overlay = run_inference(model, img_input)
+            
+            cv2.imshow(window_name, overlay)
+            if cv2.waitKey(0) & 0xFF == ord('q'):
+                break
+                
     cv2.destroyAllWindows()
 
 # ==========================================
@@ -320,95 +346,91 @@ def eval_mode(args):
 # State
 current_clicks = []
 current_image = None
+current_image_path = None
 
 def mouse_callback(event, x, y, flags, param):
     global current_clicks
     if event == cv2.EVENT_LBUTTONDOWN:
-        # Add point
         current_clicks.append((x, y))
-        print(f"Added Point: {x}, {y}")
-        # Redraw immediately for better responsiveness
+        print(f"Added Point (Source Res): {x}, {y}")
         draw_interface()
     elif event == cv2.EVENT_RBUTTONDOWN:
-        # Undo last point
         if current_clicks:
             removed = current_clicks.pop()
             print(f"Removed Point: {removed}")
             draw_interface()
 
 def draw_interface():
-    """Helper to redraw the image with points and HUD."""
     global current_image, current_clicks
     if current_image is None:
         return
 
     display = current_image.copy()
 
-    # Draw all points
-    for i, pt in enumerate(current_clicks):
+    for pt in current_clicks:
         cv2.circle(display, pt, 5, (0, 255, 0), -1)
 
-    # HUD
-    status_text = f"Points: {len(current_clicks)}"
+    status_text = f"Points: {len(current_clicks)} | Res: {SOURCE_RES}"
     cv2.putText(display, status_text, (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    # cv2.putText(display, "[Space] Save | [N] Skip | [Q] Quit & Upload", (10, 60), 
-    #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
     cv2.imshow("Labeler", display)
 
 def label_mode(args):
-    global current_clicks, current_image
+    global current_clicks, current_image, current_image_path
 
     TRAIN_DIR = os.path.join(LOCAL_DATASET_ROOT, "train")
     METADATA_PATH = os.path.join(TRAIN_DIR, "metadata.jsonl")
     
     if not os.path.exists(TRAIN_DIR): os.makedirs(TRAIN_DIR)
     
-    # Initialize README if missing
     readme_path = os.path.join(LOCAL_DATASET_ROOT, "README.md")
     if not os.path.exists(readme_path):
         with open(readme_path, "w") as f:
             f.write("---\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: train/metadata.jsonl\n---\n")
 
-    cv2.namedWindow("Labeler")
+    cv2.namedWindow("Labeler", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Labeler", SOURCE_RES[0], SOURCE_RES[1])
     cv2.setMouseCallback("Labeler", mouse_callback)
     
     print("Labeler Started.")
-    print("Files are loaded from:", UNPROCESSED_DIR)
+    print("Files are loaded from:", HEATMAP_UNPROCESSED_DIR)
+    print(f"Expected Input Res: {SOURCE_RES}")
+    print(f"Saved Target Res:   {HM_IMAGE_RES}")
     print("\n--- Instructions ---")
-    print("1. Left-Click:   Mark a spot (x, y).")
+    print("1. Left-Click:   Mark a spot.")
     print("2. Right-Click:  Undo last mark.")
-    print("3. SPACE:        Save to local JSONL and go to next.")
+    print("3. SPACE:        Save (resizes img & points) and Next.")
     print("4. 'n':          Skip to next random frame.")
     print("5. 'q':          Quit and ask to upload to Hugging Face.")
 
     while True:
-        # Get next file
-        if not os.path.exists(UNPROCESSED_DIR):
-            print(f"No unprocessed directory: {UNPROCESSED_DIR}")
+        if not os.path.exists(HEATMAP_UNPROCESSED_DIR):
+            print(f"No unprocessed directory: {HEATMAP_UNPROCESSED_DIR}")
             break
             
-        files = [f for f in os.listdir(UNPROCESSED_DIR) if f.endswith('.jpg')]
+        files = [f for f in os.listdir(HEATMAP_UNPROCESSED_DIR) if f.endswith('.jpg')]
         if not files:
             print("No more files to process.")
             upload_prompt(args)
             break
             
         fn = random.choice(files)
-        full_path = os.path.join(UNPROCESSED_DIR, fn)
+        current_image_path = os.path.join(HEATMAP_UNPROCESSED_DIR, fn)
     
-        current_image = cv2.imread(full_path)
+        current_image = cv2.imread(current_image_path)
         if current_image is None:
             continue
-        # if current_image.shape != IMAGE_RES:
-        #     raise ValueError(f"image shape {current_image.shape} from file {full_path} cannot be used in this dataset, require {IMAGE_RES}")
+            
+        # Ensure we are working with expected source resolution or warn/resize
+        h, w = current_image.shape[:2]
+        if (w, h) != SOURCE_RES:
+            print(f"Warning: Image {fn} is {w}x{h}, expected {SOURCE_RES}. Visuals might be skewed.")
 
         current_clicks = [] 
         
         draw_interface()
 
-        # Interaction Loop
         save_it = False
         while True:
             key = cv2.waitKey(1) & 0xFF
@@ -425,22 +447,38 @@ def label_mode(args):
             elif key == ord(' '):
                 save_it = True
                 break
+
         if save_it:
-            # Move image to dataset folder
+            # Transform points from SOURCE_RES to HM_IMAGE_RES
+            scale_x = HM_IMAGE_RES[0] / SOURCE_RES[0]
+            scale_y = HM_IMAGE_RES[1] / SOURCE_RES[1]
+            
+            scaled_points = []
+            for px, py in current_clicks:
+                scaled_points.append((int(px * scale_x), int(py * scale_y)))
+
+            # Resize image
+            resized_img = cv2.resize(current_image, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)
+
+            # Generate filename and save
             new_id = str(uuid.uuid4())
             new_fn = f"{new_id}.jpg"
             new_path = os.path.join(TRAIN_DIR, new_fn)
-            shutil.move(full_path, new_path)
+            
+            cv2.imwrite(new_path, resized_img)
+            
+            # Remove original from unprocessed
+            os.remove(current_image_path)
             
             # Write Metadata
             entry = {
                 "file_name": new_fn,
-                "points": current_clicks
+                "points": scaled_points
             }
             with open(METADATA_PATH, 'a') as f:
                 f.write(json.dumps(entry) + "\n")
             
-            print(f"Saved {len(current_clicks)} points -> {new_fn}")
+            print(f"Saved {len(scaled_points)} points -> {new_fn} (Resized to {HM_IMAGE_RES})")
 
 def upload_prompt(args):
     if not os.path.exists(LOCAL_DATASET_ROOT): return
@@ -460,15 +498,6 @@ def upload_prompt(args):
         print("Uploaded successfully.")
 
 def split_and_upload(args):
-    """
-    1. Collects all data from local 'train' and 'eval' folders.
-    2. Shuffles them.
-    3. Splits 90/10 into train/eval.
-    4. Moves files to correct folders.
-    5. Regenerates metadata.jsonl for both.
-    6. Updates README.
-    7. Uploads to HF.
-    """
     print(f"Preparing to split dataset in {LOCAL_DATASET_ROOT}...")
     
     train_dir = os.path.join(LOCAL_DATASET_ROOT, "train")
@@ -476,13 +505,11 @@ def split_and_upload(args):
     train_meta = os.path.join(train_dir, "metadata.jsonl")
     eval_meta = os.path.join(eval_dir, "metadata.jsonl")
 
-    # Ensure directories exist
     if not os.path.exists(train_dir): os.makedirs(train_dir)
     if not os.path.exists(eval_dir): os.makedirs(eval_dir)
 
     all_samples = []
 
-    # Helper: Load samples and tag their current location
     def load_samples(meta_path, source_split):
         if os.path.exists(meta_path):
             with open(meta_path, 'r') as f:
@@ -508,15 +535,12 @@ def split_and_upload(args):
     
     print(f"New distribution -> Train: {len(train_set)} | Eval: {len(eval_set)}")
 
-    # Helper: Move files and write metadata
     def process_split(sample_list, target_split, target_dir, target_meta_path):
-        # Open in write mode to overwrite old metadata
         with open(target_meta_path, 'w') as f:
             for entry in sample_list:
                 current_split = entry.pop('_current_split')
                 fname = entry['file_name']
                 
-                # Move file if it's not in the right folder
                 if current_split != target_split:
                     src_path = os.path.join(LOCAL_DATASET_ROOT, current_split, fname)
                     dst_path = os.path.join(target_dir, fname)
@@ -531,18 +555,9 @@ def split_and_upload(args):
     process_split(train_set, "train", train_dir, train_meta)
     process_split(eval_set, "eval", eval_dir, eval_meta)
 
-    # Update README
     readme_path = os.path.join(LOCAL_DATASET_ROOT, "README.md")
     with open(readme_path, "w") as f:
-        f.write("---\n")
-        f.write("configs:\n")
-        f.write("- config_name: default\n")
-        f.write("  data_files:\n")
-        f.write("  - split: train\n")
-        f.write("    path: train/metadata.jsonl\n")
-        f.write("  - split: test\n")
-        f.write("    path: eval/metadata.jsonl\n")
-        f.write("---\n")
+        f.write("---\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: train/metadata.jsonl\n  - split: test\n    path: eval/metadata.jsonl\n---\n")
 
     upload_prompt(args)
 
@@ -559,13 +574,14 @@ if __name__ == "__main__":
     train_parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
     train_parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     train_parser.add_argument("--epochs", type=int, default=100)
-    train_parser.add_argument("--batch_size", type=int, default=28)
+    train_parser.add_argument("--batch_size", type=int, default=10)
     train_parser.add_argument("--lr", type=float, default=1e-3)
 
     # Eval Command
     eval_parser = subparsers.add_parser("eval")
     eval_parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
     eval_parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
+    eval_parser.add_argument("--uri", type=str, default=None, help="Video file path or camera index")
 
     # Label Command
     label_parser = subparsers.add_parser("label")
