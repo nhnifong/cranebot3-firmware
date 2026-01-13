@@ -1470,27 +1470,8 @@ class AsyncObserver:
                     client = valid_anchor_clients[i]
                     results = extract_targets_from_heatmap(heatmap_np)
 
-                    # generate debug image
-                    # img_display = bgr_image.copy()
-                    # heatmap_vis = (heatmap_np * 255).astype(np.uint8)
-                    # heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
-                    # overlay = cv2.addWeighted(img_display, 0.8, heatmap_color, 0.4, 0)
-                    # for x, y, confidence in results:
-                    #     x = int(x * HM_IMAGE_RES[0])
-                    #     y = int(y * HM_IMAGE_RES[1])
-                    #     box_size = 20
-                    #     top_left =     (x - box_size, y - box_size)
-                    #     bottom_right = (x + box_size, y + box_size)
-                    #     cv2.rectangle(overlay, top_left, bottom_right, (0, 255, 0), 2)
-                    #     conf_text = f"{confidence:.2f}"
-                    #     cv2.putText(overlay, conf_text, (x - 10, y - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                    # cv2.imwrite(f'debug_image_{client.anchor_num}.jpg', overlay)
-
-                    if len(results) > 0 and client.anchor_num==0:
+                    if len(results) > 0:
                         targets2d = results[:,:2] # the third number is confidence
-                        targets2d = np.array([
-                            [0.1,0.1], [0.1,0.9], [0.9,0.9], [0.9,0.1], 
-                        ], dtype=float)
                         # if this is an anchor, project points to floor using anchor's specific pose
                         floor_points = project_pixels_to_floor(targets2d, client.camera_pose, self.config.camera_cal)
                         all_floor_target_arrs.append(floor_points)
