@@ -137,7 +137,7 @@ class AsyncObserver:
         self.last_user_move_time = time.time()
         self.episode_control_events = set()
         self.named_positions = {}
-        self.dobby_model = None
+        self.target_model = None
         self.centering_model = None
         self.predicted_lateral_vector = None
         # targets
@@ -250,50 +250,24 @@ class AsyncObserver:
         self.send_tq_to_ui()
 
     def submitTargets(self):
-        """snapshot any active cameras
-            project the targets from the floor to those camera's normalized image coords
-            save the data in the target dataset
-        """
-        targets = self.target_queue.get_targets_as_array()
-        if len(targets) == 0:
-            return
-
-        images = {}
+        """snapshot any active cameras at 1920x1080 and save images in the raw dir"""
+        images = []
         for anchor in self.anchors:
-            if anchor.last_frame_resized is not None:
-                images[anchor.anchor_num] = (anchor.last_frame_resized.copy(), anchor.camera_pose)
-            elif anchor.frame is not None:
-                resized = cv2.resize(anchor.frame, (640, 360), interpolation=cv2.INTER_AREA)
-                images[anchor.anchor_num] = (resized, anchor.camera_pose)
+            if anchor.frame is not None:
+                images.append(anchor.frame.copy())
 
-        def save_data(targets, images):
-            directory_path = Path(USER_TARGETS_DIR)
+        def save_data(images):
+            directory_path = Path("target_heatmap_data_unlabeled")
             directory_path.mkdir(exist_ok=True, parents=True)
             
-            with open(METADATA_PATH, 'a') as f:
-                for anchor_num, tup in images.items():
-                    img, cam_pose = tup
+            for img in images:
+                img_filename = f"{str(uuid.uuid4())}.jpg"
+                # write the image
+                rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img_full_path = directory_path / img_filename
+                cv2.imwrite(str(img_full_path), rgb_image)
 
-                    # project the points. pass only x and y
-                    uv_coords = project_floor_to_pixels(targets[:,:2], cam_pose, self.config.camera_cal)                    
-                    if len(uv_coords) == 0:
-                        continue
-
-                    img_filename = f"{str(uuid.uuid4())}.jpg"
-
-                    # Format: {"file_name": "1.jpg", "points": [[x1,y1], [x2,y2]]}
-                    metadata_entry = {
-                        "file_name": img_filename,
-                        "points": uv_coords.tolist()
-                    }
-                    f.write(json.dumps(metadata_entry) + "\n")
-                    
-                    # write the image
-                    rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                    img_full_path = directory_path / img_filename
-                    cv2.imwrite(str(img_full_path), rgb_image)
-
-        threading.Thread(target=save_data, args=(targets, images)).start()
+        threading.Thread(target=save_data, args=(images,)).start()
 
     def _handle_scale_room(self, item: control.ScaleRoom):
         if item.scale:
@@ -805,7 +779,6 @@ class AsyncObserver:
                     # We need a way to know that, but for now, you'll have to make sure only one is one at a time while discovering.
                     # After discovery, it should be ok to have more than one on at a time.
                     print(f"Discovered another anchor server on the network, but we already know of 4 {key} {address}")
-                    print(f"existing anchors: {self.config.anchor_num_map.keys()}")
                     return None
             self.config.anchors[anchor_num].num = anchor_num
             self.config.anchors[anchor_num].service_name = key
@@ -1397,16 +1370,15 @@ class AsyncObserver:
 
     async def run_perception(self):
         """
-        Run the dobby network on preferred cameras at a modest rate.
+        Run the target heatmap network on preferred cameras at a modest rate.
         Send heatmaps to UI.
         Store target candidates and confidence.
         """
-        DOBBY_MODEL_PATH = "trainer/models/sock_tracker.pth"
+        TARGET_HM_MODEL_PATH = "trainer/models/target_heatmap.pth"
         CENTERING_MODEL_PATH = "trainer/models/square_centering.pth"
-        IMAGE_RES = (640, 360)
         DEVICE = "cpu"
         LOOP_DELAY = 0.1
-        RUN_DOBBY_EVERY = 5
+        FIND_TARGETS_EVERY = 5 # loops
 
         # do nothing until at least one camera from the preferred set is producing frames
         have_gripper_frames = False
@@ -1418,15 +1390,14 @@ class AsyncObserver:
                 if client.anchor_num in self.config.preferred_cameras and client.last_frame_resized is not None:
                     have_anchor_frames = True
 
-        if self.dobby_model is None:
+        if self.target_model is None:
             import torch
-            from trainer.dobby import DobbyNet
-            from trainer.dobby_eval import extract_targets_from_heatmap
+            from trainer.target_heatmap import extract_targets_from_heatmap, TargetHeatmapNet, HM_IMAGE_RES
             DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"Loading model from {DOBBY_MODEL_PATH}...")
-            self.dobby_model = DobbyNet().to(DEVICE)
-            self.dobby_model.load_state_dict(torch.load(DOBBY_MODEL_PATH, map_location=DEVICE))
-            self.dobby_model.eval()
+            print(f"Loading model from {TARGET_HM_MODEL_PATH}...")
+            self.target_model = TargetHeatmapNet().to(DEVICE)
+            self.target_model.load_state_dict(torch.load(TARGET_HM_MODEL_PATH, map_location=DEVICE))
+            self.target_model.eval()
 
         if self.centering_model is None:
             import torch
@@ -1451,9 +1422,9 @@ class AsyncObserver:
 
             if self.gripper_client is not None and self.gripper_client.last_frame_resized is not None:
 
-                # seems to work better this way. TODO if the network was trained on BGR, flip it. train it on RGB so we don't have to do this here.
-                rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
-                gripper_image_tensor = torch.from_numpy(rgb_image).permute(2, 0, 1).float() / 255.0
+                # network was trained on BGR
+                bgr_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
+                gripper_image_tensor = torch.from_numpy(bgr_image).permute(2, 0, 1).float() / 255.0
                 if gripper_image_tensor is not None:
                     gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
                     with torch.no_grad():
@@ -1471,7 +1442,7 @@ class AsyncObserver:
                             prob_holding = self.gripper_sees_holding,
                         ))
 
-            if counter < RUN_DOBBY_EVERY:
+            if counter < FIND_TARGETS_EVERY:
                 continue
             counter = 0
 
@@ -1482,7 +1453,8 @@ class AsyncObserver:
                 if client.last_frame_resized is None or client.anchor_num not in self.config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
-                img_tensor = torch.from_numpy(client.last_frame_resized).permute(2, 0, 1).float() / 255.0
+                bgr_image = cv2.cvtColor(client.last_frame_resized, cv2.COLOR_BGR2RGB)
+                img_tensor = torch.from_numpy(bgr_image).permute(2, 0, 1).float() / 255.0
                 img_tensors.append(img_tensor)
                 valid_anchor_clients.append(client)
             if img_tensors:
@@ -1490,15 +1462,35 @@ class AsyncObserver:
                 all_floor_target_arrs = []
                 batch = torch.stack(img_tensors).to(DEVICE)
                 with torch.no_grad():
-                    heatmaps_out = self.dobby_model(batch)
+                    heatmaps_out = self.target_model(batch)
 
                 # Shape: (Batch, 1, H, W) -> (Batch, H, W)
                 heatmaps_np = heatmaps_out.squeeze(1).cpu().numpy() # this is the blocking call
                 for i, heatmap_np in enumerate(heatmaps_np):
                     client = valid_anchor_clients[i]
                     results = extract_targets_from_heatmap(heatmap_np)
-                    if len(results) > 0:
+
+                    # generate debug image
+                    # img_display = bgr_image.copy()
+                    # heatmap_vis = (heatmap_np * 255).astype(np.uint8)
+                    # heatmap_color = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+                    # overlay = cv2.addWeighted(img_display, 0.8, heatmap_color, 0.4, 0)
+                    # for x, y, confidence in results:
+                    #     x = int(x * HM_IMAGE_RES[0])
+                    #     y = int(y * HM_IMAGE_RES[1])
+                    #     box_size = 20
+                    #     top_left =     (x - box_size, y - box_size)
+                    #     bottom_right = (x + box_size, y + box_size)
+                    #     cv2.rectangle(overlay, top_left, bottom_right, (0, 255, 0), 2)
+                    #     conf_text = f"{confidence:.2f}"
+                    #     cv2.putText(overlay, conf_text, (x - 10, y - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    # cv2.imwrite(f'debug_image_{client.anchor_num}.jpg', overlay)
+
+                    if len(results) > 0 and client.anchor_num==0:
                         targets2d = results[:,:2] # the third number is confidence
+                        targets2d = np.array([
+                            [0.1,0.1], [0.1,0.9], [0.9,0.9], [0.9,0.1], 
+                        ], dtype=float)
                         # if this is an anchor, project points to floor using anchor's specific pose
                         floor_points = project_pixels_to_floor(targets2d, client.camera_pose, self.config.camera_cal)
                         all_floor_target_arrs.append(floor_points)
