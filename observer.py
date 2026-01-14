@@ -241,7 +241,11 @@ class AsyncObserver:
     def _handle_add_cam_target(self, item: control.AddTargetFromAnchorCam):
         # Add the target
         targets2d = [[item.img_norm_x, item.img_norm_y]]
-        floor_points = project_pixels_to_floor(targets2d, self.anchors[item.anchor_num].camera_pose, self.config.camera_cal)
+        match_anchors = matching_items = [x for x in self.anchors if x.anchor_num == item.anchor_num]
+        if len(match_anchors) != 1:
+            return
+        floor_points = project_pixels_to_floor(targets2d, match_anchors[0].camera_pose, self.config.camera_cal)
+        print(f'adding target at floor point ({floor_points}) from image point ({targets2d[0]}) in anchor cam {item.anchor_num}')
         if (len(floor_points) == 1):
             if item.target_id is not None:
                 self.target_queue.set_target_position(item.target_id, floor_points[0])
