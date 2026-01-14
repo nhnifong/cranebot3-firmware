@@ -16,7 +16,7 @@ tests/last_dataset
 dataset_heatmap/
 laundry_spots_data/
 gant_pos.npy
-square_centering_data_unlabled/
+square_centering_data_unlabeled/
 square_centering_data/
 multi_view_data/
 trainer/models/multiview_4cam.pth
