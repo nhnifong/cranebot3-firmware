@@ -12,6 +12,7 @@ from huggingface_hub import snapshot_download, HfApi, create_repo
 import random
 import uuid
 import shutil
+import subprocess
 
 # ==========================================
 # CONFIGURATION
@@ -280,8 +281,38 @@ def eval_mode(args):
             print(f"Error: Could not open video source {source}")
             return
 
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps is None or fps <= 0 or np.isnan(fps):
+            fps = 30.0
+        print(f"Stream FPS: {fps}")
+
         cv2.resizeWindow(window_name, HM_IMAGE_RES[0], HM_IMAGE_RES[1])
         print("Controls: [Q] Quit")
+
+        # FFMPEG Recording Setup
+        recorder = None
+        if args.record:
+            # We are writing raw BGR24 frames to stdin
+            command = [
+                'ffmpeg',
+                '-y',                    # Overwrite output
+                '-f', 'rawvideo',        # Input format
+                '-vcodec', 'rawvideo',
+                '-s', f'{HM_IMAGE_RES[0]}x{HM_IMAGE_RES[1]}', # Size
+                '-pix_fmt', 'bgr24',     # OpenCV uses BGR
+                '-r', str(fps),          # Input framerate
+                '-i', '-',               # Read from stdin
+                '-c:v', 'libx264',       # Output codec
+                '-pix_fmt', 'yuv420p',   # Pixel format for compatibility
+                '-preset', 'fast',       # Encoding speed
+                args.record              # Output filename
+            ]
+            print(f"Starting recording: {' '.join(command)}")
+            try:
+                recorder = subprocess.Popen(command, stdin=subprocess.PIPE)
+            except FileNotFoundError:
+                print("Error: ffmpeg not found. Please install ffmpeg to record.")
+                return
 
         while True:
             ret, frame = cap.read()
@@ -294,12 +325,24 @@ def eval_mode(args):
             
             overlay = run_inference(model, frame_resized)
             
+            # Write to ffmpeg stdin
+            if recorder:
+                try:
+                    recorder.stdin.write(overlay.tobytes())
+                except BrokenPipeError:
+                    print("FFmpeg recording stopped unexpectedly.")
+                    recorder = None
+
             cv2.imshow(window_name, overlay)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
         
         cap.release()
+        if recorder:
+            recorder.stdin.close()
+            recorder.wait()
+            print(f"Saved recording to {args.record}")
         
     # Mode 2: Dataset Evaluation
     else:
@@ -582,6 +625,8 @@ if __name__ == "__main__":
     eval_parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
     eval_parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
     eval_parser.add_argument("--uri", type=str, default=None, help="Video file path or camera index")
+    eval_parser.add_argument("--record", type=str, default=None, help="Path to save MP4 recording (only works with --uri)")
+
 
     # Label Command
     label_parser = subparsers.add_parser("label")
