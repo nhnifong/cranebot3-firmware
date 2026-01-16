@@ -22,6 +22,8 @@ GEAR_RATIO = 10/45 # a finger lever makes this many revolutions per revolution o
 FINGER_TRAVEL_DEG = 59 # actually 60 but need small margin of space at wide open. 
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 
+i2c = busio.I2C(board.SCL, board.SDA)
+
 input("Plug only the wrist motor into the board and press Enter...")
 # set id of this motor to 2. let the finger motor id remain 1, the factory setting.
 sts = SimpleSTS3215(port='/dev/serial0', timeout=0.5)
@@ -29,9 +31,11 @@ sts = SimpleSTS3215(port='/dev/serial0', timeout=0.5)
 # Perform a full scan (0-253) to ensure we don't accidentally broadcast to multiple motors
 # If we see ANY more than 1 motor, we abort to prevent ID collisions.
 print("Scanning for connected motors...")
-servos = sts.scan()
+servos = sts.scan(8)
 
-if len(servos) == 0:
+if len(servos) == 2 and (1 in servos and 2 in servos):
+    print("Servo IDs correct")
+elif len(servos) == 0:
     print("Error: No servos found. Check connections.")
     quit()
 elif len(servos) > 1:
@@ -49,23 +53,25 @@ else:
         sts.change_id(current_id, WRIST_MOTOR_ID)
 
 input("Plug in both motors and press Enter...")
+time.sleep(0.1)
+assert sts.ping(FINGER_MOTOR_ID), "Finger motor did not respond to ping"
+assert sts.ping(WRIST_MOTOR_ID), "Wrist motor did not respond to ping"
 
-assert sts.ping(FINGER_MOTOR_ID) "Finger motor did not respond to ping"
-assert sts.ping(WRIST_MOTOR_ID) "Wrist motor did not respond to ping"
-
+ads = ADS1015(i2c)
+pressure_sensor = AnalogIn(ads, ads1x15.Pin.A0)
 
 input("Press Enter to move gripper fingers...")
 # Find the position at which the gripper fingers touch.
 print(f"Calibrating finger servo...")
 sts.torque_enable(FINGER_MOTOR_ID, True)
 
-pos = sts.get_position(target_id)
+pos = sts.get_position(FINGER_MOTOR_ID)
 # open a few degrees in case fingers were already touching.
 sts.set_position(FINGER_MOTOR_ID, pos + 50)
 time.sleep(0.5)
 
 # confirm no pressure on finger pad
-assert pressure_sensor.value > 3 "Voltage too low on finger pad. Is pressure sensor connected?"
+assert pressure_sensor.value > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
 
 # slowly close until the fingerpad voltage drops below 2V
 sts.set_speed(FINGER_MOTOR_ID, -100)
