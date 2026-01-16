@@ -76,12 +76,13 @@ class RobotComponentServer:
         """
         logging.info('start streaming measurements')
         while True:
-            # add line lengths
-            meas = self.spooler.popMeasurements()
-            if len(meas) > 0:
-                if len(meas) > 50:
-                    meas = meas[:50]
-                self.update['line_record'] = meas
+            if self.spooler is not None:
+                # add line lengths
+                meas = self.spooler.popMeasurements()
+                if len(meas) > 0:
+                    if len(meas) > 50:
+                        meas = meas[:50]
+                    self.update['line_record'] = meas
 
             self.readOtherSensors()
 
@@ -180,21 +181,22 @@ class RobotComponentServer:
             message = await websocket.recv()
             update = json.loads(message)
 
-            if 'length_set' in update:
-                self.spooler.setTargetLength(update['length_set'])
-            if 'aim_speed' in update:
-                self.spooler.setAimSpeed(update['aim_speed'])
-            if 'host_time' in update:
-                logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
-            if 'jog' in update:
-                self.spooler.jogRelativeLen(float(update['jog']))
-            if 'reference_length' in update:
-                self.spooler.setReferenceLength(float(update['reference_length']))
-            if 'set_zero_angle' in update:
-                self.spooler.sc.set_zero_angle(float(update['set_zero_angle']))
             if 'set_config_vars' in update:
                 self.conf.update(update['set_config_vars'])
-                pass
+            if 'host_time' in update:
+                logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
+
+            if self.spooler is not None:
+                if 'length_set' in update:
+                    self.spooler.setTargetLength(update['length_set'])
+                if 'aim_speed' in update:
+                    self.spooler.setAimSpeed(update['aim_speed'])
+                if 'jog' in update:
+                    self.spooler.jogRelativeLen(float(update['jog']))
+                if 'reference_length' in update:
+                    self.spooler.setReferenceLength(float(update['reference_length']))
+                if 'set_zero_angle' in update:
+                    self.spooler.sc.set_zero_angle(float(update['set_zero_angle']))
 
             # defer to specific server subclass
             result = await self.processOtherUpdates(update,tg)
@@ -217,8 +219,9 @@ class RobotComponentServer:
         except* (ConnectionClosedOK, ConnectionClosedError):
             logging.info("Client disconnected")
         logging.info("All tasks in handler task group completed")
-        # stop motor just in case some task left it running
-        self.spooler.setAimSpeed(0)
+        # stop spool motors just in case some task left it running
+        if self.spooler is not None:
+            self.spooler.setAimSpeed(0)
 
 
     async def main(self, port=8765, name=None):
@@ -234,7 +237,8 @@ class RobotComponentServer:
         asyncio.create_task(self.register_mdns_service(f"123.{self.service_name}", "_http._tcp.local.", port))
 
         # thread for controlling stepper motor
-        spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
+        if self.spooler is not None:
+            spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
 
         # Call a function which subclasses implement to start tasks at startup that should remain running even if clients disconnect.
         # tasks started this way should run only while self.run_server is true
@@ -262,8 +266,9 @@ class RobotComponentServer:
         if self.run_server:
             logging.info('\nStopping detection listener task')
             self.run_server = False
-            logging.info('Stopping Spool Motor')
-            self.spooler.fastStop()
+            if self.spooler is not None:
+                logging.info('Stopping Spool Motor')
+                self.spooler.fastStop()
 
     def get_wifi_ip(self):
         """Gets the Raspberry Pi's IP address on the Wi-Fi interface."""
