@@ -10,6 +10,9 @@ def fromnp(arr: np.ndarray):
 def clamp(x,small,big):
     return max(min(x,big),small)
 
+def remap(x, ilow, ihigh, olow, ohigh):
+    return (x-ilow) / (ihigh-ilow) * (ohigh-olow) + olow 
+
 def poseTupleToProto(p):
     return common.Pose(rotation=fromnp(p[0]), position=fromnp(p[1]))
 
