@@ -356,7 +356,7 @@ if __name__ == "__main__":
 
     # --- Default Mode: Scan and Test IDs 1-8 ---
     else:
-        servos = sts.scan(8).
+        servos = sts.scan(8)
         
         if not servos:
             print("No servos found. Check power/wiring.")
