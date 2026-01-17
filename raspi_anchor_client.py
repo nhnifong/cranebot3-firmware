@@ -425,7 +425,7 @@ class ComponentClient:
                 return
 
 CAL_MARKERS = set(['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'])
-OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'gamepad-back', 'hamper-back', 'trash-back'])
+OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'gamepad_back', 'hamper_back', 'trash_back'])
 
 class RaspiAnchorClient(ComponentClient):
     def __init__(self, address, port, anchor_num, datastore, ob, pool, stat, telemetry_env):

@@ -112,7 +112,7 @@ class GripperArpServer(RobotComponentServer):
         Voltage at no pressure will be close to 3.3 but may require calibration.
         Voltage decreased to as little as 1v with a strong grip.
         """
-        return remap(self.pressure_sensor.value, 3.3, 0, 0, 1)
+        return remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
 
 
     def startOtherTasks(self):

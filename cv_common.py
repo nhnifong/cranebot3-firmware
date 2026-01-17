@@ -111,11 +111,17 @@ MARKER_NAMES = [
     'cal_assist_1',
     'cal_assist_2',
     'cal_assist_3',
-]
+    'gamepad_back',
+    'hamper_back',
+    'trash_back',
+    'toys',
+    'toys_back',
+] # next tag id 13
 
 # AprilTag images are typically downloaded, not generated in code.
-# You can find printable PNGs for all standard families here:
-# https://github.com/AprilRobotics/apriltag-imgs
+# We are using the tag36h11 tag family.
+# The images for new tags can be downloaded at
+# https://github.com/AprilRobotics/apriltag-imgs/tree/master/tag36h11
 
 DEFAULT_MARKER_SIZE = 0.08948 # The default side length of markers in meters
 # Define the physical size of any markers that are not the default size.
