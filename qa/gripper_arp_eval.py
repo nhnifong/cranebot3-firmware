@@ -6,6 +6,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import time
+import socket
 import subprocess
 import board
 import busio
@@ -67,7 +68,8 @@ sts.torque_enable(FINGER_MOTOR_ID, True)
 
 pos = sts.get_position(FINGER_MOTOR_ID)
 # open a few degrees in case fingers were already touching.
-sts.set_position(FINGER_MOTOR_ID, pos + 50)
+rel = 100
+sts.set_position(FINGER_MOTOR_ID, pos + rel)
 time.sleep(0.5)
 
 # confirm no pressure on finger pad
@@ -76,13 +78,15 @@ assert v > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
 
 # slowly close until the fingerpad voltage drops below 2V
 start = time.time()
-rel = 50
+load = 0
 while v > 2.0 and time.time() < start+10:
     sts.set_position(FINGER_MOTOR_ID, pos + rel)
     rel -= 10
     time.sleep(0.05)
-    v = pressure_sensor.voltage 
-    print('voltage = {v}')
+    v = pressure_sensor.voltage
+    data = sts.get_feedback(FINGER_MOTOR_ID)
+    load = data["load"]
+    print(f'voltage={v}, load={load}')
 sts.set_speed(FINGER_MOTOR_ID, 0)
 
 finger_closed_pos = sts.get_position(FINGER_MOTOR_ID)
@@ -90,7 +94,7 @@ print(f"Motor encoder position at finger touch = {finger_closed_pos}")
 finger_open_pos = finger_closed_pos + FINGER_TRAVEL_STEPS
 
 # move back to a neutral position
-sts.set_position(FINGER_MOTOR_ID, int(closed+FINGER_TRAVEL_STEPS*0.3))
+sts.set_position(FINGER_MOTOR_ID, int(finger_closed_pos+FINGER_TRAVEL_STEPS*0.3))
 time.sleep(0.75)
 sts.torque_enable(FINGER_MOTOR_ID, False)
 
