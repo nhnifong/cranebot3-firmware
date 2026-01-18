@@ -71,6 +71,7 @@ pos = sts.get_position(FINGER_MOTOR_ID)
 rel = 100
 sts.set_position(FINGER_MOTOR_ID, pos + rel)
 time.sleep(0.5)
+data = sts.get_feedback(FINGER_MOTOR_ID)
 
 # confirm no pressure on finger pad
 v = pressure_sensor.voltage
@@ -79,7 +80,7 @@ assert v > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
 # slowly close until the fingerpad voltage drops below 2V
 start = time.time()
 load = 0
-while v > 2.0 and time.time() < start+10:
+while v > 3.0 and time.time() < start+10:
     sts.set_position(FINGER_MOTOR_ID, pos + rel)
     rel -= 10
     time.sleep(0.05)
@@ -87,6 +88,8 @@ while v > 2.0 and time.time() < start+10:
     data = sts.get_feedback(FINGER_MOTOR_ID)
     load = data["load"]
     print(f'voltage={v}, load={load}')
+    if load < 1000: # ignore load values over 1000, they're not real
+        assert load<450, "motor load too high while no finger pressure detected"
 sts.set_speed(FINGER_MOTOR_ID, 0)
 
 finger_closed_pos = sts.get_position(FINGER_MOTOR_ID)
