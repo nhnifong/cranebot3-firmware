@@ -22,6 +22,9 @@ source venv/bin/activate
 pip3 install -r requirements_raspi.txt
 deactivate
 
+# make sure we will be able to perform network manager changes without running as root
+# usermod -aG netdev,plugdev $SUDO_USER # not working yet
+
 # Create service file
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
@@ -33,7 +36,7 @@ StartLimitIntervalSec=0
 Type=simple
 Restart=always
 RestartSec=1
-User=$SUDO_USER
+User=root
 WorkingDirectory=$APP_DIR
 ExecStart=$VENV_DIR/bin/python3 component_server.py
 Restart=always
