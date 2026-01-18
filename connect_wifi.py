@@ -7,7 +7,9 @@ import numpy as np
 # sudo apt install python3-picamera2
 from picamera2 import Picamera2
 
-import zxingcpp
+# Pyzbar for decoding
+# sudo apt-get install libzbar0
+from pyzbar.pyzbar import decode
 
 async def ensure_connection():
     """
@@ -61,8 +63,7 @@ async def monitor_wifi_status(connected_event):
             capture_output=True,
             text=True
         )
-        testmode=False
-        
+        testmode = False
         # Regex to match 'GENERAL.STATE: 100 (connected)'
         if not testmode and re.search(r'GENERAL\.STATE:\s*100 \(connected\)', result.stdout):
             conn_match = re.search(r'GENERAL\.CONNECTION:\s*(.+)', result.stdout)
@@ -90,29 +91,35 @@ async def scan_and_configure_wifi(connected_event):
 
     try:
         while not connected_event.is_set():
-            # Capture raw RGB array. Shape is (480, 640, 3)
+            # Capture raw RGB array
+            # shape is (480, 640, 3)
             frame = picam2.capture_array()
             
+            # Extract the Green channel only.
+            # frame[:, :, 1] takes the 2nd channel (Green) from every pixel.
+            # This creates a 2D array (480, 640) that acts as 'Greyscale'.
+            # pyzbar handles 2D numpy arrays as strictly grayscale (Y800).
+            gray_view = frame[:, :, 1]
+
             try:
-                # read_barcodes returns a list of results
-                results = zxingcpp.read_barcodes(frame)
+                # Pass the numpy slice directly to pyzbar
+                decoded_objects = decode(gray_view)
                 
-                for result in results:
-                    qr_data = result.text
+                for obj in decoded_objects:
+                    qr_data = obj.data.decode('utf-8')
                     if qr_data.startswith("WIFI:"):
-                        print(f"WiFi QR code detected: {qr_data[:20]}...")
+                        print("WiFi QR code detected.")
                         
                         # Attempt to connect
                         success = await connect_via_nmcli(qr_data)
                         
                         if success:
                             print("Network configuration applied. Waiting for connection...")
-                            # Pause here to let the monitor task verify the connection
+                            # Pause to allow the monitor task to verify the connection
                             await asyncio.sleep(10)
 
-            except Exception:
-                # Print full traceback for debugging, do not swallow the error
-                traceback.print_exc()
+            except Exception as e:
+                print(f"Error during scan loop: {e}")
 
             # Yield to event loop
             await asyncio.sleep(1)
