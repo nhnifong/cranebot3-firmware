@@ -88,14 +88,20 @@ class GripperArpServer(RobotComponentServer):
             os.remove('offsets.pickle')
 
     def readOtherSensors(self):
+        # if necessary this function could be faster by waiting on all this IO at the same time.
+
+        # 1.35 ms to read data from both motors with two synchronous calls
+        finger_data = self.motors.get_feedback(FINGER)
+        wrist_data = self.motors.get_feedback(WRIST)
+
+        pressure_v = remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
 
         self.update['grip_sensors'] = {
             'time': time.time(),
             # 'quat': self.imu.quaternion,
-            'fing_v': self.hat.gpio_pin_value(PRESSURE_PIN),
-            # we don't have an encoder that tells us the true finger angle. fing_a is only what it was last commanded to be.
-            # this could be easily remedied by using a smart servo or by adding another mouse wheel encoder to the IHM's B port
-            'fing_a': self.last_finger_angle,
+            'fing_v': pressure_v,
+            'fing_a': finger_data['position'],
+            'wrist_a': wrist_data['position'],
         }
 
         if self.rangefinder.data_ready:
@@ -104,16 +110,6 @@ class GripperArpServer(RobotComponentServer):
             if distance:
                 self.rangefinder.clear_interrupt()
                 self.update['grip_sensors']['range'] = distance / 100
-
-    def readPressure(self):
-        """
-        Report finger pressure as a value beween 0 and 1
-
-        Voltage at no pressure will be close to 3.3 but may require calibration.
-        Voltage decreased to as little as 1v with a strong grip.
-        """
-        return remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
-
 
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
