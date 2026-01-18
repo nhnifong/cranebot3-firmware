@@ -10,3 +10,4 @@ adafruit-circuitpython-bno08x==1.2.9
 adafruit-circuitpython-vl53l1x==1.2.2
 adafruit-circuitpython-ads1x15==3.0.2
 RPi.GPIO==0.7.1
+zxing-cpp==2.3.0

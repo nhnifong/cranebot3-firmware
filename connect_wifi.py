@@ -3,13 +3,11 @@ import subprocess
 import re
 import numpy as np
 
-# New import for Picamera2
+# import for Picamera2
+# sudo apt install python3-picamera2
 from picamera2 import Picamera2
 
-# Pyzbar for decoding
-# must run
-# sudo apt-get install libzbar0
-from pyzbar.pyzbar import decode
+import zxingcpp
 
 async def ensure_connection():
     """
@@ -22,7 +20,7 @@ async def ensure_connection():
 
     # Task 1: Monitor for connection
     monitor_task = asyncio.create_task(monitor_wifi_status(connected_event))
-	print("Checking for existing wifi connection...")
+    print("Checking for existing wifi connection...")
 
     try:
         # Wait up to 10 seconds for the monitor task to find a connection
@@ -63,9 +61,10 @@ async def monitor_wifi_status(connected_event):
             capture_output=True,
             text=True
         )
+        testmode=False
         
         # Regex to match 'GENERAL.STATE: 100 (connected)'
-        if re.search(r'GENERAL\.STATE:\s*100 \(connected\)', result.stdout):
+        if not testmode and re.search(r'GENERAL\.STATE:\s*100 \(connected\)', result.stdout):
             conn_match = re.search(r'GENERAL\.CONNECTION:\s*(.+)', result.stdout)
             conn_name = conn_match.group(1) if conn_match else "Unknown"
             
@@ -91,35 +90,29 @@ async def scan_and_configure_wifi(connected_event):
 
     try:
         while not connected_event.is_set():
-            # Capture raw RGB array
-            # shape is (480, 640, 3)
+            # Capture raw RGB array. Shape is (480, 640, 3)
             frame = picam2.capture_array()
             
-            # Extract the Green channel only.
-            # frame[:, :, 1] takes the 2nd channel (Green) from every pixel.
-            # This creates a 2D array (480, 640) that acts as 'Greyscale'.
-            # pyzbar handles 2D numpy arrays as strictly grayscale (Y800).
-            gray_view = frame[:, :, 1]
-
             try:
-                # Pass the numpy slice directly to pyzbar
-                decoded_objects = decode(gray_view)
+                # read_barcodes returns a list of results
+                results = zxingcpp.read_barcodes(frame)
                 
-                for obj in decoded_objects:
-                    qr_data = obj.data.decode('utf-8')
+                for result in results:
+                    qr_data = result.text
                     if qr_data.startswith("WIFI:"):
-                        print("WiFi QR code detected.")
+                        print(f"WiFi QR code detected: {qr_data[:20]}...")
                         
                         # Attempt to connect
                         success = await connect_via_nmcli(qr_data)
                         
                         if success:
                             print("Network configuration applied. Waiting for connection...")
-                            # Pause to allow the monitor task to verify the connection
+                            # Pause here to let the monitor task verify the connection
                             await asyncio.sleep(10)
 
-            except Exception as e:
-                print(f"Error during scan loop: {e}")
+            except Exception:
+                # Print full traceback for debugging, do not swallow the error
+                traceback.print_exc()
 
             # Yield to event loop
             await asyncio.sleep(1)
