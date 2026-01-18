@@ -2,6 +2,7 @@ import asyncio
 import subprocess
 import re
 import numpy as np
+import logging
 
 # import for Picamera2
 # sudo apt install python3-picamera2
@@ -23,21 +24,21 @@ async def ensure_connection():
 
     # Task 1: Monitor for connection
     monitor_task = asyncio.create_task(monitor_wifi_status(connected_event))
-    print("Checking for existing wifi connection...")
+    logging.info("Checking for existing wifi connection...")
 
     try:
         # Wait up to 10 seconds for the monitor task to find a connection
         await asyncio.wait_for(connected_event.wait(), timeout=10.0)
-        print("Existing connection confirmed.")
+        logging.info("Existing connection confirmed.")
         return True
 
     except asyncio.TimeoutError:
-        print("No connection found after 10 seconds. Starting QR Scanner...")
+        logging.info("No connection found after 10 seconds. Starting QR Scanner...")
     
     # Task 2: Scan for QR codes
     scanner_task = asyncio.create_task(scan_and_configure_wifi(connected_event))
 
-    print("Starting WiFi connection tasks...")
+    logging.info("Starting WiFi connection tasks...")
 
     # Wait until the monitor task signals that we are connected
     await connected_event.wait()
@@ -48,9 +49,9 @@ async def ensure_connection():
     try:
         await scanner_task
     except asyncio.CancelledError:
-        print("Scanner task stopped.")
+        logging.info("Scanner task stopped.")
 
-    print("WiFi connection established.")
+    logging.info("WiFi connection established.")
     return True
 
 async def monitor_wifi_status(connected_event):
@@ -70,7 +71,7 @@ async def monitor_wifi_status(connected_event):
             conn_match = re.search(r'GENERAL\.CONNECTION:\s*(.+)', result.stdout)
             conn_name = conn_match.group(1) if conn_match else "Unknown"
             
-            print(f"Monitor detected active connection: {conn_name}")
+            logging.info(f"Monitor detected active connection: {conn_name}")
             connected_event.set()
             return
         
@@ -90,7 +91,7 @@ async def scan_and_configure_wifi(connected_event):
     # enable continuous autofocus
     picam2.set_controls({"AfMode": controls.AfModeEnum.Continuous})
 
-    print("Camera scanning for QR codes (Picamera2 / Direct Numpy)...")
+    logging.info("Camera scanning for QR codes (Picamera2 / Direct Numpy)...")
 
     try:
         while not connected_event.is_set():
@@ -111,18 +112,18 @@ async def scan_and_configure_wifi(connected_event):
                 for obj in decoded_objects:
                     qr_data = obj.data.decode('utf-8')
                     if qr_data.startswith("WIFI:"):
-                        print("WiFi QR code detected.")
+                        logging.info("WiFi QR code detected.")
                         
                         # Attempt to connect
                         success = await connect_via_nmcli(qr_data)
                         
                         if success:
-                            print("Network configuration applied. Waiting for connection...")
+                            logging.info("Network configuration applied. Waiting for connection...")
                             # Pause to allow the monitor task to verify the connection
                             await asyncio.sleep(10)
 
             except Exception as e:
-                print(f"Error during scan loop: {e}")
+                logging.info(f"Error during scan loop: {e}")
 
             # Yield to event loop
             await asyncio.sleep(1)
@@ -140,30 +141,30 @@ async def connect_via_nmcli(qr_string):
     pass_match = re.search(r'P:([^;]+)', qr_string)
     
     if not ssid_match or not pass_match:
-        print("Invalid WiFi QR format. Missing SSID or Password.")
+        logging.info("Invalid WiFi QR format. Missing SSID or Password.")
         return False
 
     ssid = ssid_match.group(1)
     password = pass_match.group(1)
 
     # Force a Rescan
-    print("Forcing Wi-Fi rescan to find new networks...")
+    logging.info("Forcing Wi-Fi rescan to find new networks...")
     subprocess.run(['nmcli', 'device', 'wifi', 'rescan'], capture_output=True)
     # Give the wifi card a moment to populate the list
     await asyncio.sleep(3)
 
     # Retry Loop
     for attempt in range(1, 4):
-        print(f"Attempting connection to '{ssid}' (Try {attempt}/3)...")
+        logging.info(f"Attempting connection to '{ssid}' (Try {attempt}/3)...")
         
         cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password]
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode == 0:
-            print("Successfully associated!")
+            logging.info("Successfully associated!")
             return True
         else:
-            print(f"Connection failed: {result.stderr.strip()}")
+            logging.info(f"Connection failed: {result.stderr.strip()}")
             # If the error is specific to "No network found", wait a bit longer and retry
             if "No network" in result.stderr:
                 await asyncio.sleep(3)
@@ -176,4 +177,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(ensure_connection())
     except KeyboardInterrupt:
-        print("Interrupted.")
+        logging.info("Interrupted.")
