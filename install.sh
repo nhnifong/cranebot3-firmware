@@ -13,7 +13,7 @@ fi
 
 # rpicam-apps is not present by default in the lite image we are using
 # is needed for libav support
-apt install python3-dev python3-virtualenv rpicam-apps
+apt install python3-dev python3-virtualenv rpicam-apps python3-picamera2 libzbar0
 
 if [[ ! -d "venv" ]]; then
   python3 -m venv --system-site-packages venv

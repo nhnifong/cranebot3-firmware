@@ -1,6 +1,7 @@
 import sys
 import logging
 import time
+from connect_wifi import ensure_connection
 
 # todo maybe there is a better solution to this but systemctl starts us too early and some zeroconf things dont work
 time.sleep(3)
@@ -22,25 +23,33 @@ sys.excepthook = handle_exception
 
 import asyncio
 
-with open('server.conf', 'r') as file:
-    for line in file:
-        line = line.strip()  # Remove leading/trailing whitespace
-        if not line.startswith('#') and line:  # Check if line is not a comment and is not empty
-            component_type = line
-            logging.info(f'Starting cranebot server of type {component_type}')
-            break
+async def main():
+    connected = await ensure_connection()
+    if not connected:
+        print('Wifi connection script failed to find a network')
+        quit()
 
-if component_type == 'anchor':
-    from anchor_server import RaspiAnchorServer
-    ras = RaspiAnchorServer(False)
-    asyncio.run(ras.main())
+    with open('server.conf', 'r') as file:
+        for line in file:
+            line = line.strip()  # Remove leading/trailing whitespace
+            if not line.startswith('#') and line:  # Check if line is not a comment and is not empty
+                component_type = line
+                logging.info(f'Starting cranebot server of type {component_type}')
+                break
 
-elif component_type == 'power anchor':
-    from anchor_server import RaspiAnchorServer
-    ras = RaspiAnchorServer(True)
-    asyncio.run(ras.main())
+    if component_type == 'anchor':
+        from anchor_server import RaspiAnchorServer
+        ras = RaspiAnchorServer(False)
+        r = await ras.main()
 
-elif component_type == 'gripper':
-    from gripper_server import RaspiGripperServer
-    gs = RaspiGripperServer()
-    asyncio.run(gs.main())
+    elif component_type == 'power anchor':
+        from anchor_server import RaspiAnchorServer
+        ras = RaspiAnchorServer(True)
+        r = await ras.main()
+
+    elif component_type == 'gripper':
+        from gripper_server import RaspiGripperServer
+        gs = RaspiGripperServer()
+        r = await gs.main()
+
+asyncio.run(main())

@@ -6,6 +6,7 @@ import numpy as np
 # import for Picamera2
 # sudo apt install python3-picamera2
 from picamera2 import Picamera2
+from libcamera import controls
 
 # Pyzbar for decoding
 # sudo apt-get install libzbar0
@@ -85,7 +86,9 @@ async def scan_and_configure_wifi(connected_event):
     # Configure camera for a moderate resolution RGB output
     config = picam2.create_preview_configuration(main={"size": (1920, 1080), "format": "RGB888"})
     picam2.configure(config)
-    picam2.start(controls={"AfMode": 2}) # enable continuous autofocus
+    picam2.start()
+    # enable continuous autofocus
+    picam2.set_controls({"AfMode": controls.AfModeEnum.Continuous})
 
     print("Camera scanning for QR codes (Picamera2 / Direct Numpy)...")
 
@@ -131,9 +134,8 @@ async def scan_and_configure_wifi(connected_event):
 async def connect_via_nmcli(qr_string):
     """
     Parses the QR string and invokes nmcli to connect.
+    Forces a rescan before connecting to ensure Hotspots are visible.
     """
-    # Regex to extract SSID and Password
-    # Format: WIFI:S:MySSID;T:WPA;P:MyPassword;;
     ssid_match = re.search(r'S:([^;]+)', qr_string)
     pass_match = re.search(r'P:([^;]+)', qr_string)
     
@@ -144,18 +146,31 @@ async def connect_via_nmcli(qr_string):
     ssid = ssid_match.group(1)
     password = pass_match.group(1)
 
-    print(f"Attempting connection to '{ssid}'...")
-    
-    # nmcli connects and saves the profile for future reboots automatically
-    cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password]
-    
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    
-    if result.returncode == 0:
-        return True
-    else:
-        print(f"Failed to connect: {result.stderr}")
-        return False
+    # Force a Rescan
+    print("Forcing Wi-Fi rescan to find new networks...")
+    subprocess.run(['nmcli', 'device', 'wifi', 'rescan'], capture_output=True)
+    # Give the wifi card a moment to populate the list
+    await asyncio.sleep(3)
+
+    # Retry Loop
+    for attempt in range(1, 4):
+        print(f"Attempting connection to '{ssid}' (Try {attempt}/3)...")
+        
+        cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("Successfully associated!")
+            return True
+        else:
+            print(f"Connection failed: {result.stderr.strip()}")
+            # If the error is specific to "No network found", wait a bit longer and retry
+            if "No network" in result.stderr:
+                await asyncio.sleep(3)
+            else:
+                await asyncio.sleep(1)
+                
+    return False
 
 if __name__ == "__main__":
     try:
