@@ -123,7 +123,7 @@ MARKER_NAMES = [
 # The images for new tags can be downloaded at
 # https://github.com/AprilRobotics/apriltag-imgs/tree/master/tag36h11
 
-DEFAULT_MARKER_SIZE = 0.08948 # The default side length of markers in meters
+DEFAULT_MARKER_SIZE = 0.0945 # The default side length of markers in meters
 # Define the physical size of any markers that are not the default size.
 SPECIAL_SIZES = {
     'origin': 0.1680, # size in meters
