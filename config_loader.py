@@ -41,7 +41,7 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     
     # Camera Calibration 
     config.camera_cal = nf_config.CameraCalibration()
-    config.camera_cal.resolution = nf_config.CameraCalibrationResolution(
+    config.camera_cal.resolution = nf_config.Resolution(
         width=1920, 
         height=1080
     )
