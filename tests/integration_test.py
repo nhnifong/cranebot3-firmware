@@ -1,27 +1,25 @@
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import asyncio
 import unittest
 import numpy as np
 from unittest.mock import patch, Mock, MagicMock, ANY
 from multiprocessing import Queue
-from anchor_server import RaspiAnchorServer
-from gripper_server import RaspiGripperServer
-from debug_motor import DebugMotor
-from observer import AsyncObserver
 from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2
 from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X
 from zeroconf import IPVersion
 from zeroconf.asyncio import AsyncZeroconf
-from mock_rpicam_vid import RPiCamVidMock, convert_pose
 from math import pi
-from cv_common import compose_poses
-import model_constants
 import pytest
+
+# from local tests folder
+from mock_rpicam_vid import RPiCamVidMock, convert_pose
+
+from nf_robot.robot.anchor_server import RaspiAnchorServer
+from nf_robot.robot.gripper_server import RaspiGripperServer
+from nf_robot.robot.debug_motor import DebugMotor
+from nf_robot.host.observer import AsyncObserver
+from nf_robot.common.cv_common import compose_poses
+import nf_robot.common.definitions as model_constants
 
 # this test starts four anchor servers and a gripper server and then starts up a full instances of the observer
 # which is expoected to discover and connect to all of them.

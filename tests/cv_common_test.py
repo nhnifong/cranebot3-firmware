@@ -1,22 +1,16 @@
 """
 Unit tests for common pose functions
 """
-
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-
 import unittest
 import numpy as np
 from math import pi
 import cv2
-from cv_common import *
-import model_constants
-from config_loader import load_config
-from util import *
 import copy
+
+import nf_robot.common.definitions as model_constants
+from nf_robot.common.cv_common import *
+from nf_robot.common.config_loader import load_config
+from nf_robot.common.util import *
 
 
 def p(l): # make a numpy array of floats out of the given list. for brevity

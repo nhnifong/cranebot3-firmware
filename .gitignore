@@ -6,6 +6,7 @@ cranebot.log
 gant_pos.npy
 conf*.json
 *.pt
+dist/
 collected_cal_data.pickle
 models_compressed/
 laundry_spots_data/

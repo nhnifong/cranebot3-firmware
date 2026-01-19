@@ -1,25 +1,21 @@
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import asyncio
 import unittest
 from unittest.mock import patch, Mock, ANY, MagicMock, AsyncMock
 from multiprocessing import Pool, Queue
 import numpy as np
 from functools import partial
-from observer import AsyncObserver
-from position_estimator import Positioner2
-from raspi_anchor_client import RaspiAnchorClient
-from raspi_gripper_client import RaspiGripperClient
 from math import pi
-from cv_common import invert_pose, compose_poses
-import model_constants
 import time
 from zeroconf import IPVersion, ServiceStateChange
 from zeroconf.asyncio import AsyncZeroconf
-from config_loader import create_default_config, config_has_any_address
+
+import nf_robot.common.definitions as model_constants
+from nf_robot.common.config_loader import create_default_config, config_has_any_address
+from nf_robot.host.observer import AsyncObserver
+from nf_robot.common.cv_common import invert_pose, compose_poses
+from nf_robot.host.position_estimator import Positioner2
+from nf_robot.host.anchor_client import RaspiAnchorClient
+from nf_robot.host.gripper_client import RaspiGripperClient
 
 # Todo, automate the following tests
 # with a blank config, start observer, allow it to discover the bots, assert it wrote the addresses in the config.
@@ -54,7 +50,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_pe.main = mock_pe_main
         self.mock_pe.anchor_points = self.anchor_points
         self.mock_pe.gant_pos = np.array([0.4, 0.5, 0.6])
-        self.patchers.append(patch('observer.Positioner2', self.mock_pe_class))
+        self.patchers.append(patch('nf_robot.host.observer.Positioner2', self.mock_pe_class))
 
         self.clients_refuse_connections = False
         self.clients_disconnect_abnormally = False
@@ -69,7 +65,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client.last_frame_resized = None
         self.mock_gripper_client.connected = False
 
-        self.patchers.append(patch('observer.RaspiGripperClient', self.mock_gripper_client_class))
+        self.patchers.append(patch('nf_robot.host.observer.RaspiGripperClient', self.mock_gripper_client_class))
 
         # Create four mock anchor clients
         self.mock_anchor_clients = [Mock(spec=RaspiAnchorClient) for _ in range(4)]
@@ -85,7 +81,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         d = MagicMock()
         d.async_cancel = self.instant_nothing
         self.async_service_browser_mock.return_value = d
-        self.mock_zc_service_browser_patch = patch('observer.AsyncServiceBrowser', self.async_service_browser_mock)
+        self.mock_zc_service_browser_patch = patch('nf_robot.host.observer.AsyncServiceBrowser', self.async_service_browser_mock)
         self.patchers.append(self.mock_zc_service_browser_patch)
 
         self.mock_zc_types_patch = patch('zeroconf.asyncio.AsyncZeroconfServiceTypes.async_find', new_callable=AsyncMock)
@@ -95,18 +91,17 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
 
         # The side_effect makes it so that the correct mock anchor client is returned
-        self.patchers.append(patch('observer.RaspiAnchorClient', side_effect=lambda a, b, num, d, e, f, g, : self.mock_anchor_clients[num]))
+        self.patchers.append(patch('nf_robot.host.observer.RaspiAnchorClient', side_effect=lambda a, b, num, d, e, f, g, h, : self.mock_anchor_clients[num]))
 
         self.mock_pool = MagicMock()
         self.mock_pool.__enter__.return_value = self.mock_pool
-        self.patchers.append(patch('observer.Pool', return_value=self.mock_pool))
+        self.patchers.append(patch('nf_robot.host.observer.Pool', return_value=self.mock_pool))
 
         for p in self.patchers:
             p.start()
 
         # Create observer with test default config (no components are known)
-        cfg = create_default_config()
-        self.ob = AsyncObserver(False, cfg)
+        self.ob = AsyncObserver(False, "conf_test.json")
         # before running main, set it's zeroconf instance to a mock
         self.zc = MagicMock()
         self.zc.async_close = self.instant_nothing
@@ -175,7 +170,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         full_name = f"{name}.{service_type}"
         
         # Mock the AsyncServiceInfo that observer.add_service will instantiate
-        with patch('observer.AsyncServiceInfo') as mock_service_info_cls:
+        with patch('nf_robot.host.observer.AsyncServiceInfo') as mock_service_info_cls:
             mock_instance = mock_service_info_cls.return_value
             mock_instance.async_request = AsyncMock()
             

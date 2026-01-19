@@ -1,23 +1,16 @@
 """
 Unit tests for spool controller
 """
-
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-
 import unittest
 import numpy as np
 from math import pi
 import asyncio
 import time
 
-from spools import *
-from debug_motor import DebugMotor
-from anchor_server import default_anchor_conf
-from gripper_server import default_gripper_conf
+from nf_robot.robot.spools import *
+from nf_robot.robot.debug_motor import DebugMotor
+from nf_robot.robot.anchor_server import default_anchor_conf
+from nf_robot.robot.gripper_server import default_gripper_conf
 
 class TestSpoolControllerInit(unittest.TestCase):
 

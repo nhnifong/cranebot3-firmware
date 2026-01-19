@@ -20,9 +20,11 @@ Requires-Dist: lerobot
 Requires-Dist: betterproto2
 Provides-Extra: ui
 Requires-Dist: ursina>=7.0.0; extra == "ui"
-Provides-Extra: test
-Requires-Dist: pytest; extra == "test"
-Requires-Dist: pytest-cov; extra == "test"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
+Requires-Dist: grpcio-tools; extra == "dev"
+Requires-Dist: betterproto2_compiler; extra == "dev"
 Provides-Extra: pi
 Requires-Dist: pyserial; extra == "pi"
 Requires-Dist: getmac; extra == "pi"
