@@ -1,0 +1,17 @@
+name: robot-component
+description: "Dependencies and setup for a stringman robot component"
+
+# Install system packages via APT
+packages:
+  - python3-dev
+  - python3-virtualenv
+  - rpicam-apps
+  - python3-picamera2
+  - libzbar0
+  # Basic networking tools often needed for wifi manipulation scripts
+  - network-manager 
+  - git
+
+# Scripts to run inside the image during build
+run:
+  - scripts/setup.sh
