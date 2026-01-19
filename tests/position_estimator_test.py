@@ -1,22 +1,17 @@
-
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import unittest
-from position_estimator import *
 from unittest.mock import MagicMock, patch
 import time
 from multiprocessing import Queue
-from data_store import DataStore
 import numpy as np
 from math import pi, sqrt, sin, cos
 import time
 from random import random
-from observer import AsyncObserver
 from scipy.spatial.transform import Rotation
-from config_loader import create_default_config
+
+from nf_robot.common.config_loader import create_default_config
+from nf_robot.host.position_estimator import *
+from nf_robot.host.observer import AsyncObserver
+from nf_robot.host.data_store import DataStore
 
 class TestPositionEstimator(unittest.TestCase):
 
@@ -150,7 +145,7 @@ class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         # make an instance of observer just to use it's simulated data function.
-        self.ob = AsyncObserver(terminate_with_ui=False, robot_config=create_default_config())
+        self.ob = AsyncObserver(terminate_with_ui=False, config_path='conf_test.json')
         self.datastore = self.ob.datastore
 
     async def test_positioner_main(self):

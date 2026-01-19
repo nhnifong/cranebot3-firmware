@@ -1,8 +1,3 @@
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import asyncio
 import socket
 import io
@@ -16,8 +11,9 @@ from panda3d.core import (
     GraphicsPipe, PNMFileTypeRegistry, StringStream, LColor,
     loadPrcFileData
 )
-from cv_common import special_sizes, default_marker_size
 from math import pi
+
+from nf_robot.common.cv_common import special_sizes, default_marker_size
 
 def convert_pose(pose):
     # convert to X Y Z H P R

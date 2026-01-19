@@ -10,6 +10,12 @@ av
 lerobot
 betterproto2
 
+[dev]
+pytest
+pytest-cov
+grpcio-tools
+betterproto2_compiler
+
 [pi]
 pyserial
 getmac
@@ -20,10 +26,6 @@ adafruit-circuitpython-bno08x
 adafruit-circuitpython-vl53l1x
 RPi.GPIO
 pyzbar
-
-[test]
-pytest
-pytest-cov
 
 [ui]
 ursina>=7.0.0

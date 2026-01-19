@@ -43,6 +43,7 @@ pi = [
     "Adafruit-Blinka",
     "adafruit-circuitpython-bno08x",
     "adafruit-circuitpython-vl53l1x",
+    "adafruit-circuitpython-ads1x15",
     "RPi.GPIO",
     "pyzbar",
 ]
