@@ -1,0 +1,34 @@
+name: stringman-zero2w
+deployment: image
+
+variables:
+  # Target the Pi Zero 2W (64-bit)
+  architecture: arm64
+  # Ensure we are using Debian Bookworm
+  release: bookworm
+
+# We build the image layout
+image:
+  - name: stringman-zero2w.img
+    size: 4G
+    partitions:
+      - name: boot
+        fstype: vfat
+        size: 256M
+        label: bootfs
+        mountpoint: /boot/firmware
+      - name: root
+        fstype: ext4
+        label: rootfs
+        mountpoint: /
+
+# The sequence of layers to build
+layers:
+  # 1. Include the standard Raspberry Pi OS Lite base
+  # (These paths depend on rpi-image-gen's internal structure, 
+  # strictly speaking, we reference the built-in layers)
+  - layer: os/bookworm
+  - layer: raspbian/lite
+
+  # 2. Add our custom robot layer
+  - layer: layers/robot-component

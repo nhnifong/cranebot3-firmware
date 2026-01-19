@@ -1,0 +1,17 @@
+[Unit]
+Description=Cranebot Service
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=root
+WorkingDirectory=/opt/robot
+ExecStart=/opt/robot/env/bin/robot-server
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
