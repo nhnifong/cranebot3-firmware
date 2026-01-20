@@ -1,18 +1,24 @@
 # cranebot3-firmware
 
-Control code for a crane mounted household robotic crane consisting of a gripper than hangs from multiple lines
-attached to spools in AI-camera equipped anchor points on the walls of a room.
+Control code for a household robotic crane.
 
 ## [Build Guides and Documentation](https://nhnifong.github.io/neufangled-site-2/)
 
-## Desktop setup
+Purchase assembled robots or kits at [neufangled.com](https://neufangled.com)
 
-These instructions require python 3.11 or later.
+## Installation of Robot Control Panel (end users)
+
+Linux (python 3.11 or later)
 
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
     python -m virtualenv venv
-    source venv/bin/activate
-    pip3 install -r requirements_desktop.txt
+    pip install "stringman[ui]"
+
+Windows
+
+Mac
+
+### Run
 
 Start control panel with ursina UI in lan mode
 
@@ -22,27 +28,52 @@ Or start headless in a mode that connects to remote telemetry
 
     python observer.py
 
-requirements_desktop.txt includes the game engine, while requirements_raspi.txt is more lightweight and includes only the dependencies of the headless servers that run on the raspberry pi zeros
+## Installation of Robot Control Panel (developers)
 
-main.py is a graphical control panel made with ursina (a python game engine)
-in it's current form, it requires a blender installation in order to load assets
+    sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
+    python -m virtualenv venv
+    source venv/bin/activate
+    pip install -e ".[ui,dev,pi]"
 
-    sudo apt-get install blender
+### Run tests
+
+    pytest tests
 
 ## Raspberry Pi setup
 
+`stringman-pilot-rpi-image` contains the configuration needed to build an SD card image for various stringman robot components.
+
+Build the image with
+
+    
+
+After booting the robot component with the image for the first time, it will use it's camera to look for a wifi share QR code to get connected. You can produce a code with [qifi.org](htts://qifi.org)
+
+Once the pi sees the code it will connect to the network and remember those settings. It should then be discoverable by the control panel via multicast DNS (Bonjour)
+
+## Starting from a base image
+
+Alternatively the software can be set up from a fresh raspberry pi lite 64 bit image.
 After booting any raspberry pi from a fresh image, perform an update
 
     sudo apt update
     sudo apt full-upgrade
 
-you may have to hit enter a few times during full-upgrade.
-
 When starting with the lite raspi image, you will be missing the following, so install those.
 
     sudo apt install git python3-dev python3-virtualenv
 
-### Anchors
+Set the component type by uncommenting the appropriate line in server.conf
+
+    nano server.conf
+
+Install stringman
+
+    git clone https://github.com/nhnifong/cranebot3-firmware.git && cd cranebot3-firmware
+    chmod +x install.sh
+    sudo ./install.sh
+
+### additional settings for anchors
 
 Setup for any raspberry pi that will be part of an anchor
 Enable uart serial harware interface interactively.
@@ -57,14 +88,7 @@ Then reboot after this change
     enable_uart=1
     dtoverlay=disable-bt
 
-Uncomment the `anchor` or `power anchor` line in the `server.conf` file depending on whether this anchor is the one having the power line to the gripper.
-
-install server
-
-    chmod +x install.sh
-    sudo ./install.sh
-
-### Gripper
+### additional settings for gripper
 
 Setup for the raspberry pi in the gripper with the inventor hat mini
 Enable i2c
@@ -75,22 +99,11 @@ Add this line to `/boot/firmware/config.txt` just under `dtparam=i2c_arm=on` and
 
     dtparam=i2c_baudrate=400000
 
-Uncomment the `gripper` line in the `server.conf` file
+## Rebuilding the raspberry pi image
 
-install server
 
-    chmod +x install.sh
-    sudo ./install.sh
+## Training models
 
-### Development
-
-Since we require the picamera2 module and it can't be installed with pip, you have to install it with apt and create a virtualenv that can use site packages 
-
-    git clone https://github.com/nhnifong/cranebot3-firmware.git
-    cd cranebot3-firmware
-    python3 -m venv --system-site-packages venv
-    source venv/bin/activate
-    pip3 install -r requirements_raspi.txt
 
 ## Support this project
 

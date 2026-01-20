@@ -62,6 +62,7 @@ qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
 [tool.setuptools.package-data]
 "nf_robot.ui" = ["assets/**/*", "assets/*"]
 "nf_robot.scripts" = ["*.sh"]
+"nf_robot.ml" = ["models/*"] 
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

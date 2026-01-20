@@ -1,4 +1,5 @@
 venv
+module-venv
 */venv
 __pycache__
 */__pycache__
@@ -15,3 +16,5 @@ square_centering_data/
 user_targets_data/
 target_heatmap_data/
 target_heatmap_data_unlabeled/
+src/nf_robot.egg-info
+dataset_heatmap/
