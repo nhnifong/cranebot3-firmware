@@ -1,7 +1,0 @@
-[console_scripts]
-observer = nf_robot.host.observer:main
-qa-anchor = nf_robot.qa.anchor_eval:main
-qa-anchor-arp = nf_robot.qa.anchor_arp_eval:main
-qa-gripper = nf_robot.qa.gripper_eval:main
-robot-server = nf_robot.robot.component_server:main
-robot-ui = nf_robot.ui.main:main

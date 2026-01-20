@@ -1,0 +1,8 @@
+include README.md
+include LICENSE
+recursive-include src/nf_robot/ui/assets *
+recursive-include src/nf_robot/protos *.proto
+recursive-include src/nf_robot/scripts *.sh
+recursive-include src/nf_robot/ml/models *
+global-exclude *.pyc
+global-exclude pycache
