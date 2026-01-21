@@ -7,27 +7,26 @@ name = "nf_robot"
 version = "0.1.0"
 description = "Robot control system for Stringman"
 authors = [{name = "Nathaniel Nifong", email = "naavox@gmail.com"}]
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "Apache 2.0"}
 
 dependencies = [
     "numpy>=2.0",
-    "opencv-contrib-python>=4.0", 
-    "scipy",
     "zeroconf",
     "asyncio",
     "websockets",
-    "python-fcl",
-    "pupil-apriltags",
-    "av",
-    "lerobot",
     "betterproto2",
 ]
 
 [project.optional-dependencies]
-ui = [
-    "ursina>=7.0.0",
+host = [
+    "opencv-contrib-python>=4.0", 
+    "scipy",
+    "torch>=2.4.0",
+    "torchvision",
+    "pupil-apriltags",
+    "av",
 ]
 dev = [
     "pytest",
@@ -50,9 +49,8 @@ pi = [
 
 [project.scripts]
 # Main Applications
-robot-server = "nf_robot.robot.component_server:main"
-observer = "nf_robot.host.observer:main"
-robot-ui = "nf_robot.ui.main:main" 
+component-server = "nf_robot.robot.component_server:main"
+stringman-headless = "nf_robot.host.observer:main"
 
 # QA Tools
 qa-anchor = "nf_robot.qa.anchor_eval:main"
@@ -60,7 +58,6 @@ qa-gripper = "nf_robot.qa.gripper_eval:main"
 qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
 
 [tool.setuptools.package-data]
-"nf_robot.ui" = ["assets/**/*", "assets/*"]
 "nf_robot.scripts" = ["*.sh"]
 "nf_robot.ml" = ["models/*"] 
 

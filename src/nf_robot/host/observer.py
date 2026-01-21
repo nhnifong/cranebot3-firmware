@@ -30,6 +30,7 @@ from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 from functools import partial
 from pathlib import Path
 import json
+from importlib.resources import files
 
 from nf_robot.common.cv_common import *
 from nf_robot.common.config_loader import *
@@ -1381,8 +1382,8 @@ class AsyncObserver:
         Send heatmaps to UI.
         Store target candidates and confidence.
         """
-        TARGET_HM_MODEL_PATH = "trainer/models/target_heatmap.pth"
-        CENTERING_MODEL_PATH = "trainer/models/square_centering.pth"
+        TARGET_HM_MODEL_PATH = files("nf_robot.ml").joinpath("models/target_heatmap.pth")
+        CENTERING_MODEL_PATH = files("nf_robot.ml").joinpath("models/square_centering.pth")
         DEVICE = "cpu"
         LOOP_DELAY = 0.1
         FIND_TARGETS_EVERY = 5 # loops

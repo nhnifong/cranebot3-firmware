@@ -12,7 +12,7 @@ Linux (python 3.11 or later)
 
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
     python -m virtualenv venv
-    pip install "stringman[ui]"
+    pip install "stringman[host]"
 
 Windows
 
@@ -30,10 +30,16 @@ Or start headless in a mode that connects to remote telemetry
 
 ## Installation of Robot Control Panel (developers)
 
+    git clone https://github.com/nhnifong/cranebot3-firmware.git
+
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
     python -m virtualenv venv
     source venv/bin/activate
-    pip install -e ".[ui,dev,pi]"
+    pip install -e ".[host,dev,pi]"
+
+### If you have an RTX 5090
+
+    pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
 
 ### Run tests
 
