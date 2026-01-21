@@ -5,6 +5,7 @@ variables:
 # Explicitly target the Pi Zero 2W hardware configuration
 device:
   layer: rpizero2w
+  user1pass: pi
 
 image:
   name: stringman-zero2w
