@@ -16,19 +16,24 @@ run_in_chroot() {
     chroot "$ROOTFS_DIR" /bin/bash -c "$1"
 }
 
-# 1. Create directory structure
+# Install NetworkManager Wifi Connection
+echo "Installing Wifi Config from $FILES_DIR/default-wifi-connection.nmconnection"
+# NetworkManager connections must be owned by root and have 600 permissions
+install -m 600 -o root -g root "$FILES_DIR/default-wifi-connection.nmconnection" "$ROOTFS_DIR/etc/NetworkManager/system-connections/preconfigured-wifi.nmconnection"
+
+# Create directory structure
 # (We use mkdir on the host, targeting the directory inside the rootfs)
 mkdir -p "$ROOTFS_DIR/opt/robot"
 
-# 2. Create Virtual Environment
+# Create Virtual Environment
 # We run python INSIDE the image to create the venv
 run_in_chroot "python3 -m venv --system-site-packages /opt/robot/env"
 
-# 3. Install pip packages
+# Install pip packages
 run_in_chroot "/opt/robot/env/bin/pip install --upgrade pip"
 run_in_chroot "/opt/robot/env/bin/pip install \"nf_robot[pi]\""
 
-# 4. Install Systemd Service
+# Install Systemd Service
 # We copy from our layer files (on host) to the rootfs (on host)
 # Note: 'files/' is relative to where the script is run from (the layer dir usually)
 install -m 644 files/cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
@@ -36,7 +41,7 @@ install -m 644 files/cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.s
 # Enable the service (by creating the symlink manually or using systemctl in chroot)
 run_in_chroot "systemctl enable cranebot.service"
 
-# 5. Apply custom boot config
+# Apply custom boot config
 if [ -f "$ROOTFS_DIR/boot/firmware/config.txt" ]; then
     mv "$ROOTFS_DIR/boot/firmware/config.txt" "$ROOTFS_DIR/boot/firmware/config.txt.bak"
 fi
