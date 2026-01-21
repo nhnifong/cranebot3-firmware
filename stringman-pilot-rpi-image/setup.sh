@@ -17,9 +17,9 @@ run_in_chroot() {
 }
 
 # Install NetworkManager Wifi Connection
-echo "Installing Wifi Config from $FILES_DIR/default-wifi-connection.nmconnection"
+echo "Installing Wifi Config from preconfigured-wifi.nmconnection"
 # NetworkManager connections must be owned by root and have 600 permissions
-install -m 600 -o root -g root "$FILES_DIR/default-wifi-connection.nmconnection" "$ROOTFS_DIR/etc/NetworkManager/system-connections/preconfigured-wifi.nmconnection"
+install -m 600 -o root -g root "preconfigured-wifi.nmconnection" "$ROOTFS_DIR/etc/NetworkManager/system-connections/preconfigured-wifi.nmconnection"
 
 # Create directory structure
 # (We use mkdir on the host, targeting the directory inside the rootfs)
@@ -36,7 +36,7 @@ run_in_chroot "/opt/robot/env/bin/pip install \"nf_robot[pi]\""
 # Install Systemd Service
 # We copy from our layer files (on host) to the rootfs (on host)
 # Note: 'files/' is relative to where the script is run from (the layer dir usually)
-install -m 644 files/cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
+install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
 
 # Enable the service (by creating the symlink manually or using systemctl in chroot)
 run_in_chroot "systemctl enable cranebot.service"
@@ -45,6 +45,6 @@ run_in_chroot "systemctl enable cranebot.service"
 if [ -f "$ROOTFS_DIR/boot/firmware/config.txt" ]; then
     mv "$ROOTFS_DIR/boot/firmware/config.txt" "$ROOTFS_DIR/boot/firmware/config.txt.bak"
 fi
-install -m 644 files/config.txt "$ROOTFS_DIR/boot/firmware/config.txt"
+install -m 644 config.txt "$ROOTFS_DIR/boot/firmware/config.txt"
 
 echo "--- Stringman Component Setup Complete ---"
