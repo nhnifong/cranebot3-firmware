@@ -9,7 +9,7 @@ Restart=always
 RestartSec=1
 User=root
 WorkingDirectory=/opt/robot
-ExecStart=/opt/robot/env/bin/robot-server
+ExecStart=/opt/robot/env/bin/component-server
 Restart=always
 RestartSec=10
 

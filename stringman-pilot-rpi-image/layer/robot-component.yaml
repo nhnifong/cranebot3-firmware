@@ -1,0 +1,19 @@
+# METABEGIN
+# X-Env-Layer-Name: robot-component
+# X-Env-Layer-Category: robot
+# X-Env-Layer-Desc: Dependencies and setup for stringman robot component
+# X-Env-Layer-Requires: trixie-minbase
+# METAEND
+
+mmdebstrap:
+  packages:
+    - python3-dev
+    - python3-virtualenv
+    - rpicam-apps
+    - python3-picamera2
+    - libzbar0
+    - network-manager 
+    - git
+  
+  customize-hooks:
+    - '"${SRCROOT}/layer/robot-component/scripts/setup.sh" "$1"'
