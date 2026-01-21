@@ -16,4 +16,4 @@ mmdebstrap:
     - git
   
   customize-hooks:
-    - 'bash "${SRCROOT}/layer/robot-component/scripts/setup.sh" "$1"'
+    - 'bash "${SRCROOT}/setup.sh" "$1"'
