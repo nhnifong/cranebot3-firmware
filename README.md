@@ -41,12 +41,14 @@ Start headless robot controller in a mode that connects to remote telemetry
 
 `stringman-pilot-rpi-image` contains the configuration needed to build an SD card image for various stringman robot components.
 
+On a raspberry pi with suitable ram, such as a Pi 5,
 with [rpi-image-gen](https://github.com/raspberrypi/rpi-image-gen) checked out into a directory which is a sibling of this repo,
 Build the image with 
 
     ./rpi-image-gen build \
       -S ../cranebot3-firmware/stringman-pilot-rpi-image/ \
-      -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/stringman.yaml
+      -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/stringman.yaml \
+      -- IGconf_device_user1pass='Fo0bar!!'
 
 After booting the robot component with the image for the first time, it will use it's camera to look for a wifi share QR code to get connected. You can produce a code with [qifi.org](htts://qifi.org)
 
