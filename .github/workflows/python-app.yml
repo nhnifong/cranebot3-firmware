@@ -26,7 +26,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install ".[host,dev]"
+        pip install ".[host,pi,dev]"
     - name: Test with pytest
       run: |
         pytest tests
