@@ -1,0 +1,19 @@
+variables:
+  architecture: arm64
+  release: trixie
+
+# Explicitly target the Pi Zero 2W hardware configuration
+device:
+  layer: rpizero2w
+
+image:
+  name: stringman-zero2w
+  layer: image-rpios
+
+layer:
+  # 'minbase' is the rpi-image-gen equivalent of "Lite" (CLI only, includes Net/SSH)
+  os: trixie-minbase
+  
+  # Stringman custom layer
+  # the name provided must match the X-Env-Layer-Name metadata field in the layer yaml file.
+  robot: robot-component

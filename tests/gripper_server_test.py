@@ -1,30 +1,26 @@
 """
 Test that starts up gripper server and connects to it with a websocket.
 """
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import unittest
 from unittest.mock import patch, Mock, MagicMock, ANY, call
 import asyncio
-from gripper_server import RaspiGripperServer
-from debug_motor import DebugMotor
 import websockets
 import json
-from spools import SpoolController
 from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2
 from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X
 import time
+
+from nf_robot.robot.gripper_server import RaspiGripperServer
+from nf_robot.robot.spools import SpoolController
+from nf_robot.robot.debug_motor import DebugMotor
 
 class TestGripperServer(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.patchers = []
 
         self.mock_spool_class = Mock(spec=SpoolController)
-        self.patchers.append(patch('gripper_server.SpoolController', self.mock_spool_class))
+        self.patchers.append(patch('nf_robot.robot.gripper_server.SpoolController', self.mock_spool_class))
         self.mock_spooler = self.mock_spool_class.return_value
 
         #replace certain functions in the mocked spooler
@@ -47,7 +43,7 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
 
         # mock inventor hat mini
         self.mock_hat_class = Mock(spec=InventorHATMini)
-        self.patchers.append(patch('gripper_server.InventorHATMini', self.mock_hat_class))
+        self.patchers.append(patch('nf_robot.robot.gripper_server.InventorHATMini', self.mock_hat_class))
         self.mock_hat = self.mock_hat_class.return_value
 
         # gpio pins
@@ -62,19 +58,19 @@ class TestGripperServer(unittest.IsolatedAsyncioTestCase):
         self.mock_hat.encoders.__getitem__.side_effect = lambda key: self.encoders[key]
 
         # prevent this call from failing         i2c = busio.I2C(board.SCL, board.SDA)
-        self.patchers.append(patch('gripper_server.board.SCL', None, create=True))
-        self.patchers.append(patch('gripper_server.board.SDA', None, create=True))
-        self.patchers.append(patch('gripper_server.busio.I2C', lambda a, b: None,))
+        self.patchers.append(patch('nf_robot.robot.gripper_server.board.SCL', None, create=True))
+        self.patchers.append(patch('nf_robot.robot.gripper_server.board.SDA', None, create=True))
+        self.patchers.append(patch('nf_robot.robot.gripper_server.busio.I2C', lambda a, b: None,))
 
         # mock IMU
         self.mock_imu_class = Mock(spec=BNO08X_I2C)
-        self.patchers.append(patch('gripper_server.BNO08X_I2C', self.mock_imu_class))
+        self.patchers.append(patch('nf_robot.robot.gripper_server.BNO08X_I2C', self.mock_imu_class))
         self.mock_imu = self.mock_imu_class.return_value
         self.mock_imu.quaternion = (1,2,3,4)
 
         # mock Rangefinder
         self.mock_range_class = Mock(spec=VL53L1X)
-        self.patchers.append(patch('gripper_server.VL53L1X', self.mock_range_class))
+        self.patchers.append(patch('nf_robot.robot.gripper_server.VL53L1X', self.mock_range_class))
         self.mock_range = self.mock_range_class.return_value
         self.mock_range.model_info = (1,2,3)
         self.mock_range.data_ready = True

@@ -1,11 +1,6 @@
 """
 Test that starts up gripper server and connects to it with a gripper client
 """
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import unittest
 from unittest.mock import patch, Mock, MagicMock, ANY, call
 import asyncio
@@ -18,11 +13,11 @@ from websockets.exceptions import (
 from multiprocessing import Pool, Queue
 import json
 
-from data_store import DataStore
-from raspi_gripper_client import RaspiGripperClient
-from stats import StatCounter
-from generated.nf import telemetry, control, common
-from config_loader import create_default_config
+from nf_robot.host.data_store import DataStore
+from nf_robot.host.gripper_client import RaspiGripperClient
+from nf_robot.host.stats import StatCounter
+from nf_robot.generated.nf import telemetry, control, common
+from nf_robot.common.config_loader import create_default_config
 
 ws_port = 8765
 
@@ -80,12 +75,12 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.9)
 
     async def test_shutdown_before_connect(self):
-        gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.ob_mock, self.pool, self.stat, self.pe )
+        gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.ob_mock, self.pool, self.stat, self.pe, None)
         self.assertFalse(gc.connected)
         await gc.shutdown()
 
     async def clientSetup(self):
-        self.gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.ob_mock, self.pool, self.stat, self.pe )
+        self.gc = RaspiGripperClient("127.0.0.1", ws_port, self.datastore, self.ob_mock, self.pool, self.stat, self.pe, None)
         self.client_task = asyncio.create_task(self.gc.startup())
         result = await asyncio.wait_for(self.got_connection.wait(), 2)
         await asyncio.sleep(0.1) # client_task needs a chance to act

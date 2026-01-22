@@ -1,14 +1,10 @@
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import unittest
 import numpy as np
-from target_queue import TargetQueue
-from generated.nf.telemetry import TargetStatus
-from generated.nf.common import Vec3
-from util import *
+
+from nf_robot.host.target_queue import TargetQueue
+from nf_robot.generated.nf.telemetry import TargetStatus
+from nf_robot.generated.nf.common import Vec3
+from nf_robot.common.util import *
 
 class TestTargetQueue(unittest.TestCase):
     def setUp(self):
