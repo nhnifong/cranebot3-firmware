@@ -217,6 +217,9 @@ def calibrate_from_stream(address, config_file):
 
 ### the following functions pertain to calibration of the entire assembled robot, not just one camera ###
 
+W_ORIGIN = 0.1 # increase this to to make origin errors more expensive
+W_PLANAR = 1 # increase this to make anchor height deviations from the average plane more expensive
+
 def multi_card_residuals(x, averages):
     """
     Computes the vector of residuals (differences) for least_squares.
@@ -230,12 +233,13 @@ def multi_card_residuals(x, averages):
     
     # Iterate over every marker (Origin and Cal Assists)
     for marker_name, sightings in averages.items():
-        
+
         # Calculate world positions for all cameras that saw this marker
         valid_sightings = []
         
         for anchor_idx, marker_pose_cams in enumerate(sightings):
             for marker_pose_cam in marker_pose_cams:
+                print(f'marker_pose_cam=\n{marker_pose_cam}')
                 if marker_pose_cam is None:
                     continue
                 
@@ -245,6 +249,7 @@ def multi_card_residuals(x, averages):
                     model_constants.anchor_camera,
                     marker_pose_cam
                 ]
+                print(f'pose_list=\n{pose_list}')
                 if marker_name == 'gantry':
                     pose_list.append(gantry_april_inv)
                 pose_in_room = compose_poses(pose_list)
@@ -263,8 +268,7 @@ def multi_card_residuals(x, averages):
             # Residual = Position_Calculated - [0,0,0]
             # We add 3 residuals (dx, dy, dz) per sighting
             
-            origin_weight = 0.1 # tune this to to make origin errors more expensive
-            current_residuals = (projected_positions - np.zeros(3)) * origin_weight
+            current_residuals = (projected_positions - np.zeros(3)) * W_ORIGIN
             residuals.extend(current_residuals.flatten())
             
         elif len(projected_positions) > 1:
@@ -288,8 +292,7 @@ def multi_card_residuals(x, averages):
             avg_z = np.mean(anchor_zs)
             
             # Penalize deviation from the average plane
-            z_weight = 10.0
-            z_residuals = (anchor_zs - avg_z) * z_weight
+            z_residuals = (anchor_zs - avg_z) * W_PLANAR
             residuals.extend(z_residuals)
 
     return np.array(residuals)
@@ -297,7 +300,7 @@ def multi_card_residuals(x, averages):
 def optimize_anchor_poses(averages):
     """Finds optimal anchor poses
     Args:
-        averages: dict keyed by marker names. each value is a list of four poses corresponding to the four anchors.
+        averages: dict keyed by marker names. each value is a list of four lists of poses corresponding to the four anchors.
             poses represent the pose of the marker in the camera's referene frame.
     """
 

@@ -554,7 +554,7 @@ class AsyncObserver:
     def locate_anchors(self):
         """using the record of recent origin detections and cal_assist marker detections, estimate the pose of each anchor."""
         markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3', 'gantry']
-        averages = defaultdict(lambda: [None]*4)
+        averages = defaultdict(lambda: [[]]*4)
         for client in self.anchors:
             # average each list of detections, but leave them in the camera's reference frame.
             for marker in markers:

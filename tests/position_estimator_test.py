@@ -145,7 +145,7 @@ class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         # make an instance of observer just to use it's simulated data function.
-        self.ob = AsyncObserver(terminate_with_ui=False, config_path='conf_test.json')
+        self.ob = AsyncObserver(terminate_with_ui=False, config_path=None)
         self.datastore = self.ob.datastore
 
     async def test_positioner_main(self):

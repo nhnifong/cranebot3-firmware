@@ -75,14 +75,23 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     return config
 
 def save_config(config: nf_config.StringmanPilotConfig, path: Path=DEFAULT_CONFIG_PATH):
-    """Writes the proto to a JSON file."""
+    """
+    Writes the proto to a JSON file.
+    """
+    if path is None:
+        return
     with open(path, 'w') as f:
         f.write(config.to_json(indent=2))
 
 def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfig:
-    """Loads the proto from a JSON file."""
+    """
+    Loads the proto from a JSON file.
+    """
     try:
+        if path is None:
+            raise FileNotFoundError # observer unit test path
         with open(path, 'r') as f:
+            print(f'Loaded config from {path}')
             return nf_config.StringmanPilotConfig().from_json(f.read())
             
     except FileNotFoundError:
