@@ -101,11 +101,13 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             p.start()
 
         # Create observer with test default config (no components are known)
-        self.ob = AsyncObserver(False, "conf_test.json")
+        self.ob = AsyncObserver(terminate_with_ui=False, config_path=None)
         # before running main, set it's zeroconf instance to a mock
         self.zc = MagicMock()
         self.zc.async_close = self.instant_nothing
         self.ob.aiozc = self.zc
+
+    async def start_observer(self):
         self.ob_task = asyncio.create_task(self.ob.main())
         await asyncio.wait_for(self.ob.startup_complete.wait(), 20)
 
@@ -158,6 +160,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # in it shutting down after calling it's own async_close.
         # If this test fails, you'll know it's a startup/shutdown issue even if all the others fail to.
         # you can then run this one in isolation.
+        await self.start_observer()
         self.assertFalse(self.ob_task.done())
 
     async def advertise_service(self, name, properties={}):
@@ -194,6 +197,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
     async def observer_accepts_local_ui_connection_test(self):
         """observer should listen for local UI at localhost:4245"""
+        await self.start_observer()
         async with websockets.connect("ws://127.0.0.1:4245") as ws:
             await asyncio.sleep(0.01)
             self.assertFalse(self.ob_task.done(), "Server should still be running after getting a connection")
@@ -203,6 +207,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
     async def test_keep_robot_connected_waits(self):
         """With a blank config, the observer should sleep and just wait for zeroconf"""
+        await self.start_observer()
         self.assertFalse(config_has_any_address(self.ob.config))
         await asyncio.sleep(1.01) # one tick from keep_robot_connected
         self.assertIsNone(self.ob.gripper_client)
@@ -214,6 +219,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # advertise a service that matches a gripper.
         # it does not matter that we are running no such service.
         # when the observer creates a gripper client, it will create a mock object
+        await self.start_observer()
         name = "123.cranebot-gripper-service.test"
         await self.advertise_service(name)
         # since we are immediately calling the observer's add_service callback, it should add this to the config immediately
@@ -231,6 +237,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
     async def test_discover_anchor(self):
         # advertise a service that matches an anchor.
+        await self.start_observer()
         name = "123.cranebot-anchor-service.test"
         await self.advertise_service(name)
         # since we are immediately calling the observer's add_service callback, it should add this to the config immediately
@@ -254,9 +261,11 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         """
         name = "123.cranebot-anchor-service.test"
         # name, address, and port must be set for observer to attempt a connection
+        print(f'overriding config with test values')
         self.ob.config.anchors[0].service_name = name
         self.ob.config.anchors[0].address = '127.0.0.1'
         self.ob.config.anchors[0].port = 8765
+        await self.start_observer()
 
         # After half second, keep_robot_connected should wake up and start a client to connect to the anchor
         await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
@@ -280,6 +289,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.ob.config.anchors[0].address = '127.0.0.1'
         self.ob.config.anchors[0].port = 8765
         self.assertTrue(config_has_any_address(self.ob.config))
+        await self.start_observer()
 
         # After half second, keep_robot_connected should wake up and start a client to connect to the gripper
         # but it will return immediately, which is how the real clients behave when a connection is refused.
@@ -298,10 +308,10 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # assert the client task is running.
         self.assertFalse(self.ob.connection_tasks[name].done())
 
-    async def test_anchor_connection_lost_reconnect(self):
+    # async def test_anchor_connection_lost_reconnect(self):
         """Confirm that if observer loses a connection to an anchor that it reconnects as soon as possible."""
 
-    async def test_anchor_connection_lost_abnormal_reconnect(self):
+    # async def test_anchor_connection_lost_abnormal_reconnect(self):
         """Confirm that if observer has a connection to an anchor abnormally,
         that it sends an appropriate message to a connected UI,
         and  that it reconnects to the anchor as soon as possible.
@@ -325,6 +335,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.ob.config.gripper.service_name = gripper_name
         self.ob.config.gripper.address = '127.0.0.1'
         self.ob.config.gripper.port = 8765
+        await self.start_observer()
 
         # After half second, keep_robot_connected should wake up and start a client to connect to all these components.
         # all mock components are pointing a the same startup event, and we're not going to both distinguishing between them.

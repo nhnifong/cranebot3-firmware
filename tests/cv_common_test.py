@@ -8,7 +8,7 @@ import copy
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
-from nf_robot.common.pose_functions import compose_poses
+from nf_robot.common.pose_functions import compose_poses, create_lookat_pose
 from nf_robot.common.config_loader import load_config
 from nf_robot.common.util import *
 

@@ -15,7 +15,8 @@ from nf_robot.common.util import *
 from nf_robot.common.pose_functions import *
 from nf_robot.generated.nf import telemetry, control, common
 import nf_robot.common.definitions as model_constants
-# from nf_robot.host.ssh_launch import launch_ssh_terminal
+
+from ssh_launch import launch_ssh_terminal
 
 # ursina considers +Y up. all the other processes, such as the position estimator consider +Z up. 
 def swap_yz(vec):
@@ -174,8 +175,8 @@ class Gripper(Entity):
         self.wp = WindowPanel(
         title=f"Gripper at {self.ip_address}",
         content=(
-            # Button(text='Open SSH Terminal', color=color.gold, text_color=color.black,
-            #     on_click=partial(launch_ssh_terminal, self.ip_address)),
+            Button(text='Open SSH Terminal', color=color.gold, text_color=color.black,
+                on_click=partial(launch_ssh_terminal, self.ip_address)),
             Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
                 on_click=self.open_manual_spool_control),
             ),
