@@ -6,30 +6,26 @@ So we just mock that.
 
 Any method common to anchor and gripper server is tested here in anchor
 """
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import unittest
 from unittest.mock import patch, Mock, ANY
 import asyncio
-from anchor_server import RaspiAnchorServer
 import websockets
 import json
-from debug_motor import DebugMotor
-from spools import SpoolController  # Import the class to be mocked
 import time
 import subprocess
+
+from nf_robot.robot.spools import SpoolController  # mocked
+from nf_robot.robot.debug_motor import DebugMotor
+from nf_robot.robot.anchor_server import RaspiAnchorServer
 
 class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.debug_motor = DebugMotor()
         self.mock_spool_class = Mock(spec=SpoolController)
-        self.patcher = patch('anchor_server.SpoolController', self.mock_spool_class)
+        self.patcher = patch('nf_robot.robot.anchor_server.SpoolController', self.mock_spool_class)
         self.patcher.start()  # This is the mocked class
         self.mock_spooler = self.mock_spool_class.return_value
-        self.patcher2 = patch('anchor_server.stream_command', ['sleep', 'infinity'])
+        self.patcher2 = patch('nf_robot.robot.anchor_server.stream_command', ['sleep', 'infinity'])
         self.patcher2.start()
 
         #replace certain functions in the mocked spooler

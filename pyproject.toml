@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nf_robot"
+# versioning rules
+# major when making incompatible API changes,
+# minor when adding functionality in a backwards-compatible manner, and
+# patch, when making backwards-compatible bug fixes.
+version = "0.2.0"
+description = "Robot control system for Stringman"
+authors = [{name = "Nathaniel Nifong", email = "naavox@gmail.com"}]
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "Apache 2.0"}
+
+dependencies = [
+    "numpy>=2.0",
+    "zeroconf",
+    "asyncio",
+    "websockets",
+    "betterproto2",
+    "opencv-contrib-python-headless>=4.0",
+]
+
+[project.optional-dependencies]
+host = [
+    "scipy",
+    "torch>=2.4.0",
+    "torchvision",
+    "pupil-apriltags",
+    "av",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "grpcio-tools",
+    "betterproto2_compiler",
+    "opencv-contrib-python>=4.0", # for the data labelling tools
+]
+pi = [
+    "pyserial",
+    "getmac",
+    "inventorhatmini",
+    "gpiodevice",
+    "Adafruit-Blinka",
+    "adafruit-circuitpython-bno08x",
+    "adafruit-circuitpython-vl53l1x",
+    "adafruit-circuitpython-ads1x15",
+    "RPi.GPIO",
+    "pyzbar",
+]
+
+[project.scripts]
+# Main Applications
+component-server = "nf_robot.robot.component_server:main"
+stringman-headless = "nf_robot.host.observer:main"
+
+# QA Tools
+qa-anchor = "nf_robot.qa.anchor_eval:main"
+qa-gripper = "nf_robot.qa.gripper_eval:main"
+qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
+
+[tool.setuptools.package-data]
+"nf_robot.scripts" = ["*.sh"]
+"nf_robot.ml" = ["models/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
