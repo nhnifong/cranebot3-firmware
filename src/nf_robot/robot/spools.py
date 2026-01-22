@@ -1,7 +1,6 @@
 import math
 import asyncio
 import time
-import serial
 import logging
 import asyncio
 import numpy as np
@@ -236,57 +235,54 @@ class SpoolController:
             if self.spoolPause:
                 time.sleep(0.2)
                 continue
-            try:
-                t, currentLen = self.currentLineLength()
+
+            t, currentLen = self.currentLineLength()
+            
+            # Determine the desired line speed based on mode
+            aimSpeed = 0
+
+            if self.tracking_mode == 'position':
+                position_err = self.target_length - self.last_length
                 
-                # Determine the desired line speed based on mode
+                # deadband to prevent jitter when extremely close to target
+                if abs(position_err) < self.conf['DEADBAND']: 
+                    aimSpeed = 0
+                else:
+                    # Simple Proportional controller clamped to cruise_speed.
+                    # As we get closer (error decreases), the speed decreases (deceleration).
+                    # PE_TERM determines how aggressively we brake. 
+                    # High PE_TERM = Late braking, Low PE_TERM = Early braking.
+                    calc_speed = position_err * self.conf['PE_TERM']
+                    aimSpeed = np.clip(calc_speed, -self.cruise_speed, self.cruise_speed)
+
+            elif self.tracking_mode == 'speed':
+                aimSpeed = self.aim_line_speed
+
+            # Stop outspooling of line when not tight and switch is available
+            # This overrides both position and speed commands
+            if aimSpeed > 0 and (self.tight_check_fn is not None) and (not self.tight_check_fn()):
+                logging.warning(f"would unspool at speed={aimSpeed} but switch shows line is not tight.")
                 aimSpeed = 0
 
-                if self.tracking_mode == 'position':
-                    position_err = self.target_length - self.last_length
-                    
-                    # deadband to prevent jitter when extremely close to target
-                    if abs(position_err) < self.conf['DEADBAND']: 
-                        aimSpeed = 0
-                    else:
-                        # Simple Proportional controller clamped to cruise_speed.
-                        # As we get closer (error decreases), the speed decreases (deceleration).
-                        # PE_TERM determines how aggressively we brake. 
-                        # High PE_TERM = Late braking, Low PE_TERM = Early braking.
-                        calc_speed = position_err * self.conf['PE_TERM']
-                        aimSpeed = np.clip(calc_speed, -self.cruise_speed, self.cruise_speed)
+            # limit the acceleration of the line (Physics constraint)
+            currentSpeed = self.speed * self.meters_per_rev
+            wouldAccel = (aimSpeed - currentSpeed) / self.conf['LOOP_DELAY_S']
+            
+            if wouldAccel > self.conf['MAX_ACCEL']:
+                aimSpeed = self.conf['MAX_ACCEL'] * self.conf['LOOP_DELAY_S'] + currentSpeed
+            elif wouldAccel < -self.conf['MAX_ACCEL']:
+                aimSpeed = -self.conf['MAX_ACCEL'] * self.conf['LOOP_DELAY_S'] + currentSpeed
 
-                elif self.tracking_mode == 'speed':
-                    aimSpeed = self.aim_line_speed
+            maxspeed = self.motor.getMaxSpeed()
 
-                # Stop outspooling of line when not tight and switch is available
-                # This overrides both position and speed commands
-                if aimSpeed > 0 and (self.tight_check_fn is not None) and (not self.tight_check_fn()):
-                    logging.warning(f"would unspool at speed={aimSpeed} but switch shows line is not tight.")
-                    aimSpeed = 0
-
-                # limit the acceleration of the line (Physics constraint)
-                currentSpeed = self.speed * self.meters_per_rev
-                wouldAccel = (aimSpeed - currentSpeed) / self.conf['LOOP_DELAY_S']
+            # convert speed to revolutions per second
+            cspeed = np.clip(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
+            
+            # Minimum motor speed check so we go full quiet.
+            if abs(cspeed) < 0.02:
+                cspeed = 0
                 
-                if wouldAccel > self.conf['MAX_ACCEL']:
-                    aimSpeed = self.conf['MAX_ACCEL'] * self.conf['LOOP_DELAY_S'] + currentSpeed
-                elif wouldAccel < -self.conf['MAX_ACCEL']:
-                    aimSpeed = -self.conf['MAX_ACCEL'] * self.conf['LOOP_DELAY_S'] + currentSpeed
+            self._commandSpeed(cspeed)
 
-                maxspeed = self.motor.getMaxSpeed()
-
-                # convert speed to revolutions per second
-                cspeed = np.clip(aimSpeed / self.meters_per_rev, -maxspeed, maxspeed)
-                
-                # Minimum motor speed check so we go full quiet.
-                if abs(cspeed) < 0.02:
-                    cspeed = 0
-                    
-                self._commandSpeed(cspeed)
-
-                time.sleep(self.conf['LOOP_DELAY_S'])
-            except serial.serialutil.SerialTimeoutException:
-                logging.critical('Lost serial contact with motor. This may require power cycling the motor controller.')
-                break
+            time.sleep(self.conf['LOOP_DELAY_S'])
         logging.info(f'Spool tracking loop stopped')

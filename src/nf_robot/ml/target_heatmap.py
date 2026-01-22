@@ -8,7 +8,6 @@ import os
 import json
 import numpy as np
 import argparse
-from huggingface_hub import snapshot_download, HfApi, create_repo
 import random
 import uuid
 import shutil
@@ -184,6 +183,7 @@ def extract_targets_from_heatmap(heatmap: np.ndarray, top_n: int = 10, threshold
 # ==========================================
 
 def train(args):
+    from huggingface_hub import snapshot_download
     print(f"Downloading/Loading dataset from {args.dataset_id}...")
     dataset_path = snapshot_download(repo_id=args.dataset_id, repo_type="dataset")
     print(f"Dataset available at: {dataset_path}")
@@ -259,6 +259,7 @@ def run_inference(model, img_bgr):
     return overlay
 
 def eval_mode(args):
+    from huggingface_hub import snapshot_download
     print(f"Loading model from {args.model_path}...")
     model = TargetHeatmapNet().to(DEVICE)
     model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
@@ -524,6 +525,7 @@ def label_mode(args):
             print(f"Saved {len(scaled_points)} points -> {new_fn} (Resized to {HM_IMAGE_RES})")
 
 def upload_prompt(args):
+    from huggingface_hub import HfApi, create_repo
     if not os.path.exists(LOCAL_DATASET_ROOT): return
     
     print("\n" + "="*30)

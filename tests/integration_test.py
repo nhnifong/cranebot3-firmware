@@ -18,7 +18,7 @@ from nf_robot.robot.anchor_server import RaspiAnchorServer
 from nf_robot.robot.gripper_server import RaspiGripperServer
 from nf_robot.robot.debug_motor import DebugMotor
 from nf_robot.host.observer import AsyncObserver
-from nf_robot.common.cv_common import compose_poses
+from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 
 # this test starts four anchor servers and a gripper server and then starts up a full instances of the observer

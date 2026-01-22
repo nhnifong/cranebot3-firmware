@@ -17,11 +17,11 @@ dependencies = [
     "asyncio",
     "websockets",
     "betterproto2",
+    "opencv-contrib-python-headless>=4.0",
 ]
 
 [project.optional-dependencies]
 host = [
-    "opencv-contrib-python>=4.0", 
     "scipy",
     "torch>=2.4.0",
     "torchvision",
@@ -33,6 +33,7 @@ dev = [
     "pytest-cov",
     "grpcio-tools",
     "betterproto2_compiler",
+    "opencv-contrib-python>=4.0", # for the data labelling tools
 ]
 pi = [
     "pyserial",

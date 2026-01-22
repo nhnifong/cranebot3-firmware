@@ -20,6 +20,8 @@ Start headless robot controller in a mode that connects to remote telemetry
 
     stringman-headless
 
+For LAN mode, see [local_ui/README.md](local_ui/README.md)
+
 ## Installation of Robot Control Panel (developers)
 
     git clone https://github.com/nhnifong/cranebot3-firmware.git
@@ -102,8 +104,19 @@ Add this line to `/boot/firmware/config.txt` just under `dtparam=i2c_arm=on` and
 
     dtparam=i2c_baudrate=400000
 
-## Rebuilding the raspberry pi image
+## Rebuilding the python module
 
+within a venv install the build tools
+
+    python3 -m pip install --upgrade build twine
+
+at this repo's root, build the module. Artifacts will be in dist/
+
+    python3 -m build
+
+Upload to Pypi
+
+    python3 -m twine upload dist/*
 
 ## Training models
 

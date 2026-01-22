@@ -16,6 +16,7 @@ from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHand
 import copy
 
 from nf_robot.common.cv_common import *
+from nf_robot.common.pose_functions  import *
 from nf_robot.common.util import *
 import nf_robot.common.definitions as model_constants
 from nf_robot.ml.target_heatmap import HM_IMAGE_RES
