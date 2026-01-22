@@ -32,6 +32,7 @@ from pathlib import Path
 import json
 from importlib.resources import files
 
+from nf_robot.common.pose_functions import compose_poses
 from nf_robot.common.cv_common import *
 from nf_robot.common.config_loader import *
 import nf_robot.common.definitions as model_constants
@@ -557,7 +558,6 @@ class AsyncObserver:
         for client in self.anchors:
             # average each list of detections, but leave them in the camera's reference frame.
             for marker in markers:
-                # averages[marker][client.anchor_num] = average_pose(list(client.origin_poses[marker]))
                 if marker == 'gantry':
                     averages[marker][client.anchor_num] = list(client.raw_gant_poses)
                 else:

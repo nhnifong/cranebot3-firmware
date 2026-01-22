@@ -10,7 +10,6 @@ import numpy as np
 import argparse
 import random
 import shutil
-from huggingface_hub import snapshot_download, HfApi, create_repo
 
 # ==========================================
 # CONFIGURATION
@@ -225,6 +224,7 @@ def capture_gripper_image(ndimage, gripper_occupied=False):
 # ==========================================
 
 def train(args):
+    from huggingface_hub import snapshot_download
     print(f"Loading dataset from {args.dataset_id}...")
     try:
         dataset_path = snapshot_download(repo_id=args.dataset_id, repo_type="dataset")
@@ -291,6 +291,7 @@ def train(args):
 # ==========================================
 
 def eval_mode(args):
+    from huggingface_hub import snapshot_download
     print(f"Loading model from {args.model_path}...")
     model = CenteringNet().to(DEVICE)
     try:
@@ -611,6 +612,7 @@ def split_and_upload(args):
     upload_prompt(args)
 
 def upload_prompt(args):
+    from huggingface_hub import HfApi, create_repo
     if not os.path.exists(LOCAL_DATASET_ROOT): return
     
     print("\n" + "="*30)

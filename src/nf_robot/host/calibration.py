@@ -8,7 +8,7 @@ import argparse
 import logging
 
 from nf_robot.robot.spools import SpiralCalculator
-from nf_robot.common.cv_common import *
+from nf_robot.common.pose_functions import *
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
 from nf_robot.common.config_loader import *

@@ -16,7 +16,7 @@ from nf_robot.common.kalman_filter import KalmanFilter
 from nf_robot.host.frequency_estimator import SwingFrequencyEstimator
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.util import *
-from nf_robot.common.cv_common import compose_poses, gripper_imu_inv
+from nf_robot.common.pose_functions import compose_poses, gripper_imu_inv
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares

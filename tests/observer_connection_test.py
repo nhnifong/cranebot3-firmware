@@ -12,7 +12,7 @@ from zeroconf.asyncio import AsyncZeroconf
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.config_loader import create_default_config, config_has_any_address
 from nf_robot.host.observer import AsyncObserver
-from nf_robot.common.cv_common import invert_pose, compose_poses
+from nf_robot.common.pose_functions import invert_pose, compose_poses
 from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.anchor_client import RaspiAnchorClient
 from nf_robot.host.gripper_client import RaspiGripperClient
