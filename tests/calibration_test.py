@@ -1,30 +1,20 @@
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import unittest
 import numpy as np
 from unittest.mock import patch, MagicMock
 
-import calibration
+from nf_robot.host import calibration
 
 class TestCalibration(unittest.TestCase):
     def setUp(self):
         # Create a dummy dataset for testing
         # 4 anchors, 2 markers ('origin' and 'tag1')
         self.averages = {
-            'origin': [
-                (np.zeros(3), np.array([0.0, 0.0, 0.0])), # Seen by Anchor 0
-                None,
-                None,
-                None
-            ],
+            'origin': np.zeros((4, 1, 2, 3)), # for each of the four anchors, a list of one pose at 0,0,0 with no rotation.
             'tag1': [
-                (np.zeros(3), np.array([1.0, 0.0, 0.0])), # Seen by Anchor 0
-                (np.zeros(3), np.array([2.0, 0.0, 0.0])), # Seen by Anchor 1
-                None,
-                None
+                [(np.zeros(3), np.array([1.0, 0.0, 0.0]))], # Seen by Anchor 0
+                [(np.zeros(3), np.array([2.0, 0.0, 0.0]))], # Seen by Anchor 1
+                [],
+                []
             ]
         }
         
@@ -34,8 +24,8 @@ class TestCalibration(unittest.TestCase):
         self.anchors_zero = np.zeros((4, 2, 3))
         self.x_zero = self.anchors_zero.flatten()
 
-    @patch('calibration.compose_poses')
-    @patch('calibration.model_constants')
+    @patch('nf_robot.host.calibration.compose_poses')
+    @patch('nf_robot.host.calibration.model_constants')
     def test_multi_card_residuals_origin_constraint(self, mock_constants, mock_compose):
         """
         Test that origin markers produce weighted residuals based on distance from [0,0,0].
@@ -64,20 +54,20 @@ class TestCalibration(unittest.TestCase):
         # Let's change the input to have an error
         # Origin marker seen at [1, 2, 3]
         bad_origin_data = {
-            'origin': [(np.zeros(3), np.array([1.0, 2.0, 3.0])), None, None, None]
+            'origin': [[(np.zeros(3), np.array([1.0, 2.0, 3.0]))], [], [], []]
         }
         
         residuals = calibration.multi_card_residuals(self.x_zero, bad_origin_data)
         
-        # Expected: ([1, 2, 3] - [0, 0, 0]) * 5.0
-        expected_residuals = np.array([5.0, 10.0, 15.0])
+        # Expected: ([1, 2, 3] - [0, 0, 0]) * W_ORIGIN
+        expected_residuals = np.array([1, 2, 3])*calibration.W_ORIGIN
         
         # Note: residuals array will also contain Z-constraints for the anchors (0 deviation)
         # Slicing the first 3 elements which correspond to the marker
         np.testing.assert_array_almost_equal(residuals[:3], expected_residuals)
 
-    @patch('calibration.compose_poses')
-    @patch('calibration.model_constants')
+    @patch('nf_robot.host.calibration.compose_poses')
+    @patch('nf_robot.host.calibration.model_constants')
     def test_multi_card_residuals_consistency_constraint(self, mock_constants, mock_compose):
         """
         Test that shared markers minimize distance to their centroid.
@@ -92,10 +82,10 @@ class TestCalibration(unittest.TestCase):
         
         data = {
             'tag1': [
-                (np.zeros(3), np.array([10.0, 0.0, 0.0])), 
-                (np.zeros(3), np.array([12.0, 0.0, 0.0])),
-                None, 
-                None
+                [(np.zeros(3), np.array([10.0, 0.0, 0.0]))], 
+                [(np.zeros(3), np.array([12.0, 0.0, 0.0]))],
+                [], 
+                []
             ]
         }
 
@@ -111,10 +101,10 @@ class TestCalibration(unittest.TestCase):
         expected = np.array([-1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
         np.testing.assert_array_almost_equal(marker_residuals, expected)
 
-    @patch('calibration.optimize.least_squares')
-    @patch('calibration.invert_pose')
-    @patch('calibration.compose_poses')
-    @patch('calibration.model_constants')
+    @patch('nf_robot.host.calibration.optimize.least_squares')
+    @patch('nf_robot.host.calibration.invert_pose')
+    @patch('nf_robot.host.calibration.compose_poses')
+    @patch('nf_robot.host.calibration.model_constants')
     def test_optimize_anchor_poses_success(self, mock_constants, mock_compose, mock_invert, mock_least_squares):
         """
         Test the optimization driver function calls the solver and returns reshaped poses.
@@ -147,10 +137,10 @@ class TestCalibration(unittest.TestCase):
         self.assertEqual(result_poses.shape, (4, 2, 3))
         self.assertTrue(np.all(result_poses == 1)) # Based on our mock result.x
 
-    @patch('calibration.optimize.least_squares')
-    @patch('calibration.invert_pose')
-    @patch('calibration.compose_poses')
-    @patch('calibration.model_constants')
+    @patch('nf_robot.host.calibration.optimize.least_squares')
+    @patch('nf_robot.host.calibration.invert_pose')
+    @patch('nf_robot.host.calibration.compose_poses')
+    @patch('nf_robot.host.calibration.model_constants')
     def test_optimize_anchor_poses_failure(self, mock_constants, mock_compose, mock_invert, mock_least_squares):
         """
         Test that optimization failure returns None.

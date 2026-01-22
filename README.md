@@ -1,45 +1,84 @@
-# cranebot3-firmware
+# nf_robot
 
-Control code for a crane mounted household robotic crane consisting of a gripper than hangs from multiple lines
-attached to spools in AI-camera equipped anchor points on the walls of a room.
+Control code for the Stringman household robotic crane from Neufangled Robotics
 
 ## [Build Guides and Documentation](https://nhnifong.github.io/neufangled-site-2/)
 
-## Desktop setup
+Purchase assembled robots or kits at [neufangled.com](https://neufangled.com)
 
-These instructions require python 3.11 or later.
+## Installation of Robot Control Panel (end users)
+
+Linux (python 3.11 or later)
+
+    sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
+    python -m virtualenv venv
+    pip install "stringman[host]"
+
+### Run
+
+Start headless robot controller in a mode that connects to remote telemetry
+
+    stringman-headless
+
+For LAN mode, see [local_ui/README.md](local_ui/README.md)
+
+## Installation of Robot Control Panel (developers)
+
+    git clone https://github.com/nhnifong/cranebot3-firmware.git
 
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
     python -m virtualenv venv
     source venv/bin/activate
-    pip3 install -r requirements_desktop.txt
+    pip install -e ".[host,dev,pi]"
 
-Start control panel with UI
+### If you have an RTX 5090
 
-    python host/main.py
+    pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
 
+### Run tests
 
-requirements_desktop.txt includes the game engine, while requirements_raspi.txt is more lightweight and includes only the dependencies of the headless servers that run on the raspberry pi zeros
+    pytest tests
 
-main.py is a graphical control panel made with ursina (a python game engine)
-in it's current form, it requires a blender installation in order to load assets
+## Raspberry pi (development)
 
-    sudo apt-get install blender
+`stringman-pilot-rpi-image` contains the configuration needed to build an SD card image for various stringman robot components.
 
-## Raspberry Pi setup
+On a raspberry pi with suitable ram, such as a Pi 5,
+with [rpi-image-gen](https://github.com/raspberrypi/rpi-image-gen) checked out into a directory which is a sibling of this repo,
+Build the image with 
 
+    ./rpi-image-gen build \
+      -S ../cranebot3-firmware/stringman-pilot-rpi-image/ \
+      -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/stringman.yaml \
+      -- IGconf_device_user1pass='Fo0bar!!'
+
+After booting the robot component with the image for the first time, it will use it's camera to look for a wifi share QR code to get connected. You can produce a code with [qifi.org](htts://qifi.org)
+
+Once the pi sees the code it will connect to the network and remember those settings. It should then be discoverable by the control panel via multicast DNS (Bonjour)
+
+## Starting from a base image
+
+Alternatively the software can be set up from a fresh raspberry pi lite 64 bit image.
 After booting any raspberry pi from a fresh image, perform an update
 
     sudo apt update
     sudo apt full-upgrade
 
-you may have to hit enter a few times during full-upgrade.
-
 When starting with the lite raspi image, you will be missing the following, so install those.
 
     sudo apt install git python3-dev python3-virtualenv
 
-### Anchors
+Set the component type by uncommenting the appropriate line in server.conf
+
+    nano server.conf
+
+Install stringman
+
+    git clone https://github.com/nhnifong/cranebot3-firmware.git && cd cranebot3-firmware
+    chmod +x install.sh
+    sudo ./install.sh
+
+### additional settings for anchors
 
 Setup for any raspberry pi that will be part of an anchor
 Enable uart serial harware interface interactively.
@@ -54,14 +93,7 @@ Then reboot after this change
     enable_uart=1
     dtoverlay=disable-bt
 
-Uncomment the `anchor` or `power anchor` line in the `server.conf` file depending on whether this anchor is the one having the power line to the gripper.
-
-install server
-
-    chmod +x install.sh
-    sudo ./install.sh
-
-### Gripper
+### additional settings for gripper
 
 Setup for the raspberry pi in the gripper with the inventor hat mini
 Enable i2c
@@ -72,22 +104,22 @@ Add this line to `/boot/firmware/config.txt` just under `dtparam=i2c_arm=on` and
 
     dtparam=i2c_baudrate=400000
 
-Uncomment the `gripper` line in the `server.conf` file
+## Rebuilding the python module
 
-install server
+within a venv install the build tools
 
-    chmod +x install.sh
-    sudo ./install.sh
+    python3 -m pip install --upgrade build twine
 
-### Development
+at this repo's root, build the module. Artifacts will be in dist/
 
-Since we require the picamera2 module and it can't be installed with pip, you have to install it with apt and create a virtualenv that can use site packages 
+    python3 -m build
 
-    git clone https://github.com/nhnifong/cranebot3-firmware.git
-    cd cranebot3-firmware
-    python3 -m venv --system-site-packages venv
-    source venv/bin/activate
-    pip3 install -r requirements_raspi.txt
+Upload to Pypi
+
+    python3 -m twine upload dist/*
+
+## Training models
+
 
 ## Support this project
 

@@ -1,10 +1,6 @@
 """
 Test that starts up gripper server and connects to it with a gripper client
 """
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
 from unittest.mock import patch, Mock, MagicMock, ANY, AsyncMock, call
@@ -20,11 +16,11 @@ from websockets.frames import Close
 from multiprocessing import Pool, Queue
 import json
 
-from data_store import DataStore
-from raspi_anchor_client import RaspiAnchorClient
-from stats import StatCounter
-from generated.nf import telemetry, control, common
-from config_loader import create_default_config
+from nf_robot.host.data_store import DataStore
+from nf_robot.host.anchor_client import RaspiAnchorClient
+from nf_robot.host.stats import StatCounter
+from nf_robot.generated.nf import telemetry, control, common
+from nf_robot.common.config_loader import create_default_config
 
 ws_port = 8765
 
@@ -83,12 +79,12 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_shutdown_before_connect(self):
         # 1 is the anchor number
-        ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.ob_mock, self.pool, self.stat)
+        ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.ob_mock, self.pool, self.stat, None)
         self.assertFalse(ac.connected)
         await ac.shutdown()
 
     async def clientSetup(self):
-        self.ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.ob_mock, self.pool, self.stat)
+        self.ac = RaspiAnchorClient("127.0.0.1", ws_port, 1, self.datastore, self.ob_mock, self.pool, self.stat, None)
         self.client_task = asyncio.create_task(self.ac.startup())
         result = await asyncio.wait_for(self.got_connection.wait(), 2)
         await asyncio.sleep(0.1) # client_task needs a chance to act
@@ -150,8 +146,7 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         detection_list = [
             {
                 'n': 'gantry',
-                'r': [0.1,0.2,0.3],
-                't': [0.4,0.5,0.6]
+                'p': np.array([[0.1,0.2,0.3], [0.4,0.5,0.6]]), # p for pose, (rvec,tvec)
             },
         ]
         timestamp = 123456789.0

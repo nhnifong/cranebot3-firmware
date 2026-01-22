@@ -1,16 +1,12 @@
 """
 Unit tests for datatore class
 """
-import sys
-import os
-# This will let us import files and modules located in the parent directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import unittest
 import numpy as np
 import time
 import multiprocessing
-from data_store import CircularBuffer, DataStore
+
+from nf_robot.host.data_store import CircularBuffer, DataStore
 
 
 class TestDatastore(unittest.TestCase):
