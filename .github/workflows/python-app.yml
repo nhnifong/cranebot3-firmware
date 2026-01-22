@@ -26,10 +26,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        cd tests
-        pip install pytest
-        pip install -r requirements_testing.txt
+        pip install ".[host,dev]"
     - name: Test with pytest
       run: |
-        cd tests
-        pytest -k "not test_auto_calibration"
+        pytest tests
