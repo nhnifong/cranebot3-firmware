@@ -18,3 +18,4 @@ target_heatmap_data/
 target_heatmap_data_unlabeled/
 src/nf_robot.egg-info
 dataset_heatmap/
+build/
