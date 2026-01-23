@@ -108,7 +108,8 @@ within a venv install the build tools
 
     python3 -m pip install --upgrade build twine
 
-at this repo's root, build the module. Artifacts will be in dist/
+Bump the version number in pyproject.toml
+then at this repo's root, build the module. Artifacts will be in dist/
 
     python3 -m build
 
