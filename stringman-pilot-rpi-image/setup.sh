@@ -19,7 +19,7 @@ run_in_chroot() {
 # Install NetworkManager Wifi Connection
 echo "Installing Wifi Config from preconfigured-wifi.nmconnection"
 # NetworkManager connections must be owned by root and have 600 permissions
-install -m 600 -o root -g root "preconfigured-wifi.nmconnection" "$ROOTFS_DIR/etc/NetworkManager/system-connections/preconfigured-wifi.nmconnection"
+install -m 600 -o root -g root "preconfigured.nmconnection" "$ROOTFS_DIR/etc/NetworkManager/system-connections/preconfigured.nmconnection"
 
 # Create directory structure
 # (We use mkdir on the host, targeting the directory inside the rootfs)
@@ -34,12 +34,15 @@ run_in_chroot "/opt/robot/env/bin/pip install --upgrade pip"
 run_in_chroot "/opt/robot/env/bin/pip install \"nf_robot[pi]\""
 
 # Install Systemd Service
-# We copy from our layer files (on host) to the rootfs (on host)
-# Note: 'files/' is relative to where the script is run from (the layer dir usually)
 install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
 
 # Enable the service (by creating the symlink manually or using systemctl in chroot)
 run_in_chroot "systemctl enable cranebot.service"
+
+# Install a one time filesystem resize service on first boot to expand to fill the SD card
+install -m 644 resize-rootfs.sh "$ROOTFS_DIR/usr/local/sbin/resize-rootfs.sh"
+install -m 644 resize-rootfs.service "$ROOTFS_DIR/etc/systemd/system/resize-rootfs.service"
+run_in_chroot "systemctl enable resize-rootfs.service"
 
 # Apply custom boot config
 if [ -f "$ROOTFS_DIR/boot/firmware/config.txt" ]; then

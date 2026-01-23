@@ -1,0 +1,11 @@
+[Unit]
+Description=Resize RootFS on First Boot
+After=local-fs.target
+Before=cranebot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/resize-rootfs.sh
+
+[Install]
+WantedBy=sysinit.target
