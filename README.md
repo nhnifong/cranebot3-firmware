@@ -37,24 +37,13 @@ For LAN mode, see [local_ui/README.md](local_ui/README.md)
 
     pytest tests
 
-## Raspberry pi (development)
+### Setting up a component
 
-`stringman-pilot-rpi-image` contains the configuration needed to build an SD card image for various stringman robot components.
-
-On a raspberry pi with suitable ram, such as a Pi 5,
-with [rpi-image-gen](https://github.com/raspberrypi/rpi-image-gen) checked out into a directory which is a sibling of this repo,
-Build the image with 
-
-    ./rpi-image-gen build \
-      -S ../cranebot3-firmware/stringman-pilot-rpi-image/ \
-      -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/stringman.yaml \
-      -- IGconf_device_user1pass='Fo0bar!!'
-
-After booting the robot component with the image for the first time, it will use it's camera to look for a wifi share QR code to get connected. You can produce a code with [qifi.org](htts://qifi.org)
+Robot components that boot from the `stringman-zero2w.img` image should begin looking for wifi share codes with their camera immediately. You can produce a code with [qifi.org](htts://qifi.org)
 
 Once the pi sees the code it will connect to the network and remember those settings. It should then be discoverable by the control panel via multicast DNS (Bonjour)
 
-## Starting from a base image
+## Starting from a base rpi image
 
 Alternatively the software can be set up from a fresh raspberry pi lite 64 bit image.
 After booting any raspberry pi from a fresh image, perform an update
@@ -76,7 +65,7 @@ Install stringman
     chmod +x install.sh
     sudo ./install.sh
 
-### additional settings for anchors
+### Additional settings for anchors
 
 Setup for any raspberry pi that will be part of an anchor
 Enable uart serial harware interface interactively.
@@ -91,7 +80,7 @@ Then reboot after this change
     enable_uart=1
     dtoverlay=disable-bt
 
-### additional settings for gripper
+### Additional settings for gripper
 
 Setup for the raspberry pi in the gripper with the inventor hat mini
 Enable i2c

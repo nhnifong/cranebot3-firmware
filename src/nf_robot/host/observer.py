@@ -154,6 +154,8 @@ class AsyncObserver:
         self.gip_task = None
         self.cloud_telem = None
         self.passive_safety_task = None
+        # last attempt to connect, keyed by service name
+        self.connection_tasks: dict[str, asyncio.Task] = {}
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -839,10 +841,7 @@ class AsyncObserver:
             await asyncio.sleep(0.5)
         print('Config not empty, begin connecting to discovered components')
 
-        # last attempt to connect, keyed by service name
-        self.connection_tasks: dict[str, asyncio.Task] = {}
         while self.run_command_loop:
-
             # is everything up the way we want it to be?
             if len([b for b in self.bot_clients.values() if b.connected])==5:
                 await asyncio.sleep(0.5)
