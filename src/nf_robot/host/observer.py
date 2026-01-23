@@ -835,7 +835,7 @@ class AsyncObserver:
         123.cranebot-anchor-service.2ccf67bc3fc4
         """
         # sleep until there is something to do
-        if not config_has_any_address(self.config) and self.run_command_loop:
+        while not config_has_any_address(self.config) and self.run_command_loop:
             await asyncio.sleep(0.5)
         print('Config not empty, begin connecting to discovered components')
 
@@ -1019,12 +1019,12 @@ class AsyncObserver:
 
             # the only reason it might not be none is if a unit test set before calling main.
             if self.aiozc is None:
-                self.aiozc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=InterfaceChoice.All)
+                self.aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only, interfaces=InterfaceChoice.All)
 
             try:
                 print("get services list")
                 services = list(
-                    await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.All)
+                    await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.V4Only)
                 )
                 print("start service browser")
                 self.aiobrowser = AsyncServiceBrowser(

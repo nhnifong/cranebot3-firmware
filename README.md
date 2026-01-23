@@ -6,15 +6,13 @@ Control code for the Stringman household robotic crane from Neufangled Robotics
 
 Purchase assembled robots or kits at [neufangled.com](https://neufangled.com)
 
-## Installation of Robot Control Panel (end users)
+## Installation of stringman controler
 
 Linux (python 3.11 or later)
 
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
     python -m virtualenv venv
     pip install "stringman[host]"
-
-### Run
 
 Start headless robot controller in a mode that connects to remote telemetry
 
