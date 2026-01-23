@@ -40,7 +40,7 @@ install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service
 run_in_chroot "systemctl enable cranebot.service"
 
 # Install a one time filesystem resize service on first boot to expand to fill the SD card
-install -m 644 resize-rootfs.sh "$ROOTFS_DIR/usr/local/sbin/resize-rootfs.sh"
+install -m 755 resize-rootfs.sh "$ROOTFS_DIR/usr/local/sbin/resize-rootfs.sh"
 install -m 644 resize-rootfs.service "$ROOTFS_DIR/etc/systemd/system/resize-rootfs.service"
 run_in_chroot "systemctl enable resize-rootfs.service"
 
