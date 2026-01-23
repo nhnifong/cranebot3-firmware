@@ -12,11 +12,12 @@ Linux (python 3.11 or later)
 
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
     python -m virtualenv venv
-    pip install "stringman[host]"
+    pip install "nf_robot[host]"
 
-Start headless robot controller in a mode that connects to remote telemetry
+Start headless robot controller in a mode that connects to remote telemetry.
+The particular robot details will be read from/saved to bedroom.conf
 
-    stringman-headless
+    stringman-headless --config=bedroom.conf
 
 For LAN mode, see [local_ui/README.md](local_ui/README.md)
 
