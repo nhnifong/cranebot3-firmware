@@ -27,7 +27,7 @@ import asyncio
 async def main():
     connected = await ensure_connection()
     if not connected:
-        print('Wifi connection script failed to find a network')
+        logging.error('Wifi connection script failed to find a network')
         quit()
 
     with open('server.conf', 'r') as file:
