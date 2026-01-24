@@ -40,7 +40,7 @@ For LAN mode, see [local_ui/README.md](local_ui/README.md)
 
 ### Setting up a component
 
-Robot components that boot from the `stringman-zero2w.img` image should begin looking for wifi share codes with their camera immediately. You can produce a code with [qifi.org](htts://qifi.org)
+Robot components that boot from the [`stringman-zero2w.img`](https://storage.googleapis.com/stringman-models/stringman-zero2w.img) (1.6GB) image should begin looking for wifi share codes with their camera immediately. You can produce a code with [qifi.org](htts://qifi.org)
 
 Once the pi sees the code it will connect to the network and remember those settings. It should then be discoverable by the control panel via multicast DNS (Bonjour)
 
@@ -49,12 +49,11 @@ Once the pi sees the code it will connect to the network and remember those sett
 Alternatively the software can be set up from a fresh raspberry pi lite 64 bit image.
 After booting any raspberry pi from a fresh image, perform an update
 
-    sudo apt update
-    sudo apt full-upgrade
+    sudo apt update -y && sudo apt full-upgrade -y -o Dpkg::Options::="--force-confold" && sudo apt install -y git python3-dev python3-virtualenv rpicam-apps i2c-tools
 
-When starting with the lite raspi image, you will be missing the following, so install those.
+Clone the [cranebot-firmware](https://github.com/nhnifong/cranebot3-firmware) repo
 
-    sudo apt install git python3-dev python3-virtualenv
+    git clone https://github.com/nhnifong/cranebot3-firmware.git && cd cranebot3-firmware
 
 Set the component type by uncommenting the appropriate line in server.conf
 
@@ -62,7 +61,6 @@ Set the component type by uncommenting the appropriate line in server.conf
 
 Install stringman
 
-    git clone https://github.com/nhnifong/cranebot3-firmware.git && cd cranebot3-firmware
     chmod +x install.sh
     sudo ./install.sh
 
