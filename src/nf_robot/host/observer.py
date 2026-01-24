@@ -926,8 +926,10 @@ class AsyncObserver:
                             r = await self.handle_command(message)
                             if not self.run_command_loop:
                                 r = await websocket.close()
-                    except (ConnectionClosedError, ConnectionClosedOK) as e:
+                    except ConnectionClosedOK as e:
                         pass
+                    except ConnectionClosedError as e:
+                        print(e)
                     finally:
                         print(f'disconnected from control_plane {websocket}')
                         self.cloud_telem_websocket = None
