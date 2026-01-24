@@ -1,3 +1,5 @@
+# Stringman component /boot/firmware/config.txt
+
 # For more options and information see
 # http://rptl.io/configtxt
 # Some settings may impact device functionality. See link above for details
@@ -8,7 +10,7 @@
 #dtparam=spi=on
 
 # Enable audio (loads snd_bcm2835)
-dtparam=audio=on
+# dtparam=audio=on
 
 # Additional overlays and parameters are documented
 # /boot/firmware/overlays/README
@@ -49,3 +51,9 @@ otg_mode=1
 dtoverlay=dwc2,dr_mode=host
 
 [all]
+# Gripper has a BNO085 on the I2C interface so we need a software I2C
+dtoverlay=i2c-gpio,bus=1,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=2
+
+# enable hardware uart for communication with MKSSERVO42C and disable bluetooth which would conflict with it.
+enable_uart=1
+dtoverlay=disable-bt

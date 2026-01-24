@@ -50,4 +50,22 @@ if [ -f "$ROOTFS_DIR/boot/firmware/config.txt" ]; then
 fi
 install -m 644 config.txt "$ROOTFS_DIR/boot/firmware/config.txt"
 
+# Disable Serial Console (UART Login) ---
+CMDLINE="$ROOTFS_DIR/boot/firmware/cmdline.txt"
+
+if [ -f "$CMDLINE" ]; then
+    echo "Disabling serial console in cmdline.txt..."
+    # Remove console=serial0,115200 (or ttyAMA0/ttyS0) to stop kernel messages going to UART
+    # We match console= followed by serial0, ttyAMA0, or ttyS0, followed by baud rate
+    sed -i -E 's/console=(serial0|ttyAMA0|ttyS0),[0-9]+ //g' "$CMDLINE"
+    sed -i -E 's/console=(serial0|ttyAMA0|ttyS0),[0-9]+//g' "$CMDLINE"
+else
+    echo "Warning: $CMDLINE not found. Could not disable serial console kernel args."
+fi
+
+# Mask the systemd services that spawn login prompts on UART
+# We mask all common Raspberry Pi UART identifiers to be sure.
+echo "Masking serial getty services..."
+run_in_chroot "systemctl mask serial-getty@ttyAMA0.service serial-getty@ttyS0.service serial-getty@serial0.service"
+
 echo "--- Stringman Component Setup Complete ---"

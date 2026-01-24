@@ -105,6 +105,21 @@ Upload to Pypi
 
     python3 -m twine upload dist/*
 
+### QA scripts
+
+Note that if you are proceeding to QA scripts right after doing the steps above you must reboot and then stop the service before running those scrips.
+
+    sudo reboot now
+
+log back in
+
+    sudo systemctl stop cranebot.service
+
+Run QA scripts for the specific component type
+
+    source venv/bin/activate
+    qa-anchor
+
 ## Training models
 
 
