@@ -4,11 +4,11 @@
 
 On a raspberry pi with suitable ram, such as a Pi 5,
 with [rpi-image-gen](https://github.com/raspberrypi/rpi-image-gen) checked out into a directory which is a sibling of this repo,
-Build the image with 
+Build the pilot anchor image with 
 
     ./rpi-image-gen build \
       -S ../cranebot3-firmware/stringman-pilot-rpi-image/ \
-      -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/stringman.yaml \
+      -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/anchor.yaml \
       -- IGconf_device_user1pass='Fo0bar!!'
 
 If an SD card reader is attached to the Pi that this was run on, you can immediately write the image with this command
