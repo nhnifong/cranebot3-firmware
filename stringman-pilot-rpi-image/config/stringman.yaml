@@ -7,7 +7,6 @@ device:
   layer: rpizero2w
 
 image:
-  name: stringman-zero2w
   layer: image-rpios
 
 layer:

@@ -74,4 +74,7 @@ fi
 echo "Masking serial getty services..."
 run_in_chroot "systemctl mask serial-getty@ttyAMA0.service serial-getty@ttyS0.service serial-getty@serial0.service"
 
+echo "Setting Wi-Fi Country Code..."
+run_in_chroot "raspi-config nonint do_wifi_country US"
+
 echo "--- Stringman Component Setup Complete ---"
