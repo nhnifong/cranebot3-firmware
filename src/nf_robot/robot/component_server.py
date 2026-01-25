@@ -52,12 +52,16 @@ async def asyncmain():
     elif len(addrs) == 0:
         from anchor_server import RaspiAnchorServer
 
-        with open('server.conf', 'r') as file:
+        # to differentiate power anchor, look for file written by anchor_eval.py
+        component_type = 'anchor'
+        try:
+            with open('server.conf', 'r') as file:
+                for line in file:
+                    line = line.strip()  # Remove leading/trailing whitespace
+                    if not line.startswith('#') and line:  # Check if line is not a comment and is not empty
+                        component_type = line
+        except FileNotFoundError:
             component_type = 'anchor'
-            for line in file:
-                line = line.strip()  # Remove leading/trailing whitespace
-                if not line.startswith('#') and line:  # Check if line is not a comment and is not empty
-                    component_type = line
 
         powerline = component_type == 'power anchor' # TODO differentiate in some automatic way
         ras = RaspiAnchorServer(powerline)

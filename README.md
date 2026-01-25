@@ -117,9 +117,11 @@ log back in
 
 Run QA scripts for the specific component type as root
 
-    sudo /opt/robot/env/bin/qa-anchor
+    sudo /opt/robot/env/bin/qa-anchor [power_anchor]
     sudo /opt/robot/env/bin/qa-gripper
     sudo /opt/robot/env/bin/qa-gripper-arp
+
+These scripts both check whether everything is connected as it should be and in the case of anchors, set whether it is a power anchor or not.
 
 ## Training models
 
