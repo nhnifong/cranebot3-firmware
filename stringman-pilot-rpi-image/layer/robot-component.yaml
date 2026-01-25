@@ -17,6 +17,8 @@ mmdebstrap:
     - libzbar0
     - network-manager 
     - git
+    - iw
+    - wpasupplicant
   
   customize-hooks:
     - 'bash "${SRCROOT}/setup.sh" "$1"'
