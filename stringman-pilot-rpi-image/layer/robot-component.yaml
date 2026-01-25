@@ -3,6 +3,7 @@
 # X-Env-Layer-Category: robot
 # X-Env-Layer-Desc: Dependencies and setup for stringman robot component
 # X-Env-Layer-Requires: trixie-minbase
+# X-Env-VarRequires: IGconf_componenttype
 # METAEND
 
 mmdebstrap:

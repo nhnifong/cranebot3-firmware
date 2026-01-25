@@ -36,6 +36,12 @@ run_in_chroot "/opt/robot/env/bin/pip install \"nf_robot[pi]\""
 # Install Systemd Service
 install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
 
+# Inject component type into ExecStart (Required by layer definition)
+echo "Configuring cranebot.service with component type: $IGconf_componenttype"
+# Appends the argument to the ExecStart line (e.g. ".../component-server" -> ".../component-server <type>")
+sed -i "s|^ExecStart=.*|& $IGconf_componenttype|" "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
+
+
 # Enable the service (by creating the symlink manually or using systemctl in chroot)
 run_in_chroot "systemctl enable cranebot.service"
 

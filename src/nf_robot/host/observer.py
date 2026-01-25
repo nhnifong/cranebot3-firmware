@@ -1757,7 +1757,7 @@ def main():
     python3 observer.py --config=conf_bedroom.json local
 
     """
-    parser = argparse.ArgumentParser(description="CenteringNet System")
+    parser = argparse.ArgumentParser(description="Stringman motion controller")
     parser.add_argument("--config", type=str, default='configuration.json')
     parser.add_argument(
             '--telemetry_env',
