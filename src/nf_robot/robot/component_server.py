@@ -1,6 +1,7 @@
 import sys
 import logging
 import time
+import argparse
 
 from nf_robot.robot.connect_wifi import ensure_connection
 
@@ -25,32 +26,38 @@ sys.excepthook = handle_exception
 import asyncio
 
 async def main():
+    parser = argparse.ArgumentParser(description="Stringman Component")
+    parser.add_argument(
+            'component_type',
+            type=str,
+            choices=['anchor', 'power_anchor', 'gripper', 'arpeggio_gripper'],
+            help="The type of component server to run (choices: anchor, power_anchor, gripper, arpeggio_gripper)"
+        )
+    args = parser.parse_args()
+
     connected = await ensure_connection()
     if not connected:
         logging.error('Wifi connection script failed to find a network')
         quit()
 
-    with open('server.conf', 'r') as file:
-        for line in file:
-            line = line.strip()  # Remove leading/trailing whitespace
-            if not line.startswith('#') and line:  # Check if line is not a comment and is not empty
-                component_type = line
-                logging.info(f'Starting cranebot server of type {component_type}')
-                break
-
-    if component_type == 'anchor':
+    if args.component_type == 'anchor':
         from anchor_server import RaspiAnchorServer
         ras = RaspiAnchorServer(False)
         r = await ras.main()
 
-    elif component_type == 'power anchor':
+    elif args.component_type == 'power_anchor':
         from anchor_server import RaspiAnchorServer
         ras = RaspiAnchorServer(True)
         r = await ras.main()
 
-    elif component_type == 'gripper':
+    elif args.component_type == 'gripper':
         from gripper_server import RaspiGripperServer
         gs = RaspiGripperServer()
+        r = await gs.main()
+
+    elif args.component_type == 'arpeggio_gripper':
+        from gripper_arp_server import GripperArpServer
+        gs = GripperArpServer()
         r = await gs.main()
 
 asyncio.run(main())
