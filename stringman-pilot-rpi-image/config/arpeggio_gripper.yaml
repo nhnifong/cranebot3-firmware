@@ -1,6 +1,0 @@
-include:
-  file: stringman.yaml
-variables:
-  componenttype: arpeggio_gripper
-image:
-  name: stringman-pilot-arpeggio-gripper

@@ -1,6 +1,0 @@
-include:
-  file: stringman.yaml
-variables:
-  componenttype: power_anchor
-image:
-  name: stringman-pilot-power-anchor

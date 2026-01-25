@@ -1,6 +1,0 @@
-include:
-  file: stringman.yaml
-variables:
-  componenttype: gripper
-image:
-  name: stringman-pilot-gripper

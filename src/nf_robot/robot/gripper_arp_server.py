@@ -52,7 +52,7 @@ class GripperArpServer(RobotComponentServer):
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'
 
-        # i2c = busio.I2C(board.SCL, board.SDA)
+        i2c = busio.I2C(board.SCL, board.SDA)
         # self.imu = BNO08X_I2C(i2c, address=0x4b)
         # self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
 

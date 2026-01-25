@@ -1,6 +1,0 @@
-include:
-  file: stringman.yaml
-variables:
-  componenttype: anchor
-image:
-  name: stringman-pilot-anchor
