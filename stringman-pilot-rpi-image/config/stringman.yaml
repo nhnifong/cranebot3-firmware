@@ -7,7 +7,7 @@ device:
   layer: rpizero2w
 
 image:
-  name: stringman-pilot
+  name: stringman-zero2w
   layer: image-rpios
 
 layer:

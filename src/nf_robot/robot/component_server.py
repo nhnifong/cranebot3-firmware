@@ -26,8 +26,7 @@ sys.excepthook = handle_exception
 
 import asyncio
 
-async def main():
-
+async def asyncmain():
     connected = await ensure_connection()
     if not connected:
         logging.error('Wifi connection script failed to find a network')
@@ -64,4 +63,8 @@ async def main():
         ras = RaspiAnchorServer(powerline)
         r = await ras.main()
 
-asyncio.run(main())
+def main():
+    asyncio.run(asyncmain())
+
+if __name__ == "__main__":
+    main()

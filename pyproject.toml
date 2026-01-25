@@ -60,7 +60,7 @@ stringman-headless = "nf_robot.host.observer:main"
 # QA Tools
 qa-anchor = "nf_robot.qa.anchor_eval:main"
 qa-gripper = "nf_robot.qa.gripper_eval:main"
-qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
+qa-gripper-arp = "nf_robot.qa.gripper_arp_eval:main"
 
 [tool.setuptools.package-data]
 "nf_robot.scripts" = ["*.sh"]
