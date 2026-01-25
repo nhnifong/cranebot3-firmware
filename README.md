@@ -115,13 +115,13 @@ log back in
 
     sudo systemctl stop cranebot.service
 
-Run QA scripts for the specific component type
+Run QA scripts for the specific component type as root
 
-    source venv/bin/activate
-    qa-anchor
+    sudo /opt/robot/env/bin/qa-anchor
+    sudo /opt/robot/env/bin/qa-gripper
+    sudo /opt/robot/env/bin/qa-gripper-arp
 
 ## Training models
-
 
 ## Support this project
 
