@@ -1,0 +1,4 @@
+include:
+  file: stringman.yaml
+variables:
+  componenttype: arpeggio_gripper
