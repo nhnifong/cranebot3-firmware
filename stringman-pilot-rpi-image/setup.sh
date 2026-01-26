@@ -39,14 +39,14 @@ run_in_chroot "usermod -aG netdev pi"
 
 # Create Polkit rule to allow 'netdev' group to manage NetworkManager
 # This, combined with libpam-systemd, fixes the "property missing" error for non-root users.
-# mkdir -p "$ROOTFS_DIR/etc/polkit-1/rules.d"
-# cat <<EOF > "$ROOTFS_DIR/etc/polkit-1/rules.d/50-allow-netdev.rules"
-# polkit.addRule(function(action, subject) {
-#   if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 && subject.isInGroup("netdev")) {
-#     return polkit.Result.YES;
-#   }
-# });
-# EOF
+mkdir -p "$ROOTFS_DIR/etc/polkit-1/rules.d"
+cat <<EOF > "$ROOTFS_DIR/etc/polkit-1/rules.d/50-allow-netdev.rules"
+polkit.addRule(function(action, subject) {
+  if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 && subject.isInGroup("netdev")) {
+    return polkit.Result.YES;
+  }
+});
+EOF
 
 # Create missing udev rule for Camera DMA Heaps ---
 # Minimal images lack the rule that lets 'video' group access /dev/dma_heap/*
@@ -54,6 +54,9 @@ run_in_chroot "usermod -aG netdev pi"
 echo "Creating udev rules for DMA Heap access..."
 mkdir -p "$ROOTFS_DIR/etc/udev/rules.d"
 echo 'SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-camera-perms.rules"
+
+# GPIO Access (Fixes "No access to /dev/mem" by enabling /dev/gpiomem for gpio group)
+echo 'KERNEL=="gpiomem", GROUP="gpio", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-gpio.rules"
 
 # Install Systemd Service
 install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
