@@ -33,6 +33,17 @@ run_in_chroot "python3 -m venv --system-site-packages /opt/robot/env"
 run_in_chroot "/opt/robot/env/bin/pip install --upgrade pip"
 run_in_chroot "/opt/robot/env/bin/pip install \"nf_robot[pi]\""
 
+# Give pi permission to run this service
+run_in_chroot "chown -R pi:pi /opt/robot"
+run_in_chroot "usermod -aG netdev pi"
+
+# Create missing udev rule for Camera DMA Heaps ---
+# Minimal images lack the rule that lets 'video' group access /dev/dma_heap/*
+# This fixes "Could not open any dma-buf provider" when running as non-root.
+echo "Creating udev rules for DMA Heap access..."
+mkdir -p "$ROOTFS_DIR/etc/udev/rules.d"
+echo 'SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-camera-perms.rules"
+
 # Install Systemd Service
 install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
 
