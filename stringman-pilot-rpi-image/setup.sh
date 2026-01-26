@@ -37,6 +37,17 @@ run_in_chroot "/opt/robot/env/bin/pip install \"nf_robot[pi]\""
 run_in_chroot "chown -R pi:pi /opt/robot"
 run_in_chroot "usermod -aG netdev pi"
 
+# Create Polkit rule to allow 'netdev' group to manage NetworkManager
+# This, combined with libpam-systemd, fixes the "property missing" error for non-root users.
+# mkdir -p "$ROOTFS_DIR/etc/polkit-1/rules.d"
+# cat <<EOF > "$ROOTFS_DIR/etc/polkit-1/rules.d/50-allow-netdev.rules"
+# polkit.addRule(function(action, subject) {
+#   if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 && subject.isInGroup("netdev")) {
+#     return polkit.Result.YES;
+#   }
+# });
+# EOF
+
 # Create missing udev rule for Camera DMA Heaps ---
 # Minimal images lack the rule that lets 'video' group access /dev/dma_heap/*
 # This fixes "Could not open any dma-buf provider" when running as non-root.

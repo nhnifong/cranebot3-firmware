@@ -18,6 +18,9 @@ mmdebstrap:
     - git
     - iw
     - wpasupplicant
+    - libpam-systemd
+    - polkitd
+    - pkexec
   
   customize-hooks:
     - 'bash "${SRCROOT}/setup.sh" "$1"'
