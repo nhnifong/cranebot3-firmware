@@ -16,7 +16,7 @@ Build the pilot anchor image with
 If an SD card reader is attached to the Pi that this was run on, you can immediately write the image with this command
 but *make sure you are writing to the correct device*
 
-    sudo rpi-imager --cli ~/rpi-image-gen/work/image-stringman-pilot/stringman-pilot.img /dev/sda
+    sudo rpi-imager --cli ~/rpi-image-gen/work/image-stringman-zero2w/stringman-zero2w.img /dev/sda
 
 If it does not boot correctly but you can still get into it with ethernet, then check out the logs with
 
