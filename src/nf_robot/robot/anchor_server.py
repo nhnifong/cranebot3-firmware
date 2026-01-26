@@ -289,7 +289,7 @@ class RobotComponentServer:
 
         ip = "127.0.0.1" # if ip remains unchanged, we are in a unit test
         if self.zc is None:
-            self.zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.All)
+            self.zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.V4Only)
             ip = self.get_wifi_ip()
 
         logging.info(f'zeroconf instance advertising on {ip}')
