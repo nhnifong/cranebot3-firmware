@@ -40,17 +40,17 @@ async def asyncmain():
         addrs = set([])
 
     if addrs == set([0x29, 0x4b, 0x17]): # gripper
-        from gripper_server import RaspiGripperServer
+        from nf_robot.robot.gripper_server import RaspiGripperServer
         gs = RaspiGripperServer()
         r = await gs.main()
 
     elif set([0x48, 0x29]) in addrs: # arpeggio_gripper with or without IMU
-        from gripper_arp_server import GripperArpServer
+        from nf_robot.robot.gripper_arp_server import GripperArpServer
         gs = GripperArpServer()
         r = await gs.main()
 
     elif len(addrs) == 0:
-        from anchor_server import RaspiAnchorServer
+        from nf_robot.robot.anchor_server import RaspiAnchorServer
 
         # to differentiate power anchor, look for file written by anchor_eval.py
         component_type = 'anchor'
