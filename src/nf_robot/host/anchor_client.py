@@ -14,6 +14,7 @@ import os
 from collections import defaultdict, deque
 from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHandshake, ConnectionClosedOK
 import copy
+from scipy.spatial.transform import Rotation
 
 from nf_robot.common.cv_common import *
 from nf_robot.common.pose_functions  import *
@@ -247,7 +248,10 @@ class ComponentClient:
                 # stabilize and resize for centering network input
                 temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
                 fudge_latency =  0.3
-                gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
+                try:
+                    gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
+                except IndexError:
+                    gripper_quat = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True).as_quat()
                 if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
                     # roomspin = 15/180*np.pi
                     roomspin = 0
