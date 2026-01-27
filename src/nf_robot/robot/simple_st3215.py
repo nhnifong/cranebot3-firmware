@@ -213,6 +213,7 @@ class SimpleSTS3215:
 
     def set_position(self, servo_id, position, speed=2400, acc=50):
         """Moves the servo to a specific target position."""
+        position = int(position)
         position = max(0, min(4095, position))
         
         pos_L, pos_H = position & 0xFF, (position >> 8) & 0xFF
