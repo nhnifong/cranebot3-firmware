@@ -192,6 +192,7 @@ class Gripper(Entity):
             self.wrist_move -= WRIST_SPEED
 
     def update(self):
+        print(f'f {self.finger_target} w {self.wrist_target}')
         if self.finger_move != 0 or self.wrist_move != 0:
 
             self.finger_target += self.finger_move

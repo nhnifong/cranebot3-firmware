@@ -75,7 +75,7 @@ class GripperArpServer(RobotComponentServer):
         self.service_name = self.service_type + '.' + unique
 
         self.desired_finger_angle = 0
-        self.desired_wist_angle = 0
+        self.desired_wrist_angle = 0
 
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.
@@ -95,6 +95,9 @@ class GripperArpServer(RobotComponentServer):
         # 1.35 ms to read data from both motors with two synchronous calls
         finger_data = self.motors.get_feedback(FINGER)
         wrist_data = self.motors.get_feedback(WRIST)
+
+        finger_angle = remap(finger_data['position'], self.finger_open_pos, self.finger_closed_pos, -90, 90)
+        wrist_angle = remap(wrist_data['position'], 0, 4000, 0, 360)
 
         pressure_v = remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
 
@@ -146,8 +149,8 @@ class GripperArpServer(RobotComponentServer):
             
     def setWrist(self, angle):
         # Accept an angle in degrees.
-        self.desired_wist_angle = angle
-        target_pos = remap(self.desired_finger_angle, -90, 90, self.finger_open_pos, self.finger_closed_pos)
+        self.desired_wrist_angle = angle % 360
+        target_pos = remap(self.desired_finger_angle, 0, 360, 0, 4000)
         self.motors.set_position(WRIST, target_pos)
 
     async def processOtherUpdates(self, update, tg):
