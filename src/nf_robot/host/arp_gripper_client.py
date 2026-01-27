@@ -65,6 +65,7 @@ class ArpeggioGripperClient(ComponentClient):
                 range = distance_measurement,
                 angle = angle,
                 pressure = voltage,
+                wrist = wrist,
             ))
 
     def handle_detections(self, detections, timestamp):

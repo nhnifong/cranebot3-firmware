@@ -63,9 +63,9 @@ class GripperArpServer(RobotComponentServer):
         self.rangefinder.start_ranging()
 
         self.ads = ADS1015(i2c)
-        self.pressure_sensor = AnalogIn(ads, ads1x15.Pin.A0)
+        self.pressure_sensor = AnalogIn(self.ads, ads1x15.Pin.A0)
 
-        self.motors = SimpleSTS3215(port='/dev/serial0', timeout=0.5)
+        self.motors = SimpleSTS3215()
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
         self.spooler = None
@@ -120,11 +120,12 @@ class GripperArpServer(RobotComponentServer):
         Check recently read data for overload conditions and act on it.
         TODO, we need to experiment and find some more sensible behavior here, as well as to have a reset mechanism.
         """
-        MAX_LOAD = 750 # TODO I think this is measured in milliamps, find out.
-        if finger_data['load'] > MAX_LOAD:
+        MAX_LOAD = 750 # Motor returns a value between 0 and 1000.
+        # but sometimes values are over 1000 in which case they should be ignored
+        if finger_data['load'] < 1000 and finger_data['load'] > MAX_LOAD:
             logging.warning(f"Finger motor load ({finger_data['load']}) exceeds limit ({MAX_LOAD}). motor disabled")
             self.motors.torque_enable(FINGER, False)
-        if wrist_data['load'] > MAX_LOAD:
+        if wrist_data['load'] < 1000 and wrist_data['load'] > MAX_LOAD:
             logging.warning(f"Finger motor load ({wrist_data['load']}) exceeds limit ({MAX_LOAD}). motor disabled")
             self.motors.torque_enable(WRIST, False)
 

@@ -92,6 +92,9 @@ class Gripper(betterproto2.Message):
     service_name: "str | None" = betterproto2.field(
         1, betterproto2.TYPE_STRING, optional=True
     )
+    """
+    service name also indicates which type it is, such as pilot gripper or arp.
+    """
 
     address: "str | None" = betterproto2.field(
         2, betterproto2.TYPE_STRING, optional=True

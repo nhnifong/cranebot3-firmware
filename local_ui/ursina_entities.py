@@ -139,19 +139,15 @@ class Gripper(Entity):
             position=(0,-250,0),
         )
 
-        self.remap = {
-            'r down': 'up arrow down',
-            'r up': 'up arrow up',
-            'r hold': 'up arrow hold',
-            'f down': 'down arrow down',
-            'f up': 'down arrow up',
-            'f hold': 'down arrow hold',
-        }
         # winch line jog speed
-        self.jog_speed = 0
         self.vid_visible = False
         self.ip_address = None
-        self.open = True
+
+        self.finger_target = 0
+        self.wrist_target = 0
+
+        self.finger_move = 0
+        self.wrist_move = 0
 
     def setStatus(self, status):
         self.label.text = f"Gripper\n{status}"
@@ -178,70 +174,53 @@ class Gripper(Entity):
         content=(
             Button(text='Open SSH Terminal', color=color.gold, text_color=color.black,
                 on_click=partial(launch_ssh_terminal, self.ip_address)),
-            Button(text='Manual Spool Control', color=color.blue, text_color=color.white,
-                on_click=self.open_manual_spool_control),
             ),
         popup=True,
         )
 
-    def open_manual_spool_control(self):
-        self.wp.enabled = False
-        self.jog_speed = 0.1
-        self.manual_spool_wp = WindowPanel(
-            title="Manual Spool Control",
-            content=(
-                Text(text="Use buttons or Up/Down arrow keys to control spool."),
-                # Button(text='Reel in 5cm', color=color.orange, text_color=color.black,
-                #     on_click=partial(self.reel_manual, -0.05)),
-                # Button(text='Reel out 5cm', color=color.orange, text_color=color.black,
-                #     on_click=partial(self.reel_manual, 0.05)),
-            ),
-            popup=True,
-        )
-
     def input(self, key):
-        canMove = hasattr(self, "manual_spool_wp") and self.manual_spool_wp.enabled
-        mkey = key
-        if key in self.remap:
-            canMove = True
-            mkey = self.remap[key]
+        FINGER_SPEED = 1
+        WRIST_SPEED = 1
 
+        if key == ['space', 'shift up']:
+            self.finger_move += FINGER_SPEED
+        elif key in ['space up', 'left shift']:
+            self.finger_move -= FINGER_SPEED
+        elif key in ['x', 'z up']:
+            self.wrist_move += WRIST_SPEED
+        elif key in ['z', 'x up']:
+            self.wrist_move -= WRIST_SPEED
 
-        if canMove:
-            print(f'Gripper client input key {key} remapped to {mkey} and movement enabled')
-            if mkey == 'up arrow':
-                self.reel_manual(-self.jog_speed)
-            elif mkey == 'up arrow hold':
-                if self.jog_speed < MAX_JOG_SPEED:
-                    self.jog_speed += 0.005
-                self.reel_manual(-self.jog_speed)
-            elif mkey == 'up arrow up':
-                self.jog_speed = 0.1
-                self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=True, speed=0))
+    def update(self):
+        if self.finger_move != 0 or self.wrist_move != 0:
 
+            self.finger_target += self.finger_move
+            self.wrist_target += self.wrist_move
 
-            elif mkey == 'down arrow':
-                self.reel_manual(self.jog_speed)
-            elif mkey == 'down arrow hold':
-                if self.jog_speed < MAX_JOG_SPEED:
-                    self.jog_speed += 0.005
-                self.reel_manual(self.jog_speed)
-            elif mkey == 'down arrow up':
-                self.jog_speed = 0.1
-                self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=True, speed=0))
+            self.ui.send_ob(move=control.CombinedMove(
+                finger = self.finger_target,
+                wrist = self.wrist_target,
+            ))
 
-    def reel_manual(self, metersPerSecond):
-        self.ui.send_ob(jog_spool=control.JogSpool(is_gripper=True, speed=metersPerSecond))
-
-    def setFingerAngle(self, commanded_angle):
+    def setFingerAngle(self, angle):
         """
-        Sets the appearance of the finger angle.
-        commanded_angle is int the range (-90, 90) This is the value that was commanded of the inventor hat mini
-        this function translates it into the pilot hardware gripper's physical angle 
+        Called when the robot sends telemetry feedback about actual finger position
+        Sets the appearance of the finger.
+        angle is in the range (-90, 90)
+        this function translates it into the physical angle for rendering
         """
+        if self.finger_move == 0:
+            self.finger_target = angle
         phys_angle = mapval(commanded_angle, -90, 90, 60, 0)
         self.left_finger.rotation = (0,0,phys_angle)
         self.right_finger.rotation = (0,0,-phys_angle)
+
+    def setWristAngle(self, angle):
+        """
+        Called when the robot sends telemetry feedback about actual wrist position
+        """
+        if self.wrist_move == 0:
+            self.wrist_target = angle
 
     def toggle_closed(self):
         """Send a command to open or close the gripper."""

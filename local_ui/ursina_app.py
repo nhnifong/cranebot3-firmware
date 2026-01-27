@@ -434,9 +434,7 @@ class ControlPanelUI:
         self.send_ob(scale_room=control.ScaleRoom(tiltcams=amount))
 
     def input(self, key):
-        if key == 'space':
-            self.gripper.toggle_closed()
-        elif key == 'c':
+        if key == 'c':
             self.simple_command('half_cal')
         elif key == 'escape' and self.gamepad_window.enabled:
             self.gamepad_window.enabled = False
@@ -448,6 +446,8 @@ class ControlPanelUI:
             self.tilt_cams(0.25)
         elif key == '/':
             self.tilt_cams(-0.25)
+        else:
+            print(key)
 
         was_dir = self.direction
 
@@ -655,6 +655,7 @@ class ControlPanelUI:
     def _handle_grip_sensors(self, item: telemetry.GripperSensors):
         self.gripper.setLaserRange(item.range)
         self.gripper.setFingerAngle(item.angle)
+        self.gripper.setWristAngle(item.wrist)
 
     def _handle_grip_cam_preditions(self, item: telemetry.GripCamPredictions):
         self.cam_views[None].set_predictions(item)

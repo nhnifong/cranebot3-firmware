@@ -90,12 +90,19 @@ message Popup {
 message GripperSensors {
 	// measured laser range from palm to obstacle in meters. Unset when infinite
 	float range = 1;
-	// the value commanded of the finger servo [-90,90].
+
+	// Finger angle from full open to full closed [-90,90]
+	// In the pilot gripper this is the value last commanded of the finger servo.
+	// In the arpeggio gripper, this is the last measured value
 	// map this to [0,60] to get the angle in degrees of the first finger bone.
 	// the second bone is a deterministic function of the first one, but I don't know the function.
 	float angle = 2;
+
 	// The voltage on the sensing finger pad, higher is more pressure. [0,3.3]
 	float pressure = 3;
+
+	// Wrist angle in degrees [0,360]
+	float wrist = 4;
 }
 
 // values predicted by model using the gripper camera provided to UI for diagnostic visualization

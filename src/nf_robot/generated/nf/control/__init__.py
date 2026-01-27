@@ -207,6 +207,16 @@ class CombinedMove(betterproto2.Message):
     Set the winch line speed
     Line lengthening speed in meters per second
     when unset, winch spool continues at previously commanded speed.
+    not used in arp
+    """
+
+    wrist: "float | None" = betterproto2.field(
+        5, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    Set the wrist angle in degrees
+    when unset, wrist command will not be issued, wrist continues holding previously commanded angle
+    Not used in pilot
     """
 
 
