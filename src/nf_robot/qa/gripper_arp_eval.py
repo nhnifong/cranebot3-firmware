@@ -5,11 +5,13 @@ import socket
 import subprocess
 import board
 import busio
+import json
 # import adafruit_bno08x
 # from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X # rangefinder
-from simple_st3215 import SimpleSTS3215
 from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital converter for pressure
+
+from nf_robot.robot.simple_st3215 import SimpleSTS3215
 
 FINGER_MOTOR_ID = 1
 WRIST_MOTOR_ID = 2
@@ -20,10 +22,19 @@ FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 
 def main():
     i2c = busio.I2C(board.SCL, board.SDA)
+    sts = SimpleSTS3215(port='/dev/serial0', timeout=0.5)
+
+    def wiggle_wrist():
+        sts.torque_enable(WRIST_MOTOR_ID, True)
+        pos = sts.get_position(WRIST_MOTOR_ID)
+        sts.set_position(WRIST_MOTOR_ID, pos+200)
+        time.sleep(0.5)
+        sts.set_position(WRIST_MOTOR_ID, pos)
+        time.sleep(0.5)
+        sts.torque_enable(WRIST_MOTOR_ID, False)
 
     input("Plug only the wrist motor into the board and press Enter...")
     # set id of this motor to 2. let the finger motor id remain 1, the factory setting.
-    sts = SimpleSTS3215(port='/dev/serial0', timeout=0.5)
 
     # Perform a full scan (0-253) to ensure we don't accidentally broadcast to multiple motors
     # If we see ANY more than 1 motor, we abort to prevent ID collisions.
@@ -31,25 +42,41 @@ def main():
     servos = sts.scan(8)
 
     if len(servos) == 2 and (1 in servos and 2 in servos):
-        print("Servo IDs correct")
+        # spin the wrist motor a small amount
+        input(f"Found exactly two servos with IDs 1 and 2. Press enter to move servo 2 and note which it is")
+        wiggle_wrist()
+        val = input("Did the wrist move? y/n")
+        if val == 'y':
+            print('servo IDs correct.')
+        else:
+            input('Servo IDs are backwards will be swapped. press enter to confirm.')
+            sts.change_id(WRIST_MOTOR_ID, 3)
+            sts.change_id(FINGER_MOTOR_ID, WRIST_MOTOR_ID)
+            sts.change_id(3, FINGER_MOTOR_ID)
     elif len(servos) == 0:
         print("Error: No servos found. Check connections.")
         quit()
     elif len(servos) > 1:
         print(f"Error: Found {len(servos)} servos ({servos}).")
         print("Changing ID with multiple servos connected will change ALL of them to the same ID.")
-        print("Please connect ONLY the wrist motor.")
+        print("If both have the same id, unplug one and rerun this script")
         quit()
-    else:
+    elif len(servos)==1:
         current_id = servos[0]
-        print(f"Found exactly one servo with ID {current_id}.")
-        
-        if current_id == WRIST_MOTOR_ID:
-            print(f"Servo is already set to ID {WRIST_MOTOR_ID}.")
+        input(f"Found exactly one servo with ID {current_id}. Press enter to move it and note which it is")
+        wiggle_wrist()
+        val = input("Did the wrist move? y/n")
+        if val == 'y':
+            if current_id == WRIST_MOTOR_ID:
+                print(f"Servo is wrist and already set correctly to {WRIST_MOTOR_ID}.")
+            else:
+                sts.change_id(current_id, WRIST_MOTOR_ID)
         else:
-            sts.change_id(current_id, WRIST_MOTOR_ID)
+            if current_id == FINGER_MOTOR_ID:
+                print(f"Servo is finger and already set correctly to {FINGER_MOTOR_ID}.")
+            else:
+                sts.change_id(current_id, WRIST_MOTOR_ID)
 
-    input("Plug in both motors and press Enter...")
     time.sleep(0.1)
     assert sts.ping(FINGER_MOTOR_ID), "Finger motor did not respond to ping"
     assert sts.ping(WRIST_MOTOR_ID), "Wrist motor did not respond to ping"
@@ -101,15 +128,6 @@ def main():
     sts.set_position(FINGER_MOTOR_ID, int(finger_closed_pos+FINGER_TRAVEL_STEPS*0.3))
     time.sleep(0.75)
     sts.torque_enable(FINGER_MOTOR_ID, False)
-
-    # spin the wrist motor a small amount
-    sts.torque_enable(WRIST_MOTOR_ID, True)
-    pos = sts.get_position(WRIST_MOTOR_ID)
-    sts.set_position(WRIST_MOTOR_ID, pos+200)
-    time.sleep(0.5)
-    sts.set_position(WRIST_MOTOR_ID, pos)
-    time.sleep(0.5)
-    sts.torque_enable(WRIST_MOTOR_ID, False)
 
     # confim readings from IMU
     # i2c = busio.I2C(board.SCL, board.SDA)

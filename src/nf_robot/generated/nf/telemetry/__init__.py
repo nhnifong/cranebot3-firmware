@@ -210,7 +210,9 @@ class GripperSensors(betterproto2.Message):
 
     angle: "float" = betterproto2.field(2, betterproto2.TYPE_FLOAT)
     """
-    the value commanded of the finger servo [-90,90].
+    Finger angle from full open to full closed [-90,90]
+    In the pilot gripper this is the value last commanded of the finger servo.
+    In the arpeggio gripper, this is the last measured value
     map this to [0,60] to get the angle in degrees of the first finger bone.
     the second bone is a deterministic function of the first one, but I don't know the function.
     """
@@ -218,6 +220,11 @@ class GripperSensors(betterproto2.Message):
     pressure: "float" = betterproto2.field(3, betterproto2.TYPE_FLOAT)
     """
     The voltage on the sensing finger pad, higher is more pressure. [0,3.3]
+    """
+
+    wrist: "float" = betterproto2.field(4, betterproto2.TYPE_FLOAT)
+    """
+    Wrist angle in degrees [0,360]
     """
 
 

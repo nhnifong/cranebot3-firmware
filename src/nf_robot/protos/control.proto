@@ -83,7 +83,13 @@ message CombinedMove {
   // Set the winch line speed
   // Line lengthening speed in meters per second
   // when unset, winch spool continues at previously commanded speed.
+  // not used in arp
   optional float winch = 4;
+
+  // Set the wrist angle in degrees
+  // when unset, wrist command will not be issued, wrist continues holding previously commanded angle
+  // Not used in pilot
+  optional float wrist = 5;
 }
 
 // Adds the named episode control events to a set
