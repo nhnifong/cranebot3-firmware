@@ -211,7 +211,7 @@ class Gripper(Entity):
         """
         if self.finger_move == 0:
             self.finger_target = angle
-        phys_angle = mapval(commanded_angle, -90, 90, 60, 0)
+        phys_angle = mapval(angle, -90, 90, 60, 0)
         self.left_finger.rotation = (0,0,phys_angle)
         self.right_finger.rotation = (0,0,-phys_angle)
 

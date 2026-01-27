@@ -7,6 +7,7 @@ import pickle
 import os
 import board
 import busio
+import json
 # import adafruit_bno08x
 # from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X # rangefinder
@@ -132,8 +133,7 @@ class GripperArpServer(RobotComponentServer):
 
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
-        t1 = asyncio.create_task(self.watchMotorLoad())
-        return [t1]
+        return []
             
     def setFingers(self, angle):
         # use same finger "angle" range as previous gripper. translate internally.
