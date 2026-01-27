@@ -14,7 +14,7 @@ from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital convert
 
 from nf_robot.robot.anchor_server import RobotComponentServer
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
-from nf_robot.util import remap, clamp
+from nf_robot.common.util import remap, clamp
 
 """ Server for Arpeggio Gripper
 
@@ -103,6 +103,7 @@ class GripperArpServer(RobotComponentServer):
             'fing_v': pressure_v,
             'fing_a': finger_data['position'],
             'wrist_a': wrist_data['position'],
+            # range added below
         }
 
         if self.rangefinder.data_ready:
@@ -137,10 +138,10 @@ class GripperArpServer(RobotComponentServer):
         self.motors.set_position(FINGER_MOTOR_ID, target_pos)
 
     async def processOtherUpdates(self, update, tg):
-        if 'zero_winch_line' in update:
-            tg.create_task(self.performZeroWinchLine())
         if 'set_finger_angle' in update:
             self.setFingers(clamp(float(update['set_finger_angle']), -90, 90))
+        if 'set_wrist_angle' in update:
+            self.setFingers(clamp(float(update['set_wrist_angle']), -180, 180))
 
 if __name__ == "__main__":
     logging.basicConfig(

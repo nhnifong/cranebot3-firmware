@@ -21,6 +21,7 @@ message Anchor {
 }
 
 message Gripper {
+  // service name also indicates which type it is, such as pilot gripper or arp.
   optional string service_name = 1;
   optional string address = 2;
   uint32 port = 3;

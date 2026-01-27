@@ -239,7 +239,7 @@ class RobotComponentServer:
 
         # thread for controlling stepper motor
         if self.spooler is not None:
-            spool_task = asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop))
+            self.extra_tasks.append(asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop)))
 
         # Call a function which subclasses implement to start tasks at startup that should remain running even if clients disconnect.
         # tasks started this way should run only while self.run_server is true
@@ -248,16 +248,14 @@ class RobotComponentServer:
 
         async with websockets.serve(self.handler, "0.0.0.0", port):
             logging.info("Websocket server started")
-            # cause the server to serve only as long as these other tasks are running
-            # note that you must always get the result from something run with asyncio.to_thread or it will silently pass exceptions.
-            result = await spool_task
+            # serve until there is some exception thrown
+            await asyncio.get_event_loop().create_future()
             # if those tasks finish, exiting this context will cause the server's close() method to be called.
             logging.info("Closing websocket server")
 
 
         await self.zc.async_unregister_all_services()
         logging.info("Service unregistered")
-        result = await spool_task
         if len(self.extra_tasks) > 0:
             result = await asyncio.gather(*self.extra_tasks)
 
