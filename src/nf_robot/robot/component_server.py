@@ -44,7 +44,7 @@ async def asyncmain():
         gs = RaspiGripperServer()
         r = await gs.main()
 
-    elif set([0x48, 0x29]) in addrs: # arpeggio_gripper with or without IMU
+    elif set([0x48, 0x29]).issubset(addrs): # arpeggio_gripper with or without IMU
         from nf_robot.robot.gripper_arp_server import GripperArpServer
         gs = GripperArpServer()
         r = await gs.main()
