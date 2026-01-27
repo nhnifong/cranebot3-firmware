@@ -108,7 +108,7 @@ class Gripper(Entity):
             color=gripper_color,
             **kwargs
         )
-        self.ui = ui,
+        self.ui = ui
         self.closed = False
         self.label_offset = (0.00, 0.04)
         self.label = Text(
@@ -244,7 +244,7 @@ class Gripper(Entity):
         self.right_finger.rotation = (0,0,-phys_angle)
 
     def toggle_closed(self):
-        """ Send a command to open or close the gripper """
+        """Send a command to open or close the gripper."""
         self.open = not self.open
         self.ui.send_ob(move=control.CombinedMove(finger = -30 if self.open else 85))
 

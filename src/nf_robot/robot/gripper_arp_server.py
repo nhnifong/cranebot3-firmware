@@ -73,16 +73,16 @@ class GripperArpServer(RobotComponentServer):
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = self.service_type + '.' + unique
 
-        self.last_finger_angle = 0
         self.desired_finger_angle = 0
+        self.desired_wist_angle = 0
 
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.
         try:
-            with open('offsets.pickle', 'rb') as f:
-                d = pickle.load(f)
-                self.last_finger_angle = d['last_finger_angle']
-                self.desired_finger_angle = d['last_finger_angle']
+            with open('arp_gripper_state.json', 'r') as f:
+                d = json.load(f)
+                self.finger_open_pos = d['finger_open_pos']
+                self.finger_closed_pos = d['finger_closed_pos']
         except FileNotFoundError:
             pass
         except EOFError: # corruption
@@ -113,35 +113,47 @@ class GripperArpServer(RobotComponentServer):
                 self.rangefinder.clear_interrupt()
                 self.update['grip_sensors']['range'] = distance / 100
 
+        self.checkMotorLoad(finger_data, wrist_data)
+
+    def checkMotorLoad(self, finger_data, wrist_data):
+        """
+        Check recently read data for overload conditions and act on it.
+        TODO, we need to experiment and find some more sensible behavior here, as well as to have a reset mechanism.
+        """
+        MAX_LOAD = 750 # TODO I think this is measured in milliamps, find out.
+        if finger_data['load'] > MAX_LOAD:
+            logging.warning(f"Finger motor load ({finger_data['load']}) exceeds limit ({MAX_LOAD}). motor disabled")
+            self.motors.torque_enable(FINGER, False)
+        if wrist_data['load'] > MAX_LOAD:
+            logging.warning(f"Finger motor load ({wrist_data['load']}) exceeds limit ({MAX_LOAD}). motor disabled")
+            self.motors.torque_enable(WRIST, False)
+
+
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
-        t2 = asyncio.create_task(self.saveOffsets())
-        return [t2]
-
-    async def saveOffsets(self):
-        """Periodically save winch length and finger position to disk so we don't recal after power out"""
-        i=0
-        while self.run_server:
-            await asyncio.sleep(1) # less sleep so this won't hold up server shutdown
-            i+=1
-            if i==30:
-                i=0
-                with open('offsets.pickle', 'wb') as f:
-                    f.write(pickle.dumps({
-                          'last_finger_angle': self.last_finger_angle
-                        }))
-
+        t1 = asyncio.create_task(self.watchMotorLoad())
+        return [t1]
+            
     def setFingers(self, angle):
         # use same finger "angle" range as previous gripper. translate internally.
+        # -90 is wide open, and 90 is closed tight.
+        # 
         self.desired_finger_angle = angle
-        target_pos = remap(self.desired_finger_angle, -90, 90, 0, 4000) 
-        self.motors.set_position(FINGER_MOTOR_ID, target_pos)
+        target_pos = remap(self.desired_finger_angle, -90, 90, self.finger_open_pos, self.finger_closed_pos)
+        self.motors.set_position(FINGER, target_pos)
+
+            
+    def setWrist(self, angle):
+        # Accept an angle in degrees.
+        self.desired_wist_angle = angle
+        target_pos = remap(self.desired_finger_angle, -90, 90, self.finger_open_pos, self.finger_closed_pos)
+        self.motors.set_position(WRIST, target_pos)
 
     async def processOtherUpdates(self, update, tg):
         if 'set_finger_angle' in update:
             self.setFingers(clamp(float(update['set_finger_angle']), -90, 90))
         if 'set_wrist_angle' in update:
-            self.setFingers(clamp(float(update['set_wrist_angle']), -180, 180))
+            self.setWrist(float(update['set_wrist_angle']))
 
 if __name__ == "__main__":
     logging.basicConfig(
