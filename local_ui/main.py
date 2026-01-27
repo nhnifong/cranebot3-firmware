@@ -6,6 +6,12 @@ import argparse
 from nf_robot.host.observer import start_observation
 from ursina_app import start_ui
 
+import torch.multiprocessing as mp
+try:
+    mp.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="CenteringNet System")

@@ -33,7 +33,7 @@ class SimpleSTS3215:
     ADDR_PRESENT_TEMP = 63
     ADDR_MOVING = 66
     
-    def __init__(self, port='/dev/serial0', baudrate=1000000, timeout=0.5):
+    def __init__(self, port='/dev/ttyAMA0', baudrate=1000000, timeout=0.5):
         """
         Initializes the serial connection to the servo bus.
 

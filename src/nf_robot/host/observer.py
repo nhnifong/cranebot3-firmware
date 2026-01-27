@@ -44,12 +44,14 @@ from nf_robot.host.target_queue import TargetQueue
 from nf_robot.host.calibration import optimize_anchor_poses
 from nf_robot.host.anchor_client import RaspiAnchorClient, max_origin_detections
 from nf_robot.host.gripper_client import RaspiGripperClient
+from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
 from nf_robot.host.position_estimator import Positioner2
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
 anchor_power_service_name = 'cranebot-anchor-power-service'
 gripper_service_name = 'cranebot-gripper-service'
+arp_gripper_service_name = 'cranebot-gripper-arpeggio-service'
 
 N_ANCHORS = 4
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
@@ -774,6 +776,7 @@ class AsyncObserver:
         is_power_anchor = kind == anchor_power_service_name
         is_standard_anchor = kind == anchor_service_name
         is_standard_gripper = kind == gripper_service_name
+        is_arp_gripper = kind == arp_gripper_service_name
 
         if is_power_anchor or is_standard_anchor:
             # the number of anchors is decided ahead of time (in main.py)
@@ -796,7 +799,7 @@ class AsyncObserver:
             self.config.anchors[anchor_num].port = info.port
             save_config(self.config, self.config_path)
 
-        elif kind == gripper_service_name:
+        elif is_standard_gripper or is_arp_gripper:
             # a gripper has been discovered, assume it is ours only if we have never seen one before
             if self.config.gripper.service_name is None:
                 self.config.gripper.service_name = key
@@ -875,9 +878,15 @@ class AsyncObserver:
         is_power_anchor = name_component == anchor_power_service_name
         is_standard_anchor = name_component == anchor_service_name
         is_standard_gripper = name_component == gripper_service_name
+        is_arp_gripper = name_component == arp_gripper_service_name
 
         if is_standard_gripper:
             client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.telemetry_env)
+            self.gripper_client_connected.clear()
+            client.connection_established_event = self.gripper_client_connected
+            self.gripper_client = client
+        if is_arp_gripper:
+            client = ArpeggioGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.telemetry_env)
             self.gripper_client_connected.clear()
             client.connection_established_event = self.gripper_client_connected
             self.gripper_client = client

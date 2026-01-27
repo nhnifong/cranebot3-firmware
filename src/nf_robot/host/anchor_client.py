@@ -345,7 +345,7 @@ class ComponentClient:
                 # don't catch websockets.exceptions.ConnectionClosedOK here because we want it to trip the infinite generator in websockets.connect
                 # so it will stop retrying. after it has the intended effect, websockets.connect will raise it again, so we catch it in 
                 # connect_websocket
-                print(f"Connection to {self.address} closed.")
+                print(f"Connection to {self.address} closed. {e}")
                 self.connected = False
                 self.websocket = None
                 # self.conn_status.websocket_status = telemetry.ConnStatus.NOT_DETECTED
@@ -406,7 +406,7 @@ class ComponentClient:
                 self.heartbeat_receipt.clear()
                 last_update = time.time()
             except TimeoutError:
-                print(f'No line record update sent from {self.anchor_num} in {TIMEOUT} seconds. it may have gone offline. sending ping')
+                print(f'No update sent from {self.anchor_num} in {TIMEOUT} seconds. it may have gone offline. sending ping')
                 try:
                     pong_future = await self.websocket.ping()
                     latency = await asyncio.wait_for(pong_future, TIMEOUT)

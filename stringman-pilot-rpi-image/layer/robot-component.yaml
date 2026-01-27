@@ -21,6 +21,7 @@ mmdebstrap:
     - libpam-systemd
     - polkitd
     - pkexec
+    - i2c-tools
   
   customize-hooks:
     - 'bash "${SRCROOT}/setup.sh" "$1"'
