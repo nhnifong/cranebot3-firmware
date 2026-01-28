@@ -667,6 +667,18 @@ class AsyncObserver:
                 # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
                 # when the stabilization is done without any existing z rotation term
                 self.gripper_client.calibrating_room_spin = True
+
+                if isinstance(self.gripper_client, ArpeggioGripperClient):
+                    # measurement must be taken at the wrist's zero point
+                    asyncio.create_task(self.gripper_client.send_commands({'set_wrist_angle': 0}))
+                    # wait till within 1 degree of target or up to 10 seconds
+                    actual_wrist = 100
+                    end_time = time.time() + 10
+                    while abs(actual_wrist) > 1.0 and time.time() < end_time:
+                        await asyncio.sleep(0.2)
+                        actual_wrist = self.datastore.winch_line_record.getLast()[1]
+
+                # detect origin card
                 await asyncio.sleep(0.1)
                 origin_card_pose = [None]
                 def special_handle_det(timestamp, detections):
@@ -680,6 +692,7 @@ class AsyncObserver:
                         (self.gripper_client.last_frame_resized, self.config.camera_cal),
                         callback=partial(special_handle_det, time.time()))
                     detections = async_result.get(timeout=5)
+                
                 euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
                 print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
                 roomspin = -euler_rot[0]
