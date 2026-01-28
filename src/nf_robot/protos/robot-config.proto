@@ -51,7 +51,10 @@ message CameraCalibration {
 message StringmanPilotConfig {
   repeated Anchor anchors = 1;
   
+  // The camera calibration values for a raspberry pi camera module 3 standard
   CameraCalibration camera_cal = 2;
+  // values for a raspberry pi camera module 3 wide
+  CameraCalibration camera_cal_wide = 10;
   
   // Max acceleration of anchor line in meters per second squarted
   double max_accel = 3;

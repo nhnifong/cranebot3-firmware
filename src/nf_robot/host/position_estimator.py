@@ -346,6 +346,12 @@ class Positioner2:
         # gripper swing freqency estimator
         self.swing_est = SwingFrequencyEstimator(hysteresis=0.04, smoothing_factor=0.15)
 
+        # Gripper type (pilot or arp)
+        self.gripper_type = 'pilot'
+
+    def set_gripper_type(self, t):
+        self.gripper_type = t
+
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
         assert points.shape == (4, 3)

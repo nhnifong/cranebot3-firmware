@@ -78,3 +78,19 @@ class RaspiGripperClient(ComponentClient):
         self.winch_zero_event = asyncio.Event()
         await self.send_commands({'zero_winch_line': None})
         await asyncio.wait_for(self.winch_zero_event.wait(), timeout=20)
+
+    def process_frame(self, frame_to_encode):
+        # stabilize and resize for centering network input
+        temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
+        fudge_latency =  0.3
+        try:
+            gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
+        except IndexError:
+            gripper_quat = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True).as_quat()
+        if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
+            # roomspin = 15/180*np.pi
+            roomspin = 0
+        else:
+            roomspin = self.config.gripper.frame_room_spin
+        range_to_object = self.datastore.range_record.getLast()[1]
+        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal, roomspin, range_dist=range_to_object)

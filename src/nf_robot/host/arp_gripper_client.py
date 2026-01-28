@@ -56,7 +56,8 @@ class ArpeggioGripperClient(ComponentClient):
             # lower values indicate more pressure.
             voltage = float(gs['fing_v'])
 
-            # wrist angle in degrees. -180 to 180
+            # wrist angle in degrees of rotation from the original zero point. can be more than one revolution.
+            # the zero point is probably a safe bet for where the wire would be least twisted.
             # the angle at which it aligns with the gantry or the room must be determined in calibration
             wrist = float(gs['wrist_a'])
 
@@ -76,3 +77,21 @@ class ArpeggioGripperClient(ComponentClient):
 
     async def send_config(self):
         pass
+
+    def process_frame(self, frame_to_encode):
+        # stabilize and resize for centering network input
+        temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
+        fudge_latency =  0.3
+        try:
+            gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
+        except IndexError:
+            gripper_quat = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True).as_quat()
+
+        if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
+            # roomspin = 15/180*np.pi
+            roomspin = 0
+        else:
+            roomspin = self.config.gripper.frame_room_spin
+
+        range_to_object = self.datastore.range_record.getLast()[1]
+        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal, roomspin, range_dist=range_to_object)

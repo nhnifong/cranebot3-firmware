@@ -179,20 +179,22 @@ class Gripper(Entity):
         )
 
     def input(self, key):
-        FINGER_SPEED = 1
+        FINGER_SPEED = 1.6
         WRIST_SPEED = 1
 
-        if key == ['space', 'shift up']:
+        if key in ['space', 'shift up']:
             self.finger_move += FINGER_SPEED
+
         elif key in ['space up', 'left shift']:
             self.finger_move -= FINGER_SPEED
+
         elif key in ['x', 'z up']:
             self.wrist_move += WRIST_SPEED
+
         elif key in ['z', 'x up']:
             self.wrist_move -= WRIST_SPEED
 
     def update(self):
-        print(f'f {self.finger_target} w {self.wrist_target}')
         if self.finger_move != 0 or self.wrist_move != 0:
 
             self.finger_target += self.finger_move

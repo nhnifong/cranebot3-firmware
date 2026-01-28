@@ -371,11 +371,12 @@ class AsyncObserver:
                     asyncio.create_task(client.slow_stop_spool())
 
     async def _handle_zero_winch_line(self):
-        await self.gripper_client.zero_winch()
+        if self.gripper_client is not None and isinstance(self.gripper_client, RaspiGripperClient):
+            await self.gripper_client.zero_winch()
 
     async def _handle_movement(self, move: control.CombinedMove):
         # if we have to clip these values to legal limits, save what they were clipped to
-        winch, finger = await self.send_winch_and_finger(move.winch, move.finger)
+        winch, finger, wrist = await self.send_gripper_move(move.winch, move.finger, move.wrist)
 
         direction = np.zeros(3)
         if move.direction:
@@ -383,7 +384,10 @@ class AsyncObserver:
         commanded_vel = await self.move_direction_speed(direction, move.speed)
 
         # the saved values will be what we return from GetLastAction
-        self.last_gp_action = (commanded_vel, winch, finger)
+        if winch is not None:
+            self.last_gp_action = (commanded_vel, winch, finger)
+        else:
+            self.last_gp_action = (commanded_vel, wrist, finger)
         self.last_user_move_time = time.time()
 
     async def passive_safety(self):
@@ -475,11 +479,13 @@ class AsyncObserver:
         # If only some anchors are connected, this would still send reference lengths to those
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
-        # winch line length is set to last swing based estimate
-        if self.gripper_client is not None:
+
+        # use swing to estimate winch line length in pilot gripper
+        if self.gripper_client is not None and isinstance(self.gripper_client, RaspiGripperClient):
             winch_length = self.pe.get_pendulum_length()
             if winch_length is not None:
                 asyncio.create_task(self.gripper_client.send_commands({'reference_length': winch_length}))
+
         # reset biases on kalman filter
         data = self.datastore.gantry_pos.deepCopy()
         position = np.mean(data[:,2:], axis=0)
@@ -697,7 +703,7 @@ class AsyncObserver:
         Attempt to move the gantry in a perfectly horizontal line. How hard could this be?
         This is a motion task
         """
-        await asyncio.gather(self.gripper_client.zero_winch(), self.tension_and_wait())
+        await self.tension_and_wait()
         await asyncio.sleep(1)
         range_at_start = self.datastore.range_record.getLast()[1]
         result = await self.move_direction_speed([1,0,0], 0.2, downward_bias=0)
@@ -885,11 +891,13 @@ class AsyncObserver:
             self.gripper_client_connected.clear()
             client.connection_established_event = self.gripper_client_connected
             self.gripper_client = client
+            self.pe.set_gripper_type('pilot')
         if is_arp_gripper:
             client = ArpeggioGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.telemetry_env)
             self.gripper_client_connected.clear()
             client.connection_established_event = self.gripper_client_connected
             self.gripper_client = client
+            self.pe.set_gripper_type('arp')
         else:
             for a in self.config.anchors:
                 if a.service_name != service_name:
@@ -1209,25 +1217,18 @@ class AsyncObserver:
             result[client.anchor_num] = client.last_gantry_frame_coords
         return result
 
-    async def send_winch_and_finger(self, line_speed, finger_angle):
-        """Command the gripper's motors in one update.
-        command the winch to change line length at the given speed.
-        Enforces extents based on last reported length and returns actual speed commanded.
-
-        Commands the finger to the given angle.
-        """
-        last_length = self.datastore.winch_line_record.getLast()[1]
-        # if last_length < 0.02 or last_length > 1.9:
-        #     print('winch too short')
-        #     line_speed = 0
+    async def send_gripper_move(self, line_speed, finger_angle, wrist_angle):
+        """Command the gripper's motors in one update."""
         update = {}
         if line_speed is not None:
             update['aim_speed'] = line_speed
         if finger_angle is not None:
             update['set_finger_angle'] = clamp(finger_angle, -90, 90)
+        if wrist_angle is not None:
+            update['set_wrist_angle'] = wrist_angle
         if update and self.gripper_client is not None:
             asyncio.create_task(self.gripper_client.send_commands(update))
-        return line_speed, finger_angle
+        return line_speed, finger_angle, wrist_angle
 
     async def clear_gantry_goal(self):
         self.gantry_goal_pos = None
@@ -1512,8 +1513,6 @@ class AsyncObserver:
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
-        PICK_WINCH_LENGTH = 1.0
-        DROP_WINCH_LENGTH = 0.2
         GANTRY_HEIGHT_OVER_TARGET = 1.0
         GANTRY_HEIGHT_OVER_DROPOFF = 0.9
         RELAXED_OPEN = 0 # enough to drop something
@@ -1549,11 +1548,6 @@ class AsyncObserver:
                 # pick Z position for gantry
                 goal_pos = next_target.position + np.array([0, 0, GANTRY_HEIGHT_OVER_TARGET])
                 self.gantry_goal_pos = goal_pos
-
-                # if we are far enough away from the basket
-                # if np.linalg.norm(self.pe.gant_pos - (self.named_positions['hamper'] + np.array([0,0,0.8]))) > 0.7:
-                #     # set winch for ideal pickup length
-                #     await self.gripper_client.send_commands({'length_set': PICK_WINCH_LENGTH})
 
                 # gantry is now heading for a position over next_target
                 # wait only one second for it to arrive.
