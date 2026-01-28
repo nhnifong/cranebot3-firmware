@@ -248,8 +248,8 @@ class RobotComponentServer:
 
         async with websockets.serve(self.handler, "0.0.0.0", port):
             logging.info("Websocket server started")
-            # serve until there is some exception thrown
-            await asyncio.get_event_loop().create_future()
+            while self.run_server:
+                await asyncio.sleep(0.5)
             # if those tasks finish, exiting this context will cause the server's close() method to be called.
             logging.info("Closing websocket server")
 

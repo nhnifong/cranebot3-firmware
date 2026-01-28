@@ -78,10 +78,10 @@ class DataStore:
         
         gantry_pos: shape (size, 5) T N XYZ   time, anchor_num, z, y, x
         imu_quat: shape (size, 5) each row TXYZW
-        winch_line_record: shape (size, 3) TLS
+        winch_line_record: shape (size, 3) TLS  # used as wrist record in arp gripper (Time, Angle, 0)
         anchor_line_record: shape (size, 4) TLST  time, length, speed, tight.  one for each line
         range_record: shape (size, 3) TL
-        finger: shape (size, 3) TAV time, commanded_angle, pad_voltage
+        finger: shape (size, 3) TAV time, angle, pad_voltage
         """
         self.n_anchors = n_anchors
 

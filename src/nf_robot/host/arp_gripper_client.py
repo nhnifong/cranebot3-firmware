@@ -50,7 +50,7 @@ class ArpeggioGripperClient(ComponentClient):
 
             # Note that finger angles are returned in the range of (-90, 90) even though these are not the actual angle
             # -90 is open
-            angle = float(gs['fing_a'])
+            finger_angle = float(gs['fing_a'])
 
             # finger pad pressure is indicated by this voltage with 3.3 being no pressure.
             # lower values indicate more pressure.
@@ -59,14 +59,16 @@ class ArpeggioGripperClient(ComponentClient):
             # wrist angle in degrees of rotation from the original zero point. can be more than one revolution.
             # the zero point is probably a safe bet for where the wire would be least twisted.
             # the angle at which it aligns with the gantry or the room must be determined in calibration
-            wrist = float(gs['wrist_a'])
+            wrist_angle = float(gs['wrist_a'])
 
-            self.datastore.finger.insert([timestamp, angle, voltage])
+            self.datastore.winch_line_record.insertList([timestamp, wrist_angle, 0])
+            self.datastore.finger.insert([timestamp, finger_angle, voltage])
+            
             self.ob.send_ui(grip_sensors=telemetry.GripperSensors(
                 range = distance_measurement,
-                angle = angle,
+                angle = finger_angle,
                 pressure = voltage,
-                wrist = wrist,
+                wrist = wrist_angle,
             ))
 
     def handle_detections(self, detections, timestamp):
@@ -87,11 +89,16 @@ class ArpeggioGripperClient(ComponentClient):
         except IndexError:
             gripper_quat = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True).as_quat()
 
+        # how should we spin the frame around the room z axis so that room +Y is up
         if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
             # roomspin = 15/180*np.pi
             roomspin = 0
         else:
-            roomspin = self.config.gripper.frame_room_spin
+            # undo the rotation added by the wrist joint
+            wrist = self.datastore.winch_line_record.getClosest(self.last_frame_cap_time - fudge_latency)[1]
+            roomspin = wrist / 180 * np.pi
+            # then undro the rotation that the room would appear to have at the wrist's zero position
+            roomspin += self.config.gripper.frame_room_spin
 
         range_to_object = self.datastore.range_record.getLast()[1]
         return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal, roomspin, range_dist=range_to_object)

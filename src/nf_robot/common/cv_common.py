@@ -272,7 +272,7 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_s
         frame: Input image
         quat: BNO085 quaternion
         camera_cal: camera calibration of 1920x1080 unstabilized "normal" image
-        room_spin: Z-axis offset for room alignment
+        room_spin: Z-axis offset for room alignment in radians
         range_dist: Distance from camera to floor (meters).
         axis_uv_linear: (slope, intercept) for Y-axis target.
         axis_uv_x_linear: Optional (slope, intercept) for X-axis target. Defaults to Center (0.5).

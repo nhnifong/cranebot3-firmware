@@ -93,16 +93,16 @@ class GripperArpServer(RobotComponentServer):
         # if necessary this function could be faster by waiting on all this IO at the same time.
 
         # 1.35 ms to read data from both motors with two synchronous calls
+        t = time.time()
         finger_data = self.motors.get_feedback(FINGER)
         wrist_data = self.motors.get_feedback(WRIST)
 
         finger_angle = remap(finger_data['position'], self.finger_open_pos, self.finger_closed_pos, -90, 90)
         wrist_angle = remap(wrist_data['position'], 0, 4000, 0, 360)
-
         pressure_v = remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
 
         self.update['grip_sensors'] = {
-            'time': time.time(),
+            'time': t,
             # 'quat': self.imu.quaternion,
             'fing_v': pressure_v,
             'fing_a': finger_angle,
