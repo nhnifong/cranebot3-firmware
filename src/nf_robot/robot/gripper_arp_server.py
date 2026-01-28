@@ -155,8 +155,10 @@ class GripperArpServer(RobotComponentServer):
 
     async def processOtherUpdates(self, update, tg):
         if 'set_finger_angle' in update:
+            logging.info(f"set_finger_angle {update['set_finger_angle']}")
             self.setFingers(clamp(float(update['set_finger_angle']), -90, 90))
         if 'set_wrist_angle' in update:
+            logging.info(f"set_wrist_angle {update['set_wrist_angle']}")
             self.setWrist(float(update['set_wrist_angle']))
 
 if __name__ == "__main__":
