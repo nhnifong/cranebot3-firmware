@@ -216,6 +216,7 @@ class ComponentClient:
         else:
             rtmp = None
 
+        # this is basically an ffmpeg subprocess
         vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
         vs.start()
 
@@ -243,31 +244,13 @@ class ComponentClient:
 
             # Do the actual work outside the lock
             # This lets the receive_video loop add the next frame without waiting for the encode.
-            if self.anchor_num is None:
-                # gripper
-                # stabilize and resize for centering network input
-                temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
-                fudge_latency =  0.3
-                try:
-                    gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
-                except IndexError:
-                    gripper_quat = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True).as_quat()
-                if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
-                    # roomspin = 15/180*np.pi
-                    roomspin = 0
-                else:
-                    roomspin = self.config.gripper.frame_room_spin
-                range_to_object = self.datastore.range_record.getLast()[1]
-                self.last_frame_resized = stabilize_frame(temp_image, gripper_quat, self.config.camera_cal, roomspin, range_dist=range_to_object)
-
-            else:
-                # anchors
-                self.last_frame_resized = cv2.resize(frame_to_encode, final_shape, interpolation=cv2.INTER_AREA)
+            self.last_frame_resized = self.process_frame(frame_to_encode)
 
             # send self.last_frame_resized to the UI process
             vs.send_frame(self.last_frame_resized)
             frames_sent += 1
             if frames_sent == 20:
+                # sending the notification on the 20th frame ensures that the mediamtx server has something to send before clients connect
                 self.local_udp_port = vs.local_udp_port
                 self.ob.send_ui(video_ready=telemetry.VideoReady(
                     is_gripper=self.anchor_num is None,
@@ -277,6 +260,14 @@ class ComponentClient:
                 ))
 
         vs.stop()
+
+    def process_frame(self, frame_to_encode):
+        """
+        Subclasses should override this function to resize or stabilize frames based on specific hardware constants
+        the returned frame will be what is used for inference and sent to any teleoperation pipelines.
+        Runs in a seperate thread from the main client.
+        """
+        return frame_to_encode
 
     async def connect_websocket(self):
         # main client loop
@@ -533,3 +524,6 @@ class RaspiAnchorClient(ComponentClient):
         }
         if len(anchor_config_vars) > 0:
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
+
+    def process_frame(self, frame_to_encode):
+        return cv2.resize(frame_to_encode, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)

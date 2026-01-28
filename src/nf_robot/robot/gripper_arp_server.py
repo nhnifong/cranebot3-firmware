@@ -149,16 +149,14 @@ class GripperArpServer(RobotComponentServer):
             
     def setWrist(self, angle):
         # Accept an angle in degrees.
-        self.desired_wrist_angle = angle % 360
-        target_pos = remap(self.desired_finger_angle, 0, 360, 0, 4000)
+        self.desired_wrist_angle = angle
+        target_pos = self.desired_wrist_angle / 360 * 4000
         self.motors.set_position(WRIST, target_pos)
 
     async def processOtherUpdates(self, update, tg):
         if 'set_finger_angle' in update:
-            logging.info(f"set_finger_angle {update['set_finger_angle']}")
             self.setFingers(clamp(float(update['set_finger_angle']), -90, 90))
         if 'set_wrist_angle' in update:
-            logging.info(f"set_wrist_angle {update['set_wrist_angle']}")
             self.setWrist(float(update['set_wrist_angle']))
 
 if __name__ == "__main__":

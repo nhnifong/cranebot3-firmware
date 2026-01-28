@@ -134,6 +134,16 @@ class StringmanPilotConfig(betterproto2.Message):
     camera_cal: "CameraCalibration | None" = betterproto2.field(
         2, betterproto2.TYPE_MESSAGE, optional=True
     )
+    """
+    The camera calibration values for a raspberry pi camera module 3 standard
+    """
+
+    camera_cal_wide: "CameraCalibration | None" = betterproto2.field(
+        10, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    values for a raspberry pi camera module 3 wide
+    """
 
     max_accel: "float" = betterproto2.field(3, betterproto2.TYPE_DOUBLE)
     """
