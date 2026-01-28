@@ -12,12 +12,13 @@ import random
 import uuid
 import shutil
 import subprocess
+from importlib.resources import files
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 DEFAULT_REPO_ID = "naavox/target-heatmap-dataset"
-DEFAULT_MODEL_PATH = "trainer/models/target_heatmap.pth"
+DEFAULT_MODEL_PATH = files("nf_robot.ml").joinpath("models/target_heatmap.pth")
 LOCAL_DATASET_ROOT = "target_heatmap_data"
 HEATMAP_UNPROCESSED_DIR = "target_heatmap_data_unlabeled"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
