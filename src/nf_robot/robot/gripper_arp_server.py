@@ -105,8 +105,8 @@ class GripperArpServer(RobotComponentServer):
             'time': time.time(),
             # 'quat': self.imu.quaternion,
             'fing_v': pressure_v,
-            'fing_a': finger_data['position'],
-            'wrist_a': wrist_data['position'],
+            'fing_a': finger_angle,
+            'wrist_a': wrist_angle,
             # range added below
         }
 
