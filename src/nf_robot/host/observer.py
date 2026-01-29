@@ -158,6 +158,7 @@ class AsyncObserver:
         self.passive_safety_task = None
         # last attempt to connect, keyed by service name
         self.connection_tasks: dict[str, asyncio.Task] = {}
+        self.run_collect_images = False
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -1741,14 +1742,21 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
     def _handle_collect_images(self):
-        self.gip_task = asyncio.create_task(self.collect_images())
+        if self.run_collect_images:
+            self.run_collect_images = False # ends the task
+        else:
+            self.run_collect_images = True
+            self.gip_task = asyncio.create_task(self.collect_images())
 
     async def collect_images(self):
         """Collects data for the centering network"""
-        while self.run_command_loop:
-            print(self.gripper_client.last_frame_resized.shape)
-            rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
-            capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
+        while self.run_command_loop and self.run_collect_images:
+            if self.gripper_client.last_frame_resized is not None:
+                print(self.gripper_client.last_frame_resized.shape)
+                rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
+                capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
+            else:
+                print('no resized frame available from gripper')
             await asyncio.sleep(1)
 
 def start_observation(terminate_with_ui=False, config_path='configuration.json'):
