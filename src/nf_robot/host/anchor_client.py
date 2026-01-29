@@ -240,6 +240,7 @@ class ComponentClient:
                 frame_to_encode = self.frame
 
             if frame_to_encode is None:
+                print(f'no frame to encode {self}')
                 continue
 
             # Do the actual work outside the lock

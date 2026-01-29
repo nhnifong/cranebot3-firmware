@@ -57,6 +57,9 @@ class UnsupervisedSorter:
             
         self.embeddings.append(embedding)
 
+        # return the index
+        return len(self.embeddings) -1
+
     def cluster(self, distance_threshold=15.0):
         """
         Groups the crops.
@@ -79,6 +82,7 @@ class UnsupervisedSorter:
 
         # We use Agglomerative Clustering because we can set a distance threshold
         # instead of picking 'K' clusters.
+        # HDBscan looks like a good choice too
         clustering = AgglomerativeClustering(
             n_clusters=None,
             distance_threshold=distance_threshold,

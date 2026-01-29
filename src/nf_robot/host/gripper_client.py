@@ -2,11 +2,13 @@ import asyncio
 import numpy as np
 from scipy.spatial.transform import Rotation
 import json
+import cv2
 
 from nf_robot.host.anchor_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common
+from nf_robot.common.cv_common import SF_INPUT_SHAPE, stabilize_frame
 
 class RaspiGripperClient(ComponentClient):
     def __init__(self, address, port, datastore, ob, pool, stat, pe, local_telemetry):
