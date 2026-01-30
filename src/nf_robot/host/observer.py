@@ -1461,7 +1461,7 @@ class AsyncObserver:
                 if gripper_image_tensor is not None:
                     gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
                     with torch.no_grad():
-                        pred_vec, pred_valid, pred_grip = self.centering_model(gripper_image_tensor)
+                        pred_vec, pred_valid, pred_grip, grip_angle = self.centering_model(gripper_image_tensor)
                         vec = pred_vec[0].cpu().numpy()
                         self.gripper_sees_target = pred_valid[0].item()
                         self.gripper_sees_holding = pred_grip[0].item()
