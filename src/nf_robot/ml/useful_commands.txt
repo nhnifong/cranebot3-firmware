@@ -16,6 +16,7 @@ Anchor video command
 
 ffplay -fast -fflags nobuffer -flags low_delay "tcp://192.168.1.151:8888"
 
-Upload models
+When ready to upload models ( PUSH TO PROD )
 
-gsutil -m rsync -d -r src/nf_robot/ "$${TARGET_INACTIVE_BUCKET}/assets" # ESCAPED: $$TARGET_INACTIVE_BUCKET
+huggingface-cli upload naavox/targeting src/nf_robot/ml/models/target_heatmap.pth target_heatmap.pth
+huggingface-cli upload naavox/centering src/nf_robot/ml/models/square_centering.pth square_centering.pth

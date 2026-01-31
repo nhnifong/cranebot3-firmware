@@ -8,7 +8,7 @@ name = "nf_robot"
 # major when making incompatible API changes,
 # minor when adding functionality in a backwards-compatible manner, and
 # patch, when making backwards-compatible bug fixes.
-version = "1.1.5"
+version = "1.2.0"
 description = "Robot control system for Stringman"
 authors = [{name = "Nathaniel Nifong", email = "naavox@gmail.com"}]
 requires-python = ">=3.11"
@@ -31,6 +31,7 @@ host = [
     "torchvision",
     "pupil-apriltags",
     "av",
+    "huggingface_hub",
 ]
 dev = [
     "pytest",
@@ -38,7 +39,6 @@ dev = [
     "grpcio-tools",
     "betterproto2_compiler",
     "opencv-contrib-python>=4.0", # for the data labelling tools
-    "huggingface_hub",
 ]
 pi = [
     "pyserial",
@@ -65,7 +65,6 @@ qa-gripper-arp = "nf_robot.qa.gripper_arp_eval:main"
 
 [tool.setuptools.package-data]
 "nf_robot.scripts" = ["*.sh"]
-"nf_robot.ml" = ["models/*"]
 "nf_robot.protos" = ["protos/*"]
 
 [tool.pytest.ini_options]
