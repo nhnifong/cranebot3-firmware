@@ -30,7 +30,6 @@ from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 from functools import partial
 from pathlib import Path
 import json
-from importlib.resources import files
 
 from nf_robot.common.pose_functions import compose_poses
 from nf_robot.common.cv_common import *
@@ -1407,8 +1406,8 @@ class AsyncObserver:
         Send heatmaps to UI.
         Store target candidates and confidence.
         """
-        TARGET_HM_MODEL_PATH = files("nf_robot.ml").joinpath("models/target_heatmap.pth")
-        CENTERING_MODEL_PATH = files("nf_robot.ml").joinpath("models/square_centering.pth")
+        TARGETING_MODEL_REPOID = "naavox/targeting"
+        CENTERING_MODEL_REPOID = "naavox/centering"
         DEVICE = "cpu"
         LOOP_DELAY = 0.1
         FIND_TARGETS_EVERY = 5 # loops
@@ -1425,20 +1424,24 @@ class AsyncObserver:
 
         if self.target_model is None:
             import torch
+            from huggingface_hub import hf_hub_download
             from nf_robot.ml.target_heatmap import extract_targets_from_heatmap, TargetHeatmapNet, HM_IMAGE_RES
             DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"Loading model from {TARGET_HM_MODEL_PATH}...")
+            model_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
+            print(f"Loading model from {model_path}...")
             self.target_model = TargetHeatmapNet().to(DEVICE)
-            self.target_model.load_state_dict(torch.load(TARGET_HM_MODEL_PATH, map_location=DEVICE))
+            self.target_model.load_state_dict(torch.load(model_path, map_location=DEVICE))
             self.target_model.eval()
 
         if self.centering_model is None:
             import torch
+            from huggingface_hub import hf_hub_download
             from nf_robot.ml.centering import CenteringNet
             DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"Loading model from {CENTERING_MODEL_PATH}...")
+            model_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
+            print(f"Loading model from {model_path}...")
             self.centering_model = CenteringNet().to(DEVICE)
-            self.centering_model.load_state_dict(torch.load(CENTERING_MODEL_PATH, map_location=DEVICE))
+            self.centering_model.load_state_dict(torch.load(model_path, map_location=DEVICE))
             self.centering_model.eval()
 
         if self.telemetry_env == 'local':
