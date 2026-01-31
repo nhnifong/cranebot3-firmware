@@ -821,7 +821,7 @@ class AsyncObserver:
 
         elif is_standard_gripper or is_arp_gripper:
             # a gripper has been discovered, assume it is ours only if we have never seen one before
-            if self.config.gripper.service_name is None:
+            if self.config.gripper.service_name is None or self.config.gripper.service_name == "":
                 self.config.gripper.service_name = key
                 self.config.gripper.address = address
                 self.config.gripper.port = info.port
