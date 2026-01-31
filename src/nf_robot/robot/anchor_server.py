@@ -69,6 +69,7 @@ class RobotComponentServer:
         self.zc = None # zerconf instance.
         self.mock_camera_port = None
         self.extra_tasks = []
+        self.stream_command = stream_command # subclasses may override
 
     async def stream_measurements(self, ws):
         """
@@ -140,7 +141,8 @@ class RobotComponentServer:
         the client uses that to compute wall times from PTS times.
         it prints one more line after that then stops printing stuff until a few lines when the client disconnects.
         """
-        self.rpicam_process = await asyncio.create_subprocess_exec(stream_command[0], *stream_command[1:], stdout=PIPE, stderr=STDOUT)
+        self.rpicam_process = await asyncio.create_subprocess_exec(
+            self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
         while True:
             # during normal streaming, it is normal for this to block a long time because rpicam-vid isn't writing lines
