@@ -63,7 +63,7 @@ class ArpeggioGripperClient(ComponentClient):
             # the angle at which it aligns with the gantry or the room must be determined in calibration
             wrist_angle = float(gs['wrist_a'])
 
-            self.datastore.winch_line_record.insertList([timestamp, wrist_angle, 0])
+            self.datastore.winch_line_record.insert([timestamp, wrist_angle, 0])
             self.datastore.finger.insert([timestamp, finger_angle, voltage])
             
             self.ob.send_ui(grip_sensors=telemetry.GripperSensors(
