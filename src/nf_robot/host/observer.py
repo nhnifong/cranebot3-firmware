@@ -1242,6 +1242,7 @@ class AsyncObserver:
             update['set_wrist_angle'] = wrist_angle
         if update and self.gripper_client is not None:
             asyncio.create_task(self.gripper_client.send_commands(update))
+        print(f'gripper move {line_speed} {finger_angle} {wrist_angle}')
         return line_speed, finger_angle, wrist_angle
 
     async def clear_gantry_goal(self):

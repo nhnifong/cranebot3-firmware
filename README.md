@@ -6,7 +6,7 @@ Control code for the Stringman household robotic crane from Neufangled Robotics
 
 Purchase assembled robots or kits at [neufangled.com](https://neufangled.com)
 
-## Installation of stringman controler
+## Installation of stringman controller
 
 Linux (python 3.11 or later)
 

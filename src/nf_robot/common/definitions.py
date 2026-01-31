@@ -59,3 +59,6 @@ full_spool_diameter_fishing_line = 27.5
 full_spool_diameter_power_line = 43.7
 
 rpi_cam_3_fov = np.array([66, 41])
+
+# Arp gripper pole length (m)
+arp_pole_length = 0.53
