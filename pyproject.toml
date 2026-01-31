@@ -66,6 +66,7 @@ qa-gripper-arp = "nf_robot.qa.gripper_arp_eval:main"
 [tool.setuptools.package-data]
 "nf_robot.scripts" = ["*.sh"]
 "nf_robot.ml" = ["models/*"]
+"nf_robot.protos" = ["protos/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

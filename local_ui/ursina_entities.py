@@ -203,6 +203,7 @@ class Gripper(Entity):
             self.ui.send_ob(move=control.CombinedMove(
                 finger = self.finger_target,
                 wrist = self.wrist_target,
+                winch = self.wrist_move * 0.1 # winch line lengthening speed in meters per second.
             ))
 
     def setFingerAngle(self, angle):

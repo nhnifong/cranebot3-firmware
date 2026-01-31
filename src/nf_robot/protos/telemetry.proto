@@ -48,6 +48,11 @@ enum ConnStatus {
   CONNSTATUS_CONNECTED = 2;
 }
 
+enum GripperModel {
+  GRIPPERMODEL_PILOT = 0;
+  GRIPPERMODEL_ARPEGGIO = 1;
+}
+
 // Update about the status of the connection between observer and a robot component such as an anchor or gripper
 message ComponentConnStatus {
 	bool is_gripper = 1;
@@ -55,6 +60,7 @@ message ComponentConnStatus {
 	ConnStatus websocket_status = 3;
 	ConnStatus video_status = 4;
 	string ip_address = 5; // On the wifi network in the house where the robot is.
+	optional GripperModel gripper_model = 6; 
 }
 
 // Info on the throughput and latency of video connections and apriltag processing

@@ -10,6 +10,7 @@ __all__ = (
     "ConnStatus",
     "GantrySightings",
     "GripCamPredictions",
+    "GripperModel",
     "GripperSensors",
     "NamedObjectPosition",
     "OneTarget",
@@ -56,6 +57,26 @@ class ConnStatus(betterproto2.Enum):
             "CONNSTATUS_NOT_DETECTED": 0,
             "CONNSTATUS_CONNECTING": 1,
             "CONNSTATUS_CONNECTED": 2,
+        }
+
+
+class GripperModel(betterproto2.Enum):
+    PILOT = 0
+
+    ARPEGGIO = 1
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "GRIPPERMODEL_PILOT",
+            1: "GRIPPERMODEL_ARPEGGIO",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "GRIPPERMODEL_PILOT": 0,
+            "GRIPPERMODEL_ARPEGGIO": 1,
         }
 
 
@@ -145,6 +166,10 @@ class ComponentConnStatus(betterproto2.Message):
     """
     On the wifi network in the house where the robot is.
     """
+
+    gripper_model: "GripperModel | None" = betterproto2.field(
+        6, betterproto2.TYPE_ENUM, optional=True
+    )
 
 
 default_message_pool.register_message(
