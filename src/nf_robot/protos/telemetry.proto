@@ -120,6 +120,8 @@ message GripCamPredictions {
 	float prob_target_in_view = 3; 
 	// probability an object is held in the gripper (visual only)
 	float prob_holding = 4;
+	// Predicted ideal grip angle from vertical in the image [0-pi]
+	float grip_angle = 5;
 }
 
 enum TargetStatus {
@@ -186,7 +188,7 @@ message TelemetryItem {
     CommandedVelocity last_commanded_vel = 8;
     Popup pop_message = 9;
 		GripperSensors grip_sensors = 10;
-		GripCamPredictions grip_cam_preditions = 11;
+		GripCamPredictions grip_cam_preditions = 11; // note misspelled. not changed for backwards compat
 		TargetList target_list = 12;
 		VideoReady video_ready = 13;
 		UplinkStatus uplink_status = 15; // only sent from control plane

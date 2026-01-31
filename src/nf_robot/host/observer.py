@@ -1242,7 +1242,6 @@ class AsyncObserver:
             update['set_wrist_angle'] = wrist_angle
         if update and self.gripper_client is not None:
             asyncio.create_task(self.gripper_client.send_commands(update))
-        print(f'gripper move {line_speed} {finger_angle} {wrist_angle}')
         return line_speed, finger_angle, wrist_angle
 
     async def clear_gantry_goal(self):
@@ -1467,6 +1466,9 @@ class AsyncObserver:
                         self.gripper_sees_target = pred_valid[0].item()
                         self.gripper_sees_holding = pred_grip[0].item()
 
+                        # grip angle is relative to vertical in the image. [0-pi]
+                        # it is a prediction of the best angle for the fingers to cross the object
+
                         # you get a normalized u,v coordinate in the [-1,1] range
                         self.predicted_lateral_vector = vec if self.gripper_sees_target > 0.5 else np.zeros(2)
                         self.send_ui(grip_cam_preditions=telemetry.GripCamPredictions(
@@ -1474,6 +1476,7 @@ class AsyncObserver:
                             move_y = self.predicted_lateral_vector[1],
                             prob_target_in_view = self.gripper_sees_target,
                             prob_holding = self.gripper_sees_holding,
+                            grip_angle = grip_angle,
                         ))
 
             if counter < FIND_TARGETS_EVERY:

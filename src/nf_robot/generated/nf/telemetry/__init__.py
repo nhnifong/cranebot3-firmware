@@ -216,6 +216,11 @@ class GripCamPredictions(betterproto2.Message):
     probability an object is held in the gripper (visual only)
     """
 
+    grip_angle: "float" = betterproto2.field(5, betterproto2.TYPE_FLOAT)
+    """
+    Predicted ideal grip angle from vertical in the image [0-pi]
+    """
+
 
 default_message_pool.register_message(
     "nf.telemetry", "GripCamPredictions", GripCamPredictions
@@ -499,6 +504,9 @@ class TelemetryItem(betterproto2.Message):
     grip_cam_preditions: "GripCamPredictions | None" = betterproto2.field(
         11, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
+    """
+    note misspelled. not changed for backwards compat
+    """
 
     target_list: "TargetList | None" = betterproto2.field(
         12, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
