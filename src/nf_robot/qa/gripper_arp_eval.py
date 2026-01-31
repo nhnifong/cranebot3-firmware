@@ -22,7 +22,7 @@ FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 
 def main():
     i2c = busio.I2C(board.SCL, board.SDA)
-    sts = SimpleSTS3215(port='/dev/serial0', timeout=0.5)
+    sts = SimpleSTS3215()
 
     def wiggle_wrist():
         sts.torque_enable(WRIST_MOTOR_ID, True)

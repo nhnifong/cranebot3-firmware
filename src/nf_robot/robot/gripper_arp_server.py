@@ -53,6 +53,18 @@ class GripperArpServer(RobotComponentServer):
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'
 
+        self.stream_command = [
+            "/usr/bin/rpicam-vid", "-t", "0", "-n",
+            "--width=1920", "--height=1080",
+            "-o", "tcp://0.0.0.0:8888?listen=1",
+            "--codec", "libav",
+            "--libav-format", "mpegts",
+            "--vflip", "--hflip",
+            "--autofocus-mode", "continuous",
+            "--low-latency",
+            "--bitrate", "2000kbps"
+        ]
+
         i2c = busio.I2C(board.SCL, board.SDA)
         # self.imu = BNO08X_I2C(i2c, address=0x4b)
         # self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)

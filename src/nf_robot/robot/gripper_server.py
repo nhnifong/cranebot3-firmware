@@ -108,6 +108,18 @@ class RaspiGripperServer(RobotComponentServer):
         self.conf.update(default_gripper_conf)
         self.service_type = 'cranebot-gripper-service'
 
+        self.stream_command = [
+            "/usr/bin/rpicam-vid", "-t", "0", "-n",
+            "--width=1920", "--height=1080",
+            "-o", "tcp://0.0.0.0:8888?listen=1",
+            "--codec", "libav",
+            "--libav-format", "mpegts",
+            "--vflip", "--hflip",
+            "--autofocus-mode", "continuous",
+            "--low-latency",
+            "--bitrate", "2000kbps"
+        ]
+
         self.hat = InventorHATMini(init_leds=False)
         self.hand_servo = self.hat.servos[SERVO_2]
         self.hat.gpio_pin_mode(PRESSURE_PIN, ADC) # pressure resistor
