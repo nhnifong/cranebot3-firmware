@@ -494,32 +494,42 @@ class Positioner2:
 
     def estimate_gripper(self):
         """Estimate attributes of the gripper that depend on its IMU reading"""
-        last_imu = self.datastore.imu_quat.getLast()
-        ts = last_imu[0]
-        if not ts:
-            return
-        rotation = Rotation.from_quat(last_imu[1:])
-        # back out mounting position of IMU
-        rotation = rotation * Rotation.from_euler('xyz', [-90, 0, 0], degrees=True)
 
-        # When distance to floor is less than 12cm, Detect Tipping
-        if self.datastore.range_record.getLast()[1] < 0.12:
-            THRESHOLD_DEGREES = 9
-            euler = rotation.as_euler('xyz', degrees=True)
-            if abs(euler[0]) > THRESHOLD_DEGREES or abs(euler[1]) > THRESHOLD_DEGREES:
-                self.tip_over.set()
+        if self.gripper_type == 'pilot':
+            last_imu = self.datastore.imu_quat.getLast()
 
-        # feed angle to frequency estimator
-        rotvec = rotation.as_rotvec()
-        self.swing_est.add_rotation_vector(ts, rotvec)
+            ts = last_imu[0]
+            if not ts:
+                return
+            rotation = Rotation.from_quat(last_imu[1:])
+            # back out mounting position of IMU
+            rotation = rotation * Rotation.from_euler('xyz', [-90, 0, 0], degrees=True)
 
-        # get the encoder based winch line length
-        _, length, speed = self.datastore.winch_line_record.getLast()
+            # When distance to floor is less than 12cm, Detect Tipping
+            if self.datastore.range_record.getLast()[1] < 0.12:
+                THRESHOLD_DEGREES = 9
+                euler = rotation.as_euler('xyz', degrees=True)
+                if abs(euler[0]) > THRESHOLD_DEGREES or abs(euler[1]) > THRESHOLD_DEGREES:
+                    self.tip_over.set()
 
-        self.grip_pose = compose_poses([
-            (rotvec, self.gant_pos),
-            (np.zeros(3), np.array([0,0,-length], dtype=float)),
-        ])
+            # feed angle to frequency estimator
+            rotvec = rotation.as_rotvec()
+            self.swing_est.add_rotation_vector(ts, rotvec)
+
+            # get the encoder based winch line length
+            _, length, speed = self.datastore.winch_line_record.getLast()
+
+            self.grip_pose = compose_poses([
+                (rotvec, self.gant_pos),
+                (np.zeros(3), np.array([0,0,-length], dtype=float)),
+            ])
+
+        elif self.gripper_type == 'arp':
+            rotvec = Rotation.from_euler('xyz', [0, 0, 0], degrees=True).as_rotvec()
+            self.grip_pose = compose_poses([
+                (rotvec, self.gant_pos),
+                (np.zeros(3), np.array([0,0,-model_constants.arp_pole_length], dtype=float)),
+            ])
 
     def detect_grip(self):
         """
