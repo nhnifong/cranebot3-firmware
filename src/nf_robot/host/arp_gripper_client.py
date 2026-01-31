@@ -8,6 +8,7 @@ from nf_robot.host.anchor_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common
+from nf_robot.common.cv_common import SF_INPUT_SHAPE, stabilize_frame
 
 """
 "Arpeggio" is the codename of the 2nd revision of the Stringman gripper
