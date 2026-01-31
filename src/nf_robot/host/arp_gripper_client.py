@@ -2,6 +2,7 @@ import asyncio
 import numpy as np
 from scipy.spatial.transform import Rotation
 import json
+import cv2
 
 from nf_robot.host.anchor_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
