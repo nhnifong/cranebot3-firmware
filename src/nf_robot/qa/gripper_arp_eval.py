@@ -118,7 +118,7 @@ def main():
     finger_closed_pos = sts.get_position(FINGER_MOTOR_ID)
     print(f"Motor encoder position at finger touch = {finger_closed_pos}")
     finger_open_pos = finger_closed_pos + FINGER_TRAVEL_STEPS
-    with open('arp_gripper_state.json', 'w') as f:
+    with open('/opt/robot/arp_gripper_state.json', 'w') as f:
         json.dump({
             'finger_closed_pos': finger_closed_pos,
             'finger_open_pos': finger_open_pos,

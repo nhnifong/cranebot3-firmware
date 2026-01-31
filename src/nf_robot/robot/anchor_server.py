@@ -129,7 +129,7 @@ class RobotComponentServer:
                     logging.info("Killing rpicam-vid subprocess the task is being cancelled")
                     try:
                         self.rpicam_process.kill()
-                    except ProcessLookupError:
+                    except ProcessLookupError, AttributeError:
                         pass
                     return await self.rpicam_process.wait()
 
