@@ -1464,13 +1464,11 @@ class AsyncObserver:
                 if gripper_image_tensor is not None:
                     gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
                     with torch.no_grad():
-                        pred_vec, pred_valid, pred_grip, grip_angle = self.centering_model(gripper_image_tensor)
+                        pred_vec, pred_valid, pred_grip, pred_angle = self.centering_model(gripper_image_tensor)
                         vec = pred_vec[0].cpu().numpy()
                         self.gripper_sees_target = pred_valid[0].item()
                         self.gripper_sees_holding = pred_grip[0].item()
-
-                        # grip angle is relative to vertical in the image. [0-pi]
-                        # it is a prediction of the best angle for the fingers to cross the object
+                        self.grip_angle = pred_angle[0].item()
 
                         # you get a normalized u,v coordinate in the [-1,1] range
                         self.predicted_lateral_vector = vec if self.gripper_sees_target > 0.5 else np.zeros(2)
@@ -1479,7 +1477,7 @@ class AsyncObserver:
                             move_y = self.predicted_lateral_vector[1],
                             prob_target_in_view = self.gripper_sees_target,
                             prob_holding = self.gripper_sees_holding,
-                            grip_angle = grip_angle,
+                            grip_angle = self.grip_angle,
                         ))
 
             if counter < FIND_TARGETS_EVERY:
@@ -1655,6 +1653,8 @@ class AsyncObserver:
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 2.0
 
+        smooth_grip_angle = self.grip_angle
+
         try:
             attempts = 3
             while not self.pe.holding and attempts > 0 and self.run_command_loop:
@@ -1679,6 +1679,7 @@ class AsyncObserver:
                             break
                     else:
                         nothing_seen_countdown = 15
+
                     # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
                     lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
                     if lat_travel_seconds > 0:
@@ -1702,7 +1703,14 @@ class AsyncObserver:
                         lateral_speed = 0
                     lateral_vector *= lateral_speed
 
+                    print(f'moving {[lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED]}')
                     await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
+
+                    if isinstance(self.gripper_client, ArpeggioGripperClient):
+                        # move wrist to predicted grip angle with smoothing
+                        smooth_grip_angle = smooth_grip_angle*0.8 + self.grip_angle*0.2
+                        print(f'setting wrist {smooth_grip_angle}')
+                        await self.gripper_client.send_commands({'set_wrist_angle': smooth_grip_angle/np.pi*180})
 
                     try:
                         # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
