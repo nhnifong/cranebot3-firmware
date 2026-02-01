@@ -264,7 +264,7 @@ def get_rotation_to_center_ray(K, u, v, image_shape):
     R_fix, _ = cv2.Rodrigues(r_vec)
     return R_fix
 
-def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_spin=0, range_dist=None, cam_offset_mm=(0, -41.97), cam_tilt_deg=2.37):
+def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_spin=0, range_dist=None, cam_offset_mm=(0, -38.9), cam_tilt_deg=0):
     """
     Warp a video frame to a stationary, centered perspective.
     
