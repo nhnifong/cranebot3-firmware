@@ -20,3 +20,4 @@ src/nf_robot.egg-info
 dataset_heatmap/
 build/
 angling_data/
+*.pth
