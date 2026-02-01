@@ -22,3 +22,7 @@ If it does not boot correctly but you can still get into it with ethernet, then 
 
     journalctl -u resize-rootfs.service
     journalctl -u cranebot.service
+
+The image can be uploaded to cloud storage with
+
+    gsutil cp ~/rpi-image-gen/work/image-stringman-zero2w/stringman-zero2w.img gs://stringman-models
