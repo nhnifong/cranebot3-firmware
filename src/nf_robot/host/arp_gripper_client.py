@@ -103,4 +103,5 @@ class ArpeggioGripperClient(ComponentClient):
             roomspin += self.config.gripper.frame_room_spin
 
         range_to_object = self.datastore.range_record.getLast()[1]
-        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal_wide, roomspin, range_dist=range_to_object, cam_offset_mm=(0, -41.97), cam_tilt_deg=2.37)
+        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal_wide, roomspin,
+            range_dist=range_to_object, cam_offset_mm=(0, -41.97), cam_tilt_deg=2.37) # next model would be 4.67 degrees
