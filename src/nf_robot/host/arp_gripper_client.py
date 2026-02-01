@@ -103,4 +103,4 @@ class ArpeggioGripperClient(ComponentClient):
             roomspin += self.config.gripper.frame_room_spin
 
         range_to_object = self.datastore.range_record.getLast()[1]
-        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal, roomspin, range_dist=range_to_object)
+        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal_wide, roomspin, range_dist=range_to_object)

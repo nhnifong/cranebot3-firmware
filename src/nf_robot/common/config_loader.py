@@ -38,8 +38,8 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
             position=common.Vec3(x=pos[0], y=pos[1], z=pos[2]),
         )
         config.anchors.append(anchor)
-    
-    # Camera Calibration 
+
+    # Camera Calibration Standard
     config.camera_cal = nf_config.CameraCalibration()
     config.camera_cal.resolution = nf_config.Resolution(
         width=1920, 
@@ -58,6 +58,18 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
 
     # Default Distortion Coefficients
     distortion_np = np.array([ 0.0115842, 0.18723804, -0.00126164, 0.00058383, -0.38807272])
+    config.camera_cal.distortion_coeff = distortion_np.flatten().tolist()
+
+    # Camera Calibration Wide
+    config.camera_cal = nf_config.CameraCalibration()
+    config.camera_cal.resolution = nf_config.Resolution(width=1920, height=1080)
+    intrinsic_np = np.array([
+        [791.15,    0., 960.],
+        [   0., 791.57, 540.],
+        [   0.,    0.,   1.]
+    ])
+    config.camera_cal.intrinsic_matrix = intrinsic_np.flatten().tolist()
+    distortion_np = np.array([-0.06742619,  0.1546371, -0.00232347, 0.00080991, -0.13094542])
     config.camera_cal.distortion_coeff = distortion_np.flatten().tolist()
 
     # Gripper
