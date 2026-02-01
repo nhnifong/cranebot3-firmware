@@ -1,10 +1,9 @@
 import subprocess
-import cv2
 import time
 import logging
 import atexit
-import numpy as np
 import socket
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +17,8 @@ class VideoStreamer:
         self.connection_status = 'ok'
         self.local_udp_port = None
         
-        # if no rtmp url, only broadcast locally on UDP
-        # find a free local port for that.
-        if rtmp_url == None:
+        # If no RTMP URL is provided, broadcast on a random free local UDP port.
+        if rtmp_url is None:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.bind(('127.0.0.1', 0))
                 self.local_udp_port = s.getsockname()[1]
@@ -28,126 +26,127 @@ class VideoStreamer:
         atexit.register(self.stop)
 
     def _calculate_bitrate(self):
-        # Estimate bitrate based on resolution and fps
+        # Bitrate estimation based on a 0.5 bits-per-pixel heuristic for H.264.
         raw_bitrate = int(self.width * self.height * self.fps * 0.5)
         target_bitrate = max(200000, min(raw_bitrate, 2500000))
         return f"{target_bitrate // 1000}k"
 
     def start(self):
-        """
-        Starts the FFMPEG process. 
-        pipe raw video into stdin, and FFMPEG sends FLV/RTMP to the server.
-        """
+        """Starts the FFMPEG process and the stderr monitoring thread."""
         if self.process:
             return
 
-        # Calculate a keyframe interval (GOP) that ensures a keyframe every 2 seconds.
-        # For 30fps -> GOP 60. For 2fps -> GOP 4.
-        # This keeps stream join latency low (~2s) regardless of framerate.
+        # A 2-second GOP (Group of Pictures) ensures that clients joining a live 
+        # stream don't have to wait more than 2 seconds for a keyframe.
         gop_size = max(1, int(self.fps * 2))
         bitrate = self._calculate_bitrate()
 
         command = [
             'ffmpeg',
-            '-y', # Overwrite output files
-            
-            # Use wallclock time for input timestamps.
-            # This handles variable frame rates correctly for live streaming.
+            '-y',
             '-use_wallclock_as_timestamps', '1',
-
-            '-f', 'rawvideo', # Input format
+            '-f', 'rawvideo',
             '-vcodec', 'rawvideo',
             '-pix_fmt', 'rgb24',
-            '-s', f'{self.width}x{self.height}', # Input resolution
-            '-i', '-', # Read from STDIN
-            
-            # Encoding settings (tune for latency)
-            '-c:v', 'libx264', # h264 encoding, usually faster than anythign else.
-            '-pix_fmt', 'yuv420p', # Required for compatibility
-            '-preset', 'ultrafast', # Prioritize speed over compression ratio
+            '-s', f'{self.width}x{self.height}',
+            '-i', '-',
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-preset', 'ultrafast',
             '-tune', 'zerolatency',
-            '-g', str(gop_size), # Force keyframe every 2 seconds
-            # '-b:v', "1200k", # Calculated bitrate
+            '-g', str(gop_size),
+            '-b:v', bitrate,
         ]
             
-        # If streaming to a remote server over RTMP is requested, add that output
         if self.rtmp_url:
-            command.extend([
-                '-f', 'flv', self.rtmp_url
-            ])
-        
+            command.extend(['-f', 'flv', self.rtmp_url])
 
-        # If a local port is requested, add the second output
         if self.local_udp_port:
+            # mpegts over UDP for low-latency local previews.
             command.extend([
-                '-f', 'mpegts', f'udp://127.0.0.1:{self.local_udp_port}?pkt_size=1316'
+                '-f', 'mpegts', 
+                f'udp://127.0.0.1:{self.local_udp_port}?pkt_size=1316'
             ])
 
-        #  redirect stderr to PIPE so we can log errors if it crashes,
+        # stderr must be piped to monitor for connection losses.
         self.process = subprocess.Popen(
             command, 
             stdin=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
+            bufsize=0 # Use unbuffered I/O for immediate error detection
         )
 
-        # TODO read stderr and look for this line. it usually means the media server hung up on you (not authorized)
-        # ERROR:video_streamer:FFmpeg pipe broken: [Errno 32] Broken pipe
-        # if seen, call
-        # self.stop()
-        # self.connection_status = 'error'
+        # Launching a daemon thread ensures the stream monitoring doesn't block 
+        # the main process and shuts down automatically when the main thread exits.
+        self.monitor_thread = threading.Thread(target=self._monitor_stderr, daemon=True)
+        self.monitor_thread.start()
 
-        logger.info(f"FFmpeg streamer started to {self.rtmp_url}")
-        if self.local_udp_port:
-            logger.info(f"Also streaming locally to udp://127.0.0.1:{self.local_udp_port}")
+        logger.info(f"FFmpeg streamer started to {self.rtmp_url or 'local UDP'}")
+
+    def _monitor_stderr(self):
+        """
+        Continuously reads FFmpeg's stderr to detect crashes or connection issues.
+        """
+        if not self.process or not self.process.stderr:
+            return
+
+        # Iterating over readline blocks until a line is available or the pipe closes.
+        for line_bytes in iter(self.process.stderr.readline, b''):
+            line = line_bytes.decode('utf-8', errors='ignore').strip()
+
+            # Skip noise, but log actual errors.
+            if "Error" in line or "failed" in line or "Connection" in line:
+                logger.error(f"FFmpeg Error: {line}")
+
+            # Specific triggers for reconnection logic or auth failure.
+            # "Broken pipe" usually happens when the remote server stops accepting data.
+            if "Broken pipe" in line or "Connection reset" in line:
+                logger.warning("Media server disconnected. Updating status to error.")
+                self.connection_status = 'error'
+                self.stop()
+                break
+            
+            if "not authorized" in line.lower() or "Authentication failed" in line:
+                logger.error("Streaming unauthorized. Video can only be published from robots that are sending telemetry.")
+                self.connection_status = 'unauthorized'
+                self.stop()
+                break
 
     def send_frame(self, frame):
         """
         Encodes and pushes a single frame to the stream.
-        Frame must be a numpy array (OpenCV image) of size (width, height).
         """
-        if not self.process:
+        if not self.process or self.connection_status != 'ok':
             return
 
         try:
-            # Write raw bytes to ffmpeg's stdin
             self.process.stdin.write(frame.tobytes())
             self.process.stdin.flush()
-        except Exception as e:
+        except (BrokenPipeError, OSError) as e:
+            # Write failures occur immediately if the background process died.
             self._handle_crash(e)
 
-
     def _handle_crash(self, exception):
-        """Analyze why ffmpeg died, update status, and cleanup."""
-        logger.error(f"FFmpeg pipe broken: {exception}")
-        
-        # Capture stderr if available for post-mortem debugging
-        if self.process and self.process.stderr:
-            try:
-                # Non-blocking read might fail if process is already dead/closed, so we wrap it
-                # We don't analyze it, just print it for the developer
-                err_out = self.process.stderr.read()
-                if err_out:
-                    logger.debug(f"FFmpeg stderr content: {err_out.decode('utf-8', errors='ignore')}")
-            except Exception:
-                pass
-
-        self.stop()
+        """Cleanup and update status when a write failure occurs."""
+        logger.error(f"FFmpeg pipe broken during write: {exception}")
         self.connection_status = 'error'
+        self.stop()
 
     def stop(self):
-        # Unregister to prevent memory leaks if called manually multiple times
-        atexit.unregister(self.stop)
-        
+        """Gracefully shuts down the FFmpeg process."""
         if self.process:
             try:
-                self.process.stdin.close()
+                if self.process.stdin:
+                    self.process.stdin.close()
                 self.process.terminate()
-                self.process.wait(timeout=1)
-            except Exception:
-                # Force kill if it hangs
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
                 self.process.kill()
+            except Exception:
+                # If the process is already gone, don't raise during cleanup.
+                pass
             finally:
-                self.process
+                self.process = None
 
         if self.connection_status not in ['unauthorized', 'error']:
             self.connection_status = 'disconnected'

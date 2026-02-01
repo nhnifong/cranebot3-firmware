@@ -264,7 +264,7 @@ def get_rotation_to_center_ray(K, u, v, image_shape):
     R_fix, _ = cv2.Rodrigues(r_vec)
     return R_fix
 
-def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_spin=0, range_dist=None, axis_uv_linear=(-0.3182, 0.9845), axis_uv_x_linear=None):
+def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_spin=0, range_dist=None, cam_offset_mm=(0, -41.97), cam_tilt_deg=2.37):
     """
     Warp a video frame to a stationary, centered perspective.
     
@@ -274,8 +274,8 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_s
         camera_cal: camera calibration of 1920x1080 unstabilized "normal" image
         room_spin: Z-axis offset for room alignment in radians
         range_dist: Distance from camera to floor (meters).
-        axis_uv_linear: (slope, intercept) for Y-axis target.
-        axis_uv_x_linear: Optional (slope, intercept) for X-axis target. Defaults to Center (0.5).
+        cam_offset_mm: (x, y) Vector from Camera Lens to Rotation Axis Center in mm.
+        cam_tilt_deg: Camera Pitch angle in degrees.
     """
 
     if 'K_new' not in saved_matrices:
@@ -302,20 +302,39 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_s
     R_fix = np.eye(3)
     
     if range_dist is not None:
-        # Y-Axis Logic
-        slope_y, intercept_y = axis_uv_linear
-        target_v = slope_y * range_dist + intercept_y
+        # Define Target Point in Camera Frame
+        # Convert Offset to meters
+        off_x = cam_offset_mm[0] / 1000.0
+        off_y = cam_offset_mm[1] / 1000.0
         
-        # X-Axis Logic (Default to 0.5/Center if not provided)
-        if axis_uv_x_linear is not None:
-            slope_x, intercept_x = axis_uv_x_linear
-            target_u = slope_x * range_dist + intercept_x
-        else:
-            target_u = 0.5
-            
+        # Point on floor relative to "Untilted" Camera:
+        # We assume the axis is at (off_x, off_y) relative to camera
+        # and the floor is at Z = range_dist
+        P_untilted = np.array([off_x, off_y, range_dist])
+        
+        # Apply Tilt Rotation
+        # If camera is tilted by 'cam_tilt_deg', we must rotate the point
+        # into the tilted camera frame.
+        # Pitch is rotation around X-axis.
+        r_tilt = Rotation.from_euler('x', cam_tilt_deg, degrees=True)
+        P_tilted = r_tilt.apply(P_untilted)
+        
+        # Project to Pixel Coordinates
+        K = saved_matrices['starting_K']
+        fx, fy = K[0, 0], K[1, 1]
+        cx, cy = K[0, 2], K[1, 2]
+        
+        # Standard Pinhole Projection: u = fx * (X/Z) + cx
+        target_u_px = fx * (P_tilted[0] / P_tilted[2]) + cx
+        target_v_px = fy * (P_tilted[1] / P_tilted[2]) + cy
+        
+        # Convert to UV (0..1) for the helper function
+        target_u = target_u_px / w
+        target_v = 1.0 - (target_v_px / h)
+
         # Calculate the corrective rotation
         # This rotation maps the Target Ray to the Optical Axis (Z)
-        R_fix = get_rotation_to_center_ray(saved_matrices['starting_K'], target_u, target_v, (w, h))
+        R_fix = get_rotation_to_center_ray(K, target_u, target_v, (w, h))
 
     # Final Homography ---
     # Chain: K_new @ R_relative @ R_fix @ K_inv
