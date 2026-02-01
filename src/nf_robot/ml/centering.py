@@ -18,7 +18,7 @@ from importlib.resources import files
 # CONFIGURATION
 # ==========================================
 DEFAULT_REPO_ID = "naavox/square-centering-dataset"
-DEFAULT_MODEL_PATH = files("nf_robot.ml").joinpath("models/square_centering.pth")
+DEFAULT_MODEL_PATH = "models/square_centering.pth"
 LOCAL_DATASET_ROOT = "square_centering_data"
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
