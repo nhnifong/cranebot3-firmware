@@ -494,7 +494,7 @@ class ControlPanelUI:
 
     def send_ob(self, events=None, **kwargs):
         """
-        Ensure that the given control item is sent to every connected UI
+        Send the given control item to the robot immediately.
         keyword args are passed directly to control item, so you can construct one like this
         """
         to_send = None

@@ -137,7 +137,6 @@ class AsyncObserver:
         self.grpc_server = None
         self.last_gp_action = None
         self.last_user_move_time = time.time()
-        self.episode_control_events = set()
         self.named_positions = {}
         self.target_model = None
         self.centering_model = None
@@ -502,8 +501,8 @@ class AsyncObserver:
             self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
     async def stop_all(self):
-        # If lerobot scripts are connected this must also stop them
-        self.episode_control_events.add('stop_recording')
+        # If lerobot episode recorders are connected, they must abandon this episode.
+        self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EPCOMMAND_ABANDON))
 
         # Cancel any active motion task
         if self.motion_task is not None:
@@ -1383,14 +1382,9 @@ class AsyncObserver:
             return image
         return bytes()
 
-    def get_episode_control_events(self):
-        e = list(self.episode_control_events)
-        self.episode_control_events.clear()
-        return e
-
-    def _handle_add_episode_control_events(self, data: control.EpControl):
-        for k in data.events:
-            self.episode_control_events.add(str(k))
+    def _handle_add_episode_control_events(self, data: common.EpisodeControl):
+        # both UI and lerobot episode recorder are clients. forwarding sends the message from one to the other.
+        self.send_ui(episode_control=data)
 
     def send_tq_to_ui(self):
         snapshot = self.target_queue.get_queue_snapshot()
