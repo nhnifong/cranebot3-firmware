@@ -1641,6 +1641,12 @@ class AsyncObserver:
 
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
+        if isinstance(self.gripper_client, ArpeggioGripperClient):
+            await self.arp_execute_grasp()
+        else:
+            await self.pilot_execute_grasp()
+
+    async def pilot_execute_grasp(self):
         OPEN = -30
         CLOSED = 85
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
@@ -1746,6 +1752,125 @@ class AsyncObserver:
                     await asyncio.sleep(2.0)
                     self.slow_stop_all_spools()
                     continue
+                print('Successful grasp')
+                return True
+            print(f'Gave up on grasp after {attempts} attempts. self.pe.holding={self.pe.holding}')
+            return False
+
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+
+    async def arp_execute_grasp(self):
+        """Try to grasp whatever is directly below the gripper"""
+        OPEN = -50
+        CLOSED = 90
+        FINGER_LENGTH = 0.03 # length between rangefinder and floor when fingers touch in meters
+        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
+        DOWNWARD_SPEED = -0.06
+        VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
+        COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
+        LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
+        LAT_SPEED_ADJUSTMENT = 5.00 # final adjustment to lateral speed
+        LOOP_DELAY = 0.1
+        PRESSURE_SENSE_WAIT = 2.0
+
+        smooth_grip_angle = self.grip_angle
+
+        try:
+            attempts = 3
+            while not self.pe.holding and attempts > 0 and self.run_command_loop:
+                attempts -= 1
+                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+
+                # move laterally until target is centered
+                # at the same time, move downward until tip is detected.
+
+                nothing_seen_countdown = 15
+                self.pe.tip_over.clear()
+                while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
+                    distance_to_floor = self.datastore.range_record.getLast()[1]
+                    if distance_to_floor < FINGER_LENGTH:
+                        print(f'stop going down, distance to floor is {distance_to_floor}')
+                        break
+
+                    if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and distance_to_floor > COMMIT_HEIGHT:
+                        nothing_seen_countdown -= 1
+                        if nothing_seen_countdown == 0:
+                            print('print nothing seen during centering loop')
+                            break
+                    else:
+                        nothing_seen_countdown = 15
+
+                    # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
+                    lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
+                    if lat_travel_seconds > 0:
+                        # determine which direction we'd have to move laterally to center the object
+                        # you get a normalized u,v coordinate in the [-1,1] range
+                        # for now assume that the up direction in the gripper image is -Y in world space 
+                        # stabilize_frame produced this direction and I think it depends on the compass.
+                        # the direction in world space depends on how the user placed the origin card on the ground
+                        # we need to capture a number during calibration to relate these two.
+                        # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
+                        pred_vector = self.predicted_lateral_vector
+                        pred_vector[1] *= -1
+                        # lateral distance to object
+                        lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * distance_to_floor
+                        # lateral distance in meters
+                        lateral_distance = np.linalg.norm(lateral_vector)
+                        # speed to travel that lateral distance in lat_travel_seconds
+                        lateral_speed = lateral_distance / lat_travel_seconds * LAT_SPEED_ADJUSTMENT
+                    else:
+                        # once we get too close, go straight down, stop relying on the camera
+                        lateral_speed = 0
+                    lateral_vector *= lateral_speed
+
+                    await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
+
+                    if isinstance(self.gripper_client, ArpeggioGripperClient):
+                        # move wrist to predicted grip angle with smoothing
+                        smooth_grip_angle = smooth_grip_angle*0.8 + self.grip_angle*0.2
+                        await self.gripper_client.send_commands({'set_wrist_angle': smooth_grip_angle/np.pi*180})
+
+                    try:
+                        # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
+                        # we want to stop immediately.
+                        await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
+                        print('detected tip over, must be floor')
+                        break
+                    except TimeoutError:
+                        pass
+
+                self.slow_stop_all_spools()
+                self.pe.tip_over.clear()
+
+                if nothing_seen_countdown == 0:
+                    print('Nothing seen')
+                    continue # find new target?
+
+                print('close gripper')
+                finger_angle = OPEN
+                end_time = time.time() + PRESSURE_SENSE_WAIT
+                while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and finger_angle < CLOSED:
+                    finger_angle += 1.5
+                    await self.gripper_client.send_commands({'set_finger_angle': finger_angle})
+                    await asyncio.sleep(0.03)
+
+                if not self.pe.finger_pressure_rising.is_set():
+                    print('did not detect a successful hold, open and go back up high enough to get a view of the object')
+                    # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
+                    await self.move_direction_speed([0,0,0.06])
+                    await asyncio.sleep(1.0)
+                    asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+                    # now move up a little faster in a slightly random direction
+                    direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
+                    await self.move_direction_speed(direction)
+                    await asyncio.sleep(2.0)
+                    self.slow_stop_all_spools()
+                    continue
+
+                self.pe.finger_pressure_rising.clear()
                 print('Successful grasp')
                 return True
             print(f'Gave up on grasp after {attempts} attempts. self.pe.holding={self.pe.holding}')
