@@ -61,16 +61,16 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.camera_cal.distortion_coeff = distortion_np.flatten().tolist()
 
     # Camera Calibration Wide
-    config.camera_cal = nf_config.CameraCalibration()
-    config.camera_cal.resolution = nf_config.Resolution(width=1920, height=1080)
+    config.camera_cal_wide = nf_config.CameraCalibration()
+    config.camera_cal_wide.resolution = nf_config.Resolution(width=1920, height=1080)
     intrinsic_np = np.array([
         [791.15,    0., 960.],
         [   0., 791.57, 540.],
         [   0.,    0.,   1.]
     ])
-    config.camera_cal.intrinsic_matrix = intrinsic_np.flatten().tolist()
+    config.camera_cal_wide.intrinsic_matrix = intrinsic_np.flatten().tolist()
     distortion_np = np.array([-0.06742619,  0.1546371, -0.00232347, 0.00080991, -0.13094542])
-    config.camera_cal.distortion_coeff = distortion_np.flatten().tolist()
+    config.camera_cal_wide.distortion_coeff = distortion_np.flatten().tolist()
 
     # Gripper
     config.gripper = nf_config.Gripper()
