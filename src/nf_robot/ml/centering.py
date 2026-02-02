@@ -572,9 +572,9 @@ if __name__ == "__main__":
     train_p = subparsers.add_parser("train")
     train_p.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
     train_p.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
-    train_p.add_argument("--epochs", type=int, default=50)
-    train_p.add_argument("--batch_size", type=int, default=16)
-    train_p.add_argument("--lr", type=float, default=1e-4)
+    train_p.add_argument("--epochs", type=int, default=180)
+    train_p.add_argument("--batch_size", type=int, default=64)
+    train_p.add_argument("--lr", type=float, default=1e-5)
 
     eval_p = subparsers.add_parser("eval")
     eval_p.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
