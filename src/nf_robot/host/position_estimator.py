@@ -536,7 +536,7 @@ class Positioner2:
         Watch for the rising and falling edge in grip pressure and set corresponding asyncio events
         may set self.finger_pressure_rising or self.finger_pressure_falling
         """
-        THRESHOLD = 0.4
+        THRESHOLD = 0.2
         HYSTERESIS = 0.04
         pressure = self.datastore.finger.getLast()[2]
 
