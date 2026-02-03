@@ -801,6 +801,7 @@ class AsyncObserver:
             # the number of anchors is decided ahead of time (in main.py)
             # but they are assigned numbers as we find them on the network
             # and the chosen numbers are persisted in configuration.json
+            # create a map structure from the existing config in order to look up things in it.
             anchor_num_map = {a.service_name: a.num for a in self.config.anchors if a.service_name is not None}
             if key in anchor_num_map:
                 anchor_num = anchor_num_map[key]
@@ -812,11 +813,12 @@ class AsyncObserver:
                     # After discovery, it should be ok to have more than one on at a time.
                     print(f"Discovered another anchor server on the network, but we already know of 4 {key} {address}")
                     return None
-            self.config.anchors[anchor_num].num = anchor_num
-            self.config.anchors[anchor_num].service_name = key
-            self.config.anchors[anchor_num].address = address
-            self.config.anchors[anchor_num].port = info.port
-            save_config(self.config, self.config_path)
+            if self.config.anchors[anchor_num].address != address or self.config.anchors[anchor_num].port != info.port
+                self.config.anchors[anchor_num].num = anchor_num
+                self.config.anchors[anchor_num].service_name = key
+                self.config.anchors[anchor_num].address = address
+                self.config.anchors[anchor_num].port = info.port
+                save_config(self.config, self.config_path)
 
         elif is_standard_gripper or is_arp_gripper:
             # a gripper has been discovered, assume it is ours only if we have never seen one before
@@ -1239,6 +1241,7 @@ class AsyncObserver:
             update['set_finger_angle'] = clamp(finger_angle, -90, 90)
         if wrist_angle is not None:
             update['set_wrist_angle'] = wrist_angle
+            print(f'wrist angle {wrist_angle}')
         if update and self.gripper_client is not None:
             asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_angle, wrist_angle
@@ -1712,12 +1715,6 @@ class AsyncObserver:
                     print(f'moving {[lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED]}')
                     await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
 
-                    if isinstance(self.gripper_client, ArpeggioGripperClient):
-                        # move wrist to predicted grip angle with smoothing
-                        smooth_grip_angle = smooth_grip_angle*0.8 + self.grip_angle*0.2
-                        print(f'setting wrist {smooth_grip_angle}')
-                        await self.gripper_client.send_commands({'set_wrist_angle': smooth_grip_angle/np.pi*180})
-
                     try:
                         # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
                         # we want to stop immediately.
@@ -1766,7 +1763,8 @@ class AsyncObserver:
         """Try to grasp whatever is directly below the gripper"""
         OPEN = -50
         CLOSED = 90
-        FINGER_LENGTH = 0.03 # length between rangefinder and floor when fingers touch in meters
+        FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
+        FLOOR_GRIPPER_HEIGHT = 0.20 # distance above floor (gripper origin) when grasp should be started
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.06
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
@@ -1774,7 +1772,7 @@ class AsyncObserver:
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
         LAT_SPEED_ADJUSTMENT = 5.00 # final adjustment to lateral speed
         LOOP_DELAY = 0.1
-        PRESSURE_SENSE_WAIT = 2.0
+        PRESSURE_SENSE_WAIT = 4.0
 
         smooth_grip_angle = self.grip_angle
 
@@ -1790,12 +1788,19 @@ class AsyncObserver:
                 nothing_seen_countdown = 15
                 self.pe.tip_over.clear()
                 while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
-                    distance_to_floor = self.datastore.range_record.getLast()[1]
-                    if distance_to_floor < FINGER_LENGTH:
-                        print(f'stop going down, distance to floor is {distance_to_floor}')
+                    range_to_target = self.datastore.range_record.getLast()[1]
+                    # compare this rangefinder distance to the distance estimated from other methods
+                    gripper_height = self.pe.grip_pose[1][2]
+
+                    # for bulky objects, we want to close range_to_target to about zero to get the fingers all the way around
+                    # for small objects, we don't want to, we can't get that low, the fingers would touch the floor and the object
+                    # would still be a few cm away from the rangefinder. 
+
+                    if gripper_height < FLOOR_GRIPPER_HEIGHT:
+                        print(f'Reached target at height {gripper_height} and range {range_to_target}')
                         break
 
-                    if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and distance_to_floor > COMMIT_HEIGHT:
+                    if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and range_to_target > COMMIT_HEIGHT:
                         nothing_seen_countdown -= 1
                         if nothing_seen_countdown == 0:
                             print('print nothing seen during centering loop')
@@ -1804,7 +1809,7 @@ class AsyncObserver:
                         nothing_seen_countdown = 15
 
                     # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
-                    lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
+                    lat_travel_seconds = (range_to_target-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
                     if lat_travel_seconds > 0:
                         # determine which direction we'd have to move laterally to center the object
                         # you get a normalized u,v coordinate in the [-1,1] range
@@ -1816,7 +1821,7 @@ class AsyncObserver:
                         pred_vector = self.predicted_lateral_vector
                         pred_vector[1] *= -1
                         # lateral distance to object
-                        lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * distance_to_floor
+                        lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * range_to_target
                         # lateral distance in meters
                         lateral_distance = np.linalg.norm(lateral_vector)
                         # speed to travel that lateral distance in lat_travel_seconds
@@ -1828,10 +1833,9 @@ class AsyncObserver:
 
                     await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
 
-                    if isinstance(self.gripper_client, ArpeggioGripperClient):
-                        # move wrist to predicted grip angle with smoothing
-                        smooth_grip_angle = smooth_grip_angle*0.8 + self.grip_angle*0.2
-                        await self.gripper_client.send_commands({'set_wrist_angle': smooth_grip_angle/np.pi*180})
+                    # move wrist to predicted grip angle with smoothing
+                    smooth_grip_angle = smooth_grip_angle*0.8 + self.grip_angle*0.2
+                    await self.gripper_client.send_commands({'set_wrist_angle': smooth_grip_angle/np.pi*180})
 
                     try:
                         # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
@@ -1853,7 +1857,7 @@ class AsyncObserver:
                 finger_angle = OPEN
                 end_time = time.time() + PRESSURE_SENSE_WAIT
                 while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and finger_angle < CLOSED:
-                    finger_angle += 1.5
+                    finger_angle += 2.5
                     await self.gripper_client.send_commands({'set_finger_angle': finger_angle})
                     await asyncio.sleep(0.03)
 
