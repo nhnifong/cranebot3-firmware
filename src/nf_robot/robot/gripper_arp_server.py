@@ -79,6 +79,7 @@ class GripperArpServer(RobotComponentServer):
         self.pressure_sensor = AnalogIn(self.ads, ads1x15.Pin.A0)
 
         self.motors = SimpleSTS3215()
+        self.motors.configure_multiturn(WRIST)
 
         # the superclass, RobotComponentServer, assumes the presense of this attribute
         self.spooler = None
@@ -110,7 +111,7 @@ class GripperArpServer(RobotComponentServer):
         wrist_data = self.motors.get_feedback(WRIST)
 
         finger_angle = remap(finger_data['position'], self.finger_open_pos, self.finger_closed_pos, -90, 90)
-        wrist_angle = remap(wrist_data['position'], 0, 4000, 0, 360)
+        wrist_angle = wrist_data['position'] / 4096 * 360
         pressure_v = remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
 
         self.update['grip_sensors'] = {
@@ -154,20 +155,22 @@ class GripperArpServer(RobotComponentServer):
         # use same finger "angle" range as previous gripper. translate internally.
         # -90 is wide open, and 90 is closed tight.
         # 
+        angle = clamp(angle, -90, 90)
         self.desired_finger_angle = angle
         target_pos = remap(self.desired_finger_angle, -90, 90, self.finger_open_pos, self.finger_closed_pos)
         self.motors.set_position(FINGER, target_pos)
 
             
     def setWrist(self, angle):
-        # Accept an angle in degrees.
+        # Accept an angle in degrees between 0 and 1080 (3 revolutions)
+        angle = clamp(angle, 0, 1080)
         self.desired_wrist_angle = angle
-        target_pos = self.desired_wrist_angle / 360 * 4000
+        target_pos = self.desired_wrist_angle / 360 * 4096
         self.motors.set_position(WRIST, target_pos)
 
     async def processOtherUpdates(self, update, tg):
         if 'set_finger_angle' in update:
-            self.setFingers(clamp(float(update['set_finger_angle']), -90, 90))
+            self.setFingers(float(update['set_finger_angle'])
         if 'set_wrist_angle' in update:
             self.setWrist(float(update['set_wrist_angle']))
 

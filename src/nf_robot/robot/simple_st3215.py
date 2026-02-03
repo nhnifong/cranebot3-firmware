@@ -20,6 +20,8 @@ class SimpleSTS3215:
     # Memory Addresses
     ADDR_ID = 5
     ADDR_BAUD_RATE = 6
+    ADDR_MIN_ANGLE_LIMIT = 9
+    ADDR_MAX_ANGLE_LIMIT = 11
     ADDR_MODE = 33
     ADDR_TORQUE_ENABLE = 40
     ADDR_ACC = 41
@@ -214,7 +216,7 @@ class SimpleSTS3215:
     def set_position(self, servo_id, position, speed=2400, acc=50):
         """Moves the servo to a specific target position."""
         position = int(position)
-        position = max(0, min(4095, position))
+        position = max(0, min(3*4095, position))
         
         pos_L, pos_H = position & 0xFF, (position >> 8) & 0xFF
         spd_L, spd_H = speed & 0xFF, (speed >> 8) & 0xFF
@@ -320,6 +322,28 @@ class SimpleSTS3215:
         """Sets the operational mode of the servo."""
         self.torque_enable(servo_id, False)
         self._write_packet(servo_id, 3, [self.ADDR_MODE, mode])
+
+    def configure_multiturn(self, servo_id):
+        """
+        Configures the servo for multi-turn mode (unlimited rotation).
+        
+        Sets both the Min Angle Limit (Addr 9) and Max Angle Limit (Addr 11) to 0.
+        In the STS3215 protocol, setting both limits to 0 disables the single-turn 
+        angle safety check.
+        
+        Args:
+            servo_id (int): The ID of the servo.
+        """
+        print(f"Configuring ID {servo_id} for multi-turn mode...")
+        # Unlock EEPROM
+        self._write_packet(servo_id, 3, [55, 0])
+        # Write 0 to Min Angle Limit (Addr 9)
+        self._write_packet(servo_id, 3, [self.ADDR_MIN_ANGLE_LIMIT, 0, 0])
+        # Write 0 to Max Angle Limit (Addr 11)
+        self._write_packet(servo_id, 3, [self.ADDR_MAX_ANGLE_LIMIT, 0, 0])
+        # Lock EEPROM
+        self._write_packet(servo_id, 3, [55, 1])
+        print(f"ID {servo_id} configured. Full signed 16-bit range enabled.")
 
 if __name__ == "__main__":
     sts = SimpleSTS3215(port='/dev/serial0', timeout=0.5) 
