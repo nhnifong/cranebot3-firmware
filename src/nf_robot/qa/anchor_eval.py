@@ -20,9 +20,8 @@ def main():
 	args = parser.parse_args()
 
 	# Write the file that differentiates power anchors from regular anchors
-	if args.anchor_type == 'anchor':
-		full_diameter=model_constants.full_spool_diameter_fishing_line
-	elif args.anchor_type == 'power anchor':
+	full_diameter=model_constants.full_spool_diameter_fishing_line
+	if args.anchor_type == 'power anchor':
 		full_diameter=model_constants.full_spool_diameter_power_line
 
 	with open('/opt/robot/server.conf', 'w') as f:
