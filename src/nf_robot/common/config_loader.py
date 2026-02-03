@@ -113,6 +113,7 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
                     c.camera_cal = default.camera_cal
                 if c.camera_cal_wide is None:
                     c.camera_cal_wide = default.camera_cal_wide
+            return c
 
             
     except FileNotFoundError:
