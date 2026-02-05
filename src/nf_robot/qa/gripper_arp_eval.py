@@ -24,16 +24,16 @@ def main():
     i2c = busio.I2C(board.SCL, board.SDA)
     sts = SimpleSTS3215()
 
-    def wiggle_wrist():
-        sts.torque_enable(WRIST_MOTOR_ID, True)
-        pos = sts.get_position(WRIST_MOTOR_ID)
-        sts.set_position(WRIST_MOTOR_ID, pos+200)
+    def wiggle_motor(mid):
+        sts.torque_enable(mid, True)
+        pos = sts.get_position(mid)
+        sts.set_position(mid, pos+200)
         time.sleep(0.5)
-        sts.set_position(WRIST_MOTOR_ID, pos)
+        sts.set_position(mid, pos)
         time.sleep(0.5)
-        sts.torque_enable(WRIST_MOTOR_ID, False)
+        sts.torque_enable(mid, False)
 
-    input("Plug only the wrist motor into the board and press Enter...")
+    input("Plug only one motor into the board and press Enter...")
     # set id of this motor to 2. let the finger motor id remain 1, the factory setting.
 
     # Perform a full scan (0-253) to ensure we don't accidentally broadcast to multiple motors
@@ -44,7 +44,7 @@ def main():
     if len(servos) == 2 and (1 in servos and 2 in servos):
         # spin the wrist motor a small amount
         input(f"Found exactly two servos with IDs 1 and 2. Press enter to move servo 2 and note which it is")
-        wiggle_wrist()
+        wiggle_motor(WRIST_MOTOR_ID)
         val = input("Did the wrist move? y/n")
         if val == 'y':
             print('servo IDs correct.')
@@ -64,7 +64,7 @@ def main():
     elif len(servos)==1:
         current_id = servos[0]
         input(f"Found exactly one servo with ID {current_id}. Press enter to move it and note which it is")
-        wiggle_wrist()
+        wiggle_motor(current_id)
         val = input("Did the wrist move? y/n")
         if val == 'y':
             if current_id == WRIST_MOTOR_ID:

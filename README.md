@@ -123,7 +123,13 @@ Run QA scripts for the specific component type
 
 These scripts both check whether everything is connected as it should be and in the case of anchors, set whether it is a power anchor or not.
 
+To update to the lastest nf_robot version in a component
+
+    /opt/robot/env/bin/pip install --upgrade "nf_robot[pi]"
+
 ## Training models
+
+
 
 ## Support this project
 
