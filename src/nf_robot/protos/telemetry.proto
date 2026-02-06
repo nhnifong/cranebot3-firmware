@@ -192,7 +192,7 @@ message TelemetryItem {
 		TargetList target_list = 12;
 		VideoReady video_ready = 13;
 		UplinkStatus uplink_status = 15; // only sent from control plane
-		nf.common.EpisodeControl episode_control= 14; // Forwarded
+		nf.common.EpisodeControl episode_control= 16; // Forwarded by robot to all listening 'UIs'
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

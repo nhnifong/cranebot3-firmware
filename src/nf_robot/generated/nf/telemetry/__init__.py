@@ -249,7 +249,7 @@ class GripperSensors(betterproto2.Message):
 
     pressure: "float" = betterproto2.field(3, betterproto2.TYPE_FLOAT)
     """
-    The voltage on the sensing finger pad, higher is more pressure. [0,3.3]
+    The voltage on the sensing finger pad, lower is more pressure. [0,3.3]
     """
 
     wrist: "float" = betterproto2.field(4, betterproto2.TYPE_FLOAT)
@@ -521,6 +521,13 @@ class TelemetryItem(betterproto2.Message):
     )
     """
     only sent from control plane
+    """
+
+    episode_control: "_common__.EpisodeControl | None" = betterproto2.field(
+        16, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+    """
+    Forwarded by robot to all listening 'UIs'
     """
 
     retain_key: "str | None" = betterproto2.field(

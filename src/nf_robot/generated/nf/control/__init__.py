@@ -11,7 +11,6 @@ __all__ = (
     "ControlBatchUpdate",
     "ControlItem",
     "DeleteTarget",
-    "EpControl",
     "GantryGoalPos",
     "JogSpool",
     "ScaleRoom",
@@ -281,8 +280,8 @@ class ControlItem(betterproto2.Message):
         4, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
-    episode_control: "EpControl | None" = betterproto2.field(
-        5, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    episode_control: "_common__.EpisodeControl | None" = betterproto2.field(
+        9, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
     scale_room: "ScaleRoom | None" = betterproto2.field(
@@ -307,19 +306,6 @@ class DeleteTarget(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.control", "DeleteTarget", DeleteTarget)
-
-
-@dataclass(eq=False, repr=False)
-class EpControl(betterproto2.Message):
-    """
-    Adds the named episode control events to a set
-    When lerobot is connected, this is how a teleoperator can start or stop an episode during recording
-    """
-
-    events: "list[str]" = betterproto2.field(1, betterproto2.TYPE_STRING, repeated=True)
-
-
-default_message_pool.register_message("nf.control", "EpControl", EpControl)
 
 
 @dataclass(eq=False, repr=False)

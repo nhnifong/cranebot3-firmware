@@ -8,6 +8,10 @@ from typing import Any
 from dataclasses import dataclass, field
 import numpy as np
 import cv2
+import argparse
+import threading
+from websockets.sync.client import connect as websocket_connect_sync
+import time
 
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
@@ -18,7 +22,6 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
 from lerobot.utils.constants import OBS_STR, ACTION
 from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
-from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.utils import log_say
 
 IMG_RES = 384  # Square resolution of post-stabilized gripper camera.
@@ -26,9 +29,7 @@ IMG_RES = 384  # Square resolution of post-stabilized gripper camera.
 @RobotConfig.register_subclass("stringman")
 @dataclass
 class StringmanConfig(RobotConfig):
-    robot_id: str
-    server: str
-    protocol: str # ws or wss
+    uri: str
 
 def decode_image(jpeg_bytes):
     try:
@@ -44,7 +45,7 @@ class StringmanLeRobot(Robot):
 
     def __init__(self, config: StringmanConfig):
         super().__init__(config)
-        self.address = f'{config.protocol}//{config.server}/control/{config.robot_id}'
+        self.address = config.uri
         self.websocket = None
         self.last_commanded_vel = common.Vec3(0,0,0)
         self.last_observed_vel = common.Vec3(0,0,0)
@@ -52,6 +53,7 @@ class StringmanLeRobot(Robot):
         self.last_finger_angle = 0
         self.last_pressure = 0
         self.last_range = 0
+        self.events = {}
 
     @cached_property
     def _motors_ft(self) -> dict[str, type]:
@@ -94,18 +96,23 @@ class StringmanLeRobot(Robot):
 
     @property
     def is_connected(self) -> bool:
-        return self.websocket is not None:
+        return self.websocket is not None
 
     def connect(self, calibrate: bool = True) -> None:
         receive_updates_thread = threading.Thread(target=self.connect_thread, daemon=True)
         receive_updates_thread.start()
+        # block until completely connected.
+        give_up = time.time()+5
+        while self.websocket is None and time.time() < give_up:
+            time.sleep(0.1)
 
     def connect_thread(self):
         # consume the telemetry stream from the robot like any other UI
         # saving the values relevant to this teleoperation system
         print(f'Connecting to {self.address}')
-        with websocket_connect_sync('ws://localhost:4245') as websocket:
+        with websocket_connect_sync(self.address) as websocket:
             self.websocket = websocket
+            print(f'Connected')
             # iterator ends when websocket closes.
             for message in websocket:
                 batch = telemetry.TelemetryBatchUpdate().parse(message)
@@ -121,6 +128,8 @@ class StringmanLeRobot(Robot):
             self._handle_video_ready(item.video_ready)
         if item.last_commanded_vel:
             self._handle_last_commanded_vel(item.last_commanded_vel)
+        if item.episode_control:
+            self._handle_episode_control(item.episode_control)
 
     def _handle_pos_estimate(self, item: telemetry.PositionEstimate):
         self.last_observed_vel = item.gantry_velocity
@@ -148,9 +157,26 @@ class StringmanLeRobot(Robot):
         # for remote robots construct a url using this stream path
         # for example http://localhost:8889/${streamPath}/whep
         # item.stream_path
+        pass
 
     def _handle_last_commanded_vel(self, item: telemetry.CommandedVelocity):
         self.last_commanded_vel = item.velocity
+
+    def _handle_episode_control(self, item: common.EpisodeControl):
+        # these are forwarded from any UI connected to the robot.
+        # if you receive one, store it in the events dict. it is up to the 
+        # record_until_disconnected and record_episode to take action on them and clear them
+        if item.command == common.EpCommand.START:
+            self.events['episode_start'] = True
+        if item.command == common.EpCommand.COMPLETE:
+            self.events['episode_stop'] = True
+        if item.command == common.EpCommand.ABANDON:
+            self.events['episode_abandon'] = True
+        if item.command == common.EpCommand.END_RECORDING:
+            self.events['end_recording'] = True
+
+    def get_episode_control_events(self):
+        return self.events
 
     def disconnect(self) -> None:
         print("Disconnecting")
@@ -222,9 +248,6 @@ class StringmanLeRobot(Robot):
             "finger_angle": self.last_finger_angle,
         }
 
-    def get_episode_control_events(self):
-        return events
-
 # --- Recording Configuration ---
 EPISODE_MAX_TIME_SEC = 600
 FPS = 30
@@ -276,13 +299,13 @@ def record_episode(
         events.update(robot.get_episode_control_events())
 
         dt_s = time.perf_counter() - start_loop_t
-        busy_wait(1 / fps - dt_s)
+        time.sleep(1 / fps - dt_s)
 
         timestamp = time.perf_counter() - start_episode_t
 
 
 
-def record_until_disconnected(hf_repo_id):
+def record_until_disconnected(uri, hf_repo_id):
     """
     Record episodes to the dataset as long as connected
     episode start and stop are signalled from the gamepad ultimately
@@ -297,7 +320,7 @@ def record_until_disconnected(hf_repo_id):
     }
 
     # Initialize the robot connection
-    robot = StringmanConfig(StringmanConfig(ADDR))
+    robot = StringmanLeRobot(StringmanConfig(uri))
 
     # Configure the dataset features
     action_features = hw_to_dataset_features(robot.action_features, "action")
@@ -316,14 +339,14 @@ def record_until_disconnected(hf_repo_id):
             robot_type = robot.name,
             use_videos = True,
             image_writer_threads = 8,
-            async_video_encoding = True,
+            # async_video_encoding = True,
             vcodec = 'h264',
         )
     else:
         dataset = LeRobotDataset(
             repo_id = hf_repo_id,
             download_videos = False,
-            async_video_encoding = True,
+            # async_video_encoding = True,
             vcodec = 'h264',
         )
         dataset.start_image_writer(num_threads=8)
@@ -337,9 +360,9 @@ def record_until_disconnected(hf_repo_id):
         robot.connect()
 
         # Initialize Rerun for visualization
-        init_rerun(session_name="stringman_record")
         if not robot.is_connected:
             raise ConnectionError("Robot failed to connect!")
+        init_rerun(session_name="stringman_record")
         log_say("System ready. Press start.")
 
         while robot.is_connected and not events["stop_recording"]:
@@ -384,10 +407,20 @@ def record_until_disconnected(hf_repo_id):
             # log_say(f"{recorded_episodes} episodes collected. Encoding remaining video")
             # dataset.stop_async_video_encoder(wait=True)
             log_say("Encoding complete. Uploading to hugging face.")
-            dataset.push_to_hub()
+            # dataset.push_to_hub()
             log_say("Upload complete.")
 
 if __name__ == "__main__":
+    """
+    python -m nf_robot.ml.stringman_lerobot --robot_id=simulated_robot_1 --server_address=ws://localhost:8080 --repo_id=naavox/grasping_dataset
+    """
+    parser = argparse.ArgumentParser(description="Stringman Lerobot Episode Recorder")
+    parser.add_argument("--server_address", help="WebSocket server address (ws://localhost:8080)")
+    parser.add_argument("--robot_id", help="id of robot to record from")
+    parser.add_argument("--repo_id", help="repo id of dataset to append to (naavox/grasping_dataset)")
+    args = parser.parse_args()
+
+    uri = f'{args.server_address}/telemetry/{args.robot_id}'
 
     # TODO add args for any useful settings.
-    record_until_disconnected("naavox/grasping_dataset")
+    record_until_disconnected(uri, args.repo_id)

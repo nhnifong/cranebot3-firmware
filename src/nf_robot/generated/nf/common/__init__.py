@@ -4,6 +4,8 @@
 # This file has been @generated
 
 __all__ = (
+    "EpCommand",
+    "EpisodeControl",
     "Pose",
     "Vec3",
 )
@@ -16,6 +18,48 @@ from ...message_pool import default_message_pool
 
 _COMPILER_VERSION = "0.9.0"
 betterproto2.check_compiler_version(_COMPILER_VERSION)
+
+
+class EpCommand(betterproto2.Enum):
+    """
+    Episode control commands
+    """
+
+    START = 0
+
+    COMPLETE = 1
+
+    ABANDON = 2
+
+    END_RECORDING = 3
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "EPCOMMAND_START",
+            1: "EPCOMMAND_COMPLETE",
+            2: "EPCOMMAND_ABANDON",
+            3: "EPCOMMAND_END_RECORDING",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "EPCOMMAND_START": 0,
+            "EPCOMMAND_COMPLETE": 1,
+            "EPCOMMAND_ABANDON": 2,
+            "EPCOMMAND_END_RECORDING": 3,
+        }
+
+
+@dataclass(eq=False, repr=False)
+class EpisodeControl(betterproto2.Message):
+    command: "EpCommand" = betterproto2.field(
+        1, betterproto2.TYPE_ENUM, default_factory=lambda: EpCommand(0)
+    )
+
+
+default_message_pool.register_message("nf.common", "EpisodeControl", EpisodeControl)
 
 
 @dataclass(eq=False, repr=False)
