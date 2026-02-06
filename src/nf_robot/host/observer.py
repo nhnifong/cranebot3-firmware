@@ -207,7 +207,7 @@ class AsyncObserver:
             r = await self._dispatch_update(update)
 
     async def _dispatch_update(self, item: control.ControlItem):
-        # In betterproto, 'oneof' fields appear as attributes. 
+        # In betterproto2, 'oneof' fields appear as attributes. 
         # Only one will be non-None.
         
         # Standard Commands (Stop, Calibrate, Zero)
