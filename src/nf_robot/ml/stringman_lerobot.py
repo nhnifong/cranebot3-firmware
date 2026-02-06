@@ -166,10 +166,8 @@ class StringmanLeRobot(Robot):
         # these are forwarded from any UI connected to the robot.
         # if you receive one, store it in the events dict. it is up to the 
         # record_until_disconnected and record_episode to take action on them and clear them
-        if item.command == common.EpCommand.START:
-            self.events['episode_start'] = True
-        if item.command == common.EpCommand.COMPLETE:
-            self.events['episode_stop'] = True
+        if item.command == common.EpCommand.EPCOMMAND_START_OR_COMPLETE:
+            self.events['episode_start_or_complete'] = True
         if item.command == common.EpCommand.ABANDON:
             self.events['episode_abandon'] = True
         if item.command == common.EpCommand.END_RECORDING:
@@ -277,8 +275,10 @@ def record_episode(
     while timestamp < max_episode_duration:
         start_loop_t = time.perf_counter()
 
-        if events["episode_stop"]:
-            events["episode_stop"] = False
+        if events["episode_start_or_complete"]:
+            events["episode_start_or_complete"] = False
+            break
+        if events["episode_abandon"]: # gets cleared by record_until_disconnected
             break
 
         # Get robot observation
@@ -313,8 +313,7 @@ def record_until_disconnected(uri, hf_repo_id):
 
     # shared state used for returning early
     events={
-        'episode_start': False,
-        'episode_stop': False,
+        'episode_start_or_complete': False,
         'episode_abandon': False,
         'stop_recording': False,
     }
@@ -370,9 +369,9 @@ def record_until_disconnected(uri, hf_repo_id):
 
             # wait for the signal to start an episode.
             events.update(robot.get_episode_control_events())
-            if not events['episode_start']:
+            if not events['episode_start_or_complete']:
                 continue # while loop continues to run and process will stop if robot disconnects
-            events['episode_start'] = False # reset flag
+            events['episode_start_or_complete'] = False # reset flag
 
             # Start of a new episode
             # TODO speak the episode number from the whole dataset, not just this session.

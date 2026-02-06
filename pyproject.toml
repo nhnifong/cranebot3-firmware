@@ -39,6 +39,7 @@ dev = [
     "grpcio-tools",
     "betterproto2_compiler",
     "opencv-contrib-python>=4.0", # for the data labelling tools
+    "lerobot",
 ]
 pi = [
     "pyserial",
