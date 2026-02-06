@@ -179,6 +179,15 @@ class RobotComponentServer:
         # wait for the subprocess to exit, whether because we killed it, or it stopped normally
         return await self.rpicam_process.wait()
 
+    async def run_update(self):
+        logging.info('Performing Update')
+        pip_subprocess = await asyncio.create_subprocess_exec(
+            '/opt/robot/env/bin/pip', 'install', '--upgrade', '"nf_robot[pi]"', stdout=STDOUT, stderr=STDOUT)
+        pip_subprocess.wait()
+        logging.info('Self update complete. Restarting.')
+        self.shutdown() # systemctl will bring us back up.
+
+
     async def read_updates_from_client(self,websocket,tg):
         while True:
             message = await websocket.recv()
@@ -188,6 +197,9 @@ class RobotComponentServer:
                 self.conf.update(update['set_config_vars'])
             if 'host_time' in update:
                 logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
+            if 'run_update' in update:
+                self.run_update()
+                self.extra_tasks.append(asyncio.create_task(self.run_update))
 
             if self.spooler is not None:
                 if 'length_set' in update:

@@ -92,6 +92,8 @@ def save_config(config: nf_config.StringmanPilotConfig, path: Path=DEFAULT_CONFI
     """
     if path is None:
         return
+    print(f'Saving configuration to {path}')
+    print(f'wide = {config.camera_cal_wide}')
     with open(path, 'w') as f:
         f.write(config.to_json(indent=2))
 
@@ -104,7 +106,15 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
             raise FileNotFoundError # observer unit test path
         with open(path, 'r') as f:
             print(f'Loaded config from {path}')
-            return nf_config.StringmanPilotConfig().from_json(f.read())
+            c = nf_config.StringmanPilotConfig().from_json(f.read())
+            if c.camera_cal is None or c.camera_cal_wide is None:
+                default = create_default_config()
+                if c.camera_cal is None:
+                    c.camera_cal = default.camera_cal
+                if c.camera_cal_wide is None:
+                    c.camera_cal_wide = default.camera_cal_wide
+            return c
+
             
     except FileNotFoundError:
         print(f"No config found at {path}, creating default.")
