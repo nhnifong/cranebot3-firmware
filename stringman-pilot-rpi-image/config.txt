@@ -51,8 +51,7 @@ otg_mode=1
 dtoverlay=dwc2,dr_mode=host
 
 [all]
-# Gripper has a BNO085 on the I2C interface so we need a software I2C
-# disabled for now. something is missing in the image
+# If there is any chip on the i2c bus which does clock stretching you can switch to this and disable the i2c_arm driver
 # dtoverlay=i2c-gpio,bus=1,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=2
 
 # enable hardware uart for communication with MKSSERVO42C and disable bluetooth which would conflict with it.
