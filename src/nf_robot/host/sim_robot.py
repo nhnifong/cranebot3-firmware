@@ -5,10 +5,10 @@ import math
 import random
 import logging
 import websockets
+import numpy as np
 from dataclasses import dataclass
+from scipy.spatial.transform import Rotation
 
-# Importing generated protobufs
-# Ensure these are in your python path
 from nf_robot.generated.nf import telemetry, common, control
 
 # Configure logging
@@ -21,73 +21,38 @@ logger = logging.getLogger("SimRobot")
 # Constants
 ROOM_SIZE_X = 5.0
 ROOM_SIZE_Y = 5.0
-HALF_ROOM_X = ROOM_SIZE_X / 2.0
-HALF_ROOM_Y = ROOM_SIZE_Y / 2.0
 ANCHOR_HEIGHT = 2.5
 GRIPPER_OFFSET_Z = 0.53
 UPDATE_RATE_HZ = 30
 DT = 1.0 / UPDATE_RATE_HZ
 ROBOT_ID = 'simulated_robot_1'
+INACTIVITY_TIMEOUT_SEC = 60.0
+
+# Define bounds as numpy arrays for vector clamping
+MIN_BOUNDS = np.array([-ROOM_SIZE_X / 2.0, -ROOM_SIZE_Y / 2.0, 0.0])
+MAX_BOUNDS = np.array([ROOM_SIZE_X / 2.0, ROOM_SIZE_Y / 2.0, ANCHOR_HEIGHT])
 
 @dataclass
 class RobotState:
-    # Gantry kinematics (Origin is now center of room, z=0 is floor)
-    pos_x: float = 0.0
-    pos_y: float = 0.0
-    pos_z: float = 1.0
-    vel_x: float = 0.0
-    vel_y: float = 0.0
-    vel_z: float = 0.0
+    # Gantry kinematics (Origin is center of room, z=0 is floor)
+    pos: np.ndarray # [x, y, z]
+    vel: np.ndarray # [x, y, z]
+    target_vel: np.ndarray # [x, y, z]
     
     # Gripper state
     wrist_angle: float = 0.0
     finger_angle: float = 0.0 # -90 to 90
     
-    # Simulation internals
-    target_vel_x: float = 0.0
-    target_vel_y: float = 0.0
-    target_vel_z: float = 0.0
-    
     last_update: float = 0.0
+    last_control_time: float = 0.0
+    is_sleeping: bool = False
 
-def euler_to_rodrigues(roll, pitch, yaw):
-    """
-    Convert Euler angles (radians) to Rodrigues rotation vector (Vec3).
-    Rodrigues vector r: direction is axis of rotation, magnitude is angle in radians.
-    """
-    # 1. Convert Euler to Quaternion (w, x, y, z)
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-    cr = math.cos(roll * 0.5)
-    sr = math.sin(roll * 0.5)
-
-    w = cr * cp * cy + sr * sp * sy
-    x = sr * cp * cy - cr * sp * sy
-    y = cr * sp * cy + sr * cp * sy
-    z = cr * cp * sy - sr * sp * cy
-
-    # 2. Convert Quaternion to Axis-Angle (Rodrigues)
-    # Angle theta = 2 * acos(w)
-    # Axis v = (x, y, z) / sin(theta/2)
-    # Rodrigues r = theta * v
-    
-    # Calculate magnitude of the vector part (sin(theta/2))
-    sin_half_theta_sq = x*x + y*y + z*z
-    
-    # Avoid division by zero for very small rotations
-    if sin_half_theta_sq < 1e-7:
-        return common.Vec3(x=0.0, y=0.0, z=0.0)
-    
-    sin_half_theta = math.sqrt(sin_half_theta_sq)
-    
-    # Use atan2 for stable angle calculation
-    theta = 2.0 * math.atan2(sin_half_theta, w)
-    
-    scale = theta / sin_half_theta
-    
-    return common.Vec3(x=x*scale, y=y*scale, z=z*scale)
+    def __init__(self):
+        self.pos = np.array([0.0, 0.0, 1.0])
+        self.vel = np.array([0.0, 0.0, 0.0])
+        self.target_vel = np.array([0.0, 0.0, 0.0])
+        self.last_update = time.time()
+        self.last_control_time = time.time()
 
 def get_anchor_poses():
     """
@@ -110,14 +75,14 @@ def get_anchor_poses():
     ]
 
     for x, y, deg in corners:
-        # Convert degrees to radians for yaw
-        yaw_rad = math.radians(deg)
-        
         # Assuming Z-up coordinate system where rotation is around Z
-        rotation = euler_to_rodrigues(0, 0, yaw_rad)
+        rotation = Rotation.from_euler('z', deg, degrees=True).as_rotvec()
         
         pos = common.Vec3(x=x, y=y, z=ANCHOR_HEIGHT)
-        poses.append(common.Pose(position=pos, rotation=rotation))
+        poses.append(common.Pose(
+            position=pos, 
+            rotation=common.Vec3(x=rotation[0], y=rotation[1], z=rotation[2])
+        ))
         
     return telemetry.AnchorPoses(poses=poses)
 
@@ -181,60 +146,64 @@ async def physics_loop(websocket, state: RobotState):
     
     while True:
         now = time.time()
+        
+        # Check for inactivity sleep
+        if now - state.last_control_time > INACTIVITY_TIMEOUT_SEC:
+            if not state.is_sleeping:
+                logger.info("Entering sleep mode due to inactivity")
+                state.is_sleeping = True
+            await asyncio.sleep(0.5)
+            continue
+        
+        # If we just woke up, reset the delta time to avoid a physics jump
+        if state.is_sleeping:
+            logger.info("Waking up from sleep")
+            state.is_sleeping = False
+            state.last_update = now
+
         dt_actual = now - state.last_update
         state.last_update = now
 
         # Update Gantry Position
-        # Simple Euler integration
-        state.vel_x += (state.target_vel_x - state.vel_x) * 0.1 # Simple smoothing
-        state.vel_y += (state.target_vel_y - state.vel_y) * 0.1
-        state.vel_z += (state.target_vel_z - state.vel_z) * 0.1
+        # Simple Euler integration with vector operations
+        state.vel += (state.target_vel - state.vel) * 0.1 # Simple smoothing
+        state.pos += state.vel * dt_actual
 
-        state.pos_x += state.vel_x * dt_actual
-        state.pos_y += state.vel_y * dt_actual
-        state.pos_z += state.vel_z * dt_actual
-
-        # Clamp to room boundaries (Origin at center, so +/- half size)
-        state.pos_x = max(-HALF_ROOM_X, min(HALF_ROOM_X, state.pos_x))
-        state.pos_y = max(-HALF_ROOM_Y, min(HALF_ROOM_Y, state.pos_y))
-        state.pos_z = max(0.0, min(ANCHOR_HEIGHT, state.pos_z))
-
-        # --- Prepare Telemetry ---
+        # Clamp to room boundaries
+        state.pos = np.clip(state.pos, MIN_BOUNDS, MAX_BOUNDS)
         
-        # 1. Position Estimate
-        # Gripper is 53cm below gantry
-        gripper_pos = common.Vec3(x=state.pos_x, y=state.pos_y, z=state.pos_z - GRIPPER_OFFSET_Z)
-        
-        # Random rotation for gripper to simulate "guessing" if we don't have commanded data
-        # Gripper rotated -90 degrees around Y (Pitch = -90)
-        gripper_rot = euler_to_rodrigues(0, 0, math.radians(state.wrist_angle))
+        # Position Estimate
+        # Gripper is 53cm below gantry in arpeggio configuration
+        gripper_pos_arr = state.pos - np.array([0, 0, GRIPPER_OFFSET_Z])
+        gripper_rot = Rotation.from_euler('xyz', [0, 0, state.wrist_angle], degrees=True).as_rotvec()
         
         pos_est = telemetry.PositionEstimate(
-            gantry_position=common.Vec3(x=state.pos_x, y=state.pos_y, z=state.pos_z),
-            gantry_velocity=common.Vec3(x=state.vel_x, y=state.vel_y, z=state.vel_z),
-            gripper_pose=common.Pose(position=gripper_pos, rotation=gripper_rot),
+            gantry_position=common.Vec3(x=state.pos[0], y=state.pos[1], z=state.pos[2]),
+            gantry_velocity=common.Vec3(x=state.vel[0], y=state.vel[1], z=state.vel[2]),
+            gripper_pose=common.Pose(
+                position=common.Vec3(x=gripper_pos_arr[0], y=gripper_pos_arr[1], z=gripper_pos_arr[2]),
+                rotation=common.Vec3(x=gripper_rot[0], y=gripper_rot[1], z=gripper_rot[2])
+            ),
             data_ts=now,
             slack=[False, False, False, False]
         )
 
-        # 2. Position Factors
+        # Position Factors
         # Add noise to "real" position for visual
         noise_level = 0.02
-        vis_pos = common.Vec3(
-            x=state.pos_x + random.uniform(-noise_level, noise_level),
-            y=state.pos_y + random.uniform(-noise_level, noise_level),
-            z=state.pos_z + random.uniform(-noise_level, noise_level)
-        )
+        noise = np.random.uniform(-noise_level, noise_level, 3)
+        vis_pos_arr = state.pos + noise
+        
         pos_factors = telemetry.PositionFactors(
-            visual_pos=vis_pos,
-            visual_vel=common.Vec3(x=state.vel_x, y=state.vel_y, z=state.vel_z),
-            hanging_pos=common.Vec3(x=state.pos_x, y=state.pos_y, z=state.pos_z), # Ideal hanging
-            hanging_vel=common.Vec3(x=state.vel_x, y=state.vel_y, z=state.vel_z)
+            visual_pos=common.Vec3(x=vis_pos_arr[0], y=vis_pos_arr[1], z=vis_pos_arr[2]),
+            visual_vel=common.Vec3(x=state.vel[0], y=state.vel[1], z=state.vel[2]),
+            hanging_pos=common.Vec3(x=state.pos[0], y=state.pos[1], z=state.pos[2]), # Ideal hanging
+            hanging_vel=common.Vec3(x=state.vel[0], y=state.vel[1], z=state.vel[2])
         )
 
-        # 3. Gripper Sensors
+        # Gripper Sensors
         # Calculate real range to floor (z=0)
-        range_to_floor = max(0.0, (state.pos_z - GRIPPER_OFFSET_Z))
+        range_to_floor = max(0.0, (state.pos[2] - GRIPPER_OFFSET_Z))
         
         # Simulate pressure only if close to floor and gripper is closed
         simulated_pressure = 0.0
@@ -248,10 +217,10 @@ async def physics_loop(websocket, state: RobotState):
             wrist=state.wrist_angle
         )
 
-        # 4. Commanded Velocity
-        # The velocity we are actually trying to achieve (target_vel)
+        # Send backCommanded Velocity
+        # The velocity commanded after any clamping or alteration
         cmd_vel = telemetry.CommandedVelocity(
-            velocity=common.Vec3(x=state.target_vel_x, y=state.target_vel_y, z=state.target_vel_z)
+            velocity=common.Vec3(x=state.target_vel[0], y=state.target_vel[1], z=state.target_vel[2])
         )
 
         # Construct Batch Update
@@ -278,72 +247,54 @@ async def receive_loop(websocket, state: RobotState):
     Listens for ControlBatchUpdate messages and updates state.
     """
     async for message in websocket:
+        # Reset timeout timer on any message
+        state.last_control_time = time.time()
+        
         # Letting exceptions propagate if parsing fails
         try:
             batch = control.ControlBatchUpdate().parse(message)
             
             for item in batch.updates:
-                # betterproto2 exposes oneofs as attributes.
-                # We check the ones we care about.
+                # betterproto2 exposes oneofs as attributes. Only one will be non-none
                 
                 if item.command:
                     cmd = item.command
                     logger.info(f"Received CommonCommand: {cmd.name}")
                     if cmd.name == control.Command.STOP_ALL:
                         logger.info("STOPPING ALL MOTION")
-                        state.target_vel_x = 0
-                        state.target_vel_y = 0
-                        state.target_vel_z = 0
-                        state.vel_x = 0
-                        state.vel_y = 0
-                        state.vel_z = 0
+                        state.target_vel = np.array([0.0, 0.0, 0.0])
+                        state.vel = np.array([0.0, 0.0, 0.0])
 
                 elif item.move:
                     move = item.move
                     logger.info(f"Received Move: {move}")
                     
-                    # --- Velocity Update Logic ---
-                    # We update velocity if either direction or speed is provided.
+                    # Update velocity if either direction or speed is provided.
                     # This handles:
                     # 1. CombinedMove(direction=Vec3(), speed=0.0) -> Stop
                     # 2. CombinedMove(speed=0.0) -> Stop
                     # 3. CombinedMove(direction=Vec3(1,0,0), speed=1.0) -> Move
                     # 4. CombinedMove(direction=Vec3(1,0,0)) -> Move (direction is velocity)
                     
-                    should_update_vel = False
-                    new_vel_x, new_vel_y, new_vel_z = 0.0, 0.0, 0.0
-
-                    # Check for explicit stop command (speed=0)
                     if move.speed is not None and move.speed == 0.0:
-                        should_update_vel = True
-                        # Velocities remain 0.0
+                        # Explicit stop command
+                        state.target_vel = np.array([0.0, 0.0, 0.0])
                         
                     elif move.direction is not None:
-                        should_update_vel = True
-                        mag = math.sqrt(move.direction.x**2 + move.direction.y**2 + move.direction.z**2)
+                        dir_vec = np.array([move.direction.x, move.direction.y, move.direction.z])
+                        mag = np.linalg.norm(dir_vec)
                         
                         if mag > 0:
                             if move.speed is not None:
                                 # Speed provided: normalize direction and scale
-                                scale = move.speed / mag
-                                new_vel_x = move.direction.x * scale
-                                new_vel_y = move.direction.y * scale
-                                new_vel_z = move.direction.z * scale
+                                state.target_vel = (dir_vec / mag) * move.speed
                             else:
                                 # Speed not provided: direction is velocity
-                                new_vel_x = move.direction.x
-                                new_vel_y = move.direction.y
-                                new_vel_z = move.direction.z
+                                state.target_vel = dir_vec
                         else:
                             # Direction is (0,0,0) -> Stop
-                            # Velocities remain 0.0
-                            pass
+                            pass # We don't implicitly stop on zero-vector direction unless speed was 0
 
-                    if should_update_vel:
-                        state.target_vel_x = new_vel_x
-                        state.target_vel_y = new_vel_y
-                        state.target_vel_z = new_vel_z
-                    
                     # Update Finger
                     if move.finger is not None:
                         state.finger_angle = move.finger
@@ -373,7 +324,7 @@ async def main():
         
         state = RobotState()
         
-        # 1. Send Anchor Poses immediately
+        # Send Anchor Poses immediately
         anchor_poses_msg = get_anchor_poses()
         init_update = telemetry.TelemetryBatchUpdate(
             robot_id=ROBOT_ID,
@@ -382,20 +333,20 @@ async def main():
         await websocket.send(bytes(init_update))
         logger.info("Sent initial AnchorPoses.")
 
-        # 2. Start Connection Simulation Tasks (Background)
+        # Start Connection Simulation Tasks (Background)
         conn_tasks = []
         # 4 Anchors
         for i in range(4):
             await asyncio.sleep(1.0)
             conn_tasks.append(asyncio.create_task(simulate_component_connection(websocket, is_gripper=False, anchor_num=i)))
-        # 1 Gripper
+        # Gripper
         conn_tasks.append(asyncio.create_task(simulate_component_connection(websocket, is_gripper=True)))
 
-        # 3. Start Loops
+        # Start Loops
         physics_task = asyncio.create_task(physics_loop(websocket, state))
         receive_task = asyncio.create_task(receive_loop(websocket, state))
 
-        # Wait for loops (they generally run forever until connection drop)
+        # Wait for loops (they run until connection drop or keyboard interrupts)
         await asyncio.gather(physics_task, receive_task, *conn_tasks)
 
 if __name__ == "__main__":
