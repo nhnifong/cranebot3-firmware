@@ -2,7 +2,7 @@
 
 Control code for the Stringman household robotic crane from Neufangled Robotics
 
-## [Build Guides and Documentation](https://nhnifong.github.io/neufangled-site-2/)
+## [Build Guides and Documentation](https://neufangled.com/docs)
 
 Purchase assembled robots or kits at [neufangled.com](https://neufangled.com)
 
@@ -134,8 +134,7 @@ To update to the lastest nf_robot version in a component
 
 There is a barebones simulator which can connect to a telemetry server to provide basic feedback for UI testing. It is not suitable for training models against.
 
-    python -m nf_robot.host.sim_robot ws://localhost:8080
-
+    python -m nf_robot.sim.sim_robot ws://localhost:8080
 
 ## Support this project
 

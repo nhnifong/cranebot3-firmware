@@ -1921,7 +1921,7 @@ def main():
 
     typical run command for local testing
 
-    python3 observer.py --config=conf_bedroom.json local
+    python3 observer.py --config=conf_bedroom.json --telemetry_env=local
 
     """
     parser = argparse.ArgumentParser(description="Stringman motion controller")
@@ -1930,8 +1930,8 @@ def main():
             '--telemetry_env',
             type=str,
             choices=['local', 'staging', 'production'],
-            default='production',
-            help="The telemetry server to connect to (choices: local, staging, production) Used in development only"
+            default=None,
+            help="The cloud telemetry server to connect to (choices: local, staging, production) Used in development only. The default is None, which allows local connections on port 4245 only"
         )
     args = parser.parse_args()
 
