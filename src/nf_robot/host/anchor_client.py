@@ -206,13 +206,13 @@ class ComponentClient:
         path = f'stringman/{self.config.robot_id}/{cam_num}'
 
         if self.telemetry_env is None:
-            rtmp = None # when in LAN mode do not upload ANYTHING to the cloud.
+            rtmp = None # when in LAN mode do not upload anything to the cloud.
         elif self.telemetry_env == "local":
-            rtmp = f'rtmp://localhost:1935/{path}?user=user&pass=pass'
+            rtmp = f'rtmp://localhost:1935/{path}'
         elif self.telemetry_env == "staging":
-            rtmp = f'rtmp://media.neufangled.com:1935/{path}?user=user&pass=pass'
+            rtmp = f'rtmp://media.neufangled.com:1935/{path}'
         elif self.telemetry_env == "production":
-            rtmp = f'rtmp://media.neufangled.com:1935/{path}?user=user&pass=pass'
+            rtmp = f'rtmp://media.neufangled.com:1935/{path}'
         else:
             rtmp = None
 
