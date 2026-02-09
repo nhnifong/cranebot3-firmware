@@ -1913,16 +1913,11 @@ def main():
     Run stringman in a headless manner
 
     note that connecting to a local telemetry enviroment is distinct from lan mode
-    when observer.py is run directly it is always connecting to some telemetry server
+    To run in LAN mode, do not pass --telemetry_env
+    observer.py will listen on port 4245
+    
+    Whenever --telemetry_env is set, observer.py is connecting to some telemetry server
     even if it is the full stack running on the local machine
-    in contrast, LAN mode is enabled by running main.py which starts the Ursina UI and observer.py together
-    and where observer.py sends telemetry only to the ursina UI process.
-    the lan mode entrypoint is start_observation() above
-
-    typical run command for local testing
-
-    python3 observer.py --config=conf_bedroom.json --telemetry_env=local
-
     """
     parser = argparse.ArgumentParser(description="Stringman motion controller")
     parser.add_argument("--config", type=str, default='configuration.json')
