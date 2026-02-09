@@ -1014,7 +1014,7 @@ class AsyncObserver:
         """
         with self.telemetry_buffer_lock:
             batch = telemetry.TelemetryBatchUpdate(
-                robot_id="0",
+                robot_id=self.config.robot_id,
                 updates=list(self.telemetry_buffer)
             )
             self.telemetry_buffer.clear()

@@ -130,12 +130,6 @@ To update to the lastest nf_robot version in a component
 ## Training models
 
 
-## Simulation
-
-There is a barebones simulator which can connect to a telemetry server to provide basic feedback for UI testing. It is not suitable for training models against.
-
-    python -m nf_robot.sim.sim_robot ws://localhost:8080
-
 ## Support this project
 
 [Donate on Ko-fi](https://ko-fi.com/neufangled)
