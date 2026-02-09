@@ -336,6 +336,13 @@ class AsyncObserver:
                 r = await self.invoke_motion_task(self.execute_grasp())
             case control.Command.SUBMIT_TARGETS_TO_DATASET:
                 self.submitTargets()
+            case control.Command.UPDATE_FIRMWARE:
+                r = await self._handle_update_firmware()
+
+    async def _handle_update_firmware(self):
+        r = await self.stop_all()
+        for client in self.bot_clients:
+            asyncio.create_task(client.send_commands({'run_update': None}))
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
@@ -1059,6 +1066,7 @@ class AsyncObserver:
                 services = list(
                     await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.V4Only)
                 )
+                print(f"service list {services}")
                 print("start service browser")
                 self.aiobrowser = AsyncServiceBrowser(
                     self.aiozc.zeroconf, services, handlers=[self.on_service_state_change]

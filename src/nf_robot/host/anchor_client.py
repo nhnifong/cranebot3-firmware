@@ -328,6 +328,9 @@ class ComponentClient:
                     print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
                     vid_thread.start()
+                if 'firmware_update_complete' in update:
+                    success = update['firmware_update_complete']
+                    print(f'Firmware update {'successful' if success else 'failed'} on {self.address}')
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set() 
                 await self.handle_update_from_ws(update)

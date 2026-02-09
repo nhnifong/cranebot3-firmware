@@ -40,6 +40,8 @@ enum Command {
   COMMAND_COLLECT_GRIPPER_IMAGES = 7;
   // Shuts down the observer process. robot components remain on.
   COMMAND_SHUTDOWN = 8;
+  // Update the nf_robot python module on all components
+  COMMAND_UPDATE_FIRMWARE = 14;
 }
 
 // Start one of several common tasks which take no arguments.
