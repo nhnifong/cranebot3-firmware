@@ -343,7 +343,7 @@ class ComponentClient:
                     vid_thread.start()
                 if 'firmware_update_complete' in update:
                     success = update['firmware_update_complete']
-                    print(f'Firmware update {'successful' if success else 'failed'} on {self.address}')
+                    print(f"Firmware update {'successful' if success else 'failed'} on {self.address}")
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set() 
                 await self.handle_update_from_ws(update)

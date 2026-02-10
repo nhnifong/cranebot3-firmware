@@ -25,26 +25,30 @@ class EpCommand(betterproto2.Enum):
     Episode control commands
     """
 
-    START_OR_COMPLETE = 0
+    NOTHING = 0
 
     ABANDON = 1
 
     END_RECORDING = 2
 
+    START_OR_COMPLETE = 3
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
-            0: "EPCOMMAND_START_OR_COMPLETE",
+            0: "EPCOMMAND_NOTHING",
             1: "EPCOMMAND_ABANDON",
             2: "EPCOMMAND_END_RECORDING",
+            3: "EPCOMMAND_START_OR_COMPLETE",
         }
 
     @classmethod
     def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
         return {
-            "EPCOMMAND_START_OR_COMPLETE": 0,
+            "EPCOMMAND_NOTHING": 0,
             "EPCOMMAND_ABANDON": 1,
             "EPCOMMAND_END_RECORDING": 2,
+            "EPCOMMAND_START_OR_COMPLETE": 3,
         }
 
 

@@ -103,16 +103,31 @@ class GripperArpServer(RobotComponentServer):
             os.remove('offsets.pickle')
 
     def readOtherSensors(self):
-        # if necessary this function could be faster by waiting on all this IO at the same time.
-
         # 1.35 ms to read data from both motors with two synchronous calls
         t = time.time()
         finger_data = self.motors.get_feedback(FINGER)
         wrist_data = self.motors.get_feedback(WRIST)
 
         finger_angle = remap(finger_data['position'], self.finger_open_pos, self.finger_closed_pos, -90, 90)
-        wrist_angle = wrist_data['position'] / 4096 * 360
         pressure_v = remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
+
+        # motor only reports it's position within one revolution.
+        # even though you can command multi turns from it.
+        # return a value between 0 and 1080, which is the same range we accept commands in.
+        # 540 is the neutral position.
+        # the only way to relate this measurement to an absolute multi turn position is to reference our last command.
+
+        # Convert raw data to 0-360 degrees
+        simple_angle = wrist_data['position'] / 4096 * 360
+        # Calculate the difference between where we want to be and where the motor says it is
+        # within a single revolution context.
+        # gives the shortest distance to the target.
+        error = (simple_angle - (self.desired_wrist_angle % 360) + 180) % 360 - 180
+        # Subtracting that shortest-path error from the desired angle aligns 
+        # the multi-turn value with the motor's actual physical orientation.
+        wrist_angle = self.desired_wrist_angle - error
+        #Clamp to 0-1080 range
+        wrist_angle = clamp(wrist_angle, 0, 1080)
 
         self.update['grip_sensors'] = {
             'time': t,

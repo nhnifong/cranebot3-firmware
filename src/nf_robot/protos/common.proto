@@ -17,9 +17,10 @@ message Pose {
 // Episode control commands
 
 enum EpCommand {
-  EPCOMMAND_START_OR_COMPLETE = 0;
+  EPCOMMAND_NOTHING = 0;
   EPCOMMAND_ABANDON = 1;
   EPCOMMAND_END_RECORDING = 2;
+  EPCOMMAND_START_OR_COMPLETE = 3;
 }
 
 message EpisodeControl {

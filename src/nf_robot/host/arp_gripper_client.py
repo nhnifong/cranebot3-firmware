@@ -62,6 +62,7 @@ class ArpeggioGripperClient(ComponentClient):
             # the zero point is probably a safe bet for where the wire would be least twisted.
             # the angle at which it aligns with the gantry or the room must be determined in calibration
             wrist_angle = float(gs['wrist_a'])
+            print(f'reported wrist angle = {wrist_angle}')
 
             self.datastore.winch_line_record.insert([timestamp, wrist_angle, 0])
             self.datastore.finger.insert([timestamp, finger_angle, voltage])

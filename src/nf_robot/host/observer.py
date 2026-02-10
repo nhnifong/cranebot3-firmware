@@ -137,7 +137,6 @@ class AsyncObserver:
         self.grpc_server = None
         self.last_gp_action = None
         self.last_user_move_time = time.time()
-        self.episode_control_events = set()
         self.named_positions = {}
         self.target_model = None
         self.centering_model = None
@@ -511,7 +510,7 @@ class AsyncObserver:
 
     async def stop_all(self):
         # If lerobot scripts are connected this must also stop them
-        self.episode_control_events.add('stop_recording')
+        self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.ABANDON))
 
         # Cancel any active motion task
         if self.motion_task is not None:
@@ -1254,7 +1253,9 @@ class AsyncObserver:
         if finger_angle is not None:
             update['set_finger_angle'] = clamp(finger_angle, -90, 90)
         if wrist_angle is not None:
-            update['set_wrist_angle'] = clamp(wrist_angle, 0, 1080)
+            clamped = clamp(wrist_angle, 0, 1080)
+            print(f'setting wrist angnle. want {wrist_angle} clamped {clamped}')
+            update['set_wrist_angle'] = clamped
         if update and self.gripper_client is not None:
             asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_angle, wrist_angle
@@ -1399,14 +1400,9 @@ class AsyncObserver:
             return image
         return bytes()
 
-    def get_episode_control_events(self):
-        e = list(self.episode_control_events)
-        self.episode_control_events.clear()
-        return e
-
-    def _handle_add_episode_control_events(self, data: control.EpControl):
-        for k in data.events:
-            self.episode_control_events.add(str(k))
+    def _handle_add_episode_control_events(self, data: nf.common.EpisodeControl):
+        # forward episode control events back to all telemetry listeners
+        self.send_ui(episode_control=data)
 
     def send_tq_to_ui(self):
         snapshot = self.target_queue.get_queue_snapshot()
