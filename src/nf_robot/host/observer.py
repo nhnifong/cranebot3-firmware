@@ -502,7 +502,7 @@ class AsyncObserver:
 
     async def stop_all(self):
         # If lerobot episode recorders are connected, they must abandon this episode.
-        self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EPCOMMAND_ABANDON))
+        self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.ABANDON))
 
         # Cancel any active motion task
         if self.motion_task is not None:

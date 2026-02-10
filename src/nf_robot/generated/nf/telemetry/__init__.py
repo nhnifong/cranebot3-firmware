@@ -527,13 +527,6 @@ class TelemetryItem(betterproto2.Message):
         16, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
     """
-    Forwarded by robot to all listening 'UIs'
-    """
-
-    episode_control: "_common__.EpisodeControl | None" = betterproto2.field(
-        16, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
-    )
-    """
     Forwarded
     """
 
