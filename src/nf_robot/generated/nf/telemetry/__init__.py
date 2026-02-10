@@ -254,7 +254,7 @@ class GripperSensors(betterproto2.Message):
 
     wrist: "float" = betterproto2.field(4, betterproto2.TYPE_FLOAT)
     """
-    Wrist angle in degrees [0,360]
+    Wrist angle in degrees [0,1080]
     """
 
 

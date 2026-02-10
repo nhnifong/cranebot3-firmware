@@ -157,6 +157,7 @@ class AsyncObserver:
         # last attempt to connect, keyed by service name
         self.connection_tasks: dict[str, asyncio.Task] = {}
         self.run_collect_images = False
+        self.time_last_grip_sensors_retain_key = 0
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -383,7 +384,10 @@ class AsyncObserver:
 
     async def _handle_movement(self, move: control.CombinedMove):
         # if we have to clip these values to legal limits, save what they were clipped to
-        winch, finger, wrist = await self.send_gripper_move(move.winch, move.finger, move.wrist)
+        if move.finger is not None:
+            winch, finger, wrist = await self.send_gripper_move_legacy(move.winch, move.finger, move.wrist)
+        else:
+            winch, finger, wrist = await self.send_gripper_move(move.winch, move.finger_speed, move.wrist_speed)
 
         direction = np.zeros(3)
         if move.direction:
@@ -1002,6 +1006,11 @@ class AsyncObserver:
             item.retain_key = f'component_conn_status_{msg.anchor_num}'
         if key == 'video_ready':
             item.retain_key = f'video_ready_{msg.anchor_num}'
+        if key == 'grip_sensors':
+            # cut down heavily on the frequency of this with a timeout
+            if time.time() > self.time_last_grip_sensors_retain_key + 1:
+                item.retain_key = f'grip_sensors'
+                self.time_last_grip_sensors_retain_key = time.time()
 
         # Add item to batch
         with self.telemetry_buffer_lock:
@@ -1245,7 +1254,28 @@ class AsyncObserver:
             result[client.anchor_num] = client.last_gantry_frame_coords
         return result
 
-    async def send_gripper_move(self, line_speed, finger_angle, wrist_angle):
+    async def send_gripper_move(self, line_speed, finger_speed, wrist_speed):
+        """Command the gripper's motors in one update.
+        finger speed is in degrees per second (but it's the fake degrees of the finger which range from -90 (open) to 90 (closed))
+        positive values close the fingers.
+        wrist speed is in real degrees per second."""
+        update = {}
+        if line_speed is not None:
+            update['aim_speed'] = line_speed # winch
+
+        if finger_speed is not None and finger_speed > 1.0:
+            finger_speed = clamp(finger_speed, -90, 90)
+            update['set_finger_speed'] = finger_speed
+
+        if wrist_speed is not None and wrist_speed > 1.0:
+            wrist_speed = clamp(wrist_speed, -70, 70)
+            update['set_wrist_speed'] = wrist_speed
+
+        if update and self.gripper_client is not None:
+            asyncio.create_task(self.gripper_client.send_commands(update))
+        return line_speed, finger_speed, wrist_speed
+
+    async def send_gripper_move_legacy(self, line_speed, finger_angle, wrist_angle):
         """Command the gripper's motors in one update."""
         update = {}
         if line_speed is not None:

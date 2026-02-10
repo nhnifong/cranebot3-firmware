@@ -107,7 +107,7 @@ message GripperSensors {
 	// The voltage on the sensing finger pad, lower is more pressure. [0,3.3]
 	float pressure = 3;
 
-	// Wrist angle in degrees [0,360]
+	// Wrist angle in degrees [0,1080]
 	float wrist = 4;
 }
 

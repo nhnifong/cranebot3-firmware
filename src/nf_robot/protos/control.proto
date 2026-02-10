@@ -75,17 +75,28 @@ message CombinedMove {
   // if speed is unset, direction is assumed to be a velocity vector
   optional float speed = 2; // meters per second
 
-  // Set the finger servo angle
-  // Range [-90,90]
-  // When unset, finger command will not be issued, finger continues tracking previously commanded angle.
-  optional float finger = 3;
-
   // Set the winch line speed
   // Line lengthening speed in meters per second
   // when unset, winch spool continues at previously commanded speed.
   // not used in arp
   optional float winch = 4;
 
+  // Set the wrist speed in degrees of rotation per second
+  optional float wrist_speed = 6;
+
+  // Set the finger closing speed in degrees of rotation per second.
+  optional float finger_speed = 7;
+
+
+  ///// deprecated fields /////
+
+  // DEPRECATED AND IGNORED use finger_speed
+  // Set the finger servo angle
+  // Range [-90,90]
+  // When unset, finger command will not be issued, finger continues tracking previously commanded angle.
+  optional float finger = 3;
+
+  // DEPRECATED AND IGNORED use wrist_speed
   // Set the wrist angle in degrees
   // when unset, wrist command will not be issued, wrist continues holding previously commanded angle
   // Not used in pilot

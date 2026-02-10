@@ -409,7 +409,7 @@ class ComponentClient:
 
     async def safety_monitor(self):
         """Notifies observer if this anchor stops sending line record updates for some time"""
-        TIMEOUT=1 # seconds
+        TIMEOUT=4 # seconds
         last_update = time.time()
         while self.connected:
             try:

@@ -190,15 +190,6 @@ class CombinedMove(betterproto2.Message):
     meters per second
     """
 
-    finger: "float | None" = betterproto2.field(
-        3, betterproto2.TYPE_FLOAT, optional=True
-    )
-    """
-    Set the finger servo angle
-    Range [-90,90]
-    When unset, finger command will not be issued, finger continues tracking previously commanded angle.
-    """
-
     winch: "float | None" = betterproto2.field(
         4, betterproto2.TYPE_FLOAT, optional=True
     )
@@ -209,10 +200,37 @@ class CombinedMove(betterproto2.Message):
     not used in arp
     """
 
+    wrist_speed: "float | None" = betterproto2.field(
+        6, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    Set the wrist speed in degrees of rotation per second
+    """
+
+    finger_speed: "float | None" = betterproto2.field(
+        7, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    Set the finger closing speed in degrees of rotation per second.
+    """
+
+    finger: "float | None" = betterproto2.field(
+        3, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    /// deprecated fields, ignore
+
+    DEPRECATED use finger_speed
+    Set the finger servo angle
+    Range [-90,90]
+    When unset, finger command will not be issued, finger continues tracking previously commanded angle.
+    """
+
     wrist: "float | None" = betterproto2.field(
         5, betterproto2.TYPE_FLOAT, optional=True
     )
     """
+    DEPRECATED use wrist_speed
     Set the wrist angle in degrees
     when unset, wrist command will not be issued, wrist continues holding previously commanded angle
     Not used in pilot

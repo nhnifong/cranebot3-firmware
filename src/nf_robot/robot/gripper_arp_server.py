@@ -39,6 +39,8 @@ STEPS_PER_REV = 4096
 GEAR_RATIO = 10/45 # a finger lever makes this many revolutions per revolution of the drive gear
 FINGER_TRAVEL_DEG = 59 # actually 60 but need small margin of space at wide open. 
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
+DT = 1/60
+ACTION_TIMEOUT = 0.2
 
 
 # values that can be overridden by the controller
@@ -89,6 +91,9 @@ class GripperArpServer(RobotComponentServer):
 
         self.desired_finger_angle = 0
         self.desired_wrist_angle = 0
+            
+        self.desired_finger_speed = 0
+        self.desired_wrist_speed = 0
 
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.
@@ -164,7 +169,43 @@ class GripperArpServer(RobotComponentServer):
 
     def startOtherTasks(self):
         # any tasks started here must stop on their own when self.run_server goes false
-        return []
+        umtask = asyncio.create_task(self.updateMotors())
+        return [umtask]
+
+    async def updateMotors(self):
+        while self.run_server:
+            now = time.time()
+
+            finger_before = self.desired_finger_angle
+            wrist_before = self.desired_wrist_angle
+            
+            # Actions are only valid for a short time.
+            if now > self.time_last_commanded_finger_speed + ACTION_TIMEOUT:
+                self.desired_finger_speed = 0
+            if now > self.time_last_commanded_wrist_speed + ACTION_TIMEOUT:
+                self.desired_wrist_speed = 0
+
+            # alter the desired position
+            self.desired_finger_angle = clamp(self.desired_finger_angle + self.desired_finger_speed * DT, -90, 90)
+            self.desired_wrist_angle  = clamp(self.desired_wrist_angle + self.desired_wrist_speed * DT, 0, 1080)
+
+            if finger_before != self.desired_finger_angle:
+                target_pos = remap(self.desired_finger_angle, -90, 90, self.finger_open_pos, self.finger_closed_pos)
+                self.motors.set_position(FINGER, target_pos)
+
+            if wrist_before != self.desired_wrist_angle:
+                target_pos = self.desired_wrist_angle / 360 * 4096
+                self.motors.set_position(WRIST, target_pos)
+            
+            await asyncio.sleep(DT)
+
+    def setFingerSpeed(self, deg_per_second):
+        self.time_last_commanded_finger_speed = time.time()
+        self.desired_finger_speed = deg_per_second
+
+    def setWristSpeed(self, deg_per_second):
+        self.time_last_commanded_wrist_speed = time.time()
+        self.desired_wrist_speed = deg_per_second
             
     def setFingers(self, angle):
         # use same finger "angle" range as previous gripper. translate internally.
@@ -174,7 +215,6 @@ class GripperArpServer(RobotComponentServer):
         self.desired_finger_angle = angle
         target_pos = remap(self.desired_finger_angle, -90, 90, self.finger_open_pos, self.finger_closed_pos)
         self.motors.set_position(FINGER, target_pos)
-
             
     def setWrist(self, angle):
         # Accept an angle in degrees between 0 and 1080 (3 revolutions)
@@ -188,6 +228,12 @@ class GripperArpServer(RobotComponentServer):
             self.setFingers(float(update['set_finger_angle']))
         if 'set_wrist_angle' in update:
             self.setWrist(float(update['set_wrist_angle']))
+        if 'set_finger_speed' in update:
+            self.setFingerSpeed(float(update['set_finger_speed']))
+        if 'set_wrist_speed' in update:
+            self.setWristSpeed(float(update['set_wrist_speed']))
+
+
 
 if __name__ == "__main__":
     logging.basicConfig(
