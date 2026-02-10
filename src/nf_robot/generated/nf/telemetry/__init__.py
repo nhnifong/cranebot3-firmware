@@ -530,6 +530,13 @@ class TelemetryItem(betterproto2.Message):
     Forwarded by robot to all listening 'UIs'
     """
 
+    episode_control: "_common__.EpisodeControl | None" = betterproto2.field(
+        16, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+    """
+    Forwarded
+    """
+
     retain_key: "str | None" = betterproto2.field(
         14, betterproto2.TYPE_STRING, optional=True
     )
@@ -583,6 +590,12 @@ class VideoReady(betterproto2.Message):
     """
     for remote UI's construct a url using this stream path
     for example http://localhost:8889/${streamPath}/whep
+    """
+
+    feed_number: "int" = betterproto2.field(5, betterproto2.TYPE_UINT32)
+    """
+    feed number, distinct from anchor num.
+    0: gripper, 1: first preferred anchor, 2: 2nd preferred anchor
     """
 
 

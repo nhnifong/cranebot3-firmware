@@ -150,14 +150,79 @@ class StringmanLeRobot(Robot):
         # TODO others
 
     def _handle_video_ready(self, item: telemetry.VideoReady):
-        # for local robots connect at this address
-        # udp:127.0.0.1:1234
-        # item.local_uri
+        # We only care about the gripper camera
+        if not item.is_gripper:
+            return
 
-        # for remote robots construct a url using this stream path
-        # for example http://localhost:8889/${streamPath}/whep
-        # item.stream_path
-        pass
+        # Prevent starting multiple video threads if multiple ready signals are sent
+        if self.video_thread is not None and self.video_thread.is_alive():
+            return
+
+        url = ""
+
+        if item.local_uri:
+            url = item.local_uri
+            # Standardize UDP for PyAV if needed
+            if url.startswith("udp:") and "://" not in url:
+                url = url.replace("udp:", "udp://")
+        
+        elif item.stream_path:
+            url = f"rtsp://media.neufangled.com:8554/{item.stream_path}"
+
+        if url:
+            # Determine if local based on the URL host, independent of which field provided it.
+            # This supports the transition to a unified URL field.
+            parsed = urlparse(url)
+            hostname = parsed.hostname if parsed.hostname else "localhost"
+            is_local = hostname in ["localhost", "127.0.0.1", "::1", "0.0.0.0"]
+
+            print(f"Video ready. Connecting to stream: {url} (Local: {is_local})")
+            self.stop_video_event.clear()
+            self.video_thread = threading.Thread(
+                target=self._video_stream_loop, 
+                args=(url, is_local), 
+                daemon=True
+            )
+            self.video_thread.start()
+        else:
+            print("Received VideoReady event but could not determine stream URL.")
+
+    def _video_stream_loop(self, stream_url, is_local):
+        print(f"Opening PyAV stream: {stream_url}")
+        
+        # Optimize transport based on location
+        # LAN (Local): UDP is faster and packet loss is rare.
+        # Cloud (Remote): TCP guarantees frame integrity over public internet.
+        transport = 'udp' if is_local else 'tcp'
+
+        options = {
+            'fflags': 'nobuffer',
+            'flags': 'low_delay',
+            'fast': '1',
+            'rtsp_transport': transport, 
+            'stimeout': '5000000', # Socket timeout in microseconds (5s)
+        }
+
+        container = av.open(stream_url, options=options)
+        
+        # Select video stream
+        stream = next(s for s in container.streams if s.type == 'video')
+        stream.thread_type = "SLICE" # Multi-threaded decoding
+
+        # Iterating over container.decode() blocks until frames arrive
+        for av_frame in container.decode(stream):
+            if self.stop_video_event.is_set():
+                break
+            
+            # Convert to numpy and RGB
+            frame = av_frame.to_ndarray(format='rgb24')
+            
+            # Resize if necessary to match expected IMG_RES
+            if frame.shape[0] != IMG_RES or frame.shape[1] != IMG_RES:
+                frame = cv2.resize(frame, (IMG_RES, IMG_RES))
+            
+            with self.camera_lock:
+                self.last_image_frame = frame
 
     def _handle_last_commanded_vel(self, item: telemetry.CommandedVelocity):
         self.last_commanded_vel = item.velocity

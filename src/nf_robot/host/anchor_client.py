@@ -176,7 +176,7 @@ class ComponentClient:
             if 'container' in locals():
                 container.close()
 
-    def frame_resizer_loop(self, cam_num):
+    def frame_resizer_loop(self, feed_number):
         """
         This runs in a dedicated thread. It waits for a signal that a new
         frame is available, resizes it, and stabilizes it in the gripper case.
@@ -192,7 +192,7 @@ class ComponentClient:
         Numpy functions such as those used by cv2.resize actually release the GIL
         which is why this is a thread not a task (main loop can run faster this way)
 
-        cam_num identifies which of the preferred cameras this is. 0 is the gripper, 1 and 2 are the two overhead cams.
+        feed_number identifies which of the preferred cameras this is. 0 is the gripper, 1 and 2 are the two overhead cams.
         """
 
         # TODO allow these to change when in a teleop mode
@@ -203,23 +203,29 @@ class ComponentClient:
             final_shape = HM_IMAGE_RES # resize for target heatmap network input
             final_fps = 10
 
-        path = f'stringman/{self.config.robot_id}/{cam_num}'
+        path = f'stringman/{self.config.robot_id}/{feed_number}'
+        mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
+        localuri = f'http://localhost:{mjpegport}/stream.mjpeg'
+        vs = None # duck type MjpegStreamer or VideoStreamer
 
         if self.telemetry_env is None:
             rtmp = None # when in LAN mode do not upload ANYTHING to the cloud.
-        elif self.telemetry_env == "local":
-            rtmp = f'rtmp://localhost:1935/{path}?user=user&pass=pass'
-        elif self.telemetry_env == "staging":
-            rtmp = f'rtmp://media.neufangled.com:1935/{path}?user=user&pass=pass'
-        elif self.telemetry_env == "production":
-            rtmp = f'rtmp://media.neufangled.com:1935/{path}?user=user&pass=pass'
+            # The UI is still browser based though and mjpeg to an img tag is a pretty good low latency option with few dependencies. 
+            vs = MjpegStreamer(width=final_shape[0], height=final_shape[1], mjpegport)
+            print(f'Streaming video locally at {localuri}')
         else:
-            rtmp = None
+            # this is basically an ffmpeg subprocess
+            vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
+            if self.telemetry_env == "local":
+                rtmp = f'rtmp://localhost:1935/{path}'
+            elif self.telemetry_env == "staging":
+                rtmp = f'rtmp://media.neufangled.com:1935/{path}'
+            elif self.telemetry_env == "production":
+                rtmp = f'rtmp://media.neufangled.com:1935/{path}'
+            else:
+                raise ValueError(f"unusable value for telemetry_env {self.telemetry_env}")
 
-        # this is basically an ffmpeg subprocess
-        vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
         vs.start()
-
         frames_sent = 0
         time_last_frame_taken = time.time()-1
 
@@ -256,8 +262,9 @@ class ComponentClient:
                 self.ob.send_ui(video_ready=telemetry.VideoReady(
                     is_gripper=self.anchor_num is None,
                     anchor_num=self.anchor_num,
-                    local_uri=f'udp://127.0.0.1:{vs.local_udp_port}',
+                    local_uri=localuri,
                     stream_path=path,
+                    feed_number=feed_number,
                 ))
 
         vs.stop()

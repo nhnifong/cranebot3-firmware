@@ -168,6 +168,10 @@ message VideoReady {
 	// for remote UI's construct a url using this stream path
 	// for example http://localhost:8889/${streamPath}/whep
 	optional string stream_path = 4;
+
+	// feed number, distinct from anchor num.
+	// 0: gripper, 1: first preferred anchor, 2: 2nd preferred anchor
+	uint32 feed_number = 5;
 }
 
 message UplinkStatus {
@@ -192,7 +196,7 @@ message TelemetryItem {
 		TargetList target_list = 12;
 		VideoReady video_ready = 13;
 		UplinkStatus uplink_status = 15; // only sent from control plane
-		nf.common.EpisodeControl episode_control= 16; // Forwarded by robot to all listening 'UIs'
+		nf.common.EpisodeControl episode_control = 16; // Forwarded
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

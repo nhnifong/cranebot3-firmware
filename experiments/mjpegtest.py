@@ -11,9 +11,10 @@ import io
 import cv2
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 class StreamingHandler(BaseHTTPRequestHandler):
-    """Handles the HTTP requests for the MJPEG stream and the demo index page."""
+    """Handles the HTTP requests for the MJPEG stream and the index page."""
     
     def do_GET(self):
         if self.path == '/':
@@ -86,13 +87,17 @@ class MjpegStreamer:
         atexit.register(self.stop)
 
     def start(self):
-        self.http_server = ThreadingHTTPServer(('0.0.0.0', self.port), StreamingHandler)
-        # Inject self into server so handler can access frame buffer
-        self.http_server.streamer = self
-        
-        thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
-        thread.start()
-        logger.info(f"MJPEG Stream accessible at http://localhost:{self.port}")
+        try:
+            self.http_server = ThreadingHTTPServer(('0.0.0.0', self.port), StreamingHandler)
+            # Inject self into server so handler can access frame buffer
+            self.http_server.streamer = self
+            
+            thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
+            thread.start()
+            logger.info(f"MJPEG Stream accessible at http://localhost:{self.port}")
+        except Exception as e:
+            logger.error(f"Failed to start HTTP server: {e}")
+            raise e
 
     def send_frame(self, frame):
         """
@@ -218,7 +223,6 @@ class VideoStreamer:
                 self.process = None
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     # DEMO MODE: MjpegStreamer
     WIDTH, HEIGHT = 640, 480
     streamer = MjpegStreamer(WIDTH, HEIGHT, port=8000)
