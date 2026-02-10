@@ -1080,15 +1080,20 @@ class AsyncObserver:
             # task remains in a lightweight sleep until frames arrive.
             asyncio.create_task(self.run_perception())
 
-            # start a websocket server to accept incoming connection from local ursia UI process
-            async with websockets.serve(self.handle_local_client, "127.0.0.1", 4245):
-                # await something that will end when the program closes to keep serving and
-                # keep zeroconf alive and discovering services.
-                try:
-                    self.startup_complete.set()
-                    result = await self.keeper
-                except asyncio.exceptions.CancelledError:
-                    pass
+            if self.telemetry_env is None:
+                # start a websocket server to accept incoming connection from local UI
+                async with websockets.serve(self.handle_local_client, "127.0.0.1", 4245):
+                    # await something that will end when the program closes to keep serving and
+                    # keep zeroconf alive and discovering services.
+                    try:
+                        self.startup_complete.set()
+                        result = await self.keeper
+                    except asyncio.exceptions.CancelledError:
+                        pass
+            else:
+                result = await self.keeper
+
+
             await self.async_close()
 
     async def async_close(self) -> None:
