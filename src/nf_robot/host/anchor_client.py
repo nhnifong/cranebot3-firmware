@@ -58,8 +58,11 @@ class ComponentClient:
         self.last_frame_cap_time = None
         self.heartbeat_receipt = asyncio.Event()
         self.safety_task = None
-        self.local_video_uri = None
         self.telemetry_env = telemetry_env
+
+        # saved for setup telemetry
+        self.local_video_uri = None
+        self.feed_number = None
 
         # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
@@ -260,6 +263,7 @@ class ComponentClient:
             if frames_sent == 20:
                 # sending the notification on the 20th frame ensures that the mediamtx server has something to send before clients connect
                 self.local_video_uri = localuri
+                self.feed_number = feed_number
                 self.ob.send_ui(video_ready=telemetry.VideoReady(
                     is_gripper=self.anchor_num is None,
                     anchor_num=self.anchor_num,

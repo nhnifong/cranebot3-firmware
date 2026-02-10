@@ -68,7 +68,8 @@ class StreamingHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-    pass
+    def server_close(self):
+        super().server_close()
 
 class MjpegStreamer:
     """

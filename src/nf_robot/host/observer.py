@@ -170,7 +170,8 @@ class AsyncObserver:
                 self.send_ui(video_ready=telemetry.VideoReady(
                     is_gripper=client.anchor_num is None,
                     anchor_num=client.anchor_num,
-                    local_uri=client.local_video_uri
+                    local_uri=client.local_video_uri,
+                    feed_number=client.feed_number
                 ))
         r = await self.flush_tele_buffer()
 
