@@ -13,3 +13,15 @@ message Pose {
   Vec3 rotation = 1; // Rodriguez rotation vector
   Vec3 position = 2;
 }
+
+// Episode control commands
+
+enum EpCommand {
+  EPCOMMAND_START_OR_COMPLETE = 0;
+  EPCOMMAND_ABANDON = 1;
+  EPCOMMAND_END_RECORDING = 2;
+}
+
+message EpisodeControl {
+  EpCommand command = 1;
+}

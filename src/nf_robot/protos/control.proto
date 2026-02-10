@@ -40,8 +40,6 @@ enum Command {
   COMMAND_COLLECT_GRIPPER_IMAGES = 7;
   // Shuts down the observer process. robot components remain on.
   COMMAND_SHUTDOWN = 8;
-  // Update the nf_robot python module on all components
-  COMMAND_UPDATE_FIRMWARE = 14;
 }
 
 // Start one of several common tasks which take no arguments.
@@ -94,12 +92,6 @@ message CombinedMove {
   optional float wrist = 5;
 }
 
-// Adds the named episode control events to a set
-// When lerobot is connected, this is how a teleoperator can start or stop an episode during recording
-message EpControl {
-  repeated string events = 1;
-}
-
 // message used to tweak calibration by scaling all the anchor positions towards or away from the origin
 message ScaleRoom {
   float scale = 1;
@@ -130,10 +122,12 @@ message ControlItem {
     JogSpool jog_spool = 2;
     CombinedMove move = 3;
     GantryGoalPos gantry_goal_pos = 4;
-    EpControl episode_control = 5;
+    nf.common.EpisodeControl episode_control= 9;
     ScaleRoom scale_room = 6;
     AddTargetFromAnchorCam add_cam_target = 7;
     DeleteTarget delete_target = 8;
+
+    // next id = 10
   }
 }
 
