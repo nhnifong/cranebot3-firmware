@@ -166,11 +166,11 @@ class AsyncObserver:
         ))
         for client in self.bot_clients.values():
             client.send_conn_status()
-            if client.local_udp_port is not None and client.anchor_num in [None, *self.config.preferred_cameras]:
+            if client.local_video_uri is not None and client.anchor_num in [None, *self.config.preferred_cameras]:
                 self.send_ui(video_ready=telemetry.VideoReady(
                     is_gripper=client.anchor_num is None,
                     anchor_num=client.anchor_num,
-                    local_uri=f'udp://127.0.0.1:{client.local_udp_port}'
+                    local_uri=client.local_video_uri
                 ))
         r = await self.flush_tele_buffer()
 

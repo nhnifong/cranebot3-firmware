@@ -8,7 +8,7 @@ name = "nf_robot"
 # major when making incompatible API changes,
 # minor when adding functionality in a backwards-compatible manner, and
 # patch, when making backwards-compatible bug fixes.
-version = "2.0.1"
+version = "2.0.2"
 description = "Robot control system for Stringman"
 authors = [{name = "Nathaniel Nifong", email = "naavox@gmail.com"}]
 requires-python = ">=3.11"
@@ -39,6 +39,9 @@ dev = [
     "grpcio-tools",
     "betterproto2_compiler",
     "opencv-contrib-python>=4.0", # for the data labelling tools
+    "lerobot",
+    "build",
+    "twine",
 ]
 pi = [
     "pyserial",
