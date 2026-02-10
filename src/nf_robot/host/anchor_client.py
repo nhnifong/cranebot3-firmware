@@ -256,9 +256,10 @@ class ComponentClient:
             # Do the actual work outside the lock
             # This lets the receive_video loop add the next frame without waiting for the encode.
             self.last_frame_resized = self.process_frame(frame_to_encode)
+            rgb = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_BGR2RGB)
 
             # send self.last_frame_resized to the UI process
-            vs.send_frame(self.last_frame_resized)
+            vs.send_frame(rgb)
             frames_sent += 1
             if frames_sent == 20:
                 # sending the notification on the 20th frame ensures that the mediamtx server has something to send before clients connect

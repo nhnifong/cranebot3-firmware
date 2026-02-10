@@ -1475,7 +1475,7 @@ class AsyncObserver:
             if self.gripper_client is not None and self.gripper_client.last_frame_resized is not None:
 
                 # network was trained on BGR
-                bgr_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
+                bgr_image = self.gripper_client.last_frame_resized
                 gripper_image_tensor = torch.from_numpy(bgr_image).permute(2, 0, 1).float() / 255.0
                 if gripper_image_tensor is not None:
                     gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
@@ -1507,7 +1507,7 @@ class AsyncObserver:
                 if client.last_frame_resized is None or client.anchor_num not in self.config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 
-                bgr_image = cv2.cvtColor(client.last_frame_resized, cv2.COLOR_BGR2RGB)
+                bgr_image = client.last_frame_resized
                 img_tensor = torch.from_numpy(bgr_image).permute(2, 0, 1).float() / 255.0
                 img_tensors.append(img_tensor)
                 valid_anchor_clients.append(client)
