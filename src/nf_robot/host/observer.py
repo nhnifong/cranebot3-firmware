@@ -384,10 +384,10 @@ class AsyncObserver:
 
     async def _handle_movement(self, move: control.CombinedMove):
         # if we have to clip these values to legal limits, save what they were clipped to
-        if move.finger is not None:
-            winch, finger, wrist = await self.send_gripper_move_legacy(move.winch, move.finger, move.wrist)
-        else:
+        if move.finger_speed is not None:
             winch, finger, wrist = await self.send_gripper_move(move.winch, move.finger_speed, move.wrist_speed)
+        else:
+            winch, finger, wrist = await self.send_gripper_move_legacy(move.winch, move.finger, move.wrist)
 
         direction = np.zeros(3)
         if move.direction:
@@ -1284,7 +1284,6 @@ class AsyncObserver:
             update['set_finger_angle'] = clamp(finger_angle, -90, 90)
         if wrist_angle is not None:
             clamped = clamp(wrist_angle, 0, 1080)
-            print(f'setting wrist angnle. want {wrist_angle} clamped {clamped}')
             update['set_wrist_angle'] = clamped
         if update and self.gripper_client is not None:
             asyncio.create_task(self.gripper_client.send_commands(update))

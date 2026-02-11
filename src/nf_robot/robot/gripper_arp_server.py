@@ -95,6 +95,9 @@ class GripperArpServer(RobotComponentServer):
         self.desired_finger_speed = 0
         self.desired_wrist_speed = 0
 
+        self.time_last_commanded_finger_speed = 0
+        self.time_last_commanded_wrist_speed = 0
+
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.
         try:
