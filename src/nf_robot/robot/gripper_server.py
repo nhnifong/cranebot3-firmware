@@ -114,7 +114,6 @@ class RaspiGripperServer(RobotComponentServer):
             "-o", "tcp://0.0.0.0:8888?listen=1",
             "--codec", "libav",
             "--libav-format", "mpegts",
-            "--vflip", "--hflip",
             "--autofocus-mode", "continuous",
             "--low-latency",
             "--bitrate", "2000kbps"

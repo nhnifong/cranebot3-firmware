@@ -342,14 +342,4 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_s
     # Then R_relative aligns that Z-axis (now containing the target) to World Down.
     H = saved_matrices['K_new'] @ R_relative @ R_fix @ np.linalg.inv(saved_matrices['starting_K'])
 
-    # Vertical Flip Matrix
-    # flip_vertical = np.array([
-    #     [1,  0,  0],
-    #     [0, -1,  SF_TARGET_SHAPE[1]], 
-    #     [0,  0,  1]
-    # ])
-    
-    # H_final = flip_vertical @ H
-    H_final = H
-
-    return cv2.warpPerspective(frame, H_final, SF_TARGET_SHAPE, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
+    return cv2.warpPerspective(frame, H, SF_TARGET_SHAPE, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
