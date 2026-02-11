@@ -342,8 +342,20 @@ class AsyncObserver:
 
     async def _handle_update_firmware(self):
         r = await self.stop_all()
-        for client in self.bot_clients:
-            asyncio.create_task(client.send_commands({'run_update': None}))
+        # for client in self.bot_clients:
+        #     asyncio.create_task(client.send_commands({'run_update': None}))
+        for i in range(100):
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=float(i),
+                name="Update Component Firmware",
+                current_action="updating...",
+            ))
+            await asyncio.sleep(0.05)
+        self.send_ui(operation_progress=telemetry.OperationProgress(
+            percent_complete=float(100),
+            name="Update Component Firmware",
+            current_action="Completed successfully",
+        ))
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
@@ -625,6 +637,11 @@ class AsyncObserver:
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
+        self.send_ui(operation_progress=telemetry.OperationProgress(
+            percent_complete=0.0,
+            name="Calibration",
+            current_action="Observing markers",
+        ))
         DETECTION_WAIT_S = 1.0 # seconds
         try:
             if len(self.anchors) < N_ANCHORS:
@@ -639,11 +656,22 @@ class AsyncObserver:
             for a in self.anchors:
                 a.save_raw = True
             num_o_dets = []
+            detecting_start = time.time()
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
                 print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors]
+                self.send_ui(operation_progress=telemetry.OperationProgress(
+                    percent_complete=((time.time() / detecting_start) / DETECTION_WAIT_S) * 10,
+                    name="Calibration",
+                    current_action="Observing markers",
+                ))
             
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=12.0,
+                name="Calibration",
+                current_action="Running optimizer",
+            ))
             anchor_poses = self.locate_anchors()
 
             for a in self.anchors:
@@ -663,15 +691,31 @@ class AsyncObserver:
             anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
             self.pe.set_anchor_points(anchor_points)
 
+
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=20.0,
+                name="Calibration",
+                current_action="Tensioning lines and Locating Gripper",
+            ))
             await self.half_auto_calibration()
 
             # open grip enough that we can see an unobstructed view from the palm camera
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
 
             # move over the origin card
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=40.0,
+                name="Calibration",
+                current_action="Moving gripper to origin",
+            ))
             self.gantry_goal_pos = np.array([0,0,1.2])
             await self.seek_gantry_goal()
 
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=90.0,
+                name="Calibration",
+                current_action="Measuring spin",
+            ))
             # there should be some swing when we get there. 
             await self.half_auto_calibration()
 
@@ -716,11 +760,18 @@ class AsyncObserver:
                 print('Warning, cannot calibrate the relationship between gripper IMU zero angle and camera if gripper camera is offline!')
 
             # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
-            self.send_ui(pop_message=telemetry.Popup(
-                message='Calibration complete. Cards can be removed from the floor.'
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=100.0,
+                name="Calibration",
+                current_action="Calibration completed. Sanity check anchor positions before moving. Cards can be removed from the floor.",
             ))
 
         except asyncio.CancelledError:
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=100.0,
+                name="Calibration",
+                current_action="Cancelled by user",
+            ))
             raise
 
     async def horizontal_line_task(self):

@@ -210,6 +210,7 @@ message TelemetryItem {
 		VideoReady video_ready = 13;
 		UplinkStatus uplink_status = 15; // only sent from control plane
 		nf.common.EpisodeControl episode_control = 16; // Forwarded
+		OperationProgress operation_progress = 17;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

@@ -559,6 +559,10 @@ class TelemetryItem(betterproto2.Message):
     Forwarded
     """
 
+    operation_progress: "OperationProgress | None" = betterproto2.field(
+        17, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
     retain_key: "str | None" = betterproto2.field(
         14, betterproto2.TYPE_STRING, optional=True
     )
