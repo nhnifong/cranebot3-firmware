@@ -25,6 +25,12 @@ They are related by a chain of poses from the gantry tags, through the wrist rot
 
 """
 
+R_imu_to_cam = np.array([
+    [-1, 0,  0],
+    [0,  0, -1],
+    [0, -1,  0]
+])
+
 class ArpeggioGripperClient(ComponentClient):
     def __init__(self, address, port, datastore, ob, pool, stat, pe, local_telemetry):
         super().__init__(address, port, datastore, ob, pool, stat, local_telemetry)
@@ -103,5 +109,5 @@ class ArpeggioGripperClient(ComponentClient):
             roomspin += self.config.gripper.frame_room_spin
 
         range_to_object = self.datastore.range_record.getLast()[1]
-        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal_wide, roomspin,
+        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal_wide, R_imu_to_cam, roomspin,
             range_dist=range_to_object, cam_offset_mm=(0, 41.97), cam_tilt_deg=-4.67) # next model would be 4.67 degrees

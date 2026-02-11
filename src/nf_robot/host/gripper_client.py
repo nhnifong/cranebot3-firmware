@@ -10,6 +10,12 @@ import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.cv_common import SF_INPUT_SHAPE, stabilize_frame
 
+R_imu_to_cam = np.array([
+    [1,  0,   0],
+    [0,  0,   1],
+    [0,  -1,  0]
+])
+
 class RaspiGripperClient(ComponentClient):
     def __init__(self, address, port, datastore, ob, pool, stat, pe, local_telemetry):
         super().__init__(address, port, datastore, ob, pool, stat, local_telemetry)
@@ -103,4 +109,11 @@ class RaspiGripperClient(ComponentClient):
         else:
             roomspin = self.config.gripper.frame_room_spin
         range_to_object = self.datastore.range_record.getLast()[1]
-        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal, roomspin, range_dist=range_to_object)
+        return cv2.flip(stabilize_frame(
+            temp_image,
+            gripper_quat,
+            self.config.camera_cal,
+            R_imu_to_cam,
+            roomspin,
+            range_dist=range_to_object
+        ), 1)

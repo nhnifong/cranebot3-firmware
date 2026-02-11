@@ -264,7 +264,7 @@ def get_rotation_to_center_ray(K, u, v, image_shape):
     R_fix, _ = cv2.Rodrigues(r_vec)
     return R_fix
 
-def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_spin=0, range_dist=None, cam_offset_mm=(0, -38.9), cam_tilt_deg=0):
+def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, R_imu_to_cam, room_spin=0, range_dist=None, cam_offset_mm=(0, -38.9), cam_tilt_deg=0):
     """
     Warp a video frame to a stationary, centered perspective.
     
@@ -287,12 +287,6 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_s
     R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
     r_imu = Rotation.from_quat(quat)
     R_world_to_imu = r_imu.as_matrix().T
-    
-    R_imu_to_cam = np.array([
-        [-1,  0,  0], 
-        [0,  0, -1], 
-        [0,  -1,  0]
-    ])
     
     R_world_to_cam = R_imu_to_cam @ R_world_to_imu
     # R_relative un-rotates the camera to align with World Frame
