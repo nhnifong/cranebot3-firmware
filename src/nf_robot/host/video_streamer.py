@@ -9,6 +9,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import io
 import cv2
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,11 @@ class StreamingHandler(BaseHTTPRequestHandler):
     """Handles the HTTP requests for the MJPEG stream and the demo index page."""
     
     def do_GET(self):
-        if self.path == '/':
+        # Parse URL to ignore query parameters (like timestamps used for cache busting)
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == '/':
             self.send_response(200)
             self.send_header('Content-Type', 'text/html')
             self.end_headers()
@@ -38,7 +43,7 @@ class StreamingHandler(BaseHTTPRequestHandler):
             """
             self.wfile.write(content.encode('utf-8'))
             
-        elif self.path == '/stream.mjpeg':
+        elif path == '/stream.mjpeg':
             self.send_response(200)
             self.send_header('Age', '0')
             self.send_header('Cache-Control', 'no-cache, private')

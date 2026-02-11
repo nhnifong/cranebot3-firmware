@@ -14,12 +14,10 @@ Linux (python 3.11 or later)
     python -m virtualenv venv
     pip install "nf_robot[host]"
 
-Start headless robot controller in a mode that connects to remote telemetry.
+Start headless robot controller in LAN-only mode.
 The particular robot details will be read from/saved to bedroom.conf
 
     stringman-headless --config=bedroom.conf
-
-For LAN mode, see [local_ui/README.md](local_ui/README.md)
 
 ## Installation of Robot Control Panel (developers)
 
