@@ -27,74 +27,74 @@ betterproto2.check_compiler_version(_COMPILER_VERSION)
 
 
 class Command(betterproto2.Enum):
-    COMMAND_TIGHTEN_LINES = 0
+    TIGHTEN_LINES = 0
     """
     Reel every line until tight (by switch)
     """
 
-    COMMAND_HALF_CAL = 1
+    HALF_CAL = 1
     """
     Perform fast calibration (takes about 2 seconds)
     """
 
-    COMMAND_FULL_CAL = 2
+    FULL_CAL = 2
     """
     Perform full calibration sequence. (requires setup of cards on the floor)
     """
 
-    COMMAND_ZERO_WINCH = 3
+    ZERO_WINCH = 3
     """
     Zero the winch line in the gripper by reeling it in until it hits the limit switch
     """
 
-    COMMAND_STOP_ALL = 4
+    STOP_ALL = 4
     """
     Stop all spool motion (while respecting deceleration limits)
     """
 
-    COMMAND_ENABLE_LEROBOT = 5
+    ENABLE_LEROBOT = 5
     """
     Begin accepting connections from lerobot teleoperation or data collection tools
     """
 
-    COMMAND_PICK_AND_DROP = 9
+    PICK_AND_DROP = 9
     """
     Begin performing automated pick and drop of targets in queue
     """
 
-    COMMAND_PARK = 10
+    PARK = 10
     """
     Drop everything and auto park on the saddle
     """
 
-    COMMAND_UNPARK = 11
+    UNPARK = 11
     """
     Unpark from the saddle and move clear of it.
     """
 
-    COMMAND_GRASP = 12
+    GRASP = 12
     """
     Execute an automated grasp at the current position.
     """
 
-    COMMAND_SUBMIT_TARGETS_TO_DATASET = 13
+    SUBMIT_TARGETS_TO_DATASET = 13
     """
     Take the current set of targets as complete and correct and add entries to dataset
     """
 
-    COMMAND_HORIZONTAL_CHECK = 6
+    HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
 
     A horizontal move paralell to the floor that measures the quality of calibration
     """
 
-    COMMAND_COLLECT_GRIPPER_IMAGES = 7
+    COLLECT_GRIPPER_IMAGES = 7
     """
     Begin saving images of the gripper camera at regular intervals in a local directory
     """
 
-    COMMAND_SHUTDOWN = 8
+    SHUTDOWN = 8
     """
     Shuts down the observer process. robot components remain on.
     """
@@ -103,6 +103,46 @@ class Command(betterproto2.Enum):
     """
     Run a firmware update on every connected component.
     """
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "COMMAND_TIGHTEN_LINES",
+            1: "COMMAND_HALF_CAL",
+            2: "COMMAND_FULL_CAL",
+            3: "COMMAND_ZERO_WINCH",
+            4: "COMMAND_STOP_ALL",
+            5: "COMMAND_ENABLE_LEROBOT",
+            9: "COMMAND_PICK_AND_DROP",
+            10: "COMMAND_PARK",
+            11: "COMMAND_UNPARK",
+            12: "COMMAND_GRASP",
+            13: "COMMAND_SUBMIT_TARGETS_TO_DATASET",
+            6: "COMMAND_HORIZONTAL_CHECK",
+            7: "COMMAND_COLLECT_GRIPPER_IMAGES",
+            8: "COMMAND_SHUTDOWN",
+            14: "COMMAND_UPDATE_FIRMWARE",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "COMMAND_TIGHTEN_LINES": 0,
+            "COMMAND_HALF_CAL": 1,
+            "COMMAND_FULL_CAL": 2,
+            "COMMAND_ZERO_WINCH": 3,
+            "COMMAND_STOP_ALL": 4,
+            "COMMAND_ENABLE_LEROBOT": 5,
+            "COMMAND_PICK_AND_DROP": 9,
+            "COMMAND_PARK": 10,
+            "COMMAND_UNPARK": 11,
+            "COMMAND_GRASP": 12,
+            "COMMAND_SUBMIT_TARGETS_TO_DATASET": 13,
+            "COMMAND_HORIZONTAL_CHECK": 6,
+            "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
+            "COMMAND_SHUTDOWN": 8,
+            "COMMAND_UPDATE_FIRMWARE": 14,
+        }
 
 
 @dataclass(eq=False, repr=False)

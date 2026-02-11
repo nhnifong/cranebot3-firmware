@@ -597,6 +597,8 @@ class AsyncObserver:
                 else:
                     averages[marker][client.anchor_num] = list(client.origin_poses[marker])
                 print(f'anchor {client.anchor_num} has {len(averages[marker][client.anchor_num])} observations of {marker}')
+            if len(averages['origin'][client.anchor_num]) == 0:
+                raise RuntimeError(f'Anchor {client.anchor_num} could not see the origin marker.')
 
         # run optimization in pool
         async_result = self.pool.apply_async(optimize_anchor_poses, (dict(averages),))
@@ -662,7 +664,7 @@ class AsyncObserver:
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors]
                 self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=((time.time() / detecting_start) / DETECTION_WAIT_S) * 10,
+                    percent_complete=((time.time() - detecting_start) / DETECTION_WAIT_S) * 10,
                     name="Calibration",
                     current_action="Observing markers",
                 ))
@@ -690,7 +692,6 @@ class AsyncObserver:
             # inform position estimator
             anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
             self.pe.set_anchor_points(anchor_points)
-
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=20.0,
@@ -730,24 +731,35 @@ class AsyncObserver:
                     # wait till within 1 degree of target or up to 10 seconds
                     actual_wrist = 100
                     end_time = time.time() + 10
+                    print('Moved wrist to 540, waiting to reach position')
                     while abs(actual_wrist) > 1.0 and time.time() < end_time:
                         await asyncio.sleep(0.2)
                         actual_wrist = self.datastore.winch_line_record.getLast()[1]
+                    print(f'actual_wrist position = {actual_wrist}')
 
                 # detect origin card
-                await asyncio.sleep(0.1)
-                origin_card_pose = [None]
-                def special_handle_det(timestamp, detections):
-                    for d in detections:
-                        if d['n'] == 'origin':
-                            # a pose of the origin card in the frame of reference of the stabilized gripper cam.
-                            origin_card_pose[0] = d['p']
-                while origin_card_pose[0] is None:
-                    async_result = self.pool.apply_async(
-                        locate_markers_gripper,
-                        (self.gripper_client.last_frame_resized, self.config.camera_cal),
-                        callback=partial(special_handle_det, time.time()))
-                    detections = async_result.get(timeout=5)
+                try:
+                    await asyncio.sleep(0.1)
+                    origin_card_pose = [None]
+                    def special_handle_det(timestamp, detections):
+                        for d in detections:
+                            if d['n'] == 'origin':
+                                # a pose of the origin card in the frame of reference of the stabilized gripper cam.
+                                origin_card_pose[0] = d['p']
+                    end_time = time.time() + 10
+                    print('Collecting observations of origin card from gripper cam')
+                    while origin_card_pose[0] is None and time.time() < end_time:
+                        async_result = self.pool.apply_async(
+                            locate_markers_gripper,
+                            (self.gripper_client.last_frame_resized, self.config.camera_cal_wide),
+                            callback=partial(special_handle_det, time.time()))
+                        detections = async_result.get(timeout=5)
+                        print(f'detections {detections}')
+                except Exception as e:
+                    print(e)
+                    raise
+                if origin_card_pose[0] is None:
+                    raise RuntimeError("Gripper camera was unable to make any observations of the origin card.")
                 
                 euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
                 print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
@@ -771,6 +783,13 @@ class AsyncObserver:
                 percent_complete=100.0,
                 name="Calibration",
                 current_action="Cancelled by user",
+            ))
+            raise
+        except Exception as e:
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=100.0,
+                name="Calibration",
+                current_action=str(e),
             ))
             raise
 

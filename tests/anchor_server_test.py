@@ -152,7 +152,6 @@ class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
         """
         self.server.line_timeout = 1
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
-            print(dir(ws))
             await asyncio.sleep(6.1) # one second for it to timeout, 5 more for it to wait before restarting 
             await ws.close()
             await asyncio.sleep(0.1)

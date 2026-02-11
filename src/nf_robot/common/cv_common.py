@@ -289,9 +289,9 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_s
     R_world_to_imu = r_imu.as_matrix().T
     
     R_imu_to_cam = np.array([
-        [-1, 0,  0], 
+        [-1,  0,  0], 
         [0,  0, -1], 
-        [0, -1,  0]
+        [0,  -1,  0]
     ])
     
     R_world_to_cam = R_imu_to_cam @ R_world_to_imu
@@ -343,12 +343,13 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, room_s
     H = saved_matrices['K_new'] @ R_relative @ R_fix @ np.linalg.inv(saved_matrices['starting_K'])
 
     # Vertical Flip Matrix
-    flip_vertical = np.array([
-        [1,  0,  0],
-        [0, -1,  SF_TARGET_SHAPE[1]], 
-        [0,  0,  1]
-    ])
+    # flip_vertical = np.array([
+    #     [1,  0,  0],
+    #     [0, -1,  SF_TARGET_SHAPE[1]], 
+    #     [0,  0,  1]
+    # ])
     
-    H_final = flip_vertical @ H
+    # H_final = flip_vertical @ H
+    H_final = H
 
     return cv2.warpPerspective(frame, H_final, SF_TARGET_SHAPE, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))

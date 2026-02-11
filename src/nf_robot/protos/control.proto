@@ -41,7 +41,7 @@ enum Command {
   // Shuts down the observer process. robot components remain on.
   COMMAND_SHUTDOWN = 8;
   // Run a firmware update on every connected component.
-  UPDATE_FIRMWARE = 14;
+  COMMAND_UPDATE_FIRMWARE = 14;
 }
 
 // Start one of several common tasks which take no arguments.

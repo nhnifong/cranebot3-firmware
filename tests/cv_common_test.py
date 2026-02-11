@@ -21,7 +21,6 @@ class TestProjectionAndDetection(unittest.TestCase):
         # override intrinsics with something simple (Simple pinhole, no distortion)
         W, H = 1920, 1080
         cx, cy = W / 2.0, H / 2.0 # Principal point is exactly center
-        print(dir(self.config.camera_cal))
         self.simple_cal = copy.deepcopy(self.config.camera_cal)
         K = np.array([
             [1000, 0, cx],
@@ -105,6 +104,14 @@ class TestProjectionAndDetection(unittest.TestCase):
     def test_detect_origin_card_in_image(self):
         frame = cv2.imread('tests/origin_card_on_floor.jpg')
         result = locate_markers(frame, self.config.camera_cal)
+        seen = set()
+        for detection in result:
+            seen.add(detection['n'])
+        self.assertTrue('origin' in seen)
+
+    def test_detect_origin_card_in_image_gripper_wide(self):
+        frame = cv2.imread('tests/gripper_cam.jpg')
+        result = locate_markers_gripper(frame, self.config.camera_cal_wide)
         seen = set()
         for detection in result:
             seen.add(detection['n'])

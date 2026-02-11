@@ -239,7 +239,6 @@ def multi_card_residuals(x, averages):
         
         for anchor_idx, marker_pose_cams in enumerate(sightings):
             for marker_pose_cam in marker_pose_cams:
-                print(f'marker_pose_cam=\n{marker_pose_cam}')
                 if marker_pose_cam is None:
                     continue
                 
@@ -249,7 +248,6 @@ def multi_card_residuals(x, averages):
                     model_constants.anchor_camera,
                     marker_pose_cam
                 ]
-                print(f'pose_list=\n{pose_list}')
                 if marker_name == 'gantry':
                     pose_list.append(gantry_april_inv)
                 pose_in_room = compose_poses(pose_list)
@@ -324,6 +322,7 @@ def optimize_anchor_poses(averages):
         ]))
         
         initial_guesses.append(guess)
+    print(f'initial_guesses = {initial_guesses}')
 
     # 'lm' (Levenberg-Marquardt) is standard for unconstrained least squares
     print('running least squares optimization')

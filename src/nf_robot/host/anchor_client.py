@@ -496,6 +496,8 @@ class RaspiAnchorClient(ComponentClient):
             if detection['n'] in CAL_MARKERS:
                 # save all the detections of the origin for later analysis
                 self.origin_poses[detection['n']].append(detection['p'])
+                # if detection['n'] == "origin":
+                #     print(detection)
 
             if detection['n'] == 'gantry':
                 # rotate and translate to where that object's origin would be
