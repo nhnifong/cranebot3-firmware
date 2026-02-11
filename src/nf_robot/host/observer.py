@@ -1263,11 +1263,11 @@ class AsyncObserver:
         if line_speed is not None:
             update['aim_speed'] = line_speed # winch
 
-        if finger_speed is not None and finger_speed > 1.0:
+        if finger_speed is not None and abs(finger_speed) > 1.0:
             finger_speed = clamp(finger_speed, -90, 90)
             update['set_finger_speed'] = finger_speed
 
-        if wrist_speed is not None and wrist_speed > 1.0:
+        if wrist_speed is not None and abs(wrist_speed) > 1.0:
             wrist_speed = clamp(wrist_speed, -70, 70)
             update['set_wrist_speed'] = wrist_speed
 
