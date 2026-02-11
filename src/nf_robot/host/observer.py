@@ -384,9 +384,10 @@ class AsyncObserver:
 
     async def _handle_movement(self, move: control.CombinedMove):
         # if we have to clip these values to legal limits, save what they were clipped to
-        if move.finger_speed is not None:
+        if move.finger_speed is not None or move.wrist_speed is not None:
             winch, finger, wrist = await self.send_gripper_move(move.winch, move.finger_speed, move.wrist_speed)
         else:
+            # this type of message may be sent from older UIs. probably safe to removed by end of Feb.
             winch, finger, wrist = await self.send_gripper_move_legacy(move.winch, move.finger, move.wrist)
 
         direction = np.zeros(3)
@@ -1045,6 +1046,10 @@ class AsyncObserver:
     async def main(self) -> None:
         self.startup_complete.clear()
 
+        from nf_robot.host.loop_monitor import LoopMonitor
+        monitor = LoopMonitor(interval=0.5, threshold=0.2)
+        monitor.start()
+
         # broken
         self.passive_safety_task = asyncio.create_task(self.passive_safety())
 
@@ -1259,19 +1264,29 @@ class AsyncObserver:
         finger speed is in degrees per second (but it's the fake degrees of the finger which range from -90 (open) to 90 (closed))
         positive values close the fingers.
         wrist speed is in real degrees per second."""
+        if self.gripper_client is None:
+            return
         update = {}
-        if line_speed is not None:
-            update['aim_speed'] = line_speed # winch
 
-        if finger_speed is not None and abs(finger_speed) > 1.0:
-            finger_speed = clamp(finger_speed, -90, 90)
-            update['set_finger_speed'] = finger_speed
+        if isinstance(self.gripper_client, ArpeggioGripperClient):
 
-        if wrist_speed is not None and abs(wrist_speed) > 1.0:
-            wrist_speed = clamp(wrist_speed, -70, 70)
-            update['set_wrist_speed'] = wrist_speed
+            # arpeggio gripper. Update finger and wrist speed
+            if finger_speed is not None and abs(finger_speed) > 1.0:
+                finger_speed = clamp(finger_speed, -90, 90)
+                update['set_finger_speed'] = finger_speed
+            if wrist_speed is not None and abs(wrist_speed) > 1.0:
+                wrist_speed = clamp(wrist_speed, -70, 70)
+                update['set_wrist_speed'] = wrist_speed
+        elif isinstance(self.gripper_client, RaspiGripperClient):
 
-        if update and self.gripper_client is not None:
+            # pilot gripper, update winch speed and finger angle
+            if line_speed is not None:
+                update['aim_speed'] = line_speed # winch
+            if finger_speed is not None and abs(finger_speed) > 1.0:
+                finger_speed = clamp(finger_speed, -90, 90)
+                await self.gripper_client.set_finger_speed(finger_speed)
+
+        if update:
             asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_speed, wrist_speed
 

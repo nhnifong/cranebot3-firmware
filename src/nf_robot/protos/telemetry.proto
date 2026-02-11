@@ -178,6 +178,19 @@ message UplinkStatus {
 	bool online = 1;
 }
 
+// A message used by Stringman to give progress feedback to the UI on various operations
+// such as calibration, firmware update, and anything else we need.
+message OperationProgress {
+	// from 0 to 100
+	float percent_complete = 1;
+
+	// Operation name
+  string name = 2;
+
+  // Extra message (what is happening right now)
+  string current_action = 3;
+}
+
 // A single kind of update that the observer is providing to an external UI
 // Typically about the robot's state such as it's position
 message TelemetryItem {

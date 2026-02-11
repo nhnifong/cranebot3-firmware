@@ -218,9 +218,9 @@ class CombinedMove(betterproto2.Message):
         3, betterproto2.TYPE_FLOAT, optional=True
     )
     """
-    /// deprecated fields, ignore
+    /// deprecated fields /////
 
-    DEPRECATED use finger_speed
+    DEPRECATED AND IGNORED use finger_speed
     Set the finger servo angle
     Range [-90,90]
     When unset, finger command will not be issued, finger continues tracking previously commanded angle.
@@ -230,7 +230,7 @@ class CombinedMove(betterproto2.Message):
         5, betterproto2.TYPE_FLOAT, optional=True
     )
     """
-    DEPRECATED use wrist_speed
+    DEPRECATED AND IGNORED use wrist_speed
     Set the wrist angle in degrees
     when unset, wrist command will not be issued, wrist continues holding previously commanded angle
     Not used in pilot

@@ -14,6 +14,7 @@ __all__ = (
     "GripperSensors",
     "NamedObjectPosition",
     "OneTarget",
+    "OperationProgress",
     "Popup",
     "PositionEstimate",
     "PositionFactors",
@@ -331,6 +332,34 @@ class OneTarget(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.telemetry", "OneTarget", OneTarget)
+
+
+@dataclass(eq=False, repr=False)
+class OperationProgress(betterproto2.Message):
+    """
+    A message used by Stringman to give progress feedback to the UI on various operations
+    such as calibration, firmware update, and anything else we need.
+    """
+
+    percent_complete: "float" = betterproto2.field(1, betterproto2.TYPE_FLOAT)
+    """
+    from 0 to 100
+    """
+
+    name: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    Operation name
+    """
+
+    current_action: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+    """
+    Extra message (what is happening right now)
+    """
+
+
+default_message_pool.register_message(
+    "nf.telemetry", "OperationProgress", OperationProgress
+)
 
 
 @dataclass(eq=False, repr=False)

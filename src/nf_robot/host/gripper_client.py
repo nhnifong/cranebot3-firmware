@@ -21,6 +21,9 @@ class RaspiGripperClient(ComponentClient):
         self.anchor_num = None
         self.pe = pe
 
+        self.finger_angle = 0 # -90 to 90
+        self.finger_speed = 0 # units of angle per second\
+
     async def handle_update_from_ws(self, update):
         if 'line_record' in update:
             self.datastore.winch_line_record.insertList(update['line_record'])
@@ -42,13 +45,13 @@ class RaspiGripperClient(ComponentClient):
             # the actual servo installed in the Pilot hardware is a 270 degree servo
             # and it is connected to the fingers with a reduction gear.
 
-            angle = float(gs['fing_a'])
+            self.finger_angle = float(gs['fing_a'])
             voltage = float(gs['fing_v'])
 
-            self.datastore.finger.insert([timestamp, angle, voltage])
+            self.datastore.finger.insert([timestamp, self.finger_angle, voltage])
             self.ob.send_ui(grip_sensors=telemetry.GripperSensors(
                 range = distance_measurement,
-                angle = angle,
+                angle = self.finger_angle,
                 pressure = voltage,
             ))
             
@@ -64,6 +67,11 @@ class RaspiGripperClient(ComponentClient):
 
         if 'episode_button_pushed' in update:
             print('episode_button_pushed')
+
+    async def set_finger_speed(self, speed):
+        # UI now only sends finger speed, but pilot gripper only accepts finger angle and internally tracks it with acceleration.
+        self.finger_angle += speed / 8 # arrive at number by magically trying things. why is it not 30?
+        await self.send_commands({'set_finger_angle': self.finger_angle})
 
     def handle_detections(self, detections, timestamp):
         """
