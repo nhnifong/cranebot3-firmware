@@ -342,19 +342,28 @@ class AsyncObserver:
 
     async def _handle_update_firmware(self):
         r = await self.stop_all()
-        # for client in self.bot_clients:
-        #     asyncio.create_task(client.send_commands({'run_update': None}))
-        for i in range(100):
-            self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=float(i),
-                name="Update Component Firmware",
-                current_action="updating...",
-            ))
-            await asyncio.sleep(0.05)
+        async def update_bar_task():
+            for i in range(100):
+                self.send_ui(operation_progress=telemetry.OperationProgress(
+                    percent_complete=float(i),
+                    name="Update Component Firmware",
+                    current_action="updating...",
+                ))
+                await asyncio.sleep(0.5)
+        bar = asyncio.create_task(update_bar_task())
+        tasks = []
+        for name, client in self.bot_clients.items():
+            tasks.append(client.firmware_update())
+        results = await asyncio.gather(*tasks)
+        bar.cancel()
+        if all(results):
+            message = "Completed successfully"
+        else:
+            message = f"Failed on one or more components ({results})"
         self.send_ui(operation_progress=telemetry.OperationProgress(
             percent_complete=float(100),
             name="Update Component Firmware",
-            current_action="Completed successfully",
+            current_action=message,
         ))
 
     async def _handle_jog_spool(self, jog: control.JogSpool):

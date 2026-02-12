@@ -201,7 +201,7 @@ class RobotComponentServer:
                 logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
             if 'run_update' in update:
                 self.run_update()
-                self.extra_tasks.append(asyncio.create_task(self.run_update))
+                self.extra_tasks.append(asyncio.create_task(self.run_update()))
 
             if self.spooler is not None:
                 if 'length_set' in update:

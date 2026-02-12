@@ -59,6 +59,8 @@ class ComponentClient:
         self.heartbeat_receipt = asyncio.Event()
         self.safety_task = None
         self.telemetry_env = telemetry_env
+        self.firmware_update_event = asyncio.Event()
+        self.firmware_update_success = False
 
         # saved for setup telemetry
         self.local_video_uri = None
@@ -317,6 +319,12 @@ class ComponentClient:
         self.send_conn_status()
         return self.abnormal_shutdown
 
+    async def firmware_update(self):
+        self.firmware_update_event.clear()
+        asyncio.create_task(self.send_commands({'run_update': None}))
+        await self.firmware_update_event.wait()
+        return self.firmware_update_success
+
     async def receive_loop(self, websocket):
         self.conn_status.websocket_status = telemetry.ConnStatus.CONNECTED
         self.send_conn_status()
@@ -342,7 +350,8 @@ class ComponentClient:
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
                     vid_thread.start()
                 if 'firmware_update_complete' in update:
-                    success = update['firmware_update_complete']
+                    self.firmware_update_success = update['firmware_update_complete']
+                    self.firmware_update_event.set()
                     print(f"Firmware update {'successful' if success else 'failed'} on {self.address}")
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set() 
