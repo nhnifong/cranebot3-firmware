@@ -179,12 +179,22 @@ class RobotComponentServer:
         # wait for the subprocess to exit, whether because we killed it, or it stopped normally
         return await self.rpicam_process.wait()
 
+    async def log_subprocess_output(self, stream, logger_func):
+        async for line in stream:
+            logger_func(line.decode('utf-8').rstrip())
+
     async def run_update(self):
         logging.info('Performing Update')
         self.update['firmware_update_complete'] = {'pending': None}
         pip_subprocess = await asyncio.create_subprocess_exec(
-            '/opt/robot/env/bin/pip', 'install', '--upgrade', '"nf_robot[pi]"', stdout=STDOUT, stderr=STDOUT)
+            '/opt/robot/env/bin/pip', 'install', '--upgrade', '"nf_robot[pi]"',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE)
+        stdout_task = asyncio.create_task(self.log_subprocess_output(pip_subprocess.stdout, logging.info))
+        stderr_task = asyncio.create_task(self.log_subprocess_output(pip_subprocess.stderr, logging.error))
         returncode = await pip_subprocess.wait()
+        await stdout_task
+        await stderr_task
         logging.info('Self update complete. Restarting.')
         self.update['firmware_update_complete'] = {'returncode': returncode}
         if returncode==0:

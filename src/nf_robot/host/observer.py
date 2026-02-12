@@ -358,12 +358,12 @@ class AsyncObserver:
             tasks.append(client.firmware_update())
         results = await asyncio.gather(*tasks)
         bar.cancel()
-        if any(x is None for x in results):
-            message = "Clients killed while component servers running updates. Servers will probably finish but we wont find out."
-        if all(results):
+        if any(x is False for x in results):
+            message = f"Failed on one or more components ({results})"
+        elif all(results):
             message = "Completed successfully"
         else:
-            message = f"Failed on one or more components ({results})"
+            message = "Successful on some components, others require manual updating {results}"
         self.send_ui(operation_progress=telemetry.OperationProgress(
             percent_complete=float(100),
             name="Update Component Firmware",
