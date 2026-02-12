@@ -187,7 +187,7 @@ class RobotComponentServer:
         logging.info('Performing Update')
         self.update['firmware_update_complete'] = {'pending': None}
         pip_subprocess = await asyncio.create_subprocess_exec(
-            '/opt/robot/env/bin/pip', 'install', '--upgrade', 'nf_robot[pi]',
+            '/opt/robot/env/bin/pip', 'install', '--upgrade', 'nf_robot[pi]', '-q',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE)
         stdout_task = asyncio.create_task(self.log_subprocess_output(pip_subprocess.stdout, logging.info))

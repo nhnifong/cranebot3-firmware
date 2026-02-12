@@ -354,18 +354,20 @@ class AsyncObserver:
                 await asyncio.sleep(0.5)
         bar = asyncio.create_task(update_bar_task())
         tasks = []
+        keys = []
         for name, client in self.bot_clients.items():
             tasks.append(client.firmware_update())
+            keys.append(name)
         results = await asyncio.gather(*tasks)
         bar.cancel()
         lines = []
-        for i, r in results:
+        for i, r in enumerate(results):
             a = "Not supported"
             if r == True:
                 a = "Success"
             elif r == False:
                 a = "Failed"
-            lines.append(f"({self.bot_clients.values()[i].address}) {a}")
+            lines.append(f"({self.bot_clients[keys[i]].address}) {a}")
         table = '\n'.join(lines)
         if any(x is False for x in results):
             message = f"Failed on one or more components \n\n{table}"
