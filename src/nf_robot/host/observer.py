@@ -349,6 +349,8 @@ class AsyncObserver:
                     name="Update Component Firmware",
                     current_action="updating...",
                 ))
+                if not self.run_command_loop:
+                    break
                 await asyncio.sleep(0.5)
         bar = asyncio.create_task(update_bar_task())
         tasks = []
@@ -356,6 +358,8 @@ class AsyncObserver:
             tasks.append(client.firmware_update())
         results = await asyncio.gather(*tasks)
         bar.cancel()
+        if any(x is None for x in results):
+            message = "Clients killed while component servers running updates. Servers will probably finish but we wont find out."
         if all(results):
             message = "Completed successfully"
         else:

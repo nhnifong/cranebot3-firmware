@@ -59,8 +59,8 @@ class ComponentClient:
         self.heartbeat_receipt = asyncio.Event()
         self.safety_task = None
         self.telemetry_env = telemetry_env
-        self.firmware_update_event = asyncio.Event()
-        self.firmware_update_success = False
+        self.firmware_update_success = None
+        self.firmware_update_pending = False
 
         # saved for setup telemetry
         self.local_video_uri = None
@@ -320,9 +320,17 @@ class ComponentClient:
         return self.abnormal_shutdown
 
     async def firmware_update(self):
-        self.firmware_update_event.clear()
-        asyncio.create_task(self.send_commands({'run_update': None}))
-        await self.firmware_update_event.wait()
+        # once complete, will be set to True or False
+        print(f'Starting Update on {self.address}')
+        self.firmware_update_success = None
+        self.firmware_update_pending = False
+        await self.send_commands({'run_update': None})
+        started = time.time()
+        while self.firmware_update_success is None and self.connected:
+            if time.time() > started+3 and not self.firmware_update_pending:
+                print(f'Component does not yes support self update. run \nssh pi@{self.address} "/opt/robot/env/bin/pip install --upgrade \\\"nf_robot[pi]\\\"\"\npassword Fo0bar!!')
+                return None
+            await asyncio.sleep(0.5)
         return self.firmware_update_success
 
     async def receive_loop(self, websocket):
@@ -350,9 +358,14 @@ class ComponentClient:
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
                     vid_thread.start()
                 if 'firmware_update_complete' in update:
-                    self.firmware_update_success = update['firmware_update_complete']
-                    self.firmware_update_event.set()
-                    print(f"Firmware update {'successful' if success else 'failed'} on {self.address}")
+                    upd = update['firmware_update_complete']
+                    if type(upd) == dict:
+                        if 'pending' in upd:
+                            # this component supports updates
+                            self.firmware_update_pending = True
+                        if 'returncode' in upd:
+                            print(f'pip install result on {self.address} = {upd["returncode"] == 0}')
+                            self.firmware_update_success = upd['returncode'] == 0
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set() 
                 await self.handle_update_from_ws(update)

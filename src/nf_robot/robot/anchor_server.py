@@ -181,11 +181,12 @@ class RobotComponentServer:
 
     async def run_update(self):
         logging.info('Performing Update')
+        self.update['firmware_update_complete'] = {'pending': None}
         pip_subprocess = await asyncio.create_subprocess_exec(
             '/opt/robot/env/bin/pip', 'install', '--upgrade', '"nf_robot[pi]"', stdout=STDOUT, stderr=STDOUT)
         returncode = await pip_subprocess.wait()
         logging.info('Self update complete. Restarting.')
-        self.update['firmware_update_complete'] = returncode == 0
+        self.update['firmware_update_complete'] = {'returncode': returncode}
         if returncode==0:
             self.shutdown() # systemctl will bring us back up.
 
