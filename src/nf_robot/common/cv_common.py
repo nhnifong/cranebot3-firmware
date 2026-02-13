@@ -24,7 +24,8 @@ MARKER_NAMES = [
     'trash_back',
     'toys',
     'toys_back',
-] # next tag id 13
+    'park_target',
+] # next tag id 14
 
 # AprilTag images are typically downloaded, not generated in code.
 # We are using the tag36h11 tag family.

@@ -61,6 +61,17 @@ UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
 
+CRANEBOT_SERVICE_TYPES = [
+    "_cranebot-gripper-arpeggio-service._tcp.local.",
+    "_cranebot-gripper-service._tcp.local.",
+    "_cranebot-anchor-power-service._tcp.local.",
+    "_cranebot-anchor-service._tcp.local.",
+]
+
+# finger positions
+OPEN = -30
+CLOSED = 90
+
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
     Saves an image to the unprocessed directory. 
@@ -164,6 +175,11 @@ class AsyncObserver:
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
             poses=[a.pose for a in self.config.anchors]
         ))
+        if self.config.park_data is not None:
+            self.send_ui(named_position=telemetry.NamedObjectPosition(
+                name = 'parking_location',
+                position = self.config.park_data.pos
+            ))
         for client in self.bot_clients.values():
             client.send_conn_status()
             if client.local_video_uri is not None and client.anchor_num in [None, *self.config.preferred_cameras]:
@@ -329,6 +345,8 @@ class AsyncObserver:
                 self._handle_collect_images()
             case control.Command.SHUTDOWN:
                 self.run_command_loop = False
+            case control.Command.RECORD_PARK:
+                r = await self.invoke_motion_task(self.record_park())
             case control.Command.PARK:
                 r = await self.invoke_motion_task(self.park())
             case control.Command.UNPARK:
@@ -834,20 +852,44 @@ class AsyncObserver:
         range_at_end = self.datastore.range_record.getLast()[1]
         print(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
 
+    async def record_park(self):
+        """Record that the current location is above the parking saddle and save in the config"""
+        # confirm we can actually see the parking target in the grip camera
+        if ok_to_save:
+            self.config.park_data.pos = fromnp(self.pe.gant_pos)
+            save_config(self.config, self.config_path)
+            self.send_ui(named_position=telemetry.NamedObjectPosition(
+                name = 'parking_location',
+                position = self.config.park_data.pos
+            ))
+            self.send_ui(pop_message=telemetry.Popup(
+                message=f'Saved parking location as {self.config.park_data.pos}'
+            ))
+        else:
+            self.send_ui(pop_message=telemetry.Popup(
+                message=f'Cannot save location. The parking saddle is not in view of the gripper camera. Move 10cm above the parking saddle or improve lighting.'
+            ))
+
+
     async def park(self):
         """
-        Drop item and park on the saddle for safe power down. 
-        
-        This procedure is absolutely naieve and never going to work reliably with feedback at every step.
-        Probably a specific network can be trained on the gripper camera to produce the needed feedback.
+        Ensure we aren't holding an item and park on the saddle for safe power down. 
         """
+
+        # check if holding something, if so warn user and do not proceed.
+
+        # perform half cal.
+
         # open gripper
         asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
 
+        # if this is a pilot gripper, reel in winch line to 20cm.
+        if isinstance(self..gripper_client, RaspiGripperClient):
+            asyncio.create_task(self.gripper_client.send_commands({'length_set': 0.2}))
+
         # move over saddle.
         # TODO Since the saddle can be high and close to the wall, we may want to slow down signifigantly before we get there.
-        winch_len = self.datastore.winch_line_record.getLast()[1]
-        self.gantry_goal_pos = fromnp(self.config.saddle_position) + np.array([0,0, winch_len + 0.1])
+        self.gantry_goal_pos = tonp(self.config.park_data.pos)
         await self.seek_gantry_goal()
 
         # slowly lower onto saddle. How do we know when we hit it?
@@ -1103,11 +1145,6 @@ class AsyncObserver:
             item.retain_key = f'component_conn_status_{msg.anchor_num}'
         if key == 'video_ready':
             item.retain_key = f'video_ready_{msg.anchor_num}'
-        if key == 'grip_sensors':
-            # cut down heavily on the frequency of this with a timeout
-            if time.time() > self.time_last_grip_sensors_retain_key + 1:
-                item.retain_key = f'grip_sensors'
-                self.time_last_grip_sensors_retain_key = time.time()
 
         # Add item to batch
         with self.telemetry_buffer_lock:
@@ -1172,14 +1209,14 @@ class AsyncObserver:
                 self.aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only, interfaces=InterfaceChoice.All)
 
             try:
-                print("get services list")
-                services = list(
-                    await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.V4Only)
-                )
-                print(f"service list {services}")
+                # print("get services list")
+                # services = list(
+                #     await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.V4Only)
+                # )
+                # print(f"service list {services}")
                 print("start service browser")
                 self.aiobrowser = AsyncServiceBrowser(
-                    self.aiozc.zeroconf, services, handlers=[self.on_service_state_change]
+                    self.aiozc.zeroconf, CRANEBOT_SERVICE_TYPES, handlers=[self.on_service_state_change]
                 )
             except asyncio.exceptions.CancelledError:
                 await self.aiozc.async_close()

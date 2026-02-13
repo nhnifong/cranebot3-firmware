@@ -7,7 +7,7 @@
 
 # --- Configuration ---
 FILE_NAME="end-user-wlan.nmconnection"
-CONFIG_DIR="/media/$SUDO_USER/rootfs/etc/NetworkManager/system-connections"
+CONFIG_DIR="/media/$SUDO_USER/ROOT/etc/NetworkManager/system-connections"
 FILE_PATH="$CONFIG_DIR/$FILE_NAME"
 CONNECTION_ID="end-user-wlan"
 

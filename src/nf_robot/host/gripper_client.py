@@ -84,6 +84,14 @@ class RaspiGripperClient(ComponentClient):
         handle a list of aruco detections from the pool
         """
         self.stat.pending_frames_in_pool -= 1
+        self.stat.detection_count += len(detections)
+
+        for detection in detections:
+            if detection['n'] == 'park_target':
+                # pose of parking target relative to gripper camera
+                # the top of the tag (+Y) is closest to the wall
+                print(f"gripper sees parking target at {detection['p']}")
+                # save vector in room frame pointing from gripper origin to target
 
     async def send_config(self):
         pass

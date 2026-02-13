@@ -47,6 +47,13 @@ message CameraCalibration {
   repeated double distortion_coeff = 3;
 }
 
+// Data specific to this robot used during self park and unpark
+message ParkData {
+  // The position of the marker box at an ideal position over the parking saddle
+  // for the pilot gripper, assumes that the winch line is reeled in to 10cm.
+  common.Vec3 pos = 1;
+}
+
 // Message representing the configuration read and written by observer
 message StringmanPilotConfig {
   repeated Anchor anchors = 1;
@@ -72,4 +79,6 @@ message StringmanPilotConfig {
   
   string robot_id = 8;
   bool has_been_calibrated = 9;
+
+  ParkData park_data = 11;
 }
