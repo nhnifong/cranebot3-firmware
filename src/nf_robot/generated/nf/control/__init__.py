@@ -62,9 +62,14 @@ class Command(betterproto2.Enum):
     Begin performing automated pick and drop of targets in queue
     """
 
+    RECORD_PARK = 15
+    """
+    Record the robot location as being above the parking saddle.
+    """
+
     PARK = 10
     """
-    Drop everything and auto park on the saddle
+    Auto park on the saddle
     """
 
     UNPARK = 11
@@ -114,6 +119,7 @@ class Command(betterproto2.Enum):
             4: "COMMAND_STOP_ALL",
             5: "COMMAND_ENABLE_LEROBOT",
             9: "COMMAND_PICK_AND_DROP",
+            15: "COMMAND_RECORD_PARK",
             10: "COMMAND_PARK",
             11: "COMMAND_UNPARK",
             12: "COMMAND_GRASP",
@@ -134,6 +140,7 @@ class Command(betterproto2.Enum):
             "COMMAND_STOP_ALL": 4,
             "COMMAND_ENABLE_LEROBOT": 5,
             "COMMAND_PICK_AND_DROP": 9,
+            "COMMAND_RECORD_PARK": 15,
             "COMMAND_PARK": 10,
             "COMMAND_UNPARK": 11,
             "COMMAND_GRASP": 12,

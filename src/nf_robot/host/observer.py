@@ -884,7 +884,7 @@ class AsyncObserver:
         asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
 
         # if this is a pilot gripper, reel in winch line to 20cm.
-        if isinstance(self..gripper_client, RaspiGripperClient):
+        if isinstance(self.gripper_client, RaspiGripperClient):
             asyncio.create_task(self.gripper_client.send_commands({'length_set': 0.2}))
 
         # move over saddle.

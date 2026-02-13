@@ -7,6 +7,7 @@ __all__ = (
     "Anchor",
     "CameraCalibration",
     "Gripper",
+    "ParkData",
     "Resolution",
     "StringmanPilotConfig",
 )
@@ -112,6 +113,24 @@ default_message_pool.register_message("nf.config", "Gripper", Gripper)
 
 
 @dataclass(eq=False, repr=False)
+class ParkData(betterproto2.Message):
+    """
+    Data specific to this robot used during self park and unpark
+    """
+
+    pos: "_common__.Vec3 | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    The position of the marker box at an ideal position over the parking saddle
+    for the pilot gripper, assumes that the winch line is reeled in to 10cm.
+    """
+
+
+default_message_pool.register_message("nf.config", "ParkData", ParkData)
+
+
+@dataclass(eq=False, repr=False)
 class Resolution(betterproto2.Message):
     width: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)
 
@@ -174,6 +193,10 @@ class StringmanPilotConfig(betterproto2.Message):
     robot_id: "str" = betterproto2.field(8, betterproto2.TYPE_STRING)
 
     has_been_calibrated: "bool" = betterproto2.field(9, betterproto2.TYPE_BOOL)
+
+    park_data: "ParkData | None" = betterproto2.field(
+        11, betterproto2.TYPE_MESSAGE, optional=True
+    )
 
 
 default_message_pool.register_message(
