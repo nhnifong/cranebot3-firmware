@@ -1209,14 +1209,14 @@ class AsyncObserver:
                 self.aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only, interfaces=InterfaceChoice.All)
 
             try:
-                # print("get services list")
-                # services = list(
-                #     await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.V4Only)
-                # )
-                # print(f"service list {services}")
+                print("get services list")
+                services = list(
+                    await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.V4Only)
+                )
+                print(f"service list {services}")
                 print("start service browser")
                 self.aiobrowser = AsyncServiceBrowser(
-                    self.aiozc.zeroconf, CRANEBOT_SERVICE_TYPES, handlers=[self.on_service_state_change]
+                    self.aiozc.zeroconf, services, handlers=[self.on_service_state_change]
                 )
             except asyncio.exceptions.CancelledError:
                 await self.aiozc.async_close()
