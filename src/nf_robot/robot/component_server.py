@@ -33,18 +33,20 @@ async def asyncmain():
         quit()
 
     # determine component type
+    # TODO: first boot of a new image has been observed to not have a valid I2C bus. if the image cannot be
+    # fixed, then detect that problem here and reboot, because it seems to work the second time.
     try:
         i2c = busio.I2C(board.SCL, board.SDA)
         addrs = set(i2c.scan())
     except ValueError:
         addrs = set([])
 
-    if addrs == set([0x29, 0x4b, 0x17]): # gripper
+    if addrs == set([0x29, 0x4b, 0x17]): # pilot gripper
         from nf_robot.robot.gripper_server import RaspiGripperServer
         gs = RaspiGripperServer()
         r = await gs.main()
 
-    elif set([0x48, 0x29]).issubset(addrs): # arpeggio_gripper with or without IMU
+    elif set([0x48, 0x29, 0x68]).issubset(addrs): # arpeggio_gripper
         from nf_robot.robot.gripper_arp_server import GripperArpServer
         gs = GripperArpServer()
         r = await gs.main()
