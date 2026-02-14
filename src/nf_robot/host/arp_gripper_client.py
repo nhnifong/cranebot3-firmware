@@ -82,6 +82,12 @@ class ArpeggioGripperClient(ComponentClient):
                 distance_measurement = float(gs['range'])
                 self.datastore.range_record.insert([timestamp, distance_measurement])
 
+            if 'raw_accel' in gs:
+                print(gs['raw_accel'])
+
+            if 'vel_from_imu' in gs:
+                self.vel_from_imu = np.array(gs['vel_from_imu'])
+
             # Note that finger angles are returned in the range of (-90, 90) even though these are not the actual angle
             # -90 is open
             finger_angle = float(gs['fing_a'])

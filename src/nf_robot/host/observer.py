@@ -937,6 +937,19 @@ class AsyncObserver:
         if not isinstance(self.gripper_client, ArpeggioGripperClient):
             return
         print('start experimental swing cancellation')
+            """Rotates a 2D vector by a given angle in radians."""
+            cos_a = np.cos(rad)
+            sin_a = np.sin(rad)
+            # Standard 2D rotation matrix multiplication
+            nx = x * cos_a - y * sin_a
+            ny = x * sin_a + y * cos_a
+            return nx, ny
+        fudge_latency = 0.3
+        try:
+            while self.run_command_loop:
+                vel2  = self.gripper_client.vel_from_imu
+                if vel2 is not None:
+                    vel2 = vel2*p_term
 
         self.latency = 0.0
         try:
@@ -958,7 +971,6 @@ class AsyncObserver:
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
     ) -> None:
         if 'cranebot' in name:
-            # print(f"Service {name} of type {service_type} state changed: {state_change}")
             if state_change is ServiceStateChange.Added:
                 asyncio.create_task(self.add_service(zeroconf, service_type, name))
             if state_change is ServiceStateChange.Updated:

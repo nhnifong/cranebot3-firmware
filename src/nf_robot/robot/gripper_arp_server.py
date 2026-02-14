@@ -8,7 +8,6 @@ import os
 import board
 import busio
 import json
-import numpy as np
 
 from adafruit_mpu6050 import MPU6050 # accelerometer
 from adafruit_vl53l1x import VL53L1X # rangefinder
@@ -160,12 +159,18 @@ class GripperArpServer(RobotComponentServer):
         #Clamp to 0-1080 range
         wrist_angle = clamp(wrist_angle, 0, 1080)
 
+        # Todo, we could return these directly, or go ahead and estimate the swing parameters from them here and return those, either is fine
+        # mpu.acceleration
+        # mpu.gyro
+
         self.update['grip_sensors'] = {
             'time': t,
             'fing_v': pressure_v,
             'fing_a': finger_angle,
             'wrist_a': wrist_angle,
         }
+
+        self.integrateAccel(t)
 
         if self.rangefinder.data_ready:
             distance = self.rangefinder.distance
