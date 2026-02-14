@@ -42,11 +42,11 @@ class ArpeggioGripperClient(ComponentClient):
         self.anchor_num = None
         self.pe = pe
         self.park_pose_relative_to_camera = None
-        self.vel_from_imu = np.zeros(2)
+        self.gripper_ang_accel = np.zeros(2)
 
     async def handle_update_from_ws(self, update):
-        if 'gv' in update:
-            self.vel_from_imu = np.array(update['gv'])
+        if 'aa' in update:
+            self.gripper_ang_accel = np.array(update['aa'])
             
         if 'grip_sensors' in update:
             gs = update['grip_sensors']

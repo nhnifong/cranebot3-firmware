@@ -42,6 +42,7 @@ FINGER_TRAVEL_DEG = 59 # actually 60 but need small margin of space at wide open
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 DT = 1/60
 ACTION_TIMEOUT = 0.2
+FILTER_COEFF = 0.05
 
 
 # values that can be overridden by the controller
@@ -101,10 +102,9 @@ class GripperArpServer(RobotComponentServer):
         self.time_last_commanded_wrist_speed = 0
 
         self.last_time_imu = time.time()
-        self.high_pass_cutoff = 0.1
-        self.vel_from_imu = np.array([0.0, 0.0])
-        self.raw_accel = (0,0)
-        self.filtered_accel = np.array([0.0, 0.0])
+        self.vel_from_imu = np.zeros(2)
+        self.last_gyro = np.zeros(2)
+        self.filtered_alpha = np.zeros(2)
 
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.
@@ -219,20 +219,21 @@ class GripperArpServer(RobotComponentServer):
             dt = now - self.last_time_imu
             self.last_time_imu = now
 
-            # Get raw acceleration (m/s^2)
-            self.raw_accel = self.imu.acceleration
-            raw_accel_2 = np.array(self.raw_accel[:2])
+            # Get current angular velocity (rad/s)
+            # MPU6050 returns (gx, gy, gz) in rad/s
+            current_gyro = np.array(self.imu.gyro[:2])
 
-            # High-pass filter to remove gravity/bias
-            self.filtered_accel = (1 - self.high_pass_cutoff) * self.filtered_accel + self.high_pass_cutoff * raw_accel_2
-            clean_accel = raw_accel_2 - self.filtered_accel
+            # Derive Angular Acceleration (Alpha)
+            raw_alpha = (current_gyro - self.last_gyro) / dt
+            self.last_gyro = current_gyro
 
-            # Integrate acceleration to get relative velocity
-            # Apply a small 'leak' (0.98) to velocity to prevent integration drift
-            self.vel_from_imu = (self.vel_from_imu + clean_accel * dt) * 0.98
+            # Low-pass filter the derivative
+            self.filtered_alpha = (1 - FILTER_COEFF) * self.filtered_alpha + FILTER_COEFF * raw_alpha
 
-            update = {'gv': self.vel_from_imu.tolist()}
-            # send on websocket
+            # return this filtered angular XY acceleration
+            update = {'aa': self.filtered_alpha.tolist()}
+
+            # send on websocket at a fast rate
             await ws.send(json.dumps(update))
             await asyncio.sleep(1/100)
 

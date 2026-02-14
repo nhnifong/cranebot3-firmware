@@ -944,21 +944,20 @@ class AsyncObserver:
             ny = x * sin_a + y * cos_a
             return nx, ny
 
-        p_term = 0.1
+        gain = -0.01
         fudge_latency = 0.3
         try:
             while self.run_command_loop:
-                vel2  = self.gripper_client.vel_from_imu
-                if vel2 is not None:
-                    vel2 = vel2*p_term
+                aa  = self.gripper_client.gripper_ang_accel
+                if aa is not None:
+                    vel2 = vel2 * gain
 
                     wrist = self.datastore.winch_line_record.getClosest(self.gripper_client.last_frame_cap_time - fudge_latency)[1]
                     imu_to_room_z = wrist / 180 * np.pi
                     imu_to_room_z += self.config.gripper.frame_room_spin
-
                     z = np.pi
-
                     vel2 = rotate_vector(vel2[0], vel2[1], z)
+                    
                     print(f'move in {vel2} z={imu_to_room_z}')
                     await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
                 await asyncio.sleep(1/100)
