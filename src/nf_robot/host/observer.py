@@ -944,7 +944,7 @@ class AsyncObserver:
             ny = x * sin_a + y * cos_a
             return nx, ny
 
-        p_term = 0.15
+        p_term = 0.1
         fudge_latency = 0.3
         try:
             while self.run_command_loop:
@@ -956,10 +956,12 @@ class AsyncObserver:
                     imu_to_room_z = wrist / 180 * np.pi
                     imu_to_room_z += self.config.gripper.frame_room_spin
 
-                    vel2 = rotate_vector(vel2[0], vel2[1], imu_to_room_z)
-                    print(f'move in {vel2}')
+                    z = np.pi
+
+                    vel2 = rotate_vector(vel2[0], vel2[1], z)
+                    print(f'move in {vel2} z={imu_to_room_z}')
                     await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
-                await asyncio.sleep(0.03)
+                await asyncio.sleep(1/100)
         except asyncio.CancelledError:
             raise
         finally:

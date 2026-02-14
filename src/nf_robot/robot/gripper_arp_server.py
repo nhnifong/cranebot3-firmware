@@ -8,6 +8,7 @@ import os
 import board
 import busio
 import json
+import numpy as np
 
 from adafruit_mpu6050 import MPU6050 # accelerometer
 from adafruit_vl53l1x import VL53L1X # rangefinder
@@ -102,6 +103,7 @@ class GripperArpServer(RobotComponentServer):
         self.last_time_imu = time.time()
         self.high_pass_cutoff = 0.1
         self.vel_from_imu = np.array([0.0, 0.0])
+        self.raw_accel = (0,0)
         self.filtered_accel = np.array([0.0, 0.0])
 
         # try to read the physical positions of winch and finger last written to disk.
@@ -143,18 +145,12 @@ class GripperArpServer(RobotComponentServer):
         #Clamp to 0-1080 range
         wrist_angle = clamp(wrist_angle, 0, 1080)
 
-        # Todo, we could return these directly, or go ahead and estimate the swing parameters from them here and return those, either is fine
-        # mpu.acceleration
-        # mpu.gyro
-
         self.update['grip_sensors'] = {
             'time': t,
             'fing_v': pressure_v,
             'fing_a': finger_angle,
             'wrist_a': wrist_angle,
         }
-
-        self.integrateAccel(t)
 
         if self.rangefinder.data_ready:
             distance = self.rangefinder.distance
@@ -212,29 +208,33 @@ class GripperArpServer(RobotComponentServer):
             
             await asyncio.sleep(DT)
 
-    async def integrateAccel(self, now):
+    async def stabilization(self, ws):
         """
         Process IMU and compute the lateral velocity for use in active swing cancellation
-        Put results in self.update. to be called just before update is sent.
+        send result to client at a fast rate
         """
-        now = time.time()
-        dt = now - self.last_time_imu
-        self.last_time_imu = now
 
-        # Get raw acceleration (m/s^2)
-        raw_accel = self.imu.acceleration
-        raw_accel_2 = np.array(raw_accel[:2])
+        while True:
+            now = time.time()
+            dt = now - self.last_time_imu
+            self.last_time_imu = now
 
-        # High-pass filter to remove gravity/bias
-        self.filtered_accel = (1 - self.high_pass_cutoff) * self.filtered_accel + self.high_pass_cutoff * raw_accel_2
-        clean_accel = raw_accel_2 - self.filtered_accel
+            # Get raw acceleration (m/s^2)
+            self.raw_accel = self.imu.acceleration
+            raw_accel_2 = np.array(self.raw_accel[:2])
 
-        # Integrate acceleration to get relative velocity
-        # Apply a small 'leak' (0.98) to velocity to prevent integration drift
-        self.vel_from_imu = (self.vel_from_imu + clean_accel * dt) * 0.98
+            # High-pass filter to remove gravity/bias
+            self.filtered_accel = (1 - self.high_pass_cutoff) * self.filtered_accel + self.high_pass_cutoff * raw_accel_2
+            clean_accel = raw_accel_2 - self.filtered_accel
 
-        self.update['grip_sensors']['raw_accel'] = self.raw_accel
-        self.update['grip_sensors']['vel_from_imu'] = self.vel_from_imu
+            # Integrate acceleration to get relative velocity
+            # Apply a small 'leak' (0.98) to velocity to prevent integration drift
+            self.vel_from_imu = (self.vel_from_imu + clean_accel * dt) * 0.98
+
+            update = {'gv': self.vel_from_imu.tolist()}
+            # send on websocket
+            await ws.send(json.dumps(update))
+            await asyncio.sleep(1/100)
 
     def setFingerSpeed(self, deg_per_second):
         self.time_last_commanded_finger_speed = time.time()
