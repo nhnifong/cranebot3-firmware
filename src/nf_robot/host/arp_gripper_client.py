@@ -41,6 +41,8 @@ class ArpeggioGripperClient(ComponentClient):
         )
         self.anchor_num = None
         self.pe = pe
+        self.park_pose_relative_to_camera = None
+        self.vel_from_imu = np.zeros(2)
 
     async def handle_update_from_ws(self, update):
         if 'grip_sensors' in update:
@@ -55,6 +57,12 @@ class ArpeggioGripperClient(ComponentClient):
             if 'range' in gs:
                 distance_measurement = float(gs['range'])
                 self.datastore.range_record.insert([timestamp, distance_measurement])
+
+            if 'raw_accel' in gs:
+                print(gs['raw_accel'])
+
+            if 'vel_from_imu' in gs:
+                self.vel_from_imu = np.array(gs['vel_from_imu'])
 
             # Note that finger angles are returned in the range of (-90, 90) even though these are not the actual angle
             # -90 is open

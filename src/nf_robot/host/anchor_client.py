@@ -148,21 +148,21 @@ class ComponentClient:
                 last_time = now
 
                 # send frame to apriltag detector
-                if self.anchor_num is not None:
-                    try:
-                        if self.stat.pending_frames_in_pool < 60:
-                            self.stat.pending_frames_in_pool += 1
-                            self.pool.apply_async(
-                                locate_markers,
-                                (self.frame, self.config.camera_cal),
-                                callback=partial(self.handle_detections, timestamp=timestamp),
-                                error_callback=error_callback_func)
-                        else:
-                            pass
-                            # print(f'Dropping frame because there are already too many pending.')
-                            # TODO record fraction of frames which are dropped in stat collector
-                    except ValueError:
-                        break # the pool is not running
+                # if self.anchor_num is not None:
+                try:
+                    if self.stat.pending_frames_in_pool < 60:
+                        self.stat.pending_frames_in_pool += 1
+                        self.pool.apply_async(
+                            locate_markers,
+                            (self.frame, self.config.camera_cal),
+                            callback=partial(self.handle_detections, timestamp=timestamp),
+                            error_callback=error_callback_func)
+                    else:
+                        pass
+                        # print(f'Dropping frame because there are already too many pending.')
+                        # TODO record fraction of frames which are dropped in stat collector
+                except ValueError:
+                    break # the pool is not running
 
                 # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
                 # handle_detections runs in this process, but in a thread managed by the pool.
@@ -417,11 +417,9 @@ class ComponentClient:
                 result = await self.websocket.close()
         elif self.ct:
             self.ct.cancel()
-        print(f"Finished client {self.anchor_num} shutdown")
 
     def shutdown_sync(self):
         # this might get called twice
-        print("\nWait for client shutdown (sync)")
         if self.connected:
             self.connected = False
             if self.websocket:

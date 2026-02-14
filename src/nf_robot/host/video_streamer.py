@@ -73,6 +73,7 @@ class StreamingHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True 
     def server_close(self):
         super().server_close()
 
@@ -116,9 +117,10 @@ class MjpegStreamer:
             logger.warning("Failed to encode frame to JPEG")
 
     def stop(self):
-        if self.http_server:
-            self.http_server.shutdown()
-            self.http_server.server_close()
+        h = self.http_server
+        if h is not None:
+            h.shutdown()
+            h.server_close()
             self.http_server = None
 
 class VideoStreamer:

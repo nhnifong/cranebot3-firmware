@@ -39,7 +39,8 @@ SPECIAL_SIZES = {
     'cal_assist_1': 0.1640, # shouldn't these have printed with the same dimensions as the origin card?
     'cal_assist_2': 0.1640,
     'cal_assist_3': 0.1640,
-    'gantry':       0.0915
+    'gantry':       0.0915,
+    'park_target':       0.0464,
 }
 
 # These are the 3D corner points of a generic marker of size 1x1 meter.

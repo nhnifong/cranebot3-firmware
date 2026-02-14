@@ -8,8 +8,8 @@ import os
 import board
 import busio
 import json
-# import adafruit_bno08x
-# from adafruit_bno08x.i2c import BNO08X_I2C
+
+from adafruit_mpu6050 import MPU6050 # accelerometer
 from adafruit_vl53l1x import VL53L1X # rangefinder
 from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital converter for pressure
 
@@ -79,6 +79,8 @@ class GripperArpServer(RobotComponentServer):
         self.ads = ADS1015(i2c)
         self.pressure_sensor = AnalogIn(self.ads, ads1x15.Pin.A0)
 
+        self.imu = MPU6050(i2c)
+
         self.motors = SimpleSTS3215()
         self.motors.configure_multiturn(WRIST)
 
@@ -96,6 +98,11 @@ class GripperArpServer(RobotComponentServer):
 
         self.time_last_commanded_finger_speed = 0
         self.time_last_commanded_wrist_speed = 0
+
+        self.last_time_imu = time.time()
+        self.high_pass_cutoff = 0.1
+        self.vel_from_imu = np.array([0.0, 0.0])
+        self.filtered_accel = np.array([0.0, 0.0])
 
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.
@@ -136,14 +143,18 @@ class GripperArpServer(RobotComponentServer):
         #Clamp to 0-1080 range
         wrist_angle = clamp(wrist_angle, 0, 1080)
 
+        # Todo, we could return these directly, or go ahead and estimate the swing parameters from them here and return those, either is fine
+        # mpu.acceleration
+        # mpu.gyro
+
         self.update['grip_sensors'] = {
             'time': t,
-            # 'quat': self.imu.quaternion,
             'fing_v': pressure_v,
             'fing_a': finger_angle,
             'wrist_a': wrist_angle,
-            # range added below
         }
+
+        self.integrateAccel(t)
 
         if self.rangefinder.data_ready:
             distance = self.rangefinder.distance
@@ -200,6 +211,30 @@ class GripperArpServer(RobotComponentServer):
                 self.motors.set_position(WRIST, target_pos)
             
             await asyncio.sleep(DT)
+
+    async def integrateAccel(self, now):
+        """
+        Process IMU and compute the lateral velocity for use in active swing cancellation
+        Put results in self.update. to be called just before update is sent.
+        """
+        now = time.time()
+        dt = now - self.last_time_imu
+        self.last_time_imu = now
+
+        # Get raw acceleration (m/s^2)
+        raw_accel = self.imu.acceleration
+        raw_accel_2 = np.array(raw_accel[:2])
+
+        # High-pass filter to remove gravity/bias
+        self.filtered_accel = (1 - self.high_pass_cutoff) * self.filtered_accel + self.high_pass_cutoff * raw_accel_2
+        clean_accel = raw_accel_2 - self.filtered_accel
+
+        # Integrate acceleration to get relative velocity
+        # Apply a small 'leak' (0.98) to velocity to prevent integration drift
+        self.vel_from_imu = (self.vel_from_imu + clean_accel * dt) * 0.98
+
+        self.update['grip_sensors']['raw_accel'] = self.raw_accel
+        self.update['grip_sensors']['vel_from_imu'] = self.vel_from_imu
 
     def setFingerSpeed(self, deg_per_second):
         self.time_last_commanded_finger_speed = time.time()

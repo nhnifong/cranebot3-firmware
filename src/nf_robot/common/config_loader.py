@@ -113,6 +113,8 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
                     c.camera_cal = default.camera_cal
                 if c.camera_cal_wide is None:
                     c.camera_cal_wide = default.camera_cal_wide
+            if c.park_data is None:
+                c.park_data = nf_config.ParkData()
             return c
 
             

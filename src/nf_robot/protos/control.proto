@@ -129,6 +129,11 @@ message DeleteTarget {
   string target_id = 1;
 }
 
+message Debug {
+  // For triggering experimental undocumented behaviors without protobuf updates
+  string action = 1;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -141,8 +146,9 @@ message ControlItem {
     ScaleRoom scale_room = 6;
     AddTargetFromAnchorCam add_cam_target = 7;
     DeleteTarget delete_target = 8;
+    Debug debug = 10;
 
-    // next id = 10
+    // next id = 11
   }
 }
 

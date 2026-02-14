@@ -342,11 +342,12 @@ class AsyncObserver:
             case control.Command.HORIZONTAL_CHECK:
                 r = await self.invoke_motion_task(self.horizontal_line_task())
             case control.Command.COLLECT_GRIPPER_IMAGES:
-                self._handle_collect_images()
+                r = await self.invoke_motion_task(self.run_swing_cancellation())
+                # self._handle_collect_images()
             case control.Command.SHUTDOWN:
                 self.run_command_loop = False
             case control.Command.RECORD_PARK:
-                r = await self.invoke_motion_task(self.record_park())
+                r = await self.record_park()
             case control.Command.PARK:
                 r = await self.invoke_motion_task(self.park())
             case control.Command.UNPARK:
@@ -700,16 +701,16 @@ class AsyncObserver:
             for a in self.anchors:
                 a.save_raw = True
             num_o_dets = []
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=2.0,
+                name="Calibration",
+                current_action="Observing markers",
+            ))
             detecting_start = time.time()
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
                 print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors]
-                self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=((time.time() - detecting_start) / DETECTION_WAIT_S) * 10,
-                    name="Calibration",
-                    current_action="Observing markers",
-                ))
             
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=12.0,
@@ -774,7 +775,7 @@ class AsyncObserver:
                     actual_wrist = 100
                     end_time = time.time() + 10
                     print('Moved wrist to 540, waiting to reach position')
-                    while abs(actual_wrist) > 1.0 and time.time() < end_time:
+                    while abs(actual_wrist) > 2.0 and time.time() < end_time:
                         await asyncio.sleep(0.2)
                         actual_wrist = self.datastore.winch_line_record.getLast()[1]
                     print(f'actual_wrist position = {actual_wrist}')
@@ -805,7 +806,7 @@ class AsyncObserver:
                 
                 euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
                 print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
-                roomspin = -euler_rot[0]
+                roomspin = euler_rot[0]
                 if isinstance(self.gripper_client, ArpeggioGripperClient):
                     roomspin+=np.pi
                 self.config.gripper.frame_room_spin = roomspin
@@ -855,7 +856,7 @@ class AsyncObserver:
     async def record_park(self):
         """Record that the current location is above the parking saddle and save in the config"""
         # confirm we can actually see the parking target in the grip camera
-        if ok_to_save:
+        if self.gripper_client.park_pose_relative_to_camera is not None:
             self.config.park_data.pos = fromnp(self.pe.gant_pos)
             save_config(self.config, self.config_path)
             self.send_ui(named_position=telemetry.NamedObjectPosition(
@@ -875,51 +876,100 @@ class AsyncObserver:
         """
         Ensure we aren't holding an item and park on the saddle for safe power down. 
         """
+        try:
+            # check if holding something, if so warn user and do not proceed.
 
-        # check if holding something, if so warn user and do not proceed.
+            # perform half cal.
 
-        # perform half cal.
+            # open gripper
+            print('open gripper')
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -85}))
 
-        # open gripper
-        asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
+            # if this is a pilot gripper, reel in winch line to 20cm.
+            if isinstance(self.gripper_client, RaspiGripperClient):
+                print('adjust winch line')
+                asyncio.create_task(self.gripper_client.send_commands({'length_set': 0.2}))
 
-        # if this is a pilot gripper, reel in winch line to 20cm.
-        if isinstance(self.gripper_client, RaspiGripperClient):
-            asyncio.create_task(self.gripper_client.send_commands({'length_set': 0.2}))
+            # move over saddle.
+            # TODO Since the saddle can be high and close to the wall, we may want to slow down signifigantly before we get there.
+            self.gantry_goal_pos = tonp(self.config.park_data.pos)
+            print('seek_gantry_goal')
+            await self.seek_gantry_goal()
 
-        # move over saddle.
-        # TODO Since the saddle can be high and close to the wall, we may want to slow down signifigantly before we get there.
-        self.gantry_goal_pos = tonp(self.config.park_data.pos)
-        await self.seek_gantry_goal()
+            # center over target marker while moving down
+            pos = np.array([0,0,1])
+            # since we want this dead center and as close to the camera as possible, we just take the 
+            # magnitude of the position vector in the marker pose.
+            timeout = time.time()+10
+            while np.linalg.norm(pos) > 0.02 and time.time() < timeout:
+                move = np.array([pos[0]/4, pos[1]/4, -0.06])
+                await self.move_direction_speed(move)
+                print(f'distance {np.linalg.norm(pos)} and moving {move}')
+                await asyncio.sleep(0.1)
+                try:
+                    pos = self.gripper_client.park_pose_relative_to_camera[1]
+                except TypeError:
+                    pass
 
-        # slowly lower onto saddle. How do we know when we hit it?
-        # gripper camera goes black
-        r = await self.move_direction_speed(np.array([0,0,-0.05]))
-        await asyncio.sleep(0.1)
-        await self.stop_all()
 
-        # close gripper enough to clamp onto saddle
-        asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': 10}))
+            self.slow_stop_all_spools()
+
+            # close gripper enough to clamp onto saddle
+            print('close fingers')
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': 10}))
+
+        except asyncio.CancelledError:
+            print('park cancelled')
+            raise
+        finally:
+            self.slow_stop_all_spools()
+            await self.clear_gantry_goal()
 
 
     async def unpark(self):
         """ Unpark from the saddle and move clear of it. """
         pass
-        # tighten all
 
-        # open grip
+    async def run_swing_cancellation(self):
+        if not isinstance(self.gripper_client, ArpeggioGripperClient):
+            return
+        print('start experimental swing cancellation')
 
-        # move up
+        def rotate_vector(x, y, rad):
+            """Rotates a 2D vector by a given angle in radians."""
+            cos_a = np.cos(rad)
+            sin_a = np.sin(rad)
+            # Standard 2D rotation matrix multiplication
+            nx = x * cos_a - y * sin_a
+            ny = x * sin_a + y * cos_a
+            return nx, ny
 
-        # move about a meter towards origin while extending winch to operating length
+        p_term = 0.15
+        fudge_latency = 0.3
+        try:
+            while self.run_command_loop:
+                vel2  = self.gripper_client.vel_from_imu
+                if vel2 is not None:
+                    vel2 = vel2*p_term
 
-        # half cal
+                    wrist = self.datastore.winch_line_record.getClosest(self.gripper_client.last_frame_cap_time - fudge_latency)[1]
+                    imu_to_room_z = wrist / 180 * np.pi
+                    imu_to_room_z += self.config.gripper.frame_room_spin
+
+                    vel2 = rotate_vector(vel2[0], vel2[1], imu_to_room_z)
+                    print(f'move in {vel2}')
+                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
+                await asyncio.sleep(0.03)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+            await self.clear_gantry_goal()
 
     def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
     ) -> None:
         if 'cranebot' in name:
-            print(f"Service {name} of type {service_type} state changed: {state_change}")
             if state_change is ServiceStateChange.Added:
                 asyncio.create_task(self.add_service(zeroconf, service_type, name))
             if state_change is ServiceStateChange.Updated:
@@ -939,7 +989,6 @@ class AsyncObserver:
         kind = namesplit[1]
         key  = ".".join(namesplit[:3])
 
-        print(f"Service discovered: {info}")
         address = socket.inet_ntoa(info.addresses[0])
 
         is_power_anchor = kind == anchor_power_service_name
@@ -992,7 +1041,6 @@ class AsyncObserver:
         namesplit = name.split('.')
         kind = namesplit[1]
         key  = ".".join(namesplit[:3])
-        print(f'Removing service {key} from {self.bot_clients.keys()}')
 
         # only in this dict if we are connected to it.
         if key in self.bot_clients:
@@ -1075,7 +1123,6 @@ class AsyncObserver:
             self.bot_clients[service_name] = client
             # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
             abnormal_close = await client.startup()
-            print('observer: client.startup() has returned')
             # remove client
             r = await self.remove_service(None, service_name)
             if abnormal_close:
@@ -1270,6 +1317,7 @@ class AsyncObserver:
             result = await asyncio.gather(*tasks)
         except asyncio.exceptions.CancelledError:
             pass
+        print('Stringman Controller Shutdown')
 
     async def add_simulated_data_circle(self):
         """ Simulate the gantry moving in a circle"""
@@ -1409,6 +1457,7 @@ class AsyncObserver:
                 update['set_finger_speed'] = finger_speed
             if wrist_speed is not None and abs(wrist_speed) > 1.0:
                 wrist_speed = clamp(wrist_speed, -70, 70)
+                print(f'set wrist speed {wrist_speed}')
                 update['set_wrist_speed'] = wrist_speed
         elif isinstance(self.gripper_client, RaspiGripperClient):
 
@@ -1518,7 +1567,7 @@ class AsyncObserver:
         # This makes the behavior consistent across installations of different heights.
         hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
         speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.55)
-        speed = min(speed, speed_limit)
+        # speed = min(speed, speed_limit)
 
         # when a very small speed is provided, clamp it to zero.
         if speed < 0.005:
