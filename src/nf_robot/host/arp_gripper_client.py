@@ -3,6 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import json
 import cv2
+import time
 
 from nf_robot.host.anchor_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
@@ -33,7 +34,7 @@ R_imu_to_cam = np.array([
 
 # omega is the constant angular frequency of the 53cm pendulum.
 OMEGA = np.sqrt(9.81 / 0.53)
-SWING_CANCEL_GAIN = -0.4
+SWING_CANCEL_GAIN = -0.1
 
 def rotate_vector(vec, rad):
     """Rotates a 2D vector [x, y] by a given angle in radians."""
@@ -56,6 +57,7 @@ class ArpeggioGripperClient(ComponentClient):
         self.park_pose_relative_to_camera = None
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
+        self.derived_accel = np.zeros(2)
 
     async def handle_update_from_ws(self, update):
         if 'st' in update:
@@ -63,6 +65,9 @@ class ArpeggioGripperClient(ComponentClient):
 
         if 'sm' in update:
             self.gripper_swing_model = np.array(update['sm'])
+
+        if 'aa' in update:
+            self.derived_accel = np.array(update['aa'])
             
         if 'grip_sensors' in update:
             gs = update['grip_sensors']
@@ -100,7 +105,7 @@ class ArpeggioGripperClient(ComponentClient):
                 wrist = wrist_angle,
             ))
 
-    def compute_swing_correction(self, future_time):
+    def compute_swing_correction(self, future_time, f):
         """Compute a corrective velocity to be applied at a future time in order to cancel the swing"""
         sm = self.gripper_swing_model
         st = self.swing_model_ts
@@ -115,9 +120,12 @@ class ArpeggioGripperClient(ComponentClient):
         # The angular acceleration (alpha) is the derivative of the velocity (gyro).
         # For this model, the derivative is omega * [-sin(theta), cos(theta)].
         future_accel = OMEGA * (sm[:, 1] * c_future - sm[:, 0] * s_future)
+        print(f'future_accel {future_accel} vs derived accel {self.derived_accel} difference {np.linalg.norm(self.derived_accel - future_accel)}')
+        f.write(f'{future_accel[0]},{future_accel[1]},{self.derived_accel[0]},{self.derived_accel[1]}\n')
 
         # A corrective velocity to the gantry inversely proportional to the angular velocity of the gripper cancels the swing
-        vel = future_accel * SWING_CANCEL_GAIN
+        # vel = future_accel * SWING_CANCEL_GAIN
+        vel = self.derived_accel * SWING_CANCEL_GAIN
 
         # rotate vector into room frame of reference
         wrist = self.datastore.winch_line_record.getLast()[1]

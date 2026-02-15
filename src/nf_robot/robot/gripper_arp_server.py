@@ -103,8 +103,11 @@ class GripperArpServer(RobotComponentServer):
 
         self.last_time_imu = time.time()
 
+        self.last_gyro = np.zeros(2)
+        self.filtered_alpha = np.zeros(2)
+
         # pendulum constants for 53cm pole
-        L = 0.53
+        L = 0.4526 # 0.53
         g = 9.81
         # omega is the constant angular frequency of the pendulum.
         # It represents the speed that the system progresses along it's cycle radians per second.
@@ -233,6 +236,13 @@ class GripperArpServer(RobotComponentServer):
             # MPU6050 returns (gx, gy, gz) in rad/s
             current_gyro = np.array(self.imu.gyro[:2])
 
+            # older method for comparison
+            # Derive Angular Acceleration (Alpha)
+            raw_alpha = (current_gyro - self.last_gyro) / dt
+            self.last_gyro = current_gyro
+            # Low-pass filter the derivative
+            self.filtered_alpha = (1 - FILTER_COEFF) * self.filtered_alpha + FILTER_COEFF * raw_alpha
+
             step_angle = self.omega * dt
             c_step, s_step = np.cos(step_angle), np.sin(step_angle)
             # Rotation matrix to keep the virtual pendulum 'swinging' in sync with time.
@@ -242,7 +252,11 @@ class GripperArpServer(RobotComponentServer):
             self.state[:, 0] += self.observation_gain * (current_gyro - self.state[:, 0])
 
             # Send the state of the model to the client
-            update = {'sm': self.state.tolist(), 'st': self.last_time_imu}
+            update = {
+                'sm': self.state.tolist(),
+                'st': self.last_time_imu,
+                'aa': self.filtered_alpha.tolist(),
+            }
 
             # To use this information, the motion controller should evaluate the derivative of the model at future times
             # based on expected latency in order to obtain a prediction of the angular acceleration in X and Y.

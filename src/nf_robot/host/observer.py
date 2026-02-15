@@ -170,6 +170,8 @@ class AsyncObserver:
         self.run_collect_images = False
         self.time_last_grip_sensors_retain_key = 0
 
+        self.latency = -0.6
+
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
@@ -935,18 +937,21 @@ class AsyncObserver:
             return
         print('start experimental swing cancellation')
 
-        latency = 0.1
+        self.latency = 0.0
         try:
-            while self.run_command_loop:
-                vel2 = self.gripper_client.compute_swing_correction(time.time()+latency)
-                if vel2 is not None:
-                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
-                await asyncio.sleep(1/100)
+            with open('data.csv', 'w') as f:
+                f.write("new_x,new_y,old_x,old_y\n")
+                while self.run_command_loop:
+                    vel2 = self.gripper_client.compute_swing_correction(time.time()+self.latency, f)
+                    if vel2 is not None:
+                        await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
+                    await asyncio.sleep(1/100)
         except asyncio.CancelledError:
             raise
         finally:
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
+            print(f'====================== {self.latency}')
 
     def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
