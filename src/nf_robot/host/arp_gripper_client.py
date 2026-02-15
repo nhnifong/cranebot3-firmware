@@ -31,6 +31,18 @@ R_imu_to_cam = np.array([
     [0, -1,  0]
 ])
 
+# omega is the constant angular frequency of the 53cm pendulum.
+OMEGA = np.sqrt(9.81 / 0.53)
+SWING_CANCEL_GAIN = -0.4
+
+def rotate_vector(vec, rad):
+    """Rotates a 2D vector [x, y] by a given angle in radians."""
+    cos_a, sin_a = np.cos(rad), np.sin(rad)
+    return np.array([
+        vec[0] * cos_a - vec[1] * sin_a,
+        vec[0] * sin_a + vec[1] * cos_a
+    ])
+
 class ArpeggioGripperClient(ComponentClient):
     def __init__(self, address, port, datastore, ob, pool, stat, pe, local_telemetry):
         super().__init__(address, port, datastore, ob, pool, stat, local_telemetry)
@@ -42,11 +54,15 @@ class ArpeggioGripperClient(ComponentClient):
         self.anchor_num = None
         self.pe = pe
         self.park_pose_relative_to_camera = None
-        self.gripper_ang_accel = np.zeros(2)
+        self.gripper_swing_model = np.zeros((2,2))
+        self.swing_model_ts = time.time()
 
     async def handle_update_from_ws(self, update):
-        if 'aa' in update:
-            self.gripper_ang_accel = np.array(update['aa'])
+        if 'st' in update:
+            self.swing_model_ts = float(update['st'])
+
+        if 'sm' in update:
+            self.gripper_swing_model = np.array(update['sm'])
             
         if 'grip_sensors' in update:
             gs = update['grip_sensors']
@@ -84,9 +100,33 @@ class ArpeggioGripperClient(ComponentClient):
                 wrist = wrist_angle,
             ))
 
+    def compute_swing_correction(self, future_time):
+        """Compute a corrective velocity to be applied at a future time in order to cancel the swing"""
+        sm = self.gripper_swing_model
+        st = self.swing_model_ts
+        if sm is None or st is None:
+            return None
+
+        # we calculate the angle of the system at a future time.
+        latency_comp = future_time - st
+        look_ahead_angle = OMEGA * latency_comp
+        c_future, s_future = np.cos(look_ahead_angle), np.sin(look_ahead_angle)
+        
+        # The angular acceleration (alpha) is the derivative of the velocity (gyro).
+        # For this model, the derivative is omega * [-sin(theta), cos(theta)].
+        future_accel = OMEGA * (sm[:, 1] * c_future - sm[:, 0] * s_future)
+
+        # A corrective velocity to the gantry inversely proportional to the angular velocity of the gripper cancels the swing
+        vel = future_accel * SWING_CANCEL_GAIN
+
+        # rotate vector into room frame of reference
+        wrist = self.datastore.winch_line_record.getLast()[1]
+        imu_to_room_z = wrist / 180 * np.pi + self.config.gripper.frame_room_spin + np.pi/2
+        return rotate_vector(vel, -imu_to_room_z)
+
     def handle_detections(self, detections, timestamp):
         """
-        handle a list of aruco detections from the pool
+        handle a list of tag detections from the pool
         """
         self.stat.pending_frames_in_pool -= 1
 

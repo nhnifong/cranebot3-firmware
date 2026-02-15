@@ -102,9 +102,21 @@ class GripperArpServer(RobotComponentServer):
         self.time_last_commanded_wrist_speed = 0
 
         self.last_time_imu = time.time()
-        self.vel_from_imu = np.zeros(2)
-        self.last_gyro = np.zeros(2)
-        self.filtered_alpha = np.zeros(2)
+
+        # pendulum constants for 53cm pole
+        L = 0.53
+        g = 9.81
+        # omega is the constant angular frequency of the pendulum.
+        # It represents the speed that the system progresses along it's cycle radians per second.
+        self.omega = np.sqrt(g / L)
+        
+        # The state matrix representing the sin curves being fitted to the gyro measurements.
+        # Row 0: X-axis swing, Row 1: Y-axis swing.
+        # Col 0: Velocity (Sine component), Col 1: Phase tracker (Cosine component).
+        self.state = np.zeros((2, 2))
+
+        # observation_gain defines how much real sensor data to average into the model each time step
+        self.observation_gain = 0.1 
 
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.
@@ -210,10 +222,8 @@ class GripperArpServer(RobotComponentServer):
 
     async def stabilization(self, ws):
         """
-        Process IMU and compute the lateral velocity for use in active swing cancellation
-        send result to client at a fast rate
+        Observe gyro and fit a sin curve for use in active swing cancellation
         """
-
         while True:
             now = time.time()
             dt = now - self.last_time_imu
@@ -223,17 +233,25 @@ class GripperArpServer(RobotComponentServer):
             # MPU6050 returns (gx, gy, gz) in rad/s
             current_gyro = np.array(self.imu.gyro[:2])
 
-            # Derive Angular Acceleration (Alpha)
-            raw_alpha = (current_gyro - self.last_gyro) / dt
-            self.last_gyro = current_gyro
+            step_angle = self.omega * dt
+            c_step, s_step = np.cos(step_angle), np.sin(step_angle)
+            # Rotation matrix to keep the virtual pendulum 'swinging' in sync with time.
+            self.state = self.state @ np.array([[c_step, -s_step], [s_step, c_step]])
 
-            # Low-pass filter the derivative
-            self.filtered_alpha = (1 - FILTER_COEFF) * self.filtered_alpha + FILTER_COEFF * raw_alpha
+            # Correct the Sine component (Col 0) using the actual Gyro reading.
+            self.state[:, 0] += self.observation_gain * (current_gyro - self.state[:, 0])
 
-            # return this filtered angular XY acceleration
-            update = {'aa': self.filtered_alpha.tolist()}
+            # Send the state of the model to the client
+            update = {'sm': self.state.tolist(), 'st': self.last_time_imu}
+
+            # To use this information, the motion controller should evaluate the derivative of the model at future times
+            # based on expected latency in order to obtain a prediction of the angular acceleration in X and Y.
+            # the compensatory velocity to apply to the marker box is proportional to the inverse of that angular acceleration.
+            # the compensation must be rotated to account for the wrist.
 
             # send on websocket at a fast rate
+            # todo, it may not be necessary to send these and use them at a fast rate, only to update the model at a fast rate.
+            # but the effect of using the sin model needs to be evaluated seperately from the effect of slowing the updates.
             await ws.send(json.dumps(update))
             await asyncio.sleep(1/100)
 

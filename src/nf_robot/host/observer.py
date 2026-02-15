@@ -935,30 +935,11 @@ class AsyncObserver:
             return
         print('start experimental swing cancellation')
 
-        def rotate_vector(x, y, rad):
-            """Rotates a 2D vector by a given angle in radians."""
-            cos_a = np.cos(rad)
-            sin_a = np.sin(rad)
-            # Standard 2D rotation matrix multiplication
-            nx = x * cos_a - y * sin_a
-            ny = x * sin_a + y * cos_a
-            return nx, ny
-
-        gain = -0.01
-        fudge_latency = 0.3
+        latency = 0.1
         try:
             while self.run_command_loop:
-                aa  = self.gripper_client.gripper_ang_accel
-                if aa is not None:
-                    vel2 = vel2 * gain
-
-                    wrist = self.datastore.winch_line_record.getClosest(self.gripper_client.last_frame_cap_time - fudge_latency)[1]
-                    imu_to_room_z = wrist / 180 * np.pi
-                    imu_to_room_z += self.config.gripper.frame_room_spin
-                    z = np.pi
-                    vel2 = rotate_vector(vel2[0], vel2[1], z)
-                    
-                    print(f'move in {vel2} z={imu_to_room_z}')
+                vel2 = self.gripper_client.compute_swing_correction(time.time()+latency)
+                if vel2 is not None:
                     await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
                 await asyncio.sleep(1/100)
         except asyncio.CancelledError:
