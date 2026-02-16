@@ -1,5 +1,0 @@
-ursina>=7.0.0
-nf_robot[host]
-numpy>=2.0
-pillow
-av

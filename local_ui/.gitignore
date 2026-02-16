@@ -1,5 +1,0 @@
-venv/
-.venv/
-builds/
-build_cache/
-models_compressed/

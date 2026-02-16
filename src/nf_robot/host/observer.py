@@ -440,12 +440,13 @@ class AsyncObserver:
             await self.gripper_client.zero_winch()
 
     async def _handle_movement(self, move: control.CombinedMove):
-        # if we have to clip these values to legal limits, save what they were clipped to
-        if move.finger_speed is not None or move.wrist_speed is not None:
-            winch, finger, wrist = await self.send_gripper_move(move.winch, move.finger_speed, move.wrist_speed)
-        else:
-            # this type of message may be sent from older UIs. probably safe to removed by end of Feb.
-            winch, finger, wrist = await self.send_gripper_move_legacy(move.winch, move.finger, move.wrist)
+        if self.gripper_client is not None:
+            # if we have to clip these values to legal limits, save what they were clipped to
+            if move.finger_speed is not None or move.wrist_speed is not None:
+                winch, finger, wrist = await self.send_gripper_move(move.winch, move.finger_speed, move.wrist_speed)
+            else:
+                # this type of message may be sent from older UIs. probably safe to removed by end of Feb.
+                winch, finger, wrist = await self.send_gripper_move_legacy(move.winch, move.finger, move.wrist)
 
         direction = np.zeros(3)
         if move.direction:
@@ -957,6 +958,7 @@ class AsyncObserver:
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
     ) -> None:
         if 'cranebot' in name:
+            # print(f"Service {name} of type {service_type} state changed: {state_change}")
             if state_change is ServiceStateChange.Added:
                 asyncio.create_task(self.add_service(zeroconf, service_type, name))
             if state_change is ServiceStateChange.Updated:
@@ -1048,7 +1050,6 @@ class AsyncObserver:
         # sleep until there is something to do
         while not config_has_any_address(self.config) and self.run_command_loop:
             await asyncio.sleep(0.5)
-        print('Config not empty, begin connecting to discovered components')
 
         while self.run_command_loop:
             # is everything up the way we want it to be?
@@ -1243,12 +1244,9 @@ class AsyncObserver:
                 self.aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only, interfaces=InterfaceChoice.All)
 
             try:
-                print("get services list")
                 services = list(
                     await AsyncZeroconfServiceTypes.async_find(aiozc=self.aiozc, ip_version=IPVersion.V4Only)
                 )
-                print(f"service list {services}")
-                print("start service browser")
                 self.aiobrowser = AsyncServiceBrowser(
                     self.aiozc.zeroconf, services, handlers=[self.on_service_state_change]
                 )
@@ -1432,8 +1430,6 @@ class AsyncObserver:
         finger speed is in degrees per second (but it's the fake degrees of the finger which range from -90 (open) to 90 (closed))
         positive values close the fingers.
         wrist speed is in real degrees per second."""
-        if self.gripper_client is None:
-            return
         update = {}
 
         if isinstance(self.gripper_client, ArpeggioGripperClient):
@@ -1647,34 +1643,42 @@ class AsyncObserver:
                 if client.anchor_num in self.config.preferred_cameras and client.last_frame_resized is not None:
                     have_anchor_frames = True
 
-        if self.target_model is None:
-            import torch
-            from huggingface_hub import hf_hub_download
-            from nf_robot.ml.target_heatmap import extract_targets_from_heatmap, TargetHeatmapNet, HM_IMAGE_RES
-            DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-            model_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
-            print(f"Loading model from {model_path}...")
-            self.target_model = TargetHeatmapNet().to(DEVICE)
-            self.target_model.load_state_dict(torch.load(model_path, map_location=DEVICE))
-            self.target_model.eval()
+        import torch
+        from huggingface_hub import hf_hub_download
+        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+        from nf_robot.ml.target_heatmap import TargetHeatmapNet, extract_targets_from_heatmap, HM_IMAGE_RES
+        from nf_robot.ml.centering import CenteringNet
 
-        if self.centering_model is None:
-            import torch
-            from huggingface_hub import hf_hub_download
-            from nf_robot.ml.centering import CenteringNet
-            DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-            model_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
-            print(f"Loading model from {model_path}...")
-            self.centering_model = CenteringNet().to(DEVICE)
-            self.centering_model.load_state_dict(torch.load(model_path, map_location=DEVICE))
-            self.centering_model.eval()
+        def load_models_sync():
+            target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
+            print(f"Loading model from {target_path}...")
+            t_model = TargetHeatmapNet().to(DEVICE)
+            t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
+            t_model.eval()
 
+            center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
+            print(f"Loading model from {center_path}...")
+            c_model = CenteringNet().to(DEVICE)
+            c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
+            c_model.eval()
+            
+            return t_model, c_model
+
+        self.target_model, self.centering_model = await asyncio.to_thread(load_models_sync)
+
+        if self.telemetry_env == None:
+            message = 'Listening on localhost:4245 To control visit https://neufangled.com/playroom?robotid=lan on this machine'
         if self.telemetry_env == 'local':
-            print(f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}')
+            message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
         if self.telemetry_env == 'staging':
-            print(f'To control visit https://nf-site-monolith-staging-690802609278.us-east1.run.app/playroom?robotid={self.config.robot_id}')
+            message = f'To control visit https://nf-site-monolith-staging-690802609278.us-east1.run.app/playroom?robotid={self.config.robot_id}'
         if self.telemetry_env == 'production':
-            print(f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}')
+            message = f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}'
+
+        bar = '=' * (len(message) + 12)
+        print(bar)
+        print(f'===== {message} =====')
+        print(bar)
 
         counter = 0
         while self.run_command_loop:
@@ -2156,13 +2160,20 @@ def main():
     async def run_async():
         runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env)
 
-        # when running as a standalone process, register signal handler
+        # Idempotent stop trigger
         def stop():
-            # Must be idempotent, may be called multiple times
             runner.run_command_loop = False
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(getattr(signal, 'SIGINT'), stop)
-        result = await runner.main()
+
+        # On Unix, register signal handler.
+        # On Windows, catch keyboard interrupt
+        if sys.platform != "win32":
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGINT, stop)
+        
+        try:
+            r = await runner.main()
+        except KeyboardInterrupt:
+            stop()
 
     asyncio.run(run_async())
 

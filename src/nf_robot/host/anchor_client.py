@@ -85,7 +85,7 @@ class ComponentClient:
 
     def receive_video(self, port):
         video_uri = f'tcp://{self.address}:{port}'
-        print(f'Connecting to {video_uri}')
+        # print(f'Connecting to {video_uri}')
         self.conn_status.video_status = telemetry.ConnStatus.CONNECTING
         # cannot send here, not in event loop
         self.notify_video = True
@@ -119,7 +119,6 @@ class ComponentClient:
                 encoder_thread = threading.Thread(target=self.frame_resizer_loop, kwargs={"feed_number": components_to_stream.index(self.anchor_num)}, daemon=True)
                 encoder_thread.start()
 
-            print(f'video connection successful')
             self.conn_status.video_status = telemetry.ConnStatus.CONNECTED
             self.notify_video = True
             lastSam = time.time()
@@ -295,7 +294,7 @@ class ComponentClient:
         self.abnormal_shutdown = False # indicating we had a connection and then lost it unexpectedly
         self.failed_to_connect = False # indicating we failed to ever make a connection
         ws_uri = f"ws://{self.address}:{self.port}"
-        print(f"Connecting to {ws_uri}...")
+        # print(f"Connecting to {ws_uri}...")
         try:
             async with websockets.connect(ws_uri, max_size=None, open_timeout=10) as websocket:
                 self.connected = True
@@ -438,12 +437,12 @@ class ComponentClient:
                 self.heartbeat_receipt.clear()
                 last_update = time.time()
             except TimeoutError:
-                print(f'No update sent from {self.anchor_num} in {TIMEOUT} seconds. it may have gone offline. sending ping')
+                # print(f'No update sent from {self.anchor_num} in {TIMEOUT} seconds. it may have gone offline. sending ping')
                 try:
                     pong_future = await self.websocket.ping()
                     latency = await asyncio.wait_for(pong_future, TIMEOUT)
                     # some hiccup on the server raspi made it unable to send anything for some time but it's not down.
-                    print(f'Pong received in {latency}s, must have been my imagination.')
+                    # print(f'Pong received in {latency}s, must have been my imagination.')
                     continue
                 except (ConnectionClosedError, TimeoutError):
                     # it's no longer running, either because it lost power, or the server crashed.

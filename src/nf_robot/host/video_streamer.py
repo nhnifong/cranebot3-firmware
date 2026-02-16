@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 class StreamingHandler(BaseHTTPRequestHandler):
     """Handles the HTTP requests for the MJPEG stream and the demo index page."""
+
+    def log_message(self, format, *args):
+        pass # suppress internal logging
     
     def do_GET(self):
         # Parse URL to ignore query parameters (like timestamps used for cache busting)
@@ -99,7 +102,6 @@ class MjpegStreamer:
         
         thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
         thread.start()
-        logger.info(f"MJPEG Stream accessible at http://localhost:{self.port}")
 
     def send_frame(self, frame):
         """
