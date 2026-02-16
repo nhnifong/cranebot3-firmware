@@ -10,6 +10,7 @@ __all__ = (
     "CommonCommand",
     "ControlBatchUpdate",
     "ControlItem",
+    "Debug",
     "DeleteTarget",
     "GantryGoalPos",
     "JogSpool",
@@ -328,8 +329,23 @@ class ControlItem(betterproto2.Message):
         8, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    debug: "Debug | None" = betterproto2.field(
+        10, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
+
+
+@dataclass(eq=False, repr=False)
+class Debug(betterproto2.Message):
+    action: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    For triggering experimental undocumented behaviors without protobuf updates
+    """
+
+
+default_message_pool.register_message("nf.control", "Debug", Debug)
 
 
 @dataclass(eq=False, repr=False)
