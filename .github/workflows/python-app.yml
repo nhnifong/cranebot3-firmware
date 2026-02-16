@@ -14,8 +14,12 @@ permissions:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    # This creates a separate runner for each OS in the list
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
