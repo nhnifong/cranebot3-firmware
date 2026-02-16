@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 class StreamingHandler(BaseHTTPRequestHandler):
     """Handles the HTTP requests for the MJPEG stream and the demo index page."""
+
+    def log_message(self, format, *args):
+        pass # suppress internal logging
     
     def do_GET(self):
         # Parse URL to ignore query parameters (like timestamps used for cache busting)
@@ -73,6 +76,7 @@ class StreamingHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True 
     def server_close(self):
         super().server_close()
 
@@ -98,7 +102,6 @@ class MjpegStreamer:
         
         thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
         thread.start()
-        logger.info(f"MJPEG Stream accessible at http://localhost:{self.port}")
 
     def send_frame(self, frame):
         """
@@ -116,9 +119,10 @@ class MjpegStreamer:
             logger.warning("Failed to encode frame to JPEG")
 
     def stop(self):
-        if self.http_server:
-            self.http_server.shutdown()
-            self.http_server.server_close()
+        h = self.http_server
+        if h is not None:
+            h.shutdown()
+            h.server_close()
             self.http_server = None
 
 class VideoStreamer:
