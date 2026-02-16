@@ -6,6 +6,10 @@ So we just mock that.
 
 Any method common to anchor and gripper server is tested here in anchor
 """
+import pytest
+pytestmark = pytest.mark.pi
+pytest.importorskip("gpiodevice")
+
 import unittest
 from unittest.mock import patch, Mock, ANY
 import asyncio
@@ -13,13 +17,11 @@ import websockets
 import json
 import time
 import subprocess
-import pytest
 
 from nf_robot.robot.spools import SpoolController  # mocked
 from nf_robot.robot.debug_motor import DebugMotor
 from nf_robot.robot.anchor_server import RaspiAnchorServer
 
-pytestmark = pytest.mark.pi
 
 class TestAnchorServer(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
