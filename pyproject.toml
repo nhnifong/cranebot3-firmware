@@ -74,3 +74,6 @@ qa-gripper-arp = "nf_robot.qa.gripper_arp_eval:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "pi: marks tests that require Raspberry Pi hardware or Linux-specific GPIO libraries"
+]

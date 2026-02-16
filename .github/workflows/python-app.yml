@@ -14,27 +14,44 @@ permissions:
 
 jobs:
   build:
-    # This creates a separate runner for each OS in the list
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    
+        include:
+          - os: ubuntu-latest
+            # Linux: Install everything including Pi-specific hardware libs
+            install_extras: "[host,pi,dev]"
+            # Run all tests
+            pytest_args: ""
+          - os: macos-latest
+            # macOS: Exclude [pi] dependencies to avoid C compilation errors
+            install_extras: "[host,dev]"
+            # Skip tests that require the 'pi' hardware markers
+            pytest_args: "-m 'not pi'"
+          - os: windows-latest
+            install_extras: "[host,dev]"
+            pytest_args: "-m 'not pi'"
+
     runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
+
     - name: Pull only test images from LFS
       run: |
         git lfs install
         git lfs pull --include="tests/*.jpg"
+
     - name: Set up Python 3.11
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: "3.11"
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install ".[host,pi,dev]"
+        pip install ".${{ matrix.install_extras }}"
+
     - name: Test with pytest
+      # use the matrix variable to skip hardware-dependent tests on non-Linux
       run: |
-        pytest tests
+        pytest tests ${{ matrix.pytest_args }}

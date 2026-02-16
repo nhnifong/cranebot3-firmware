@@ -6,11 +6,14 @@ import numpy as np
 from math import pi
 import asyncio
 import time
+import pytest
 
 from nf_robot.robot.spools import *
 from nf_robot.robot.debug_motor import DebugMotor
 from nf_robot.robot.anchor_server import default_anchor_conf
 from nf_robot.robot.gripper_server import default_gripper_conf
+
+pytestmark = pytest.mark.pi
 
 class TestSpoolControllerInit(unittest.TestCase):
 

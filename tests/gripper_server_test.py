@@ -10,10 +10,13 @@ from inventorhatmini import InventorHATMini, SERVO_1, SERVO_2
 from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X
 import time
+import pytest
 
 from nf_robot.robot.gripper_server import RaspiGripperServer
 from nf_robot.robot.spools import SpoolController
 from nf_robot.robot.debug_motor import DebugMotor
+
+pytestmark = pytest.mark.pi
 
 class TestGripperServer(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
