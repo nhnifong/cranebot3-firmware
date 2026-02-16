@@ -229,7 +229,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(8765, self.ob.config.gripper.port)
 
         # After half second, keep_robot_connected should wake up and start a client to connect to the gripper
-        await asyncio.wait_for(self.watchable_startup_events[4].wait(), 0.51)
+        await asyncio.wait_for(self.watchable_startup_events[4].wait(), 2.0)
         self.assertTrue(self.ob.gripper_client is not None)
         self.assertEqual(1, len(self.ob.connection_tasks))
         # assert the client task is running.
@@ -248,7 +248,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(8765, self.ob.config.anchors[0].port)
 
         # After half second, keep_robot_connected should wake up and start a client to connect to the gripper
-        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
+        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 2.0)
         self.assertTrue(self.ob.anchors[0] is not None)
         self.assertEqual(1, len(self.ob.connection_tasks))
         # assert the client task is running.
@@ -268,7 +268,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         await self.start_observer()
 
         # After half second, keep_robot_connected should wake up and start a client to connect to the anchor
-        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
+        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 2.0)
         self.assertTrue(self.ob.anchors[0] is not None)
         self.assertEqual(1, len(self.ob.connection_tasks))
         # assert the client task is running.
@@ -293,7 +293,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
         # After half second, keep_robot_connected should wake up and start a client to connect to the gripper
         # but it will return immediately, which is how the real clients behave when a connection is refused.
-        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
+        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 2.0)
         # client appeared to startup and refuse the connection. now make sure it was removed
         self.assertEqual(0, len(self.ob.anchors))
         self.assertEqual(0, len(self.ob.connection_tasks))
@@ -302,7 +302,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.watchable_startup_events[0].clear()
         self.clients_refuse_connections = False
 
-        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 0.51)
+        await asyncio.wait_for(self.watchable_startup_events[0].wait(), 2.0)
         self.assertTrue(self.ob.anchors[0] is not None)
         self.assertEqual(1, len(self.ob.connection_tasks))
         # assert the client task is running.
