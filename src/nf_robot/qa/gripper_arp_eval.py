@@ -87,7 +87,7 @@ def main():
     input("Press Enter to move gripper fingers...")
     # Find the position at which the gripper fingers touch.
     print(f"Calibrating finger servo...")
-    sts.torque_enable(FINGER_MOTOR_ID, True)
+    sts.reset_encoder_to_midpoint(FINGER_MOTOR_ID)
 
     pos = sts.get_position(FINGER_MOTOR_ID)
     # open a few degrees in case fingers were already touching.

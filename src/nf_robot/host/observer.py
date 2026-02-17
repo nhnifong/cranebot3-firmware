@@ -258,6 +258,14 @@ class AsyncObserver:
         elif item.delete_target:
             self._handle_delete_target(item.delete_target)
 
+        elif item.debug:
+            await self._handle_debug_command(item.debug)
+
+    async def _handle_debug_command(self, item: control.Debug):
+        print(f'Debug action "{item.action}"')
+        if item.action == "swingc":
+            r = await self.invoke_motion_task(self.run_swing_cancellation())
+
     def _handle_delete_target(self, item: control.DeleteTarget):
         if item.target_id is not None:
             self.target_queue.remove_target(item.target_id);
@@ -344,8 +352,7 @@ class AsyncObserver:
             case control.Command.HORIZONTAL_CHECK:
                 r = await self.invoke_motion_task(self.horizontal_line_task())
             case control.Command.COLLECT_GRIPPER_IMAGES:
-                r = await self.invoke_motion_task(self.run_swing_cancellation())
-                # self._handle_collect_images()
+                self._handle_collect_images()
             case control.Command.SHUTDOWN:
                 self.run_command_loop = False
             case control.Command.RECORD_PARK:
@@ -937,19 +944,6 @@ class AsyncObserver:
         if not isinstance(self.gripper_client, ArpeggioGripperClient):
             return
         print('start experimental swing cancellation')
-            """Rotates a 2D vector by a given angle in radians."""
-            cos_a = np.cos(rad)
-            sin_a = np.sin(rad)
-            # Standard 2D rotation matrix multiplication
-            nx = x * cos_a - y * sin_a
-            ny = x * sin_a + y * cos_a
-            return nx, ny
-        fudge_latency = 0.3
-        try:
-            while self.run_command_loop:
-                vel2  = self.gripper_client.vel_from_imu
-                if vel2 is not None:
-                    vel2 = vel2*p_term
 
         self.latency = 0.0
         try:
@@ -966,6 +960,7 @@ class AsyncObserver:
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
             print(f'====================== {self.latency}')
+
 
     def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
