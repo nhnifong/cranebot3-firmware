@@ -261,8 +261,8 @@ class AsyncObserver:
 
     async def _handle_debug_command(self, item: control.Debug):
         print(f'Debug action "{item.action}"')
-        if item.action == "swingc":
-            r = await self.invoke_motion_task(self.run_swing_cancellation())
+        # if item.action == "swingc":
+        #     r = await self.invoke_motion_task(self.run_swing_cancellation())
 
     def _handle_delete_target(self, item: control.DeleteTarget):
         if item.target_id is not None:
