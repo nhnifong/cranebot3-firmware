@@ -53,9 +53,7 @@ dts_zero_offset = 0.719379
 # values that can be overridden by the controller
 default_conf = {
     # delay in seconds between updates sent on websocket during normal operation
-    'RUNNING_WS_DELAY': 0.1,
-    # delay in seconds between updates sent on websocket during calibration
-    'CALIBRATING_WS_DELAY': 0.05
+    'RUNNING_WS_DELAY': 1/25,
 }
 
 class RobotComponentServer:
@@ -179,7 +177,7 @@ class RobotComponentServer:
         # wait for the subprocess to exit, whether because we killed it, or it stopped normally
         return await self.rpicam_process.wait()
 
-    async def stabilization(self, ws):
+    async def process_imu(self, ws):
         pass
 
     async def log_subprocess_output(self, stream, logger_func):
@@ -249,7 +247,7 @@ class RobotComponentServer:
                 read_updates = tg.create_task(self.read_updates_from_client(websocket, tg))
                 stream = tg.create_task(self.stream_measurements(websocket))
                 mjpeg = tg.create_task(self.stream_video(websocket))
-                stabil = tg.create_task(self.stabilization(websocket))
+                stabil = tg.create_task(self.process_imu(websocket))
         except* (ConnectionClosedOK, ConnectionClosedError):
             logging.info("Client disconnected")
         logging.info("All tasks in handler task group completed")

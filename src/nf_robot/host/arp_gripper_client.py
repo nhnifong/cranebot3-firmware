@@ -130,8 +130,8 @@ class ArpeggioGripperClient(ComponentClient):
         f.write(f'{future_accel[0]},{future_accel[1]},{self.derived_accel[0]},{self.derived_accel[1]}\n')
 
         # A corrective velocity to the gantry inversely proportional to the angular velocity of the gripper cancels the swing
-        # vel = future_accel * SWING_CANCEL_GAIN
-        vel = self.derived_accel * SWING_CANCEL_GAIN
+        vel = future_accel * SWING_CANCEL_GAIN
+        # vel = self.derived_accel * SWING_CANCEL_GAIN
 
         # rotate vector into room frame of reference
         wrist = self.datastore.winch_line_record.getLast()[1]

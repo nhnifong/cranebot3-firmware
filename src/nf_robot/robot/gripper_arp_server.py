@@ -170,8 +170,6 @@ class GripperArpServer(RobotComponentServer):
             'wrist_a': wrist_angle,
         }
 
-        self.integrateAccel(t)
-
         if self.rangefinder.data_ready:
             distance = self.rangefinder.distance
             # If the floor is out of range, distance is None
@@ -228,7 +226,7 @@ class GripperArpServer(RobotComponentServer):
             
             await asyncio.sleep(DT)
 
-    async def stabilization(self, ws):
+    async def process_imu(self, ws):
         """
         Observe gyro and fit a sin curve for use in active swing cancellation
         """
@@ -241,13 +239,6 @@ class GripperArpServer(RobotComponentServer):
             # MPU6050 returns (gx, gy, gz) in rad/s
             current_gyro = np.array(self.imu.gyro[:2])
 
-            # older method for comparison
-            # Derive Angular Acceleration (Alpha)
-            raw_alpha = (current_gyro - self.last_gyro) / dt
-            self.last_gyro = current_gyro
-            # Low-pass filter the derivative
-            self.filtered_alpha = (1 - FILTER_COEFF) * self.filtered_alpha + FILTER_COEFF * raw_alpha
-
             step_angle = self.omega * dt
             c_step, s_step = np.cos(step_angle), np.sin(step_angle)
             # Rotation matrix to keep the virtual pendulum 'swinging' in sync with time.
@@ -256,22 +247,15 @@ class GripperArpServer(RobotComponentServer):
             # Correct the Sine component (Col 0) using the actual Gyro reading.
             self.state[:, 0] += self.observation_gain * (current_gyro - self.state[:, 0])
 
-            # Send the state of the model to the client
-            update = {
-                'sm': self.state.tolist(),
-                'st': self.last_time_imu,
-                'aa': self.filtered_alpha.tolist(),
-            }
+            # The state of the model only needs to be sent to the client at the regular rate
+            update['sm'] = self.state.tolist()
+            update['st'] = self.last_time_imu
 
             # To use this information, the motion controller should evaluate the derivative of the model at future times
             # based on expected latency in order to obtain a prediction of the angular acceleration in X and Y.
             # the compensatory velocity to apply to the marker box is proportional to the inverse of that angular acceleration.
             # the compensation must be rotated to account for the wrist.
 
-            # send on websocket at a fast rate
-            # todo, it may not be necessary to send these and use them at a fast rate, only to update the model at a fast rate.
-            # but the effect of using the sin model needs to be evaluated seperately from the effect of slowing the updates.
-            await ws.send(json.dumps(update))
             await asyncio.sleep(1/100)
 
     def setFingerSpeed(self, deg_per_second):

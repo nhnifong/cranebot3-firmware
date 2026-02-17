@@ -945,7 +945,7 @@ class AsyncObserver:
             return
         print('start experimental swing cancellation')
 
-        self.latency = 0.0
+        self.latency = 0.3
         try:
             with open('data.csv', 'w') as f:
                 f.write("new_x,new_y,old_x,old_y\n")
