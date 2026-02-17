@@ -8,6 +8,7 @@ import os
 import board
 import busio
 import json
+import numpy as np
 
 from adafruit_mpu6050 import MPU6050 # accelerometer
 from adafruit_vl53l1x import VL53L1X # rangefinder
@@ -248,8 +249,8 @@ class GripperArpServer(RobotComponentServer):
             self.state[:, 0] += self.observation_gain * (current_gyro - self.state[:, 0])
 
             # The state of the model only needs to be sent to the client at the regular rate
-            update['sm'] = self.state.tolist()
-            update['st'] = self.last_time_imu
+            self.update['sm'] = self.state.tolist()
+            self.update['st'] = self.last_time_imu
 
             # To use this information, the motion controller should evaluate the derivative of the model at future times
             # based on expected latency in order to obtain a prediction of the angular acceleration in X and Y.

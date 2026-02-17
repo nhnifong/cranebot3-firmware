@@ -947,13 +947,11 @@ class AsyncObserver:
 
         self.latency = 0.3
         try:
-            with open('data.csv', 'w') as f:
-                f.write("new_x,new_y,old_x,old_y\n")
-                while self.run_command_loop:
-                    vel2 = self.gripper_client.compute_swing_correction(time.time()+self.latency, f)
-                    if vel2 is not None:
-                        await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
-                    await asyncio.sleep(1/100)
+            while self.run_command_loop:
+                vel2 = self.gripper_client.compute_swing_correction(time.time()+self.latency)
+                if vel2 is not None:
+                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
+                await asyncio.sleep(1/100)
         except asyncio.CancelledError:
             raise
         finally:
@@ -1446,8 +1444,7 @@ class AsyncObserver:
                 finger_speed = clamp(finger_speed, -90, 90)
                 update['set_finger_speed'] = finger_speed
             if wrist_speed is not None and abs(wrist_speed) > 1.0:
-                wrist_speed = clamp(wrist_speed, -70, 70)
-                print(f'set wrist speed {wrist_speed}')
+                wrist_speed = clamp(wrist_speed, -120, 120)
                 update['set_wrist_speed'] = wrist_speed
         elif isinstance(self.gripper_client, RaspiGripperClient):
 
