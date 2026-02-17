@@ -48,6 +48,17 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
+# set up i2c Kernel Module
+# We must load 'i2c-dev' to create the /dev/i2c-1 character device which is what raspi-config would do if you ran it interactively
+# Without this, i2cdetect and python libraries cannot see the bus.
+if [ ! -f "$ROOTFS_DIR/etc/modules" ]; then
+    touch "$ROOTFS_DIR/etc/modules"
+fi
+
+if ! grep -q "i2c-dev" "$ROOTFS_DIR/etc/modules"; then
+    echo "i2c-dev" >> "$ROOTFS_DIR/etc/modules"
+fi
+
 # Create missing udev rule for Camera DMA Heaps ---
 # Minimal images lack the rule that lets 'video' group access /dev/dma_heap/*
 # This fixes "Could not open any dma-buf provider" when running as non-root.
@@ -57,6 +68,9 @@ echo 'SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"' > "$ROOTFS_DIR/etc/udev
 
 # GPIO Access (Fixes "No access to /dev/mem" by enabling /dev/gpiomem for gpio group)
 echo 'KERNEL=="gpiomem", GROUP="gpio", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-gpio.rules"
+
+# I2C Access (Fixes access to /dev/i2c-* for 'i2c' group)
+echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-i2c.rules"
 
 # Install Systemd Service
 install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
