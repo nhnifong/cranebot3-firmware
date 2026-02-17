@@ -345,6 +345,24 @@ class SimpleSTS3215:
         self._write_packet(servo_id, 3, [55, 1])
         print(f"ID {servo_id} configured. Full signed 16-bit range enabled.")
 
+    def reset_encoder_to_midpoint(self, servo_id):
+        """
+        Resets the current hardware position to 2048 (Midpoint).
+        
+        Uses the special Torque Enable command (128) to set current position as offset.
+        Useful when installing motors at unknown angles. 
+        Call this before calibration routine to avoid hitting 0 limit.
+        """
+        print(f"Resetting ID {servo_id} current position to 2048...")
+        # Unlock EEPROM (required for some models, but 128 is usually a RAM op)
+        self._write_packet(servo_id, 3, [55, 0]) 
+        # Write 128 (0x80) to Torque Enable
+        self._write_packet(servo_id, 3, [self.ADDR_TORQUE_ENABLE, 128])
+        # Lock EEPROM
+        self._write_packet(servo_id, 3, [55, 1])
+        # Re-enable torque after reset if needed (usually defaults to off/safe)
+        self.torque_enable(servo_id, True)
+
 if __name__ == "__main__":
     sts = SimpleSTS3215(port='/dev/serial0', timeout=0.5) 
 

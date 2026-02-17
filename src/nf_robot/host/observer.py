@@ -256,6 +256,14 @@ class AsyncObserver:
         elif item.delete_target:
             self._handle_delete_target(item.delete_target)
 
+        elif item.debug:
+            await self._handle_debug_command(item.debug)
+
+    async def _handle_debug_command(self, item: control.Debug):
+        print(f'Debug action "{item.action}"')
+        if item.action == "swingc":
+            r = await self.invoke_motion_task(self.run_swing_cancellation())
+
     def _handle_delete_target(self, item: control.DeleteTarget):
         if item.target_id is not None:
             self.target_queue.remove_target(item.target_id);
@@ -915,6 +923,7 @@ class AsyncObserver:
         # move about a meter towards origin while extending winch to operating length
 
         # half cal
+
 
     def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
