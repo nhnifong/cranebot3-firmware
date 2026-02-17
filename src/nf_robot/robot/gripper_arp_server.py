@@ -8,8 +8,9 @@ import os
 import board
 import busio
 import json
-# import adafruit_bno08x
-# from adafruit_bno08x.i2c import BNO08X_I2C
+import numpy as np
+
+from adafruit_mpu6050 import MPU6050 # accelerometer
 from adafruit_vl53l1x import VL53L1X # rangefinder
 from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital converter for pressure
 
@@ -41,6 +42,7 @@ FINGER_TRAVEL_DEG = 59 # actually 60 but need small margin of space at wide open
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 DT = 1/60
 ACTION_TIMEOUT = 0.2
+FILTER_COEFF = 0.05
 
 
 # values that can be overridden by the controller
@@ -79,6 +81,8 @@ class GripperArpServer(RobotComponentServer):
         self.ads = ADS1015(i2c)
         self.pressure_sensor = AnalogIn(self.ads, ads1x15.Pin.A0)
 
+        self.imu = MPU6050(i2c)
+
         self.motors = SimpleSTS3215()
         self.motors.configure_multiturn(WRIST)
 
@@ -96,6 +100,26 @@ class GripperArpServer(RobotComponentServer):
 
         self.time_last_commanded_finger_speed = 0
         self.time_last_commanded_wrist_speed = 0
+
+        self.last_time_imu = time.time()
+
+        self.last_gyro = np.zeros(2)
+        self.filtered_alpha = np.zeros(2)
+
+        # pendulum constants for 53cm pole
+        L = 0.4526 # 0.53
+        g = 9.81
+        # omega is the constant angular frequency of the pendulum.
+        # It represents the speed that the system progresses along it's cycle radians per second.
+        self.omega = np.sqrt(g / L)
+        
+        # The state matrix representing the sin curves being fitted to the gyro measurements.
+        # Row 0: X-axis swing, Row 1: Y-axis swing.
+        # Col 0: Velocity (Sine component), Col 1: Phase tracker (Cosine component).
+        self.state = np.zeros((2, 2))
+
+        # observation_gain defines how much real sensor data to average into the model each time step
+        self.observation_gain = 0.1 
 
         # try to read the physical positions of winch and finger last written to disk.
         # For the gripper, there's a good change nothing has moved since power down.
@@ -136,13 +160,15 @@ class GripperArpServer(RobotComponentServer):
         #Clamp to 0-1080 range
         wrist_angle = clamp(wrist_angle, 0, 1080)
 
+        # Todo, we could return these directly, or go ahead and estimate the swing parameters from them here and return those, either is fine
+        # mpu.acceleration
+        # mpu.gyro
+
         self.update['grip_sensors'] = {
             'time': t,
-            # 'quat': self.imu.quaternion,
             'fing_v': pressure_v,
             'fing_a': finger_angle,
             'wrist_a': wrist_angle,
-            # range added below
         }
 
         if self.rangefinder.data_ready:
@@ -200,6 +226,38 @@ class GripperArpServer(RobotComponentServer):
                 self.motors.set_position(WRIST, target_pos)
             
             await asyncio.sleep(DT)
+
+    async def process_imu(self, ws):
+        """
+        Observe gyro and fit a sin curve for use in active swing cancellation
+        """
+        while True:
+            now = time.time()
+            dt = now - self.last_time_imu
+            self.last_time_imu = now
+
+            # Get current angular velocity (rad/s)
+            # MPU6050 returns (gx, gy, gz) in rad/s
+            current_gyro = np.array(self.imu.gyro[:2])
+
+            step_angle = self.omega * dt
+            c_step, s_step = np.cos(step_angle), np.sin(step_angle)
+            # Rotation matrix to keep the virtual pendulum 'swinging' in sync with time.
+            self.state = self.state @ np.array([[c_step, -s_step], [s_step, c_step]])
+
+            # Correct the Sine component (Col 0) using the actual Gyro reading.
+            self.state[:, 0] += self.observation_gain * (current_gyro - self.state[:, 0])
+
+            # The state of the model only needs to be sent to the client at the regular rate
+            self.update['sm'] = self.state.tolist()
+            self.update['st'] = self.last_time_imu
+
+            # To use this information, the motion controller should evaluate the derivative of the model at future times
+            # based on expected latency in order to obtain a prediction of the angular acceleration in X and Y.
+            # the compensatory velocity to apply to the marker box is proportional to the inverse of that angular acceleration.
+            # the compensation must be rotated to account for the wrist.
+
+            await asyncio.sleep(1/100)
 
     def setFingerSpeed(self, deg_per_second):
         self.time_last_commanded_finger_speed = time.time()

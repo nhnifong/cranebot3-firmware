@@ -12,9 +12,9 @@ default_conf = {
     # factor controlling how much positon error matters in the tracking loop.
     'PE_TERM': 2.0,
     # maximum acceleration in meters of line per second squared
-    'MAX_ACCEL': 0.8,
+    'MAX_ACCEL': 1.6,
     # sleep delay of tracking loop
-    'LOOP_DELAY_S': 0.03,
+    'LOOP_DELAY_S': 0.01,
     # record line length every x iterations of tracking loop
     'REC_MOD': 3,
     # default cruise speed in meters/sec for position moves

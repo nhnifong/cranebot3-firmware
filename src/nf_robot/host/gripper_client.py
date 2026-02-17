@@ -11,8 +11,8 @@ from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.cv_common import SF_INPUT_SHAPE, stabilize_frame
 
 R_imu_to_cam = np.array([
-    [-1,  0,   0],
-    [0,  0,   -1],
+    [1,  0,   0],
+    [0,  0,   1],
     [0,  -1,  0]
 ])
 
@@ -28,7 +28,8 @@ class RaspiGripperClient(ComponentClient):
         self.pe = pe
 
         self.finger_angle = 0 # -90 to 90
-        self.finger_speed = 0 # units of angle per second\
+        self.finger_speed = 0 # units of angle per second
+        self.park_pose_relative_to_camera = None
 
     async def handle_update_from_ws(self, update):
         if 'line_record' in update:
@@ -85,13 +86,15 @@ class RaspiGripperClient(ComponentClient):
         """
         self.stat.pending_frames_in_pool -= 1
         self.stat.detection_count += len(detections)
+        # setting to none every frame so we know whether it's in frame by looking at this variable
+        self.park_pose_relative_to_camera = None
 
         for detection in detections:
             if detection['n'] == 'park_target':
                 # pose of parking target relative to gripper camera
                 # the top of the tag (+Y) is closest to the wall
-                print(f"gripper sees parking target at {detection['p']}")
                 # save vector in room frame pointing from gripper origin to target
+                self.park_pose_relative_to_camera = detection['p']
 
     async def send_config(self):
         pass

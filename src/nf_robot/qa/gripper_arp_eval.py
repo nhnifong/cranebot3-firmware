@@ -103,7 +103,7 @@ def main():
     # slowly close until the fingerpad voltage drops below 2V
     start = time.time()
     load = 0
-    while v > 3.0 and time.time() < start+10:
+    while v > 3.0 and time.time() < start+16:
         sts.set_position(FINGER_MOTOR_ID, pos + rel)
         rel -= 10
         time.sleep(0.05)
