@@ -126,7 +126,8 @@ class RaspiGripperServer(RobotComponentServer):
 
         i2c = busio.I2C(board.SCL, board.SDA)
         self.imu = BNO08X_I2C(i2c, address=0x4b)
-        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
+        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)\
+        self.lastq = [0,0,0,0]
 
         self.rangefinder = VL53L1X(i2c)
         model_id, module_type, mask_rev = self.rangefinder.model_info
@@ -177,9 +178,14 @@ class RaspiGripperServer(RobotComponentServer):
 
     def readOtherSensors(self):
 
+        try:
+            self.lastq = self.imu.quaternion
+        except RuntimeError:
+            pass # it's due to clock stretching
+
         self.update['grip_sensors'] = {
             'time': time.time(),
-            'quat': self.imu.quaternion,
+            'quat': self.lastq,
             'fing_v': self.hat.gpio_pin_value(PRESSURE_PIN),
             # we don't have an encoder that tells us the true finger angle. fing_a is only what it was last commanded to be.
             # this could be easily remedied by using a smart servo or by adding another mouse wheel encoder to the IHM's B port
