@@ -126,7 +126,7 @@ class RaspiGripperServer(RobotComponentServer):
 
         i2c = busio.I2C(board.SCL, board.SDA)
         self.imu = BNO08X_I2C(i2c, address=0x4b)
-        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)\
+        self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
         self.lastq = [0,0,0,0]
 
         self.rangefinder = VL53L1X(i2c)
