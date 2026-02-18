@@ -180,7 +180,7 @@ class RaspiGripperServer(RobotComponentServer):
 
         try:
             self.lastq = self.imu.quaternion
-        except RuntimeError:
+        except RuntimeError, KeyError:
             pass # it's due to clock stretching
 
         self.update['grip_sensors'] = {

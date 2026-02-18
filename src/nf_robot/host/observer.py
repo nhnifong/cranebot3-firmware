@@ -807,6 +807,7 @@ class AsyncObserver:
                         async_result = self.pool.apply_async(
                             locate_markers_gripper,
                             (self.gripper_client.last_frame_resized, self.config.camera_cal_wide),
+                                # self.config.camera_cal if isinstance(self.gripper_client, RaspiGripperClient) else self.config.camera_cal_wide),
                             callback=partial(special_handle_det, time.time()))
                         detections = async_result.get(timeout=5)
                         print(f'detections {detections}')
@@ -819,8 +820,8 @@ class AsyncObserver:
                 euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
                 print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
                 roomspin = euler_rot[0]
-                if isinstance(self.gripper_client, ArpeggioGripperClient):
-                    roomspin+=np.pi
+                # if isinstance(self.gripper_client, ArpeggioGripperClient):
+                roomspin+=np.pi
                 self.config.gripper.frame_room_spin = roomspin
                 self.config.has_been_calibrated = True
                 save_config(self.config, self.config_path)
