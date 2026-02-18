@@ -92,8 +92,6 @@ def save_config(config: nf_config.StringmanPilotConfig, path: Path=DEFAULT_CONFI
     """
     if path is None:
         return
-    print(f'Saving configuration to {path}')
-    print(f'wide = {config.camera_cal_wide}')
     with open(path, 'w') as f:
         f.write(config.to_json(indent=2))
 

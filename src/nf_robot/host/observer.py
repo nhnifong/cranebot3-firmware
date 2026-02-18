@@ -447,6 +447,8 @@ class AsyncObserver:
             await self.gripper_client.zero_winch()
 
     async def _handle_movement(self, move: control.CombinedMove):
+        winch = None
+        wrist = None
         if self.gripper_client is not None:
             # if we have to clip these values to legal limits, save what they were clipped to
             if move.finger_speed is not None or move.wrist_speed is not None:
@@ -463,7 +465,7 @@ class AsyncObserver:
         # the saved values will be what we return from GetLastAction
         if winch is not None:
             self.last_gp_action = (commanded_vel, winch, finger)
-        else:
+        elif wrist is not None:
             self.last_gp_action = (commanded_vel, wrist, finger)
         self.last_user_move_time = time.time()
 

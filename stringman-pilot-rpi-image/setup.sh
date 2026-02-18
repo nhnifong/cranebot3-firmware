@@ -66,8 +66,14 @@ echo "Creating udev rules for DMA Heap access..."
 mkdir -p "$ROOTFS_DIR/etc/udev/rules.d"
 echo 'SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-camera-perms.rules"
 
-# GPIO Access (Fixes "No access to /dev/mem" by enabling /dev/gpiomem for gpio group)
-echo 'KERNEL=="gpiomem", GROUP="gpio", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-gpio.rules"
+# GPIO Access
+# 1. Legacy Memory Interface (used by older RPi.GPIO)
+# 2. Modern Character Device Interface (used by libgpiod / InventorHAT)
+cat <<EOF > "$ROOTFS_DIR/etc/udev/rules.d/99-gpio.rules"
+KERNEL=="gpiomem", GROUP="gpio", MODE="0660"
+SUBSYSTEM=="gpio", KERNEL=="gpiochip*", GROUP="gpio", MODE="0660"
+EOF
+
 
 # I2C Access (Fixes access to /dev/i2c-* for 'i2c' group)
 echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-i2c.rules"

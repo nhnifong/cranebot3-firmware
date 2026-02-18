@@ -169,9 +169,6 @@ class StringmanLeRobot(Robot):
 
         if item.local_uri:
             url = item.local_uri
-            # Standardize UDP for PyAV if needed
-            if url.startswith("udp:") and "://" not in url:
-                url = url.replace("udp:", "udp://")
         
         elif item.stream_path:
             url = f"rtsp://media.neufangled.com:8554/{item.stream_path}"
