@@ -945,10 +945,10 @@ class AsyncObserver:
             return
         print('start experimental swing cancellation')
 
-        self.latency = 0.3
+        latency = 0.28
         try:
             while self.run_command_loop:
-                vel2 = self.gripper_client.compute_swing_correction(time.time()+self.latency)
+                vel2 = self.gripper_client.compute_swing_correction(time.time() + latency)
                 if vel2 is not None:
                     await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
                 await asyncio.sleep(1/100)
@@ -957,7 +957,6 @@ class AsyncObserver:
         finally:
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
-            print(f'====================== {self.latency}')
 
 
 
