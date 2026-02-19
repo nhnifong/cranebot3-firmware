@@ -20,3 +20,24 @@ When ready to upload models ( PUSH TO PROD )
 
 huggingface-cli upload naavox/targeting src/nf_robot/ml/models/target_heatmap.pth target_heatmap.pth
 huggingface-cli upload naavox/centering src/nf_robot/ml/models/square_centering.pth square_centering.pth
+
+python -m nf_robot.ml.target_heatmap label
+
+Example record command
+
+python -m nf_robot.ml.stringman_lerobot \
+  --robot_id=lan \
+  --server_address=ws://localhost:4245 \
+  --repo_id=naavox/grasping_dataset
+
+Example train command
+
+lerobot-train \
+  --dataset.repo_id=naavox/grasping_dataset \
+  --policy.type=act \
+  --output_dir=outputs/train/act_your_dataset \
+  --job_name=act_your_dataset \
+  --policy.device=cuda \
+  --wandb.enable=false \
+  --policy.repo_id=naavox/act_policy \
+  --steps=1000

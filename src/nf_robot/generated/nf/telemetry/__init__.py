@@ -5,6 +5,7 @@
 
 __all__ = (
     "AnchorPoses",
+    "CommandedGrip",
     "CommandedVelocity",
     "ComponentConnStatus",
     "ConnStatus",
@@ -127,14 +128,38 @@ default_message_pool.register_message("nf.telemetry", "AnchorPoses", AnchorPoses
 
 
 @dataclass(eq=False, repr=False)
+class CommandedGrip(betterproto2.Message):
+    """
+    The last commanded grip command sent to the gripper
+    """
+
+    wrist_speed: "float" = betterproto2.field(1, betterproto2.TYPE_FLOAT)
+    """
+    commanded wrist speed.
+    """
+
+    finger_speed: "float" = betterproto2.field(2, betterproto2.TYPE_FLOAT)
+    """
+    commanded finger speed
+    """
+
+
+default_message_pool.register_message("nf.telemetry", "CommandedGrip", CommandedGrip)
+
+
+@dataclass(eq=False, repr=False)
 class CommandedVelocity(betterproto2.Message):
     """
     When the gantry has been commanded to move with a velocity eitehr by AI or human, it gives this velocity to the UI for visualization.
+    Also used when recording a dataset. these are the action that will be saved with the video frames.
     """
 
     velocity: "_common__.Vec3 | None" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, optional=True
     )
+    """
+    commanded gantry velocity
+    """
 
 
 default_message_pool.register_message(
@@ -561,6 +586,10 @@ class TelemetryItem(betterproto2.Message):
 
     operation_progress: "OperationProgress | None" = betterproto2.field(
         17, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
+    last_commanded_grip: "CommandedGrip | None" = betterproto2.field(
+        18, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
     retain_key: "str | None" = betterproto2.field(

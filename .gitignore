@@ -21,3 +21,4 @@ dataset_heatmap/
 build/
 angling_data/
 *.pth
+/outputs

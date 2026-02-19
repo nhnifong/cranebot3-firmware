@@ -950,7 +950,7 @@ class AsyncObserver:
             return
         print('start experimental swing cancellation')
 
-        latency = 0.28
+        latency = 0.24
         try:
             self.active_set.add('swingc')
             while self.run_command_loop:
@@ -1447,12 +1447,17 @@ class AsyncObserver:
         if isinstance(self.gripper_client, ArpeggioGripperClient):
 
             # arpeggio gripper. Update finger and wrist speed
+            cg = telemetry.CommandedGrip()
             if finger_speed is not None and abs(finger_speed) > 1.0:
                 finger_speed = clamp(finger_speed, -90, 90)
                 update['set_finger_speed'] = finger_speed
+                cg.finger_speed = finger_speed
             if wrist_speed is not None and abs(wrist_speed) > 1.0:
                 wrist_speed = clamp(wrist_speed, -120, 120)
                 update['set_wrist_speed'] = wrist_speed
+                cg.wrist_speed = wrist_speed
+            self.send_ui(last_commanded_grip=cg)
+
         elif isinstance(self.gripper_client, RaspiGripperClient):
 
             # pilot gripper, update winch speed and finger angle

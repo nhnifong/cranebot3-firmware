@@ -83,8 +83,19 @@ message NamedObjectPosition {
 }
 
 // When the gantry has been commanded to move with a velocity eitehr by AI or human, it gives this velocity to the UI for visualization.
+// Also used when recording a dataset. these are the action that will be saved with the video frames.
 message CommandedVelocity {
+	// commanded gantry velocity
 	nf.common.Vec3 velocity = 1;
+}
+
+// The last commanded grip command sent to the gripper
+message CommandedGrip {
+	// commanded wrist speed.
+	float wrist_speed = 1;
+
+  // commanded finger speed
+	float finger_speed = 2;
 }
 
 // A connected UI should immediately display this message in a popup with an OK button.
@@ -211,6 +222,7 @@ message TelemetryItem {
 		UplinkStatus uplink_status = 15; // only sent from control plane
 		nf.common.EpisodeControl episode_control = 16; // Forwarded
 		OperationProgress operation_progress = 17;
+		CommandedGrip last_commanded_grip = 18;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

@@ -33,6 +33,10 @@ class EpCommand(betterproto2.Enum):
 
     START_OR_COMPLETE = 3
 
+    EVAL_START = 4
+
+    EVAL_STOP = 5
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -40,6 +44,8 @@ class EpCommand(betterproto2.Enum):
             1: "EPCOMMAND_ABANDON",
             2: "EPCOMMAND_END_RECORDING",
             3: "EPCOMMAND_START_OR_COMPLETE",
+            4: "EPCOMMAND_EVAL_START",
+            5: "EPCOMMAND_EVAL_STOP",
         }
 
     @classmethod
@@ -49,6 +55,8 @@ class EpCommand(betterproto2.Enum):
             "EPCOMMAND_ABANDON": 1,
             "EPCOMMAND_END_RECORDING": 2,
             "EPCOMMAND_START_OR_COMPLETE": 3,
+            "EPCOMMAND_EVAL_START": 4,
+            "EPCOMMAND_EVAL_STOP": 5,
         }
 
 
