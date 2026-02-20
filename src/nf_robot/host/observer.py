@@ -170,7 +170,9 @@ class AsyncObserver:
         self.run_collect_images = False
         self.time_last_grip_sensors_retain_key = 0
 
-        self.latency = -0.6
+        # dict of vectors representing last velocities commanded by different subsystems. all keys in active_set are summard
+        self.input_velocities = {}
+        self.active_set = set(['default'])
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -950,14 +952,16 @@ class AsyncObserver:
 
         latency = 0.28
         try:
+            self.active_set.add('swingc')
             while self.run_command_loop:
                 vel2 = self.gripper_client.compute_swing_correction(time.time() + latency)
                 if vel2 is not None:
-                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]))
+                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc')
                 await asyncio.sleep(1/100)
         except asyncio.CancelledError:
             raise
         finally:
+            self.active_set.remove('swingc')
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
 
@@ -1524,7 +1528,7 @@ class AsyncObserver:
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
 
-    async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04):
+    async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04, key='default'):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
         we will use the last one sent from position_estimator
@@ -1540,6 +1544,9 @@ class AsyncObserver:
         according to the laser rangefinder.
 
         if speed is None, uvec is assumed to be velocity and used directly with no bias
+
+        If key is supplied, the resulting vector overwrites the last one with the same key
+        Whenever one of the keys from the set that is being combined changes, all keys in the active set are summed and sent to the anchors.
         """
         KINEMATICS_STEP_SCALE = 10.0 # Determines the size of the virtual step to calculate line speed derivatives
 
@@ -1576,6 +1583,12 @@ class AsyncObserver:
         uvec  = uvec / np.linalg.norm(uvec)
         velocity = uvec * speed
 
+
+        # this commanded velocity overwrites the last velocity with the same key and all velocities are summed
+        # currently this is only used to combine swing cancellation with user inputs.
+        self.input_velocities[key] = velocity
+        total_velocity = np.sum([self.input_velocities[k] for k in self.active_set], axis=0)
+
         anchor_positions = np.zeros((4,3))
         for a in self.anchors:
             anchor_positions[a.anchor_num] = np.array(a.anchor_pose[1])
@@ -1587,7 +1600,7 @@ class AsyncObserver:
         # zero the speed if this would move the gantry out of the work area
         if not self.pe.point_inside_work_area(new_pos):
             speed = 0
-            velocity = np.zeros(3)
+            total_velocity = np.zeros(3)
         lengths_b = np.linalg.norm(new_pos - self.pe.anchor_points, axis=1)
         # length changes needed to travel a small distance in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
@@ -1596,8 +1609,8 @@ class AsyncObserver:
         # send move
         for client in self.anchors:
             asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
-        self.pe.record_commanded_vel(velocity)
-        return velocity
+        self.pe.record_commanded_vel(total_velocity)
+        return total_velocity
 
     def get_last_frame(self, camera_key):
         """gets the last frame of video from the given camera if possible
