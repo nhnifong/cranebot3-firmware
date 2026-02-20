@@ -871,20 +871,20 @@ class AsyncObserver:
     async def record_park(self):
         """Record that the current location is above the parking saddle and save in the config"""
         # confirm we can actually see the parking target in the grip camera
-        if self.gripper_client.park_pose_relative_to_camera is not None:
-            self.config.park_data.pos = fromnp(self.pe.gant_pos)
-            save_config(self.config, self.config_path)
-            self.send_ui(named_position=telemetry.NamedObjectPosition(
-                name = 'parking_location',
-                position = self.config.park_data.pos
-            ))
-            self.send_ui(pop_message=telemetry.Popup(
-                message=f'Saved parking location as {self.config.park_data.pos}'
-            ))
-        else:
-            self.send_ui(pop_message=telemetry.Popup(
-                message=f'Cannot save location. The parking saddle is not in view of the gripper camera. Move 10cm above the parking saddle or improve lighting.'
-            ))
+        # if self.gripper_client.park_pose_relative_to_camera is not None:
+        self.config.park_data.pos = fromnp(self.pe.gant_pos)
+        save_config(self.config, self.config_path)
+        self.send_ui(named_position=telemetry.NamedObjectPosition(
+            name = 'parking_location',
+            position = self.config.park_data.pos
+        ))
+        self.send_ui(pop_message=telemetry.Popup(
+            message=f'Saved parking location as {self.config.park_data.pos}'
+        ))
+        # else:
+        #     self.send_ui(pop_message=telemetry.Popup(
+        #         message=f'Cannot save location. The parking saddle is not in view of the gripper camera. Move 10cm above the parking saddle or improve lighting.'
+        #     ))
 
 
     async def park(self):
@@ -1244,7 +1244,7 @@ class AsyncObserver:
         self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
-        with Pool(processes=5) as pool:
+        with Pool(processes=6) as pool:
             self.pool = pool
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
@@ -1593,6 +1593,8 @@ class AsyncObserver:
         # currently this is only used to combine swing cancellation with user inputs.
         self.input_velocities[key] = velocity
         total_velocity = np.sum([self.input_velocities[k] for k in self.active_set], axis=0)
+        speed = np.linalg.norm(total_velocity)
+        uvec  = total_velocity / speed
 
         anchor_positions = np.zeros((4,3))
         for a in self.anchors:

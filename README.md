@@ -11,13 +11,22 @@ Purchase assembled robots or kits at [neufangled.com](https://neufangled.com)
 Linux (python 3.11 or later)
 
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
-    python -m virtualenv venv
+    python3 -m virtualenv venv
+    source venv/bin/activate
     pip install "nf_robot[host]"
 
 Start headless robot controller in LAN-only mode.
 The particular robot details will be read from/saved to bedroom.conf
 
     stringman-headless --config=bedroom.conf
+
+### Minimum system specs
+
+At least 8 cores and 8GB of ram.
+In order to perform local inference, some kind of pytorch accelertion is necessary.
+Mini PC's or laptops based on the Ryzen 7 7840HS are probably about the cheapest machines that can run stringman's motion controller since it has an NPU that can be used to accelerate pytorch. A mac mini is also a viable option.
+
+Otherwise, any gaming PC is usually more than enough.
 
 ## Installation of Robot Control Panel (developers)
 
