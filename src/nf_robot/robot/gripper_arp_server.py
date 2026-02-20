@@ -133,15 +133,8 @@ class GripperArpServer(RobotComponentServer):
         except EOFError: # corruption
             os.remove('offsets.pickle')
 
-    def readOtherSensors(self):
-        # 1.35 ms to read data from both motors with two synchronous calls
-        t = time.time()
-        finger_data = self.motors.get_feedback(FINGER)
+    def getWristAngle(self):
         wrist_data = self.motors.get_feedback(WRIST)
-
-        finger_angle = remap(finger_data['position'], self.finger_open_pos, self.finger_closed_pos, -90, 90)
-        pressure_v = remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
-
         # motor only reports it's position within one revolution.
         # even though you can command multi turns from it.
         # return a value between 0 and 1080, which is the same range we accept commands in.
@@ -157,12 +150,20 @@ class GripperArpServer(RobotComponentServer):
         # Subtracting that shortest-path error from the desired angle aligns 
         # the multi-turn value with the motor's actual physical orientation.
         wrist_angle = self.desired_wrist_angle - error
-        #Clamp to 0-1080 range
+        # Clamp to 0-1080 range
         wrist_angle = clamp(wrist_angle, 0, 1080)
+        return wrist_data, wrist_angle
 
-        # Todo, we could return these directly, or go ahead and estimate the swing parameters from them here and return those, either is fine
-        # mpu.acceleration
-        # mpu.gyro
+    def getFingerAngle(self):
+        finger_data, finger_angle = self.motors.get_feedback(FINGER)
+        finger_angle = remap(finger_data['position'], self.finger_open_pos, self.finger_closed_pos, -90, 90)
+        finger_data, finger_angle
+
+    def readOtherSensors(self):
+        t = time.time()
+        finger_data, finger_angle = self.getFingerAngle()
+        wrist_data, wrist_angle = self.getWristAngle()
+        pressure_v = remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
 
         self.update['grip_sensors'] = {
             'time': t,
@@ -201,6 +202,11 @@ class GripperArpServer(RobotComponentServer):
         return [umtask]
 
     async def updateMotors(self):
+        # runs at startup of server
+        # initialize with current positions to prevent sudden moves
+        _, self.desired_wrist_angle = self.getWristAngle()
+        _, self.desired_finger_angle = self.getFingerAngle()
+
         while self.run_server:
             now = time.time()
 
