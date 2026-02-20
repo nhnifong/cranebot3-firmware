@@ -129,6 +129,8 @@ class RobotComponentServer:
                         self.rpicam_process.kill()
                     except (ProcessLookupError, AttributeError):
                         pass
+                    if self.rpicam_process is None:
+                        return
                     return await self.rpicam_process.wait()
 
     async def run_rpicam_vid(self):

@@ -94,6 +94,9 @@ class GripperArpServer(RobotComponentServer):
 
         self.desired_finger_angle = 0
         self.desired_wrist_angle = 0
+        
+        self.last_simple_wrist_angle = None
+        self.unrolled_wrist_angle = 0
             
         self.desired_finger_speed = 0
         self.desired_wrist_speed = 0
@@ -128,36 +131,40 @@ class GripperArpServer(RobotComponentServer):
                 d = json.load(f)
                 self.finger_open_pos = d['finger_open_pos']
                 self.finger_closed_pos = d['finger_closed_pos']
+                self.saved_unrolled_wrist_angle = d.get('unrolled_wrist_angle', 0)
+                self.saved_finger_angle = d.get('finger_angle', 0)
         except FileNotFoundError:
             pass
-        except EOFError: # corruption
-            os.remove('offsets.pickle')
+        except EOFError:
+            os.remove('arp_gripper_state.json')
 
     def getWristAngle(self):
-        wrist_data = self.motors.get_feedback(WRIST)
         # motor only reports it's position within one revolution.
         # even though you can command multi turns from it.
         # return a value between 0 and 1080, which is the same range we accept commands in.
         # 540 is the neutral position.
-        # the only way to relate this measurement to an absolute multi turn position is to reference our last command.
+        wrist_data = self.motors.get_feedback(WRIST)
+        simple_angle = wrist_data['position'] / STEPS_PER_REV * 360
 
-        # Convert raw data to 0-360 degrees
-        simple_angle = wrist_data['position'] / 4096 * 360
-        # Calculate the difference between where we want to be and where the motor says it is
-        # within a single revolution context.
-        # gives the shortest distance to the target.
-        error = (simple_angle - (self.desired_wrist_angle % 360) + 180) % 360 - 180
-        # Subtracting that shortest-path error from the desired angle aligns 
-        # the multi-turn value with the motor's actual physical orientation.
-        wrist_angle = self.desired_wrist_angle - error
-        # Clamp to 0-1080 range
-        wrist_angle = clamp(wrist_angle, 0, 1080)
-        return wrist_data, wrist_angle
+        # Anchor continuous tracking to the motor's actual physical position at boot
+        if self.last_simple_wrist_angle is None:
+            self.last_simple_wrist_angle = simple_angle
+            
+            # Assume the physical joint moved less than half a turn while powered off
+            # to mathematically reconstruct the continuous multi-turn angle from the saved state
+            error = (simple_angle - self.saved_unrolled_wrist_angle + 180) % 360 - 180
+            self.unrolled_wrist_angle = self.saved_unrolled_wrist_angle + error
+
+        # Accumulate the shortest-path delta between consecutive readings to track multi-turn rotations
+        self.unrolled_wrist_angle += (simple_angle - self.last_simple_wrist_angle + 180) % 360 - 180
+        self.last_simple_wrist_angle = simple_angle
+
+        return wrist_data, clamp(self.unrolled_wrist_angle, 0, 1080)
 
     def getFingerAngle(self):
-        finger_data, finger_angle = self.motors.get_feedback(FINGER)
+        finger_data = self.motors.get_feedback(FINGER)
         finger_angle = remap(finger_data['position'], self.finger_open_pos, self.finger_closed_pos, -90, 90)
-        finger_data, finger_angle
+        return finger_data, finger_angle
 
     def readOtherSensors(self):
         t = time.time()
@@ -203,9 +210,16 @@ class GripperArpServer(RobotComponentServer):
 
     async def updateMotors(self):
         # runs at startup of server
+        self.motors.torque_enable(FINGER, True)
+        self.motors.torque_enable(WRIST, True)
+
         # initialize with current positions to prevent sudden moves
         _, self.desired_wrist_angle = self.getWristAngle()
         _, self.desired_finger_angle = self.getFingerAngle()
+
+        logging.info(f'wrist angle at startup = {self.desired_wrist_angle}')
+        
+        last_movement_time = time.time()
 
         while self.run_server:
             now = time.time()
@@ -228,8 +242,25 @@ class GripperArpServer(RobotComponentServer):
                 self.motors.set_position(FINGER, target_pos)
 
             if wrist_before != self.desired_wrist_angle:
-                target_pos = self.desired_wrist_angle / 360 * 4096
+                target_pos = self.desired_wrist_angle / 360 * STEPS_PER_REV
                 self.motors.set_position(WRIST, target_pos)
+            
+            # Record time logic for tracking inactivity to save layout state
+            if finger_before != self.desired_finger_angle or wrist_before != self.desired_wrist_angle:
+                last_movement_time = now
+            elif now - last_movement_time > 1.0:
+                # Triggers exactly once per stop since properties sync immediately after write
+                if self.unrolled_wrist_angle != self.saved_unrolled_wrist_angle or self.desired_finger_angle != self.saved_finger_angle:
+                    self.saved_unrolled_wrist_angle = self.unrolled_wrist_angle
+                    self.saved_finger_angle = self.desired_finger_angle
+                    
+                    with open('arp_gripper_state.json', 'w') as f:
+                        json.dump({
+                            'finger_open_pos': getattr(self, 'finger_open_pos', 0),
+                            'finger_closed_pos': getattr(self, 'finger_closed_pos', 0),
+                            'unrolled_wrist_angle': self.saved_unrolled_wrist_angle,
+                            'finger_angle': self.saved_finger_angle
+                        }, f)
             
             await asyncio.sleep(DT)
 
