@@ -285,8 +285,8 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, R_imu_
 
     h, w = frame.shape[:2]
 
-    # Physics Rotation (World -> Camera)
     R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
+
     r_imu = Rotation.from_quat(quat)
     R_world_to_imu = r_imu.as_matrix().T
     
@@ -339,3 +339,76 @@ def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, R_imu_
     H = saved_matrices['K_new'] @ R_relative @ R_fix @ np.linalg.inv(saved_matrices['starting_K'])
 
     return cv2.warpPerspective(frame, H, SF_TARGET_SHAPE, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
+
+def stabilize_frame_2(frame, r_tilt_vec, camera_cal, R_gripper_to_cam, room_spin=0, range_dist=None, cam_offset_mm=(0, -38.9), cam_tilt_deg=0):
+    """
+    Warp a video frame to a stationary, centered perspective using local tilt data.
+    
+    Args:
+        frame: Input image.
+        r_tilt_vec: Gripper tilt as a Rodriguez vector (3x1 or 1x3) representing 
+                    rotation from 'level' to current local orientation.
+        camera_cal: Camera calibration object.
+        R_gripper_to_cam: Matrix transforming coordinates from gripper frame to camera frame.
+        room_spin: Z-axis rotation in radians to align the stabilized image with the room.
+        range_dist: Distance from camera to floor (meters).
+        cam_offset_mm: (x, y) Vector from camera lens to rotation axis center in mm.
+        cam_tilt_deg: Static camera pitch angle relative to the gripper in degrees.
+    """
+
+    if 'K_new' not in saved_matrices:
+        saved_matrices['starting_K'], saved_matrices['K_new'] = gripper_stabilized_cal(camera_cal)
+
+    h, w = frame.shape[:2]
+
+    # Convert the Rodriguez vector to a rotation matrix representing the gripper's tilt.
+    # We invert it (.T) because we want the transformation that 'un-tilts' the gripper 
+    # back to the world/level frame.
+    R_gripper_tilt = Rotation.from_rotvec(r_tilt_vec.flatten()).as_matrix()
+    R_untilt_gripper = R_gripper_tilt.T
+
+    # Map the 'un-tilting' rotation into the camera's frame of reference.
+    # Logic: Camera -> Gripper -> Un-tilt Gripper -> Gripper -> Camera
+    R_untilt_cam = R_gripper_to_cam @ R_untilt_gripper @ R_gripper_to_cam.T
+
+    # Apply room_spin to align the level camera frame with the room's Z-axis.
+    R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
+    R_relative = R_room_spin @ R_untilt_cam
+
+    R_fix = np.eye(3)
+    
+    if range_dist is not None:
+        # Calculate the projection of the rotation center onto the floor to keep the 
+        # view centered on the ground contact point rather than the optical center.
+        off_x, off_y = np.array(cam_offset_mm) / 1000.0
+        
+        # Point on floor relative to an un-tilted camera.
+        P_untilted = np.array([off_x, off_y, range_dist])
+        
+        # Adjust the point based on the physical mounting pitch of the camera.
+        r_pitch = Rotation.from_euler('x', cam_tilt_deg, degrees=True)
+        P_tilted = r_pitch.apply(P_untilted)
+        
+        K = saved_matrices['starting_K']
+        # Project the physical offset into pixel space to find the 'target' center.
+        target_u_px = K[0, 0] * (P_tilted[0] / P_tilted[2]) + K[0, 2]
+        target_v_px = K[1, 1] * (P_tilted[1] / P_tilted[2]) + K[1, 2]
+        
+        # Helper expects normalized UV coordinates where V is bottom-up (0 to 1).
+        R_fix = get_rotation_to_center_ray(
+            K, 
+            target_u_px / w, 
+            1.0 - (target_v_px / h), 
+            (w, h)
+        )
+
+    # Construct the final homography. 
+    # Order: K_inv (to rays) -> R_fix (re-center) -> R_relative (un-tilt/spin) -> K_new (re-project).
+    H = saved_matrices['K_new'] @ R_relative @ R_fix @ np.linalg.inv(saved_matrices['starting_K'])
+
+    return cv2.warpPerspective(
+        frame, 
+        H, 
+        SF_TARGET_SHAPE, 
+        borderMode=cv2.BORDER_REPLICATE
+    )

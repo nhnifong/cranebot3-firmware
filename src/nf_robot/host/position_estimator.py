@@ -524,7 +524,8 @@ class Positioner2:
             ])
 
         elif self.gripper_type == 'arp':
-            rotvec = Rotation.from_euler('xyz', [0, 0, 0], degrees=True).as_rotvec()
+            # rotvec = Rotation.from_euler('xyz', [0, 0, 0], degrees=True).as_rotvec()
+            rotvec = self.ob.gripper_client.get_gripper_rvec()
             self.grip_pose = compose_poses([
                 (rotvec, self.gant_pos),
                 (np.zeros(3), np.array([0,0,-model_constants.arp_pole_length], dtype=float)),

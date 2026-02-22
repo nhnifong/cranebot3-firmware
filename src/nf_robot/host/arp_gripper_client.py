@@ -9,7 +9,7 @@ from nf_robot.host.anchor_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common
-from nf_robot.common.cv_common import SF_INPUT_SHAPE, stabilize_frame
+from nf_robot.common.cv_common import SF_INPUT_SHAPE, stabilize_frame_2
 
 """
 "Arpeggio" is the codename of the 2nd revision of the Stringman gripper
@@ -27,13 +27,14 @@ They are related by a chain of poses from the gantry tags, through the wrist rot
 """
 
 R_imu_to_cam = np.array([
-    [-1, 0,  0],
-    [0,  0, -1],
-    [0, -1,  0]
+    [1, 0,  0],
+    [0,  -1, 0],
+    [0,  0,  1]
 ])
 
-# omega is the constant angular frequency of the 53cm pendulum.
-OMEGA = np.sqrt(9.81 / 0.53)
+# omega is the constant angular frequency of the pendulum. Effectuve length from pivot to center of gripper mass is 0.4526 meters
+LENGTH = 0.4526
+OMEGA = np.sqrt(9.81 / LENGTH)
 SWING_CANCEL_GAIN = -0.1
 
 def rotate_vector(vec, rad):
@@ -140,26 +141,46 @@ class ArpeggioGripperClient(ComponentClient):
     async def send_config(self):
         pass
 
+    def get_gripper_rvec(self, timestamp=None):
+        """
+        Calculates the rotation of the gripper in its local frame of reference
+        at a specific timestamp, not counting the wrist.
+        """
+        if timestamp is None:
+            projected_state = self.gripper_swing_model
+        else:
+            # Calculate how much the phase has evolved between the model's last update and the requested timestamp.
+            dt = timestamp - self.swing_model_ts
+            angle = OMEGA * dt
+            c, s = np.cos(angle), np.sin(angle)
+            # Project the state matrix to the target timestamp using a rotation matrix.
+            # This allows us to find the A*sin and A*cos components at that exact moment.
+            projected_state = self.gripper_swing_model @ np.array([[c, -s], [s, c]])
+        
+        # In a harmonic oscillator, displacement is the integral of velocity.
+        # For a model where Col 0 is Velocity (A*sin), the displacement is -A/omega * cos.
+        # This corresponds to the negative of the phase tracker (Col 1) divided by omega.
+        theta_x = projected_state[0, 1] / OMEGA
+        theta_y = projected_state[1, 1] / OMEGA
+        return np.array([theta_x, theta_y, 0])
+
     def process_frame(self, frame_to_encode):
         # stabilize and resize for centering network input
         temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
-        fudge_latency =  0.3
-        try:
-            gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
-        except IndexError:
-            gripper_quat = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True).as_quat()
+        # magic numbers determined experimentally to stabilize the image
+        fudge_latency = 0.28
+        fudge_amplitude = 1.55
+        time_of_rotation = self.last_frame_cap_time - fudge_latency
 
-        # how should we spin the frame around the room z axis so that room +Y is up
-        if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
-            # roomspin = 15/180*np.pi
-            roomspin = 0
-        else:
-            # undo the rotation added by the wrist joint
-            wrist = self.datastore.winch_line_record.getClosest(self.last_frame_cap_time - fudge_latency)[1]
-            roomspin = wrist / 180 * np.pi
-            # then undro the rotation that the room would appear to have at the wrist's zero position
-            roomspin += self.config.gripper.frame_room_spin
+        # rotate around z by wrist
+        roomspin = self.datastore.winch_line_record.getClosest(time_of_rotation)[1] / 180 * np.pi
+        if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
+            # undo the rotation that the room would appear to have at the wrist's 540 position
+            roomspin = roomspin + self.config.gripper.frame_room_spin - np.pi
+
+        # get gripper's tilt in its local frame of reference
+        rotvec = self.get_gripper_rvec(timestamp=time_of_rotation) * fudge_amplitude
 
         range_to_object = self.datastore.range_record.getLast()[1]
-        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal_wide, R_imu_to_cam, roomspin,
+        return stabilize_frame_2(temp_image, rotvec, self.config.camera_cal_wide, R_imu_to_cam, roomspin,
             range_dist=range_to_object, cam_offset_mm=(0, 41.97), cam_tilt_deg=-4.67) # next model would be 4.67 degrees
