@@ -171,7 +171,7 @@ class AsyncObserver:
         self.time_last_grip_sensors_retain_key = 0
 
         # dict of vectors representing last velocities commanded by different subsystems. all keys in active_set are summard
-        self.input_velocities = {}
+        self.input_velocities = {'default': np.zeros(3)}
         self.active_set = set(['default'])
 
     async def send_setup_telemetry(self):
