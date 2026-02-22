@@ -495,6 +495,9 @@ class Positioner2:
         """Estimate attributes of the gripper that depend on its IMU reading"""
 
         if self.gripper_type == 'pilot':
+            # the position of the pilot gripper is determined by using the IMU to count vertical crossings
+            # and fitting swing parameters to it with self.swing_est.
+
             last_imu = self.datastore.imu_quat.getLast()
 
             ts = last_imu[0]
@@ -524,7 +527,13 @@ class Positioner2:
             ])
 
         elif self.gripper_type == 'arp':
-            rotvec = Rotation.from_euler('xyz', [0, 0, 0], degrees=True).as_rotvec()
+            # The arpeggio gripper fits X and Y anglular velocity to a sine observer onboard
+            # then ships the model parameters to us at a regular interval.
+            # the pose math lives in the client
+            if self.ob.gripper_client is not None:
+                rotvec = self.ob.gripper_client.get_gripper_rvec()
+            else:
+                rotvec = Rotation.from_euler('xyz', [0, 0, 0], degrees=True).as_rotvec()
             self.grip_pose = compose_poses([
                 (rotvec, self.gant_pos),
                 (np.zeros(3), np.array([0,0,-model_constants.arp_pole_length], dtype=float)),

@@ -784,7 +784,7 @@ class AsyncObserver:
 
                 if isinstance(self.gripper_client, ArpeggioGripperClient):
                     # measurement must be taken at the wrist's zero point
-                    asyncio.create_task(self.gripper_client.send_commands({'set_wrist_angle': 540}))
+                    asyncio.create_task(self.gripper_client.send_commands({'set_wrist_angle': 0}))
                     # wait till within 1 degree of target or up to 10 seconds
                     actual_wrist = 100
                     end_time = time.time() + 10
@@ -822,8 +822,8 @@ class AsyncObserver:
                 euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
                 print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
                 roomspin = euler_rot[0]
-                # if isinstance(self.gripper_client, ArpeggioGripperClient):
-                roomspin+=np.pi
+                if isinstance(self.gripper_client, RaspiGripperClient):
+                    roomspin+=np.pi
                 self.config.gripper.frame_room_spin = roomspin
                 self.config.has_been_calibrated = True
                 save_config(self.config, self.config_path)

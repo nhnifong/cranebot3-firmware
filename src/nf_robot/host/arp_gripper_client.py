@@ -27,13 +27,14 @@ They are related by a chain of poses from the gantry tags, through the wrist rot
 """
 
 R_imu_to_cam = np.array([
-    [-1, 0,  0],
-    [0,  0, -1],
-    [0, -1,  0]
+    [1, 0,  0],
+    [0,  1, 0],
+    [0, 0,  1]
 ])
 
-# omega is the constant angular frequency of the 53cm pendulum.
-OMEGA = np.sqrt(9.81 / 0.53)
+# omega is the constant angular frequency of the pendulum. Effectuve length from pivot to center of gripper mass is 0.4526 meters
+LENGTH = 0.4526
+OMEGA = np.sqrt(9.81 / LENGTH)
 SWING_CANCEL_GAIN = -0.1
 
 def rotate_vector(vec, rad):
@@ -55,6 +56,10 @@ class ArpeggioGripperClient(ComponentClient):
         self.anchor_num = None
         self.pe = pe
         self.park_pose_relative_to_camera = None
+
+        # The state matrix representing the sin curves being fitted to angular velocity measurements.
+        # Row 0: X-axis swing, Row 1: Y-axis swing.
+        # Col 0: Velocity (Sine component), Col 1: Phase tracker (Cosine component).
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
 
@@ -131,6 +136,32 @@ class ArpeggioGripperClient(ComponentClient):
         imu_to_room_z = wrist / 180 * np.pi + self.config.gripper.frame_room_spin - np.pi/2
         return rotate_vector(vel, -imu_to_room_z)
 
+    def get_gripper_rvec(self):
+        """
+        Calculates the current 6-DOF pose (rvec, tvec) of the gripper.
+        Uses the observer state to infer angular displacement from angular velocity.
+        """
+        # In a simple harmonic oscillator, velocity leads displacement by 90 degrees.
+        # Since state[:, 0] is velocity (A*sin(phi)), the displacement (theta) is 
+        # the integral: -A/omega * cos(phi), which corresponds to -state[:, 1] / omega.
+        theta_x = -self.gripper_swing_model[0, 1] / OMEGA
+        theta_y = -self.gripper_swing_model[1, 1] / OMEGA
+        
+        # Retrieve total Z-rotation in radians (pendulum tilt + wrist orientation)
+        wrist = self.datastore.winch_line_record.getLast()[1]
+        if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
+            roomspin = 0
+        else:
+            # additional spin that has to be done from the wrist's 540 position to align with the origin.
+            roomspin = self.config.gripper.frame_room_spin
+        total_rot_rad = roomspin
+        # total_rot_rad = wrist / 180 * np.pi + roomspin - np.pi/2
+        
+        # Rodriguez vector (rvec): For small angles, this is approximately [rot_x, rot_y, rot_z].
+        rvec = np.array([theta_x, theta_y, total_rot_rad])
+        # print(Rotation.from_rotvec(rvec, degrees=False).as_euler('xyz', degrees=True))
+        return rvec
+
     def handle_detections(self, detections, timestamp):
         """
         handle a list of tag detections from the pool
@@ -145,21 +176,11 @@ class ArpeggioGripperClient(ComponentClient):
         temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
         fudge_latency =  0.3
         try:
-            gripper_quat = self.datastore.imu_quat.getClosest(self.last_frame_cap_time - fudge_latency)[1:]
+            gripper_quat = Rotation.from_rotvec(self.get_gripper_rvec(), degrees=False).as_quat()
         except IndexError:
+            print('unable to determine gripper rotation')
             gripper_quat = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True).as_quat()
 
-        # how should we spin the frame around the room z axis so that room +Y is up
-        if self.calibrating_room_spin or self.config.gripper.frame_room_spin is None:
-            # roomspin = 15/180*np.pi
-            roomspin = 0
-        else:
-            # undo the rotation added by the wrist joint
-            wrist = self.datastore.winch_line_record.getClosest(self.last_frame_cap_time - fudge_latency)[1]
-            roomspin = wrist / 180 * np.pi
-            # then undro the rotation that the room would appear to have at the wrist's zero position
-            roomspin += self.config.gripper.frame_room_spin
-
         range_to_object = self.datastore.range_record.getLast()[1]
-        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal_wide, R_imu_to_cam, roomspin,
+        return stabilize_frame(temp_image, gripper_quat, self.config.camera_cal_wide, R_imu_to_cam, 0,
             range_dist=range_to_object, cam_offset_mm=(0, 41.97), cam_tilt_deg=-4.67) # next model would be 4.67 degrees
