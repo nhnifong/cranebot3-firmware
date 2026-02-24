@@ -2017,13 +2017,14 @@ class AsyncObserver:
         OPEN = -50
         CLOSED = 90
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        FLOOR_GRIPPER_HEIGHT = 0.20 # distance above floor (gripper origin) when grasp should be started
+        FLOOR_GRIPPER_HEIGHT = 0.1 # distance above floor (gripper origin) when grasp should be started
+        RANGE_ITEM = 0.05 # range to item below which grip should be started
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.06
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 5.00 # final adjustment to lateral speed
+        LAT_SPEED_ADJUSTMENT = 50.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 4.0
 
@@ -2049,7 +2050,7 @@ class AsyncObserver:
                     # for small objects, we don't want to, we can't get that low, the fingers would touch the floor and the object
                     # would still be a few cm away from the rangefinder. 
 
-                    if gripper_height < FLOOR_GRIPPER_HEIGHT:
+                    if range_to_target < RANGE_ITEM or gripper_height < FLOOR_GRIPPER_HEIGHT:
                         print(f'Reached target at height {gripper_height} and range {range_to_target}')
                         break
 
@@ -2109,6 +2110,7 @@ class AsyncObserver:
                 print('close gripper')
                 finger_angle = OPEN
                 end_time = time.time() + PRESSURE_SENSE_WAIT
+                self.pe.finger_pressure_rising.clear()
                 while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and finger_angle < CLOSED:
                     finger_angle += 2.5
                     await self.gripper_client.send_commands({'set_finger_angle': finger_angle})
