@@ -108,9 +108,9 @@ then at this repo's root, build the module. Artifacts will be in dist/
 
     python3 -m build
 
-Upload to Pypi
+Upload the particular version you just built to PyPi
 
-    python3 -m twine upload dist/*
+    python3 -m twine upload dist/nf_robot-3.4.4*
 
 ### QA scripts
 

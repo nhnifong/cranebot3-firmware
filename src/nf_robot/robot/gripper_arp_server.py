@@ -21,17 +21,6 @@ from nf_robot.common.util import remap, clamp
 """ Server for Arpeggio Gripper
 
 Hardware is a Raspberry pi zero 2W, Camera Module 3 Wide, and Stringman Gripper Hat.
-
-the gripper hat has a a2d converter with connected finger pressure sensor,
-BNO085 imu on the i2c bus,
-a half duplex smart servo comm circuit with two connected st3215 servos
-laser rangefinder
-
-the rpi zero 2w's hardware i2c bus may not play nice with the bno085
-but this can be avoided with a software i2c bus
-dtparam=i2c_arm=off
-dtoverlay=i2c-gpio,bus=1,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=2
-
 """
 
 FINGER = 1
@@ -69,8 +58,6 @@ class GripperArpServer(RobotComponentServer):
         ]
 
         i2c = busio.I2C(board.SCL, board.SDA)
-        # self.imu = BNO08X_I2C(i2c, address=0x4b)
-        # self.imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
 
         self.rangefinder = VL53L1X(i2c)
         model_id, module_type, mask_rev = self.rangefinder.model_info
@@ -158,7 +145,6 @@ class GripperArpServer(RobotComponentServer):
         # Accumulate the shortest-path delta between consecutive readings to track multi-turn rotations
         self.unrolled_wrist_angle += (simple_angle - self.last_simple_wrist_angle + 180) % 360 - 180
         self.last_simple_wrist_angle = simple_angle
-
         return wrist_data, clamp(self.unrolled_wrist_angle, 0, 1080)
 
     def getFingerAngle(self):
@@ -248,12 +234,13 @@ class GripperArpServer(RobotComponentServer):
             # Record time logic for tracking inactivity to save layout state
             if finger_before != self.desired_finger_angle or wrist_before != self.desired_wrist_angle:
                 last_movement_time = now
-            elif now - last_movement_time > 1.0:
+            elif now - last_movement_time > 5.0:
                 # Triggers exactly once per stop since properties sync immediately after write
                 if self.unrolled_wrist_angle != self.saved_unrolled_wrist_angle or self.desired_finger_angle != self.saved_finger_angle:
                     self.saved_unrolled_wrist_angle = self.unrolled_wrist_angle
                     self.saved_finger_angle = self.desired_finger_angle
-                    
+                    logging.info(f'saving unrolled wrist angle of {self.saved_unrolled_wrist_angle}')
+
                     with open('arp_gripper_state.json', 'w') as f:
                         json.dump({
                             'finger_open_pos': getattr(self, 'finger_open_pos', 0),

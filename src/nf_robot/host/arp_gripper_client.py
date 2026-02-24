@@ -74,7 +74,7 @@ class ArpeggioGripperClient(ComponentClient):
             if 'quat' in gs:
                 self.datastore.imu_quat.insert(np.concatenate([np.array([timestamp], dtype=float), gs['quat']]))
 
-            distance_measurement = 0
+            distance_measurement = self.datastore.range_record.getLast()[1]
             if 'range' in gs:
                 distance_measurement = float(gs['range'])
                 self.datastore.range_record.insert([timestamp, distance_measurement])
@@ -176,7 +176,8 @@ class ArpeggioGripperClient(ComponentClient):
         roomspin = self.datastore.winch_line_record.getClosest(time_of_rotation)[1] / 180 * np.pi
         if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
             # undo the rotation that the room would appear to have at the wrist's 540 position
-            roomspin = roomspin + self.config.gripper.frame_room_spin - np.pi
+            extra = self.config.gripper.frame_room_spin - np.pi
+            roomspin = roomspin + extra
 
         # get gripper's tilt in its local frame of reference
         rotvec = self.get_gripper_rvec(timestamp=time_of_rotation) * fudge_amplitude
