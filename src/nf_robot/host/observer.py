@@ -114,7 +114,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, auto_start=False) -> None:
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
@@ -173,6 +173,9 @@ class AsyncObserver:
         # dict of vectors representing last velocities commanded by different subsystems. all keys in active_set are summard
         self.input_velocities = {'default': np.zeros(3)}
         self.active_set = set(['default'])
+
+        self.run_ai = run_ai
+        self.auto_start = auto_start
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -908,8 +911,10 @@ class AsyncObserver:
             # move over saddle.
             # TODO Since the saddle can be high and close to the wall, we may want to slow down signifigantly before we get there.
             self.gantry_goal_pos = tonp(self.config.park_data.pos)
-            print('seek_gantry_goal')
             await self.seek_gantry_goal()
+
+            # return early. park centering needs more work
+            return
 
             # center over target marker while moving down
 
@@ -946,7 +951,24 @@ class AsyncObserver:
 
     async def unpark(self):
         """ Unpark from the saddle and move clear of it. """
-        pass
+        try:
+            # assume gantry position based on parking location since we probably can't see it
+            self.pe.kf.reset_biases(tonp(self.config.park_data.pos))
+            # move up 10cm
+            await self.move_direction_speed(np.array([0, 0, 0.1]))
+            await asyncio.sleep(1.0)
+            # move towards center of room.
+            self.gantry_goal_pos = tonp([0,0,1])
+            task = asyncio.create_task(self.seek_gantry_goal())
+            # but don't go all the way, just stop after a bit
+            await asyncio.sleep(2.5)
+            await self.clear_gantry_goal()
+            await self.half_auto_calibration()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+            await self.clear_gantry_goal()
 
     async def run_swing_cancellation(self):
         if not isinstance(self.gripper_client, ArpeggioGripperClient):
@@ -1056,19 +1078,38 @@ class AsyncObserver:
                 self.gripper_client = None
             del self.bot_clients[key]
 
+    async def startup_action(self, event):
+        """A sequence of actions to run when all components are discovered."""
+        # wait for event
+        await event.wait()
+
+        # unpark if we were parked.
+        r = await self.unpark()
+        # start pick_and_place_loop
+        r = await self.pick_and_place_loop()
+        # pick and place finishes if no targets appear during a timeout
+        # park robot
+        r = await self.park()
+        # disconnect all components and set flag that they should not reconnect unless control input is received.
+
     async def keep_robot_connected(self):
         """
         Keep a connection open to every robot component known in the config
         components are keyed by their service name which is the first three components of info.name, eg
         123.cranebot-anchor-service.2ccf67bc3fc4
         """
-        # sleep until there is something to do
+        # If config is empty (first time startup) sleep until zeroconf discovers robot components
         while not config_has_any_address(self.config) and self.run_command_loop:
             await asyncio.sleep(0.5)
+
+        ready = asyncio.Event()
+        if self.auto_start:
+            s_task = asyncio.create_task(self.startup_action(ready))
 
         while self.run_command_loop:
             # is everything up the way we want it to be?
             if len([b for b in self.bot_clients.values() if b.connected])==5:
+                ready.set()
                 await asyncio.sleep(0.5)
                 continue # All websocket connections are up.
 
@@ -1084,6 +1125,11 @@ class AsyncObserver:
                     self.connection_tasks[key] = asyncio.create_task(self.connect_component(key))
 
             await asyncio.sleep(0.5)
+
+        if self.auto_start:
+            s_task.cancel()
+            r = await s_task
+
         for task in self.connection_tasks.values():
             task.cancel()
         result = await asyncio.gather(*self.connection_tasks.values())
@@ -1270,8 +1316,9 @@ class AsyncObserver:
                 return
 
             # perception model
-            # task remains in a lightweight sleep until frames arrive.
-            asyncio.create_task(self.run_perception())
+            if self.run_ai:
+                # task remains in a lightweight sleep until frames arrive.
+                asyncio.create_task(self.run_perception())
 
             if self.telemetry_env is None:
                 # start a websocket server to accept incoming connection from local UI
@@ -1796,7 +1843,9 @@ class AsyncObserver:
         RELAXED_OPEN = 0 # enough to drop something
         DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
         LOOP_DELAY = 0.5
+        END_LOOP_TIMEOUT = 10
 
+        target_seen_t = time.time()
         try:
             gtask = None
             while self.run_command_loop:
@@ -1810,13 +1859,15 @@ class AsyncObserver:
 
                 next_target = self.target_queue.get_best_target()
                 if next_target is None:
-                    print('no target was found, be still')
                     if gtask is not None:
                         gtask.cancel()
                     self.gantry_goal_pos = None
-                    # TODO park on the saddle.
+                    if time.time() > target_seen_t + END_LOOP_TIMEOUT:
+                        print('Looks clean enough to me!')
+                        return
                     await asyncio.sleep(LOOP_DELAY)
                     continue
+                target_seen_t = time.time()
 
                 print(f'selected target {next_target.id} with dropoff {next_target.dropoff}')
 
@@ -2161,12 +2212,6 @@ class AsyncObserver:
                 print('no resized frame available from gripper')
             await asyncio.sleep(1)
 
-def start_observation(terminate_with_ui=False, config_path='configuration.json'):
-    """Entry point to be used when starting this from main.py with multiprocessing."""
-    ob = AsyncObserver(terminate_with_ui, config_path, telemetry_env=None)
-    asyncio.run(ob.main())
-    # set ob.run_command_loop = False or kill or connect to websocket and send shutdown command
-
 def main():
     """
     Run stringman in a headless manner
@@ -2187,10 +2232,12 @@ def main():
             default=None,
             help="The cloud telemetry server to connect to (choices: local, staging, production) Used in development only. The default is None, which allows local connections on port 4245 only"
         )
+    parser.add_argument("--no_ai", help="Disable model execution. Use with small hardware. Only manual movement will be possible")
+    parser.add_argument("--auto_start", help="Automatically unpark and start cleaning when all components connect")
     args = parser.parse_args()
 
     async def run_async():
-        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env)
+        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start)
 
         # Idempotent stop trigger
         def stop():
