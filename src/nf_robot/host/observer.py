@@ -898,7 +898,7 @@ class AsyncObserver:
 
             # open gripper
             print('open gripper')
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -85}))
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
 
             # if this is a pilot gripper, reel in winch line to 20cm.
             if isinstance(self.gripper_client, RaspiGripperClient):
@@ -912,7 +912,10 @@ class AsyncObserver:
             await self.seek_gantry_goal()
 
             # center over target marker while moving down
+
+            # observed position of park marker relative to camera
             pos = np.array([0,0,1])
+            
             # since we want this dead center and as close to the camera as possible, we just take the 
             # magnitude of the position vector in the marker pose.
             timeout = time.time()+10
