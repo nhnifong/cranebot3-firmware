@@ -32,7 +32,7 @@ from lerobot.policies.utils import get_device_from_parameters
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.utils.control_utils import predict_action
 
-IMG_RES = 384
+IMG_RES = 224
 
 @RobotConfig.register_subclass("stringman")
 @dataclass
@@ -58,8 +58,8 @@ class StringmanLeRobot(Robot):
         self.vision_only = config.vision_only
         self.websocket = None
         
-        self.last_commanded_vel = common.Vec3(0,0,0)
-        self.last_observed_vel = common.Vec3(0,0,0)
+        self.last_commanded_vel = np.zeros(3, dtype=float)
+        self.last_observed_vel = np.zeros(3, dtype=float)
         
         self.last_wrist_speed = 0.0
         self.last_finger_speed = 0.0
@@ -164,7 +164,7 @@ class StringmanLeRobot(Robot):
             self._handle_episode_control(item.episode_control)
 
     def _handle_pos_estimate(self, item: telemetry.PositionEstimate):
-        self.last_observed_vel = item.gantry_velocity
+        self.last_observed_vel = tonp(item.gantry_velocity)
         
         if item.gripper_pose:
             if item.gripper_pose.position:
@@ -363,7 +363,7 @@ class StringmanLeRobot(Robot):
     def get_last_action(self):
         # Create the training labels by extrapolating the current teleoperated velocity 
         # into a spatial waypoint for the P-controller to chase
-        lookahead_dt = 0.1 
+        lookahead_dt = 0.5
         rel_pos = self.last_gripper_pos - self.episode_start_pos
         
         return {
@@ -567,9 +567,9 @@ def eval_episode(
         if display_data:
             # We must build a faux state to visualize the commanded action properly in rerun
             action_echo = {
-                "vel_x": float(robot.last_commanded_vel.x),
-                "vel_y": float(robot.last_commanded_vel.y),
-                "vel_z": float(robot.last_commanded_vel.z),
+                "vel_x": float(robot.last_commanded_vel[0]),
+                "vel_y": float(robot.last_commanded_vel[1]),
+                "vel_z": float(robot.last_commanded_vel[2]),
                 "wrist_speed": float(robot.last_wrist_speed),
                 "finger_speed": float(robot.last_finger_speed),
             }
@@ -607,7 +607,7 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, vision_only=Fa
     print(f"Loading policy config from {policy_repo_id}...")
     cfg = PreTrainedConfig.from_pretrained(policy_repo_id)
     cfg.pretrained_path = policy_repo_id 
-    cfg.temporal_ensemble_coeff = 0.01
+    # cfg.temporal_ensemble_coeff = 0.01
 
     print("Instantiating processors and policy...")
     preprocessor, postprocessor = make_pre_post_processors(
@@ -633,10 +633,10 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, vision_only=Fa
     while robot.is_connected:
         time.sleep(0.03)
         
-        if not events['eval_start']:
+        if not events['episode_start_or_complete']:
             continue
         
-        events['eval_start'] = False
+        events['episode_start_or_complete'] = False
         log_say("Starting Evaluation Episode")
         
         eval_episode(
