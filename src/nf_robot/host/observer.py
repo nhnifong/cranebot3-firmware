@@ -1870,8 +1870,8 @@ class AsyncObserver:
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
-        GANTRY_HEIGHT_OVER_TARGET = 1.0
-        GANTRY_HEIGHT_OVER_DROPOFF = 0.9
+        GANTRY_HEIGHT_OVER_TARGET = 0.9
+        GANTRY_HEIGHT_OVER_DROPOFF = 1.0
         RELAXED_OPEN = 0 # enough to drop something
         DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
         LOOP_DELAY = 0.5
@@ -1981,9 +1981,9 @@ class AsyncObserver:
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
         if isinstance(self.gripper_client, ArpeggioGripperClient):
-            await self.arp_execute_grasp()
+            return await self.arp_execute_grasp()
         else:
-            await self.pilot_execute_grasp()
+            return await self.pilot_execute_grasp()
 
     async def pilot_execute_grasp(self):
         OPEN = -30
@@ -2074,7 +2074,8 @@ class AsyncObserver:
                     await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), PRESSURE_SENSE_WAIT)
                     self.pe.finger_pressure_rising.clear()
                 except TimeoutError:
-                    print('did not detect a successful hold, open and go back up high enough to get a view of the object')
+                    pressure = self.datastore.finger.getLast()[2]
+                    print(f'did not detect a successful hold. pressure=({pressure}) open and go back up high enough to get a view of the object')
                     # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
                     await self.move_direction_speed([0,0,0.06])
                     await asyncio.sleep(1.0)
@@ -2100,7 +2101,7 @@ class AsyncObserver:
         OPEN = -50
         CLOSED = 90
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        FLOOR_GRIPPER_HEIGHT = 0.1 # distance above floor (gripper origin) when grasp should be started
+        FLOOR_GRIPPER_HEIGHT = 0.11 # distance above floor (gripper origin) when grasp should be started
         RANGE_ITEM = 0.05 # range to item below which grip should be started
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.06
@@ -2195,7 +2196,7 @@ class AsyncObserver:
                 end_time = time.time() + PRESSURE_SENSE_WAIT
                 self.pe.finger_pressure_rising.clear()
                 while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and finger_angle < CLOSED:
-                    finger_angle += 2.5
+                    finger_angle += 4.0
                     await self.gripper_client.send_commands({'set_finger_angle': finger_angle})
                     await asyncio.sleep(0.03)
 
