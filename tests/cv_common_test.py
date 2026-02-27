@@ -116,3 +116,50 @@ class TestProjectionAndDetection(unittest.TestCase):
         for detection in result:
             seen.add(detection['n'])
         self.assertTrue('origin' in seen)
+
+class TestWallNormal(unittest.TestCase):
+    def setUp(self):
+        # A simple 10x10 square room
+        self.square_anchors = [
+            np.array([0, 0, 3]),
+            np.array([10, 0, 3]),
+            np.array([10, 10, 3]),
+            np.array([0, 10, 3])
+        ]
+
+    def test_center_closest_to_bottom_wall(self):
+        # Point is at (5, 1), closest to the wall between (0,0) and (10,0)
+        p = np.array([5, 1, 1])
+        normal = get_inward_wall_normal(p, self.square_anchors)
+        # Normal should point straight "up" (+Y direction)
+        np.testing.assert_array_almost_equal(normal, [0, 1])
+
+    def test_closest_to_right_wall(self):
+        # Point is at (9, 5), closest to the wall between (10,0) and (10,10)
+        p = np.array([9, 5, 1])
+        normal = get_inward_wall_normal(p, self.square_anchors)
+        # Normal should point "left" (-X direction)
+        np.testing.assert_array_almost_equal(normal, [-1, 0])
+
+    def test_non_rectangular_quad(self):
+        # A diamond/skewed shape
+        skewed_anchors = [
+            np.array([0, 0, 0]),
+            np.array([10, 2, 0]),
+            np.array([8, 10, 0]),
+            np.array([-2, 8, 0])
+        ]
+        p = np.array([9, 6, 0]) # Near the right-slanted wall
+        normal = get_inward_wall_normal(p, skewed_anchors)
+        
+        # Ensure it's a unit vector
+        self.assertAlmostEqual(np.linalg.norm(normal), 1.0)
+        # Ensure it's not strictly axial
+        self.assertTrue(normal[0] != 0 and normal[1] != 0)
+
+    def test_outside_right_wall(self):
+        # Point is at (15, 5), outside to the right
+        p = np.array([15, 5, 0])
+        normal = get_inward_wall_normal(p, self.square_anchors)
+        # Should point "left" (-X)
+        np.testing.assert_array_almost_equal(normal, [-1, 0])

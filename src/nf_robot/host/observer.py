@@ -953,15 +953,20 @@ class AsyncObserver:
         """ Unpark from the saddle and move clear of it. """
         try:
             # assume gantry position based on parking location since we probably can't see it
-            self.pe.kf.reset_biases(tonp(self.config.park_data.pos))
+            parkpos = tonp(self.config.park_data.pos)
+            self.pe.kf.reset_biases(parkpos)
             # move up 10cm
             await self.move_direction_speed(np.array([0, 0, 0.1]))
             await asyncio.sleep(1.0)
+            # move directly away from the wall.
+            away = get_inward_wall_normal(parkpos, self.pe.anchor_points)
+            await self.move_direction_speed(np.array([away[0], away[1], 0]), 0.15)
+            await asyncio.sleep(2.0)
             # move towards center of room.
-            self.gantry_goal_pos = tonp([0,0,1])
+            self.gantry_goal_pos = np.array([0,0,1])
             task = asyncio.create_task(self.seek_gantry_goal())
             # but don't go all the way, just stop after a bit
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(5.0)
             await self.clear_gantry_goal()
             await self.half_auto_calibration()
         except asyncio.CancelledError:
@@ -1544,19 +1549,46 @@ class AsyncObserver:
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
         This is a motion task
         """
-        GOAL_PROXIMITY_M = 0.07 # meters
-        GANTRY_SPEED_MPS = 0.24 # m/s
-        LOOP_SLEEP_S = 0.2 # seconds
+        GOAL_PROXIMITY_M = 0.07 
+        MAX_SPEED = 0.24 # GANTRY_SPEED_MPS
+        ACCEL = 0.15     # m/s^2
+        LOOP_SLEEP_S = 0.1
+
+        # Calculate the distance needed to stop from MAX_SPEED: d = v^2 / (2a)
+        braking_distance = (MAX_SPEED**2) / (2 * ACCEL)
+        start_pos = self.pe.gant_pos
+        current_speed = 0.0
         
         try:
             self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.gantry_goal_pos), name='gantry_goal_marker'))
+            dist_to_goal = 10
             while self.gantry_goal_pos is not None:
                 vector = self.gantry_goal_pos - self.pe.gant_pos
-                dist = np.linalg.norm(vector)
-                if dist < GOAL_PROXIMITY_M:
+                dist_to_goal = np.linalg.norm(vector)
+                dist_from_start = np.linalg.norm(self.pe.gant_pos - start_pos)
+
+                if dist_to_goal < GOAL_PROXIMITY_M:
                     break
-                vector = vector / dist
-                result = await self.move_direction_speed(vector, GANTRY_SPEED_MPS, self.pe.gant_pos)
+
+                # Calculate target speed based on distance from start (ramp up) 
+                # and distance to goal (ramp down)
+                # v = sqrt(2 * a * d)
+                speed_ramp_up = np.sqrt(2 * ACCEL * max(dist_from_start, 0.01))
+                speed_ramp_down = np.sqrt(2 * ACCEL * dist_to_goal)
+                
+                # Target speed is the lowest of the ramps or the max allowable speed
+                target_speed = min(speed_ramp_up, speed_ramp_down, MAX_SPEED)
+                
+                # Smoothly interpolate current_speed toward target_speed to prevent 
+                # instantaneous velocity jumps between loop iterations
+                step = ACCEL * LOOP_SLEEP_S
+                if current_speed < target_speed:
+                    current_speed = min(current_speed + step, target_speed)
+                else:
+                    current_speed = max(current_speed - step, target_speed)
+
+                # Normalize vector and command movement
+                await self.move_direction_speed(vector / dist_to_goal, current_speed, self.pe.gant_pos)
                 await asyncio.sleep(LOOP_SLEEP_S)
         except asyncio.CancelledError:
             raise
@@ -1619,7 +1651,7 @@ class AsyncObserver:
         # This makes the behavior consistent across installations of different heights.
         hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
         speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.55)
-        # speed = min(speed, speed_limit)
+        speed = min(speed, speed_limit)
 
         # when a very small speed is provided, clamp it to zero.
         if speed < 0.005:
@@ -1869,8 +1901,6 @@ class AsyncObserver:
                     continue
                 target_seen_t = time.time()
 
-                print(f'selected target {next_target.id} with dropoff {next_target.dropoff}')
-
                 self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
                 self.send_tq_to_ui()
 
@@ -1880,14 +1910,12 @@ class AsyncObserver:
 
                 # gantry is now heading for a position over next_target
                 # wait only one second for it to arrive.
-                try:
-                    if gtask is None or gtask.done():
-                        gtask = asyncio.create_task(self.seek_gantry_goal())
-                    await asyncio.wait_for(gtask, 1)
-                    print('arrived at target')
-                except TimeoutError:
+                if gtask is None or gtask.done():
+                    gtask = asyncio.create_task(self.seek_gantry_goal())
+                done, pending = await asyncio.wait([gtask], timeout=1)
+                
+                if gtask in pending:
                     # if doesn't arrive in one second, run target selection again since a better one might have appeared or the user might have put one in their queue
-                    print('did not arrive yet')
                     self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
                     continue
 
@@ -1945,6 +1973,7 @@ class AsyncObserver:
             raise
         finally:
             if gtask is not None:
+                print('pick and place cancelled')
                 gtask.cancel()
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()

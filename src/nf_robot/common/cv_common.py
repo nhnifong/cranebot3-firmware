@@ -412,3 +412,49 @@ def stabilize_frame_2(frame, r_tilt_vec, camera_cal, R_gripper_to_cam, room_spin
         SF_TARGET_SHAPE, 
         borderMode=cv2.BORDER_REPLICATE
     )
+
+
+def get_inward_wall_normal(p: np.ndarray, anchor_points: list[np.ndarray]) -> np.ndarray:
+    """
+    Given a point p and 4 anchor points (3D), finds the closest 2D wall segment
+    and returns a unit vector pointing toward the interior.
+    """
+    # Project anchors and point to 2D (XY plane)
+    anchors_2d = [a[:2] for a in anchor_points]
+    p_2d = p[:2]
+    
+    closest_dist = float('inf')
+    best_normal = np.array([0.0, 0.0])
+    
+    # Calculate centroid to determine "inward" direction
+    centroid = np.mean(anchors_2d, axis=0)
+
+    for i in range(len(anchors_2d)):
+        p1 = anchors_2d[i]
+        p2 = anchors_2d[(i + 1) % len(anchors_2d)]
+        
+        wall_vec = p2 - p1
+        wall_len_sq = np.dot(wall_vec, wall_vec)
+        
+        # Project p onto the finite segment p1-p2
+        # t is the interpolation factor [0, 1]
+        t = max(0, min(1, np.dot(p_2d - p1, wall_vec) / wall_len_sq))
+        closest_point_on_wall = p1 + t * wall_vec
+        
+        dist = np.linalg.norm(p_2d - closest_point_on_wall)
+        
+        if dist < closest_dist:
+            closest_dist = dist
+            # Standard 2D normal: (dx, dy) -> (-dy, dx)
+            normal = np.array([-(p2[1] - p1[1]), p2[0] - p1[0]])
+            
+            # Ensure it points toward the centroid
+            to_interior = centroid - closest_point_on_wall
+            if np.dot(normal, to_interior) < 0:
+                normal = -normal
+                
+            # Normalize for a unit direction
+            mag = np.linalg.norm(normal)
+            best_normal = normal / mag if mag > 0 else normal
+            
+    return best_normal
