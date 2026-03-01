@@ -126,6 +126,20 @@ class ParkData(betterproto2.Message):
     for the pilot gripper, assumes that the winch line is reeled in to 10cm.
     """
 
+    marker_resting: "_common__.Pose | None" = betterproto2.field(
+        2, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    pose of parking marker relative to room-stabilized gripper camera while resting on parking hook
+    """
+
+    marker_over: "_common__.Pose | None" = betterproto2.field(
+        3, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    pose of parking marker relative to room-stabilized gripper camera while hanging 10cm over parking hook
+    """
+
 
 default_message_pool.register_message("nf.config", "ParkData", ParkData)
 

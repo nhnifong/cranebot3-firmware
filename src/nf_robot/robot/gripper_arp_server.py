@@ -121,7 +121,7 @@ class GripperArpServer(RobotComponentServer):
                 self.saved_unrolled_wrist_angle = d.get('unrolled_wrist_angle', 0)
                 self.saved_finger_angle = d.get('finger_angle', 0)
         except FileNotFoundError:
-            pass
+            logging.error('Calibration data not found. run qa-gripper-arp')
         except EOFError:
             os.remove('arp_gripper_state.json')
 

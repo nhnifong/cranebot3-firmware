@@ -872,22 +872,35 @@ class AsyncObserver:
         print(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
 
     async def record_park(self):
-        """Record that the current location is above the parking saddle and save in the config"""
+        """Record that the current location is reseted in the parking saddle and save in the config"""
         # confirm we can actually see the parking target in the grip camera
-        # if self.gripper_client.park_pose_relative_to_camera is not None:
-        self.config.park_data.pos = fromnp(self.pe.gant_pos)
-        save_config(self.config, self.config_path)
-        self.send_ui(named_position=telemetry.NamedObjectPosition(
-            name = 'parking_location',
-            position = self.config.park_data.pos
-        ))
-        self.send_ui(pop_message=telemetry.Popup(
-            message=f'Saved parking location as {self.config.park_data.pos}'
-        ))
-        # else:
-        #     self.send_ui(pop_message=telemetry.Popup(
-        #         message=f'Cannot save location. The parking saddle is not in view of the gripper camera. Move 10cm above the parking saddle or improve lighting.'
-        #     ))
+        if self.gripper_client.park_pose_relative_to_camera is not None:
+            self.config.park_data.pos = fromnp(self.pe.gant_pos)
+
+            # save marker pose in rested position
+            self.config.park_data.marker_resting = poseTupleToProto(self.gripper_client.park_pose_relative_to_camera)
+
+            # move up 10cm
+            await self.move_direction_speed(np.array([0, 0, 0.1]))
+            await asyncio.sleep(1.0)
+            self.slow_stop_all_spools()
+            await asyncio.sleep(1.0)
+
+            # save marker pose while 10cm over target
+            self.config.park_data.marker_over = poseTupleToProto(self.gripper_client.park_pose_relative_to_camera)
+
+            save_config(self.config, self.config_path)
+            self.send_ui(named_position=telemetry.NamedObjectPosition(
+                name = 'parking_location',
+                position = self.config.park_data.pos
+            ))
+            self.send_ui(pop_message=telemetry.Popup(
+                message=f'Saved parking location as {self.config.park_data.pos}'
+            ))
+        else:
+            self.send_ui(pop_message=telemetry.Popup(
+                message=f'Cannot save location. The parking saddle is not in view of the gripper camera. Move 10cm above the parking saddle or improve lighting.'
+            ))
 
 
     async def park(self):
@@ -908,21 +921,16 @@ class AsyncObserver:
                 print('adjust winch line')
                 asyncio.create_task(self.gripper_client.send_commands({'length_set': 0.2}))
 
-            # move over saddle.
-            # TODO Since the saddle can be high and close to the wall, we may want to slow down signifigantly before we get there.
-            self.gantry_goal_pos = tonp(self.config.park_data.pos)
+            # move to position above and in front of saddle,
+            parkpos + tonp(self.config.park_data.pos)
+            away = get_inward_wall_normal(parkpos, self.pe.anchor_points) * 0.2
+            self.gantry_goal_pos = parkpos + np.array([away[0], away[1], 0.1]) + 
             await self.seek_gantry_goal()
 
-            # return early. park centering needs more work
-            return
+            # use observed position of park marker to adjust slowly towards
+            # the position 10cm above parking.
 
-            # center over target marker while moving down
-
-            # observed position of park marker relative to camera
             pos = np.array([0,0,1])
-            
-            # since we want this dead center and as close to the camera as possible, we just take the 
-            # magnitude of the position vector in the marker pose.
             timeout = time.time()+10
             while np.linalg.norm(pos) > 0.02 and time.time() < timeout:
                 move = np.array([pos[0]/4, pos[1]/4, -0.06])
