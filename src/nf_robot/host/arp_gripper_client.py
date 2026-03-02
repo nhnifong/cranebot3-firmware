@@ -137,6 +137,14 @@ class ArpeggioGripperClient(ComponentClient):
         handle a list of tag detections from the pool
         """
         self.stat.pending_frames_in_pool -= 1
+        self.stat.detection_count += len(detections)
+        # setting to none every frame so we know whether it's in frame by looking at this variable
+        self.park_pose_relative_to_camera = None
+
+        for detection in detections:
+            if detection['n'] == 'park_target':
+                # pose of parking target relative to gripper camera
+                self.park_pose_relative_to_camera = detection['p']
 
     async def send_config(self):
         pass

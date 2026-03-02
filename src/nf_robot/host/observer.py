@@ -838,7 +838,7 @@ class AsyncObserver:
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
                 name="Calibration",
-                current_action="Calibration completed. Sanity check anchor positions before moving. Cards can be removed from the floor.",
+                current_action="Calibration completed. Sanity check anchor positions before moving. Cards can be removed from the floor. Parking location must be re-recorded.",
             ))
 
         except asyncio.CancelledError:
@@ -889,6 +889,12 @@ class AsyncObserver:
             # save marker pose while 10cm over target
             self.config.park_data.marker_over = poseTupleToProto(self.gripper_client.park_pose_relative_to_camera)
 
+            # move down 10cm
+            await self.move_direction_speed(np.array([0, 0, -0.1]))
+            await asyncio.sleep(1.0)
+            self.slow_stop_all_spools()
+            await asyncio.sleep(1.0)
+
             save_config(self.config, self.config_path)
             self.send_ui(named_position=telemetry.NamedObjectPosition(
                 name = 'parking_location',
@@ -899,54 +905,85 @@ class AsyncObserver:
             ))
         else:
             self.send_ui(pop_message=telemetry.Popup(
-                message=f'Cannot save location. The parking saddle is not in view of the gripper camera. Move 10cm above the parking saddle or improve lighting.'
+                message=f'Cannot save location here. The parking marker is not in view of the gripper camera.'
             ))
 
 
     async def park(self):
-        """
-        Ensure we aren't holding an item and park on the saddle for safe power down. 
-        """
+        """ Park on the parking hook for safe power down. """
+        FINGER_ANGLE_FOR_CLEAR_VIEW = -30
+        STAGING_HOR_OFFSET_M = 0.2
+        STAGING_VER_OFFSET_M = 0.0
+        LOOK_FOR_MARKER_INITIAL_S = 2.0
+        HOMING_TIME_S = 16.0
+        MARKER_DIST_CLOSE_ENOUGH = 0.16
+        HOMING_SPEED_MPS = 0.02
+        HOMING_LOOP_DELAY = 0.1
+
+        if isinstance(self.gripper_client, RaspiGripperClient):
+            print("self park unsupported in pilot gripper")
+            return
+
         try:
-            # check if holding something, if so warn user and do not proceed.
+            # TODO check if holding something, if so warn user and do not proceed.
 
             # perform half cal.
 
             # open gripper
-            print('open gripper')
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
-
-            # if this is a pilot gripper, reel in winch line to 20cm.
-            if isinstance(self.gripper_client, RaspiGripperClient):
-                print('adjust winch line')
-                asyncio.create_task(self.gripper_client.send_commands({'length_set': 0.2}))
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': FINGER_ANGLE_FOR_CLEAR_VIEW}))
 
             # move to position above and in front of saddle,
-            parkpos + tonp(self.config.park_data.pos)
-            away = get_inward_wall_normal(parkpos, self.pe.anchor_points) * 0.2
-            self.gantry_goal_pos = parkpos + np.array([away[0], away[1], 0.1]) + 
+            parkpos = tonp(self.config.park_data.pos)
+            away = get_inward_wall_normal(parkpos, self.pe.anchor_points) * STAGING_HOR_OFFSET_M
+            self.gantry_goal_pos = parkpos + np.array([away[0], away[1], STAGING_VER_OFFSET_M])
             await self.seek_gantry_goal()
 
-            # use observed position of park marker to adjust slowly towards
-            # the position 10cm above parking.
+            # TODO rotate to face wall because camera is under nose and it lets us see a little further.
 
-            pos = np.array([0,0,1])
-            timeout = time.time()+10
-            while np.linalg.norm(pos) > 0.02 and time.time() < timeout:
-                move = np.array([pos[0]/4, pos[1]/4, -0.06])
-                await self.move_direction_speed(move)
-                print(f'distance {np.linalg.norm(pos)} and moving {move}')
-                await asyncio.sleep(0.1)
+            # use observed position of park marker to adjust slowly towards
+            # the park-over position
+            park_over_pose = poseProtoToTuple(self.config.park_data.marker_over)
+            over = park_over_pose[1]
+
+
+            pos = None
+            timeout = time.time()+LOOK_FOR_MARKER_INITIAL_S
+            while time.time() < timeout:
                 try:
                     pos = self.gripper_client.park_pose_relative_to_camera[1]
+                    direction = pos - over
+                    # since the gripper's camera is stabilized and rotated into the room frame of reference
+                    # a vector pointing from the desired position of the marker to the current position in image space
+                    # is the same direction we'd need to move the gantry in the room.
+                    break
+                except TypeError:
+                    continue
+            if pos is None:
+                print("can't see parking tag right now")
+                return
+
+            timeout = time.time()+HOMING_TIME_S
+            while np.linalg.norm(direction) > MARKER_DIST_CLOSE_ENOUGH  and time.time() < timeout:
+                move = np.array([direction[1], direction[0], 0])
+                await self.move_direction_speed(move, HOMING_SPEED_MPS)
+                print(f'distance {np.linalg.norm(direction)} and moving {move}')
+                await asyncio.sleep(HOMING_LOOP_DELAY)
+                try:
+                    pos = self.gripper_client.park_pose_relative_to_camera[1]
+                    direction = pos - over
                 except TypeError:
                     pass
-
-
+                
             self.slow_stop_all_spools()
 
-            # close gripper enough to clamp onto saddle
-            print('close fingers')
+            # move down 20cm
+            # TODO or until any two lines become slack
+            # or until laser range reaches same distance recorded during set park
+            await self.move_direction_speed(np.array([0, 0, -0.1]))
+            await asyncio.sleep(2.0)
+            self.slow_stop_all_spools()
+
+            # for looks, as well as to let me know it finished.
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': 10}))
 
         except asyncio.CancelledError:
@@ -1879,7 +1916,7 @@ class AsyncObserver:
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
         GANTRY_HEIGHT_OVER_TARGET = 0.9
-        GANTRY_HEIGHT_OVER_DROPOFF = 1.0
+        GANTRY_HEIGHT_OVER_DROPOFF = 0.9
         RELAXED_OPEN = 0 # enough to drop something
         DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
         LOOP_DELAY = 0.5
@@ -2109,7 +2146,7 @@ class AsyncObserver:
         OPEN = -50
         CLOSED = 90
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        FLOOR_GRIPPER_HEIGHT = 0.11 # distance above floor (gripper origin) when grasp should be started
+        FLOOR_GRIPPER_HEIGHT = 0.12 # distance above floor (gripper origin) when grasp should be started
         RANGE_ITEM = 0.05 # range to item below which grip should be started
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.06
@@ -2204,12 +2241,18 @@ class AsyncObserver:
                 end_time = time.time() + PRESSURE_SENSE_WAIT
                 self.pe.finger_pressure_rising.clear()
                 while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and finger_angle < CLOSED:
-                    finger_angle += 4.0
+                    if finger_angle < 70:
+                        finger_angle += 2.0
+                    else:
+                        finger_angle += 1.0
                     await self.gripper_client.send_commands({'set_finger_angle': finger_angle})
+                    # pressure = self.datastore.finger.getLast()[2]
+                    # print(f'pressure {pressure}')
                     await asyncio.sleep(0.03)
 
                 if not self.pe.finger_pressure_rising.is_set():
-                    print('did not detect a successful hold, open and go back up high enough to get a view of the object')
+                    pressure = self.datastore.finger.getLast()[2]
+                    print(f'did not detect a successful hold, pressure=({pressure}) open and go back up high enough to get a view of the object')
                     # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
                     await self.move_direction_speed([0,0,0.06])
                     await asyncio.sleep(1.0)
