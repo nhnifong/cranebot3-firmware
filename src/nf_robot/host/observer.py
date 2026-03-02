@@ -270,6 +270,8 @@ class AsyncObserver:
         print(f'Debug action "{item.action}"')
         if item.action == "swingc":
             r = await self.invoke_motion_task(self.run_swing_cancellation())
+        elif item.action == "spincal":
+            r = await self.calibrate_spin()
 
     def _handle_delete_target(self, item: control.DeleteTarget):
         if item.target_id is not None:
@@ -780,59 +782,8 @@ class AsyncObserver:
             # there should be some swing when we get there. 
             await self.half_auto_calibration()
 
-            if self.gripper_client.last_frame_resized is not None:
-                # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
-                # when the stabilization is done without any existing z rotation term
-                self.gripper_client.calibrating_room_spin = True
-
-                if isinstance(self.gripper_client, ArpeggioGripperClient):
-                    # measurement must be taken at the wrist's zero point
-                    asyncio.create_task(self.gripper_client.send_commands({'set_wrist_angle': 540}))
-                    # wait till within 1 degree of target or up to 10 seconds
-                    actual_wrist = 100
-                    end_time = time.time() + 10
-                    print('Moved wrist to 540, waiting to reach position')
-                    while abs(actual_wrist) > 2.0 and time.time() < end_time:
-                        await asyncio.sleep(0.2)
-                        actual_wrist = self.datastore.winch_line_record.getLast()[1]
-                    print(f'actual_wrist position = {actual_wrist}')
-
-                # detect origin card
-                try:
-                    await asyncio.sleep(0.1)
-                    origin_card_pose = [None]
-                    def special_handle_det(timestamp, detections):
-                        for d in detections:
-                            if d['n'] == 'origin':
-                                # a pose of the origin card in the frame of reference of the stabilized gripper cam.
-                                origin_card_pose[0] = d['p']
-                    end_time = time.time() + 10
-                    print('Collecting observations of origin card from gripper cam')
-                    while origin_card_pose[0] is None and time.time() < end_time:
-                        async_result = self.pool.apply_async(
-                            locate_markers_gripper,
-                            (self.gripper_client.last_frame_resized, self.config.camera_cal_wide),
-                                # self.config.camera_cal if isinstance(self.gripper_client, RaspiGripperClient) else self.config.camera_cal_wide),
-                            callback=partial(special_handle_det, time.time()))
-                        detections = async_result.get(timeout=5)
-                        print(f'detections {detections}')
-                except Exception as e:
-                    print(e)
-                    raise
-                if origin_card_pose[0] is None:
-                    raise RuntimeError("Gripper camera was unable to make any observations of the origin card.")
-                
-                euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
-                print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
-                roomspin = euler_rot[0]
-                # if isinstance(self.gripper_client, ArpeggioGripperClient):
-                roomspin+=np.pi
-                self.config.gripper.frame_room_spin = roomspin
-                self.config.has_been_calibrated = True
-                save_config(self.config, self.config_path)
-                self.gripper_client.calibrating_room_spin = False
-            else:
-                print('Warning, cannot calibrate the relationship between gripper IMU zero angle and camera if gripper camera is offline!')
+            # roomspin
+            await self.calibrate_spin()
 
             # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -855,6 +806,65 @@ class AsyncObserver:
                 current_action=str(e),
             ))
             raise
+
+    async def calibrate_spin(self):
+        """Calibration of the relationship between the wrist and the room frame of reference.
+        Must be done over the origin card.
+        """
+        if self.gripper_client.last_frame_resized is None:
+            print('Warning, cannot calibrate the relationship between gripper zero angle and camera if gripper camera is offline!')
+            return None
+
+        # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
+        # when the stabilization is done without any existing z rotation term
+        self.gripper_client.calibrating_room_spin = True
+
+        if isinstance(self.gripper_client, ArpeggioGripperClient):
+            # measurement must be taken at the wrist's zero point
+            asyncio.create_task(self.gripper_client.send_commands({'set_wrist_angle': 540}))
+            # wait till within 1 degree of target or up to 10 seconds
+            actual_wrist = 100
+            end_time = time.time() + 10
+            print('Moved wrist to 540, waiting to reach position')
+            while abs(actual_wrist) > 2.0 and time.time() < end_time:
+                await asyncio.sleep(0.2)
+                actual_wrist = self.datastore.winch_line_record.getLast()[1]
+            print(f'actual_wrist position = {actual_wrist}')
+
+        # detect origin card
+        try:
+            await asyncio.sleep(0.1)
+            origin_card_pose = [None]
+            def special_handle_det(timestamp, detections):
+                for d in detections:
+                    if d['n'] == 'origin':
+                        # a pose of the origin card in the frame of reference of the stabilized gripper cam.
+                        origin_card_pose[0] = d['p']
+            end_time = time.time() + 10
+            print('Collecting observations of origin card from gripper cam')
+            while origin_card_pose[0] is None and time.time() < end_time:
+                async_result = self.pool.apply_async(
+                    locate_markers_gripper,
+                    (self.gripper_client.last_frame_resized, self.config.camera_cal_wide),
+                        # self.config.camera_cal if isinstance(self.gripper_client, RaspiGripperClient) else self.config.camera_cal_wide),
+                    callback=partial(special_handle_det, time.time()))
+                detections = async_result.get(timeout=5)
+                print(f'detections {detections}')
+        except Exception as e:
+            print(e)
+            raise
+        if origin_card_pose[0] is None:
+            raise RuntimeError("Gripper camera was unable to make any observations of the origin card.")
+        
+        euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
+        print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
+        roomspin = euler_rot[0]
+        # if isinstance(self.gripper_client, ArpeggioGripperClient):
+        roomspin+=np.pi
+        self.config.gripper.frame_room_spin = roomspin
+        self.config.has_been_calibrated = True
+        save_config(self.config, self.config_path)
+        self.gripper_client.calibrating_room_spin = False
 
     async def horizontal_line_task(self):
         """
@@ -1922,6 +1932,7 @@ class AsyncObserver:
         LOOP_DELAY = 0.5
         END_LOOP_TIMEOUT = 10
 
+        drop_point = np.zeros(3)
         target_seen_t = time.time()
         try:
             gtask = None
@@ -1950,7 +1961,13 @@ class AsyncObserver:
                 self.send_tq_to_ui()
 
                 # pick Z position for gantry
-                goal_pos = next_target.position + np.array([0, 0, GANTRY_HEIGHT_OVER_TARGET])
+                # if we are too close to the drop point right now, the z position has to be our current z so we don't get hung up on the basket by going down too soon.
+                # otherwise use the normal value
+                if np.linalg.norm(self.pe.gant_pos - (drop_point + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF]))) < 0.5:
+                    z_pos = self.pe.gant_pos[2]
+                else:
+                    z_pos = GANTRY_HEIGHT_OVER_TARGET
+                goal_pos = next_target.position + np.array([0, 0, z_pos])
                 self.gantry_goal_pos = goal_pos
 
                 # gantry is now heading for a position over next_target
@@ -2046,6 +2063,7 @@ class AsyncObserver:
         smooth_grip_angle = self.grip_angle
 
         try:
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
             attempts = 3
             while not self.pe.holding and attempts > 0 and self.run_command_loop:
                 attempts -= 1
@@ -2072,6 +2090,7 @@ class AsyncObserver:
 
                     # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
                     lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
+                    lateral_vector = np.zeros(3)
                     if lat_travel_seconds > 0:
                         # determine which direction we'd have to move laterally to center the object
                         # you get a normalized u,v coordinate in the [-1,1] range
@@ -2156,11 +2175,12 @@ class AsyncObserver:
         LAT_SPEED_ADJUSTMENT = 50.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 4.0
+        NUM_ATTEMPTS = 3
 
         smooth_grip_angle = self.grip_angle
 
         try:
-            attempts = 3
+            attempts = NUM_ATTEMPTS
             while not self.pe.holding and attempts > 0 and self.run_command_loop:
                 attempts -= 1
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
@@ -2267,7 +2287,7 @@ class AsyncObserver:
                 self.pe.finger_pressure_rising.clear()
                 print('Successful grasp')
                 return True
-            print(f'Gave up on grasp after {attempts} attempts. self.pe.holding={self.pe.holding}')
+            print(f'Gave up on grasp after {NUM_ATTEMPTS-attempts} attempts. self.pe.holding={self.pe.holding}')
             return False
 
         except asyncio.CancelledError:
