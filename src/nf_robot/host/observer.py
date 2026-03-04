@@ -2333,8 +2333,8 @@ def main():
             default=None,
             help="The cloud telemetry server to connect to (choices: local, staging, production) Used in development only. The default is None, which allows local connections on port 4245 only"
         )
-    parser.add_argument("--no_ai", help="Disable model execution. Use with small hardware. Only manual movement will be possible")
-    parser.add_argument("--auto_start", help="Automatically unpark and start cleaning when all components connect")
+    parser.add_argument("--no_ai", action="store_true", help="Disable model execution. Use with small hardware. Only manual movement will be possible")
+    parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     args = parser.parse_args()
 
     async def run_async():

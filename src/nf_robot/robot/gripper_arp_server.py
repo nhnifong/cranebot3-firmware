@@ -341,7 +341,6 @@ class GripperArpServer(RobotComponentServer):
         self.time_last_commanded_finger_speed = time.time()
         # Scale the speed to the -1.0 to 1.0 range
         self.finger_cmd = clamp(self.finger_cmd + deg_per_second * DT / 90, -1.0, 1.0)
-        logging.info(f'finger_cmd {self.finger_cmd}')
 
     def setWristSpeed(self, deg_per_second):
         self.time_last_commanded_wrist_speed = time.time()
