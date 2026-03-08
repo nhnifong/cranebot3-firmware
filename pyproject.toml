@@ -55,6 +55,7 @@ pi = [
     "adafruit-circuitpython-mpu6050",
     "RPi.GPIO",
     "pyzbar",
+    "damiao-motor",
 ]
 
 [project.scripts] 

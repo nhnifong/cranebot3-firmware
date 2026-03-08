@@ -30,6 +30,4 @@ run gui
 
     damiao gui
 
-change motor id 1 to 2
-
-    damiao set-motor-id --current 1 --target 2
+In the GUI you must edit the feedback id and receive id and store the parameters to flash and then power cycle the motor for it to really take effect. 
