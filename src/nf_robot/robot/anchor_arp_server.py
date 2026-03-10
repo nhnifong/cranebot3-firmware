@@ -183,7 +183,7 @@ class GripperArpServer(RobotComponentServer):
 
         self.update['grip_sensors'] = {
             'time': t,
-            'fing_v': pressure_v,
+            'fing_v': self.filtered_force, # used to be voltage, now a composite grip force estimate between 0 and 1
             'fing_a': finger_angle,
             'wrist_a': wrist_angle,
         }

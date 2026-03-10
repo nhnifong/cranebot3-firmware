@@ -188,7 +188,8 @@ class ArpeggioGripperClient(ComponentClient):
         roomspin = self.datastore.winch_line_record.getClosest(time_of_rotation)[1] / 180 * np.pi
         if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
             # undo the rotation that the room would appear to have at the wrist's 540 position
-            extra = self.config.gripper.frame_room_spin - np.pi
+            # extra = self.config.gripper.frame_room_spin - np.pi
+            extra = self.config.gripper.frame_room_spin
             roomspin = roomspin + extra
 
         # get gripper's tilt in its local frame of reference
@@ -196,4 +197,4 @@ class ArpeggioGripperClient(ComponentClient):
 
         range_to_object = self.datastore.range_record.getLast()[1]
         return stabilize_frame_2(temp_image, rotvec, self.config.camera_cal_wide, R_imu_to_cam, roomspin,
-            range_dist=range_to_object, cam_offset_mm=(0, 41.97), cam_tilt_deg=-4.67) # next model would be 4.67 degrees
+            range_dist=range_to_object, cam_offset_mm=(0, 41.97), cam_tilt_deg=9.06)
