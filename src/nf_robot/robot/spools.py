@@ -2,7 +2,6 @@ import math
 import asyncio
 import time
 import logging
-import asyncio
 import numpy as np
 
 # values that can be overridden by the controller

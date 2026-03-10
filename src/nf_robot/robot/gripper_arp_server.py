@@ -59,13 +59,13 @@ class GripperArpServer(RobotComponentServer):
 
         self.stream_command = [
             "/usr/bin/rpicam-vid", "-t", "0", "-n",
-            "--width=1920", "--height=1080",
+            "--width=960", "--height=540",
             "-o", "tcp://0.0.0.0:8888?listen=1",
             "--codec", "libav",
             "--libav-format", "mpegts",
             "--autofocus-mode", "continuous",
             "--low-latency",
-            "--bitrate", "2000kbps"
+            "--bitrate", "1800kbps"
         ]
 
         i2c = busio.I2C(board.SCL, board.SDA)
@@ -253,6 +253,9 @@ class GripperArpServer(RobotComponentServer):
             self.desired_wrist_angle  = clamp(self.desired_wrist_angle + self.desired_wrist_speed * DT, 0, 1080)
             if wrist_before != self.desired_wrist_angle:
                 target_pos = self.desired_wrist_angle / 360 * STEPS_PER_REV
+                # TODO figure out what causes the wrist to sometimes rotate a full turn when getting the first command after boot
+                if abs(self.desired_wrist_angle - self.unrolled_wrist_angle) > 90:
+                    logging.warning(f'A large wrist movement occured in one update. finger_before={finger_before} self.last_simple_wrist_angle={self.last_simple_wrist_angle} self.unrolled_wrist_angle={self.unrolled_wrist_angle}')
                 self.motors.set_position(WRIST, target_pos)
 
             finger_before = self.desired_finger_angle

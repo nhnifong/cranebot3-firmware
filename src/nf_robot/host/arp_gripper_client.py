@@ -174,7 +174,11 @@ class ArpeggioGripperClient(ComponentClient):
 
     def process_frame(self, frame_to_encode):
         # stabilize and resize for centering network input
-        temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
+        input_shape = (frame_to_encode.shape[1], frame_to_encode.shape[0])
+        if input_shape != SF_INPUT_SHAPE:
+            temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
+        else:
+            temp_image = frame_to_encode
         # magic numbers determined experimentally to stabilize the image
         fudge_latency = 0.28
         fudge_amplitude = 1.55

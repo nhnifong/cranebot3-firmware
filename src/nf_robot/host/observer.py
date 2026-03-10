@@ -542,7 +542,8 @@ class AsyncObserver:
         SPEED_SUM_THRESHOLD = 0.01 # m/s
         
         complete = False
-        while not complete:
+        timeout = time.time() + 10
+        while not complete and time.time() < timeout:
             await asyncio.sleep(POLL_INTERVAL_S)
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
@@ -2213,6 +2214,7 @@ class AsyncObserver:
 
                     # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
                     lat_travel_seconds = (range_to_target-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
+                    lateral_vector = np.zeros(2)
                     if lat_travel_seconds > 0:
                         # determine which direction we'd have to move laterally to center the object
                         # you get a normalized u,v coordinate in the [-1,1] range

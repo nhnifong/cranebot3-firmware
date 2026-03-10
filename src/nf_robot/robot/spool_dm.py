@@ -1,0 +1,198 @@
+import math
+import asyncio
+import time
+import logging
+import numpy as np
+from damiao_motor import DaMiaoMotor
+
+from nf_robot.robot.spools import SpiralCalculator
+
+
+# values that can be overridden by the controller
+default_conf_dm = {
+    # number of records of length to keep
+    'DATA_LEN': 1000,
+    # maximum acceleration in meters of line per second squared
+    'MAX_ACCEL': 1.6,
+    # sleep delay of tracking loop
+    'LOOP_FREQ_HZ': 50,
+    # measured torque on a motor with orintation 1 and a line that is minimally taught. 
+    'TARGET_TORQUE': -0.1,
+    # default cruise speed in meters/sec for position moves
+    'CRUISE_SPEED': 0.3,
+    # factor controlling how torque is smoothed with ema
+    'SMOOTH_FACTOR': 0.2,
+    # maxiumum allowable speed of line in meter per second
+    'MAX_SAFE_LINE_SPEED': 2.0,
+}
+
+class DamiaoSpoolController:
+    """
+    Spool controller intended for Damiao H-6215 motor
+    return torque instead of a boolean tightness value
+    there is no check tight function.
+    motor is expected to be of type DaMiaoMotor
+    direction is 1 or -1.
+        should be set to 1 for the motor on the right when facing the front of the device.
+        in other words should be 1 when negative motor commands reel in the line.
+    """
+    def __init__(self, motor:DaMiaoMotor, empty_diameter, full_diameter, full_length, config, direction):
+        """
+        Create a controller for a spool of line.
+
+        empty_diameter_mm is the diameter of the spool in millimeters when no line is on it.
+        full_diameter is the diameter in mm of the bulk of wrapped line when full_length meters of line are wrapped.
+        line_capacity_m is the length of line in meters that is attached to this spool.
+            if all of it were reeled in, the object at the end would reach the limit switch, if there is one.
+        """
+        self.motor = motor
+        self.direction = direction
+        self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, gear_ratio, direction)
+
+        self.conf = default_conf_dm
+        self.conf.update(config)
+        
+        # Speed tracking state (meters/sec)
+        self.aim_line_speed = 0
+
+        # Current state
+        self.last_length = 3.0
+        self.last_angle = 0.0
+        self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
+        self.torque_err = 0
+        
+        # Absolute position tracking state
+        self.last_raw_pos = None
+        self.rev_offset = 0.0
+        self.last_angle = 0.0
+
+        # Recording and Loops
+        self.record = []
+        self.run_spool_loop = True
+
+    def _getAbsoluteAngle(self):
+        """Get absolute motor angle in revolutions"""
+
+    def setReferenceLength(self, length):
+        """ Provide an external observation of the current unspooled line length """
+        if self.torque_err > 0:
+            return # gantry position has no relationship to spool zero angle if the line is slack.
+
+        za = self.sc.calc_za_from_length(length, self.last_angle)
+        self.sc.set_zero_angle(za)
+        logging.debug(f'Zero angle estimate={za} revs. current value of {angle}, using reference length {length} m')
+        # this affects the estimated amount of wrapped wire
+        self.meters_per_rev = self.sc.get_unspool_rate(angle)
+
+    def setAimSpeed(self, lineSpeed):
+        """Set the aim speed in meters of line per second.
+        negative values reel line in.
+        """
+        self.aim_line_speed = np.clip(lineSpeed, -self.conf['MAX_SAFE_LINE_SPEED'], self.conf['MAX_SAFE_LINE_SPEED'])
+
+    def popMeasurements(self):
+        """Return up to DATA_LEN measurements. newest at the end."""
+        copy_record = self.record
+        self.record = []
+        return copy_record
+
+    def fastStop(self):
+        # fast stop is permanent.
+        # it causes the trackingloop task to stop,
+        # causing the websocket connection to close
+        self.motor.stop()
+        self.run_spool_loop = False
+
+    def _update_absolute_angle(self, current_raw_rad):
+        """
+        Convert the wrapping motor position (-12.5 to +12.5 rad) into 
+        continuous absolute revolutions.
+        """
+        full_range = 25.0
+        half_range = full_range / 2.0
+
+        if self.last_raw_pos is None:
+            self.last_raw_pos = current_raw_rad
+            return self.rev_offset + (current_raw_rad / (2 * math.pi))
+
+        # We detect a rollover by looking for a massive instantaneous jump.
+        diff = current_raw_rad - self.last_raw_pos
+        
+        if diff > half_range:
+            # Wrapped from negative to positive; subtract the full range to keep it continuous.
+            self.rev_offset -= (full_range / (2 * math.pi))
+        elif diff < -half_range:
+            # Wrapped from positive to negative; add the full range.
+            self.rev_offset += (full_range / (2 * math.pi))
+
+        self.last_raw_pos = current_raw_rad
+        return self.rev_offset + (current_raw_rad / (2 * math.pi))
+
+    def trackingLoop(self):
+        """
+        Constantly try to match the position or speed targets.
+        """
+
+        self.motor.enable()
+        self.motor.ensure_control_mode("MIT")
+        
+        start_time = time.time()
+        smooth_torque = 0
+        smooth_mute = 1
+        twopi = 2*math.pi 
+
+        try:
+
+            while self.run_spool_loop:
+                loop_start = time.time()
+                elapsed = loop_start - start_time
+                
+                # Read feedback from motor. flip if necessary.
+                states = self.motor.get_states()
+                motor_pos = self.direction * states.get('pos', 0.0) # radians from -12 to +12
+                motor_vel = self.direction * states.get('vel', 0.0) # radians per second
+                motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
+                # we could also read status status_code, t_mos, t_rotor (temps)
+
+                # TODO convert to absolute position in revolutions
+                self.last_angle = self._update_absolute_angle(motor_pos)
+                
+                # low pass filter torque
+                sf = self.conf['SMOOTH_FACTOR']
+                smooth_torque = actual_torque * sf + smooth_torque * (1 - sf)
+
+                # calculate line data from motor data
+                self.last_length = self.sc.get_unspooled_length(self.last_angle)
+                self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
+                current_line_speed = motor_vel * 2 * math.pi * self.meters_per_rev
+
+                # accumulate these. parent class will send them on the websocket at it's own rate
+                row = (loop_start, self.last_length, current_line_speed, smooth_torque)
+                self.record.append(row)
+
+                # convert last commanded speed from motion controller in meters per second
+                # to motor velocity in radians per second based on current circumfrence
+                wanted_motor_vel =  self.aim_line_speed / self.meters_per_rev * twopi
+
+                # prevent birdsnest by soft muting velocity when outspooling with no tension
+                self.torque_err = smooth_torque - self.conf['TARGET_TORQUE']
+                mute = 0 if (self.torque_err > 0 and wanted_motor_vel > 0) else 1
+                smooth_mute = mute * sf + smooth_mute * (1 - sf)
+                wanted_motor_vel *= smooth_mute
+                    
+                self.motor.send_cmd_mit(
+                    target_position=0.0,
+                    target_velocity=wanted_motor_vel*self.direction,
+                    stiffness=0.0,
+                    damping=0.5, 
+                    feedforward_torque=self.conf['TARGET_TORQUE']
+                )
+
+                time_to_sleep = 1.0 / self.conf['LOOP_FREQ_HZ'] - (time.time() - loop_start)
+                if time_to_sleep > 0:
+                    time.sleep(time_to_sleep)
+            logging.info(f'Spool tracking loop stopped')
+
+        finally:
+            self.motor.disable()
+

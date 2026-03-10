@@ -308,8 +308,8 @@ class ComponentClient:
         except websockets.exceptions.ConnectionClosedError as e:
             print(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
             self.abnormal_shutdown = True
-        except (OSError, TimeoutError, InvalidURI, InvalidHandshake) as e:
-            print(f"Component server anum={self.anchor_num}: {e}")
+        except (OSError, InvalidURI, TimeoutError, InvalidHandshake) as e:
+            # normal answer when waiting for component to come online
             self.failed_to_connect = True
         finally:
             self.connected = False

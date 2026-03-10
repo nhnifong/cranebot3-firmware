@@ -414,7 +414,9 @@ def label_mode(args):
         
         while True:
             key = cv2.waitKey(10) & 0xFF
-            if key == ord('q'): 
+            if key == ord('q'):
+                cv2.destroyAllWindows()
+                upload_prompt(args)
                 return
             elif key == ord('a'):
                 current_angle = (current_angle - 0.1) % math.pi
