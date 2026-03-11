@@ -134,6 +134,10 @@ message Debug {
   string action = 1;
 }
 
+message SetSwingCancellation {
+  bool enabled = 1;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -147,8 +151,9 @@ message ControlItem {
     AddTargetFromAnchorCam add_cam_target = 7;
     DeleteTarget delete_target = 8;
     Debug debug = 10;
+    SetSwingCancellation set_swing_cancellation = 11;
 
-    // next id = 11
+    // next id = 12
   }
 }
 

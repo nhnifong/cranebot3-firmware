@@ -202,6 +202,10 @@ message OperationProgress {
   string current_action = 3;
 }
 
+message SwingCancellationState {
+  bool enabled = 1;
+}
+
 // A single kind of update that the observer is providing to an external UI
 // Typically about the robot's state such as it's position
 message TelemetryItem {
@@ -223,6 +227,7 @@ message TelemetryItem {
 		nf.common.EpisodeControl episode_control = 16; // Forwarded
 		OperationProgress operation_progress = 17;
 		CommandedGrip last_commanded_grip = 18;
+    SwingCancellationState swing_cancellation_state = 19;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

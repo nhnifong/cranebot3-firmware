@@ -169,13 +169,12 @@ class AsyncObserver:
         self.connection_tasks: dict[str, asyncio.Task] = {}
         self.run_collect_images = False
         self.time_last_grip_sensors_retain_key = 0
-
         # dict of vectors representing last velocities commanded by different subsystems. all keys in active_set are summard
         self.input_velocities = {'default': np.zeros(3)}
         self.active_set = set(['default'])
-
         self.run_ai = run_ai
         self.auto_start = auto_start
+        self.swing_cancellation_task = None
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -266,10 +265,45 @@ class AsyncObserver:
         elif item.debug:
             await self._handle_debug_command(item.debug)
 
+        elif item.set_swing_cancellation:
+            await self._handle_set_swing_cancellation(item.set_swing_cancellation)
+
+    async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
+        if item.enabled:
+            if not isinstance(self.gripper_client, ArpeggioGripperClient):
+                self.send_ui(pop_message=telemetry.Popup(
+                    message=f'Swing cancellation only supported on Arpeggio Gripper'
+                ))
+                return
+            # Does it need to be enabled?
+            if self.swing_cancellation_task is None or self.swing_cancellation_task.done():
+                self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
+        else:
+            # does it need to be disabled?
+            if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
+                self.swing_cancellation_task.cancel()
+
+    async def run_swing_cancellation(self):
+        """ Task which adds swing cancellation inputs. """
+
+        # TODO attempt to measure this. It is the round trip latency between IMU measurements on the grpper and when our inputs move the spools.
+        latency = 0.24
+        try:
+            self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True))
+            self.active_set.add('swingc')
+            while self.run_command_loop:
+                vel2 = self.gripper_client.compute_swing_correction(time.time() + latency)
+                if vel2 is not None:
+                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc')
+                await asyncio.sleep(1/100)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.active_set.remove('swingc')
+            self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False))
+
     async def _handle_debug_command(self, item: control.Debug):
         print(f'Debug action "{item.action}"')
-        if item.action == "swingc":
-            r = await self.invoke_motion_task(self.run_swing_cancellation())
         elif item.action == "spincal":
             r = await self.calibrate_spin()
 
@@ -1031,28 +1065,6 @@ class AsyncObserver:
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
 
-    async def run_swing_cancellation(self):
-        if not isinstance(self.gripper_client, ArpeggioGripperClient):
-            return
-        print('start experimental swing cancellation')
-
-        latency = 0.24
-        try:
-            self.active_set.add('swingc')
-            while self.run_command_loop:
-                vel2 = self.gripper_client.compute_swing_correction(time.time() + latency)
-                if vel2 is not None:
-                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc')
-                await asyncio.sleep(1/100)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self.active_set.remove('swingc')
-            self.slow_stop_all_spools()
-            await self.clear_gantry_goal()
-
-
-
     def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
     ) -> None:
@@ -1419,6 +1431,10 @@ class AsyncObserver:
             tasks.append(self.locate_anchor_task)
         if self.gip_task is not None:
             tasks.append(self.gip_task)
+        if self.swing_cancellation_task is not None:
+            self.swing_cancellation_task.cancel()
+            tasks.append(self.swing_cancellation_task)
+
 
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         try:
