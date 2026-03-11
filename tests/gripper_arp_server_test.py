@@ -4,6 +4,7 @@ Mocks all hardware interfaces to validate internal state machine and safety time
 """
 import pytest
 pytestmark = pytest.mark.pi
+pytest.importorskip("gpiodevice")
 
 import unittest
 from unittest.mock import patch, Mock
