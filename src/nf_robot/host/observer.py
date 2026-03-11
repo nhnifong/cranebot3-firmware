@@ -310,6 +310,13 @@ class AsyncObserver:
         print(f'Debug action "{item.action}"')
         if item.action == "spincal":
             r = await self.calibrate_spin()
+        if item.action == 'fingercal':
+            asyncio.create_task(self.calibrate_finger_servo())
+
+    async def calibrate_finger_servo(self):
+        self.gripper_client.finger_contact_calibration_complete.clear()
+        await asyncio.create_task(self.gripper_client.send_commands({'measure_finger_contact': None}))
+        await asyncio.wait_for(self.gripper_client.finger_contact_calibration_complete.wait(), 20)
 
     def _handle_delete_target(self, item: control.DeleteTarget):
         if item.target_id is not None:
@@ -808,9 +815,7 @@ class AsyncObserver:
                     current_action="Measuring point of finger contact",
                 ))
                 # measure finger contact
-                self.gripper_client.finger_contact_calibration_complete.clear()
-                await asyncio.create_task(self.gripper_client.send_commands({'measure_finger_contact': None}))
-                await asyncio.wait_for(self.gripper_client.finger_contact_calibration_complete.wait(), 20)
+                await self.calibrate_finger_servo()
 
             # open grip enough that we can see an unobstructed view from the palm camera
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -80}))

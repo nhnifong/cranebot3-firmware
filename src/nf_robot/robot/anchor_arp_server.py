@@ -427,7 +427,7 @@ class GripperArpServer(RobotComponentServer):
             data = self.motors.get_feedback(FINGER)
 
             # confirm no pressure on finger pad
-            v = pressure_sensor.voltage
+            v = self.pressure_sensor.voltage
             assert v > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
 
             # slowly close until the fingerpad voltage drops below 2V
@@ -437,7 +437,7 @@ class GripperArpServer(RobotComponentServer):
                 self.motors.set_position(FINGER, pos + rel)
                 rel -= 10
                 await asyncio.sleep(0.05)
-                v = pressure_sensor.voltage
+                v = self.pressure_sensor.voltage
                 data = self.motors.get_feedback(FINGER)
                 load = data["load"]
                 if load < 1000: # ignore load values over 1000, they indicate force in the other direction
@@ -447,8 +447,8 @@ class GripperArpServer(RobotComponentServer):
             self.motors.set_speed(FINGER, 0)
 
             self.finger_closed_pos = self.motors.get_position(FINGER)
-            logging.info(f"Motor encoder position at finger touch = {finger_closed_pos}")
-            self.finger_open_pos = finger_closed_pos + FINGER_TRAVEL_STEPS
+            logging.info(f"Motor encoder position at finger touch = {self.finger_closed_pos}")
+            self.finger_open_pos = self.finger_closed_pos + FINGER_TRAVEL_STEPS
             self.saved_finger_angle = 90 # closed
             with open('arp_gripper_state.json', 'w') as f:
                 json.dump({
