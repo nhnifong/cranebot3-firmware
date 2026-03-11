@@ -136,6 +136,7 @@ message Debug {
 
 message SetSwingCancellation {
   bool enabled = 1;
+  string present = 2; // something must be present other than a boolean with a false value for the message to even exist.
 }
 
 // A single kind of update that a UI, ursina or web, is providing to Observer

@@ -475,6 +475,11 @@ default_message_pool.register_message(
 class SwingCancellationState(betterproto2.Message):
     enabled: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
 
+    present: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    something must be present other than a boolean with a false value for the message to even exist.
+    """
+
 
 default_message_pool.register_message(
     "nf.telemetry", "SwingCancellationState", SwingCancellationState

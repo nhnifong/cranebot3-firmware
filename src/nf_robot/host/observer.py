@@ -211,6 +211,9 @@ class AsyncObserver:
                 # but the observer would go on running, possibly in a bad state.
         except (ConnectionClosedError, ConnectionClosedOK) as e:
             pass
+        # except Exception as e:
+        #     print(e)
+        #     traceback.print_exc()
         finally:
             self.connected_local_clients.remove(websocket)
             if len(self.connected_local_clients) == 0 and self.terminate_with_ui:
@@ -224,7 +227,7 @@ class AsyncObserver:
         # Safety check: Ignore commands meant for other robots
         if batch.robot_id and batch.robot_id != self.config.robot_id:
             pass
-            # print(f'warning: UI is sending commands identified as being for robot {batch.robot_id} to robot {self.config.robot_id}')
+            print(f'warning: UI is sending commands identified as being for robot {batch.robot_id} to robot {self.config.robot_id}')
             # return
         for update in batch.updates:
             r = await self._dispatch_update(update)
@@ -263,12 +266,13 @@ class AsyncObserver:
             self._handle_delete_target(item.delete_target)
 
         elif item.debug:
-            await self._handle_debug_command(item.debug)
+            r = await self._handle_debug_command(item.debug)
 
         elif item.set_swing_cancellation:
-            await self._handle_set_swing_cancellation(item.set_swing_cancellation)
+            r = await self._handle_set_swing_cancellation(item.set_swing_cancellation)
 
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
+        print(f'swing cancellation set {item.enabled}')
         if item.enabled:
             if not isinstance(self.gripper_client, ArpeggioGripperClient):
                 self.send_ui(pop_message=telemetry.Popup(
@@ -289,7 +293,7 @@ class AsyncObserver:
         # TODO attempt to measure this. It is the round trip latency between IMU measurements on the grpper and when our inputs move the spools.
         latency = 0.24
         try:
-            self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True))
+            self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True, present='.'))
             self.active_set.add('swingc')
             while self.run_command_loop:
                 vel2 = self.gripper_client.compute_swing_correction(time.time() + latency)
@@ -300,11 +304,11 @@ class AsyncObserver:
             pass
         finally:
             self.active_set.remove('swingc')
-            self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False))
+            self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
 
     async def _handle_debug_command(self, item: control.Debug):
         print(f'Debug action "{item.action}"')
-        elif item.action == "spincal":
+        if item.action == "spincal":
             r = await self.calibrate_spin()
 
     def _handle_delete_target(self, item: control.DeleteTarget):

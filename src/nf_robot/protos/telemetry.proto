@@ -204,6 +204,7 @@ message OperationProgress {
 
 message SwingCancellationState {
   bool enabled = 1;
+  string present = 2; // something must be present other than a boolean with a false value for the message to even exist.
 }
 
 // A single kind of update that the observer is providing to an external UI
