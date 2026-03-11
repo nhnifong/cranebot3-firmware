@@ -538,7 +538,7 @@ class Positioner2:
         """
         THRESHOLD = 0.2
         HYSTERESIS = 0.04
-        pressure = self.datastore.finger.getLast()[2]
+        pressure = self.datastore.finger.getLast()[2] # in arp gripper, this is filtered_force which ranged from 0 to 1.
 
         # Detect Rising Edge
         # Only trigger if we aren't currently holding to ensure we capture the

@@ -2175,8 +2175,9 @@ class AsyncObserver:
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
         LAT_SPEED_ADJUSTMENT = 50.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
         LOOP_DELAY = 0.1
-        PRESSURE_SENSE_WAIT = 4.0
+        PRESSURE_SENSE_WAIT = 10.0
         NUM_ATTEMPTS = 3
+        CLOSING_FINGER_SPEED = 90
 
         smooth_grip_angle = self.grip_angle
 
@@ -2259,18 +2260,16 @@ class AsyncObserver:
                     continue # find new target?
 
                 print('close gripper')
-                finger_angle = OPEN
                 end_time = time.time() + PRESSURE_SENSE_WAIT
                 self.pe.finger_pressure_rising.clear()
-                while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and finger_angle < CLOSED:
-                    if finger_angle < 70:
-                        finger_angle += 2.0
-                    else:
-                        finger_angle += 1.0
-                    await self.gripper_client.send_commands({'set_finger_angle': finger_angle})
-                    # pressure = self.datastore.finger.getLast()[2]
-                    # print(f'pressure {pressure}')
+
+                await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
+                # finger speed commands take effect for 200ms only. they must be sent repeatedly.
+                while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and self.datastore.finger.getLast()[1] < CLOSED:
                     await asyncio.sleep(0.03)
+                    await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
+                print(f'end grip {self.pe.finger_pressure_rising.is_set()} {self.datastore.finger.getLast()[1]}')
+                await self.gripper_client.send_commands({'set_finger_speed': 0})
 
                 if not self.pe.finger_pressure_rising.is_set():
                     pressure = self.datastore.finger.getLast()[2]
