@@ -801,8 +801,19 @@ class AsyncObserver:
             ))
             await self.half_auto_calibration()
 
+            if isinstance(self.gripper_client, ArpeggioGripperClient):
+                self.send_ui(operation_progress=telemetry.OperationProgress(
+                    percent_complete=30.0,
+                    name="Calibration",
+                    current_action="Measuring point of finger contact",
+                ))
+                # measure finger contact
+                self.gripper_client.finger_contact_calibration_complete.clear()
+                await asyncio.create_task(self.gripper_client.send_commands({'measure_finger_contact': None}))
+                await asyncio.wait_for(self.gripper_client.finger_contact_calibration_complete.wait(), 20)
+
             # open grip enough that we can see an unobstructed view from the palm camera
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -80}))
 
             # move over the origin card
             self.send_ui(operation_progress=telemetry.OperationProgress(

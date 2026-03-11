@@ -58,6 +58,7 @@ class ArpeggioGripperClient(ComponentClient):
         self.park_pose_relative_to_camera = None
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
+        self.finger_contact_calibration_complete = asyncio.Event()
 
     async def handle_update_from_ws(self, update):
         if 'st' in update:
@@ -107,6 +108,9 @@ class ArpeggioGripperClient(ComponentClient):
                 pressure = voltage,
                 wrist = wrist_angle,
             ))
+
+        if 'finger_contact_calibration_complete' in update:
+            self.finger_contact_calibration_complete.set()
 
     def compute_swing_correction(self, future_time):
         """Compute a corrective velocity to be applied at a future time in order to cancel the swing"""
@@ -188,8 +192,8 @@ class ArpeggioGripperClient(ComponentClient):
         roomspin = self.datastore.winch_line_record.getClosest(time_of_rotation)[1] / 180 * np.pi
         if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
             # undo the rotation that the room would appear to have at the wrist's 540 position
-            # extra = self.config.gripper.frame_room_spin - np.pi
-            extra = self.config.gripper.frame_room_spin
+            extra = self.config.gripper.frame_room_spin - np.pi
+            # extra = self.config.gripper.frame_room_spin
             roomspin = roomspin + extra
 
         # get gripper's tilt in its local frame of reference
