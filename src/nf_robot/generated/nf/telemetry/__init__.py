@@ -19,6 +19,7 @@ __all__ = (
     "Popup",
     "PositionEstimate",
     "PositionFactors",
+    "SwingCancellationState",
     "TargetList",
     "TargetStatus",
     "TelemetryBatchUpdate",
@@ -471,6 +472,16 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class SwingCancellationState(betterproto2.Message):
+    enabled: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+
+
+default_message_pool.register_message(
+    "nf.telemetry", "SwingCancellationState", SwingCancellationState
+)
+
+
+@dataclass(eq=False, repr=False)
 class TargetList(betterproto2.Message):
     """
     A full snapshot of the list of targets known to the observer and their statuses. replace previous
@@ -590,6 +601,10 @@ class TelemetryItem(betterproto2.Message):
 
     last_commanded_grip: "CommandedGrip | None" = betterproto2.field(
         18, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
+    swing_cancellation_state: "SwingCancellationState | None" = betterproto2.field(
+        19, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
     retain_key: "str | None" = betterproto2.field(

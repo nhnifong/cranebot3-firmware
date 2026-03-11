@@ -1435,7 +1435,6 @@ class AsyncObserver:
             self.swing_cancellation_task.cancel()
             tasks.append(self.swing_cancellation_task)
 
-
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         try:
             result = await asyncio.gather(*tasks)

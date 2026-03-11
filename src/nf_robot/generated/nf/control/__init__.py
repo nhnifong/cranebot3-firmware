@@ -15,6 +15,7 @@ __all__ = (
     "GantryGoalPos",
     "JogSpool",
     "ScaleRoom",
+    "SetSwingCancellation",
 )
 
 from dataclasses import dataclass
@@ -333,6 +334,10 @@ class ControlItem(betterproto2.Message):
         10, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    set_swing_cancellation: "SetSwingCancellation | None" = betterproto2.field(
+        11, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
@@ -417,6 +422,16 @@ class ScaleRoom(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.control", "ScaleRoom", ScaleRoom)
+
+
+@dataclass(eq=False, repr=False)
+class SetSwingCancellation(betterproto2.Message):
+    enabled: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+
+
+default_message_pool.register_message(
+    "nf.control", "SetSwingCancellation", SetSwingCancellation
+)
 
 
 from .. import common as _common__
