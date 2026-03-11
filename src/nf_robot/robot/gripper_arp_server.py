@@ -62,7 +62,7 @@ default_gripper_conf = {
 
 
 class GripperArpServer(RobotComponentServer):
-    def __init__(self, mock_motor=None):
+    def __init__(self):
         super().__init__()
         self.conf.update(default_gripper_conf)
         # the observer identifies hardware by the service types advertised on zeroconf
@@ -146,6 +146,12 @@ class GripperArpServer(RobotComponentServer):
         self.finger_torque_reenable_time = 0.0
         self.wrist_torque_reenable_time = 0.0
 
+        # defaults for persistent values
+        self.finger_open_pos = -1000
+        self.finger_closed_pos = 1000
+        self.saved_unrolled_wrist_angle = 0
+        self.saved_finger_angle = 0
+
         if os.path.exists('arp_gripper_state.json'):
             try:
                 with open('arp_gripper_state.json', 'r') as f:
@@ -202,11 +208,10 @@ class GripperArpServer(RobotComponentServer):
         t = time.time()
         finger_angle = self.getFingerAngle()
         wrist_angle = self.getWristAngle()
-        pressure_v = remap(self.pressure_sensor.voltage, 3.3, 0, 0, 1)
 
         self.update['grip_sensors'] = {
             'time': t,
-            'fing_v': pressure_v,
+            'fing_v': self.filtered_force,
             'fing_a': finger_angle,
             'wrist_a': wrist_angle,
         }
