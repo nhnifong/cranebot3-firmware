@@ -66,28 +66,37 @@ def sphere_intersection(sphere1, sphere2):
     # Dot product followed by math.sqrt bypasses NumPy's multi-axis parsing overhead for tiny arrays
     d = sqrt(np.dot(d_vec, d_vec))
     
+    # Check for intersection
     if d > r1 + r2 + 1e-9 or d < abs(r1 - r2) - 1e-9 or d == 0:
-        return None 
+        return None # No intersection or one sphere inside the other (or same center)
         
+    # Normal vector of the intersection plane
     normal_vector = d_vec / d
+    # Distance from center of sphere 1 to the intersection plane
     a = (r1**2 - r2**2 + d**2) / (2 * d)
     
+    # Center of the intersection circle is c1 + a * normal_vector
+    # Radius of the intersection circle is sqrt(max(0, r1**2 - a**2))
+    # Should not happen if intersection check passes, but for robustness we use max(0, ...)
     return c1 + a * normal_vector, normal_vector, sqrt(max(0, r1**2 - a**2))
 
 def sphere_circle_intersection(sphere_center, sphere_radius, circle_center, circle_normal, circle_radius):
     """
     Finds the intersection points between a sphere and a circle in 3D.
     """
+    # Project sphere's center onto the plane of the circle
     center_offset = sphere_center - circle_center
     distance_to_circle_plane = np.dot(center_offset, circle_normal)
     projected_sphere_center = sphere_center - distance_to_circle_plane * circle_normal
 
+    # Effective radius of the sphere in the circle's plane
     projected_sphere_radius_squared = sphere_radius**2 - distance_to_circle_plane**2
     if projected_sphere_radius_squared < -1e-9:
-        return [] 
+        return [] # No intersection with the plane
         
     projected_sphere_radius = sqrt(max(0, projected_sphere_radius_squared))
 
+    # Find an orthonormal basis for the plane of the circle
     if abs(circle_normal[2]) < 1 - 1e-9:
         u_direction = np.cross(circle_normal, _Z_AXIS)
     else:
@@ -98,14 +107,16 @@ def sphere_circle_intersection(sphere_center, sphere_radius, circle_center, circ
     u_direction /= np.linalg.norm(u_direction)
     v_direction = np.cross(circle_normal, u_direction)
 
+    # Centers of the two circles in the 2D basis
     proj_offset = projected_sphere_center - circle_center
     x0 = np.dot(proj_offset, u_direction)
     y0 = np.dot(proj_offset, v_direction)
 
+    # Solve for the intersection of the two 2D circles
     centers_distance = sqrt(x0**2 + y0**2)
 
     if centers_distance > circle_radius + projected_sphere_radius + 1e-9 or centers_distance < abs(circle_radius - projected_sphere_radius) - 1e-9:
-        return [] 
+        return [] # No intersection in the plane
 
     a_param = (circle_radius**2 - projected_sphere_radius**2 + centers_distance**2) / (2 * centers_distance)
     h_param = sqrt(max(0, circle_radius**2 - a_param**2))
@@ -123,20 +134,37 @@ def lowest_point_on_circle(circle_center, circle_normal, circle_radius):
     """
     Finds the point on the circle with the lowest z-coordinate.
     """
-    # Invalid for circles in a horizontal plane. Checking magnitude of Z implies X and Y are zero for a unit vector.
+    # invalid for circles in a horizontal plane. Checking magnitude of Z implies X and Y are zero for a unit vector.
     if abs(circle_normal[2]) > 1.0 - 1e-9:
         return None
 
+    # The lowest point is in the direction opposite the z-component of the normal vector.
+    # We create a vector pointing downwards and project the downward vector onto the plane of the circle.
     # We manually apply the projection using our pre-allocated constant to avoid the object instantiation.
     projected_vector = _DOWN_VECTOR + circle_normal[2] * circle_normal
+    
+    # Normalize the projected vector.
     proj_norm = sqrt(np.dot(projected_vector, projected_vector))
     
+    # Calculate the lowest point
     return circle_center + circle_radius * (projected_vector / proj_norm)
 
 def find_hang_point(positions, lengths):
     """
     Find the lowest point at which a mass could hang from the given anchor positions without
     the distance to any anchor being longer than the given lengths of available line
+
+    In addition to finding the position, we get an array of bools indicating which lines are slack as a side effect
+
+    If two spheres intersect, they form a circle.
+    The lowest point on the circle may be a hang point if only two lines are taut
+    if a circle intersects a sphere, it does so at two points, the lower of which may be a hang point.
+    Any hang point below the floor is discarded
+    Any hang point not inside all spheres is discarded
+    take the lowest remaining point
+
+    For a four anchor system, there are six possible sphere-sphere crosses.
+    For each circle formed this way, it could intersect with either of the two uninvolved spheres.
     """
     if len(positions) != 4 or len(lengths) != 4:
         raise ValueError
@@ -145,6 +173,7 @@ def find_hang_point(positions, lengths):
     candidates = []
     
     for pair in _ANCHOR_PAIRS:
+        # find the intersection of the two spheres in this pair
         circle = sphere_intersection((positions[pair[0]], lengths[pair[0]]), (positions[pair[1]], lengths[pair[1]]))
         if circle is None:
             continue
@@ -153,11 +182,13 @@ def find_hang_point(positions, lengths):
         if lp is not None and lp[2] > 0:
             candidates.append(lp)
             
+        # intersect this circle with the two uninvoled spheres
         for i in range(4):
             if i not in pair:
                 pts = sphere_circle_intersection(positions[i], lengths[i], *circle)
                 if len(pts) == 2:
                     # Manually sort the pair to find the lower Z to prevent constructing a NumPy array for min()
+                    # take the lower point
                     lower = pts[0] if pts[0][2] < pts[1][2] else pts[1]
                     if lower[2] > 0:
                         candidates.append(lower)
@@ -168,6 +199,7 @@ def find_hang_point(positions, lengths):
     valid_candidates = []
     ex_lengths = lengths + 1e-5
     
+    # filter out candidates that are not inside all spheres
     # Avoiding broadcasting across multiple axes reduces allocation tax. We can easily afford a 
     # Python loop for evaluating distance on these few candidate points.
     for c in candidates:
@@ -179,12 +211,20 @@ def find_hang_point(positions, lengths):
         return None
 
     best_candidate, best_dists = min(valid_candidates, key=lambda x: x[0][2])
+    
+    # line length must exceed distance to point by this much to be considered slack
+    # this is the estimate of slackness implied by the line lengths.
     slack_lines = best_dists <= (ex_lengths - 0.04)
     return best_candidate, slack_lines
 
 def eval_linear_pos(t, starting_time, starting_pos, velocity_vec):
     """
     Evaluate positions on a line at an array of times.
+
+    t - numpy array of timestamps to evaluate line at
+    starting_time - timestamp when the object is at starting_pos
+    starting_pos - position where movement started
+    velocity_vec - velocity of object in units(meters) per second
     """
     elapsed = (t - starting_time).reshape((-1,1))
     return starting_pos + velocity_vec * elapsed
@@ -196,7 +236,18 @@ def linear_move_cost_fn(model_params, starting_time, times, observed_positions):
 
 class Positioner2:
     def __init__(self, datastore, observer):
-        self.run = False 
+        """
+        continuous position estimation
+        recalculates hang point only when the data affecting it changes and consideres it a measurement'
+        considers also any visually obtained position a measurement
+        uses all measurements to update a kalman filter with each measurement type having it's own covariance matrix learned from data
+        
+        main consists of three tasks in a task group
+        * task to periodically predict forwards the kalman filter model
+        * task to wait for updates that affect hang point and recalculate it, then update filter
+        * task to wait for updates that affect visual estimates and update filter.
+        """
+        self.run = False # false until main is called
         self.datastore = datastore
         self.ob = observer
         self.config = observer.config
@@ -209,53 +260,75 @@ class Positioner2:
             [ -2,-2, 2],
         ], dtype=float)
         
+        # save grommet points
         anchor_points = np.array([compose_poses([poseProtoToTuple(a.pose), model_constants.anchor_grommet])[1] for a in self.config.anchors])
         self.set_anchor_points(anchor_points)
         self.data_ts = time.time()
 
+        # the gantry position and velocity estimated from reported line length and speeds.
         self.hang_pos = np.zeros(3, dtype=float)
         self.hang_vel = np.zeros(3, dtype=float)
 
+        # gantry position and velocity as last determined by the kalman filter
         self.gant_pos = np.zeros(3, dtype=float)
         self.gant_vel = np.zeros(3, dtype=float)
 
+        # last visual estimate of gantry position
         self.visual_pos = np.zeros(3, dtype=float)
         self.visual_vel = np.zeros(3, dtype=float)
 
+        # the time at which all reported line speeds became zero.
+        # If some nonzero speed was occuring on any line at the last update, this will be None
         self.stop_cutoff = time.time()
 
+        # last estimate of the gripper pose
         self.grip_pose = (np.zeros(3), np.zeros(3))
 
+        # last information on whether the gripper is thought to be holding something
         self.holding = False
         self.finger_pressure_rising = asyncio.Event()
         self.finger_pressure_falling = asyncio.Event()
 
+        # event coupled to gripper tipping from vertical
         self.tip_over = asyncio.Event()
 
+        # hang point based prediction of slack lines (currently unused)
         self.slack_lines = [False, False, False, False]
         self.last_visual_cutoff = time.time()
 
+        # Expected standard deviation in gantry acceleration
         acceleration_std_dev=0.001
+        # noise in the position biases used for each sensor. the biases can be 10 to 50 cm in my experience.
+        # this small constant reflects the assumtion that the bias for a camera is expected to change at least 10x slower than the gantry position.
         bias_std_dev=0.0001
-        visual_noise_std_dev=0.01 
+        # noise in visual observations of gantry position from a single camera 
+        visual_noise_std_dev=0.01 # experimentally confirmed.
+        # noise in hang position as a sensor. This is odd, it will be tightly near some position but make large jumps in z occationally.
         hang_noise_std_dev=0.015 
+        # the velocity that was commanded of the robot is also considered a sensor. the actual movement may differ from it somewhat.
         commanded_vel_std_dev=0.01 
 
         self.visual_noise_covariance = np.diag([visual_noise_std_dev**2] * 3)
         self.hang_noise_covariance = np.diag([hang_noise_std_dev**2] * 3)
         self.vel_noise_covariance = np.diag([commanded_vel_std_dev**2] * 3)
 
+        # Initialize the Kalman filter
         self.sensor_names = ['v0', 'v1' ,'v2' ,'v3', 'hang']
         self.kf = KalmanFilter(self.sensor_names, acceleration_std_dev, bias_std_dev)
 
+        # recorded amount of time take to perform various update steps
         self.predict_time_taken = 0
         self.visual_time_taken = 0
         self.hang_time_taken = 0
 
+        # last commanded gantry velocity.
         self.commanded_vel = np.zeros(3)
         self.commanded_vel_ts = time.time()
 
+        # gripper swing freqency estimator
         self.swing_est = SwingFrequencyEstimator(hysteresis=0.04, smoothing_factor=0.15)
+        
+        # Gripper type (pilot or arp)
         self.gripper_type = 'pilot'
         
         # Caching this rotation matrix upfront saves 60 string-parsing and evaluation 
@@ -270,6 +343,8 @@ class Positioner2:
         assert points.shape == (4, 3)
         self.anchor_points = points
 
+        # create and save a 2D contour to be used for containment checking.
+        # it must be a valid clockwise polygon so points are sorted by angle relative to centroid
         anchor_2d = self.anchor_points[:, 0:2]
         centroid = np.mean(anchor_2d, axis=0)
         angles = np.arctan2(anchor_2d[:, 1] - centroid[1], anchor_2d[:, 0] - centroid[0])
@@ -284,17 +359,21 @@ class Positioner2:
     async def check_and_recal(self):
         """
         Automatically send line reference length based on visual observation under certain conditions.
+
+        Conditions:
+        * no move command has been sent in the last n seconds
+        * the visually estimated gantry velocity is near zero
         """
         if self.stop_cutoff is None:
-            return 
+            return # currently moving
             
         if time.time() - self.stop_cutoff < 2:
-            return 
+            return # hasn't been long enough since we stopped
             
         position = self.visual_move_line_params[0:3]
         velocity = self.visual_move_line_params[3:6]
         if sqrt(np.dot(velocity, velocity)) > 0.005: 
-            return 
+            return # looks like it's moving visually, probably just video latency.
 
         lengths = np.linalg.norm(self.anchor_points - position, axis=1)
         print(f'auto line calibration lengths={lengths}')
@@ -304,6 +383,8 @@ class Positioner2:
         while self.run:
             start_time = time.time()
             await asyncio.sleep(1/60)
+            
+            # advance the prediction to the current time.
             self.kf.predict_present()
             self.gant_pos = self.kf.state_estimate[:3].copy()
             self.gant_vel = self.kf.state_estimate[3:6].copy()
@@ -316,22 +397,27 @@ class Positioner2:
     async def update_visual(self):
         while self.run:
             start_time = time.time()
+            # wait at least this long
             await asyncio.sleep(1/30)
+            # and wait for new visual data if necessary
             await self.datastore.gantry_pos_event.wait()
             self.datastore.gantry_pos_event.clear()
             
+            # grab any new data
             data = self.datastore.gantry_pos.deepCopy(cutoff=self.last_visual_cutoff)
             if len(data) == 0:
                 continue
                 
             self.last_visual_cutoff = np.max(data[:,0])
 
+            # update filter with every datapoint
             for measurement in data:
                 timestamp = measurement[0]
                 anchor_num = int(measurement[1])
                 this_visual_pos = measurement[2:]
                 self.kf.update(this_visual_pos, timestamp, self.visual_noise_covariance, 'position', self.sensor_names[anchor_num])
 
+                # average this visual position into self.visual_pos. this is purely for the UI
                 self.visual_pos = self.visual_pos * 0.9 + this_visual_pos * 0.1
 
             self.visual_time_taken = time.time()-start_time
@@ -339,26 +425,38 @@ class Positioner2:
     async def update_hang(self):
         while self.run:
             start_time = time.time()
+            # wait at least this long
             await asyncio.sleep(1/30)
+            # and wait for new data affecting hang point if necessary
             await self.datastore.anchor_line_record_event.wait()
             self.datastore.anchor_line_record_event.clear()
 
+            # Look at the last report for each anchor line.
             records = [alr.getLast() for alr in self.datastore.anchor_line_record]
+            
+            # time, length, speed, tight
             lengths = np.array([r[1] for r in records])
             tight = np.array([r[3] for r in records])
             speeds_sum = sum(r[2] for r in records)
+            
+            # average timestamp of the four lines contributing to this hang point.
             data_ts = sum(r[0] for r in records) / 4.0
 
+            # if any line is measured to be slack,
+            # make its length effectively infinite so it won't play a part in the hang position
             lengths[tight < 0.5] = 100
 
+            # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)
             if result is not None:
                 self.hang_pos, self.slack_lines = result
+                # update kalman filter with this position
                 self.kf.update(self.hang_pos, data_ts, self.hang_noise_covariance, 'position', self.sensor_names[-1])
                 self.data_ts = data_ts
 
             self.kf.enforce_bias_constraint()
 
+            # optional hang velocity (unreviewed)
             if speeds_sum == 0:
                 self.hang_vel = _ZERO_3.copy()
                 self.kf.update(self.hang_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
@@ -389,17 +487,21 @@ class Positioner2:
                 return
                 
             rotation = Rotation.from_quat(last_imu[1:])
+            # back out mounting position of IMU
             rotation = rotation * self._imu_mount_rot
 
+            # When distance to floor is less than 12cm, Detect Tipping
             if self.datastore.range_record.getLast()[1] < 0.12:
                 THRESHOLD_DEGREES = 9
                 euler = rotation.as_euler('xyz', degrees=True)
                 if abs(euler[0]) > THRESHOLD_DEGREES or abs(euler[1]) > THRESHOLD_DEGREES:
                     self.tip_over.set()
 
+            # feed angle to frequency estimator
             rotvec = rotation.as_rotvec()
             self.swing_est.add_rotation_vector(ts, rotvec)
 
+            # get the encoder based winch line length
             _, length, speed = self.datastore.winch_line_record.getLast()
 
             self.grip_pose = compose_poses([
@@ -421,17 +523,24 @@ class Positioner2:
         """
         THRESHOLD = 0.2
         HYSTERESIS = 0.04
+        
+        # in arp gripper, this is filtered_force which ranged from 0 to 1.
         pressure = self.datastore.finger.getLast()[2] 
 
+        # Detect Rising Edge
+        # Only trigger if we aren't currently holding to ensure we capture the
+        # transition event rather than the continuous state of being compressed.
         if not self.holding and pressure >= THRESHOLD:
             self.holding = True
             self.finger_pressure_rising.set()
 
+        # Detect Falling Edge
         elif self.holding and pressure <= (THRESHOLD - HYSTERESIS):
             self.holding = False
             self.finger_pressure_falling.set()
 
     def send_positions(self):
+        # send position factors to UI for visualization
         self.ob.send_ui(pos_estimate=telemetry.PositionEstimate(
             data_ts=float(self.data_ts),
             gantry_position=fromnp(self.gant_pos),
