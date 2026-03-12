@@ -1381,7 +1381,7 @@ class AsyncObserver:
         self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
-        with Pool(processes=6) as pool:
+        with Pool(processes=3) as pool:
             self.pool = pool
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.

@@ -92,42 +92,88 @@ def gripper_stabilized_cal(camera_cal: nf_config.CameraCalibration):
 detector = Detector(families="tag36h11", quad_decimate=1.0)
 
 def _locate_markers(im, K, D):
-    # AprilTag detection works on grayscale images.
-    gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-    detections = detector.detect(gray)
+    try:
+        # AprilTag detection works on grayscale images.
+        gray = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
+        detections = detector.detect(gray)
+        
+        if not detections:
+            return []
+
+        results = []
+        for detection in detections:
+            marker_id = detection.tag_id
+            corners = detection.corners
+
+            try:
+                name = MARKER_NAMES[marker_id]
+            except IndexError:
+                # Saw a tag that's not part of the defined system
+                print(f'Unknown AprilTag spotted with id {marker_id}')
+                continue
+            
+            # Look up the scaled object points specific to this tag
+            obj_points = SPECIAL_OBJ_POINTS.get(name, DEFAULT_OBJ_POINTS)
+            
+            # Use solvePnP to get the rotation and translation vectors (rvec, tvec)
+            # This gives the pose of the marker relative to the camera.
+            # The coordinate system has the origin at the camera center. The z-axis points from the camera center out the camera lens.
+            # The x-axis is to the right in the image taken by the camera, and y is down. The tag's coordinate frame is centered at the center of the tag.
+            # From the viewer's perspective, the x-axis is to the right, y-axis down, and z-axis is out of the tag.
+            _, r, t = cv2.solvePnP(obj_points, corners, K, D, False, cv2.SOLVEPNP_IPPE_SQUARE)
+            
+            results.append({
+                'n': name,
+                'p': (r.reshape((3,)), t.reshape((3,))), # pose tuple. numpy arrays. numpy supposedly has fast pickle hooks
+                'center': tuple(detection.corners.mean(axis=0)) 
+            })
+        return results
+    except Exception as e:
+        print(e)
+
+def _locate_markers_in_crops(crops_data, K, D):
+    """
+    Detects AprilTags by evaluating small, pre-cropped images based on previous detections
     
-    if not detections:
-        return []
-
+    Args:
+        crops_data (list): A list of dictionaries containing 'crop' (the small ndarray),
+            'x1', 'y1' (the crop's offset in the original frame), and 'name' (expected tag).
+        K (numpy.ndarray): 3x3 Camera intrinsic matrix.
+        D (numpy.ndarray): Camera distortion coefficients.
+    """
     results = []
-    for detection in detections:
-        marker_id = detection.tag_id
-        corners = detection.corners
+    for data in crops_data:
+        gray = cv2.cvtColor(data['crop'], cv2.COLOR_RGB2GRAY)
+        
+        for detection in detector.detect(gray):
+            if detection.tag_id >= len(MARKER_NAMES):
+                continue
 
-        try:
-            name = MARKER_NAMES[marker_id]
-        except IndexError:
-            # Saw a tag that's not part of the defined system
-            print(f'Unknown AprilTag spotted with id {marker_id}')
-            continue
-        
-        # Look up the scaled object points specific to this tag
-        obj_points = SPECIAL_OBJ_POINTS.get(name, DEFAULT_OBJ_POINTS)
-        
-        # Use solvePnP to get the rotation and translation vectors (rvec, tvec)
-        # This gives the pose of the marker relative to the camera.
-        # The coordinate system has the origin at the camera center. The z-axis points from the camera center out the camera lens.
-        # The x-axis is to the right in the image taken by the camera, and y is down. The tag's coordinate frame is centered at the center of the tag.
-        # From the viewer's perspective, the x-axis is to the right, y-axis down, and z-axis is out of the tag.
-        _, r, t = cv2.solvePnP(obj_points, corners, K, D, False, cv2.SOLVEPNP_IPPE_SQUARE)
-        
-        results.append({
-            'n': name,
-            'p': (r.reshape((3,)), t.reshape((3,))), # pose tuple. numpy arrays. numpy supposedly has fast pickle hooks
-        })
+            name = MARKER_NAMES[detection.tag_id]
+
+            if name != data['name']:
+                continue 
+
+            global_corners = detection.corners + np.array([data['x1'], data['y1']])
+
+            _, r, t = cv2.solvePnP(
+                SPECIAL_OBJ_POINTS.get(name, DEFAULT_OBJ_POINTS), 
+                global_corners, 
+                K, 
+                D, 
+                False, 
+                cv2.SOLVEPNP_IPPE_SQUARE
+            )
+
+            results.append({
+                'n': name,
+                'p': (r.reshape((3,)), t.reshape((3,))),
+                'center': tuple(global_corners.mean(axis=0)) 
+            })
+
     return results
 
-def locate_markers(im, camera_cal: nf_config.CameraCalibration):
+def locate_markers(im, camera_cal: nf_config.CameraCalibration, crops_data=None):
     """
     Detects AprilTags in an image and estimates their pose.
     
@@ -146,15 +192,24 @@ def locate_markers(im, camera_cal: nf_config.CameraCalibration):
     # Use passed object for camera calibration. keeps function pure for multiprocessing
     mtx = np.array(camera_cal.intrinsic_matrix).reshape((3,3))
     distortion = np.array(camera_cal.distortion_coeff)
-    return _locate_markers(im, mtx, distortion)
+    # Route to the crop handler if crop data was passed over IPC
+    if crops_data is not None:
+        return _locate_markers_in_crops(crops_data, mtx, distortion)
+    elif im is not None:
+        return _locate_markers(im, mtx, distortion)
+    return []
 
-def locate_markers_gripper(im, camera_cal: nf_config.CameraCalibration):
+def locate_markers_gripper(im, camera_cal: nf_config.CameraCalibration, crops_data=None):
     """
     Locate markers in the stabilized gripper frame
     """
     if 'K_new' not in saved_matrices:
         saved_matrices['starting_K'], saved_matrices['K_new'] = gripper_stabilized_cal(camera_cal)
-    return _locate_markers(im, saved_matrices['K_new'], np.array(camera_cal.distortion_coeff))
+    if crops_data is not None:
+        return _locate_markers_in_crops(crops_data, saved_matrices['K_new'], np.array(camera_cal.distortion_coeff))
+    elif im is not None:
+        return _locate_markers(im, saved_matrices['K_new'], np.array(camera_cal.distortion_coeff))
+    return []
 
 def project_pixels_to_floor(normalized_pixels, pose, camera_cal: nf_config.CameraCalibration):
     """

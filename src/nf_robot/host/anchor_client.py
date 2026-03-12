@@ -79,6 +79,7 @@ class ComponentClient:
         self.config = ob.config
 
         self.conn_status = None # subclass needs to set this in init
+        self.last_known_centers = {}
 
     def send_conn_status(self):
         self.ob.send_ui(component_conn_status=copy.deepcopy(self.conn_status))
@@ -124,6 +125,8 @@ class ComponentClient:
             lastSam = time.time()
             last_time = time.time()
 
+            next_full_scan = time.time()
+
             def error_callback_func(error):
                 print(f"Error in pool worker: {error}")
 
@@ -147,15 +150,46 @@ class ComponentClient:
                 last_time = now
 
                 # send frame to apriltag detector
-                # if self.anchor_num is not None:
                 try:
                     if self.stat.pending_frames_in_pool < 60:
-                        self.stat.pending_frames_in_pool += 1
-                        self.pool.apply_async(
-                            locate_markers,
-                            (self.frame, self.config.camera_cal),
-                            callback=partial(self.handle_detections, timestamp=timestamp),
-                            error_callback=error_callback_func)
+
+                        # perform a full scan 1/s
+                        if time.time() > next_full_scan:
+                            next_full_scan = time.time() + 1
+                            self.stat.pending_frames_in_pool += 1
+                            
+                            self.pool.apply_async(
+                                locate_markers,
+                                (self.frame, self.config.camera_cal, None),
+                                callback=partial(self.handle_detections, timestamp=timestamp),
+                                error_callback=error_callback_func
+                            )
+                        else:
+                            # otherwise, send only small cropped areas to the pool for detection
+                            crops_data = []
+                            for tag_name, (cx, cy) in self.last_known_centers.items():
+                                x1 = max(0, int(cx - 64))
+                                y1 = max(0, int(cy - 64))
+                                x2 = min(self.frame.shape[1], int(cx + 64))
+                                y2 = min(self.frame.shape[0], int(cy + 64))
+                                
+                                # Calling .copy() severs the slice from the base array memory, 
+                                # guaranteeing that pickle only sends the few kilobytes of the crop over IPC.
+                                crops_data.append({
+                                    'crop': self.frame[y1:y2, x1:x2].copy(),
+                                    'x1': x1,
+                                    'y1': y1,
+                                    'name': tag_name
+                                })
+                                
+                            self.stat.pending_frames_in_pool += 1
+                            self.pool.apply_async(
+                                locate_markers,
+                                (None, self.config.camera_cal, crops_data),
+                                callback=partial(self.handle_detections, timestamp=timestamp),
+                                error_callback=error_callback_func
+                            )
+
                     else:
                         pass
                         # print(f'Dropping frame because there are already too many pending.')
@@ -505,20 +539,22 @@ class RaspiAnchorClient(ComponentClient):
 
     def handle_detections(self, detections, timestamp):
         """
-        handle a list of aruco detections from the pool
+        handle a list of apriltag detections from the pool
         """
         self.stat.pending_frames_in_pool -= 1
         self.stat.detection_count += len(detections)
 
         for detection in detections:
+            name = detection['n']
+            self.last_known_centers[name] = detection['center']
 
-            if detection['n'] in CAL_MARKERS:
+            if name in CAL_MARKERS:
                 # save all the detections of the origin for later analysis
                 self.origin_poses[detection['n']].append(detection['p'])
                 # if detection['n'] == "origin":
                 #     print(detection)
 
-            if detection['n'] == 'gantry':
+            if name == 'gantry':
                 # rotate and translate to where that object's origin would be
                 # given the position and rotation of the camera that made this observation (relative to the origin)
                 # store the time and that position in the appropriate measurement array in observer.
@@ -542,8 +578,8 @@ class RaspiAnchorClient(ComponentClient):
                 if self.save_raw:
                     self.raw_gant_poses.append(detection['p'])
 
-            if detection['n'] in OTHER_MARKERS:
-                offset = model_constants.basket_offset_inv if detection['n'].endswith('back') else model_constants.basket_offset
+            if name in OTHER_MARKERS:
+                offset = model_constants.basket_offset_inv if name.endswith('back') else model_constants.basket_offset
                 pose = np.array(compose_poses([
                     self.anchor_pose,
                     model_constants.anchor_camera, # constant
