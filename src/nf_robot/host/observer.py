@@ -224,11 +224,6 @@ class AsyncObserver:
         """ Decodes a binary batch of commands """
         # betterproto .parse() returns a standard python dataclass
         batch = control.ControlBatchUpdate().parse(message)
-        # Safety check: Ignore commands meant for other robots
-        if batch.robot_id and batch.robot_id != self.config.robot_id:
-            pass
-            print(f'warning: UI is sending commands identified as being for robot {batch.robot_id} to robot {self.config.robot_id}')
-            # return
         for update in batch.updates:
             r = await self._dispatch_update(update)
 
