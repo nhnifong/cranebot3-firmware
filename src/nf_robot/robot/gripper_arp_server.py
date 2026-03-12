@@ -152,6 +152,8 @@ class GripperArpServer(RobotComponentServer):
         self.saved_unrolled_wrist_angle = 0
         self.saved_finger_angle = 0
 
+        self.motor_loop_pause = False
+
         if os.path.exists('arp_gripper_state.json'):
             try:
                 with open('arp_gripper_state.json', 'r') as f:
@@ -248,7 +250,7 @@ class GripperArpServer(RobotComponentServer):
         # Force Sensitive Resistors (FSRs) drop resistance logarithmically with applied force, 
         # causing a highly non-linear voltage curve (massive drop on light touch, slow drop on heavy press).
         # Applying an exponent > 1 compresses the overly sensitive light-touch region and linearizes the usable force proxy.
-        norm_pressure = clamp(((3.3 - self.pressure_sensor.voltage) / 3.3) ** 2.5, 0.0, 1.0)
+        norm_pressure = clamp((max(0.0, 3.3 - self.pressure_sensor.voltage) / 3.3) ** 2.5, 0.0, 1.0)
         
         # Low-pass filter mitigates sensor noise and prevents the PID derivative term from causing severe jitter
         self.filtered_force = (self.conf['FILTER_COEFF'] * ((norm_pressure * self.conf['PRESSURE_WEIGHT']) + (norm_load * self.conf['LOAD_WEIGHT']))) + ((1 - self.conf['FILTER_COEFF']) * self.filtered_force)
@@ -261,100 +263,116 @@ class GripperArpServer(RobotComponentServer):
         return [umtask]
 
     async def updateMotors(self):
-        # runs at startup of server
-        self.motors.torque_enable(FINGER, True)
-        self.motors.torque_enable(WRIST, True)
+        try:
+            # runs at startup of server
+            self.motors.torque_enable(FINGER, True)
+            self.motors.torque_enable(WRIST, True)
 
-        # initialize with current positions to prevent sudden moves
-        self.desired_wrist_angle = self.getWristAngle()
-        logging.info(f'wrist angle at startup = {self.desired_wrist_angle}')
-        self.desired_finger_angle = self.getFingerAngle()
-        logging.info(f'finger angle at startup = {self.desired_finger_angle}')
+            # initialize with current positions to prevent sudden moves
+            self.desired_wrist_angle = self.getWristAngle()
+            logging.info(f'wrist angle at startup = {self.desired_wrist_angle}')
+            self.desired_finger_angle = self.getFingerAngle()
+            logging.info(f'finger angle at startup = {self.desired_finger_angle}')
 
-        last_movement_time = time.time()
-
-        while self.run_server:
-            now = time.time()
-
-            # Restore torque after safety timeout expires
-            if self.finger_torque_reenable_time and now >= self.finger_torque_reenable_time:
-                logging.info("Safety timeout expired. Re-enabling finger motor torque.")
-                self.motors.torque_enable(FINGER, True)
-                self.finger_torque_reenable_time = 0.0
-                
-            if self.wrist_torque_reenable_time and now >= self.wrist_torque_reenable_time:
-                logging.info("Safety timeout expired. Re-enabling wrist motor torque.")
-                self.motors.torque_enable(WRIST, True)
-                self.wrist_torque_reenable_time = 0.0
-
-            # Actions are only valid for a short time.
-            if now > self.time_last_commanded_finger_speed + self.conf['ACTION_TIMEOUT']:
-                self.desired_finger_speed = 0
-            if now > self.time_last_commanded_wrist_speed + self.conf['ACTION_TIMEOUT']:
-                self.desired_wrist_speed = 0
-
-            # update wrist
-            wrist_before = self.desired_wrist_angle
-            self.desired_wrist_angle  = clamp(self.desired_wrist_angle + self.desired_wrist_speed * DT, 0, 1080)
-            if wrist_before != self.desired_wrist_angle:
-                self.motors.set_position(WRIST, (self.desired_wrist_angle / 360 * STEPS_PER_REV) - self.wrist_step_offset)
-
-            # update fingers
-            finger_before = self.desired_finger_angle
-            current_force, current_pressure = self.get_current_grip_force()
+            last_movement_time = time.time()
             
-            # Check for safety overload conditions on every loop iteration
-            # We fetch wrist data here as well since get_current_grip_force only pulls finger data
-            wrist_data = self.motors.get_feedback(WRIST)
-            self.checkMotorLoad(self.last_finger_data, wrist_data)
-            
-            if not self.in_force_mode:
-                self.desired_finger_angle = clamp(self.desired_finger_angle + self.desired_finger_speed * DT, -90, 90)
+            # State tracking to detect what actually changed in the current loop
+            last_sent_finger_angle = self.desired_finger_angle
+            last_sent_wrist_angle = self.desired_wrist_angle
+
+            while self.run_server:
+                now = time.time()
                 
-                # Enter force mode dynamically upon contact while closing
-                if current_pressure > self.conf['FORCE_TRIGGER_THRESHOLD'] and self.desired_finger_speed > 0:
-                    self.in_force_mode = True
-                    self.desired_force = self.conf['INITIAL_DESIRED_FORCE']
-                    self.fingerpid._error_sum = 0
-            
-            if self.in_force_mode:
-                # Modulate desired force based on finger speed commands
-                self.desired_force += self.desired_finger_speed * DT * self.conf['FORCE_RATE_MULTIPLIER']
-                
-                # Revert to position mode if commanded below zero force
-                if self.desired_force < 0:
-                    self.in_force_mode = False
-                    self.desired_force = 0
-                    self.desired_finger_angle = self.getFingerAngle()
-                else:
-                    self.desired_force = clamp(self.desired_force, 0.0, 1.0)
-                    self.fingerpid.setpoint = self.desired_force
+                # Halt routine updates if the calibration script requested motor control
+                if self.motor_loop_pause:
+                    await asyncio.sleep(0.1)
+                    continue
+
+                # Restore torque after safety timeout expires
+                if self.finger_torque_reenable_time and now >= self.finger_torque_reenable_time:
+                    logging.info("Safety timeout expired. Re-enabling finger motor torque.")
+                    self.motors.torque_enable(FINGER, True)
+                    self.finger_torque_reenable_time = 0.0
                     
-                    if abs(self.desired_force - current_force) >= self.conf['FORCE_DEADBAND']:
-                        self.desired_finger_angle = clamp(self.desired_finger_angle + self.fingerpid.calculate(current_force), -90, 90)
+                if self.wrist_torque_reenable_time and now >= self.wrist_torque_reenable_time:
+                    logging.info("Safety timeout expired. Re-enabling wrist motor torque.")
+                    self.motors.torque_enable(WRIST, True)
+                    self.wrist_torque_reenable_time = 0.0
 
-            if finger_before != self.desired_finger_angle:
-                self.motors.set_position(FINGER, remap(self.desired_finger_angle, -90, 90, self.finger_open_pos, self.finger_closed_pos))
+                # Actions are only valid for a short time.
+                if now > self.time_last_commanded_finger_speed + self.conf['ACTION_TIMEOUT']:
+                    self.desired_finger_speed = 0
+                if now > self.time_last_commanded_wrist_speed + self.conf['ACTION_TIMEOUT']:
+                    self.desired_wrist_speed = 0
+
+                # update wrist
+                self.desired_wrist_angle  = clamp(self.desired_wrist_angle + self.desired_wrist_speed * DT, 0, 1080)
                 
-            # Record time logic for tracking inactivity to save layout state
-            if finger_before != self.desired_finger_angle or wrist_before != self.desired_wrist_angle:
-                last_movement_time = now
-            elif now - last_movement_time > 5.0:
-                # Triggers exactly once per stop since properties sync immediately after write
-                if self.unrolled_wrist_angle != self.saved_unrolled_wrist_angle or self.desired_finger_angle != self.saved_finger_angle:
-                    self.saved_unrolled_wrist_angle = self.unrolled_wrist_angle
-                    self.saved_finger_angle = self.desired_finger_angle
-                    logging.info(f'saving unrolled wrist angle of {self.saved_unrolled_wrist_angle}')
+                wrist_changed = False
+                if last_sent_wrist_angle != self.desired_wrist_angle:
+                    self.motors.set_position(WRIST, (self.desired_wrist_angle / 360 * STEPS_PER_REV) - self.wrist_step_offset)
+                    last_sent_wrist_angle = self.desired_wrist_angle
+                    wrist_changed = True
 
-                    with open('arp_gripper_state.json', 'w') as f:
-                        json.dump({
-                            'finger_open_pos': getattr(self, 'finger_open_pos', 0),
-                            'finger_closed_pos': getattr(self, 'finger_closed_pos', 0),
-                            'unrolled_wrist_angle': self.saved_unrolled_wrist_angle,
-                            'finger_angle': self.saved_finger_angle
-                        }, f)
-            
-            await asyncio.sleep(DT)
+                # update fingers
+                current_force, current_pressure = self.get_current_grip_force()
+                
+                # Check for safety overload conditions on every loop iteration
+                # We fetch wrist data here as well since get_current_grip_force only pulls finger data
+                wrist_data = self.motors.get_feedback(WRIST)
+                self.checkMotorLoad(self.last_finger_data, wrist_data)
+                
+                if not self.in_force_mode:
+                    self.desired_finger_angle = clamp(self.desired_finger_angle + self.desired_finger_speed * DT, -90, 90)
+                    
+                    # Enter force mode dynamically upon contact while closing
+                    if current_pressure > self.conf['FORCE_TRIGGER_THRESHOLD'] and self.desired_finger_speed > 0:
+                        self.in_force_mode = True
+                        self.desired_force = self.conf['INITIAL_DESIRED_FORCE']
+                        self.fingerpid._error_sum = 0
+                
+                if self.in_force_mode:
+                    # Modulate desired force based on finger speed commands
+                    self.desired_force += self.desired_finger_speed * DT * self.conf['FORCE_RATE_MULTIPLIER']
+                    
+                    # Revert to position mode if commanded below zero force
+                    if self.desired_force < 0:
+                        self.in_force_mode = False
+                        self.desired_force = 0
+                        self.desired_finger_angle = self.getFingerAngle()
+                    else:
+                        self.desired_force = clamp(self.desired_force, 0.0, 1.0)
+                        self.fingerpid.setpoint = self.desired_force
+                        
+                        if abs(self.desired_force - current_force) >= self.conf['FORCE_DEADBAND']:
+                            self.desired_finger_angle = clamp(self.desired_finger_angle + self.fingerpid.calculate(current_force), -90, 90)
+
+                finger_changed = False
+                if last_sent_finger_angle != self.desired_finger_angle:
+                    self.motors.set_position(FINGER, remap(self.desired_finger_angle, -90, 90, self.finger_open_pos, self.finger_closed_pos))
+                    last_sent_finger_angle = self.desired_finger_angle
+                    finger_changed = True
+                    
+                # Record time logic for tracking inactivity to save layout state
+                if finger_changed or wrist_changed:
+                    last_movement_time = now
+                elif now - last_movement_time > 5.0:
+                    # Triggers exactly once per stop since properties sync immediately after write
+                    if self.unrolled_wrist_angle != self.saved_unrolled_wrist_angle or self.desired_finger_angle != self.saved_finger_angle:
+                        self.saved_unrolled_wrist_angle = self.unrolled_wrist_angle
+                        self.saved_finger_angle = self.desired_finger_angle
+
+                        with open('arp_gripper_state.json', 'w') as f:
+                            json.dump({
+                                'finger_open_pos': getattr(self, 'finger_open_pos', 0),
+                                'finger_closed_pos': getattr(self, 'finger_closed_pos', 0),
+                                'unrolled_wrist_angle': self.saved_unrolled_wrist_angle,
+                                'finger_angle': self.saved_finger_angle
+                            }, f)
+                
+                await asyncio.sleep(DT)
+        except Exception as e:
+            logging.exception("problem in motor tracking loop")
 
     async def process_imu(self, ws):
         """
@@ -402,9 +420,59 @@ class GripperArpServer(RobotComponentServer):
             
     def setWrist(self, angle):
         # Accept an angle in degrees between 0 and 1080 (3 revolutions)
-        angle = clamp(angle, 0, 1080)
-        self.desired_wrist_angle = angle
-        self.motors.set_position(WRIST, (self.desired_wrist_angle / 360 * STEPS_PER_REV) - self.wrist_step_offset)
+        self.desired_wrist_angle = clamp(angle, 0, 1080)
+
+    async def measureFingerContact(self):
+        try:
+            # pause the motor control loop
+            self.motor_loop_pause = True
+            # measure the motor angle where the fingers touch.
+            logging.info(f"Calibrating finger servo...")
+            self.motors.reset_encoder_to_midpoint(FINGER)
+
+            pos = self.motors.get_position(FINGER)
+            # open a few degrees in case fingers were already touching.
+            rel = 100
+            self.motors.set_position(FINGER, pos + rel)
+            await asyncio.sleep(0.5)
+            data = self.motors.get_feedback(FINGER)
+
+            # confirm no pressure on finger pad
+            v = self.pressure_sensor.voltage
+            assert v > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
+
+            # slowly close until the fingerpad voltage drops below 2V
+            start = time.time()
+            load = 0
+            while v > 3.0 and time.time() < start+16:
+                self.motors.set_position(FINGER, pos + rel)
+                rel -= 10
+                await asyncio.sleep(0.05)
+                v = self.pressure_sensor.voltage
+                data = self.motors.get_feedback(FINGER)
+                load = data["load"]
+                if load < 1000: # ignore load values over 1000, they indicate force in the other direction
+                    if load>450:
+                        self.motors.torque_enable(FINGER, False)
+                        raise RuntimeError("motor load too high while no finger pressure detected")
+            self.motors.set_speed(FINGER, 0)
+
+            self.finger_closed_pos = self.motors.get_position(FINGER)
+            logging.info(f"Motor encoder position at finger touch = {self.finger_closed_pos}")
+            self.finger_open_pos = self.finger_closed_pos + FINGER_TRAVEL_STEPS
+            self.saved_finger_angle = 90 # closed
+            with open('arp_gripper_state.json', 'w') as f:
+                json.dump({
+                    'finger_open_pos': self.finger_open_pos,
+                    'finger_closed_pos': self.finger_closed_pos,
+                    'unrolled_wrist_angle': self.saved_unrolled_wrist_angle,
+                    'finger_angle': self.saved_finger_angle
+                }, f)
+        except Exception as e:
+            logging.exception("problem in finger calibration task")
+        finally:
+            self.motor_loop_pause = False
+            self.update['finger_contact_calibration_complete'] = None
 
     async def processOtherUpdates(self, update, tg):
         if 'set_finger_angle' in update:
@@ -415,6 +483,8 @@ class GripperArpServer(RobotComponentServer):
             self.setFingerSpeed(float(update['set_finger_speed']))
         if 'set_wrist_speed' in update:
             self.setWristSpeed(float(update['set_wrist_speed']))
+        if 'measure_finger_contact' in update:
+            asyncio.create_task(self.measureFingerContact())
 
 if __name__ == "__main__":
     logging.basicConfig(

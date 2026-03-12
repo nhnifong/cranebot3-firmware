@@ -2203,7 +2203,7 @@ class AsyncObserver:
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 50.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
+        LAT_SPEED_ADJUSTMENT = 25.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 10.0
         NUM_ATTEMPTS = 3
@@ -2215,6 +2215,7 @@ class AsyncObserver:
             attempts = NUM_ATTEMPTS
             while not self.pe.holding and attempts > 0 and self.run_command_loop:
                 attempts -= 1
+                print(f'open fingers to {OPEN} to clear camera')
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
 
                 # move laterally until target is centered
@@ -2317,6 +2318,8 @@ class AsyncObserver:
 
                 self.pe.finger_pressure_rising.clear()
                 print('Successful grasp')
+                await self.move_direction_speed(np.array([0,0,0.15]))
+                await asyncio.sleep(2.0)
                 return True
             print(f'Gave up on grasp after {NUM_ATTEMPTS-attempts} attempts. self.pe.holding={self.pe.holding}')
             return False

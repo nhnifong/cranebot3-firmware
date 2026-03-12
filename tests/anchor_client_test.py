@@ -147,6 +147,7 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
             {
                 'n': 'gantry',
                 'p': np.array([[0.1,0.2,0.3], [0.4,0.5,0.6]]), # p for pose, (rvec,tvec)
+                'center': (50,50),
             },
         ]
         timestamp = 123456789.0
