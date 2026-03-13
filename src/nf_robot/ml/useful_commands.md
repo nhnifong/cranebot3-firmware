@@ -22,8 +22,8 @@ Playback
 
 When ready to upload models ( PUSH TO PROD )
 
-    huggingface-cli upload naavox/targeting src/nf_robot/ml/models/target_heatmap.pth target_heatmap.pth
-    huggingface-cli upload naavox/centering src/nf_robot/ml/models/square_centering.pth square_centering.pth
+    hf upload naavox/targeting models/target_heatmap.pth target_heatmap.pth
+    hf upload naavox/centering models/square_centering.pth square_centering.pth
 
 Label target data
 

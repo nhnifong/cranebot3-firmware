@@ -47,7 +47,7 @@ class DamiaoSpoolController:
         """
         self.motor = motor
         self.direction = direction
-        self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, gear_ratio, direction)
+        self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, 1, direction)
 
         self.conf = default_conf_dm
         self.conf.update(config)
@@ -100,7 +100,6 @@ class DamiaoSpoolController:
         # fast stop is permanent.
         # it causes the trackingloop task to stop,
         # causing the websocket connection to close
-        self.motor.stop()
         self.run_spool_loop = False
 
     def _update_absolute_angle(self, current_raw_rad):
@@ -135,6 +134,14 @@ class DamiaoSpoolController:
 
         self.motor.enable()
         self.motor.ensure_control_mode("MIT")
+
+        self.motor.send_cmd_mit(
+            target_position=0.0,
+            target_velocity=0.0,
+            stiffness=0.0,
+            damping=0.5, 
+            feedforward_torque=self.conf['TARGET_TORQUE']*self.direction
+        )
         
         start_time = time.time()
         smooth_torque = 0
@@ -159,7 +166,7 @@ class DamiaoSpoolController:
                 
                 # low pass filter torque
                 sf = self.conf['SMOOTH_FACTOR']
-                smooth_torque = actual_torque * sf + smooth_torque * (1 - sf)
+                smooth_torque = motor_torque * sf + smooth_torque * (1 - sf)
 
                 # calculate line data from motor data
                 self.last_length = self.sc.get_unspooled_length(self.last_angle)
@@ -185,7 +192,7 @@ class DamiaoSpoolController:
                     target_velocity=wanted_motor_vel*self.direction,
                     stiffness=0.0,
                     damping=0.5, 
-                    feedforward_torque=self.conf['TARGET_TORQUE']
+                    feedforward_torque=self.conf['TARGET_TORQUE']*self.direction
                 )
 
                 time_to_sleep = 1.0 / self.conf['LOOP_FREQ_HZ'] - (time.time() - loop_start)
