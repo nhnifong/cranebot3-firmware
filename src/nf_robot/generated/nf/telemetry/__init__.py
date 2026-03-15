@@ -121,7 +121,15 @@ class AnchorPoses(betterproto2.Message):
         1, betterproto2.TYPE_MESSAGE, repeated=True
     )
     """
-    always send all four poses in order of anchor num
+    Will either be four poses in order of anchor num (pilot anchors)
+    or two anchor poses (arpeggio anchors)
+    """
+
+    eyelets: "list[_common__.Vec3]" = betterproto2.field(
+        2, betterproto2.TYPE_MESSAGE, repeated=True
+    )
+    """
+    when anchors are arpeggio type, two eyelet positions are also sent.
     """
 
 

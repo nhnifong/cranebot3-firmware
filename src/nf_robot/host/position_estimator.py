@@ -260,9 +260,18 @@ class Positioner2:
             [ -2,-2, 2],
         ], dtype=float)
         
-        # save grommet points
-        anchor_points = np.array([compose_poses([poseProtoToTuple(a.pose), model_constants.anchor_grommet])[1] for a in self.config.anchors])
+        # read pull points from config
+        if self.config.anchor_type == common.AnchorType.ARPEGGIO:
+            anchor_points = np.array([
+                compose_poses([poseProtoToTuple(self.config.anchors[0].pose), model_constants.arp_anchor_right_eyelet])[1],
+                tonp(self.config.anchors[0].indirect_line.eyelet_pos),
+                compose_poses([poseProtoToTuple(self.config.anchors[1].pose), model_constants.arp_anchor_right_eyelet])[1],
+                tonp(self.config.anchors[1].indirect_line.eyelet_pos),
+            ])
+        else:
+            anchor_points = np.array([compose_poses([poseProtoToTuple(a.pose), model_constants.anchor_grommet])[1] for a in self.config.anchors])
         self.set_anchor_points(anchor_points)
+
         self.data_ts = time.time()
 
         # the gantry position and velocity estimated from reported line length and speeds.
@@ -340,7 +349,7 @@ class Positioner2:
 
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
-        assert points.shape == (4, 3)
+        assert points.shape == (4, 3), f"points = {points}"
         self.anchor_points = points
 
         # create and save a 2D contour to be used for containment checking.
@@ -434,9 +443,9 @@ class Positioner2:
             # Look at the last report for each anchor line.
             records = [alr.getLast() for alr in self.datastore.anchor_line_record]
             
-            # time, length, speed, tight
+            # time, length, speed, tension
             lengths = np.array([r[1] for r in records])
-            tight = np.array([r[3] for r in records])
+            tension = np.array([r[3] for r in records])
             speeds_sum = sum(r[2] for r in records)
             
             # average timestamp of the four lines contributing to this hang point.
@@ -444,7 +453,7 @@ class Positioner2:
 
             # if any line is measured to be slack,
             # make its length effectively infinite so it won't play a part in the hang position
-            lengths[tight < 0.5] = 100
+            lengths[tension < 0.0275] = 100
 
             # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)
@@ -510,11 +519,12 @@ class Positioner2:
             ])
 
         elif self.gripper_type == 'arp':
-            rotvec = self.ob.gripper_client.get_gripper_rvec()
-            self.grip_pose = compose_poses([
-                (rotvec, self.gant_pos),
-                (_ZERO_3, np.array([0,0,-model_constants.arp_pole_length], dtype=float)),
-            ])
+            if self.ob.gripper_client is not None:
+                rotvec = self.ob.gripper_client.get_gripper_rvec()
+                self.grip_pose = compose_poses([
+                    (rotvec, self.gant_pos),
+                    (_ZERO_3, np.array([0,0,-model_constants.arp_pole_length], dtype=float)),
+                ])
 
     def detect_grip(self):
         """

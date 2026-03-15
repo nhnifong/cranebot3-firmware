@@ -33,28 +33,32 @@ class ArpeggioAnchorClient(ComponentClient):
             video_status=telemetry.ConnStatus.NOT_DETECTED,
         )
         self.anchor_num = None
+        self.anchor_pose = np.zeros((2, 3))
+        self.eye_pos = np.zeros(3)
+        self.extratilt = 0
 
         self.pe = pe
 
-    def updatePose(self, pose):
+    def updatePoseAndEye(self, pose, eye):
         self.anchor_pose = pose
+        self.eye_pos = eye
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
-            model_constants.double_anchor_camera,
+            model_constants.arp_anchor_camera,
             (np.array([0,0,self.extratilt/180*np.pi], dtype=float), np.zeros(3, dtype=float)),
         ]))
 
-    def updateEyeletPos(self, position):
-    	self.eyepos = position
-
     async def handle_update_from_ws(self, update):
+        if 'spool0' in update:
+            self.storeSpoolData(0, update['spool0'])
         if 'spool1' in update:
-            self.processSpoolData(update['spool1'])
-        if 'spool2' in update:
-            self.processSpoolData(update['spool2'])
+            self.storeSpoolData(1, update['spool1'])
 
-    def processSpoolData(self, data):
-    	pass
+    def storeSpoolData(self, spool_no, data):
+        # data= [(time, line_length, line_speed, torque), ...]
+        line_number = self.anchor_num + spool_no
+        self.datastore.anchor_line_record[line_number].insertList(np.array(data))
+        self.datastore.anchor_line_record_event.set()
 
     def handle_detections(self, detections, timestamp):
         """

@@ -4,6 +4,7 @@
 # This file has been @generated
 
 __all__ = (
+    "AnchorType",
     "EpCommand",
     "EpisodeControl",
     "Pose",
@@ -18,6 +19,39 @@ from ...message_pool import default_message_pool
 
 _COMPILER_VERSION = "0.9.0"
 betterproto2.check_compiler_version(_COMPILER_VERSION)
+
+
+class AnchorType(betterproto2.Enum):
+    UNSPECIFIED = 0
+    """
+    the type of anchor is not yet known
+    """
+
+    PILOT = 1
+    """
+    four anchors each controlling one line
+    """
+
+    ARPEGGIO = 2
+    """
+    two anchors each controlling two lines
+    """
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "ANCHORTYPE_UNSPECIFIED",
+            1: "ANCHORTYPE_PILOT",
+            2: "ANCHORTYPE_ARPEGGIO",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "ANCHORTYPE_UNSPECIFIED": 0,
+            "ANCHORTYPE_PILOT": 1,
+            "ANCHORTYPE_ARPEGGIO": 2,
+        }
 
 
 class EpCommand(betterproto2.Enum):

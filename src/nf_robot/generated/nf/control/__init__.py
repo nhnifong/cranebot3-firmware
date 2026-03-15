@@ -29,9 +29,9 @@ betterproto2.check_compiler_version(_COMPILER_VERSION)
 
 
 class Command(betterproto2.Enum):
-    TIGHTEN_LINES = 0
+    UNUSED = 0
     """
-    Reel every line until tight (by switch)
+    value zero is unavailable for use
     """
 
     HALF_CAL = 1
@@ -89,6 +89,11 @@ class Command(betterproto2.Enum):
     Take the current set of targets as complete and correct and add entries to dataset
     """
 
+    TIGHTEN_LINES = 16
+    """
+    Reel every line until tight (by switch)
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -114,7 +119,7 @@ class Command(betterproto2.Enum):
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
-            0: "COMMAND_TIGHTEN_LINES",
+            0: "COMMAND_UNUSED",
             1: "COMMAND_HALF_CAL",
             2: "COMMAND_FULL_CAL",
             3: "COMMAND_ZERO_WINCH",
@@ -126,6 +131,7 @@ class Command(betterproto2.Enum):
             11: "COMMAND_UNPARK",
             12: "COMMAND_GRASP",
             13: "COMMAND_SUBMIT_TARGETS_TO_DATASET",
+            16: "COMMAND_TIGHTEN_LINES",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -135,7 +141,7 @@ class Command(betterproto2.Enum):
     @classmethod
     def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
         return {
-            "COMMAND_TIGHTEN_LINES": 0,
+            "COMMAND_UNUSED": 0,
             "COMMAND_HALF_CAL": 1,
             "COMMAND_FULL_CAL": 2,
             "COMMAND_ZERO_WINCH": 3,
@@ -147,6 +153,7 @@ class Command(betterproto2.Enum):
             "COMMAND_UNPARK": 11,
             "COMMAND_GRASP": 12,
             "COMMAND_SUBMIT_TARGETS_TO_DATASET": 13,
+            "COMMAND_TIGHTEN_LINES": 16,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,

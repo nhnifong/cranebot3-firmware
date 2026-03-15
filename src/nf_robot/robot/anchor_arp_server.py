@@ -61,23 +61,35 @@ class AnchorArpServer(RobotComponentServer):
     async def processOtherUpdates(self, updates, tg):
         if 'tighten' in updates:
             tg.create_task(self.tighten())
+        if 'aim_speed' in updates:
+            if updates['aim_speed'] == 0:
+                self.spools[0].setAimSpeed(0)
+                self.spools[1].setAimSpeed(0)
+            else:
+                try:
+                    speed, spool_no = updates['aim_speed']
+                    speed = float(speed)
+                    spool_no = int(spool_no)
+                    assert spool_no in [0,1]
+                    self.spools[spool_no].setAimSpeed(speed)
+                except (TypeError, ValueError, AssertionError):
+                    logging.warning(f'invalid aim_speed command. expected (speed, spool_no). got {updates["aim_speed"]}')
 
     def readOtherSensors(self):
         """ Sends updates about both spools with the form
         {
-            'spool1' : [
+            'spool0' : [
                 (time, line_length, line_speed, torque),
                 ...
             ],
-            'spool2': [...]
+            'spool1': [...]
         }
         """
         for i, spool in enumerate(self.spools):
             meas = spool.popMeasurements()
             if len(meas) > 0:
                 meas = meas[:50]
-            self.update[f'spool{i+2}'] = meas
-        logging.info(self.update)
+            self.update[f'spool{i}'] = meas
 
     def startOtherTasks(self):
         return list([

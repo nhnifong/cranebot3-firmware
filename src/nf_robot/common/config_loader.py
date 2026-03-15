@@ -5,6 +5,37 @@ from nf_robot.generated.nf import common, config as nf_config
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / 'configuration.json'
 
+# Anchors
+# Defaults based on a square room setup, pointing towards center.
+anchor_defs = [
+    # (num, position_xyz, rotation_rvec_xyz)
+    (0, (3.0, 3.0, 2.0),  (0.0, 0.0, -np.pi/4)),    # -45 deg
+    (1, (3.0, -3.0, 2.0), (0.0, 0.0, -3*np.pi/4)),  # -135 deg
+    (2, (-3.0, 3.0, 2.0), (0.0, 0.0, np.pi/4)),     # 45 deg
+    (3, (-3.0, -3.0, 2.0),(0.0, 0.0, 3*np.pi/4)),   # 135 deg
+]
+
+def default_arp_anchors():
+    anch_list = []
+    for i in (0,1):
+        anchor = nf_config.Anchor()
+        anchor.num = i
+        # leaving service_name None is a indicator that this anchor config is a placeholder
+        # and no such service has been disovered yet and assigned this anchor number
+        pos = anchor_defs[i*2][1]
+        rot = anchor_defs[i*2][2]
+        eye = anchor_defs[i*2+1][1]
+        anchor.pose = common.Pose(
+            rotation=common.Vec3(x=rot[0], y=rot[1], z=rot[2]),
+            position=common.Vec3(x=pos[0], y=pos[1], z=pos[2]),
+        )
+        anchor.indirect_line = nf_config.IndirectLine(
+            eyelet_pos=common.Vec3(x=eye[0], y=eye[1], z=eye[2]),
+            spool_index=0,
+        )
+        anch_list.append(anchor)  
+    return anch_list
+
 def create_default_config() -> nf_config.StringmanPilotConfig:
     """
     Creates a protobuf configuration object populated with reasonable defaults.
@@ -15,16 +46,6 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.robot_id = str(uuid.uuid4())
     config.has_been_calibrated = False
     config.connect_cloud_telemetry = False
-
-    # Anchors
-    # Defaults based on a square room setup, pointing towards center.
-    anchor_defs = [
-        # (num, position_xyz, rotation_rvec_xyz)
-        (0, (3.0, 3.0, 2.0),  (0.0, 0.0, -np.pi/4)),    # -45 deg
-        (1, (3.0, -3.0, 2.0), (0.0, 0.0, -3*np.pi/4)),  # -135 deg
-        (2, (-3.0, 3.0, 2.0), (0.0, 0.0, np.pi/4)),     # 45 deg
-        (3, (-3.0, -3.0, 2.0),(0.0, 0.0, 3*np.pi/4)),   # 135 deg
-    ]
 
     for num, pos, rot in anchor_defs:
         anchor = nf_config.Anchor()
@@ -113,6 +134,11 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
                     c.camera_cal_wide = default.camera_cal_wide
             if c.park_data is None:
                 c.park_data = nf_config.ParkData()
+
+            # any existing config which had anchors must have had pilot anchors
+            if c.anchor_type is None and len(c.anchors) > 0:
+                c.anchor_type = common.AnchorType.PILOT
+
             return c
 
             

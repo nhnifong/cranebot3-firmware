@@ -9,8 +9,9 @@ package nf.control;
 import "common.proto";
 
 enum Command {
-  // Reel every line until tight (by switch)
-  COMMAND_TIGHTEN_LINES = 0;
+  // value zero is unavailable for use
+  COMMAND_UNUSED = 0;
+
   // Perform fast calibration (takes about 2 seconds)
   COMMAND_HALF_CAL = 1;
   // Perform full calibration sequence. (requires setup of cards on the floor)
@@ -33,6 +34,8 @@ enum Command {
   COMMAND_GRASP = 12;
   // Take the current set of targets as complete and correct and add entries to dataset
   COMMAND_SUBMIT_TARGETS_TO_DATASET = 13;
+  // Reel every line until tight (by switch)
+  COMMAND_TIGHTEN_LINES = 16;
 
   // =====  Commands intended only for diagnostics =====
 

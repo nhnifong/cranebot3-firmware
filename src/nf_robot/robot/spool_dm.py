@@ -12,8 +12,8 @@ from nf_robot.robot.spools import SpiralCalculator
 default_conf_dm = {
     # number of records of length to keep
     'DATA_LEN': 1000,
-    # maximum acceleration in meters of line per second squared
-    'MAX_ACCEL': 1.6,
+    # maximum acceleration of spools in radians per second squared
+    'MAX_ACCEL': 0.01,
     # sleep delay of tracking loop
     'LOOP_FREQ_HZ': 50,
     # measured torque on a motor with orintation 1 and a line that is minimally taught. 
@@ -22,7 +22,7 @@ default_conf_dm = {
     'CRUISE_SPEED': 0.3,
     # factor controlling how torque is smoothed with ema
     'SMOOTH_FACTOR': 0.2,
-    # maxiumum allowable speed of line in meter per second
+    # maximum safe line speed in meters per second
     'MAX_SAFE_LINE_SPEED': 2.0,
 }
 
@@ -133,26 +133,26 @@ class DamiaoSpoolController:
         """
 
         self.motor.enable()
-        self.motor.ensure_control_mode("MIT")
+        self.motor.ensure_control_mode("VEL")
 
-        self.motor.send_cmd_mit(
-            target_position=0.0,
-            target_velocity=0.0,
-            stiffness=0.0,
-            damping=0.5, 
-            feedforward_torque=self.conf['TARGET_TORQUE']*self.direction
-        )
+        self.motor.set_acceleration(self.conf['MAX_ACCEL'])
+        self.motor.set_deceleration(-self.conf['MAX_ACCEL'])
+
+        self.motor.send_cmd_vel(target_velocity=0.0)
         
         start_time = time.time()
+        last_time = start_time
         smooth_torque = 0
         smooth_mute = 1
         twopi = 2*math.pi 
 
         try:
-
             while self.run_spool_loop:
                 loop_start = time.time()
-                elapsed = loop_start - start_time
+                dt = loop_start - last_time
+                if dt <= 0:
+                    dt = 1e-4  # Prevent zero division errors if loop runs too fast
+                last_time = loop_start
                 
                 # Read feedback from motor. flip if necessary.
                 states = self.motor.get_states()
@@ -161,7 +161,7 @@ class DamiaoSpoolController:
                 motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
                 # we could also read status status_code, t_mos, t_rotor (temps)
 
-                # TODO convert to absolute position in revolutions
+                # Convert to absolute position in revolutions
                 self.last_angle = self._update_absolute_angle(motor_pos)
                 
                 # low pass filter torque
@@ -171,29 +171,25 @@ class DamiaoSpoolController:
                 # calculate line data from motor data
                 self.last_length = self.sc.get_unspooled_length(self.last_angle)
                 self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
-                current_line_speed = motor_vel * 2 * math.pi * self.meters_per_rev
+                current_line_speed = (motor_vel / twopi) * self.meters_per_rev
+                line_tension = (-smooth_torque * twopi) / self.meters_per_rev
 
                 # accumulate these. parent class will send them on the websocket at it's own rate
-                row = (loop_start, self.last_length, current_line_speed, smooth_torque)
+                row = (loop_start, self.last_length, current_line_speed, line_tension)
                 self.record.append(row)
 
                 # convert last commanded speed from motion controller in meters per second
                 # to motor velocity in radians per second based on current circumfrence
-                wanted_motor_vel =  self.aim_line_speed / self.meters_per_rev * twopi
+                # let motor enforce acceleration limit
+                wanted_motor_vel = self.aim_line_speed / self.meters_per_rev * twopi
 
                 # prevent birdsnest by soft muting velocity when outspooling with no tension
                 self.torque_err = smooth_torque - self.conf['TARGET_TORQUE']
                 mute = 0 if (self.torque_err > 0 and wanted_motor_vel > 0) else 1
                 smooth_mute = mute * sf + smooth_mute * (1 - sf)
                 wanted_motor_vel *= smooth_mute
-                    
-                self.motor.send_cmd_mit(
-                    target_position=0.0,
-                    target_velocity=wanted_motor_vel*self.direction,
-                    stiffness=0.0,
-                    damping=0.5, 
-                    feedforward_torque=self.conf['TARGET_TORQUE']*self.direction
-                )
+                
+                self.motor.send_cmd_vel(target_velocity=wanted_motor_vel*self.direction)
 
                 time_to_sleep = 1.0 / self.conf['LOOP_FREQ_HZ'] - (time.time() - loop_start)
                 if time_to_sleep > 0:

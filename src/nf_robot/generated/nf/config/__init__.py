@@ -7,6 +7,7 @@ __all__ = (
     "Anchor",
     "CameraCalibration",
     "Gripper",
+    "IndirectLine",
     "ParkData",
     "Resolution",
     "StringmanPilotConfig",
@@ -55,6 +56,13 @@ class Anchor(betterproto2.Message):
     """
 
     port: "int" = betterproto2.field(5, betterproto2.TYPE_UINT32)
+
+    indirect_line: "IndirectLine | None" = betterproto2.field(
+        6, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    arpeggio anchor details
+    """
 
 
 default_message_pool.register_message("nf.config", "Anchor", Anchor)
@@ -110,6 +118,29 @@ class Gripper(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.config", "Gripper", Gripper)
+
+
+@dataclass(eq=False, repr=False)
+class IndirectLine(betterproto2.Message):
+    """
+    Settings specific to extra indirect line on arpeggio anchor
+    """
+
+    eyelet_pos: "_common__.Vec3 | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    Room position of the ceramic eyelet on the indirect line
+    """
+
+    spool_index: "int" = betterproto2.field(2, betterproto2.TYPE_UINT32)
+    """
+    spool index of the indirect line
+    spool 0 is the lower one (on the left when facing the front of the device)
+    """
+
+
+default_message_pool.register_message("nf.config", "IndirectLine", IndirectLine)
 
 
 @dataclass(eq=False, repr=False)
@@ -211,6 +242,13 @@ class StringmanPilotConfig(betterproto2.Message):
     park_data: "ParkData | None" = betterproto2.field(
         11, betterproto2.TYPE_MESSAGE, optional=True
     )
+
+    anchor_type: "_common__.AnchorType" = betterproto2.field(
+        12, betterproto2.TYPE_ENUM, default_factory=lambda: _common__.AnchorType(0)
+    )
+    """
+    once the anchor type is known, the config must become locked to that type.
+    """
 
 
 default_message_pool.register_message(

@@ -28,3 +28,12 @@ enum EpCommand {
 message EpisodeControl {
   EpCommand command = 1;
 }
+
+enum AnchorType {
+  // the type of anchor is not yet known
+  ANCHORTYPE_UNSPECIFIED = 0;
+  // four anchors each controlling one line
+  ANCHORTYPE_PILOT = 1;
+  // two anchors each controlling two lines
+  ANCHORTYPE_ARPEGGIO = 2;
+}

@@ -272,6 +272,9 @@ def multi_card_residuals(x, averages):
         elif len(projected_positions) > 1:
             # constraint 2: Consistency
             # Residual = Position_Calculated - Average_Position
+
+            # It is important that only the positions of markers are considered, not the entire pose,
+            # since the gantry displays the same tag four times symmetrically around a box, and every camera is likely seeing a different side.
             
             # Calculate the centroid of where the anchors currently "think" the marker is
             centroid = np.mean(projected_positions, axis=0)

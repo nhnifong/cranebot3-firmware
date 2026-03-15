@@ -37,6 +37,7 @@ from nf_robot.common.config_loader import *
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
+import nf_robot.generated.nf.config as nf_config
 from nf_robot.host.data_store import DataStore
 from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
@@ -51,8 +52,13 @@ anchor_service_name = 'cranebot-anchor-service'
 anchor_power_service_name = 'cranebot-anchor-power-service'
 gripper_service_name = 'cranebot-gripper-service'
 arp_gripper_service_name = 'cranebot-gripper-arpeggio-service'
+arp_anchor_service_name = 'cranebot-anchor-arpeggio-service'
 
-N_ANCHORS = 4
+N_ANCHORS = {
+    common.AnchorType.PILOT: 4,
+    common.AnchorType.ARPEGGIO: 2,
+}
+N_LINES = 4
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
 CONTROL_PLANE_PRODUCTION = "wss://neufangled.com"
 CONTROL_PLANE_STAGING = "wss://nf-site-monolith-staging-690802609278.us-east1.run.app"
@@ -60,6 +66,9 @@ CONTROL_PLANE_LOCAL = "ws://localhost:8080"
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
+
+# threshold of non slack tension in newtons
+TENSION_THRESH = 0.0275
 
 CRANEBOT_SERVICE_TYPES = [
     "_cranebot-gripper-arpeggio-service._tcp.local.",
@@ -124,8 +133,8 @@ class AsyncObserver:
         self.pool = None
         # all clients by server name
         self.bot_clients = {}
-        # all connected anchors
-        self.anchors = []
+        # all connected anchors keyed by anchor num
+        self.anchors = {}
         # convenience reference to gripper client
         self.gripper_client = None
         # TODO allow a command line argument to override the config file path
@@ -137,7 +146,6 @@ class AsyncObserver:
         self.shape_tracker = None
         # Position Estimator. this used to be a seperate process so it's still somewhat independent.
         self.pe = Positioner2(self.datastore, self)
-        self.sim_task = None
         self.locate_anchor_task = None
         # only one motion task can be active at a time
         self.motion_task = None
@@ -178,9 +186,15 @@ class AsyncObserver:
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
-        self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
-            poses=[a.pose for a in self.config.anchors]
-        ))
+        if self.config.anchor_type == common.AnchorType.ARPEGGIO:
+            self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
+                poses=[a.pose for a in self.config.anchors],
+                eyelets=[a.indirect_line.eyelet_pos],
+            ))
+        else:
+            self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
+                poses=[a.pose for a in self.config.anchors]
+            ))
         if self.config.park_data is not None:
             self.send_ui(named_position=telemetry.NamedObjectPosition(
                 name = 'parking_location',
@@ -320,8 +334,7 @@ class AsyncObserver:
     def _handle_add_cam_target(self, item: control.AddTargetFromAnchorCam):
         # Add the target
         targets2d = [[item.img_norm_x, item.img_norm_y]]
-        match_anchors = matching_items = [x for x in self.anchors if x.anchor_num == item.anchor_num]
-        if len(match_anchors) != 1:
+        if item.anchor_num not in self.anchors:
             return
         floor_points = project_pixels_to_floor(targets2d, match_anchors[0].camera_pose, self.config.camera_cal)
         print(f'adding target at floor point ({floor_points}) from image point ({targets2d[0]}) in anchor cam {item.anchor_num}')
@@ -335,7 +348,7 @@ class AsyncObserver:
     def submitTargets(self):
         """snapshot any active cameras at 1920x1080 and save images in the raw dir"""
         images = []
-        for anchor in self.anchors:
+        for anchor in self.anchors.values():
             if anchor.frame is not None:
                 images.append(anchor.frame.copy())
 
@@ -353,13 +366,14 @@ class AsyncObserver:
         threading.Thread(target=save_data, args=(images,)).start()
 
     def _handle_scale_room(self, item: control.ScaleRoom):
+        # not implemented for arpeggio anchor
         if item.scale:
             # move positions of anchors towards or away from origin
             print(f'scaling by {item.scale}')
-            anchor_poses = [(client.anchor_pose[0], client.anchor_pose[1]*item.scale) for client in self.anchors]
+            anchor_poses = [(client.anchor_pose[0], client.anchor_pose[1]*item.scale) for client in self.anchors.values()]
 
             # update everything
-            for client in self.anchors:
+            for client in self.anchors.values():
                 self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
                 client.updatePose(anchor_poses[client.anchor_num])
             save_config(self.config, self.config_path)
@@ -374,7 +388,7 @@ class AsyncObserver:
 
         if item.tiltcams:
             print(f'tilting cams inward by {item.tiltcams} deg')
-            for client in self.anchors:
+            for client in self.anchors.values():
                 client.extratilt += item.tiltcams
                 client.updatePose(client.anchor_pose)
 
@@ -392,8 +406,6 @@ class AsyncObserver:
                 r = await self.invoke_motion_task(self.half_auto_calibration())
             case control.Command.FULL_CAL:
                 r = await self.invoke_motion_task(self.full_auto_calibration())
-            case control.Command.ENABLE_LEROBOT:
-                self.training_task = asyncio.create_task(self.begin_training_mode())
             case control.Command.PICK_AND_DROP:
                 r = await self.invoke_motion_task(self.pick_and_place_loop())
             case control.Command.HORIZONTAL_CHECK:
@@ -459,14 +471,15 @@ class AsyncObserver:
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
 
+        if self.config.anchor_type != common.AnchorType.PILOT:
+            return
+
         # identify the client we need to send the command to
         client = None
         if jog.is_gripper:
             client = self.gripper_client
         else:
-            for c in self.anchors:
-                if c.anchor_num == jog.anchor_num:
-                    client = c
+            client = self.anchors[jog.anchor_num]
 
         # send the right kind of jog command
         if client is not None:
@@ -485,7 +498,7 @@ class AsyncObserver:
         if stop_data.get('id') == 'gripper' and self.gripper_client:
             asyncio.create_task(self.gripper_client.slow_stop_spool())
         else:
-            for client in self.anchors:
+            for client in self.anchors.values():
                 if client.anchor_num == stop_data.get('id'):
                     asyncio.create_task(client.slow_stop_spool())
 
@@ -570,7 +583,7 @@ class AsyncObserver:
     async def tension_lines(self):
         """Request all anchors to reel in all lines until tight.
         This is a fire and forget function"""
-        for client in self.anchors:
+        for client in self.anchors.values():
             asyncio.create_task(client.send_commands({'tighten': None}))
         # This function does not  wait for confirmation from every anchor, as it would just hold up the processing of the ob_q
         # this is similar to sending a manual move command. it can be overridden by any subsequent command.
@@ -587,9 +600,9 @@ class AsyncObserver:
             await asyncio.sleep(POLL_INTERVAL_S)
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
-            tight = np.array(records[:,3])
-            print(f'wait for tension speeds={speeds} tight={tight}')
-            complete = np.all(tight) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
+            tension = np.array(records[:,3])
+            print(f'wait for tension speeds={speeds} tension={tension}')
+            complete = np.all(tension > TENSION_THRESH) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
         return True
 
     async def tension_and_wait(self):
@@ -599,12 +612,12 @@ class AsyncObserver:
         await self.wait_for_tension()
 
     async def sendReferenceLengths(self, lengths):
-        if len(lengths) != N_ANCHORS:
+        if len(lengths) != N_LINES:
             print(f'Cannot send {len(lengths)} ref lengths to anchors')
             return
         # any anchor that receives this and is slack would ignore it
         # If only some anchors are connected, this would still send reference lengths to those
-        for client in self.anchors:
+        for client in self.anchors.values():
             asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
 
         # use swing to estimate winch line length in pilot gripper
@@ -618,15 +631,6 @@ class AsyncObserver:
         position = np.mean(data[:,2:], axis=0)
         print(f'reseting filter biases with assumed position of {position}')
         self.pe.kf.reset_biases(position)
-
-    async def set_simulated_data_mode(self, mode):
-        if self.sim_task is not None:
-            self.sim_task.cancel()
-            result = await self.sim_task
-        if mode == 'circle':
-            self.sim_task = asyncio.create_task(self.add_simulated_data_circle())
-        elif mode == 'point2point':
-            self.sim_task = asyncio.create_task(self.add_simulated_data_point2point())
 
     async def stop_all(self):
         # If lerobot scripts are connected this must also stop them
@@ -665,34 +669,11 @@ class AsyncObserver:
             asyncio.create_task(client.slow_stop_spool())
         self.pe.record_commanded_vel(np.zeros(3))
 
-    async def begin_training_mode(self):
-        """Begin allowing the robot to be controlled from the grpc server
-        movement could occur at any time while the server is running"""
-
-        from nf_robot.ml.control_service import start_robot_control_server
-        from nf_robot.ml.stringman_record_loop import record_until_disconnected
-
-        try:
-            # begin allowing requests from self.grpc_server
-            self.grpc_server = await start_robot_control_server(self)
-            # Start child process to run the dataset manager?
-            # dataset_process = multiprocessing.Process(target=record_until_disconnected, name='lerobot_record')
-            # dataset_process.daemon = False
-            # dataset_process.start()
-            await self.grpc_server.wait_for_termination()
-        except asyncio.CancelledError:
-            raise
-        finally:
-            print('training server closed.')
-            await self.grpc_server.stop(grace=5)
-            self.grpc_server = None
-            self.slow_stop_all_spools()
-
-    def locate_anchors(self):
-        """using the record of recent origin detections and cal_assist marker detections, estimate the pose of each anchor."""
+    def snapshot_tag_observations(self):
+        """Recent origin detections and cal_assist marker detections"""
         markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3', 'gantry']
         averages = defaultdict(lambda: [[]]*4)
-        for client in self.anchors:
+        for client in self.anchors.values():
             # average each list of detections, but leave them in the camera's reference frame.
             for marker in markers:
                 if marker == 'gantry':
@@ -702,14 +683,47 @@ class AsyncObserver:
                 print(f'anchor {client.anchor_num} has {len(averages[marker][client.anchor_num])} observations of {marker}')
             if len(averages['origin'][client.anchor_num]) == 0:
                 raise RuntimeError(f'Anchor {client.anchor_num} could not see the origin marker.')
+        return dict(averages)
 
-        # run optimization in pool
-        async_result = self.pool.apply_async(optimize_anchor_poses, (dict(averages),))
-        anchor_poses = async_result.get(timeout=30)
-        print(f'obtained result from find_cal_params anchor_poses=\n{anchor_poses}')
+    def save_poses_arp(self, anchor_poses, eyelet_positions):
+        # Use the optimization output to update anchor poses and spool params
+        print(f'Saving result from eyelet optimization\nanchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+        for anum, client in self.anchors.items():
+            self.config.anchors[anum].pose = poseTupleToProto(anchor_poses[anum])
+            self.config.anchors[anum].indirect_line.eyelet_pos = fromnp(eyelet_positions[anum])
+            client.updatePoseAndEye(anchor_poses[anum], eyelet_positions[anum])
+        save_config(self.config, self.config_path)
+        # inform UI
+        self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
+            poses=[poseTupleToProto(p) for p in anchor_poses],
+            eyelets=[fromnp(e) for e in eyelet_positions]
+        ))
+        # inform position estimator
+        anchor_points = np.array([
+            compose_poses([anchor_poses[0, 1], model_constants.arp_anchor_right_eyelet])[1],
+            eyelet_positions[0],
+            compose_poses([anchor_poses[1, 1], model_constants.arp_anchor_right_eyelet])[1],
+            eyelet_positions[1],
+        ])
+        self.pe.set_anchor_points(anchor_points)
 
-        return np.array(anchor_poses)
+    async def collect_arp_anchor_eyelet_experiment_data(self):
+        """  
+        Perform experiments in which one indirect line is tight and moved from a before to after position
+        the opposite indirect line is slack, and the two direct anchor lines are tight and don't change.
+        """
+        # tighten all lines and raise up enough that the gripper is off the floor
+        # for each side
+        for experimental_eyelet in (0,1):
+            # slacken the opposite line
 
+            for i in range(3):
+                pass
+                # record "before" sightings
+                # move the experimental line
+                # record "after" sightings
+                # move the anchor lines to a new position.
+    
     async def half_auto_calibration(self):
         """
         Set line lengths from observation
@@ -720,7 +734,7 @@ class AsyncObserver:
         OPTIMIZER_TIMEOUT_S = 60  # seconds
         
         try:
-            if len(self.anchors) < N_ANCHORS:
+            if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
                 print('Cannot run half calibration until all anchors are connected')
                 return
 
@@ -749,16 +763,15 @@ class AsyncObserver:
         ))
         DETECTION_WAIT_S = 1.0 # seconds
         try:
-            if len(self.anchors) < N_ANCHORS:
+            if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
                 print('Cannot run full calibration until all anchors are connected')
                 return
-            elif len(self.anchors) > N_ANCHORS:
-                print(f'Too many anchors, what is going on here\n{self.anchors}')
-            self.anchors.sort(key=lambda x: x.anchor_num)
+            elif len(self.anchors) > N_ANCHORS[self.config.anchor_type]:
+                print(f'Too many anchors found for type {self.config.anchor_type} \n{self.anchors}')
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
             #   it is only necessary to ensure enough have been collected from each client and average them.
-            for a in self.anchors:
+            for a in self.anchors.values():
                 a.save_raw = True
             num_o_dets = []
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -770,34 +783,61 @@ class AsyncObserver:
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
                 print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 await asyncio.sleep(DETECTION_WAIT_S)
-                num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors]
-            
+                num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
+
+            averages = self.snapshot_tag_observations()
+
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=12.0,
                 name="Calibration",
-                current_action="Running optimizer",
+                current_action="Determining anchor positions",
             ))
-            anchor_poses = self.locate_anchors()
 
-            for a in self.anchors:
-                a.save_raw = False
+            if self.config.anchor_type == common.AnchorType.ARPEGGIO:
+                # determine position of two anchors visually and guess at external eyelets.
+                anchor_poses, eyelet_positions = await optimize_arp_anchors(averages)
+                self.save_poses_arp(anchor_poses, eyelet_positions)
+                self.send_ui(operation_progress=telemetry.OperationProgress(
+                    percent_complete=20.0,
+                    name="Calibration",
+                    current_action="Collecting proprioceptive data",
+                ))
+                # collect length_change_data data to estimate eyelets better
+                length_change_data = await self.collect_arp_anchor_eyelet_experiment_data()
+                # stop saving raw poses
+                for a in self.anchors.values():
+                    a.save_raw = False
+                # optimize again with length_change_data
+                anchor_poses, eyelet_positions = await optimize_arp_anchors(averages, length_change_data)
+                self.save_poses_arp(anchor_poses, eyelet_positions)
 
-            # Use the optimization output to update anchor poses and spool params
-            for client in self.anchors:
-                self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
-                client.updatePose(anchor_poses[client.anchor_num])
-            save_config(self.config, self.config_path)
-            # inform UI
-            self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
-                poseTupleToProto(p)
-                for p in anchor_poses
-            ]))
-            # inform position estimator
-            anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
-            self.pe.set_anchor_points(anchor_points)
+            else:
+                for a in self.anchors.values():
+                    a.save_raw = False
+
+                # run optimization in pool
+                async_result = self.pool.apply_async(optimize_anchor_poses, (averages,))
+                anchor_poses = async_result.get(timeout=30)
+                print(f'obtained result from find_cal_params anchor_poses=\n{anchor_poses}')
+                anchor_poses = np.array(anchor_poses)
+
+                # Use the optimization output to update anchor poses and spool params
+                for client in self.anchors.values():
+                    self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
+                    client.updatePose(anchor_poses[client.anchor_num])
+                save_config(self.config, self.config_path)
+                # inform UI
+                self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
+                    poseTupleToProto(p)
+                    for p in anchor_poses
+                ]))
+                # inform position estimator
+                anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
+                self.pe.set_anchor_points(anchor_points)
+
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=20.0,
+                percent_complete=40.0,
                 name="Calibration",
                 current_action="Tensioning lines and Locating Gripper",
             ))
@@ -805,7 +845,7 @@ class AsyncObserver:
 
             if isinstance(self.gripper_client, ArpeggioGripperClient):
                 self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=30.0,
+                    percent_complete=50.0,
                     name="Calibration",
                     current_action="Measuring point of finger contact",
                 ))
@@ -817,7 +857,7 @@ class AsyncObserver:
 
             # move over the origin card
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=40.0,
+                percent_complete=60.0,
                 name="Calibration",
                 current_action="Moving gripper to origin",
             ))
@@ -856,6 +896,9 @@ class AsyncObserver:
                 current_action=str(e),
             ))
             raise
+
+    async def calibrate_arp_anchor_poses(self):
+        pass
 
     async def calibrate_spin(self):
         """Calibration of the relationship between the wrist and the room frame of reference.
@@ -1104,27 +1147,55 @@ class AsyncObserver:
         key  = ".".join(namesplit[:3])
 
         address = socket.inet_ntoa(info.addresses[0])
+        print(namesplit)
 
         is_power_anchor = kind == anchor_power_service_name
         is_standard_anchor = kind == anchor_service_name
         is_standard_gripper = kind == gripper_service_name
         is_arp_gripper = kind == arp_gripper_service_name
+        is_arp_anchor = kind == arp_anchor_service_name
 
-        if is_power_anchor or is_standard_anchor:
-            # the number of anchors is decided ahead of time (in main.py)
-            # but they are assigned numbers as we find them on the network
-            # and the chosen numbers are persisted in configuration.json
-            # create a map structure from the existing config in order to look up things in it.
+        # -- BEFORE --
+        # the number of anchors is decided ahead of time (in main.py)
+        # but they are assigned numbers as we find them on the network
+        # and the chosen numbers are persisted in configuration.json
+
+        # -- AFTER --
+        # the number of lines is always four.
+        # the number of anchors may be four pilot anchors controlling one line each,
+        # or two arpeggio anchors controlling two lines each.
+        # they cannot be mixed. As soon as one type is discovered, this config will be locked to that type.
+        # when the anchor type is arpeggio, anchor_num is 0 or 1.
+        # refrerences to anchor num that referred to a service, a camera or its pose can still reference anchor num.
+        # references to anchor num that were referring to grommet positions or line lengths and speeds,
+        # must now refer line numbers 0-3. sending a command to jog a spool or set a line speed must be abstracted through
+        # a class that will send the message to the connected server that manages that line.
+
+        if is_power_anchor or is_standard_anchor or is_arp_anchor:
+            found_type = common.AnchorType.ARPEGGIO if is_arp_anchor else common.AnchorType.PILOT
+            
+            if self.config.anchor_type == common.AnchorType.UNSPECIFIED:
+                # the first discovered anchor locks the config to an anchor type
+                self.config.anchor_type = found_type
+                if is_arp_anchor:
+                    # replace the four default pilot anchors in the config with two default arp anchors having unset addresses and service names
+                    self.config.anchors = default_arp_anchors() # imported from config_loader
+
+            elif self.config.anchor_type != found_type:
+                print(f'Ignored {found_type} anchor at {address} because config is locked to {self.config.anchor_type}')
+                return
+
+            # create a map from service name to anchor num
             anchor_num_map = {a.service_name: a.num for a in self.config.anchors if a.service_name is not None}
             if key in anchor_num_map:
                 anchor_num = anchor_num_map[key]
             else:
                 anchor_num = len(anchor_num_map)
-                if anchor_num >= N_ANCHORS:
+                if anchor_num >= N_ANCHORS[self.config.anchor_type]:
                     # Discovering more that four anchors could be a sign that another robot in the same network is turned on.
                     # We need a way to know that, but for now, you'll have to make sure only one is one at a time while discovering.
                     # After discovery, it should be ok to have more than one on at a time.
-                    print(f"Discovered another anchor server on the network, but we already know of 4 {key} {address}")
+                    print(f"Discovered another {found_type} server on the network, but we already know of {N_ANCHORS[self.config.anchor_type]} {key} {address}")
                     return None
             if self.config.anchors[anchor_num].address != address or self.config.anchors[anchor_num].port != info.port:
                 self.config.anchors[anchor_num].num = anchor_num
@@ -1160,9 +1231,9 @@ class AsyncObserver:
         if key in self.bot_clients:
             client = self.bot_clients[key]
             await client.shutdown()
-            if kind == anchor_service_name or kind == anchor_power_service_name:
-                self.anchors.remove(client)
-            elif kind == gripper_service_name:
+            if kind == anchor_service_name or kind == anchor_power_service_name or kind == arp_anchor_service_name:
+                del self.anchors[client.anchor_num]
+            elif kind == gripper_service_name or kind == arp_gripper_service_name:
                 self.gripper_client = None
             del self.bot_clients[key]
 
@@ -1254,7 +1325,7 @@ class AsyncObserver:
                     continue
                 client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.telemetry_env)
                 client.connection_established_event = self.any_anchor_connected
-                self.anchors.append(client)
+                self.anchors[a.num] = client
 
         if client:
             self.bot_clients[service_name] = client
@@ -1440,8 +1511,6 @@ class AsyncObserver:
             tasks.append(self.aiobrowser.async_cancel())
         if self.aiozc is not None:
             tasks.append(self.aiozc.async_close())
-        if self.sim_task is not None:
-            tasks.append(self.sim_task)
         if self.locate_anchor_task is not None:
             tasks.append(self.locate_anchor_task)
         if self.gip_task is not None:
@@ -1456,42 +1525,6 @@ class AsyncObserver:
         except asyncio.exceptions.CancelledError:
             pass
         print('Stringman Controller Shutdown')
-
-    async def add_simulated_data_circle(self):
-        """ Simulate the gantry moving in a circle"""
-        TIME_DIVISOR_FOR_ANGLE = 8.0
-        GANTRY_Z_HEIGHT = 1.3 # meters
-        RANDOM_EVENT_CHANCE = 0.5
-        RANDOM_NOISE_MAGNITUDE = 0.1 # meters
-        WINCH_LINE_LENGTH = 1.0 # meters
-        RANGEFINDER_OFFSET = 1.0 # meters
-        LOOP_SLEEP_S = 0.05 # seconds
-        
-        while self.run_command_loop:
-            try:
-                t = time.time()
-                gantry_real_pos = np.array([t, np.sin(t/TIME_DIVISOR_FOR_ANGLE), np.cos(t/TIME_DIVISOR_FOR_ANGLE), GANTRY_Z_HEIGHT])
-                if random() > RANDOM_EVENT_CHANCE:
-                    anum = anchor_num = np.random.randint(4)
-                    dp = gantry_real_pos + np.array([t, anum, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE, random()*RANDOM_NOISE_MAGNITUDE])
-                    self.datastore.gantry_pos.insert(dp)
-                    self.send_ui(gantry_sightings=telemetry.GantrySightings(sightings=[fromnp(dp[1:])]))
-                # winch line always 1 meter
-                self.datastore.winch_line_record.insert(np.array([t, WINCH_LINE_LENGTH, 0.0]))
-                # range always perfect
-                self.datastore.range_record.insert(np.array([t, gantry_real_pos[3]-RANGEFINDER_OFFSET]))
-                # anchor lines always perfectly agree with gripper position
-                for i, simanc in enumerate(self.pe.anchor_points):
-                    dist = np.linalg.norm(simanc - gantry_real_pos[1:])
-                    last = self.datastore.anchor_line_record[i].getLast()
-                    timesince = t-last[0]
-                    travel = dist-last[1]
-                    speed = travel/timesince
-                    self.datastore.anchor_line_record[i].insert(np.array([t, dist, speed, 1.0]))
-                tt = self.datastore.anchor_line_record[0].getLast()[0]
-                await asyncio.sleep(LOOP_SLEEP_S)
-            except asyncio.exceptions.CancelledError:
-                break
 
     async def add_simulated_data_point2point(self):
         """Simulate the gantry moving from random point to random point.
@@ -1571,12 +1604,6 @@ class AsyncObserver:
                 await asyncio.sleep(LOOP_SLEEP_S)
             except asyncio.exceptions.CancelledError:
                 break
-
-    def collect_gant_frame_positions(self):
-        result = np.zeros((4,3))
-        for client in self.anchors:
-            result[client.anchor_num] = client.last_gantry_frame_coords
-        return result
 
     async def send_gripper_move(self, line_speed, finger_speed, wrist_speed):
         """Command the gripper's motors in one update.
@@ -1701,6 +1728,13 @@ class AsyncObserver:
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
 
+    async def send_line_speed(self, line_no, speed):
+        # send the line speed to the client that controls that line
+        if self.config.anchor_type == common.AnchorType.PILOT:
+            asyncio.create_task(self.anchors[line_no].send_commands({'aim_speed': speed}))
+        elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
+            asyncio.create_task(self.anchors[line_no//2].send_commands({'aim_speed': (speed, line_no%2)}))
+
     async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04, key='default'):
         """Move in the direction of the given unit vector at the given speed.
         Any move must be based on some assumed starting position. if none is provided,
@@ -1744,8 +1778,8 @@ class AsyncObserver:
             speed = 0
 
         if speed == 0:
-            for client in self.anchors:
-                asyncio.create_task(client.send_commands({'aim_speed': 0}))
+            for line_no in range(4):
+                await self.send_line_speed(line_no, 0)
             velocity = np.zeros(3)
             self.pe.record_commanded_vel(velocity)
             return velocity
@@ -1764,10 +1798,6 @@ class AsyncObserver:
         speed = np.linalg.norm(total_velocity)
         uvec  = total_velocity / speed
 
-        anchor_positions = np.zeros((4,3))
-        for a in self.anchors:
-            anchor_positions[a.anchor_num] = np.array(a.anchor_pose[1])
-
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # line lengths at new pos
@@ -1782,8 +1812,8 @@ class AsyncObserver:
         line_speeds = deltas * KINEMATICS_STEP_SCALE * speed
 
         # send move
-        for client in self.anchors:
-            asyncio.create_task(client.send_commands({'aim_speed': line_speeds[client.anchor_num]}))
+        for i, speed in enumerate(line_speeds):
+            await self.send_line_speed(i, speed)
         self.pe.record_commanded_vel(total_velocity)
         return total_velocity
 
@@ -1796,10 +1826,7 @@ class AsyncObserver:
             if self.gripper_client is not None:
                 image = self.gripper_client.lerobot_jpeg_bytes
         else:
-            anum = int(camera_key)
-            for client in self.anchors:
-                if client.anchor_num == anum:
-                    image = client.lerobot_jpeg_bytes
+            image = self.anchors[int(camera_key)].lerobot_jpeg_bytes
         if image is not None:
             return image
         return bytes()
@@ -1834,8 +1861,8 @@ class AsyncObserver:
         while not (have_gripper_frames or have_anchor_frames):
             await asyncio.sleep(1)
             have_gripper_frames = self.gripper_client is not None and self.gripper_client.last_frame_resized is not None
-            for client in self.anchors:
-                if client.anchor_num in self.config.preferred_cameras and client.last_frame_resized is not None:
+            for anum, client in self.anchors.items():
+                if anum in self.config.preferred_cameras and client.last_frame_resized is not None:
                     have_anchor_frames = True
 
         import torch
@@ -1911,7 +1938,7 @@ class AsyncObserver:
             # collect images from any anchors that have one
             valid_anchor_clients = []
             img_tensors = []
-            for client in self.anchors:
+            for client in self.anchors.values():
                 if client.last_frame_resized is None or client.anchor_num not in self.config.preferred_cameras:
                     continue
                 # these are already assumed to be at the correct resolution 

@@ -38,8 +38,12 @@ message GantrySightings {
 
 // Send by the observer to UIs when calibration or config file reading has set the anchor poses
 message AnchorPoses {
-	// always send all four poses in order of anchor num
+	// Will either be four poses in order of anchor num (pilot anchors)
+	// or two anchor poses (arpeggio anchors)
 	repeated nf.common.Pose poses = 1;
+
+	// when anchors are arpeggio type, two eyelet positions are also sent.
+	repeated nf.common.Vec3 eyelets = 2;
 }
 
 enum ConnStatus {

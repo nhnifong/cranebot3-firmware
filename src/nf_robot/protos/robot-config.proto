@@ -4,6 +4,16 @@ package nf.config;
 
 import "common.proto";
 
+// Settings specific to extra indirect line on arpeggio anchor
+message IndirectLine {
+  // Room position of the ceramic eyelet on the indirect line
+  common.Vec3 eyelet_pos = 1;
+
+  // spool index of the indirect line
+  // spool 0 is the lower one (on the left when facing the front of the device)
+  uint32 spool_index = 2;
+}
+
 // Configuration of an Anchor
 message Anchor {
   // Index of the anchor in the system (0 to 4).
@@ -18,6 +28,9 @@ message Anchor {
   // IP address where last seen
   optional string address = 4;
   uint32 port = 5;
+
+  // arpeggio anchor details
+  optional IndirectLine indirect_line= 6;
 }
 
 message Gripper {
@@ -87,4 +100,7 @@ message StringmanPilotConfig {
   bool has_been_calibrated = 9;
 
   ParkData park_data = 11;
+
+  // once the anchor type is known, the config must become locked to that type.
+  common.AnchorType anchor_type = 12;
 }
