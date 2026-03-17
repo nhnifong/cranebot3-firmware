@@ -336,7 +336,7 @@ class AsyncObserver:
         targets2d = [[item.img_norm_x, item.img_norm_y]]
         if item.anchor_num not in self.anchors:
             return
-        floor_points = project_pixels_to_floor(targets2d, match_anchors[0].camera_pose, self.config.camera_cal)
+        floor_points = project_pixels_to_floor(targets2d, self.anchors[item.anchor_num].camera_pose, self.config.camera_cal)
         print(f'adding target at floor point ({floor_points}) from image point ({targets2d[0]}) in anchor cam {item.anchor_num}')
         if (len(floor_points) == 1):
             if item.target_id is not None:
@@ -1229,6 +1229,7 @@ class AsyncObserver:
 
         # only in this dict if we are connected to it.
         if key in self.bot_clients:
+            await self._handle_set_swing_cancellation(item=control.SetSwingCancellation(enabled=False, present='.'))
             client = self.bot_clients[key]
             await client.shutdown()
             if kind == anchor_service_name or kind == anchor_power_service_name or kind == arp_anchor_service_name:
@@ -1794,7 +1795,7 @@ class AsyncObserver:
         # this commanded velocity overwrites the last velocity with the same key and all velocities are summed
         # currently this is only used to combine swing cancellation with user inputs.
         self.input_velocities[key] = velocity
-        total_velocity = np.sum([self.input_velocities[k] for k in self.active_set], axis=0)
+        total_velocity = np.sum([self.input_velocities.get(k, 0) for k in self.active_set], axis=0)
         speed = np.linalg.norm(total_velocity)
         uvec  = total_velocity / speed
 
@@ -2223,14 +2224,14 @@ class AsyncObserver:
         OPEN = -50
         CLOSED = 90
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        FLOOR_GRIPPER_HEIGHT = 0.11 # distance above floor (gripper origin) when grasp should be started
+        FLOOR_GRIPPER_HEIGHT = 0.10 # distance above floor (gripper origin) when grasp should be started
         RANGE_ITEM = 0.04 # range to item below which grip should be started
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.06
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 25.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
+        LAT_SPEED_ADJUSTMENT = 15.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 10.0
         NUM_ATTEMPTS = 3
