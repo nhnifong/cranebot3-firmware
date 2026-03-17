@@ -123,7 +123,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, auto_start=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, auto_start=False, local_models=False) -> None:
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
@@ -183,6 +183,7 @@ class AsyncObserver:
         self.run_ai = run_ai
         self.auto_start = auto_start
         self.swing_cancellation_task = None
+        self.local_models = local_models
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -1229,7 +1230,7 @@ class AsyncObserver:
 
         # only in this dict if we are connected to it.
         if key in self.bot_clients:
-            await self._handle_set_swing_cancellation(item=control.SetSwingCancellation(enabled=False, present='.'))
+            # await self._handle_set_swing_cancellation(item=control.SetSwingCancellation(enabled=False, present='.'))
             client = self.bot_clients[key]
             await client.shutdown()
             if kind == anchor_service_name or kind == anchor_power_service_name or kind == arp_anchor_service_name:
@@ -1732,9 +1733,11 @@ class AsyncObserver:
     async def send_line_speed(self, line_no, speed):
         # send the line speed to the client that controls that line
         if self.config.anchor_type == common.AnchorType.PILOT:
-            asyncio.create_task(self.anchors[line_no].send_commands({'aim_speed': speed}))
+            if line_no in self.anchors:
+                asyncio.create_task(self.anchors[line_no].send_commands({'aim_speed': speed}))
         elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
-            asyncio.create_task(self.anchors[line_no//2].send_commands({'aim_speed': (speed, line_no%2)}))
+            if line_no//2 in self.anchors:
+                asyncio.create_task(self.anchors[line_no//2].send_commands({'aim_speed': (speed, line_no%2)}))
 
     async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04, key='default'):
         """Move in the direction of the given unit vector at the given speed.
@@ -1873,13 +1876,19 @@ class AsyncObserver:
         from nf_robot.ml.centering import CenteringNet
 
         def load_models_sync():
-            target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
+            if self.local_models:
+                target_path = "models/target_heatmap.pth"
+            else:
+                target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
             print(f"Loading model from {target_path}...")
             t_model = TargetHeatmapNet().to(DEVICE)
             t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
             t_model.eval()
 
-            center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
+            if self.local_models:
+                center_path = "models/square_centering.pth"
+            else:
+                center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
             print(f"Loading model from {center_path}...")
             c_model = CenteringNet().to(DEVICE)
             c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
@@ -2224,18 +2233,19 @@ class AsyncObserver:
         OPEN = -50
         CLOSED = 90
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        FLOOR_GRIPPER_HEIGHT = 0.10 # distance above floor (gripper origin) when grasp should be started
+        FLOOR_GRIPPER_HEIGHT = 0.11 # distance above floor (gripper origin) when grasp should be started
         RANGE_ITEM = 0.04 # range to item below which grip should be started
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.06
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 15.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
+        LAT_SPEED_ADJUSTMENT = 35.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 10.0
         NUM_ATTEMPTS = 3
-        CLOSING_FINGER_SPEED = 90
+        CLOSING_FINGER_SPEED = 20
+        WRIST_SMOOTH_FACTOR = 0.9
 
         smooth_grip_angle = self.grip_angle
 
@@ -2260,6 +2270,7 @@ class AsyncObserver:
                     # for small objects, we don't want to, we can't get that low, the fingers would touch the floor and the object
                     # would still be a few cm away from the rangefinder. 
 
+                    print(f'range_to_target {range_to_target} gripper_height = {gripper_height}')
                     if range_to_target < RANGE_ITEM or gripper_height < FLOOR_GRIPPER_HEIGHT:
                         print(f'Reached target at height {gripper_height} and range {range_to_target}')
                         break
@@ -2270,6 +2281,7 @@ class AsyncObserver:
                             print('print nothing seen during centering loop')
                             break
                     else:
+                        print('saw target, reset countdown')
                         nothing_seen_countdown = 15
 
                     # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
@@ -2299,7 +2311,7 @@ class AsyncObserver:
                     await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
 
                     # move wrist to predicted grip angle with smoothing
-                    smooth_grip_angle = smooth_grip_angle*0.8 + self.grip_angle*0.2
+                    smooth_grip_angle = smooth_grip_angle*WRIST_SMOOTH_FACTOR + self.grip_angle*(1-WRIST_SMOOTH_FACTOR)
                     await self.gripper_client.send_commands({'set_wrist_angle': smooth_grip_angle/np.pi*180})
 
                     try:
@@ -2397,10 +2409,11 @@ def main():
         )
     parser.add_argument("--no_ai", action="store_true", help="Disable model execution. Use with small hardware. Only manual movement will be possible")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
+    parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     args = parser.parse_args()
 
     async def run_async():
-        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start)
+        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start, local_models=args.local_models)
 
         # Idempotent stop trigger
         def stop():

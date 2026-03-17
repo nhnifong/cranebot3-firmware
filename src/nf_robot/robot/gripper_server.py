@@ -168,7 +168,7 @@ class RaspiGripperServer(RobotComponentServer):
                 self.desired_finger_angle =finger
         except FileNotFoundError:
             pass
-        except EOFError: # corruption
+        except (EOFError, pickle.UnpicklingError): # corruption
             os.remove('offsets.pickle')
 
         # a mode in which the finger tries to automatically hold a given pressure
