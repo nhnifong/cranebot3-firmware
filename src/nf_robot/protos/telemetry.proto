@@ -64,7 +64,9 @@ message ComponentConnStatus {
 	ConnStatus websocket_status = 3;
 	ConnStatus video_status = 4;
 	string ip_address = 5; // On the wifi network in the house where the robot is.
-	optional GripperModel gripper_model = 6; 
+	optional GripperModel gripper_model = 6;
+	// Message with additional detail about why the component may not be functioning.
+	optional string error_message = 7;
 }
 
 // Info on the throughput and latency of video connections and apriltag processing
@@ -211,6 +213,15 @@ message SwingCancellationState {
   string present = 2; // something must be present other than a boolean with a false value for the message to even exist.
 }
 
+// Lists of anchors which can see specific tags.
+// For now, only sent during first stage of calibration and only when something changes.
+message VisibilityStates {
+	// Anchors which can see the origin card. for example [0,2,3]
+	repeated uint32 anchors_seeing_origin_card = 1;
+
+	// Add other tag states if needed
+}
+
 // A single kind of update that the observer is providing to an external UI
 // Typically about the robot's state such as it's position
 message TelemetryItem {
@@ -233,6 +244,7 @@ message TelemetryItem {
 		OperationProgress operation_progress = 17;
 		CommandedGrip last_commanded_grip = 18;
     SwingCancellationState swing_cancellation_state = 19;
+    VisibilityStates visibility_states = 20;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

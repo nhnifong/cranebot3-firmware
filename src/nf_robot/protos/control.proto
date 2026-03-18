@@ -142,6 +142,29 @@ message SetSwingCancellation {
   string present = 2; // something must be present other than a boolean with a false value for the message to even exist.
 }
 
+// A command which can be sent to a single component, usually for setup or diagnostics
+enum ComponentAction {
+  // value zero is unavailable for use
+  COMPONENT_ACTION_UNUSED = 0;
+
+  // Reboot component
+  COMPONENT_ACTION_REBOOT = 1;
+  // Identify component by moving some motor or making some sound. it is up to the component exactly what happens
+  COMPONENT_ACTION_IDENTIFY = 2;
+  // Reel the line in until it is tight
+  COMPONENT_ACTION_TIGHTEN = 3;
+  // Un-Reel the line until it is slack (the user can tug on it as long as they would like more line to come out)
+  COMPONENT_ACTION_RELAX = 4;
+}
+
+message SingleComponentAction {
+  bool is_gripper = 1;
+  optional uint32 anchor_num = 2;
+  ComponentAction action = 3;
+  // reseved for future use
+  optional uint32 spool_num = 4;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -156,6 +179,7 @@ message ControlItem {
     DeleteTarget delete_target = 8;
     Debug debug = 10;
     SetSwingCancellation set_swing_cancellation = 11;
+    SingleComponentAction single_component_action = 12;
 
     // next id = 12
   }

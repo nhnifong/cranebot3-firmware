@@ -69,6 +69,7 @@ arp_anchor_left_eyelet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033
 arp_anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -0.038,  0.017], dtype=float))
 
 rpi_cam_3_fov = np.array([66, 41])
+rpi_cam_3_wide_fov = np.array([102, 67])
 
 # Arp gripper pole length (m)
 arp_pole_length = 0.53

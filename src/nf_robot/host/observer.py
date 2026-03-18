@@ -2233,18 +2233,18 @@ class AsyncObserver:
         OPEN = -50
         CLOSED = 90
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        FLOOR_GRIPPER_HEIGHT = 0.11 # distance above floor (gripper origin) when grasp should be started
+        FLOOR_GRIPPER_HEIGHT = 0.12 # distance above floor (gripper origin) when grasp should be started
         RANGE_ITEM = 0.04 # range to item below which grip should be started
-        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
-        DOWNWARD_SPEED = -0.06
+        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_wide_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
+        DOWNWARD_SPEED = -0.07
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
         LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 35.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
+        LAT_SPEED_ADJUSTMENT = 5.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
         LOOP_DELAY = 0.1
         PRESSURE_SENSE_WAIT = 10.0
         NUM_ATTEMPTS = 3
-        CLOSING_FINGER_SPEED = 20
+        CLOSING_FINGER_SPEED = 30
         WRIST_SMOOTH_FACTOR = 0.9
 
         smooth_grip_angle = self.grip_angle
@@ -2281,7 +2281,6 @@ class AsyncObserver:
                             print('print nothing seen during centering loop')
                             break
                     else:
-                        print('saw target, reset countdown')
                         nothing_seen_countdown = 15
 
                     # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
@@ -2336,9 +2335,12 @@ class AsyncObserver:
 
                 await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
                 # finger speed commands take effect for 200ms only. they must be sent repeatedly.
-                while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and self.datastore.finger.getLast()[1] < CLOSED:
+                t, angle, pressure = self.datastore.finger.getLast()
+                while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and angle < CLOSED:
                     await asyncio.sleep(0.03)
                     await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
+                    t, angle, pressure = self.datastore.finger.getLast()
+                    print(f'pressure {pressure}')
                 print(f'end grip {self.pe.finger_pressure_rising.is_set()} {self.datastore.finger.getLast()[1]}')
                 await self.gripper_client.send_commands({'set_finger_speed': 0})
 
@@ -2358,6 +2360,10 @@ class AsyncObserver:
 
                 self.pe.finger_pressure_rising.clear()
                 print('Successful grasp')
+                # slowly at first
+                await self.move_direction_speed(np.array([0,0,0.05]))
+                await asyncio.sleep(1.0)
+                # and then all at once
                 await self.move_direction_speed(np.array([0,0,0.15]))
                 await asyncio.sleep(2.0)
                 return True
@@ -2385,7 +2391,7 @@ class AsyncObserver:
                 capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
             else:
                 print('no resized frame available from gripper')
-            await asyncio.sleep(1)
+            await asyncio.sleep(3)
 
 def main():
     """

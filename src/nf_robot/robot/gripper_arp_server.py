@@ -54,10 +54,9 @@ default_gripper_conf = {
     'INITIAL_DESIRED_FORCE': 0.08,
     # (raw motor units, 0-1000) The maximum allowed motor load before capping the normalized load contribution
     'MAX_SAFE_LOAD': 500,
-    # (dimensionless, 0-1) The proportional weight of the pad pressure in the composite force calculation
-    'PRESSURE_WEIGHT': 0.8,
-    # (dimensionless, 0-1) The proportional weight of the motor load in the composite force calculation
-    'LOAD_WEIGHT': 0.2
+    # (dimensionless, 0-1) The proportional weight of the pad pressure in the composite force calculation.
+    # the weight allocated to the motor load reading is 1-this value
+    'PRESSURE_WEIGHT': 0.7,
 }
 
 
@@ -253,7 +252,8 @@ class GripperArpServer(RobotComponentServer):
         norm_pressure = clamp((max(0.0, 3.3 - self.pressure_sensor.voltage) / 3.3) ** 2.5, 0.0, 1.0)
         
         # Low-pass filter mitigates sensor noise and prevents the PID derivative term from causing severe jitter
-        self.filtered_force = (self.conf['FILTER_COEFF'] * ((norm_pressure * self.conf['PRESSURE_WEIGHT']) + (norm_load * self.conf['LOAD_WEIGHT']))) + ((1 - self.conf['FILTER_COEFF']) * self.filtered_force)
+        weighted_sum = (norm_pressure * self.conf['PRESSURE_WEIGHT']) + (norm_load * (1-self.conf['PRESSURE_WEIGHT']))
+        self.filtered_force = (self.conf['FILTER_COEFF'] * weighted_sum) + ((1 - self.conf['FILTER_COEFF']) * self.filtered_force)
         
         return self.filtered_force, norm_pressure
 

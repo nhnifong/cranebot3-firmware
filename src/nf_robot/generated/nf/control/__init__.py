@@ -8,6 +8,7 @@ __all__ = (
     "CombinedMove",
     "Command",
     "CommonCommand",
+    "ComponentAction",
     "ControlBatchUpdate",
     "ControlItem",
     "Debug",
@@ -16,6 +17,7 @@ __all__ = (
     "JogSpool",
     "ScaleRoom",
     "SetSwingCancellation",
+    "SingleComponentAction",
 )
 
 from dataclasses import dataclass
@@ -158,6 +160,57 @@ class Command(betterproto2.Enum):
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,
             "COMMAND_UPDATE_FIRMWARE": 14,
+        }
+
+
+class ComponentAction(betterproto2.Enum):
+    """
+    A command which can be sent to a single component, usually for setup or diagnostics
+    """
+
+    UNUSED = 0
+    """
+    value zero is unavailable for use
+    """
+
+    REBOOT = 1
+    """
+    Reboot component
+    """
+
+    IDENTIFY = 2
+    """
+    Identify component by moving some motor or making some sound. it is up to the component exactly what happens
+    """
+
+    TIGHTEN = 3
+    """
+    Reel the line in until it is tight
+    """
+
+    RELAX = 4
+    """
+    Un-Reel the line until it is slack (the user can tug on it as long as they would like more line to come out)
+    """
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "COMPONENT_ACTION_UNUSED",
+            1: "COMPONENT_ACTION_REBOOT",
+            2: "COMPONENT_ACTION_IDENTIFY",
+            3: "COMPONENT_ACTION_TIGHTEN",
+            4: "COMPONENT_ACTION_RELAX",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "COMPONENT_ACTION_UNUSED": 0,
+            "COMPONENT_ACTION_REBOOT": 1,
+            "COMPONENT_ACTION_IDENTIFY": 2,
+            "COMPONENT_ACTION_TIGHTEN": 3,
+            "COMPONENT_ACTION_RELAX": 4,
         }
 
 
@@ -345,6 +398,10 @@ class ControlItem(betterproto2.Message):
         11, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    single_component_action: "SingleComponentAction | None" = betterproto2.field(
+        12, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
@@ -443,6 +500,31 @@ class SetSwingCancellation(betterproto2.Message):
 
 default_message_pool.register_message(
     "nf.control", "SetSwingCancellation", SetSwingCancellation
+)
+
+
+@dataclass(eq=False, repr=False)
+class SingleComponentAction(betterproto2.Message):
+    is_gripper: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+
+    anchor_num: "int | None" = betterproto2.field(
+        2, betterproto2.TYPE_UINT32, optional=True
+    )
+
+    action: "ComponentAction" = betterproto2.field(
+        3, betterproto2.TYPE_ENUM, default_factory=lambda: ComponentAction(0)
+    )
+
+    spool_num: "int | None" = betterproto2.field(
+        4, betterproto2.TYPE_UINT32, optional=True
+    )
+    """
+    reseved for future use
+    """
+
+
+default_message_pool.register_message(
+    "nf.control", "SingleComponentAction", SingleComponentAction
 )
 
 

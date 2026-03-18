@@ -27,6 +27,7 @@ __all__ = (
     "UplinkStatus",
     "VidStats",
     "VideoReady",
+    "VisibilityStates",
 )
 
 from dataclasses import dataclass
@@ -205,6 +206,13 @@ class ComponentConnStatus(betterproto2.Message):
     gripper_model: "GripperModel | None" = betterproto2.field(
         6, betterproto2.TYPE_ENUM, optional=True
     )
+
+    error_message: "str | None" = betterproto2.field(
+        7, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    Message with additional detail about why the component may not be functioning.
+    """
 
 
 default_message_pool.register_message(
@@ -620,6 +628,10 @@ class TelemetryItem(betterproto2.Message):
         19, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    visibility_states: "VisibilityStates | None" = betterproto2.field(
+        20, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
     retain_key: "str | None" = betterproto2.field(
         14, betterproto2.TYPE_STRING, optional=True
     )
@@ -708,6 +720,26 @@ class VidStats(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.telemetry", "VidStats", VidStats)
+
+
+@dataclass(eq=False, repr=False)
+class VisibilityStates(betterproto2.Message):
+    """
+    Lists of anchors which can see specific tags.
+    For now, only sent during first stage of calibration and only when something changes.
+    """
+
+    anchors_seeing_origin_card: "list[int]" = betterproto2.field(
+        1, betterproto2.TYPE_UINT32, repeated=True
+    )
+    """
+    Anchors which can see the origin card. for example [0,2,3]
+    """
+
+
+default_message_pool.register_message(
+    "nf.telemetry", "VisibilityStates", VisibilityStates
+)
 
 
 from .. import common as _common__
