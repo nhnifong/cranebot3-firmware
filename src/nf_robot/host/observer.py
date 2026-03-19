@@ -293,13 +293,13 @@ class AsyncObserver:
             client = self.anchors.get(item.anchor_num, None)
         if client is not None:
             if item.action == control.ComponentAction.REBOOT:
-                client.send_commands({'reboot': None})
+                r = await client.send_commands({'reboot': None})
             elif item.action == control.ComponentAction.IDENTIFY:
-                client.send_commands({'identify': None})
+                r = await client.send_commands({'identify': None})
             elif item.action == control.ComponentAction.TIGHTEN:
-                client.send_commands({'tighten': None})
+                r = await client.send_commands({'tighten': None})
             elif item.action == control.ComponentAction.RELAX:
-                client.send_commands({'relax': None})
+                r = await client.send_commands({'relax': None})
 
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
         print(f'swing cancellation set {item.enabled}')
@@ -785,7 +785,11 @@ class AsyncObserver:
         DETECTION_WAIT_S = 1.0 # seconds
         try:
             if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
-                print('Cannot run full calibration until all anchors are connected')
+                self.send_ui(operation_progress=telemetry.OperationProgress(
+                    percent_complete=100.0,
+                    name="Calibration",
+                    current_action='Cannot run full calibration until all anchors are connected',
+                ))
                 return
             elif len(self.anchors) > N_ANCHORS[self.config.anchor_type]:
                 print(f'Too many anchors found for type {self.config.anchor_type} \n{self.anchors}')
@@ -804,7 +808,7 @@ class AsyncObserver:
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
                 print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 self.send_ui(visibility_states=telemetry.VisibilityStates(anchors_seeing_origin_card=list(
-                    [anum for anum, count in enumarate(num_o_dets) if count > 0] # only anchor nums which see the origin card
+                    [anum for anum, count in enumerate(num_o_dets) if count > 0] # only anchor nums which see the origin card
                 )))
 
                 await asyncio.sleep(DETECTION_WAIT_S)

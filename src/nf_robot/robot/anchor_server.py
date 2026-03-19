@@ -468,7 +468,7 @@ class RaspiAnchorServer(RobotComponentServer):
         try:
             while self.tight_check():
                 self.spooler.setAimSpeed(-self.conf['tightening_speed'])
-                await asyncio.sleep(check_interval_s)
+                await asyncio.sleep(0.05)
         finally:
             self.spooler.setAimSpeed(0)
 
