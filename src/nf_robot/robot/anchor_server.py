@@ -205,7 +205,6 @@ class RobotComponentServer:
         if returncode==0:
             self.shutdown() # systemctl will bring us back up.
 
-
     async def read_updates_from_client(self,websocket,tg):
         while True:
             message = await websocket.recv()
@@ -256,7 +255,6 @@ class RobotComponentServer:
         # stop spool motors just in case some task left it running
         if self.spooler is not None:
             self.spooler.setAimSpeed(0)
-
 
     async def main(self, port=8765, name=None):
         logging.info('Starting cranebot server')
@@ -367,14 +365,14 @@ class RaspiAnchorServer(RobotComponentServer):
         self.conf.update(default_anchor_conf)
         ratio = 20/51 # 20 drive gear teeth, 51 spool teeth.
         if mock_motor is not None:
-            motor = mock_motor
+            self.motor = mock_motor
         else:
-            motor = MKSSERVO42C()
-            motor.runConstantSpeed(0) # just in case
+            self.motor = MKSSERVO42C()
+            self.motor.runConstantSpeed(0) # just in case
         if power_anchor:
             # A power anchor spool has a thicker line
             self.spooler = SpoolController(
-                motor,
+                self.motor,
                 empty_diameter=model_constants.empty_spool_diameter,
                 full_diameter=model_constants.full_spool_diameter_power_line,
                 full_length=model_constants.assumed_full_line_length,
@@ -382,7 +380,7 @@ class RaspiAnchorServer(RobotComponentServer):
         else:
             # other spools are wound with 50lb test braided fishing line with a thickness of 0.35mm
             self.spooler = SpoolController(
-                motor,
+                self.motor,
                 empty_diameter=model_constants.empty_spool_diameter,
                 full_diameter=model_constants.full_spool_diameter_fishing_line,
                 full_length=model_constants.assumed_full_line_length,
@@ -409,6 +407,10 @@ class RaspiAnchorServer(RobotComponentServer):
     async def processOtherUpdates(self, updates, tg):
         if 'tighten' in updates:
             tg.create_task(self.tighten())
+        if 'relax' in updates:
+            tg.create_task(self.relax())
+        if 'identify' in updates:
+            tg.create_task(self.identify())
         if 'report_raw' in updates:
             self.report_raw = bool(updates['report_raw'])
 
@@ -460,6 +462,21 @@ class RaspiAnchorServer(RobotComponentServer):
         # If the loop finishes, all retries have failed
         self.spooler.setAimSpeed(0)
         logging.error(f"Failed to tighten line after {max_retries} attempts.")
+
+    async def relax(self):
+        """ Lets out line until not tight """
+        try:
+            while self.tight_check():
+                self.spooler.setAimSpeed(-self.conf['tightening_speed'])
+                await asyncio.sleep(check_interval_s)
+        finally:
+            self.spooler.setAimSpeed(0)
+
+    async def identify(self):
+        """ make a noise """
+        self.spooler.pauseTrackingLoop()
+        self.motor.make_noise()
+        self.spooler.resumeTrackingLoop()
         
 if __name__ == "__main__":
     logging.basicConfig(

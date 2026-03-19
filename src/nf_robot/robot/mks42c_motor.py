@@ -152,6 +152,17 @@ class MKSSERVO42C:
     def getMaxSpeed(self):
         return MAX_SPEED
 
+    def make_noise(self):
+        """
+        Makes a buzzing noise without going anywhere
+        """
+        for i in range(50):
+            self.runConstantSpeed(-2)
+            sleep(0.01)
+            self.runConstantSpeed(2)
+            sleep(0.01)
+            self.stop()
+
 if __name__ == "__main__":
     motor = MKSSERVO42C()
     assert(motor.ping())

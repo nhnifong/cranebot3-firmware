@@ -281,6 +281,26 @@ class AsyncObserver:
         elif item.set_swing_cancellation:
             r = await self._handle_set_swing_cancellation(item.set_swing_cancellation)
 
+        elif item.single_component_action:
+            r = await self._handle_single_component_action(item.single_component_action)
+
+    async def _handle_single_component_action(self, item: control.SingleComponentAction):
+        """Issue a special command to a single component"""
+        client = None
+        if item.is_gripper:
+            client = self.gripper_client
+        else:
+            client = self.anchors.get(item.anchor_num, None)
+        if client is not None:
+            if item.action == control.ComponentAction.REBOOT:
+                client.send_commands({'reboot': None})
+            elif item.action == control.ComponentAction.IDENTIFY:
+                client.send_commands({'identify': None})
+            elif item.action == control.ComponentAction.TIGHTEN:
+                client.send_commands({'tighten': None})
+            elif item.action == control.ComponentAction.RELAX:
+                client.send_commands({'relax': None})
+
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
         print(f'swing cancellation set {item.enabled}')
         if item.enabled:
@@ -783,6 +803,10 @@ class AsyncObserver:
             detecting_start = time.time()
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
                 print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
+                self.send_ui(visibility_states=telemetry.VisibilityStates(anchors_seeing_origin_card=list(
+                    [anum for anum, count in enumarate(num_o_dets) if count > 0] # only anchor nums which see the origin card
+                )))
+
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
 
