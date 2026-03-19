@@ -3,6 +3,7 @@ import asyncio
 import time
 import logging
 import numpy as np
+from collections import deque
 
 # values that can be overridden by the controller
 default_conf = {
@@ -14,8 +15,6 @@ default_conf = {
     'MAX_ACCEL': 1.6,
     # sleep delay of tracking loop
     'LOOP_DELAY_S': 0.01,
-    # record line length every x iterations of tracking loop
-    'REC_MOD': 3,
     # default cruise speed in meters/sec for position moves
     'CRUISE_SPEED': 0.3,
     # deadband in meters to prevent jitter when close to target
@@ -116,10 +115,13 @@ class SpoolController:
         # Recording and Loops
         self.record = []
         self.run_spool_loop = True
-        self.rec_loop_counter = 0
-
         # when this bool is set, spool tracking will pause.
         self.spoolPause = False
+
+        # tight rising edge check state
+        self.was_tight = False
+        self.switch_clicks = deque(maxlen=5)
+        self.five_click_event = None
 
     def setReferenceLength(self, length):
         """ Provide an external observation of the current unspooled line length """
@@ -207,10 +209,7 @@ class SpoolController:
         else:
             row = (time.time(), self.last_length, currentLineSpeed, self.tight_check_fn())
 
-        if self.rec_loop_counter >= self.conf['REC_MOD']:
-            self.record.append(row)
-            self.rec_loop_counter = 0
-        self.rec_loop_counter += 1
+        self.record.append(row)
         return time.time(), self.last_length
 
     def fastStop(self):
@@ -236,6 +235,9 @@ class SpoolController:
                 continue
 
             t, currentLen = self.currentLineLength()
+
+            # this function should have no side effects, but it makes the tests fail. why?
+            self.countClicks()
             
             # Determine the desired line speed based on mode
             aimSpeed = 0
@@ -285,3 +287,23 @@ class SpoolController:
 
             time.sleep(self.conf['LOOP_DELAY_S'])
         logging.info(f'Spool tracking loop stopped')
+
+    def countClicks(self):
+        """ Detect rising edge in tight_check_fn.
+        If it occurs five times in two seconds, set an event"""
+        if self.record:
+            return
+        row = self.record[-1]
+        if len(row) != 4:
+            return
+        tight = row[-1] > 0.5
+        if tight and not self.was_tight:
+            # rising edge has been detected. 
+            self.switch_clicks.append(time.time())
+            # self.switch_clicks is a deque of length 5
+            # how many clicks have occured in the past two seconds?
+            click_count = len(list(filter(lambda t: t>time.time()-2, self.switch_clicks)))
+            # trigger special behavior. event is watched in anchor_server.py
+            if self.five_click_event is not None:
+                self.five_click_event.set()
+        self.was_tight = tight

@@ -27,10 +27,7 @@ sys.excepthook = handle_exception
 import asyncio
 
 async def asyncmain():
-    connected = await ensure_connection()
-    if not connected:
-        logging.error('Wifi connection script failed to find a network')
-        quit()
+    new_connection_configured = await ensure_connection()
 
     # determine component type
     # TODO: first boot of a new image has been observed to not have a valid I2C bus. if the image cannot be
@@ -67,6 +64,8 @@ async def asyncmain():
 
         powerline = component_type == 'power anchor' # TODO differentiate in some automatic way
         ras = RaspiAnchorServer(powerline)
+        if new_connection_configured:
+            ras.identify()
         r = await ras.main()
 
 def main():

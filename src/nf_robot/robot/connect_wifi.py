@@ -16,9 +16,13 @@ from pyzbar.pyzbar import decode
 async def ensure_connection():
     """
     Checks for wifi connection.
-    Returns True once a wifi connection is confirmed.
+    Returns once a wifi connection is confirmed.
     As long as there is no connection, looks for connection data in QR codes
     Choose "share connection" from your phones wifi settings and hold it in view of the camera.
+
+    Returns False if an existing wifi connnection was used
+    Returns True if a new one was configured
+    if no connection is achieved, doesn't return.
     """
     connected_event = asyncio.Event()
 
@@ -30,7 +34,7 @@ async def ensure_connection():
         # Wait up to 10 seconds for the monitor task to find a connection
         await asyncio.wait_for(connected_event.wait(), timeout=10.0)
         logging.info("Existing connection confirmed.")
-        return True
+        return False
 
     except asyncio.TimeoutError:
         logging.info("No connection found after 10 seconds. Starting QR Scanner...")

@@ -24,6 +24,7 @@ import logging
 import nf_robot.common.definitions as model_constants
 from nf_robot.robot.spools import SpoolController
 from nf_robot.robot.mks42c_motor import MKSSERVO42C
+from nf_robot.robot.forget_wifi import forget_all_wifi_networks
 
 # using libav makes it possible to send a containerized stream with pts
 # hardware h264 encoding is still used as long as resolution is below 1080
@@ -68,6 +69,9 @@ class RobotComponentServer:
         self.mock_camera_port = None
         self.extra_tasks = []
         self.stream_command = stream_command # subclasses may override
+        self.have_client = False
+        self.reset_wifi_event = asyncio.Event()
+        self.wait_reset_task = None
 
     async def stream_measurements(self, ws):
         """
@@ -203,7 +207,8 @@ class RobotComponentServer:
         await ws.send(json.dumps(self.update))
         await asyncio.sleep(0.2)
         if returncode==0:
-            self.shutdown() # systemctl will bring us back up.
+            self.shutdown()
+            quit() # systemctl will bring us back up.
 
     async def read_updates_from_client(self,websocket,tg):
         while True:
@@ -244,6 +249,7 @@ class RobotComponentServer:
         # except* matches errors within an ExceptionGroup
         # If the thrown exception is not one of the type caught here, the server stops.
         try:
+            self.have_client = True
             async with asyncio.TaskGroup() as tg:
                 read_updates = tg.create_task(self.read_updates_from_client(websocket, tg))
                 stream = tg.create_task(self.stream_measurements(websocket))
@@ -251,6 +257,7 @@ class RobotComponentServer:
                 stabil = tg.create_task(self.process_imu(websocket))
         except* (ConnectionClosedOK, ConnectionClosedError):
             logging.info("Client disconnected")
+            self.have_client = False
         logging.info("All tasks in handler task group completed")
         # stop spool motors just in case some task left it running
         if self.spooler is not None:
@@ -271,6 +278,9 @@ class RobotComponentServer:
         # thread for controlling stepper motor
         if self.spooler is not None:
             self.extra_tasks.append(asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop)))
+
+        self.wait_reset_task = asyncio.create_task(self.watch_for_reset())
+        self.extra_tasks.append(self.wait_reset_task)
 
         # Call a function which subclasses implement to start tasks at startup that should remain running even if clients disconnect.
         # tasks started this way should run only while self.run_server is true
@@ -296,6 +306,8 @@ class RobotComponentServer:
         if self.run_server:
             logging.info('\nStopping detection listener task')
             self.run_server = False
+            if self.wait_reset_task is not None:
+                self.wait_reset_task.cancel()
             if self.spooler is not None:
                 logging.info('Stopping Spool Motor')
                 self.spooler.fastStop()
@@ -334,6 +346,21 @@ class RobotComponentServer:
 
         await self.zc.async_register_service(info)
         logging.info(f"Registered service: {name} ({service_type}) on port {port}")
+
+    async def watch_for_reset(self):
+        """
+        Forget all wifi networks on the pilot anchor if the switch is clicked five times in two seconds with no client.
+        """
+        try:
+            await self.reset_wifi_event.wait()
+            if not self.have_client:
+                print('Wifi reset triggered. Forgetting all networks.')
+                forget_all_wifi_networks()
+                self.shutdown()
+                quit() # systemctl will bring us back up. User must show new wifi share code.
+        except asyncio.exceptions.CancelledError:
+            pass
+
 
 default_anchor_conf = {
     # 0 or 1. provides a method of configuring that the switch is wired up backwards.
@@ -385,6 +412,9 @@ class RaspiAnchorServer(RobotComponentServer):
                 full_diameter=model_constants.full_spool_diameter_fishing_line,
                 full_length=model_constants.assumed_full_line_length,
                 conf=self.conf, gear_ratio=ratio, tight_check_fn=self.tight_check)
+
+        self.spooler.five_click_event = self.reset_wifi_event
+
         unique = ''.join(get_mac_address().split(':'))
 
         if power_anchor:
