@@ -27,6 +27,9 @@ MARKER_NAMES = [
     'park_target',
 ] # next tag id 14
 
+CAL_MARKERS = set(['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'])
+OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'gamepad_back', 'hamper_back', 'trash_back'])
+
 # AprilTag images are typically downloaded, not generated in code.
 # We are using the tag36h11 tag family.
 # The images for new tags can be downloaded at

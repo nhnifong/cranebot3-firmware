@@ -121,7 +121,7 @@ class AnchorArpServer(RobotComponentServer):
         current_speed = self.conf['TIGHTENING_SPEED']
 
         def slack():
-            self.spools[spool_no].last_tension < desired_tension
+            return self.spools[spool_no].last_tension < desired_tension
 
         for attempt in range(1, max_retries + 1):
             # Pull in the line until target torque is reached
@@ -141,11 +141,9 @@ class AnchorArpServer(RobotComponentServer):
 
             # Check the outcome
             if not loosened:
-                print(f"Tightening successful on attempt {attempt}.")
                 return # Success!
 
             # If it slipped, reduce speed and the loop will try again
-            print(f"Line re-loosened on attempt {attempt}. Reducing speed and reeling in.")
             current_speed *= 0.7
 
         # If the loop finishes, all retries have failed

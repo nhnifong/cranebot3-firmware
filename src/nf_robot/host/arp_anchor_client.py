@@ -1,10 +1,15 @@
 import asyncio
 import numpy as np
+from collections import deque
+import threading
 
 from nf_robot.host.anchor_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common
+from nf_robot.common.cv_common import *
+from nf_robot.common.pose_functions  import *
+from nf_robot.common.util import *
 
 # looking for cranebot-anchor-arpeggio-service
 
@@ -25,19 +30,32 @@ a binary tight/slack value.
 """
 
 class ArpeggioAnchorClient(ComponentClient):
-    def __init__(self, address, port, datastore, ob, pool, stat, pe, local_telemetry):
-        super().__init__(address, port, datastore, ob, pool, stat, local_telemetry)
+    def __init__(self, address, port, anchor_num, datastore, ob, pool, stat, telemetry_env):
+        super().__init__(address, port, datastore, ob, pool, stat, telemetry_env)
         self.conn_status = telemetry.ComponentConnStatus(
             is_gripper=False,
             websocket_status=telemetry.ConnStatus.NOT_DETECTED,
             video_status=telemetry.ConnStatus.NOT_DETECTED,
         )
-        self.anchor_num = None
+        self.anchor_num = anchor_num
         self.anchor_pose = np.zeros((2, 3))
+        self.camera_pose = np.zeros((2, 3))
         self.eye_pos = np.zeros(3)
         self.extratilt = 0
+        self.raw_gant_poses = deque(maxlen=12)
+        self.gantry_pos_sightings = deque(maxlen=100)
+        self.gantry_pos_sightings_lock = threading.RLock()
 
-        self.pe = pe
+        self.updatePoseAndEye(
+            poseProtoToTuple(self.config.anchors[anchor_num].pose),
+            tonp(self.config.anchors[anchor_num].indirect_line.eyelet_pos),
+        )
+
+    async def send_config(self):
+        anchor_config_vars = {}
+        # TODO
+        if len(anchor_config_vars) > 0:
+            await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
 
     def updatePoseAndEye(self, pose, eye):
         self.anchor_pose = pose
@@ -49,7 +67,6 @@ class ArpeggioAnchorClient(ComponentClient):
         ]))
 
     async def handle_update_from_ws(self, update):
-        print(update)
         if 'spool0' in update:
             self.storeSpoolData(0, update['spool0'])
         if 'spool1' in update:
@@ -57,7 +74,7 @@ class ArpeggioAnchorClient(ComponentClient):
 
     def storeSpoolData(self, spool_no, data):
         # data= [(time, line_length, line_speed, torque), ...]
-        line_number = self.anchor_num + spool_no
+        line_number = self.anchor_num * 2 + spool_no
         self.datastore.anchor_line_record[line_number].insertList(np.array(data))
         self.datastore.anchor_line_record_event.set()
 
@@ -86,7 +103,7 @@ class ArpeggioAnchorClient(ComponentClient):
                 # convert it to a pose relative to the origin
                 pose = np.array(compose_poses([
                     self.anchor_pose, # obtained from calibration
-                    model_constants.double_anchor_camera, # constant
+                    model_constants.arp_anchor_camera, # constant
                     detection['p'], # the pose obtained just now
                     gantry_april_inv, # constant
                 ]))
@@ -106,7 +123,7 @@ class ArpeggioAnchorClient(ComponentClient):
                 offset = model_constants.basket_offset_inv if name.endswith('back') else model_constants.basket_offset
                 pose = np.array(compose_poses([
                     self.anchor_pose,
-                    model_constants.double_anchor_camera, # constant
+                    model_constants.arp_anchor_camera, # constant
                     detection['p'], # the pose obtained just now
                     offset, # the named location is out in front of the tag.
                 ]))

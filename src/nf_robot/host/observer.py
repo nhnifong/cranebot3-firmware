@@ -45,6 +45,7 @@ from nf_robot.host.calibration import optimize_anchor_poses
 from nf_robot.host.anchor_client import RaspiAnchorClient, max_origin_detections
 from nf_robot.host.gripper_client import RaspiGripperClient
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
+from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 
 # Define the service names for network discovery
@@ -67,8 +68,8 @@ UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
 
-# threshold of non slack tension in newtons
-TENSION_THRESH = 0.0275
+# threshold of non slack tension in newtons for arp anchors
+TENSION_THRESH = 1.38
 
 CRANEBOT_SERVICE_TYPES = [
     "_cranebot-gripper-arpeggio-service._tcp.local.",
@@ -420,6 +421,7 @@ class AsyncObserver:
             case control.Command.STOP_ALL:
                 r = await self.stop_all()
             case control.Command.TIGHTEN_LINES:
+                print('TIGHTEN_LINES from UI')
                 r = await self.tension_lines()
             case control.Command.ZERO_WINCH:
                 asyncio.create_task(self._handle_zero_winch_line())
@@ -605,7 +607,11 @@ class AsyncObserver:
         """Request all anchors to reel in all lines until tight.
         This is a fire and forget function"""
         for client in self.anchors.values():
-            asyncio.create_task(client.send_commands({'tighten': None}))
+            if isinstance(client, RaspiAnchorClient):
+                asyncio.create_task(client.send_commands({'tighten': None}))
+            elif isinstance(client, ArpeggioAnchorClient):
+                asyncio.create_task(client.send_commands({'tighten': 0}))
+                asyncio.create_task(client.send_commands({'tighten': 1}))
         # This function does not  wait for confirmation from every anchor, as it would just hold up the processing of the ob_q
         # this is similar to sending a manual move command. it can be overridden by any subsequent command.
         # thus, it should be done while paused.
@@ -614,6 +620,9 @@ class AsyncObserver:
         """this function returns only once all anchors are reporting tight lines in their regular line record"""
         POLL_INTERVAL_S = 0.1 # seconds
         SPEED_SUM_THRESHOLD = 0.01 # m/s
+        threshold = 0.5
+        if self.config.anchor_type == common.AnchorType.ARPEGGIO:
+            threshold = TENSION_THRESH
         
         complete = False
         timeout = time.time() + 10
@@ -623,7 +632,7 @@ class AsyncObserver:
             speeds = np.array(records[:,2])
             tension = np.array(records[:,3])
             print(f'wait for tension speeds={speeds} tension={tension}')
-            complete = np.all(tension > TENSION_THRESH) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
+            complete = np.all(tension > threshold) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
         return True
 
     async def tension_and_wait(self):
@@ -1336,6 +1345,7 @@ class AsyncObserver:
         is_standard_anchor = name_component == anchor_service_name
         is_standard_gripper = name_component == gripper_service_name
         is_arp_gripper = name_component == arp_gripper_service_name
+        is_arp_anchor = name_component == arp_anchor_service_name
 
         if is_standard_gripper:
             client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.telemetry_env)
@@ -1349,12 +1359,19 @@ class AsyncObserver:
             client.connection_established_event = self.gripper_client_connected
             self.gripper_client = client
             self.pe.set_gripper_type('arp')
-        else:
+        elif is_power_anchor or is_standard_anchor:
             for a in self.config.anchors:
                 if a.service_name != service_name:
                     continue
                 client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.telemetry_env)
                 client.connection_established_event = self.any_anchor_connected
+                self.anchors[a.num] = client
+        elif is_arp_anchor:
+            for a in self.config.anchors:
+                if a.service_name != service_name:
+                    continue
+                client = ArpeggioAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.telemetry_env)
+                # client.connection_established_event = self.any_anchor_connected
                 self.anchors[a.num] = client
 
         if client:

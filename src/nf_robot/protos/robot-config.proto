@@ -86,7 +86,7 @@ message StringmanPilotConfig {
   double max_accel = 3;
 
   // record line length every nth iteration of the main anchor loop
-  int32 rec_mod = 4;
+  int32 rec_mod = 4; // DEPRECATED
 
   // running delay of main anchor loop in seconds.
   double running_ws_delay = 5;

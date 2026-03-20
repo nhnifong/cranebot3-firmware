@@ -491,9 +491,6 @@ class ComponentClient:
             except asyncio.exceptions.CancelledError:
                 return
 
-CAL_MARKERS = set(['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'])
-OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'gamepad_back', 'hamper_back', 'trash_back'])
-
 class RaspiAnchorClient(ComponentClient):
     def __init__(self, address, port, anchor_num, datastore, ob, pool, stat, telemetry_env):
         super().__init__(address, port, datastore, ob, pool, stat, telemetry_env)
@@ -593,7 +590,6 @@ class RaspiAnchorClient(ComponentClient):
     async def send_config(self):
         anchor_config_vars = {
             "MAX_ACCEL": self.config.max_accel,
-            "REC_MOD": self.config.rec_mod,
             "RUNNING_WS_DELAY": self.config.running_ws_delay,
         }
         if len(anchor_config_vars) > 0:
