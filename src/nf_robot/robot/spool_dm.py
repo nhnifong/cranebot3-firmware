@@ -17,7 +17,7 @@ default_conf_dm = {
     # sleep delay of tracking loop
     'LOOP_FREQ_HZ': 50,
     # measured torque on a motor with orintation 1 and a line that is minimally taught. 
-    'TARGET_TORQUE': -0.1,
+    'TARGET_TORQUE': -0.05,
     # default cruise speed in meters/sec for position moves
     'CRUISE_SPEED': 0.3,
     # factor controlling how torque is smoothed with ema
@@ -49,8 +49,10 @@ class DamiaoSpoolController:
         self.direction = direction
         self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, 1, direction)
 
-        self.conf = default_conf_dm
-        self.conf.update(config)
+        # config is the dictionary we should use and the object that will be updated by clients if any online reconfiguration occurs
+        # that's why this appears backards
+        self.conf = config
+        self.conf.update(default_conf_dm)
         
         # Speed tracking state (meters/sec)
         self.aim_line_speed = 0
@@ -58,6 +60,7 @@ class DamiaoSpoolController:
         # Current state
         self.last_length = 3.0
         self.last_angle = 0.0
+        self.last_tension  = 0.0
         self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
         self.torque_err = 0
         
@@ -172,10 +175,10 @@ class DamiaoSpoolController:
                 self.last_length = self.sc.get_unspooled_length(self.last_angle)
                 self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
                 current_line_speed = (motor_vel / twopi) * self.meters_per_rev
-                line_tension = (-smooth_torque * twopi) / self.meters_per_rev
+                self.last_tension = (-smooth_torque * twopi) / self.meters_per_rev
 
                 # accumulate these. parent class will send them on the websocket at it's own rate
-                row = (loop_start, self.last_length, current_line_speed, line_tension)
+                row = (loop_start, self.last_length, current_line_speed, self.last_tension)
                 self.record.append(row)
 
                 # convert last commanded speed from motion controller in meters per second

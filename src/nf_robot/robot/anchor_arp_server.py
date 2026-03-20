@@ -19,7 +19,10 @@ A double anchor containing two damiao hub motors and a custom hat that provides 
 """
 
 default_anchor_conf = {
+    # speed to reel in when the 'tighten' command is received. Meters of line per second
+    'TIGHTENING_SPEED': -0.12,
 }
+
 
 class AnchorArpServer(RobotComponentServer):
     def __init__(self, power):
@@ -60,7 +63,13 @@ class AnchorArpServer(RobotComponentServer):
 
     async def processOtherUpdates(self, updates, tg):
         if 'tighten' in updates:
-            tg.create_task(self.tighten())
+            spool_no = updates['tighten']
+            tg.create_task(self.tighten(spool_no))
+        if 'relax' in updates:
+            spool_no = updates['relax']
+            tg.create_task(self.relax(spool_no))
+        if 'identify' in updates:
+            self.identify()
         if 'aim_speed' in updates:
             if updates['aim_speed'] == 0:
                 self.spools[0].setAimSpeed(0)
@@ -97,8 +106,60 @@ class AnchorArpServer(RobotComponentServer):
             for spool in self.spools
         ])
 
-    async def tighten(self):
-        """Pulls in the line until tight."""
+    async def tighten(self, spool_no):
+        """
+        Pulls in the line until tight. If the line slips within 3 seconds,
+        it reduces the speed by 30% and retries, up to 5 times.
+        """
+        if spool_no not in (0, 1):
+            return
+        max_retries = 5
+        monitoring_duration_s = 3
+        check_interval_s = 0.05
+        desired_tension = 1.38 # Newtons
+        
+        current_speed = self.conf['TIGHTENING_SPEED']
+
+        def slack():
+            self.spools[spool_no].last_tension < desired_tension
+
+        for attempt in range(1, max_retries + 1):
+            # Pull in the line until target torque is reached
+            while slack():
+                self.spools[spool_no].setAimSpeed(current_speed)
+                await asyncio.sleep(check_interval_s)
+            self.spools[spool_no].setAimSpeed(0)
+
+            # Monitor for re-loosening over the next 3 seconds
+            loosened = False
+            end_time = time.monotonic() + monitoring_duration_s
+            while time.monotonic() < end_time:
+                if slack():
+                    loosened = True
+                    break  # Exit monitoring loop immediately on slip
+                await asyncio.sleep(check_interval_s)
+
+            # Check the outcome
+            if not loosened:
+                print(f"Tightening successful on attempt {attempt}.")
+                return # Success!
+
+            # If it slipped, reduce speed and the loop will try again
+            print(f"Line re-loosened on attempt {attempt}. Reducing speed and reeling in.")
+            current_speed *= 0.7
+
+        # If the loop finishes, all retries have failed
+        self.spools[spool_no].setAimSpeed(0)
+        logging.error(f"Failed to tighten line after {max_retries} attempts.")
+
+    async def relax(self, spool_no):
+        """ Lets out line until not tight """
+        if spool_no not in (0, 1):
+            return
+        pass
+
+    def identify(self):
+        """ make a noise """
         pass
 
     def shutdown(self):

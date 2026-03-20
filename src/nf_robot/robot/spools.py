@@ -90,8 +90,8 @@ class SpoolController:
         self.tight_check_fn = tight_check_fn
         self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, gear_ratio, -1)
 
-        self.conf = conf
-        self.conf.update(default_conf)
+        self.conf = default_conf
+        self.conf.update(conf)
         
         # last commanded motor speed in revs/sec
         self.speed = 0

@@ -190,7 +190,7 @@ class AsyncObserver:
         if self.config.anchor_type == common.AnchorType.ARPEGGIO:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
-                eyelets=[a.indirect_line.eyelet_pos],
+                eyelets=[a.indirect_line.eyelet_pos for a in self.config.anchors],
             ))
         else:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(

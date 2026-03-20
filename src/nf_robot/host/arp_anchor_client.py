@@ -49,6 +49,7 @@ class ArpeggioAnchorClient(ComponentClient):
         ]))
 
     async def handle_update_from_ws(self, update):
+        print(update)
         if 'spool0' in update:
             self.storeSpoolData(0, update['spool0'])
         if 'spool1' in update:

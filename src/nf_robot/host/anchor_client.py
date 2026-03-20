@@ -400,7 +400,7 @@ class ComponentClient:
                             print(f'pip install result on {self.address} = {upd["returncode"] == 0}')
                             self.firmware_update_success = upd['returncode'] == 0
                 # this event is used to detect an un-responsive state.
-                self.heartbeat_receipt.set() 
+                self.heartbeat_receipt.set()
                 await self.handle_update_from_ws(update)
 
                 # do this here because we seemingly can't do it in receive_video
