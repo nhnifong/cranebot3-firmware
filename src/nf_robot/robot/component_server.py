@@ -46,6 +46,8 @@ async def asyncmain():
     elif set([0x48, 0x29, 0x68]).issubset(addrs): # arpeggio_gripper
         from nf_robot.robot.gripper_arp_server import GripperArpServer
         gs = GripperArpServer()
+        if new_connection_configured:
+            gs.identify()
         r = await gs.main()
 
     elif len(addrs) == 0:

@@ -485,6 +485,18 @@ class GripperArpServer(RobotComponentServer):
             self.setWristSpeed(float(update['set_wrist_speed']))
         if 'measure_finger_contact' in update:
             asyncio.create_task(self.measureFingerContact())
+        if 'identify' in update:
+            self.identify()
+
+    def identify(self):
+        """ make a noise """
+        self.motor_loop_pause = True
+        pos = self.motors.get_position(FINGER)
+        # open and close a few degrees
+        self.motors.set_position(FINGER, pos + rel)
+        time.sleep(0.2)
+        self.motors.set_position(FINGER, pos)
+        self.motor_loop_pause = False
 
 if __name__ == "__main__":
     logging.basicConfig(
