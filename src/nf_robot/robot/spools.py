@@ -291,12 +291,12 @@ class SpoolController:
     def countClicks(self):
         """ Detect rising edge in tight_check_fn.
         If it occurs five times in two seconds, set an event"""
-        if self.record:
+        if self.five_click_event is None:
             return
-        row = self.record[-1]
-        if len(row) != 4:
+        try:
+            tight = self.record[-1][-1] > 0.5
+        except IndexError:
             return
-        tight = row[-1] > 0.5
         if tight and not self.was_tight:
             # rising edge has been detected. 
             self.switch_clicks.append(time.time())
@@ -304,6 +304,6 @@ class SpoolController:
             # how many clicks have occured in the past two seconds?
             click_count = len(list(filter(lambda t: t>time.time()-2, self.switch_clicks)))
             # trigger special behavior. event is watched in anchor_server.py
-            if self.five_click_event is not None:
+            if click_count == 5:
                 self.five_click_event.set()
         self.was_tight = tight

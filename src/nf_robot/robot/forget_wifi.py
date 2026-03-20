@@ -1,5 +1,5 @@
 import logging
-import asyncio
+import subprocess
 
 def forget_all_wifi_networks():
     """
@@ -42,4 +42,4 @@ def forget_all_wifi_networks():
                 else:
                     logging.warning(f"Failed to delete {uuid}: {del_result.stderr.strip()}")
 
-    logging.info(f"Finished. Forgot {deleted_count} saved WiFi network(s).")
+    logging.info(f"Finished. Removed {deleted_count} WiFi network(s).")

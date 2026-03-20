@@ -354,7 +354,6 @@ class RobotComponentServer:
         try:
             await self.reset_wifi_event.wait()
             if not self.have_client:
-                print('Wifi reset triggered. Forgetting all networks.')
                 forget_all_wifi_networks()
                 self.shutdown()
                 quit() # systemctl will bring us back up. User must show new wifi share code.
