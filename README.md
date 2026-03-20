@@ -137,6 +137,16 @@ To update to the lastest nf_robot version in a component
 ## Training models
 
 
+## Windows
+
+A self contained windows installer can be generated. The exact installation of stringman that ends up in the installer depends on what was in the virtualenv these commands are run from, so make a new one.
+
+    python3 -m venv winvenv
+    source winvenv/bin/activate
+    pip install nf_robot[host]
+    pip install pyinstaller
+    pyinstaller --onefile --windowed --name "Stringman" win_main.py
+
 ## Support this project
 
 [Donate on Ko-fi](https://ko-fi.com/neufangled)
