@@ -83,9 +83,9 @@ class DamiaoSpoolController:
 
         za = self.sc.calc_za_from_length(length, self.last_angle)
         self.sc.set_zero_angle(za)
-        logging.debug(f'Zero angle estimate={za} revs. current value of {angle}, using reference length {length} m')
+        logging.debug(f'Zero angle estimate={za} revs. current value of {self.last_angle}, using reference length {length} m')
         # this affects the estimated amount of wrapped wire
-        self.meters_per_rev = self.sc.get_unspool_rate(angle)
+        self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
 
     def setAimSpeed(self, lineSpeed):
         """Set the aim speed in meters of line per second.
