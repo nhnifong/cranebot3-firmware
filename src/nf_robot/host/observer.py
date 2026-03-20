@@ -645,10 +645,17 @@ class AsyncObserver:
         if len(lengths) != N_LINES:
             print(f'Cannot send {len(lengths)} ref lengths to anchors')
             return
-        # any anchor that receives this and is slack would ignore it
-        # If only some anchors are connected, this would still send reference lengths to those
-        for client in self.anchors.values():
-            asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
+        if self.anchor_type == nf_config.AnchorType.PILOT:
+            # any anchor that receives this and is slack would ignore it
+            # If only some anchors are connected, this would still send reference lengths to those
+            for client in self.anchors.values():
+                asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
+        elif self.anchor_type == nf_config.AnchorType.ARPEGGIO:
+            for client in self.anchors.values():
+                # which two lines is this anchor responsible for?
+                asyncio.create_task(client.send_commands({
+                    'two_reference_lengths': (lengths[client.anchor_num*2], lengths[client.anchor_num*2+1])
+                }))
 
         # use swing to estimate winch line length in pilot gripper
         if self.gripper_client is not None and isinstance(self.gripper_client, RaspiGripperClient):
@@ -1371,7 +1378,7 @@ class AsyncObserver:
                 if a.service_name != service_name:
                     continue
                 client = ArpeggioAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.telemetry_env)
-                # client.connection_established_event = self.any_anchor_connected
+                client.connection_established_event = self.any_anchor_connected
                 self.anchors[a.num] = client
 
         if client:

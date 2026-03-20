@@ -72,6 +72,13 @@ class ArpeggioAnchorClient(ComponentClient):
         if 'spool1' in update:
             self.storeSpoolData(1, update['spool1'])
 
+        if len(self.gantry_pos_sightings) > 0:
+            with self.gantry_pos_sightings_lock:
+                self.ob.send_ui(gantry_sightings=telemetry.GantrySightings(
+                    sightings=[common.Vec3(*position) for position in self.gantry_pos_sightings]
+                ))
+                self.gantry_pos_sightings.clear()
+
     def storeSpoolData(self, spool_no, data):
         # data= [(time, line_length, line_speed, torque), ...]
         line_number = self.anchor_num * 2 + spool_no

@@ -578,7 +578,7 @@ class Positioner2:
                 visual_task = tg.create_task(self.update_visual())
                 hang_task = tg.create_task(self.update_hang())
                 comv_task = tg.create_task(self.update_commanded_vel())
-                
+
         except asyncio.exceptions.CancelledError:
             pass
             

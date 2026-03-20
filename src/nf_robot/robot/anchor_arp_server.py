@@ -70,6 +70,10 @@ class AnchorArpServer(RobotComponentServer):
             tg.create_task(self.relax(spool_no))
         if 'identify' in updates:
             self.identify()
+        if 'two_reference_lengths' in update:
+            ref0, ref1 = update['reference_length']
+            self.spooler[0].setReferenceLength(float(ref0))
+            self.spooler[1].setReferenceLength(float(ref1))
         if 'aim_speed' in updates:
             if updates['aim_speed'] == 0:
                 self.spools[0].setAimSpeed(0)
