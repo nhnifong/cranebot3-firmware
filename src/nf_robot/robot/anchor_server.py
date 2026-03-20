@@ -501,7 +501,7 @@ class RaspiAnchorServer(RobotComponentServer):
         finally:
             self.spooler.setAimSpeed(0)
 
-    async def identify(self):
+    def identify(self):
         """ make a noise """
         self.spooler.pauseTrackingLoop()
         self.motor.make_noise()
