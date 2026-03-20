@@ -71,7 +71,7 @@ class AnchorArpServer(RobotComponentServer):
         if 'identify' in updates:
             self.identify()
         if 'two_reference_lengths' in updates:
-            ref0, ref1 = updates['reference_length']
+            ref0, ref1 = updates['two_reference_lengths']
             self.spooler[0].setReferenceLength(float(ref0))
             self.spooler[1].setReferenceLength(float(ref1))
         if 'aim_speed' in updates:

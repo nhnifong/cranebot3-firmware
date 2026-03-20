@@ -645,12 +645,12 @@ class AsyncObserver:
         if len(lengths) != N_LINES:
             print(f'Cannot send {len(lengths)} ref lengths to anchors')
             return
-        if self.anchor_type == nf_config.AnchorType.PILOT:
+        if self.config.anchor_type == common.AnchorType.PILOT:
             # any anchor that receives this and is slack would ignore it
             # If only some anchors are connected, this would still send reference lengths to those
             for client in self.anchors.values():
                 asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
-        elif self.anchor_type == nf_config.AnchorType.ARPEGGIO:
+        elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
             for client in self.anchors.values():
                 # which two lines is this anchor responsible for?
                 asyncio.create_task(client.send_commands({
