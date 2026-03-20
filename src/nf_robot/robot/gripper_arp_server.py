@@ -153,6 +153,11 @@ class GripperArpServer(RobotComponentServer):
 
         self.motor_loop_pause = False
 
+        # taps to trigger wifi reset
+        self.taps = deque(maxlen=5)
+        self.was_pressed = False
+
+
         if os.path.exists('arp_gripper_state.json'):
             try:
                 with open('arp_gripper_state.json', 'r') as f:
@@ -317,6 +322,9 @@ class GripperArpServer(RobotComponentServer):
                 # update fingers
                 current_force, current_pressure = self.get_current_grip_force()
                 
+                # check for rising edges in pad pressure
+                self.countFingerPresses(current_pressure)
+
                 # Check for safety overload conditions on every loop iteration
                 # We fetch wrist data here as well since get_current_grip_force only pulls finger data
                 wrist_data = self.motors.get_feedback(WRIST)
@@ -493,10 +501,28 @@ class GripperArpServer(RobotComponentServer):
         self.motor_loop_pause = True
         pos = self.motors.get_position(FINGER)
         # open and close a few degrees
-        self.motors.set_position(FINGER, pos + rel)
+        self.motors.set_position(FINGER, pos + 60)
         time.sleep(0.2)
         self.motors.set_position(FINGER, pos)
         self.motor_loop_pause = False
+
+    def countFingerPresses(self, pressure):
+        """ Detect rising edge in finger pressure.
+        If there is no client and it occurs five times in two seconds, set the reset wifi event from the parent class"""
+        if self.reset_wifi_event is None:
+            return
+        pressed = pressure > 0.2
+
+        if pressed and not self.was_pressed:
+            # rising edge has been detected. 
+            self.taps.append(time.time())
+            # how many taps have occured in the past two seconds?
+            tap_count = len(list(filter(lambda t: t>time.time()-2, self.taps)))
+            # trigger special behavior. event is watched in anchor_server.py
+            if tap_count == 5:
+                self.reset_wifi_event.set()
+        self.was_pressed = pressed
+
 
 if __name__ == "__main__":
     logging.basicConfig(
