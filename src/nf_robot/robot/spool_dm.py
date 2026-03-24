@@ -24,6 +24,10 @@ default_conf_dm = {
     'SMOOTH_FACTOR': 0.08,
     # maximum safe line speed in meters per second
     'MAX_SAFE_LINE_SPEED': 2.0,
+    # Proportional gain for the software-side position loop (meters error -> meters/sec)
+    'POS_KP': 1.5,
+    # Distance in meters within which we consider a jog "complete"
+    'POS_DEADBAND': 0.005
 }
 
 class DamiaoSpoolController:
@@ -56,6 +60,8 @@ class DamiaoSpoolController:
         
         # Speed tracking state (meters/sec)
         self.aim_line_speed = 0
+        # Jog command state
+        self.target_length = None
 
         # Current state
         self.last_length = 3.0
@@ -67,7 +73,6 @@ class DamiaoSpoolController:
         # Absolute position tracking state
         self.last_raw_pos = None
         self.rev_offset = 0.0
-        self.last_angle = 0.0
 
         # Recording and Loops
         self.record = []
@@ -81,17 +86,37 @@ class DamiaoSpoolController:
         if self.torque_err > 0:
             return # gantry position has no relationship to spool zero angle if the line is slack.
 
+        if length > 20 or length < 0:
+            logging.warning(f'length ({length}) passed to setReferenceLength outside range [0,20]')
+            return
+
         za = self.sc.calc_za_from_length(length, self.last_angle)
         self.sc.set_zero_angle(za)
         logging.debug(f'Zero angle estimate={za} revs. current value of {self.last_angle}, using reference length {length} m')
         # this affects the estimated amount of wrapped wire
         self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
 
+        # Sync target to reality if we were mid-jog
+        if self.target_length is not None:
+            self.target_length = length
+
     def setAimSpeed(self, lineSpeed):
         """Set the aim speed in meters of line per second.
         negative values reel line in.
         """
+        self.target_length = None
         self.aim_line_speed = np.clip(lineSpeed, -self.conf['MAX_SAFE_LINE_SPEED'], self.conf['MAX_SAFE_LINE_SPEED'])
+
+    def jog(self, delta_meters):
+        """ 
+        Change the unspooled length by delta_meters relative to current target 
+        (or current length if no target active).
+        """
+        if self.target_length is None:
+            self.target_length = self.last_length
+        
+        self.target_length += delta_meters
+        logging.info(f"Jogging by {delta_meters}m. New target length: {self.target_length:.3f}m")
 
     def popMeasurements(self):
         """Return up to DATA_LEN measurements. newest at the end."""
@@ -176,6 +201,20 @@ class DamiaoSpoolController:
                 self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
                 current_line_speed = (motor_vel / twopi) * self.meters_per_rev
                 self.last_tension = (-smooth_torque * twopi) / self.meters_per_rev
+
+                # Position control logic (using during jog)
+                if self.target_length is not None:
+                    dist_err = self.target_length - self.last_length
+                    # Proportional control for speed based on position error
+                    self.aim_line_speed = dist_err * self.conf['POS_KP']
+                    # Clamp to safe speeds
+                    self.aim_line_speed = np.clip(self.aim_line_speed, 
+                                                 -self.conf['CRUISE_SPEED'], 
+                                                 self.conf['CRUISE_SPEED'])
+                    # If we are within the deadband, stop and clear target
+                    if abs(dist_err) < self.conf['POS_DEADBAND']:
+                        self.target_length = None
+                        self.aim_line_speed = 0
 
                 # accumulate these. parent class will send them on the websocket at it's own rate
                 row = (loop_start, self.last_length, current_line_speed, self.last_tension)

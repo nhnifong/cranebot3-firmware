@@ -496,23 +496,18 @@ class AsyncObserver:
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
-
-        if self.config.anchor_type != common.AnchorType.PILOT:
-            return
-
         # identify the client we need to send the command to
         client = None
         if jog.is_gripper:
-            client = self.gripper_client
-        else:
-            client = self.anchors[jog.anchor_num]
-
-        # send the right kind of jog command
-        if client is not None:
             if jog.speed is not None:
-                asyncio.create_task(client.send_commands({'aim_speed': jog.speed}))
+                asyncio.create_task(self.gripper_client.send_commands({'jog': jog.offset}))
             elif jog.offset is not None:
-                asyncio.create_task(client.send_commands({'jog': jog.offset}))
+                asyncio.create_task(self.gripper_client.send_commands({'aim_speed': jog.speed}))
+        else:
+            if jog.speed is not None:
+                self.send_line_speed(jog.anchor_num, jog.speed)
+            elif jog.offset is not None:
+                self.send_line_speed(jog.anchor_num, jog.offset, jog=True)
 
     async def _handle_gantry_goal_pos(self, goal_pos: np.ndarray):
         """Handles moving the gantry to a specific goal position."""
@@ -756,6 +751,7 @@ class AsyncObserver:
         """  
         Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
         """
+        shorten = 0.4
 
         try:
             for a in self.anchors.values():
@@ -768,18 +764,18 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
             print('relax the direct lines, tighten the indirect line')
-            await self.send_line_speed(0, 0.15)
-            await self.send_line_speed(1, -0.1)
-            await self.send_line_speed(2, 0.15)
-            await self.send_line_speed(3, -0.1)
-            await asyncio.sleep(0.8)
+            await self.send_line_speed(0,  0.15, jog=True)
+            await self.send_line_speed(1, -0.15, jog=True)
+            await self.send_line_speed(2,  0.15, jog=True)
+            await self.send_line_speed(3, -0.15, jog=True)
+            await asyncio.sleep(1)
             self.slow_stop_all_spools()
 
             results = {}
 
             # keep loosening these the whole time
-            await self.send_line_speed(0, 0.05)
-            await self.send_line_speed(2, 0.05)
+            # await self.send_line_speed(0, 0.05)
+            # await self.send_line_speed(2, 0.05)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=20.0,
@@ -787,7 +783,7 @@ class AsyncObserver:
                 current_action="Observe diamond bottom",
             ))
             print('this position is the bottom of the diamond. Observe gantry for 2 seconds')
-            await asyncio.sleep(6)
+            await asyncio.sleep(5)
             results['bottom'] = self.snapshot_tag_observations()['gantry']
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -795,11 +791,11 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond right",
             ))
-            print('shorten one leg by 30 cm')
-            await self.send_line_speed(1, -0.1)
-            await asyncio.sleep(3)
+            print('shorten one leg')
+            await self.send_line_speed(1, -shorten, jog=True)
+            await asyncio.sleep(2)
             await self.send_line_speed(1, 0)
-            await asyncio.sleep(6)
+            await asyncio.sleep(5)
             results['right'] = self.snapshot_tag_observations()['gantry'] # it is to the right from the perspective of camera 0
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -807,11 +803,11 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond top",
             ))
-            print('shorten the other leg by 30 cm')
-            await self.send_line_speed(3, -0.1)
-            await asyncio.sleep(3)
+            print('shorten the other leg')
+            await self.send_line_speed(3, -shorten, jog=True)
+            await asyncio.sleep(2)
             await self.send_line_speed(3, 0)
-            await asyncio.sleep(6)
+            await asyncio.sleep(5)
             results['top'] = self.snapshot_tag_observations()['gantry']
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -820,10 +816,10 @@ class AsyncObserver:
                 current_action="Observe diamond left",
             ))
             print('lengthen the first leg by 30 cm')
-            await self.send_line_speed(1, 0.1)
-            await asyncio.sleep(3)
+            await self.send_line_speed(1, shorten, jog=True)
+            await asyncio.sleep(2)
             await self.send_line_speed(1, 0)
-            await asyncio.sleep(6)
+            await asyncio.sleep(5)
             results['left'] = self.snapshot_tag_observations()['gantry']
 
             print('return result')
@@ -1866,17 +1862,19 @@ class AsyncObserver:
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
 
-    async def send_line_speed(self, line_no, speed):
+    async def send_line_speed(self, line_no, speed, jog=False):
         # send the line speed to the client that controls that line
+        # when jog==True, speed is interpreted as a length in meters by which to lengthen the line
+        command = 'jog' if jog else 'aim_speed'
         if self.config.anchor_type == common.AnchorType.PILOT:
             if line_no in self.anchors:
-                asyncio.create_task(self.anchors[line_no].send_commands({'aim_speed': speed}))
+                asyncio.create_task(self.anchors[line_no].send_commands({command: speed}))
         elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
             if line_no//2 in self.anchors:
                 spool_no = int(not (line_no%2))
                 # we consider the lower line number to be the direct line, but in the anchor server, spool 0 is the indirect line.
                 # todo: make this consistent
-                asyncio.create_task(self.anchors[line_no//2].send_commands({'aim_speed': (speed, spool_no)}))
+                asyncio.create_task(self.anchors[line_no//2].send_commands({command: (speed, spool_no)}))
 
     async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04, key='default'):
         """Move in the direction of the given unit vector at the given speed.

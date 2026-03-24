@@ -87,6 +87,12 @@ class AnchorArpServer(RobotComponentServer):
                     self.spools[spool_no].setAimSpeed(speed)
                 except (TypeError, ValueError, AssertionError):
                     logging.warning(f'invalid aim_speed command. expected (speed, spool_no). got {updates["aim_speed"]}')
+        if 'jog' in updates:
+            try:
+                delta, spool_no = updates['jog']
+                self.spools[int(spool_no)].jog(float(delta))
+            except (TypeError, ValueError, IndexError):
+                logging.warning(f'invalid jog command: {updates["jog"]}')
 
     def readOtherSensors(self):
         """ Sends updates about both spools with the form

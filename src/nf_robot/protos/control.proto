@@ -58,7 +58,7 @@ message CommonCommand {
 // not for typical robot movement
 message JogSpool {
   bool is_gripper = 1;
-  uint32 anchor_num = 2; // only set for anchors
+  uint32 anchor_num = 2; // only set for anchors. Interpreted as line number in systems with arpeggio anchors.
   oneof var {
     float speed = 3; // lengthen the line by this many meters per second until told to stop
     float offset = 4; // change the length of unspooled line by this many meters at a fixed and safe speed.
