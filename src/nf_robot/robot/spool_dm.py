@@ -20,8 +20,8 @@ default_conf_dm = {
     'TARGET_TORQUE': -0.05,
     # default cruise speed in meters/sec for position moves
     'CRUISE_SPEED': 0.3,
-    # factor controlling how torque is smoothed with ema
-    'SMOOTH_FACTOR': 0.2,
+    # factor controlling how torque is smoothed with ema.
+    'SMOOTH_FACTOR': 0.08,
     # maximum safe line speed in meters per second
     'MAX_SAFE_LINE_SPEED': 2.0,
 }

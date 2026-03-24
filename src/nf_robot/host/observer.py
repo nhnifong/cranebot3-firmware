@@ -42,6 +42,7 @@ from nf_robot.host.data_store import DataStore
 from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
 from nf_robot.host.calibration import optimize_anchor_poses
+from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data
 from nf_robot.host.anchor_client import RaspiAnchorClient, max_origin_detections
 from nf_robot.host.gripper_client import RaspiGripperClient
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
@@ -343,6 +344,8 @@ class AsyncObserver:
             r = await self.calibrate_spin()
         if item.action == 'fingercal':
             asyncio.create_task(self.calibrate_finger_servo())
+        if item.action == 'eyelets':
+            r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data())
 
     async def calibrate_finger_servo(self):
         self.gripper_client.finger_contact_calibration_complete.clear()
@@ -707,24 +710,29 @@ class AsyncObserver:
         self.pe.record_commanded_vel(np.zeros(3))
 
     def snapshot_tag_observations(self):
-        """Recent origin detections and cal_assist marker detections"""
+        """Recent origin detections and cal_assist marker detections
+
+        returns a dict of raw observations of various markers
+        the shape of a pose is (2,3) with rotation coming first
+        the first dimension is anchor number, the next is observation
+        # for the arp anchor, the shape would be (2,12,2,3)
+
+        'marker_name': array(n_anchors, n_observations, 2, 3)
+        """
         markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3', 'gantry']
-        averages = defaultdict(lambda: [[]]*4)
+        raw_obs = defaultdict(lambda: [[]]*N_ANCHORS[self.config.anchor_type])
         for client in self.anchors.values():
-            # average each list of detections, but leave them in the camera's reference frame.
+            # copy each list of detections, but leave them in the camera's reference frame.
             for marker in markers:
                 if marker == 'gantry':
-                    averages[marker][client.anchor_num] = list(client.raw_gant_poses)
+                    raw_obs[marker][client.anchor_num] = list(client.raw_gant_poses)
                 else:
-                    averages[marker][client.anchor_num] = list(client.origin_poses[marker])
-                print(f'anchor {client.anchor_num} has {len(averages[marker][client.anchor_num])} observations of {marker}')
-            if len(averages['origin'][client.anchor_num]) == 0:
-                raise RuntimeError(f'Anchor {client.anchor_num} could not see the origin marker.')
-        return dict(averages)
+                    raw_obs[marker][client.anchor_num] = list(client.origin_poses[marker])
+                # print(f'anchor {client.anchor_num} has {len(raw_obs[marker][client.anchor_num])} observations of {marker}')
+        return dict(raw_obs)
 
     def save_poses_arp(self, anchor_poses, eyelet_positions):
         # Use the optimization output to update anchor poses and spool params
-        print(f'Saving result from eyelet optimization\nanchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
         for anum, client in self.anchors.items():
             self.config.anchors[anum].pose = poseTupleToProto(anchor_poses[anum])
             self.config.anchors[anum].indirect_line.eyelet_pos = fromnp(eyelet_positions[anum])
@@ -737,29 +745,99 @@ class AsyncObserver:
         ))
         # inform position estimator
         anchor_points = np.array([
-            compose_poses([anchor_poses[0, 1], model_constants.arp_anchor_right_eyelet])[1],
+            compose_poses([anchor_poses[0], model_constants.arp_anchor_right_eyelet])[1],
             eyelet_positions[0],
-            compose_poses([anchor_poses[1, 1], model_constants.arp_anchor_right_eyelet])[1],
+            compose_poses([anchor_poses[1], model_constants.arp_anchor_right_eyelet])[1],
             eyelet_positions[1],
         ])
         self.pe.set_anchor_points(anchor_points)
 
     async def collect_arp_anchor_eyelet_experiment_data(self):
         """  
-        Perform experiments in which one indirect line is tight and moved from a before to after position
-        the opposite indirect line is slack, and the two direct anchor lines are tight and don't change.
+        Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
         """
-        # tighten all lines and raise up enough that the gripper is off the floor
-        # for each side
-        for experimental_eyelet in (0,1):
-            # slacken the opposite line
 
-            for i in range(3):
-                pass
-                # record "before" sightings
-                # move the experimental line
-                # record "after" sightings
-                # move the anchor lines to a new position.
+        try:
+            for a in self.anchors.values():
+                a.save_raw = True
+            print('tighten all lines and raise up enough that the gripper is off the floor')
+            # timeout = time.time() + 3
+            # while self.datastore.range_record.getLast()[1] < 0.2 and time.time() < timeout:
+            #     await self.move_direction_speed(np.array([0,0,1]), 0.05, downward_bias=0)
+            # print('stop moving')
+            self.slow_stop_all_spools()
+
+            print('relax the direct lines, tighten the indirect line')
+            await self.send_line_speed(0, 0.15)
+            await self.send_line_speed(1, -0.1)
+            await self.send_line_speed(2, 0.15)
+            await self.send_line_speed(3, -0.1)
+            await asyncio.sleep(0.8)
+            self.slow_stop_all_spools()
+
+            results = {}
+
+            # keep loosening these the whole time
+            await self.send_line_speed(0, 0.05)
+            await self.send_line_speed(2, 0.05)
+
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=20.0,
+                name="Calibration",
+                current_action="Observe diamond bottom",
+            ))
+            print('this position is the bottom of the diamond. Observe gantry for 2 seconds')
+            await asyncio.sleep(6)
+            results['bottom'] = self.snapshot_tag_observations()['gantry']
+
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=25.0,
+                name="Calibration",
+                current_action="Observe diamond right",
+            ))
+            print('shorten one leg by 30 cm')
+            await self.send_line_speed(1, -0.1)
+            await asyncio.sleep(3)
+            await self.send_line_speed(1, 0)
+            await asyncio.sleep(6)
+            results['right'] = self.snapshot_tag_observations()['gantry'] # it is to the right from the perspective of camera 0
+
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=30.0,
+                name="Calibration",
+                current_action="Observe diamond top",
+            ))
+            print('shorten the other leg by 30 cm')
+            await self.send_line_speed(3, -0.1)
+            await asyncio.sleep(3)
+            await self.send_line_speed(3, 0)
+            await asyncio.sleep(6)
+            results['top'] = self.snapshot_tag_observations()['gantry']
+
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=35.0,
+                name="Calibration",
+                current_action="Observe diamond left",
+            ))
+            print('lengthen the first leg by 30 cm')
+            await self.send_line_speed(1, 0.1)
+            await asyncio.sleep(3)
+            await self.send_line_speed(1, 0)
+            await asyncio.sleep(6)
+            results['left'] = self.snapshot_tag_observations()['gantry']
+
+            print('return result')
+            for a in self.anchors.values():
+                a.save_raw = True
+
+            analyze_diamond_data(results)
+
+            return results
+
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
     
     async def half_auto_calibration(self):
         """
@@ -830,7 +908,7 @@ class AsyncObserver:
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
 
-            averages = self.snapshot_tag_observations()
+            raw_obs = self.snapshot_tag_observations()
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=12.0,
@@ -840,20 +918,27 @@ class AsyncObserver:
 
             if self.config.anchor_type == common.AnchorType.ARPEGGIO:
                 # determine position of two anchors visually and guess at external eyelets.
-                anchor_poses, eyelet_positions = await optimize_arp_anchors(averages)
+                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, None, None, None))
+                anchor_poses, eyelet_positions = async_result.get(timeout=30)
+                print(f'obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+
                 self.save_poses_arp(anchor_poses, eyelet_positions)
                 self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=20.0,
+                    percent_complete=15.0,
                     name="Calibration",
                     current_action="Collecting proprioceptive data",
                 ))
+                await self.half_auto_calibration()
                 # collect length_change_data data to estimate eyelets better
-                length_change_data = await self.collect_arp_anchor_eyelet_experiment_data()
+                diamond_data = await self.collect_arp_anchor_eyelet_experiment_data()
                 # stop saving raw poses
                 for a in self.anchors.values():
                     a.save_raw = False
                 # optimize again with length_change_data
-                anchor_poses, eyelet_positions = await optimize_arp_anchors(averages, length_change_data)
+                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, anchor_poses))
+                anchor_poses, eyelet_positions = async_result.get(timeout=30)
+                print(f'obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+
                 self.save_poses_arp(anchor_poses, eyelet_positions)
 
             else:
@@ -938,7 +1023,7 @@ class AsyncObserver:
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
                 name="Calibration",
-                current_action=str(e),
+                current_action='Calibration failed, see motion controller console',
             ))
             raise
 
@@ -987,7 +1072,6 @@ class AsyncObserver:
                         # self.config.camera_cal if isinstance(self.gripper_client, RaspiGripperClient) else self.config.camera_cal_wide),
                     callback=partial(special_handle_det, time.time()))
                 detections = async_result.get(timeout=5)
-                print(f'detections {detections}')
         except Exception as e:
             print(e)
             raise
@@ -1789,7 +1873,10 @@ class AsyncObserver:
                 asyncio.create_task(self.anchors[line_no].send_commands({'aim_speed': speed}))
         elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
             if line_no//2 in self.anchors:
-                asyncio.create_task(self.anchors[line_no//2].send_commands({'aim_speed': (speed, line_no%2)}))
+                spool_no = int(not (line_no%2))
+                # we consider the lower line number to be the direct line, but in the anchor server, spool 0 is the indirect line.
+                # todo: make this consistent
+                asyncio.create_task(self.anchors[line_no//2].send_commands({'aim_speed': (speed, spool_no)}))
 
     async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04, key='default'):
         """Move in the direction of the given unit vector at the given speed.

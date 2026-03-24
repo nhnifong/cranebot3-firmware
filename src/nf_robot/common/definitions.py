@@ -66,7 +66,8 @@ damiao_full_spool_diameter_power_line = 86.1
 # arp anchor model
 arp_anchor_right_eyelet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
 arp_anchor_left_eyelet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
-arp_anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -0.038,  0.017], dtype=float))
+# compose_poses([(np.array([0,pi,0], dtype=float), np.array([0.001, -0.039, 0.074], dtype=float)), (np.array([(90-22)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float))])
+arp_anchor_camera = (np.array([0.0, 2.60449835, -1.75675632]), np.array([ 0.001, -0.039,  0.074]))
 
 rpi_cam_3_fov = np.array([66, 41])
 rpi_cam_3_wide_fov = np.array([102, 67])

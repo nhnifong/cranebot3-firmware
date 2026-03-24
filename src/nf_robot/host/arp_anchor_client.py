@@ -42,7 +42,7 @@ class ArpeggioAnchorClient(ComponentClient):
         self.camera_pose = np.zeros((2, 3))
         self.eye_pos = np.zeros(3)
         self.extratilt = 0
-        self.raw_gant_poses = deque(maxlen=12)
+        self.raw_gant_poses = deque(maxlen=24)
         self.gantry_pos_sightings = deque(maxlen=100)
         self.gantry_pos_sightings_lock = threading.RLock()
 
