@@ -86,6 +86,10 @@ class ArpeggioGripperClient(ComponentClient):
             if 'vel_from_imu' in gs:
                 self.vel_from_imu = np.array(gs['vel_from_imu'])
 
+            target_force = 0
+            if 'dforce' in gs:
+                target_force = float(gs['dforce'])
+
             # Note that finger angles are returned in the range of (-90, 90) even though these are not the actual angle
             # -90 is open
             finger_angle = float(gs['fing_a'])
@@ -107,6 +111,7 @@ class ArpeggioGripperClient(ComponentClient):
                 angle = finger_angle,
                 pressure = voltage,
                 wrist = wrist_angle,
+                target_force = target_force,
             ))
 
         if 'finger_contact_calibration_complete' in update:

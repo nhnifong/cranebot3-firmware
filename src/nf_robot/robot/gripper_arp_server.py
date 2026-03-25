@@ -220,6 +220,7 @@ class GripperArpServer(RobotComponentServer):
             'fing_v': self.filtered_force,
             'fing_a': finger_angle,
             'wrist_a': wrist_angle,
+            'dforce': self.desired_force if self.in_force_mode else 0,
         }
 
         if self.rangefinder.data_ready:
