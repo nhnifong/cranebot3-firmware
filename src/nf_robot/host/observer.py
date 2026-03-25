@@ -962,7 +962,7 @@ class AsyncObserver:
                     a.save_raw = False
 
                 # run optimization in pool
-                async_result = self.pool.apply_async(optimize_anchor_poses, (averages,))
+                async_result = self.pool.apply_async(optimize_anchor_poses, (raw_obs,))
                 anchor_poses = async_result.get(timeout=30)
                 print(f'obtained result from find_cal_params anchor_poses=\n{anchor_poses}')
                 anchor_poses = np.array(anchor_poses)
