@@ -1655,7 +1655,7 @@ class AsyncObserver:
         self.stat.run = False
         self.pe.run = False
         self.pe_task.cancel()
-        tasks = [self.pe_task, self.keeper, self.passive_safety_task]
+        tasks = [self.pe_task, self.keeper]
         if self.cloud_telem:
             self.cloud_telem.cancel()
             tasks.append(self.cloud_telem)
