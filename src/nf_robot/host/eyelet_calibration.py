@@ -178,7 +178,11 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             D1_top = np.linalg.norm(c_top - eyelet_positions[1])
             D1_lef = np.linalg.norm(c_lef - eyelet_positions[1])
             
-            DELTA = 0.55 # 55 cm
+            DELTA = 0.30 # 55 cm
+
+            # TOP: eyelet 0 and 1 are both shortened by 30 cm relative to bottom.
+            # RIGHT: eyelet 0 is shortened by 105 cm, and eyelet 1 is lengthened by 75 cm relative to bottom
+            # LEFT: eyelet 1 is shortened by 105 cm, and eyelet 0 is lengthened by 75 cm relative to bottom
             
             # Eyelet 0 is shortened by 15cm at right and top relative to bottom and left
             d_res = [

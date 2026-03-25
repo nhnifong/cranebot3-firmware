@@ -755,7 +755,6 @@ class AsyncObserver:
         """  
         Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
         """
-        shorten = 0.3
 
         try:
             for a in self.anchors.values():
@@ -775,11 +774,19 @@ class AsyncObserver:
             await asyncio.sleep(1)
             self.slow_stop_all_spools()
 
+            half_h = 0.25
+            side_to_center = 1.0
+
             results = {}
 
             # keep loosening these the whole time
-            # await self.send_line_speed(0, 0.05)
-            # await self.send_line_speed(2, 0.05)
+            await self.send_line_speed(0, 0.05)
+            await self.send_line_speed(2, 0.05)
+
+            async def line_stops(line_no):
+                await asyncio.sleep(25)
+                # while abs(self.datastore.anchor_line_record[line_no].getLast()[2]) > 0.01:
+                #     await asyncio.sleep(1/30)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=20.0,
@@ -795,10 +802,13 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond right",
             ))
-            print('shorten one leg')
-            await self.send_line_speed(1, -shorten, jog=True)
-            await asyncio.sleep(2)
+            # RIGHT: eyelet 0 is shortened by 105 cm, and eyelet 1 is lengthened by 75 cm relative to bottom
+            print('move to RIGHT')
+            await self.send_line_speed(1, -side_to_center-half_h, jog=True)
+            await self.send_line_speed(3, side_to_center-half_h, jog=True)
+            await line_stops(1)
             await self.send_line_speed(1, 0)
+            await self.send_line_speed(3, 0)
             await asyncio.sleep(5)
             results['right'] = self.snapshot_tag_observations()['gantry'] # it is to the right from the perspective of camera 0
 
@@ -807,9 +817,12 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond top",
             ))
-            print('shorten the other leg')
-            await self.send_line_speed(3, -shorten, jog=True)
-            await asyncio.sleep(2)
+            # TOP: eyelet 0 and 1 are both shortened by 30 cm relative to bottom.
+            print('move to TOP')
+            await self.send_line_speed(1, side_to_center-half_h, jog=True)
+            await self.send_line_speed(3, -side_to_center-half_h, jog=True)
+            await line_stops(3)
+            await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
             await asyncio.sleep(5)
             results['top'] = self.snapshot_tag_observations()['gantry']
@@ -819,10 +832,13 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond left",
             ))
-            print('lengthen the first leg by 30 cm')
-            await self.send_line_speed(1, shorten, jog=True)
-            await asyncio.sleep(2)
+            # LEFT: eyelet 0 is lengthened by 75 cm, and eyelet 1 is shortened by 105 cm relative to bottom
+            print('move to LEFT')
+            await self.send_line_speed(1, side_to_center+half_h, jog=True)
+            await self.send_line_speed(3, -side_to_center+half_h, jog=True)
+            await line_stops(1)
             await self.send_line_speed(1, 0)
+            await self.send_line_speed(3, 0)
             await asyncio.sleep(5)
             results['left'] = self.snapshot_tag_observations()['gantry']
 
