@@ -274,9 +274,9 @@ class GripperArpServer(RobotComponentServer):
             self.motors.torque_enable(WRIST, True)
 
             # initialize with current positions to prevent sudden moves
-            self.desired_wrist_angle = self.getWristAngle()
+            self.desired_wrist_angle = self.saved_unrolled_wrist_angle
             logging.info(f'wrist angle at startup = {self.desired_wrist_angle}')
-            self.desired_finger_angle = self.getFingerAngle()
+            self.desired_finger_angle = self.saved_finger_angle
             logging.info(f'finger angle at startup = {self.desired_finger_angle}')
 
             last_movement_time = time.time()
@@ -324,14 +324,17 @@ class GripperArpServer(RobotComponentServer):
                 
                 # check for rising edges in pad pressure
                 self.countFingerPresses(current_pressure)
-
+                
                 # Check for safety overload conditions on every loop iteration
                 # We fetch wrist data here as well since get_current_grip_force only pulls finger data
                 wrist_data = self.motors.get_feedback(WRIST)
                 self.checkMotorLoad(self.last_finger_data, wrist_data)
-                
+
                 if not self.in_force_mode:
+                    pa = self.desired_finger_angle
                     self.desired_finger_angle = clamp(self.desired_finger_angle + self.desired_finger_speed * DT, -90, 90)
+                    if abs(self.desired_finger_speed) > 0:
+                        logging.info(f"pa={pa} dfa={self.desired_finger_angle} dfs={self.desired_finger_speed} DT={DT}")
                     
                     # Enter force mode dynamically upon contact while closing
                     if current_pressure > self.conf['FORCE_TRIGGER_THRESHOLD'] and self.desired_finger_speed > 0:
@@ -438,37 +441,56 @@ class GripperArpServer(RobotComponentServer):
             logging.info(f"Calibrating finger servo...")
             self.motors.reset_encoder_to_midpoint(FINGER)
 
-            pos = self.motors.get_position(FINGER)
-            # open a few degrees in case fingers were already touching.
-            rel = 100
-            self.motors.set_position(FINGER, pos + rel)
-            await asyncio.sleep(0.5)
-            data = self.motors.get_feedback(FINGER)
-
-            # confirm no pressure on finger pad
-            v = self.pressure_sensor.voltage
-            assert v > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
-
-            # slowly close until the fingerpad voltage drops below 2V
-            start = time.time()
-            load = 0
-            while v > 3.0 and time.time() < start+16:
+            for speed in [20, 10]:
+                pos = self.motors.get_position(FINGER)
+                # open a few degrees in case fingers were already touching.
+                rel = 200
                 self.motors.set_position(FINGER, pos + rel)
-                rel -= 10
-                await asyncio.sleep(0.05)
-                v = self.pressure_sensor.voltage
+                await asyncio.sleep(0.5)
                 data = self.motors.get_feedback(FINGER)
-                load = data["load"]
-                if load < 1000: # ignore load values over 1000, they indicate force in the other direction
-                    if load>450:
-                        self.motors.torque_enable(FINGER, False)
-                        raise RuntimeError("motor load too high while no finger pressure detected")
-            self.motors.set_speed(FINGER, 0)
 
-            self.finger_closed_pos = self.motors.get_position(FINGER)
-            logging.info(f"Motor encoder position at finger touch = {self.finger_closed_pos}")
+                # confirm no pressure on finger pad
+                v = self.pressure_sensor.voltage
+                assert v > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
+
+                # slowly close until the fingerpad voltage drops below 2V
+                start = time.time()
+                load = 0
+                while v > 3.0 and time.time() < start+16:
+                    # logging.info(f'self.motors.set_position(FINGER, {pos + rel})')
+                    self.motors.set_position(FINGER, pos + rel)
+                    rel -= speed
+
+                    # you cannot command negative positions from these servos (though they will report negative positions in feedback)
+                    # so as the fingers get more closed, we may cross that point and need to reset midpoint again to move it off the edge of our working range.
+                    if pos+rel < 0:
+                        self.motors.set_speed(FINGER, 0)
+                        self.motors.torque_enable(FINGER, False)
+                        await asyncio.sleep(0.05)
+                        self.motors.reset_encoder_to_midpoint(FINGER)
+                        await asyncio.sleep(0.05)
+                        pos = self.motors.get_position(FINGER)
+                        rel = 0
+                        logging.info(f'reset midpoint position is now {pos}')
+
+                    await asyncio.sleep(0.05)
+                    v = self.pressure_sensor.voltage
+                    data = self.motors.get_feedback(FINGER)
+                    load = data["load"]
+                    if load < 1000: # ignore load values over 1000, they indicate force in the other direction
+                        if load>450:
+                            self.motors.torque_enable(FINGER, False)
+                            raise RuntimeError("motor load too high while no finger pressure detected")
+                self.motors.set_speed(FINGER, 0)
+
+                touch_pos = self.motors.get_position(FINGER)
+                logging.info(f"Motor encoder position at finger touch = {touch_pos}")
+                # back off and do it again, but slower.
+
+            self.finger_closed_pos = touch_pos
             self.finger_open_pos = self.finger_closed_pos + FINGER_TRAVEL_STEPS
-            self.saved_finger_angle = 90 # closed
+            self.saved_finger_angle = 90 
+            self.desired_finger_angle = 90
             with open('arp_gripper_state.json', 'w') as f:
                 json.dump({
                     'finger_open_pos': self.finger_open_pos,
@@ -476,6 +498,10 @@ class GripperArpServer(RobotComponentServer):
                     'unrolled_wrist_angle': self.saved_unrolled_wrist_angle,
                     'finger_angle': self.saved_finger_angle
                 }, f)
+
+            # re-open to a neutral position
+            self.setFingers(70)
+
         except Exception as e:
             logging.exception("problem in finger calibration task")
         finally:
