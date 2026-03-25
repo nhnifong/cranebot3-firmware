@@ -186,6 +186,7 @@ class AsyncObserver:
         self.auto_start = auto_start
         self.swing_cancellation_task = None
         self.local_models = local_models
+        self.js = 0.1
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -346,6 +347,9 @@ class AsyncObserver:
             asyncio.create_task(self.calibrate_finger_servo())
         if item.action == 'eyelets':
             r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data())
+        if item.action == 'jog1':
+            self.js = -self.js
+            r = await self.send_line_speed(1, self.js, jog=True)
 
     async def calibrate_finger_servo(self):
         self.gripper_client.finger_contact_calibration_complete.clear()
@@ -505,9 +509,9 @@ class AsyncObserver:
                 asyncio.create_task(self.gripper_client.send_commands({'aim_speed': jog.speed}))
         else:
             if jog.speed is not None:
-                self.send_line_speed(jog.anchor_num, jog.speed)
+                await self.send_line_speed(jog.anchor_num, jog.speed)
             elif jog.offset is not None:
-                self.send_line_speed(jog.anchor_num, jog.offset, jog=True)
+                await self.send_line_speed(jog.anchor_num, jog.offset, jog=True)
 
     async def _handle_gantry_goal_pos(self, goal_pos: np.ndarray):
         """Handles moving the gantry to a specific goal position."""
@@ -703,6 +707,8 @@ class AsyncObserver:
             # Slow stop all spools. gripper too
             asyncio.create_task(client.slow_stop_spool())
         self.pe.record_commanded_vel(np.zeros(3))
+        raise RuntimeError
+
 
     def snapshot_tag_observations(self):
         """Recent origin detections and cal_assist marker detections
@@ -751,7 +757,7 @@ class AsyncObserver:
         """  
         Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
         """
-        shorten = 0.4
+        shorten = 0.3
 
         try:
             for a in self.anchors.values():
@@ -764,10 +770,10 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
             print('relax the direct lines, tighten the indirect line')
-            await self.send_line_speed(0,  0.15, jog=True)
-            await self.send_line_speed(1, -0.15, jog=True)
-            await self.send_line_speed(2,  0.15, jog=True)
-            await self.send_line_speed(3, -0.15, jog=True)
+            await self.send_line_speed(0,  0.05, jog=True)
+            await self.send_line_speed(1, -0.02, jog=True)
+            await self.send_line_speed(2,  0.05, jog=True)
+            await self.send_line_speed(3, -0.02, jog=True)
             await asyncio.sleep(1)
             self.slow_stop_all_spools()
 
@@ -1573,7 +1579,7 @@ class AsyncObserver:
         monitor.start()
 
         # broken
-        self.passive_safety_task = asyncio.create_task(self.passive_safety())
+        # self.passive_safety_task = asyncio.create_task(self.passive_safety())
 
         if self.telemetry_env is not None:
             self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())

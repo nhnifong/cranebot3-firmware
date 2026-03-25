@@ -17,17 +17,15 @@ default_conf_dm = {
     # sleep delay of tracking loop
     'LOOP_FREQ_HZ': 50,
     # measured torque on a motor with orintation 1 and a line that is minimally taught. 
-    'TARGET_TORQUE': -0.05,
+    'TARGET_TORQUE': -0.01,
     # default cruise speed in meters/sec for position moves
-    'CRUISE_SPEED': 0.3,
+    'CRUISE_SPEED': 0.05,
     # factor controlling how torque is smoothed with ema.
     'SMOOTH_FACTOR': 0.08,
     # maximum safe line speed in meters per second
     'MAX_SAFE_LINE_SPEED': 2.0,
-    # Proportional gain for the software-side position loop (meters error -> meters/sec)
-    'POS_KP': 1.5,
     # Distance in meters within which we consider a jog "complete"
-    'POS_DEADBAND': 0.005
+    'POS_DEADBAND': 0.001
 }
 
 class DamiaoSpoolController:
@@ -51,7 +49,8 @@ class DamiaoSpoolController:
         """
         self.motor = motor
         self.direction = direction
-        self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, 1, direction)
+        # spiral always dir -1, we're hiding that from it.
+        self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, 1, -1)
 
         # config is the dictionary we should use and the object that will be updated by clients if any online reconfiguration occurs
         # that's why this appears backards
@@ -116,7 +115,7 @@ class DamiaoSpoolController:
             self.target_length = self.last_length
         
         self.target_length += delta_meters
-        logging.info(f"Jogging by {delta_meters}m. New target length: {self.target_length:.3f}m")
+        logging.info(f"Jogging by {delta_meters}m. Current length: {self.last_length} New target length: {self.target_length:.3f}m")
 
     def popMeasurements(self):
         """Return up to DATA_LEN measurements. newest at the end."""
@@ -205,16 +204,15 @@ class DamiaoSpoolController:
                 # Position control logic (using during jog)
                 if self.target_length is not None:
                     dist_err = self.target_length - self.last_length
-                    # Proportional control for speed based on position error
-                    self.aim_line_speed = dist_err * self.conf['POS_KP']
-                    # Clamp to safe speeds
-                    self.aim_line_speed = np.clip(self.aim_line_speed, 
-                                                 -self.conf['CRUISE_SPEED'], 
-                                                 self.conf['CRUISE_SPEED'])
+                    if dist_err > 0:
+                        self.aim_line_speed = self.conf['CRUISE_SPEED']
+                    else:
+                        self.aim_line_speed = -self.conf['CRUISE_SPEED']
                     # If we are within the deadband, stop and clear target
                     if abs(dist_err) < self.conf['POS_DEADBAND']:
                         self.target_length = None
                         self.aim_line_speed = 0
+                        logging.info(f'cur_len {self.last_length}')
 
                 # accumulate these. parent class will send them on the websocket at it's own rate
                 row = (loop_start, self.last_length, current_line_speed, self.last_tension)
