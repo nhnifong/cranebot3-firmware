@@ -707,8 +707,6 @@ class AsyncObserver:
             # Slow stop all spools. gripper too
             asyncio.create_task(client.slow_stop_spool())
         self.pe.record_commanded_vel(np.zeros(3))
-        raise RuntimeError
-
 
     def snapshot_tag_observations(self):
         """Recent origin detections and cal_assist marker detections
