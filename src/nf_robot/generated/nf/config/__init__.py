@@ -217,6 +217,8 @@ class StringmanPilotConfig(betterproto2.Message):
     rec_mod: "int" = betterproto2.field(4, betterproto2.TYPE_INT32)
     """
     record line length every nth iteration of the main anchor loop
+
+    DEPRECATED
     """
 
     running_ws_delay: "float" = betterproto2.field(5, betterproto2.TYPE_DOUBLE)

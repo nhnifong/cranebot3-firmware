@@ -453,7 +453,7 @@ class JogSpool(betterproto2.Message):
 
     anchor_num: "int" = betterproto2.field(2, betterproto2.TYPE_UINT32)
     """
-    only set for anchors
+    only set for anchors. Interpreted as line number in systems with arpeggio anchors.
     """
 
     speed: "float | None" = betterproto2.field(

@@ -121,11 +121,14 @@ message GripperSensors {
 	// the second bone is a deterministic function of the first one, but I don't know the function.
 	float angle = 2;
 
-	// The voltage on the sensing finger pad, lower is more pressure. [0,3.3]
+	// The force the fingers are feeling [0,1]
 	float pressure = 3;
 
 	// Wrist angle in degrees [0,1080]
 	float wrist = 4;
+
+	// The target force the gripper is aiming for in constant force mode [0,1]
+	optional float target_force = 5;
 }
 
 // values predicted by model using the gripper camera provided to UI for diagnostic visualization

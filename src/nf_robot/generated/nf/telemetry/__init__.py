@@ -292,12 +292,19 @@ class GripperSensors(betterproto2.Message):
 
     pressure: "float" = betterproto2.field(3, betterproto2.TYPE_FLOAT)
     """
-    The voltage on the sensing finger pad, lower is more pressure. [0,3.3]
+    The force the fingers are feeling [0,1]
     """
 
     wrist: "float" = betterproto2.field(4, betterproto2.TYPE_FLOAT)
     """
     Wrist angle in degrees [0,1080]
+    """
+
+    target_force: "float | None" = betterproto2.field(
+        5, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    The target force the gripper is aiming for in constant force mode [0,1]
     """
 
 
