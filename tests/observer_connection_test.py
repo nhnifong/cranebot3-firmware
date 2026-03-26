@@ -8,6 +8,7 @@ from math import pi
 import time
 from zeroconf import IPVersion, ServiceStateChange
 from zeroconf.asyncio import AsyncZeroconf
+import websockets
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.config_loader import create_default_config, config_has_any_address
@@ -15,7 +16,7 @@ from nf_robot.host.observer import AsyncObserver
 from nf_robot.common.pose_functions import invert_pose, compose_poses
 from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.anchor_client import RaspiAnchorClient
-from nf_robot.host.gripper_client import RaspiGripperClient
+from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
 
 # Todo, automate the following tests
 # with a blank config, start observer, allow it to discover the bots, assert it wrote the addresses in the config.
@@ -56,7 +57,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.clients_disconnect_abnormally = False
         self.kill_clients = asyncio.Event()
 
-        self.mock_gripper_client_class = Mock(spec=RaspiGripperClient)
+        self.mock_gripper_client_class = Mock(spec=ArpeggioGripperClient)
         self.mock_gripper_client = self.mock_gripper_client_class.return_value
         self.mock_gripper_client.startup = partial(self.event_startup, 4)
         self.mock_gripper_client.shutdown = self.event_shutdown
@@ -65,7 +66,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client.last_frame_resized = None
         self.mock_gripper_client.connected = False
 
-        self.patchers.append(patch('nf_robot.host.observer.RaspiGripperClient', self.mock_gripper_client_class))
+        self.patchers.append(patch('nf_robot.host.observer.ArpeggioGripperClient', self.mock_gripper_client_class))
 
         # Create four mock anchor clients
         self.mock_anchor_clients = [Mock(spec=RaspiAnchorClient) for _ in range(4)]
@@ -195,7 +196,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             
             return mock_instance
 
-    async def observer_accepts_local_ui_connection_test(self):
+    async def test_observer_accepts_local_ui_connection(self):
         """observer should listen for local UI at localhost:4245"""
         await self.start_observer()
         async with websockets.connect("ws://127.0.0.1:4245") as ws:
@@ -220,7 +221,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # it does not matter that we are running no such service.
         # when the observer creates a gripper client, it will create a mock object
         await self.start_observer()
-        name = "123.cranebot-gripper-service.test"
+        self.assertFalse(config_has_any_address(self.ob.config))
+        name = "123.cranebot-gripper-arpeggio-service.test"
         await self.advertise_service(name)
         # since we are immediately calling the observer's add_service callback, it should add this to the config immediately
         self.assertTrue(config_has_any_address(self.ob.config))
@@ -330,7 +332,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             self.ob.config.anchors[i].address = '127.0.0.1'
             self.ob.config.anchors[i].port = 8765
 
-        gripper_name = "123.cranebot-gripper-service.test"
+        gripper_name = "123.cranebot-gripper-arpeggio-service.test"
         names.append(gripper_name)
         self.ob.config.gripper.service_name = gripper_name
         self.ob.config.gripper.address = '127.0.0.1'

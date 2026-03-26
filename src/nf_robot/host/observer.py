@@ -125,7 +125,8 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, auto_start=False, local_models=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, auto_start=False, local_models=False, port=4245) -> None:
+        self.port = port
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
@@ -1448,6 +1449,7 @@ class AsyncObserver:
             print(f'invalid service name "{service_name}"')
             return
 
+        print(f'try connecting to {name_component}')
         is_power_anchor = name_component == anchor_power_service_name
         is_standard_anchor = name_component == anchor_service_name
         is_standard_gripper = name_component == gripper_service_name
@@ -1480,6 +1482,8 @@ class AsyncObserver:
                 client = ArpeggioAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.telemetry_env)
                 client.connection_established_event = self.any_anchor_connected
                 self.anchors[a.num] = client
+        else:
+            print(f'Don\'t know how to connect to {name_component}')
 
         if client:
             self.bot_clients[service_name] = client
@@ -1635,7 +1639,7 @@ class AsyncObserver:
 
             if self.telemetry_env is None:
                 # start a websocket server to accept incoming connection from local UI
-                async with websockets.serve(self.handle_local_client, "127.0.0.1", 4245):
+                async with websockets.serve(self.handle_local_client, "127.0.0.1", self.port):
                     # await something that will end when the program closes to keep serving and
                     # keep zeroconf alive and discovering services.
                     try:
@@ -1779,6 +1783,7 @@ class AsyncObserver:
                 update['set_wrist_speed'] = wrist_speed
                 cg.wrist_speed = wrist_speed
             self.send_ui(last_commanded_grip=cg)
+            r = await self.flush_tele_buffer()
 
         elif isinstance(self.gripper_client, RaspiGripperClient):
 
@@ -2056,7 +2061,7 @@ class AsyncObserver:
         self.target_model, self.centering_model = await asyncio.to_thread(load_models_sync)
 
         if self.telemetry_env == None:
-            message = 'Listening on localhost:4245 To control visit https://neufangled.com/playroom?robotid=lan on this machine'
+            message = f'Listening on localhost:{self.port} To control visit https://neufangled.com/playroom?robotid=lan on this machine'
         if self.telemetry_env == 'local':
             message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
         if self.telemetry_env == 'staging':

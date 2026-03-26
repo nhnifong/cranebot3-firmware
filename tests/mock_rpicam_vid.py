@@ -13,7 +13,7 @@ from panda3d.core import (
 )
 from math import pi
 
-from nf_robot.common.cv_common import special_sizes, default_marker_size
+from nf_robot.common.cv_common import SPECIAL_SIZES, DEFAULT_MARKER_SIZE
 
 def convert_pose(pose):
     # convert to X Y Z H P R
@@ -23,8 +23,8 @@ def convert_pose(pose):
 
 starting_port = 8888
 ratio = 588/500 # marker occupies 500 px of the 588 px image width
-origin_scale = special_sizes['origin'] * ratio
-gantry_scale = default_marker_size * ratio
+origin_scale = SPECIAL_SIZES['origin'] * ratio
+gantry_scale = DEFAULT_MARKER_SIZE * ratio
 
 class RPiCamVidMock:
     """
