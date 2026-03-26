@@ -1,3 +1,7 @@
+import pytest
+pytestmark = pytest.mark.pi
+pytest.importorskip("gpiodevice")
+
 import asyncio
 import unittest
 import numpy as np
@@ -7,7 +11,6 @@ from adafruit_vl53l1x import VL53L1X
 from zeroconf import IPVersion
 from zeroconf.asyncio import AsyncZeroconf
 from math import pi
-import pytest
 from adafruit_mpu6050 import MPU6050
 from adafruit_ads1x15 import AnalogIn, ADS1015
 import websockets
