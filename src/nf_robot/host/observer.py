@@ -776,7 +776,7 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
             half_h = 0.25
-            side_to_center = 1.0
+            half_w = 1.0
 
             results = {}
 
@@ -786,6 +786,7 @@ class AsyncObserver:
 
             async def line_stops(line_no):
                 await asyncio.sleep(25)
+                # TODO wait for stop. didn't work.
                 # while abs(self.datastore.anchor_line_record[line_no].getLast()[2]) > 0.01:
                 #     await asyncio.sleep(1/30)
 
@@ -803,10 +804,10 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond right",
             ))
-            # RIGHT: eyelet 0 is shortened by 105 cm, and eyelet 1 is lengthened by 75 cm relative to bottom
+            # RIGHT:
             print('move to RIGHT')
-            await self.send_line_speed(1, -side_to_center-half_h, jog=True)
-            await self.send_line_speed(3, side_to_center-half_h, jog=True)
+            await self.send_line_speed(1, -half_w-half_h, jog=True)
+            await self.send_line_speed(3, half_w-half_h, jog=True)
             await line_stops(1)
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
@@ -818,10 +819,10 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond top",
             ))
-            # TOP: eyelet 0 and 1 are both shortened by 30 cm relative to bottom.
+            # TOP:
             print('move to TOP')
-            await self.send_line_speed(1, side_to_center-half_h, jog=True)
-            await self.send_line_speed(3, -side_to_center-half_h, jog=True)
+            await self.send_line_speed(1, half_w-half_h, jog=True)
+            await self.send_line_speed(3, -half_w-half_h, jog=True)
             await line_stops(3)
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
@@ -833,10 +834,10 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond left",
             ))
-            # LEFT: eyelet 0 is lengthened by 75 cm, and eyelet 1 is shortened by 105 cm relative to bottom
+            # LEFT:
             print('move to LEFT')
-            await self.send_line_speed(1, side_to_center+half_h, jog=True)
-            await self.send_line_speed(3, -side_to_center+half_h, jog=True)
+            await self.send_line_speed(1, half_w+half_h, jog=True)
+            await self.send_line_speed(3, -half_w+half_h, jog=True)
             await line_stops(1)
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
