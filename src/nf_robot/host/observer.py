@@ -325,7 +325,7 @@ class AsyncObserver:
         """ Task which adds swing cancellation inputs. """
 
         # TODO attempt to measure this. It is the round trip latency between IMU measurements on the grpper and when our inputs move the spools.
-        latency = 0.24
+        latency = 0.18
         try:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True, present='.'))
             self.active_set.add('swingc')
@@ -339,6 +339,7 @@ class AsyncObserver:
         finally:
             self.active_set.remove('swingc')
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
+            self.slow_stop_all_spools()
 
     async def _handle_debug_command(self, item: control.Debug):
         print(f'Debug action "{item.action}"')
@@ -924,6 +925,7 @@ class AsyncObserver:
 
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
+            print(f'collected enough observations {num_o_dets}')
 
             raw_obs = self.snapshot_tag_observations()
 

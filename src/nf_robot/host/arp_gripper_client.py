@@ -35,7 +35,8 @@ R_imu_to_cam = np.array([
 # omega is the constant angular frequency of the pendulum. Effectuve length from pivot to center of gripper mass is 0.4526 meters
 LENGTH = 0.4526
 OMEGA = np.sqrt(9.81 / LENGTH)
-SWING_CANCEL_GAIN = -0.1
+SWING_CANCEL_GAIN = -0.12
+CENTERING_GAIN = 0.4
 
 def rotate_vector(vec, rad):
     """Rotates a 2D vector [x, y] by a given angle in radians."""
@@ -59,6 +60,10 @@ class ArpeggioGripperClient(ComponentClient):
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
         self.finger_contact_calibration_complete = asyncio.Event()
+        
+        # State variables added to track and prevent platform drift
+        self._swing_position_offset = np.zeros(2)
+        self._last_future_time = 0
 
     async def handle_update_from_ws(self, update):
         if 'st' in update:
@@ -124,7 +129,7 @@ class ArpeggioGripperClient(ComponentClient):
         if sm is None or st is None:
             return None
 
-        # we calculate the angle of the system at a future time.
+        # calculate swing cancellation
         latency_comp = future_time - st
         look_ahead_angle = OMEGA * latency_comp
         c_future, s_future = np.cos(look_ahead_angle), np.sin(look_ahead_angle)
@@ -134,7 +139,23 @@ class ArpeggioGripperClient(ComponentClient):
         future_accel = OMEGA * (sm[:, 1] * c_future - sm[:, 0] * s_future)
 
         # A corrective velocity to the gantry inversely proportional to the angular velocity of the gripper cancels the swing
-        vel = future_accel * SWING_CANCEL_GAIN
+        raw_vel = future_accel * SWING_CANCEL_GAIN
+
+        # cancel accumulated drift introduced from swing cancellation
+        # Calculate time elapsed since last call to update the integrator
+        dt = future_time - self._last_future_time
+        self._last_future_time = future_time
+
+        # Ignore massive jumps in time if the control loop paused
+        if dt > 0.5 or dt < 0:
+            dt = 0.0
+
+        # Apply a centering restorative velocity proportional to the accumulated position offset
+        centering_vel = self._swing_position_offset * CENTERING_GAIN
+        vel = raw_vel - centering_vel
+
+        # Track the accumulated position offset based on the velocity we are actually commanding
+        self._swing_position_offset += vel * dt
 
         # rotate vector into room frame of reference
         wrist = self.datastore.winch_line_record.getLast()[1]
