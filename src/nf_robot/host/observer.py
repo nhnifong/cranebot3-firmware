@@ -15,7 +15,7 @@ from zeroconf.asyncio import (
     AsyncZeroconfServiceTypes,
     InterfaceChoice,
 )
-from multiprocessing import Pool
+from multiprocessing import Pool, Process
 import numpy as np
 import scipy.optimize as optimize
 from scipy.spatial.transform import Rotation
@@ -352,6 +352,20 @@ class AsyncObserver:
         if item.action == 'jog1':
             self.js = -self.js
             r = await self.send_line_speed(1, self.js, jog=True)
+        if item.action == 'recorder':
+            asyncio.create_task(self.record_dataset())
+
+    async def record_dataset(self):
+        async def print_subprocess_output(self, stream):
+            async for line in stream:
+                print(line.decode('utf-8').rstrip())
+
+        from nf_robot.ml.stringman_lerobot import record_until_disconnected
+        record_process = Process(target=record_until_disconnected, args=('ws://localhost:4245', 'naavox/grasping_dataset'), daemon=True)
+        record_process.start()
+        await self.kill_recorder.wait()
+        record_process.terminate()
+        record_process.join()
 
     async def calibrate_finger_servo(self):
         self.gripper_client.finger_contact_calibration_complete.clear()
@@ -870,6 +884,9 @@ class AsyncObserver:
             if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
                 print('Cannot run half calibration until all anchors are connected')
                 return
+
+            if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
+                self.swing_cancellation_task.cancel()
 
             for direction in [[0,0,-1], [0,0,1]]:
                 await self.tension_and_wait()
