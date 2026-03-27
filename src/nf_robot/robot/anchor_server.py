@@ -439,7 +439,7 @@ class RaspiAnchorServer(RobotComponentServer):
         if 'relax' in updates:
             tg.create_task(self.relax())
         if 'identify' in updates:
-            tg.create_task(self.identify())
+            self.identify()
         if 'report_raw' in updates:
             self.report_raw = bool(updates['report_raw'])
 

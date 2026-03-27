@@ -11,7 +11,7 @@ class DebugMotor():
         return True
 
     def stop(self):
-        print('stop')
+        print('debug motor stop')
 
     def runConstantSpeed(self, speed):
         if self.accelLimit is not None and abs(speed - self.speed) > self.accelLimit:
@@ -35,3 +35,6 @@ class DebugMotor():
 
     def setAccelLimit(self, limit):
         self.accelLimit = limit
+
+    def make_noise(self):
+        print('debug motor noise')

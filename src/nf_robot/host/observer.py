@@ -430,7 +430,6 @@ class AsyncObserver:
             case control.Command.STOP_ALL:
                 r = await self.stop_all()
             case control.Command.TIGHTEN_LINES:
-                print('TIGHTEN_LINES from UI')
                 r = await self.tension_lines()
             case control.Command.ZERO_WINCH:
                 asyncio.create_task(self._handle_zero_winch_line())
