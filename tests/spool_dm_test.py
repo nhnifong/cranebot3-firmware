@@ -1,3 +1,7 @@
+import pytest
+pytestmark = pytest.mark.pi
+pytest.importorskip("gpiodevice")
+
 import unittest
 from unittest.mock import MagicMock, patch
 import math
