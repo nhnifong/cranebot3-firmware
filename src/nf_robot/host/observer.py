@@ -332,7 +332,7 @@ class AsyncObserver:
             while self.run_command_loop:
                 vel2 = self.gripper_client.compute_swing_correction(time.time() + latency)
                 if vel2 is not None:
-                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc')
+                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc', downward_bias=0)
                 await asyncio.sleep(1/100)
         except asyncio.CancelledError:
             pass
@@ -1946,17 +1946,13 @@ class AsyncObserver:
             speed = 0
 
         if speed == 0:
-            for line_no in range(4):
-                await self.send_line_speed(line_no, 0)
             velocity = np.zeros(3)
-            self.pe.record_commanded_vel(velocity)
-            return velocity
-
-        # normalize, apply downward bias and renormalize
-        uvec  = uvec / np.linalg.norm(uvec)
-        uvec = uvec + np.array([0,0,downward_bias])
-        uvec  = uvec / np.linalg.norm(uvec)
-        velocity = uvec * speed
+        else:
+            # normalize, apply downward bias and renormalize
+            uvec  = uvec / np.linalg.norm(uvec)
+            uvec = uvec + np.array([0,0,downward_bias])
+            uvec  = uvec / np.linalg.norm(uvec)
+            velocity = uvec * speed
 
 
         # this commanded velocity overwrites the last velocity with the same key and all velocities are summed
@@ -1964,7 +1960,10 @@ class AsyncObserver:
         self.input_velocities[key] = velocity
         total_velocity = np.sum([self.input_velocities.get(k, 0) for k in self.active_set], axis=0)
         speed = np.linalg.norm(total_velocity)
-        uvec  = total_velocity / speed
+        if speed != 0:
+            uvec  = total_velocity / speed
+        else:
+            uvec = np.zeros(3)
 
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
