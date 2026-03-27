@@ -159,6 +159,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                 cost_diamond_planar += res**2
                 
         # 3b. Distance constraints based on the diamond pattern
+        # 3b. Distance constraints based on the diamond pattern
         required_states = ['bottom', 'right', 'top', 'left']
         if all(s in centroids for s in required_states):
             c_bot = centroids['bottom']
@@ -178,24 +179,33 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             D1_top = np.linalg.norm(c_top - eyelet_positions[1])
             D1_lef = np.linalg.norm(c_lef - eyelet_positions[1])
             
-            DELTA = 0.30 # 55 cm
-
-            # TOP: eyelet 0 and 1 are both shortened by 30 cm relative to bottom.
-            # RIGHT: eyelet 0 is shortened by 105 cm, and eyelet 1 is lengthened by 75 cm relative to bottom
-            # LEFT: eyelet 1 is shortened by 105 cm, and eyelet 0 is lengthened by 75 cm relative to bottom
+            half_h = 0.25
+            half_w = 1.0
             
-            # Eyelet 0 is shortened by 15cm at right and top relative to bottom and left
+            # Commanded changes for Eyelet 0 (Line 1)
+            L1_bot_to_rig = -(half_w + half_h)
+            L1_rig_to_top = (half_w - half_h)
+            L1_top_to_lef = (half_w + half_h)
+            L1_lef_to_bot = -(half_w - half_h)
+            
+            # Commanded changes for Eyelet 1 (Line 3)
+            L3_bot_to_rig = (half_w - half_h)
+            L3_rig_to_top = -(half_w + half_h)
+            L3_top_to_lef = -(half_w - half_h)
+            L3_lef_to_bot = (half_w + half_h)
+            
             d_res = [
-                (D0_rig - D0_bot + DELTA) * W_DIAMOND_DIST,
-                (D0_top - D0_lef + DELTA) * W_DIAMOND_DIST,
-                (D0_lef - D0_bot) * W_DIAMOND_DIST, # Unchanged relationship
-                (D0_top - D0_rig) * W_DIAMOND_DIST, # Unchanged relationship
+                # Eyelet 0 (Line 1) Constraints
+                (D0_rig - D0_bot - L1_bot_to_rig) * W_DIAMOND_DIST,
+                (D0_top - D0_rig - L1_rig_to_top) * W_DIAMOND_DIST,
+                (D0_lef - D0_top - L1_top_to_lef) * W_DIAMOND_DIST,
+                (D0_bot - D0_lef - L1_lef_to_bot) * W_DIAMOND_DIST,
                 
-                # Eyelet 1 is shortened by 15cm at top and left relative to right and bottom
-                (D1_lef - D1_bot + DELTA) * W_DIAMOND_DIST,
-                (D1_top - D1_rig + DELTA) * W_DIAMOND_DIST,
-                (D1_rig - D1_bot) * W_DIAMOND_DIST, # Unchanged relationship
-                (D1_top - D1_lef) * W_DIAMOND_DIST  # Unchanged relationship
+                # Eyelet 1 (Line 3) Constraints
+                (D1_rig - D1_bot - L3_bot_to_rig) * W_DIAMOND_DIST,
+                (D1_top - D1_rig - L3_rig_to_top) * W_DIAMOND_DIST,
+                (D1_lef - D1_top - L3_top_to_lef) * W_DIAMOND_DIST,
+                (D1_bot - D1_lef - L3_lef_to_bot) * W_DIAMOND_DIST
             ]
             residuals.extend(d_res)
             cost_diamond_dist += sum(r**2 for r in d_res)
