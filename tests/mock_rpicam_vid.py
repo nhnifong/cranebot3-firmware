@@ -149,7 +149,7 @@ class RPiCamVidMock:
         cm.setFrame(-0.5, 0.5, -0.5, 0.5)
         self._billboard_node = NodePath(cm.generate())
         self._billboard_node.reparentTo(self.base.render) # Attach to the main scene graph
-        self._billboard_node.setTexture(self.base.loader.loadTexture('../boards/origin.png'))
+        self._billboard_node.setTexture(self.base.loader.loadTexture('hardware/boards/origin.png'))
         self._billboard_node.setPos(0, 0, 0)
         self._billboard_node.setHpr(0, -90, 0) # I think by default this billboard faces +y
         self._billboard_node.setScale(origin_scale)
@@ -157,7 +157,7 @@ class RPiCamVidMock:
         self._billboard_node.setShaderOff()
 
         # Create the gantry cube model
-        self._gantry_cube_node = self._create_gantry_cube('../boards/gantry.png')
+        self._gantry_cube_node = self._create_gantry_cube('hardware/boards/gantry.png')
         self._gantry_cube_node.reparentTo(self.base.render) # Attach to the main scene graph
         
         # Set initial cube pose

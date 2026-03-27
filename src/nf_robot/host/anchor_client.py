@@ -434,7 +434,10 @@ class ComponentClient:
     async def slow_stop_spool(self):
         # spool will decelerate at the rate allowed by the config file.
         # tracking mode will switch to 'speed'
-        result = await self.send_commands({'aim_speed': 0})
+        try:
+            result = await self.send_commands({'aim_speed': 0})
+        except websockets.exceptions.ConnectionClosedOK:
+            pass
 
     async def startup(self):
         self.ct = asyncio.create_task(self.connect_websocket())
