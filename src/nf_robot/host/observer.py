@@ -42,7 +42,7 @@ from nf_robot.host.data_store import DataStore
 from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
 from nf_robot.host.calibration import optimize_anchor_poses
-from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data
+from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
 from nf_robot.host.anchor_client import RaspiAnchorClient, max_origin_detections
 from nf_robot.host.gripper_client import RaspiGripperClient
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
@@ -774,11 +774,10 @@ class AsyncObserver:
         try:
             for a in self.anchors.values():
                 a.save_raw = True
-            print('tighten all lines and raise up enough that the gripper is off the floor')
-            # timeout = time.time() + 3
-            # while self.datastore.range_record.getLast()[1] < 0.2 and time.time() < timeout:
-            #     await self.move_direction_speed(np.array([0,0,1]), 0.05, downward_bias=0)
-            # print('stop moving')
+            
+            # move to the center of the room.
+            # touch the floor using the rangefinder
+
             self.slow_stop_all_spools()
 
             print('relax the direct lines, tighten the indirect line')
@@ -789,8 +788,7 @@ class AsyncObserver:
             await asyncio.sleep(1)
             self.slow_stop_all_spools()
 
-            half_h = 0.25
-            half_w = 1.0
+            half_h, half_w = DIAMOND_SIZE
 
             results = {}
 
@@ -799,7 +797,7 @@ class AsyncObserver:
             await self.send_line_speed(2, 0.05)
 
             async def line_stops(line_no):
-                await asyncio.sleep(25)
+                await asyncio.sleep(18)
                 # TODO wait for stop. didn't work.
                 # while abs(self.datastore.anchor_line_record[line_no].getLast()[2]) > 0.01:
                 #     await asyncio.sleep(1/30)
@@ -971,7 +969,7 @@ class AsyncObserver:
                 for a in self.anchors.values():
                     a.save_raw = False
                 # optimize again with length_change_data
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, anchor_poses))
+                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None))
                 anchor_poses, eyelet_positions = async_result.get(timeout=30)
                 print(f'obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
@@ -1955,8 +1953,9 @@ class AsyncObserver:
         # The speed limit is proportional to how far the gantry hangs below a level 10cm below the average anchor.
         # This makes the behavior consistent across installations of different heights.
         hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
-        speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.55)
-        speed = min(speed, speed_limit)
+        if self.config.anchor_type == common.AnchorType.PILOT:
+            speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.55)
+            speed = min(speed, speed_limit)
 
         # when a very small speed is provided, clamp it to zero.
         if speed < 0.005:

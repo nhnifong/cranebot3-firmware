@@ -6,11 +6,14 @@ from nf_robot.common.pose_functions import *
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
 
-W_ORIGIN = 0.1 # increase this to to make origin errors more expensive
+W_ORIGIN = 0.2 # increase this to to make origin errors more expensive
 W_PLANAR = 1 # increase this to make anchor height deviations from the average plane more expensive
 W_DIAMOND_DIST = 1.0 # weight for the distance changes in the diamond pattern
-W_DIAMOND_PLANAR = 1.0 # weight for forcing the gantry and eyelets into a single vertical plane
-W_EYELET_REG = 0.1 # NEW: weak weight to keep eyelets near their initial 5m guess
+W_DIAMOND_PLANAR = 0.2 # weight for forcing the gantry and eyelets into a single vertical plane
+W_EYELET_REG = 0.2 # weight to keep eyelets near their initial 5m guess
+
+# half height and half width of diamond
+DIAMOND_SIZE = (0.1, 1.0)
 
 # =============================================================================
 # DIAMOND STRATEGY DATA STRUCTURE
@@ -99,21 +102,23 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             cost_origin += np.sum(current_residuals**2)
 
     # ---------------------------------------------------------
-    # 2. Anchor Z-Plane Constraint
+    # 2. Anchor and Eyelet Z-Plane Constraint
     # ---------------------------------------------------------
-    if True and fixed_anchor_poses is None:
-        # We only compute/penalize this if the anchors are actively being optimized
-        # Extract Z coordinates from the 2 anchors
+        # Extract Z coordinates from the 2 anchors and 2 eyelets
         anchor_zs = anchor_poses[:, 1, 2]
-        avg_z = np.mean(anchor_zs)
+        eyelet_zs = eyelet_positions[:, 2]
+        all_zs = np.concatenate([anchor_zs, eyelet_zs])
         
-        # Penalize deviation from each other
-        z_residuals = (anchor_zs - avg_z) * W_PLANAR
+        # Calculate the average Z plane
+        avg_z = np.mean(all_zs)
+        
+        # Penalize deviation from the average plane
+        z_residuals = (all_zs - avg_z) * W_PLANAR
         residuals.extend(z_residuals)
         cost_planar += np.sum(z_residuals**2)
 
     # ---------------------------------------------------------
-    # 3. NEW: Diamond Kinematic & Distance Residuals
+    # 3. Diamond Kinematic & Distance Residuals
     # ---------------------------------------------------------
     if diamond_observations is not None:
         all_points_per_state = {}
@@ -179,8 +184,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             D1_top = np.linalg.norm(c_top - eyelet_positions[1])
             D1_lef = np.linalg.norm(c_lef - eyelet_positions[1])
             
-            half_h = 0.25
-            half_w = 1.0
+            half_h, half_w = DIAMOND_SIZE
             
             # Commanded changes for Eyelet 0 (Line 1)
             L1_bot_to_rig = -(half_w + half_h)
@@ -211,7 +215,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             cost_diamond_dist += sum(r**2 for r in d_res)
 
     # ---------------------------------------------------------
-    # 4. NEW: Regularization (Anchor eyelets to initial guesses)
+    # 4. Regularization (Anchor eyelets to initial guesses)
     # ---------------------------------------------------------
     if initial_eyelets is not None:
         reg_residuals = (eyelet_positions - initial_eyelets).flatten() * W_EYELET_REG
