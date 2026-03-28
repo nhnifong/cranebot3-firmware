@@ -236,7 +236,7 @@ class ComponentClient:
         # TODO allow these to change when in a teleop mode
         if self.anchor_num is None:
             final_shape = SF_TARGET_SHAPE # resize for centering network input
-            final_fps = 100
+            final_fps = 60
         else:   
             final_shape = HM_IMAGE_RES # resize for target heatmap network input
             final_fps = 10
@@ -278,7 +278,7 @@ class ComponentClient:
                     continue
                 # only take every nth frame based on framerate target
                 now = time.time()
-                if now < (time_last_frame_taken + 1/final_fps):
+                if self.anchor_num is not None and now < (time_last_frame_taken + 1/final_fps):
                     continue
                 time_last_frame_taken = now
                 # We were woken up, so copy the frame pointer while we have the lock

@@ -204,12 +204,13 @@ class ArpeggioGripperClient(ComponentClient):
 
     def get_spin(self):
         # return the rotation of the gripper camera relative to the room
-        roomspin = self.datastore.winch_line_record.getClosest(time_of_rotation)[1] / 180 * np.pi
+        roomspin = self.datastore.winch_line_record.getLast()[1] / 180 * np.pi
         if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
             # undo the rotation that the room would appear to have at the wrist's 540 position
             extra = self.config.gripper.frame_room_spin - np.pi
             # extra = self.config.gripper.frame_room_spin
-            roomspin = roomspin + extra
+            print(f'wrist {roomspin} extra {extra}')
+            roomspin = roomspin
         return roomspin
 
     def process_frame(self, frame_to_encode):

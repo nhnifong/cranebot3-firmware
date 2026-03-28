@@ -330,7 +330,7 @@ class StringmanLeRobot(Robot):
 
 # --- Recording Configuration ---
 EPISODE_MAX_TIME_SEC = 600
-FPS = 30
+FPS = 60
 TASK_DESCRIPTION = "Pick up the item"
 NUM_BUFFERS = 3
 
@@ -394,7 +394,7 @@ def record_until_disconnected(uri, hf_repo_id):
     obs_features = hw_to_dataset_features(robot.observation_features, "observation")
     dataset_features = {**action_features, **obs_features}
 
-    create_dataset = False
+    create_dataset = True
     dataset = None
     if create_dataset:
         dataset = LeRobotDataset.create(

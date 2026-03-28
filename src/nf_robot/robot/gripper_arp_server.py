@@ -70,7 +70,7 @@ class GripperArpServer(RobotComponentServer):
         self.stream_command = [
             "/usr/bin/rpicam-vid", "-t", "0", "-n",
             "--width=384", "--height=384",
-            "--framerate", "100"
+            "--framerate=60",
             "-o", "tcp://0.0.0.0:8888?listen=1",
             "--codec", "libav",
             "--libav-format", "mpegts",
