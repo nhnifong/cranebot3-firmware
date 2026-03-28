@@ -94,6 +94,10 @@ message CombinedMove {
   // Set the finger closing speed in degrees of rotation per second.
   optional float finger_speed = 7;
 
+  // indicates that the lateral component of direction is in the gripper image's frame of reference
+  // And must be rotated into the room frame of reference using the observer's last known gripper orientaiton
+  // Certain ACT models are trained on this type of input.
+  optional bool direction_is_in_gripper_frame = 8;
 
   ///// deprecated fields /////
 

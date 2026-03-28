@@ -236,7 +236,7 @@ class ComponentClient:
         # TODO allow these to change when in a teleop mode
         if self.anchor_num is None:
             final_shape = SF_TARGET_SHAPE # resize for centering network input
-            final_fps = 10
+            final_fps = 100
         else:   
             final_shape = HM_IMAGE_RES # resize for target heatmap network input
             final_fps = 10

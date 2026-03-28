@@ -160,16 +160,12 @@ default_message_pool.register_message("nf.telemetry", "CommandedGrip", Commanded
 @dataclass(eq=False, repr=False)
 class CommandedVelocity(betterproto2.Message):
     """
-    When the gantry has been commanded to move with a velocity eitehr by AI or human, it gives this velocity to the UI for visualization.
-    Also used when recording a dataset. these are the action that will be saved with the video frames.
+    When the gantry has been commanded to move it gives this velocity to the UI for visualization.
     """
 
     velocity: "_common__.Vec3 | None" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, optional=True
     )
-    """
-    commanded gantry velocity
-    """
 
 
 default_message_pool.register_message(
@@ -585,6 +581,16 @@ class TelemetryItem(betterproto2.Message):
     last_commanded_vel: "CommandedVelocity | None" = betterproto2.field(
         8, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
+    """
+    Total velocity considering all inputs including the swing cancellation, in the room's frame of reference
+    """
+
+    raw_commanded_vel: "CommandedVelocity | None" = betterproto2.field(
+        21, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+    """
+    "raw" commanded velocity whether from human or AI, where the lateral component is in the un-stabilized gripper image frame of reference
+    """
 
     pop_message: "Popup | None" = betterproto2.field(
         9, betterproto2.TYPE_MESSAGE, optional=True, group="payload"

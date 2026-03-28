@@ -140,8 +140,8 @@ class StringmanLeRobot(Robot):
             self._handle_grip_sensors(item.grip_sensors)
         if item.video_ready:
             self._handle_video_ready(item.video_ready)
-        if item.last_commanded_vel:
-            self._handle_last_commanded_vel(item.last_commanded_vel)
+        if item.raw_commanded_vel:
+            self._handle_raw_commanded_vel(item.raw_commanded_vel)
         if item.last_commanded_grip:
             self._handle_last_commanded_grip(item.last_commanded_grip)
         if item.episode_control:
@@ -232,7 +232,8 @@ class StringmanLeRobot(Robot):
             container.close()
         print(f"Stream {stream_url} closed")
 
-    def _handle_last_commanded_vel(self, item: telemetry.CommandedVelocity):
+    def _handle_raw_commanded_vel(self, item: telemetry.CommandedVelocity):
+        # trained on commanded velocity in the gripper image frame of reference
         self.last_commanded_vel = tonp(item.velocity)
 
     def _handle_last_commanded_grip(self, item: telemetry.CommandedGrip):

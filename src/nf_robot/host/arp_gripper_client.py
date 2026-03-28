@@ -9,7 +9,7 @@ from nf_robot.host.anchor_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common
-from nf_robot.common.cv_common import SF_INPUT_SHAPE, stabilize_frame_2
+from nf_robot.common.cv_common import SF_TARGET_SHAPE, stabilize_frame_2
 
 """
 "Arpeggio" is the codename of the 2nd revision of the Stringman gripper
@@ -202,29 +202,24 @@ class ArpeggioGripperClient(ComponentClient):
         theta_y = projected_state[1, 1] / OMEGA
         return np.array([theta_x, theta_y, 0])
 
-    def process_frame(self, frame_to_encode):
-        # stabilize and resize for centering network input
-        input_shape = (frame_to_encode.shape[1], frame_to_encode.shape[0])
-        if input_shape != SF_INPUT_SHAPE:
-            temp_image = cv2.resize(frame_to_encode, SF_INPUT_SHAPE, interpolation=cv2.INTER_AREA)
-        else:
-            temp_image = frame_to_encode
-        # magic numbers determined experimentally to stabilize the image
-        fudge_latency = 0.28
-        fudge_amplitude = 1.55
-        time_of_rotation = self.last_frame_cap_time - fudge_latency
-
-        # rotate around z by wrist
+    def get_spin(self):
+        # return the rotation of the gripper camera relative to the room
         roomspin = self.datastore.winch_line_record.getClosest(time_of_rotation)[1] / 180 * np.pi
         if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
             # undo the rotation that the room would appear to have at the wrist's 540 position
             extra = self.config.gripper.frame_room_spin - np.pi
             # extra = self.config.gripper.frame_room_spin
             roomspin = roomspin + extra
+        return roomspin
 
-        # get gripper's tilt in its local frame of reference
-        rotvec = self.get_gripper_rvec(timestamp=time_of_rotation) * fudge_amplitude
-
-        range_to_object = self.datastore.range_record.getLast()[1]
-        return stabilize_frame_2(temp_image, rotvec, self.config.camera_cal_wide, R_imu_to_cam, roomspin,
-            range_dist=range_to_object, cam_offset_mm=(0, 41.97), cam_tilt_deg=9.06)
+    def process_frame(self, frame_to_encode):
+        # an action space in which the gripper camera is not stabilized or rotated.
+        # no matter what perspective the operator is driving with, the network is always seeing
+        # control inputs relative to the gripper image. it will see a +Y direction when the motion is up in
+        # the gripper image.
+        input_shape = (frame_to_encode.shape[1], frame_to_encode.shape[0])
+        if input_shape != SF_TARGET_SHAPE:
+            temp_image = cv2.resize(frame_to_encode, SF_TARGET_SHAPE, interpolation=cv2.INTER_AREA)
+        else:
+            temp_image = frame_to_encode
+        return temp_image

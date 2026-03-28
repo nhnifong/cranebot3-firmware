@@ -88,10 +88,8 @@ message NamedObjectPosition {
 	string name = 2; 
 }
 
-// When the gantry has been commanded to move with a velocity eitehr by AI or human, it gives this velocity to the UI for visualization.
-// Also used when recording a dataset. these are the action that will be saved with the video frames.
+// When the gantry has been commanded to move it gives this velocity to the UI for visualization.
 message CommandedVelocity {
-	// commanded gantry velocity
 	nf.common.Vec3 velocity = 1;
 }
 
@@ -236,7 +234,8 @@ message TelemetryItem {
     ComponentConnStatus component_conn_status = 5;
     VidStats vid_stats = 6;
     NamedObjectPosition named_position = 7;
-    CommandedVelocity last_commanded_vel = 8;
+    CommandedVelocity last_commanded_vel = 8; // Total velocity considering all inputs including the swing cancellation, in the room's frame of reference
+    CommandedVelocity raw_commanded_vel = 21; // "raw" commanded velocity whether from human or AI, where the lateral component is in the un-stabilized gripper image frame of reference
     Popup pop_message = 9;
 		GripperSensors grip_sensors = 10;
 		GripCamPredictions grip_cam_preditions = 11; // note misspelled. not changed for backwards compat
