@@ -35,7 +35,7 @@ Example record command
 python -m nf_robot.ml.stringman_lerobot record \
   --robot_id=lan \
   --server_address=ws://localhost:4245 \
-  --repo_id=naavox/grasping_dataset
+  --repo_id=naavox/grasping_dataset_b
 ```
 
 Example train command

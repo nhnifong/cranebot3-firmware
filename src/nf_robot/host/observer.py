@@ -1017,7 +1017,7 @@ class AsyncObserver:
                 await self.calibrate_finger_servo()
 
             # open grip enough that we can see an unobstructed view from the palm camera
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -80}))
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
 
             # move over the origin card
             self.send_ui(operation_progress=telemetry.OperationProgress(
