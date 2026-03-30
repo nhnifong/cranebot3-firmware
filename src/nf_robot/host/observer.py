@@ -560,11 +560,17 @@ class AsyncObserver:
         if move.direction:
             direction = tonp(move.direction)
 
-            # if move.direction_is_in_gripper_frame and self.gripper_client is not None and isinstance(self.gripper_client, ArpeggioGripperClient):
             if self.gripper_client is not None and isinstance(self.gripper_client, ArpeggioGripperClient):
-                self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=move.direction))
-                # rotate later component of direction into room frame
-                direction[:2] = rotate_vector(direction[:2], -self.gripper_client.get_spin())
+                # if move.direction_is_in_gripper_frame 
+                if move.direction_is_in_gripper_frame:
+                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=move.direction))
+                    # rotate later component of direction into room frame
+                    direction[:2] = rotate_vector(direction[:2], -self.gripper_client.get_spin())
+                else:
+                    # direction is already in room frame, and we can use it, but we still want to send the lerobot record script a direction in gripper frame
+                    gf_direction = direction.copy()
+                    gf_direction[:2] = rotate_vector(gf_direction[:2], self.gripper_client.get_spin())
+                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(gf_direction)))
 
         commanded_vel = await self.move_direction_speed(direction, move.speed)
 
@@ -1966,9 +1972,9 @@ class AsyncObserver:
             velocity = np.zeros(3)
         else:
             # normalize, apply downward bias and renormalize
-            uvec  = uvec / np.linalg.norm(uvec)
+            uvec  = uvec / (np.linalg.norm(uvec) + 1e-5)
             uvec = uvec + np.array([0,0,downward_bias])
-            uvec  = uvec / np.linalg.norm(uvec)
+            uvec  = uvec / (np.linalg.norm(uvec) + 1e-5)
             velocity = uvec * speed
 
 

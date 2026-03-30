@@ -61,7 +61,7 @@ lerobot-train \
   --policy.device=cuda \
   --wandb.enable=false \
   --policy.repo_id=naavox/grasp_remote_policy_c \
-  --steps=160000 \
+  --steps=100000 \
   --batch_size=200 \
   --save_freq=20000
 ```

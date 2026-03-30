@@ -55,8 +55,8 @@ class StringmanLeRobot(Robot):
         self.address = config.uri
         self.websocket = None
         
-        self.last_commanded_vel = common.Vec3(0,0,0)
-        self.last_observed_vel = common.Vec3(0,0,0)
+        self.last_commanded_vel = np.zeros(3)
+        self.last_observed_vel = np.zeros(3)
         
         self.last_wrist_speed = 0.0
         self.last_finger_speed = 0.0
@@ -312,6 +312,7 @@ class StringmanLeRobot(Robot):
                 ),
                 finger_speed=action['finger_speed'],
                 wrist_speed=action['wrist_speed'],
+                speed=0.16,
             ))]
         )
         to_send = bytes(batch)
@@ -394,23 +395,24 @@ def record_until_disconnected(uri, hf_repo_id):
     obs_features = hw_to_dataset_features(robot.observation_features, "observation")
     dataset_features = {**action_features, **obs_features}
 
-    create_dataset = True
-    dataset = None
-    if create_dataset:
-        dataset = LeRobotDataset.create(
-            repo_id = hf_repo_id,
-            fps = FPS,
-            features = dataset_features,
-            robot_type = robot.name,
-            use_videos = True,
-            image_writer_threads = 8,
-        )
-    else:
+    # Automatically determine how to initialize the dataset
+    if repo_exists(hf_repo_id, repo_type="dataset"):
+        print(f"Found existing dataset {hf_repo_id}. Resuming...")
         dataset = LeRobotDataset(
-            repo_id = hf_repo_id,
-            download_videos = False,
+            repo_id=hf_repo_id,
+            download_videos=False,
         )
         dataset.start_image_writer(num_threads=8)
+    else:
+        print(f"Creating new dataset {hf_repo_id}...")
+        dataset = LeRobotDataset.create(
+            repo_id=hf_repo_id,
+            fps=FPS,
+            features=dataset_features,
+            robot_type=robot.name,
+            use_videos=True,
+            image_writer_threads=8,
+        )
     
     recorded_episodes = 0 
     try:

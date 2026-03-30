@@ -209,8 +209,7 @@ class ArpeggioGripperClient(ComponentClient):
             # undo the rotation that the room would appear to have at the wrist's 540 position
             extra = self.config.gripper.frame_room_spin - np.pi
             # extra = self.config.gripper.frame_room_spin
-            print(f'wrist {roomspin} extra {extra}')
-            roomspin = roomspin
+            roomspin = roomspin + extra
         return roomspin
 
     def process_frame(self, frame_to_encode):
