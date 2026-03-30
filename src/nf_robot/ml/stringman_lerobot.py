@@ -15,6 +15,7 @@ import time
 from urllib.parse import urlparse
 import av
 import torch
+from huggingface_hub import repo_exists
 
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
@@ -312,7 +313,8 @@ class StringmanLeRobot(Robot):
                 ),
                 finger_speed=action['finger_speed'],
                 wrist_speed=action['wrist_speed'],
-                speed=0.16,
+                speed=0.14,
+                direction_is_in_gripper_frame=True,
             ))]
         )
         to_send = bytes(batch)

@@ -561,7 +561,6 @@ class AsyncObserver:
             direction = tonp(move.direction)
 
             if self.gripper_client is not None and isinstance(self.gripper_client, ArpeggioGripperClient):
-                # if move.direction_is_in_gripper_frame 
                 if move.direction_is_in_gripper_frame:
                     self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=move.direction))
                     # rotate later component of direction into room frame
