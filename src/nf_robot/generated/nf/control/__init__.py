@@ -290,6 +290,15 @@ class CombinedMove(betterproto2.Message):
     Set the finger closing speed in degrees of rotation per second.
     """
 
+    direction_is_in_gripper_frame: "bool | None" = betterproto2.field(
+        8, betterproto2.TYPE_BOOL, optional=True
+    )
+    """
+    indicates that the lateral component of direction is in the gripper image's frame of reference
+    And must be rotated into the room frame of reference using the observer's last known gripper orientaiton
+    Certain ACT models are trained on this type of input.
+    """
+
     finger: "float | None" = betterproto2.field(
         3, betterproto2.TYPE_FLOAT, optional=True
     )

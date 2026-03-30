@@ -15,6 +15,7 @@ import time
 from urllib.parse import urlparse
 import av
 import torch
+from huggingface_hub import repo_exists
 
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
@@ -55,8 +56,8 @@ class StringmanLeRobot(Robot):
         self.address = config.uri
         self.websocket = None
         
-        self.last_commanded_vel = common.Vec3(0,0,0)
-        self.last_observed_vel = common.Vec3(0,0,0)
+        self.last_commanded_vel = np.zeros(3)
+        self.last_observed_vel = np.zeros(3)
         
         self.last_wrist_speed = 0.0
         self.last_finger_speed = 0.0
@@ -140,8 +141,8 @@ class StringmanLeRobot(Robot):
             self._handle_grip_sensors(item.grip_sensors)
         if item.video_ready:
             self._handle_video_ready(item.video_ready)
-        if item.last_commanded_vel:
-            self._handle_last_commanded_vel(item.last_commanded_vel)
+        if item.raw_commanded_vel:
+            self._handle_raw_commanded_vel(item.raw_commanded_vel)
         if item.last_commanded_grip:
             self._handle_last_commanded_grip(item.last_commanded_grip)
         if item.episode_control:
@@ -232,7 +233,8 @@ class StringmanLeRobot(Robot):
             container.close()
         print(f"Stream {stream_url} closed")
 
-    def _handle_last_commanded_vel(self, item: telemetry.CommandedVelocity):
+    def _handle_raw_commanded_vel(self, item: telemetry.CommandedVelocity):
+        # trained on commanded velocity in the gripper image frame of reference
         self.last_commanded_vel = tonp(item.velocity)
 
     def _handle_last_commanded_grip(self, item: telemetry.CommandedGrip):
@@ -311,6 +313,8 @@ class StringmanLeRobot(Robot):
                 ),
                 finger_speed=action['finger_speed'],
                 wrist_speed=action['wrist_speed'],
+                speed=0.14,
+                direction_is_in_gripper_frame=True,
             ))]
         )
         to_send = bytes(batch)
@@ -329,7 +333,7 @@ class StringmanLeRobot(Robot):
 
 # --- Recording Configuration ---
 EPISODE_MAX_TIME_SEC = 600
-FPS = 30
+FPS = 60
 TASK_DESCRIPTION = "Pick up the item"
 NUM_BUFFERS = 3
 
@@ -393,23 +397,24 @@ def record_until_disconnected(uri, hf_repo_id):
     obs_features = hw_to_dataset_features(robot.observation_features, "observation")
     dataset_features = {**action_features, **obs_features}
 
-    create_dataset = False
-    dataset = None
-    if create_dataset:
-        dataset = LeRobotDataset.create(
-            repo_id = hf_repo_id,
-            fps = FPS,
-            features = dataset_features,
-            robot_type = robot.name,
-            use_videos = True,
-            image_writer_threads = 8,
-        )
-    else:
+    # Automatically determine how to initialize the dataset
+    if repo_exists(hf_repo_id, repo_type="dataset"):
+        print(f"Found existing dataset {hf_repo_id}. Resuming...")
         dataset = LeRobotDataset(
-            repo_id = hf_repo_id,
-            download_videos = False,
+            repo_id=hf_repo_id,
+            download_videos=False,
         )
         dataset.start_image_writer(num_threads=8)
+    else:
+        print(f"Creating new dataset {hf_repo_id}...")
+        dataset = LeRobotDataset.create(
+            repo_id=hf_repo_id,
+            fps=FPS,
+            features=dataset_features,
+            robot_type=robot.name,
+            use_videos=True,
+            image_writer_threads=8,
+        )
     
     recorded_episodes = 0 
     try:

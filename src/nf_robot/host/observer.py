@@ -45,7 +45,7 @@ from nf_robot.host.calibration import optimize_anchor_poses
 from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
 from nf_robot.host.anchor_client import RaspiAnchorClient, max_origin_detections
 from nf_robot.host.gripper_client import RaspiGripperClient
-from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
+from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 
@@ -157,7 +157,6 @@ class AsyncObserver:
         # event used to notify tasks that gripper is connected.
         self.gripper_client_connected = asyncio.Event()
         self.grpc_server = None
-        self.last_gp_action = None
         self.last_user_move_time = time.time()
         self.named_positions = {}
         self.target_model = None
@@ -560,13 +559,20 @@ class AsyncObserver:
         direction = np.zeros(3)
         if move.direction:
             direction = tonp(move.direction)
+
+            if self.gripper_client is not None and isinstance(self.gripper_client, ArpeggioGripperClient):
+                if move.direction_is_in_gripper_frame:
+                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=move.direction))
+                    # rotate later component of direction into room frame
+                    direction[:2] = rotate_vector(direction[:2], -self.gripper_client.get_spin())
+                else:
+                    # direction is already in room frame, and we can use it, but we still want to send the lerobot record script a direction in gripper frame
+                    gf_direction = direction.copy()
+                    gf_direction[:2] = rotate_vector(gf_direction[:2], self.gripper_client.get_spin())
+                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(gf_direction)))
+
         commanded_vel = await self.move_direction_speed(direction, move.speed)
 
-        # the saved values will be what we return from GetLastAction
-        if winch is not None:
-            self.last_gp_action = (commanded_vel, winch, finger)
-        elif wrist is not None:
-            self.last_gp_action = (commanded_vel, wrist, finger)
         self.last_user_move_time = time.time()
 
     async def passive_safety(self):
@@ -1965,9 +1971,9 @@ class AsyncObserver:
             velocity = np.zeros(3)
         else:
             # normalize, apply downward bias and renormalize
-            uvec  = uvec / np.linalg.norm(uvec)
+            uvec  = uvec / (np.linalg.norm(uvec) + 1e-5)
             uvec = uvec + np.array([0,0,downward_bias])
-            uvec  = uvec / np.linalg.norm(uvec)
+            uvec  = uvec / (np.linalg.norm(uvec) + 1e-5)
             velocity = uvec * speed
 
 

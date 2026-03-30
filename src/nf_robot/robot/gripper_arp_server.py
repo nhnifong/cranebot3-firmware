@@ -69,13 +69,14 @@ class GripperArpServer(RobotComponentServer):
 
         self.stream_command = [
             "/usr/bin/rpicam-vid", "-t", "0", "-n",
-            "--width=960", "--height=540",
+            "--width=384", "--height=384",
+            "--framerate=60",
             "-o", "tcp://0.0.0.0:8888?listen=1",
             "--codec", "libav",
             "--libav-format", "mpegts",
             "--autofocus-mode", "continuous",
             "--low-latency",
-            "--bitrate", "1800kbps"
+            "--bitrate", "1200kbps"
         ]
 
         i2c = busio.I2C(board.SCL, board.SDA)
