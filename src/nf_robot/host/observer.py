@@ -248,43 +248,45 @@ class AsyncObserver:
     async def _dispatch_update(self, item: control.ControlItem):
         # In betterproto2, 'oneof' fields appear as attributes. 
         # Only one will be non-None.
+        # not that checking if the field is truthy is insufficient, as a default instance of the proto is false
+        # and default instances can carry meaningful information such as zeroing out a value.
         
         # Standard Commands (Stop, Calibrate, Zero)
-        if item.command:
+        if item.command is not None:
             r = await self._handle_common_command(item.command.name)
 
         # Movement Vector (Gamepad/AI Policy)
-        elif item.move:
+        elif item.move is not None:
             r = await self._handle_movement(item.move)
 
         # Setting gantry goal
-        elif item.gantry_goal_pos:
+        elif item.gantry_goal_pos is not None:
             r = await self._handle_gantry_goal_pos(tonp(item.gantry_goal_pos.pos))
 
         # Manual Spool Control
-        elif item.jog_spool:
+        elif item.jog_spool is not None:
             r = await self._handle_jog_spool(item.jog_spool)
 
         # Lerobot Episode Control (Start/Stop Recording)
-        elif item.episode_control:
+        elif item.episode_control is not None:
             self._handle_add_episode_control_events(item.episode_control)
 
-        elif item.scale_room:
+        elif item.scale_room is not None:
             self._handle_scale_room(item.scale_room)
 
-        elif item.add_cam_target:
+        elif item.add_cam_target is not None:
             self._handle_add_cam_target(item.add_cam_target)
 
-        elif item.delete_target:
+        elif item.delete_target is not None:
             self._handle_delete_target(item.delete_target)
 
-        elif item.debug:
+        elif item.debug is not None:
             r = await self._handle_debug_command(item.debug)
 
-        elif item.set_swing_cancellation:
+        elif item.set_swing_cancellation is not None:
             r = await self._handle_set_swing_cancellation(item.set_swing_cancellation)
 
-        elif item.single_component_action:
+        elif item.single_component_action is not None:
             r = await self._handle_single_component_action(item.single_component_action)
 
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
@@ -1569,9 +1571,6 @@ class AsyncObserver:
         if len(kwargs.keys()) != 1:
             raise ValueError
         key, msg = list(kwargs.items())[0]
-        # if message is equal to a default instance of itself, dont send it.
-        if msg == type(msg)():
-            return
 
         # mark certain messages with a retain key. the server will resend them to new UIs
         item = telemetry.TelemetryItem(**kwargs)
@@ -1797,11 +1796,11 @@ class AsyncObserver:
 
             # arpeggio gripper. Update finger and wrist speed
             cg = telemetry.CommandedGrip()
-            if finger_speed is not None and abs(finger_speed) > 1.0:
+            if finger_speed is not None:
                 finger_speed = clamp(finger_speed, -90, 90)
                 update['set_finger_speed'] = finger_speed
                 cg.finger_speed = finger_speed
-            if wrist_speed is not None and abs(wrist_speed) > 1.0:
+            if wrist_speed is not None:
                 wrist_speed = clamp(wrist_speed, -120, 120)
                 update['set_wrist_speed'] = wrist_speed
                 cg.wrist_speed = wrist_speed

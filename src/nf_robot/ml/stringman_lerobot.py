@@ -135,17 +135,17 @@ class StringmanLeRobot(Robot):
                     self.process_update(item)
 
     def process_update(self, item: telemetry.TelemetryItem):
-        if item.pos_estimate:
+        if item.pos_estimate is not None:
             self._handle_pos_estimate(item.pos_estimate)
-        if item.grip_sensors:
+        if item.grip_sensors is not None:
             self._handle_grip_sensors(item.grip_sensors)
-        if item.video_ready:
+        if item.video_ready is not None:
             self._handle_video_ready(item.video_ready)
-        if item.raw_commanded_vel:
+        if item.raw_commanded_vel is not None:
             self._handle_raw_commanded_vel(item.raw_commanded_vel)
-        if item.last_commanded_grip:
+        if item.last_commanded_grip is not None:
             self._handle_last_commanded_grip(item.last_commanded_grip)
-        if item.episode_control:
+        if item.episode_control is not None:
             self._handle_episode_control(item.episode_control)
 
     def _handle_pos_estimate(self, item: telemetry.PositionEstimate):
@@ -311,9 +311,9 @@ class StringmanLeRobot(Robot):
                     y=action['vel_y'],
                     z=action['vel_z'],
                 ),
-                finger_speed=action['finger_speed'],
+                finger_speed=action['finger_speed']*2,
                 wrist_speed=action['wrist_speed'],
-                speed=0.14,
+                speed=0.1,
                 direction_is_in_gripper_frame=True,
             ))]
         )
@@ -548,6 +548,7 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda")
     print("Fetching training dataset to acquire metadata")
     dataset = LeRobotDataset(
         repo_id=dataset_repo_id,
+        root='fixed_dataset_workspace', # temporary measure
         download_videos=False,
     )
     
