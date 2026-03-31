@@ -1918,9 +1918,8 @@ class AsyncObserver:
                 asyncio.create_task(self.anchors[line_no].send_commands({command: speed}))
         elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
             if line_no//2 in self.anchors:
-                spool_no = int(not (line_no%2))
-                # we consider the lower line number to be the direct line, but in the anchor server, spool 0 is the indirect line.
-                # todo: make this consistent
+                spool_no = line_no%2
+                # we consider the lower line number to be the direct line
                 asyncio.create_task(self.anchors[line_no//2].send_commands({command: (speed, spool_no)}))
 
     async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04, key='default'):
@@ -2057,11 +2056,12 @@ class AsyncObserver:
         from huggingface_hub import hf_hub_download
         DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
         from nf_robot.ml.target_heatmap import TargetHeatmapNet, extract_targets_from_heatmap, HM_IMAGE_RES
-        from nf_robot.ml.centering import CenteringNet
+        # from nf_robot.ml.centering import CenteringNet
 
         def load_models_sync():
             if self.local_models:
-                target_path = "models/target_heatmap.pth"
+                # target_path = "models/target_heatmap.pth"
+                target_path = "models/eggs_heatmap.pth"
             else:
                 target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
             print(f"Loading model from {target_path}...")
@@ -2069,16 +2069,16 @@ class AsyncObserver:
             t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
             t_model.eval()
 
-            if self.local_models:
-                center_path = "models/square_centering.pth"
-            else:
-                center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
-            print(f"Loading model from {center_path}...")
-            c_model = CenteringNet().to(DEVICE)
-            c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
-            c_model.eval()
+            # if self.local_models:
+            #     center_path = "models/square_centering.pth"
+            # else:
+            #     center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
+            # print(f"Loading model from {center_path}...")
+            # c_model = CenteringNet().to(DEVICE)
+            # c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
+            # c_model.eval()
             
-            return t_model, c_model
+            return t_model, None
 
         self.target_model, self.centering_model = await asyncio.to_thread(load_models_sync)
 
@@ -2101,7 +2101,7 @@ class AsyncObserver:
             await asyncio.sleep(LOOP_DELAY)
             counter += 1
 
-            if self.gripper_client is not None and self.gripper_client.last_frame_resized is not None:
+            if self.gripper_client is not None and self.gripper_client.last_frame_resized is not None and self.centering_model is not None:
 
                 # network was trained on BGR
                 bgr_image = self.gripper_client.last_frame_resized
@@ -2295,7 +2295,8 @@ class AsyncObserver:
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
         if isinstance(self.gripper_client, ArpeggioGripperClient):
-            return await self.arp_execute_grasp()
+            # return await self.arp_execute_grasp()
+            return await self.act_execute_grasp()
         else:
             return await self.pilot_execute_grasp()
 
@@ -2557,6 +2558,36 @@ class AsyncObserver:
         except asyncio.CancelledError:
             raise
         finally:
+            self.slow_stop_all_spools()
+
+    async def act_execute_grasp(self):
+        """
+        Execute a grasp on an arp gripper using a lerobot ACT policy.
+        End the episode either when a timeout is reached, when motion ceases for some time, or when a grasp condition is reached.
+        A grasp condition is a certain amount of force being exerted by the fingers while being at a certain altitude off the floor.
+        
+        A seperate process must be connected to the telemetry stream to manage the act policy at this time. It can be started with
+
+        python -m nf_robot.ml.stringman_lerobot eval   --robot_id=lan   --server_address=ws://localhost:4245   --policy_id=outputs/train/grasp_remote_act_eggs_2/checkpoints/last/pretrained_model/   --dataset_id=naavox/grasping_dataset_eggs_fix
+        """
+        self.pe.finger_pressure_rising.clear()
+        try:
+            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.START_OR_COMPLETE))
+            timeout = time.time() + 60
+            lifted = False
+            applying_force = False
+            while not (lifted and applying_force) and time.time() < timeout:
+                await asyncio.sleep(0.2)
+                applying_force = self.pe.finger_pressure_rising.is_set()
+                gripper_height = self.pe.grip_pose[1][2]
+                lifted = gripper_height > 0.2
+            print(f'ended grasp lifted={lifted} applying_force={applying_force} time_rem={timeout - time.time()}')
+            # return value indicates whether grasp was successful
+            return lifted and applying_force
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.START_OR_COMPLETE))
             self.slow_stop_all_spools()
 
     def _handle_collect_images(self):

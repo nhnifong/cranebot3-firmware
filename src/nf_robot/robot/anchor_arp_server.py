@@ -37,25 +37,27 @@ class AnchorArpServer(RobotComponentServer):
         # https://jia-xie.github.io/python-damiao-driver/dev/package-usage/python-api/
         self.controller = DaMiaoController(channel="can0", bustype="socketcan")
         # h6220 is probaly the closest to DM-H6215 but they all seem the same to me.
-        self.motor1 = self.controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="H6220")
-        self.motor2 = self.controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type="H6220")
+        self.motor1 = self.controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type="H6220")
+        self.motor2 = self.controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="H6220")
 
-        # Create a spool controller for each spool
+        # consider the direct line (high) spool 0 and the indirect line (low) spool 1
+
+        # the power line, if present is always on the high spool
+        fulld = model_constants.damiao_full_spool_diameter_power_line if self.has_power_line else model_constants.damiao_full_spool_diameter_fishing_line
         spooler1 = DamiaoSpoolController(
             self.motor1,
-            empty_diameter=model_constants.damiao_empty_spool_diameter,
-            full_diameter=model_constants.damiao_full_spool_diameter_fishing_line,
-            full_length=model_constants.assumed_full_line_length,
-            config=self.conf, direction=1)
-
-        # the power line, if present is always on the second spool
-        fulld = model_constants.damiao_full_spool_diameter_power_line if self.has_power_line else model_constants.damiao_full_spool_diameter_fishing_line
-        spooler2 = DamiaoSpoolController(
-            self.motor2,
             empty_diameter=model_constants.damiao_empty_spool_diameter,
             full_diameter=fulld,
             full_length=model_constants.assumed_full_line_length,
             config=self.conf, direction=-1)
+
+        # Create a spool controller for each spool
+        spooler2 = DamiaoSpoolController(
+            self.motor2,
+            empty_diameter=model_constants.damiao_empty_spool_diameter,
+            full_diameter=model_constants.damiao_full_spool_diameter_fishing_line,
+            full_length=model_constants.assumed_full_line_length,
+            config=self.conf, direction=1)
 
         # parent class would use this to send line updates. setting it to None supresses that. we send our own.
         self.spooler = None
