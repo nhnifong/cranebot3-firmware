@@ -1,6 +1,6 @@
 [Unit]
 Description=Cranebot Service
-After=network.target
+After=network.target can-setup.service
 StartLimitIntervalSec=0
 
 [Service]

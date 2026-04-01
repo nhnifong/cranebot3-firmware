@@ -78,7 +78,8 @@ EOF
 # I2C Access (Fixes access to /dev/i2c-* for 'i2c' group)
 echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-i2c.rules"
 
-# Install Systemd Service
+# Install Systemd Services
+install -m 644 can-setup.service "$ROOTFS_DIR/etc/systemd/system/can-setup.service"
 install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
 
 # Enable the service (by creating the symlink manually or using systemctl in chroot)

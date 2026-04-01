@@ -7,7 +7,8 @@
 # Uncomment some or all of these to enable the optional hardware interfaces
 dtparam=i2c_arm=on
 #dtparam=i2s=on
-#dtparam=spi=on
+dtparam=spi=on
+dtoverlay=mcp2515-can0,oscillator=12000000,interrupt=25,spimaxfrequency=2000000
 
 # Enable audio (loads snd_bcm2835)
 # dtparam=audio=on
