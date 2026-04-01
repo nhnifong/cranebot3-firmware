@@ -564,14 +564,16 @@ class AsyncObserver:
 
             if self.gripper_client is not None and isinstance(self.gripper_client, ArpeggioGripperClient):
                 if move.direction_is_in_gripper_frame:
-                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=move.direction))
+                    velocity = direction * move.speed # make sure the network receives information on speed as well
+                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(velocity)))
                     # rotate later component of direction into room frame
                     direction[:2] = rotate_vector(direction[:2], -self.gripper_client.get_spin())
                 else:
                     # direction is already in room frame, and we can use it, but we still want to send the lerobot record script a direction in gripper frame
                     gf_direction = direction.copy()
                     gf_direction[:2] = rotate_vector(gf_direction[:2], self.gripper_client.get_spin())
-                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(gf_direction)))
+                    velocity = gf_direction * move.speed
+                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(velocity)))
 
         commanded_vel = await self.move_direction_speed(direction, move.speed)
 
@@ -1474,7 +1476,6 @@ class AsyncObserver:
             print(f'invalid service name "{service_name}"')
             return
 
-        print(f'try connecting to {name_component}')
         is_power_anchor = name_component == anchor_power_service_name
         is_standard_anchor = name_component == anchor_service_name
         is_standard_gripper = name_component == gripper_service_name
@@ -2157,6 +2158,7 @@ class AsyncObserver:
                         targets2d = results[:,:2] # the third number is confidence
                         # if this is an anchor, project points to floor using anchor's specific pose
                         floor_points = project_pixels_to_floor(targets2d, client.camera_pose, self.config.camera_cal)
+                        print(f'{i} targets2d {targets2d} floor_points {floor_points}')
                         all_floor_target_arrs.append(floor_points)
                         # TODO retain information about the original image coordinates of targets for display in UI
 

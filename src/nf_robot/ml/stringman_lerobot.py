@@ -311,9 +311,9 @@ class StringmanLeRobot(Robot):
                     y=action['vel_y'],
                     z=action['vel_z'],
                 ),
-                finger_speed=action['finger_speed']*2,
+                finger_speed=action['finger_speed'],
                 wrist_speed=action['wrist_speed'],
-                speed=0.1,
+                speed=0.12,
                 direction_is_in_gripper_frame=True,
             ))]
         )
@@ -548,7 +548,6 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda")
     print("Fetching training dataset to acquire metadata")
     dataset = LeRobotDataset(
         repo_id=dataset_repo_id,
-        root='fixed_dataset_workspace', # temporary measure
         download_videos=False,
     )
     
