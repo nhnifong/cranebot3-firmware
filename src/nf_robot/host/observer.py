@@ -797,9 +797,9 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
             print('relax the direct lines, tighten the indirect line')
-            await self.send_line_speed(0,  0.05, jog=True)
+            await self.send_line_speed(0,  0.1, jog=True)
             await self.send_line_speed(1, -0.02, jog=True)
-            await self.send_line_speed(2,  0.05, jog=True)
+            await self.send_line_speed(2,  0.1, jog=True)
             await self.send_line_speed(3, -0.02, jog=True)
             await asyncio.sleep(1)
             self.slow_stop_all_spools()
@@ -813,7 +813,7 @@ class AsyncObserver:
             await self.send_line_speed(2, 0.05)
 
             async def line_stops(line_no):
-                await asyncio.sleep(18)
+                await asyncio.sleep(14)
                 # TODO wait for stop. didn't work.
                 # while abs(self.datastore.anchor_line_record[line_no].getLast()[2]) > 0.01:
                 #     await asyncio.sleep(1/30)
@@ -1094,12 +1094,13 @@ class AsyncObserver:
 
         if isinstance(self.gripper_client, ArpeggioGripperClient):
             # measurement must be taken at the wrist's zero point
-            asyncio.create_task(self.gripper_client.send_commands({'set_wrist_angle': 540}))
+            center_angle = 540
+            asyncio.create_task(self.gripper_client.send_commands({'set_wrist_angle': center_angle}))
             # wait till within 1 degree of target or up to 10 seconds
             actual_wrist = 100
             end_time = time.time() + 10
-            print('Moved wrist to 540, waiting to reach position')
-            while abs(actual_wrist) > 2.0 and time.time() < end_time:
+            print(f'Moved wrist to {center_angle}, waiting to reach position')
+            while abs(actual_wrist - center_angle) > 2.0 and time.time() < end_time:
                 await asyncio.sleep(0.2)
                 actual_wrist = self.datastore.winch_line_record.getLast()[1]
             print(f'actual_wrist position = {actual_wrist}')
@@ -1119,7 +1120,7 @@ class AsyncObserver:
                 async_result = self.pool.apply_async(
                     locate_markers_gripper,
                     (self.gripper_client.last_frame_resized, self.config.camera_cal_wide),
-                        # self.config.camera_cal if isinstance(self.gripper_client, RaspiGripperClient) else self.config.camera_cal_wide),
+                    # self.config.camera_cal if isinstance(self.gripper_client, RaspiGripperClient) else self.config.camera_cal_wide),
                     callback=partial(special_handle_det, time.time()))
                 detections = async_result.get(timeout=5)
         except Exception as e:
@@ -1132,7 +1133,7 @@ class AsyncObserver:
         print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
         roomspin = euler_rot[0]
         # if isinstance(self.gripper_client, ArpeggioGripperClient):
-        roomspin+=np.pi
+        # roomspin+=np.pi
         self.config.gripper.frame_room_spin = roomspin
         self.config.has_been_calibrated = True
         save_config(self.config, self.config_path)

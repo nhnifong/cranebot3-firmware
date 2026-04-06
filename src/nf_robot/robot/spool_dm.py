@@ -19,13 +19,13 @@ default_conf_dm = {
     # measured torque on a motor with orintation 1 and a line that is minimally taught. 
     'TARGET_TORQUE': -0.01,
     # default cruise speed in meters/sec for position moves
-    'CRUISE_SPEED': 0.2,
+    'CRUISE_SPEED': 0.15,
     # factor controlling how torque is smoothed with ema.
     'SMOOTH_FACTOR': 0.08,
     # maximum safe line speed in meters per second
     'MAX_SAFE_LINE_SPEED': 2.0,
     # Distance in meters within which we consider a jog "complete"
-    'POS_DEADBAND': 0.001
+    'POS_DEADBAND': 0.015
 }
 
 class DamiaoSpoolController:

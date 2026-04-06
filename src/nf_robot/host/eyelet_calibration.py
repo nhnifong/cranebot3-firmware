@@ -6,9 +6,9 @@ from nf_robot.common.pose_functions import *
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
 
-W_ORIGIN = 0.2 # increase this to to make origin errors more expensive
-W_PLANAR = 1 # increase this to make anchor height deviations from the average plane more expensive
-W_DIAMOND_DIST = 1.0 # weight for the distance changes in the diamond pattern
+W_ORIGIN = 1.0 # increase this to to make origin errors more expensive
+W_PLANAR = 0.9 # increase this to make anchor height deviations from the average plane more expensive
+W_DIAMOND_DIST = 0.8 # weight for the distance changes in the diamond pattern
 W_DIAMOND_PLANAR = 0.2 # weight for forcing the gantry and eyelets into a single vertical plane
 W_EYELET_REG = 0.2 # weight to keep eyelets near their initial 5m guess
 
