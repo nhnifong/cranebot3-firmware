@@ -2059,8 +2059,10 @@ class AsyncObserver:
                     have_anchor_frames = True
 
         from nf_robot.host.video_streamer import MjpegStreamer
+        from nf_robot.host.floor_view import generate_orthographic_floor_maps
         vs = MjpegStreamer(width=1000, height=1000, port=8747)
         vs.start()
+        first_frame_sent = False
 
         import torch
         from huggingface_hub import hf_hub_download
@@ -2138,6 +2140,14 @@ class AsyncObserver:
                 heatmap_color = cv2.applyColorMap((ortho_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
                 overlay = cv2.addWeighted(cv2.cvtColor(ortho_bgr, cv2.COLOR_BGR2RGB), 0.8, heatmap_color, 0.4, 0)
                 vs.send_frame(overlay)
+                # if not first_frame_sent:
+                #     first_frame_sent = True
+                #     self.send_ui(video_ready=telemetry.VideoReady(
+                #         is_gripper=None,
+                #         anchor_num=0,
+                #         local_uri="http://localhost:8747/stream.mjpeg",
+                #         feed_number=0
+                #     ))
 
                 results = extract_targets_from_heatmap(ortho_heatmap)
 
