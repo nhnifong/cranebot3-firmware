@@ -2092,8 +2092,6 @@ class AsyncObserver:
             message = f'Listening on localhost:{self.port} To control visit https://neufangled.com/playroom?robotid=lan on this machine'
         if self.telemetry_env == 'local':
             message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
-        if self.telemetry_env == 'staging':
-            message = f'To control visit https://nf-site-monolith-staging-690802609278.us-east1.run.app/playroom?robotid={self.config.robot_id}'
         if self.telemetry_env == 'production':
             message = f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}'
 
@@ -2163,7 +2161,6 @@ class AsyncObserver:
                         targets2d = results[:,:2] # the third number is confidence
                         # if this is an anchor, project points to floor using anchor's specific pose
                         floor_points = project_pixels_to_floor(targets2d, client.camera_pose, self.config.camera_cal)
-                        print(f'{i} targets2d {targets2d} floor_points {floor_points}')
                         all_floor_target_arrs.append(floor_points)
                         # TODO retain information about the original image coordinates of targets for display in UI
 

@@ -139,6 +139,12 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
             if c.anchor_type is None and len(c.anchors) > 0:
                 c.anchor_type = common.AnchorType.PILOT
 
+            # Set camera tilt on configs that existed before the field was added
+            if c.anchor_type == common.AnchorType.ARPEGGIO:
+                for anchor in c.anchors:
+                    if anchor.indirect_line.cam_tilt is None:
+                        anchor.indirect_line.cam_tilt = 22.0
+
             return c
 
             
