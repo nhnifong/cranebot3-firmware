@@ -160,7 +160,6 @@ class AsyncObserver:
         self.last_user_move_time = time.time()
         self.named_positions = {}
         self.target_model = None
-        self.centering_model = None
         self.predicted_lateral_vector = None
         # targets
         self.target_queue = TargetQueue()
@@ -2059,6 +2058,10 @@ class AsyncObserver:
                 if anum in self.config.preferred_cameras and client.last_frame_resized is not None:
                     have_anchor_frames = True
 
+        from nf_robot.host.video_streamer import MjpegStreamer
+        vs = MjpegStreamer(width=1000, height=1000, port=8747)
+        vs.start()
+
         import torch
         from huggingface_hub import hf_hub_download
         DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -2074,19 +2077,10 @@ class AsyncObserver:
             t_model = TargetHeatmapNet().to(DEVICE)
             t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
             t_model.eval()
-
-            # if self.local_models:
-            #     center_path = "models/square_centering.pth"
-            # else:
-            #     center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
-            # print(f"Loading model from {center_path}...")
-            # c_model = CenteringNet().to(DEVICE)
-            # c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
-            # c_model.eval()
             
-            return t_model, None
+            return t_model
 
-        self.target_model, self.centering_model = await asyncio.to_thread(load_models_sync)
+        self.target_model = await asyncio.to_thread(load_models_sync)
 
         if self.telemetry_env == None:
             message = f'Listening on localhost:{self.port} To control visit https://neufangled.com/playroom?robotid=lan on this machine'
@@ -2104,30 +2098,6 @@ class AsyncObserver:
         while self.run_command_loop:
             await asyncio.sleep(LOOP_DELAY)
             counter += 1
-
-            if self.gripper_client is not None and self.gripper_client.last_frame_resized is not None and self.centering_model is not None:
-
-                # network was trained on BGR
-                bgr_image = self.gripper_client.last_frame_resized
-                gripper_image_tensor = torch.from_numpy(bgr_image).permute(2, 0, 1).float() / 255.0
-                if gripper_image_tensor is not None:
-                    gripper_image_tensor = gripper_image_tensor.unsqueeze(0).to(DEVICE) # Add batch dimension
-                    with torch.no_grad():
-                        pred_vec, pred_valid, pred_grip, pred_angle = self.centering_model(gripper_image_tensor)
-                        vec = pred_vec[0].cpu().numpy()
-                        self.gripper_sees_target = pred_valid[0].item()
-                        self.gripper_sees_holding = pred_grip[0].item()
-                        self.grip_angle = pred_angle[0].item()
-
-                        # you get a normalized u,v coordinate in the [-1,1] range
-                        self.predicted_lateral_vector = vec if self.gripper_sees_target > 0.5 else np.zeros(2)
-                        self.send_ui(grip_cam_preditions=telemetry.GripCamPredictions(
-                            move_x = self.predicted_lateral_vector[0],
-                            move_y = self.predicted_lateral_vector[1],
-                            prob_target_in_view = self.gripper_sees_target,
-                            prob_holding = self.gripper_sees_holding,
-                            grip_angle = self.grip_angle,
-                        ))
 
             if counter < FIND_TARGETS_EVERY:
                 continue
@@ -2153,29 +2123,40 @@ class AsyncObserver:
 
                 # Shape: (Batch, 1, H, W) -> (Batch, H, W)
                 heatmaps_np = heatmaps_out.squeeze(1).cpu().numpy() # this is the blocking call
-                for i, heatmap_np in enumerate(heatmaps_np):
-                    client = valid_anchor_clients[i]
-                    results = extract_targets_from_heatmap(heatmap_np)
 
-                    if len(results) > 0:
-                        targets2d = results[:,:2] # the third number is confidence
-                        # if this is an anchor, project points to floor using anchor's specific pose
-                        floor_points = project_pixels_to_floor(targets2d, client.camera_pose, self.config.camera_cal)
-                        all_floor_target_arrs.append(floor_points)
-                        # TODO retain information about the original image coordinates of targets for display in UI
+                # produce a combined heatmap projected onto the floor
+                extent = 5.0 # meters
+                ortho_heatmap, ortho_bgr = generate_orthographic_floor_maps(
+                    valid_anchor_clients, 
+                    heatmaps_np,
+                    self.config.camera_cal, 
+                    map_size_px=1000, 
+                    map_extent_meters=extent
+                )
 
-                if len(all_floor_target_arrs) > 0:
+                # make colored version of heatmap and combine with camera for visualization
+                heatmap_color = cv2.applyColorMap((ortho_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+                overlay = cv2.addWeighted(cv2.cvtColor(ortho_bgr, cv2.COLOR_BGR2RGB), 0.8, heatmap_color, 0.4, 0)
+                vs.send_frame(overlay)
+
+                results = extract_targets_from_heatmap(ortho_heatmap)
+
+                if len(results) > 0:
+                    targets2d = (results[:,:2] + np.array([-0.5, -0.5])) * extent # the third number is confidence. Don't have a use for it yet.
+
                     # filter out targets that are not inside the work area.
                     floor_targets = [
                         {'position': np.array([p[0], p[1], 0]), 'dropoff': 'hamper'}
-                        for p in np.concatenate(all_floor_target_arrs)
+                        for p in targets2d
                         if self.pe.point_inside_work_area_2d(p)
                     ]
                 else:
                     floor_targets = []
+
                 # add any floor targets dicovered during this batch to the target queue.
                 self.target_queue.add_ai_targets(floor_targets)
                 self.send_tq_to_ui()
+        vs.stop()
 
     async def pick_and_place_loop(self):
         """

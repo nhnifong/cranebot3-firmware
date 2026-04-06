@@ -316,7 +316,7 @@ class ComponentClient:
         the returned frame will be what is used for inference and sent to any teleoperation pipelines.
         Runs in a seperate thread from the main client.
         """
-        return frame_to_encode
+        return cv2.resize(frame_to_encode, (960, 544))
 
     async def connect_websocket(self):
         # main client loop
