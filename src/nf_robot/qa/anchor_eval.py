@@ -25,7 +25,7 @@ def main():
 		full_diameter=model_constants.full_spool_diameter_power_line
 
 	with open('/opt/robot/server.conf', 'w') as f:
-		f.write('args.anchor_type' + '\n')
+		f.write(f'args.anchor_type' + '\n')
 
 	empty_diameter=model_constants.empty_spool_diameter
 	full_length=model_constants.assumed_full_line_length

@@ -51,8 +51,6 @@ async def asyncmain():
         r = await gs.main()
 
     elif len(addrs) == 0:
-        from nf_robot.robot.anchor_server import RaspiAnchorServer
-
         # to differentiate power anchor, look for file written by anchor_eval.py
         component_type = 'anchor'
         try:
@@ -64,8 +62,25 @@ async def asyncmain():
         except FileNotFoundError:
             component_type = 'anchor'
 
-        powerline = component_type == 'power anchor' # TODO differentiate in some automatic way
-        ras = RaspiAnchorServer(powerline)
+        if component_type == 'anchor':
+            from nf_robot.robot.anchor_server import RaspiAnchorServer
+            ras = RaspiAnchorServer(False)
+
+        elif component_type == 'power anchor':
+            from nf_robot.robot.anchor_server import RaspiAnchorServer
+            ras = RaspiAnchorServer(True)
+
+        elif component_type == 'arpeggio anchor':
+            from nf_robot.robot.anchor_arp_server import AnchorArpServer
+            ras = AnchorArpServer(False)
+
+        elif component_type == 'arpeggio power anchor':
+            from nf_robot.robot.anchor_arp_server import AnchorArpServer
+            ras = AnchorArpServer(True)
+
+        else:
+            raise ValueError(f'Invalid type in server.conf "{component_type}"')
+
         if new_connection_configured:
             ras.identify()
         r = await ras.main()
