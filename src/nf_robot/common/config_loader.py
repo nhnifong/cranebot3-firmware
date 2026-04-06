@@ -31,7 +31,7 @@ def default_arp_anchors():
         )
         anchor.indirect_line = nf_config.IndirectLine(
             eyelet_pos=common.Vec3(x=eye[0], y=eye[1], z=eye[2]),
-            spool_index=0,
+            cam_tilt=22,
         )
         anch_list.append(anchor)  
     return anch_list
@@ -98,7 +98,7 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.gripper.frame_room_spin = (50.0 / 180.0) * np.pi
     
     # Preferred Cameras
-    config.preferred_cameras = [0, 3]
+    config.preferred_cameras = [0, 1]
     
     # Miscelleneous anchor vars
     config.max_accel = 0.3

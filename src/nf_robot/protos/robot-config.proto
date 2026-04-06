@@ -9,9 +9,14 @@ message IndirectLine {
   // Room position of the ceramic eyelet on the indirect line
   common.Vec3 eyelet_pos = 1;
 
+  // DEPRECATED.
   // spool index of the indirect line
-  // spool 0 is the lower one (on the left when facing the front of the device)
   uint32 spool_index = 2;
+
+  // Camera tilt from horizontal.
+  // Several camera tilt adapters can be printed. This indicated which one is installed in the given anchor.
+  // Tilt from horizontal in degrees. 22, 26, and 30 are available.
+  float cam_tilt = 3;
 }
 
 // Configuration of an Anchor

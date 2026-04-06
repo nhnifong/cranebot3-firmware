@@ -135,8 +135,15 @@ class IndirectLine(betterproto2.Message):
 
     spool_index: "int" = betterproto2.field(2, betterproto2.TYPE_UINT32)
     """
+    DEPRECATED.
     spool index of the indirect line
-    spool 0 is the lower one (on the left when facing the front of the device)
+    """
+
+    cam_tilt: "float" = betterproto2.field(3, betterproto2.TYPE_FLOAT)
+    """
+    Camera tilt from horizontal.
+    Several camera tilt adapters can be printed. This indicated which one is installed in the given anchor.
+    Tilt from horizontal in degrees. 22, 26, and 30 are available.
     """
 
 

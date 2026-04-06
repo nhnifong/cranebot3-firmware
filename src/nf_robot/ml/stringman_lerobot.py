@@ -302,18 +302,19 @@ class StringmanLeRobot(Robot):
 
         # action['wrist_speed'] *= 30
         # action['finger_speed'] *= 30
+        GAIN = 1.5
 
         batch = control.ControlBatchUpdate(
             robot_id="0",
             updates=[control.ControlItem(move=control.CombinedMove(
                 direction=common.Vec3(
-                    x=action['vel_x'],
-                    y=action['vel_y'],
-                    z=action['vel_z'],
+                    x=action['vel_x']*GAIN,
+                    y=action['vel_y']*GAIN,
+                    z=action['vel_z']*GAIN,
                 ),
-                finger_speed=action['finger_speed'],
-                wrist_speed=action['wrist_speed'],
-                speed=0.12,
+                finger_speed=action['finger_speed']*GAIN*GAIN,
+                wrist_speed=action['wrist_speed']*GAIN,
+                # speed=0.12,
                 direction_is_in_gripper_frame=True,
             ))]
         )
@@ -556,7 +557,7 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda")
     cfg.pretrained_path = policy_repo_id 
 
     # Enables ACT to smoothly blend overlapping chunks
-    cfg.temporal_ensemble_coeff = 0.01
+    cfg.temporal_ensemble_coeff = 0.001
 
     print("Instantiating processors and policy...")
     preprocessor, postprocessor = make_pre_post_processors(

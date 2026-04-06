@@ -19,7 +19,7 @@ from importlib.resources import files
 # ==========================================
 DEFAULT_REPO_ID = "naavox/target-heatmap-dataset"
 DEFAULT_MODEL_PATH = "models/target_heatmap.pth"
-LOCAL_DATASET_ROOT = "eggs_heatmap_data"
+LOCAL_DATASET_ROOT = "target_heatmap_data"
 HEATMAP_UNPROCESSED_DIR = "target_heatmap_data_unlabeled"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -139,7 +139,7 @@ class DobbyDataset(Dataset):
             else:
                 continue
                 
-            combined_heatmap = np.maximum(combined_heatmap, generate_blob(x_grid, y_grid, cx, cy, sigma=7))
+            combined_heatmap = np.maximum(combined_heatmap, generate_blob(x_grid, y_grid, cx, cy, sigma=8))
             
         return img_tensor, torch.from_numpy(combined_heatmap).float().unsqueeze(0)
 
@@ -619,9 +619,9 @@ if __name__ == "__main__":
     train_parser = subparsers.add_parser("train")
     train_parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
     train_parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
-    train_parser.add_argument("--epochs", type=int, default=200)
+    train_parser.add_argument("--epochs", type=int, default=50)
     train_parser.add_argument("--batch_size", type=int, default=10)
-    train_parser.add_argument("--lr", type=float, default=1e-3)
+    train_parser.add_argument("--lr", type=float, default=1e-4)
 
     # Eval Command
     eval_parser = subparsers.add_parser("eval")

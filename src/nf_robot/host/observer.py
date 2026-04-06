@@ -564,7 +564,10 @@ class AsyncObserver:
 
             if self.gripper_client is not None and isinstance(self.gripper_client, ArpeggioGripperClient):
                 if move.direction_is_in_gripper_frame:
-                    velocity = direction * move.speed # make sure the network receives information on speed as well
+                    if move.speed is not None:
+                        velocity = direction * move.speed # make sure the network receives information on speed as well
+                    else:
+                        velocity = direction
                     self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(velocity)))
                     # rotate later component of direction into room frame
                     direction[:2] = rotate_vector(direction[:2], -self.gripper_client.get_spin())
@@ -572,7 +575,10 @@ class AsyncObserver:
                     # direction is already in room frame, and we can use it, but we still want to send the lerobot record script a direction in gripper frame
                     gf_direction = direction.copy()
                     gf_direction[:2] = rotate_vector(gf_direction[:2], self.gripper_client.get_spin())
-                    velocity = gf_direction * move.speed
+                    if move.speed is not None:
+                        velocity = gf_direction * move.speed # make sure the network receives information on speed as well
+                    else:
+                        velocity = gf_direction
                     self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(velocity)))
 
         commanded_vel = await self.move_direction_speed(direction, move.speed)
@@ -2061,8 +2067,7 @@ class AsyncObserver:
 
         def load_models_sync():
             if self.local_models:
-                # target_path = "models/target_heatmap.pth"
-                target_path = "models/eggs_heatmap.pth"
+                target_path = "models/target_heatmap.pth"
             else:
                 target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
             print(f"Loading model from {target_path}...")
