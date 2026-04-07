@@ -664,7 +664,7 @@ class AsyncObserver:
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
             tension = np.array(records[:,3])
-            print(f'wait for tension speeds={speeds} tension={tension}')
+            # print(f'wait for tension speeds={speeds} tension={tension}')
             complete = np.all(tension > threshold) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
         return True
 
@@ -782,6 +782,21 @@ class AsyncObserver:
         ])
         self.pe.set_anchor_points(anchor_points)
 
+    async def touch_floor(self):
+        await self.gripper_client.send_commands({'set_finger_angle': -30})
+        laser_range = self.datastore.range_record.getLast()[1]
+        print(f'Touch the floor. current range: {laser_range}')
+        try:
+            await self.move_direction_speed(np.array([0, 0, -0.1]))
+            timeout = time.time()+20
+            while laser_range > 0.12 and time.time() < timeout:
+                await asyncio.sleep(0.1)
+                laser_range = self.datastore.range_record.getLast()[1]
+                print(f'r {laser_range}')
+        finally:
+            self.slow_stop_all_spools()
+
+
     async def collect_arp_anchor_eyelet_experiment_data(self):
         """  
         Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
@@ -792,7 +807,9 @@ class AsyncObserver:
                 a.save_raw = True
             
             # move to the center of the room.
+
             # touch the floor using the rangefinder
+            await self.touch_floor()
 
             self.slow_stop_all_spools()
 
