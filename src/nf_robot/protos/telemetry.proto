@@ -176,7 +176,7 @@ message VideoReady {
 	// is this the gripper camera?
 	bool is_gripper = 1;
 
-	// Camera anchor num 
+	// Camera anchor num if this is an anchor camera
 	optional uint32 anchor_num = 2;
 
 	// for local UI's connect at this address
@@ -188,7 +188,7 @@ message VideoReady {
 	optional string stream_path = 4;
 
 	// feed number, distinct from anchor num.
-	// 0: gripper, 1: first preferred anchor, 2: 2nd preferred anchor
+	// 0: gripper, 1: first preferred anchor, 2: 2nd preferred anchor, 3: reprojected floor image
 	uint32 feed_number = 5;
 }
 

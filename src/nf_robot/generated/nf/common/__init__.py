@@ -7,6 +7,8 @@ __all__ = (
     "AnchorType",
     "EpCommand",
     "EpisodeControl",
+    "LerobotSessionStatus",
+    "LerobotStatus",
     "Pose",
     "Vec3",
 )
@@ -66,6 +68,9 @@ class EpCommand(betterproto2.Enum):
     END_RECORDING = 2
 
     START_OR_COMPLETE = 3
+    """
+    DEPRECATED. send EVAL_START or EVAL_STOP for both recording or eval
+    """
 
     EVAL_START = 4
 
@@ -94,14 +99,124 @@ class EpCommand(betterproto2.Enum):
         }
 
 
+class LerobotStatus(betterproto2.Enum):
+    EPISODESTATUS_NA = 0
+
+    EPISODESTATUS_RECORDING = 1
+    """
+    recording an episide
+    """
+
+    EPISODESTATUS_REC_PROCESSING = 2
+    """
+    Finishing up the encoding of the last recorded episode, or finaizing dataset for upload.
+    """
+
+    EPISODESTATUS_REC_READY = 3
+    """
+    Idle and ready to start recording an episode.
+    """
+
+    EPISODESTATUS_REC_ALL_COMPLETE = 4
+    """
+    Recording session finished and data uploaded. Expected after sending EPCOMMAND_END_RECORDING
+    """
+
+    EPISODESTATUS_EVAL_IDLE = 5
+    """
+    Idle and ready to start inference
+    """
+
+    EPISODESTATUS_EVAL_ACTIVE = 6
+    """
+    Actively doing inference and sending control inputs.
+    """
+
+    EPISODESTATUS_ERROR = 7
+    """
+    Lerobot process has failed with some kind of error.
+    """
+
+
 @dataclass(eq=False, repr=False)
 class EpisodeControl(betterproto2.Message):
+    """
+    Both control panel and lerobot sessions act as UIs connected to a single robot.
+    The control panel issues EpisodeControl messages, the robot forwards them back to all connected UIs in case one is lerobot.
+    """
+
     command: "EpCommand" = betterproto2.field(
         1, betterproto2.TYPE_ENUM, default_factory=lambda: EpCommand(0)
     )
+    """
+    When the lerobot session receives one of these commands, it acts on it.
+    """
+
+    status: "LerobotSessionStatus | None" = betterproto2.field(
+        2, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    The lerobot sessions sends EpisodeControl messages contianing this field. they are forwarded to all UIs
+    When the web UI recives one, it uses it to update the interface.
+    """
 
 
 default_message_pool.register_message("nf.common", "EpisodeControl", EpisodeControl)
+
+
+@dataclass(eq=False, repr=False)
+class LerobotSessionStatus(betterproto2.Message):
+    process_id: "str | None" = betterproto2.field(
+        1, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    Uniquely identify the process running the lerobot session.
+    """
+
+    status: "LerobotStatus | None" = betterproto2.field(
+        2, betterproto2.TYPE_ENUM, optional=True
+    )
+    """
+    Used to report the current mode of the session
+    """
+
+    session_ep_number: "int | None" = betterproto2.field(
+        3, betterproto2.TYPE_UINT32, optional=True
+    )
+    """
+    Report the current episode number this session (being recorded, processed, or just completed)
+    """
+
+    dataset_repo_id: "str | None" = betterproto2.field(
+        4, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    The repo id where data will be uploaded to huggingface. reported at the beginning of a recording session,
+    """
+
+    dataset_ep_count: "int | None" = betterproto2.field(
+        5, betterproto2.TYPE_UINT32, optional=True
+    )
+    """
+    The total number of episodes in the datset. reported at the beginning of a recording session.
+    """
+
+    policy_repo_id: "str | None" = betterproto2.field(
+        6, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    The repo id or local path of the policy being used for evaluation. reported at the beginning of an eval session
+    """
+
+    error: "str | None" = betterproto2.field(7, betterproto2.TYPE_STRING, optional=True)
+    """
+    Error from the lerobot process
+    """
+
+
+default_message_pool.register_message(
+    "nf.common", "LerobotSessionStatus", LerobotSessionStatus
+)
 
 
 @dataclass(eq=False, repr=False)

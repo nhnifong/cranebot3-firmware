@@ -681,7 +681,7 @@ class VideoReady(betterproto2.Message):
         2, betterproto2.TYPE_UINT32, optional=True
     )
     """
-    Camera anchor num 
+    Camera anchor num if this is an anchor camera
     """
 
     local_uri: "str | None" = betterproto2.field(
@@ -703,7 +703,7 @@ class VideoReady(betterproto2.Message):
     feed_number: "int" = betterproto2.field(5, betterproto2.TYPE_UINT32)
     """
     feed number, distinct from anchor num.
-    0: gripper, 1: first preferred anchor, 2: 2nd preferred anchor
+    0: gripper, 1: first preferred anchor, 2: 2nd preferred anchor, 3: reprojected floor image
     """
 
 
