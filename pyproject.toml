@@ -39,7 +39,7 @@ dev = [
     "grpcio-tools",
     "betterproto2_compiler",
     "opencv-contrib-python>=4.0", # for the data labelling tools
-    "lerobot",
+    "lerobot==0.5.1", # these guys can't be trusted not to break things
     "build",
     "twine",
 ]
