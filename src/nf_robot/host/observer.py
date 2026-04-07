@@ -357,16 +357,53 @@ class AsyncObserver:
             asyncio.create_task(self.record_dataset())
 
     async def record_dataset(self):
-        async def print_subprocess_output(self, stream):
-            async for line in stream:
-                print(line.decode('utf-8').rstrip())
+        # Run the python function as a command-line script to hook into 
+        # its stdout and stderr streams asynchronously and use the same virtualenv
+        command = [
+            sys.executable,
+            '-c',
+            "from nf_robot.ml.stringman_lerobot import record_until_disconnected; "
+            "record_until_disconnected('ws://localhost:4245', 'naavox/grasping_dataset')"
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        print(f"Recording process started with PID: {process.pid}")
 
-        from nf_robot.ml.stringman_lerobot import record_until_disconnected
-        record_process = Process(target=record_until_disconnected, args=('ws://localhost:4245', 'naavox/grasping_dataset'), daemon=True)
-        record_process.start()
-        await self.kill_recorder.wait()
-        record_process.terminate()
-        record_process.join()
+        async def log_stream(stream, stream_name):
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                # Decode and strip newline characters
+                print(f"[{stream_name}] {line.decode('utf-8').rstrip()}")
+
+        # Create concurrent background tasks to monitor stdout and stderr
+        stdout_task = asyncio.create_task(log_stream(process.stdout, "RECORD STDOUT"))
+        stderr_task = asyncio.create_task(log_stream(process.stderr, "RECORD STDERR"))
+
+        try:
+            return_code = await process.wait()
+            print(f"Recording process exited with code: {return_code}")
+            
+        except asyncio.CancelledError:
+            print("Cancellation requested. Terminating recording process...")
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass # Process already died
+            
+            # Wait for it to actually close
+            await process.wait()
+            print("Recording process terminated.")
+            
+        finally:
+            # Ensure our output logging tasks finish cleaning up
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
     async def calibrate_finger_servo(self):
         self.gripper_client.finger_contact_calibration_complete.clear()
@@ -2046,6 +2083,8 @@ class AsyncObserver:
     def _handle_add_episode_control_events(self, data: nf.common.EpisodeControl):
         # forward episode control events back to all telemetry listeners
         self.send_ui(episode_control=data)
+        # TODO if the EpisodeControl message has a command, and we are running a session as a subprocess, forward it directly to that subprocess.
+        # the subprocess may also send us EpisodeControl messages containing a status. forward these as telemetry.
 
     def send_tq_to_ui(self):
         snapshot = self.target_queue.get_queue_snapshot()

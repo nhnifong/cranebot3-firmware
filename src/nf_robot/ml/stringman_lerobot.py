@@ -23,7 +23,7 @@ from nf_robot.generated.nf import telemetry, control, common
 from lerobot.robots import Robot, RobotConfig
 from lerobot.datasets.image_writer import safe_stop_image_writer
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
+from lerobot.datasets.feature_utils import build_dataset_frame, hw_to_dataset_features
 from lerobot.utils.constants import OBS_STR, ACTION
 from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
 from lerobot.utils.utils import log_say
@@ -405,7 +405,7 @@ def record_until_disconnected(uri, hf_repo_id):
             repo_id=hf_repo_id,
             download_videos=False,
         )
-        dataset.start_image_writer(num_threads=8)
+        # dataset.start_image_writer(num_threads=8)
     else:
         print(f"Creating new dataset {hf_repo_id}...")
         dataset = LeRobotDataset.create(
