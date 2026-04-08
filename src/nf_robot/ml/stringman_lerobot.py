@@ -405,37 +405,38 @@ def record_until_disconnected(uri, hf_repo_id):
         'eval_stop': False,
     }
 
+    # connect to the robot right away because it is our channel to send error messages back to the user.
     robot = StringmanLeRobot(StringmanConfig(uri), events)
+    robot.connect()
+    if not robot.is_connected:
+        raise ConnectionError(f"Failed to connect to robot at {uri}")
 
-    action_features = hw_to_dataset_features(robot.action_features, "action")
-    obs_features = hw_to_dataset_features(robot.observation_features, "observation")
-    dataset_features = {**action_features, **obs_features}
-
-    # Automatically determine how to initialize the dataset
-    if repo_exists(hf_repo_id, repo_type="dataset"):
-        print(f"Found existing dataset {hf_repo_id}. Resuming...")
-        dataset = LeRobotDataset(
-            repo_id=hf_repo_id,
-            download_videos=False,
-        )
-        # dataset.start_image_writer(num_threads=8)
-    else:
-        print(f"Creating new dataset {hf_repo_id}...")
-        dataset = LeRobotDataset.create(
-            repo_id=hf_repo_id,
-            fps=FPS,
-            features=dataset_features,
-            robot_type=robot.name,
-            use_videos=True,
-            image_writer_threads=8,
-        )
-    
-    recorded_episodes = 0 
     try:
-        robot.connect()
+        action_features = hw_to_dataset_features(robot.action_features, "action")
+        obs_features = hw_to_dataset_features(robot.observation_features, "observation")
+        dataset_features = {**action_features, **obs_features}
 
-        if not robot.is_connected:
-            raise ConnectionError("Robot failed to connect!")
+        # Automatically determine how to initialize the dataset
+        if repo_exists(hf_repo_id, repo_type="dataset"):
+            print(f"Found existing dataset {hf_repo_id}. Resuming...")
+            dataset = LeRobotDataset(
+                repo_id=hf_repo_id,
+                download_videos=False,
+            )
+            # dataset.start_image_writer(num_threads=8)
+        else:
+            print(f"Creating new dataset {hf_repo_id}...")
+            dataset = LeRobotDataset.create(
+                repo_id=hf_repo_id,
+                fps=FPS,
+                features=dataset_features,
+                robot_type=robot.name,
+                use_videos=True,
+                image_writer_threads=8,
+            )
+        
+        recorded_episodes = 0 
+
         # init_rerun(session_name="stringman_record")
         # log_say("System ready. Press start.")
         robot.send_session_status(common.LerobotSessionStatus(
