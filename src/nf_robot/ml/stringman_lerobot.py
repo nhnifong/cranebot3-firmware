@@ -30,6 +30,7 @@ from lerobot.utils.utils import log_say
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.utils import get_device_from_parameters
 from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.train import TrainPipelineConfig
 from lerobot.utils.control_utils import predict_action
 
 IMG_RES = 384
@@ -588,6 +589,11 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda")
         'eval_stop': False,
     }
 
+    if dataset_repo_id is None:
+        # determine dataset repo id this policy was trained on
+        train_config = TrainPipelineConfig.from_pretrained(policy_repo_id)
+        dataset_repo_id = train_config.dataset.repo_id
+
     print("Fetching training dataset to acquire metadata")
     dataset = LeRobotDataset(
         repo_id=dataset_repo_id,
@@ -647,6 +653,56 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda")
             
     log_say("Eval process stopping.")
     robot.disconnect()
+
+async def lerobot_process(action, repo_id):
+    # Sanitize and validate repo_id to prevent code injection.
+    # Enforces the Hugging Face Hub format: 'namespace/dataset_name'
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+$", str(repo_id)):
+        print(f"Warning: Invalid repo_id format '{repo_id}'. Expected 'namespace/dataset_name'. Aborting.")
+        return
+
+    # Run the python function as a command-line script to hook into its stdout and stderr streams asynchronously and use the same virtualenv
+    if action == control.LerobotSessionAction.START_RECORD:
+        func_name = 'record_until_disconnected'
+    elif action == control.LerobotSessionAction.START_EVAL:
+        func_name = 'eval_until_disconnected'
+
+    command = [
+        sys.executable,
+        '-u', '-c',
+        f"from nf_robot.ml.stringman_lerobot import {func_name}; "
+        f"{func_name}('ws://localhost:4245', '{repo_id}')"
+    ]
+
+    process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    print(f"Lerobot process started with PID: {process.pid}")
+
+    async def log_stream(stream, stream_name):
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            print(f"[{stream_name}] {line.decode('utf-8').rstrip()}")
+
+    # Create concurrent background tasks to monitor stdout and stderr
+    stdout_task = asyncio.create_task(log_stream(process.stdout, "LEROBOT STDOUT"))
+    stderr_task = asyncio.create_task(log_stream(process.stderr, "LEROBOT STDERR"))
+
+    try:
+        return_code = await process.wait()
+        print(f"Lerobot process exited with code: {return_code}")
+        
+    except asyncio.CancelledError:
+        print("Cancellation requested. Terminating Lerobot process...")
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass # Process already died
+        await process.wait()
+        print("Lerobot process terminated.")
+        
+    finally:
+        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
 if __name__ == "__main__":
     """

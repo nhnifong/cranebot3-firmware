@@ -291,7 +291,7 @@ class AsyncObserver:
             r = await self._handle_single_component_action(item.single_component_action)
 
         elif item.manage_lerobot_session is not None:
-            self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(item.action, item.dataset_repo_id, item.policy_repo_id))
+            self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(item.action, item.repo_id))
 
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
         """Issue a special command to a single component"""
@@ -358,44 +358,34 @@ class AsyncObserver:
             self.js = -self.js
             r = await self.send_line_speed(1, self.js, jog=True)
 
-    async def lerobot_process(self, action, dataset_repo_id, policy_repo_id=None):
+    async def lerobot_process(self, action, repo_id):
         # Sanitize and validate repo_id to prevent code injection.
         # Enforces the Hugging Face Hub format: 'namespace/dataset_name'
         if not re.match(r"^[a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+$", str(repo_id)):
             print(f"Warning: Invalid repo_id format '{repo_id}'. Expected 'namespace/dataset_name'. Aborting.")
             return
 
-        # Run the python function as a command-line script to hook into 
-        # its stdout and stderr streams asynchronously and use the same virtualenv
+        # Run the python function as a command-line script to hook into its stdout and stderr streams asynchronously and use the same virtualenv
         if action == control.LerobotSessionAction.START_RECORD:
-            command = [
-                sys.executable,
-                '-u', '-c',
-                "from nf_robot.ml.stringman_lerobot import record_until_disconnected; "
-                f"record_until_disconnected('ws://localhost:4245', '{dataset_repo_id}')"
-            ]
+            func_name = 'record_until_disconnected'
         elif action == control.LerobotSessionAction.START_EVAL:
-            command = [
-                sys.executable,
-                '-u', '-c',
-                "from nf_robot.ml.stringman_lerobot import eval_until_disconnected; "
-                f"eval_until_disconnected('ws://localhost:4245', '{policy_repo_id}', '{dataset_repo_id}')"
-            ]
-        
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        print(f"Recording process started with PID: {process.pid}")
+            func_name = 'eval_until_disconnected'
+
+        command = [
+            sys.executable,
+            '-u', '-c',
+            f"from nf_robot.ml.stringman_lerobot import {func_name}; "
+            f"{func_name}('ws://localhost:4245', '{repo_id}')"
+        ]
+
+        process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        print(f"Lerobot process started with PID: {process.pid}")
 
         async def log_stream(stream, stream_name):
             while True:
                 line = await stream.readline()
                 if not line:
                     break
-                # Decode and strip newline characters
                 print(f"[{stream_name}] {line.decode('utf-8').rstrip()}")
 
         # Create concurrent background tasks to monitor stdout and stderr
@@ -404,21 +394,18 @@ class AsyncObserver:
 
         try:
             return_code = await process.wait()
-            print(f"Recording process exited with code: {return_code}")
+            print(f"Lerobot process exited with code: {return_code}")
             
         except asyncio.CancelledError:
-            print("Cancellation requested. Terminating recording process...")
+            print("Cancellation requested. Terminating Lerobot process...")
             try:
                 process.terminate()
             except ProcessLookupError:
                 pass # Process already died
-            
-            # Wait for it to actually close
             await process.wait()
-            print("Recording process terminated.")
+            print("Lerobot process terminated.")
             
         finally:
-            # Ensure our output logging tasks finish cleaning up
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
     async def calibrate_finger_servo(self):

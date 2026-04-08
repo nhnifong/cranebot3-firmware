@@ -177,8 +177,10 @@ enum LerobotSessionAction {
 
 message ManageLerobotSession {
   LerobotSessionAction action = 1;
-  string dataset_repo_id = 2;
-  string policy_repo_id = 3;
+
+  // if action is record, repo_id should be a dataset repo
+  // if action is eval, repo_id shoud be a policy/model repo
+  string repo_id = 2;
 }
 
 // A single kind of update that a UI, ursina or web, is providing to Observer

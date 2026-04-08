@@ -15,6 +15,8 @@ __all__ = (
     "DeleteTarget",
     "GantryGoalPos",
     "JogSpool",
+    "LerobotSessionAction",
+    "ManageLerobotSession",
     "ScaleRoom",
     "SetSwingCancellation",
     "SingleComponentAction",
@@ -211,6 +213,30 @@ class ComponentAction(betterproto2.Enum):
             "COMPONENT_ACTION_IDENTIFY": 2,
             "COMPONENT_ACTION_TIGHTEN": 3,
             "COMPONENT_ACTION_RELAX": 4,
+        }
+
+
+class LerobotSessionAction(betterproto2.Enum):
+    UNUSED = 0
+
+    START_RECORD = 1
+
+    START_EVAL = 2
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "LEROBOTSESSIONACTION_UNUSED",
+            1: "LEROBOTSESSIONACTION_START_RECORD",
+            2: "LEROBOTSESSIONACTION_START_EVAL",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "LEROBOTSESSIONACTION_UNUSED": 0,
+            "LEROBOTSESSIONACTION_START_RECORD": 1,
+            "LEROBOTSESSIONACTION_START_EVAL": 2,
         }
 
 
@@ -411,6 +437,10 @@ class ControlItem(betterproto2.Message):
         12, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    manage_lerobot_session: "ManageLerobotSession | None" = betterproto2.field(
+        13, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
@@ -481,6 +511,24 @@ class JogSpool(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.control", "JogSpool", JogSpool)
+
+
+@dataclass(eq=False, repr=False)
+class ManageLerobotSession(betterproto2.Message):
+    action: "LerobotSessionAction" = betterproto2.field(
+        1, betterproto2.TYPE_ENUM, default_factory=lambda: LerobotSessionAction(0)
+    )
+
+    repo_id: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    if action is record, repo_id should be a dataset repo
+    if action is eval, repo_id shoud be a policy/model repo
+    """
+
+
+default_message_pool.register_message(
+    "nf.control", "ManageLerobotSession", ManageLerobotSession
+)
 
 
 @dataclass(eq=False, repr=False)

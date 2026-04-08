@@ -132,6 +132,11 @@ class LerobotStatus(betterproto2.Enum):
     Actively doing inference and sending control inputs.
     """
 
+    EVAL_ALL_COMPLETE = 8
+    """
+    Eval session ended
+    """
+
     ERROR = 7
     """
     Lerobot process has failed with some kind of error.
@@ -147,6 +152,7 @@ class LerobotStatus(betterproto2.Enum):
             4: "LEROBOTSTATUS_REC_ALL_COMPLETE",
             5: "LEROBOTSTATUS_EVAL_IDLE",
             6: "LEROBOTSTATUS_EVAL_ACTIVE",
+            8: "LEROBOTSTATUS_EVAL_ALL_COMPLETE",
             7: "LEROBOTSTATUS_ERROR",
         }
 
@@ -160,6 +166,7 @@ class LerobotStatus(betterproto2.Enum):
             "LEROBOTSTATUS_REC_ALL_COMPLETE": 4,
             "LEROBOTSTATUS_EVAL_IDLE": 5,
             "LEROBOTSTATUS_EVAL_ACTIVE": 6,
+            "LEROBOTSTATUS_EVAL_ALL_COMPLETE": 8,
             "LEROBOTSTATUS_ERROR": 7,
         }
 
