@@ -169,6 +169,18 @@ message SingleComponentAction {
   optional uint32 spool_num = 4;
 }
 
+enum LerobotSessionAction {
+  LEROBOTSESSIONACTION_UNUSED = 0;
+  LEROBOTSESSIONACTION_START_RECORD = 1;
+  LEROBOTSESSIONACTION_START_EVAL = 2;
+}
+
+message ManageLerobotSession {
+  LerobotSessionAction action = 1;
+  string dataset_repo_id = 2;
+  string policy_repo_id = 3;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -184,8 +196,9 @@ message ControlItem {
     Debug debug = 10;
     SetSwingCancellation set_swing_cancellation = 11;
     SingleComponentAction single_component_action = 12;
+    ManageLerobotSession manage_lerobot_session = 13;
 
-    // next id = 12
+    // next id = 14
   }
 }
 

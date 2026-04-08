@@ -100,42 +100,68 @@ class EpCommand(betterproto2.Enum):
 
 
 class LerobotStatus(betterproto2.Enum):
-    EPISODESTATUS_NA = 0
+    NA = 0
 
-    EPISODESTATUS_RECORDING = 1
+    RECORDING = 1
     """
     recording an episide
     """
 
-    EPISODESTATUS_REC_PROCESSING = 2
+    REC_PROCESSING = 2
     """
     Finishing up the encoding of the last recorded episode, or finaizing dataset for upload.
     """
 
-    EPISODESTATUS_REC_READY = 3
+    REC_READY = 3
     """
     Idle and ready to start recording an episode.
     """
 
-    EPISODESTATUS_REC_ALL_COMPLETE = 4
+    REC_ALL_COMPLETE = 4
     """
     Recording session finished and data uploaded. Expected after sending EPCOMMAND_END_RECORDING
     """
 
-    EPISODESTATUS_EVAL_IDLE = 5
+    EVAL_IDLE = 5
     """
     Idle and ready to start inference
     """
 
-    EPISODESTATUS_EVAL_ACTIVE = 6
+    EVAL_ACTIVE = 6
     """
     Actively doing inference and sending control inputs.
     """
 
-    EPISODESTATUS_ERROR = 7
+    ERROR = 7
     """
     Lerobot process has failed with some kind of error.
     """
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "LEROBOTSTATUS_NA",
+            1: "LEROBOTSTATUS_RECORDING",
+            2: "LEROBOTSTATUS_REC_PROCESSING",
+            3: "LEROBOTSTATUS_REC_READY",
+            4: "LEROBOTSTATUS_REC_ALL_COMPLETE",
+            5: "LEROBOTSTATUS_EVAL_IDLE",
+            6: "LEROBOTSTATUS_EVAL_ACTIVE",
+            7: "LEROBOTSTATUS_ERROR",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "LEROBOTSTATUS_NA": 0,
+            "LEROBOTSTATUS_RECORDING": 1,
+            "LEROBOTSTATUS_REC_PROCESSING": 2,
+            "LEROBOTSTATUS_REC_READY": 3,
+            "LEROBOTSTATUS_REC_ALL_COMPLETE": 4,
+            "LEROBOTSTATUS_EVAL_IDLE": 5,
+            "LEROBOTSTATUS_EVAL_ACTIVE": 6,
+            "LEROBOTSTATUS_ERROR": 7,
+        }
 
 
 @dataclass(eq=False, repr=False)

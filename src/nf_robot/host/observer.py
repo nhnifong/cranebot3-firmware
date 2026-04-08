@@ -187,6 +187,7 @@ class AsyncObserver:
         self.swing_cancellation_task = None
         self.local_models = local_models
         self.js = 0.1
+        self.lerobot_process_watcher = None
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -289,6 +290,9 @@ class AsyncObserver:
         elif item.single_component_action is not None:
             r = await self._handle_single_component_action(item.single_component_action)
 
+        elif item.manage_lerobot_session is not None:
+            self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(item.action, item.dataset_repo_id, item.policy_repo_id))
+
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
         """Issue a special command to a single component"""
         client = None
@@ -353,18 +357,30 @@ class AsyncObserver:
         if item.action == 'jog1':
             self.js = -self.js
             r = await self.send_line_speed(1, self.js, jog=True)
-        if item.action == 'recorder':
-            asyncio.create_task(self.record_dataset())
 
-    async def record_dataset(self):
+    async def lerobot_process(self, action, dataset_repo_id, policy_repo_id=None):
+        # Sanitize and validate repo_id to prevent code injection.
+        # Enforces the Hugging Face Hub format: 'namespace/dataset_name'
+        if not re.match(r"^[a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+$", str(repo_id)):
+            print(f"Warning: Invalid repo_id format '{repo_id}'. Expected 'namespace/dataset_name'. Aborting.")
+            return
+
         # Run the python function as a command-line script to hook into 
         # its stdout and stderr streams asynchronously and use the same virtualenv
-        command = [
-            sys.executable,
-            '-c',
-            "from nf_robot.ml.stringman_lerobot import record_until_disconnected; "
-            "record_until_disconnected('ws://localhost:4245', 'naavox/grasping_dataset')"
-        ]
+        if action == control.LerobotSessionAction.START_RECORD:
+            command = [
+                sys.executable,
+                '-u', '-c',
+                "from nf_robot.ml.stringman_lerobot import record_until_disconnected; "
+                f"record_until_disconnected('ws://localhost:4245', '{dataset_repo_id}')"
+            ]
+        elif action == control.LerobotSessionAction.START_EVAL:
+            command = [
+                sys.executable,
+                '-u', '-c',
+                "from nf_robot.ml.stringman_lerobot import eval_until_disconnected; "
+                f"eval_until_disconnected('ws://localhost:4245', '{policy_repo_id}', '{dataset_repo_id}')"
+            ]
         
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -383,8 +399,8 @@ class AsyncObserver:
                 print(f"[{stream_name}] {line.decode('utf-8').rstrip()}")
 
         # Create concurrent background tasks to monitor stdout and stderr
-        stdout_task = asyncio.create_task(log_stream(process.stdout, "RECORD STDOUT"))
-        stderr_task = asyncio.create_task(log_stream(process.stderr, "RECORD STDERR"))
+        stdout_task = asyncio.create_task(log_stream(process.stdout, "LEROBOT STDOUT"))
+        stderr_task = asyncio.create_task(log_stream(process.stderr, "LEROBOT STDERR"))
 
         try:
             return_code = await process.wait()
@@ -1760,6 +1776,9 @@ class AsyncObserver:
         if self.swing_cancellation_task is not None:
             self.swing_cancellation_task.cancel()
             tasks.append(self.swing_cancellation_task)
+        if self.lerobot_process_watcher is not None:
+            self.lerobot_process_watcher.cancel()
+            tasks.append(self.lerobot_process_watcher)
 
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         try:
@@ -2083,6 +2102,7 @@ class AsyncObserver:
     def _handle_add_episode_control_events(self, data: nf.common.EpisodeControl):
         # forward episode control events back to all telemetry listeners
         self.send_ui(episode_control=data)
+        asyncio.create_task(self.flush_tele_buffer())
         # TODO if the EpisodeControl message has a command, and we are running a session as a subprocess, forward it directly to that subprocess.
         # the subprocess may also send us EpisodeControl messages containing a status. forward these as telemetry.
 

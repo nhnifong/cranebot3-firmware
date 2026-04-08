@@ -26,14 +26,15 @@ enum EpCommand {
 }
 
 enum LerobotStatus {
-  EPISODESTATUS_NA = 0;
-  EPISODESTATUS_RECORDING = 1; // recording an episide
-  EPISODESTATUS_REC_PROCESSING = 2; // Finishing up the encoding of the last recorded episode, or finaizing dataset for upload.
-  EPISODESTATUS_REC_READY = 3; // Idle and ready to start recording an episode.
-  EPISODESTATUS_REC_ALL_COMPLETE = 4; // Recording session finished and data uploaded. Expected after sending EPCOMMAND_END_RECORDING
-  EPISODESTATUS_EVAL_IDLE = 5; // Idle and ready to start inference
-  EPISODESTATUS_EVAL_ACTIVE = 6; // Actively doing inference and sending control inputs.
-  EPISODESTATUS_ERROR = 7; // Lerobot process has failed with some kind of error.
+  LEROBOTSTATUS_NA = 0;
+  LEROBOTSTATUS_RECORDING = 1; // recording an episide
+  LEROBOTSTATUS_REC_PROCESSING = 2; // Finishing up the encoding of the last recorded episode, or finaizing dataset for upload.
+  LEROBOTSTATUS_REC_READY = 3; // Idle and ready to start recording an episode.
+  LEROBOTSTATUS_REC_ALL_COMPLETE = 4; // Recording session finished and data uploaded. Expected after sending EPCOMMAND_END_RECORDING
+  LEROBOTSTATUS_EVAL_IDLE = 5; // Idle and ready to start inference
+  LEROBOTSTATUS_EVAL_ACTIVE = 6; // Actively doing inference and sending control inputs.
+  LEROBOTSTATUS_EVAL_ALL_COMPLETE = 8; // Eval session ended
+  LEROBOTSTATUS_ERROR = 7; // Lerobot process has failed with some kind of error.
 }
 
 message LerobotSessionStatus {

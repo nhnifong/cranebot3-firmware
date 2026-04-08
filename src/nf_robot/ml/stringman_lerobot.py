@@ -242,6 +242,7 @@ class StringmanLeRobot(Robot):
         self.last_finger_speed = item.finger_speed
 
     def _handle_episode_control(self, item: common.EpisodeControl):
+        print(f'EpisodeControl received by lerobot session {item}')
         if item.command == common.EpCommand.START_OR_COMPLETE:
             self.events['episode_start_or_complete'] = True
         if item.command == common.EpCommand.ABANDON:
@@ -323,6 +324,17 @@ class StringmanLeRobot(Robot):
             self.websocket.send(to_send)
         return action
 
+    def send_session_status(self, status: common.LerobotSessionStatus):
+        batch = control.ControlBatchUpdate(
+            robot_id="0",
+            updates=[control.ControlItem(episode_control=common.EpisodeControl(
+                status=status,
+            ))]
+        )
+        to_send = bytes(batch)
+        if self.websocket and to_send:
+            self.websocket.send(to_send)
+
     def get_last_action(self):
         return {
             "vel_x": self.last_commanded_vel[0],
@@ -387,7 +399,7 @@ def record_until_disconnected(uri, hf_repo_id):
     events={
         'episode_start_or_complete': False,
         'episode_abandon': False,
-        'stop_recording': False,
+        'end_recording': False,
         'eval_start': False,
         'eval_stop': False,
     }
@@ -423,18 +435,28 @@ def record_until_disconnected(uri, hf_repo_id):
 
         if not robot.is_connected:
             raise ConnectionError("Robot failed to connect!")
-        init_rerun(session_name="stringman_record")
-        log_say("System ready. Press start.")
+        # init_rerun(session_name="stringman_record")
+        # log_say("System ready. Press start.")
+        robot.send_session_status(common.LerobotSessionStatus(
+            status=common.LerobotStatus.REC_READY,
+            session_ep_number=0,
+            dataset_ep_count=dataset.num_episodes,
+            dataset_repo_id=hf_repo_id,
+        ))
 
-        while robot.is_connected and not events["stop_recording"]:
+        while robot.is_connected and not events["end_recording"]:
             time.sleep(0.03)
 
-            if not events['episode_start_or_complete']:
+            if not events['eval_start']:
                 continue 
-            events['episode_start_or_complete'] = False 
-            print(f'Recording episode events={events}')
+            events['eval_start'] = False 
 
-            log_say(f"Recording episode {recorded_episodes + 1}")
+            # log_say(f"Recording episode {recorded_episodes + 1}")
+            robot.send_session_status(common.LerobotSessionStatus(
+                status=common.LerobotStatus.RECORDING,
+                session_ep_number=recorded_episodes + 1
+            ))
+
             record_episode(
                 robot=robot,
                 events=events,
@@ -446,26 +468,46 @@ def record_until_disconnected(uri, hf_repo_id):
             )
 
             if events["episode_abandon"]:
-                log_say("Discarding episode.")
+                # log_say("Discarding episode.")
                 events["episode_abandon"] = False
                 dataset.clear_episode_buffer()
+                robot.send_session_status(common.LerobotSessionStatus(
+                    status=common.LerobotStatus.REC_READY,
+                    session_ep_number=recorded_episodes
+                ))
                 continue
 
             log_say(f"Episode {recorded_episodes + 1} complete.")
             dataset.save_episode()
-            log_say(f"Ready.")
+            # log_say(f"Ready.")
+            robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_READY))
             recorded_episodes += 1
+            robot.send_session_status(common.LerobotSessionStatus(
+                status=common.LerobotStatus.REC_READY,
+                session_ep_number=recorded_episodes
+            ))
+
+    except Exception as e:
+        robot.send_session_status(common.LerobotSessionStatus(
+            status=common.LerobotStatus.ERROR,
+            error=str(e)
+        ))
+        raise
 
     finally:
-        log_say("Recording stopped. Cleaning up.")
-        robot.disconnect()
+        # log_say("Recording stopped. Cleaning up.")
 
         if recorded_episodes > 0:
-            log_say(f"{recorded_episodes} episodes collected. Encoding remaining video")
+            robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_PROCESSING))
+            # log_say(f"{recorded_episodes} episodes collected. Encoding remaining video")
             dataset.finalize()
-            log_say("Encoding complete. Uploading to hugging face.")
+            # log_say("Encoding complete. Uploading to hugging face.")
             dataset.push_to_hub()
-            log_say("Upload complete.")
+            # log_say("Upload complete.")
+
+        robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_ALL_COMPLETE))
+        time.sleep(0.03)
+        robot.disconnect()
 
 def eval_episode(
     robot: Robot,
@@ -541,7 +583,7 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda")
     events = {
         'episode_start_or_complete': False,
         'episode_abandon': False,
-        'stop_recording': False,
+        'end_recording': False,
         'eval_start': False,
         'eval_stop': False,
     }
