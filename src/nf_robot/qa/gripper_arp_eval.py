@@ -33,7 +33,7 @@ def main():
         time.sleep(0.5)
         sts.torque_enable(mid, False)
 
-    input("Plug only one motor into the board and press Enter...")
+    input("Plug only the finger motor into the board and press Enter...")
     # set id of this motor to 2. let the finger motor id remain 1, the factory setting.
 
     # Perform a full scan (0-253) to ensure we don't accidentally broadcast to multiple motors
@@ -71,11 +71,23 @@ def main():
                 print(f"Servo is wrist and already set correctly to {WRIST_MOTOR_ID}.")
             else:
                 sts.change_id(current_id, WRIST_MOTOR_ID)
+            input("Plug in the Finger motor and press Enter...")
+            servos = sts.scan(8)
+            assert(len(servos) == 2 and (1 in servos and 2 in servos))
         else:
-            if current_id == FINGER_MOTOR_ID:
-                print(f"Servo is finger and already set correctly to {FINGER_MOTOR_ID}.")
-            else:
-                sts.change_id(current_id, WRIST_MOTOR_ID)
+            # this case is the one I intend to hit on a new setup where both motors have ID 1 and I plug the finger motor to the board, and then next the wrist motor into the back of the finger motor.
+            # temporarily change the finger motor's id to 3
+            sts.change_id(current_id, 3)
+            input("Plug in the Wrist motor and press Enter...")
+            servos = sts.scan(8)
+            assert(len(servos) == 2 and (3 in servos))
+            # figure out the id of the other one
+            slist = servos.copy()
+            slist.remove(3)
+            new_motor = slist[0]
+            sts.change_id(new_motor, WRIST_MOTOR_ID)
+            sts.change_id(3, FINGER_MOTOR_ID)
+
 
     time.sleep(0.1)
     assert sts.ping(FINGER_MOTOR_ID), "Finger motor did not respond to ping"
