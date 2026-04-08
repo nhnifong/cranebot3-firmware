@@ -30,6 +30,7 @@ from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 from functools import partial
 from pathlib import Path
 import json
+import re
 
 from nf_robot.common.pose_functions import compose_poses
 from nf_robot.common.cv_common import *
@@ -291,7 +292,7 @@ class AsyncObserver:
             r = await self._handle_single_component_action(item.single_component_action)
 
         elif item.manage_lerobot_session is not None:
-            self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(item.action, item.repo_id))
+            self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(item.manage_lerobot_session))
 
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
         """Issue a special command to a single component"""
@@ -358,7 +359,9 @@ class AsyncObserver:
             self.js = -self.js
             r = await self.send_line_speed(1, self.js, jog=True)
 
-    async def lerobot_process(self, action, repo_id):
+    async def lerobot_process(self, item: control.ManageLerobotSession):
+        repo_id = item.repo_id
+        action = item.action
         # Sanitize and validate repo_id to prevent code injection.
         # Enforces the Hugging Face Hub format: 'namespace/dataset_name'
         if not re.match(r"^[a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+$", str(repo_id)):
