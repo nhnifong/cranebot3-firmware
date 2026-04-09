@@ -110,12 +110,14 @@ def main():
 
     # confirm no pressure on finger pad
     v = pressure_sensor.voltage
-    assert v > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
+    MAX_V = 2.8 # seems to be what you get with the 110 ohm resistor in the divider
+    thresh_v = MAX_V * 0.8
+    assert v > thresh_v, f"Voltage too low on finger pad ({v}). Is pressure sensor connected?"
 
     # slowly close until the fingerpad voltage drops below 2V
     start = time.time()
     load = 0
-    while v > 3.0 and time.time() < start+16:
+    while v > thresh_v and time.time() < start+16:
         sts.set_position(FINGER_MOTOR_ID, pos + rel)
         rel -= 10
         time.sleep(0.05)
