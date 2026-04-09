@@ -38,7 +38,7 @@ class ArpeggioAnchorClient(ComponentClient):
             anchor_num=self.anchor_num,
             websocket_status=telemetry.ConnStatus.NOT_DETECTED,
             video_status=telemetry.ConnStatus.NOT_DETECTED,
-            gripper_model=nf.telemetry.GripperModel.ARPEGGIO,
+            gripper_model=telemetry.GripperModel.ARPEGGIO,
         )
         self.anchor_pose = np.zeros((2, 3))
         self.camera_pose = np.zeros((2, 3))

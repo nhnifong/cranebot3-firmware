@@ -503,7 +503,7 @@ class RaspiAnchorClient(ComponentClient):
             anchor_num=self.anchor_num,
             websocket_status=telemetry.ConnStatus.NOT_DETECTED,
             video_status=telemetry.ConnStatus.NOT_DETECTED,
-            gripper_model=nf.telemetry.GripperModel.PILOT,
+            gripper_model=telemetry.GripperModel.PILOT,
         )
         self.last_raw_encoder = None
         self.extratilt = 0
