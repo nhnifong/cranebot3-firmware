@@ -23,6 +23,7 @@ class RaspiGripperClient(ComponentClient):
             is_gripper=True,
             websocket_status=telemetry.ConnStatus.NOT_DETECTED,
             video_status=telemetry.ConnStatus.NOT_DETECTED,
+            gripper_model=nf.telemetry.GripperModel.PILOT,
         )
         self.anchor_num = None
         self.pe = pe

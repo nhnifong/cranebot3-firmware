@@ -525,6 +525,11 @@ class ManageLerobotSession(betterproto2.Message):
     if action is eval, repo_id shoud be a policy/model repo
     """
 
+    suppress_upload: "bool" = betterproto2.field(3, betterproto2.TYPE_BOOL)
+    """
+    Whether to supress upload to huggingface when recording is finished.
+    """
+
 
 default_message_pool.register_message(
     "nf.control", "ManageLerobotSession", ManageLerobotSession

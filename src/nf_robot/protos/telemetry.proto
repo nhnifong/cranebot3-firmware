@@ -64,7 +64,7 @@ message ComponentConnStatus {
 	ConnStatus websocket_status = 3;
 	ConnStatus video_status = 4;
 	string ip_address = 5; // On the wifi network in the house where the robot is.
-	optional GripperModel gripper_model = 6;
+	optional GripperModel gripper_model = 6; // also set to communicate anchor type
 	// Message with additional detail about why the component may not be functioning.
 	optional string error_message = 7;
 }

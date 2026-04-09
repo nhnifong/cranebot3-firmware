@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 import av
 import torch
 from huggingface_hub import repo_exists
+import os
 
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
@@ -25,8 +26,8 @@ from lerobot.datasets.image_writer import safe_stop_image_writer
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.feature_utils import build_dataset_frame, hw_to_dataset_features
 from lerobot.utils.constants import OBS_STR, ACTION
-from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
-from lerobot.utils.utils import log_say
+# from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
+# from lerobot.utils.utils import log_say
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.utils import get_device_from_parameters
 from lerobot.configs.policies import PreTrainedConfig
@@ -244,8 +245,6 @@ class StringmanLeRobot(Robot):
 
     def _handle_episode_control(self, item: common.EpisodeControl):
         print(f'EpisodeControl received by lerobot session {item}')
-        if item.command == common.EpCommand.START_OR_COMPLETE:
-            self.events['episode_start_or_complete'] = True
         if item.command == common.EpCommand.ABANDON:
             self.events['episode_abandon'] = True
         if item.command == common.EpCommand.END_RECORDING:
@@ -369,10 +368,12 @@ def record_episode(
     print('ep started')
     while timestamp < max_episode_duration:
         start_loop_t = time.perf_counter()
-
-        if events["episode_start_or_complete"]:
+        
+        if events['end_recording']:
+            break
+        if events["eval_stop"]:
             print('ep complete')
-            events["episode_start_or_complete"] = False
+            events["eval_stop"] = False
             break
         if events["episode_abandon"]: 
             print('ep abandon')
@@ -387,8 +388,8 @@ def record_episode(
         frame = {**observation_frame, **action_frame, "task": task_description}
         dataset.add_frame(frame)
 
-        if display_data:
-            log_rerun_data(observation=obs, action=action_sent)
+        # if display_data:
+        #     log_rerun_data(observation=obs, action=action_sent)
 
         dt_s = time.perf_counter() - start_loop_t
         time.sleep(1 / fps - dt_s)
@@ -396,9 +397,8 @@ def record_episode(
 
     print('ep finished')
 
-def record_until_disconnected(uri, hf_repo_id):
+def record_until_disconnected(uri, hf_repo_id, upload=True):
     events={
-        'episode_start_or_complete': False,
         'episode_abandon': False,
         'end_recording': False,
         'eval_start': False,
@@ -416,29 +416,39 @@ def record_until_disconnected(uri, hf_repo_id):
         obs_features = hw_to_dataset_features(robot.observation_features, "observation")
         dataset_features = {**action_features, **obs_features}
 
+        dsname = hf_repo_id.split('/')[1]
+        root = f"datasets/{dsname}"
+        os.makedirs('datasets', exist_ok=True)
+
         # Automatically determine how to initialize the dataset
         if repo_exists(hf_repo_id, repo_type="dataset"):
             print(f"Found existing dataset {hf_repo_id}. Resuming...")
-            dataset = LeRobotDataset(
+            # resume requires a seperate root direc
+            dataset = LeRobotDataset.resume(
                 repo_id=hf_repo_id,
-                download_videos=False,
+                root=root,
+                # image_writer_threads=8,
+                streaming_encoding=True,
             )
             # dataset.start_image_writer(num_threads=8)
         else:
             print(f"Creating new dataset {hf_repo_id}...")
             dataset = LeRobotDataset.create(
                 repo_id=hf_repo_id,
+                root=root,
+                # private=True, # coming soon?
                 fps=FPS,
                 features=dataset_features,
                 robot_type=robot.name,
                 use_videos=True,
-                image_writer_threads=8,
+                # image_writer_threads=8,
+                streaming_encoding=True,
             )
         
         recorded_episodes = 0 
 
         # init_rerun(session_name="stringman_record")
-        # log_say("System ready. Press start.")
+        print("System ready. Press start.")
         robot.send_session_status(common.LerobotSessionStatus(
             status=common.LerobotStatus.REC_READY,
             session_ep_number=0,
@@ -448,12 +458,15 @@ def record_until_disconnected(uri, hf_repo_id):
 
         while robot.is_connected and not events["end_recording"]:
             time.sleep(0.03)
-
+        
+            if events['end_recording']:
+                events["end_recording"] = False
+                break
             if not events['eval_start']:
                 continue 
             events['eval_start'] = False 
 
-            # log_say(f"Recording episode {recorded_episodes + 1}")
+            print(f"Recording episode {recorded_episodes + 1}")
             robot.send_session_status(common.LerobotSessionStatus(
                 status=common.LerobotStatus.RECORDING,
                 session_ep_number=recorded_episodes + 1
@@ -470,19 +483,19 @@ def record_until_disconnected(uri, hf_repo_id):
             )
 
             if events["episode_abandon"]:
-                # log_say("Discarding episode.")
+                print("Discarding episode.")
                 events["episode_abandon"] = False
                 dataset.clear_episode_buffer()
+                robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_EP_ABANDONED))
                 robot.send_session_status(common.LerobotSessionStatus(
                     status=common.LerobotStatus.REC_READY,
                     session_ep_number=recorded_episodes
                 ))
                 continue
 
-            log_say(f"Episode {recorded_episodes + 1} complete.")
+            print(f"Episode {recorded_episodes + 1} complete.")
             dataset.save_episode()
-            # log_say(f"Ready.")
-            robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_READY))
+            print(f"Ready.")
             recorded_episodes += 1
             robot.send_session_status(common.LerobotSessionStatus(
                 status=common.LerobotStatus.REC_READY,
@@ -497,15 +510,16 @@ def record_until_disconnected(uri, hf_repo_id):
         raise
 
     finally:
-        # log_say("Recording stopped. Cleaning up.")
+        print("Recording stopped. Cleaning up.")
 
         if recorded_episodes > 0:
             robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_PROCESSING))
-            # log_say(f"{recorded_episodes} episodes collected. Encoding remaining video")
+            print(f"{recorded_episodes} episodes collected. Encoding remaining video")
             dataset.finalize()
-            # log_say("Encoding complete. Uploading to hugging face.")
-            dataset.push_to_hub()
-            # log_say("Upload complete.")
+            if upload:
+                print("Encoding complete. Uploading to hugging face.")
+                dataset.push_to_hub()
+                print("Upload complete.")
 
         robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_ALL_COMPLETE))
         time.sleep(0.03)
@@ -525,6 +539,7 @@ def eval_episode(
     timestamp = 0
     start_episode_t = time.perf_counter()
     print('Eval episode started')
+    robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_ACTIVE))
     
     policy.reset()
     preprocessor.reset()
@@ -534,11 +549,12 @@ def eval_episode(
     while timestamp < max_episode_duration:
         start_loop_t = time.perf_counter()
 
-        if events["episode_start_or_complete"]:
-            print('Eval stopped via command')
-            events["episode_start_or_complete"] = False
+        if events['end_recording']:
             break
-        
+        if events["eval_stop"]:
+            print('Eval stopped via command')
+            events["eval_stop"] = False
+            break
         obs = robot.get_observation()
         observation_frame = build_dataset_frame(dataset_features, obs, prefix="observation")
 
@@ -567,23 +583,23 @@ def eval_episode(
 
         robot.send_action(action_dict)
 
-        if display_data:
-            log_rerun_data(observation=obs, action=action_dict)
+        # if display_data:
+        #     log_rerun_data(observation=obs, action=action_dict)
 
         dt_s = time.perf_counter() - start_loop_t
         time.sleep(max(0, 1 / fps - dt_s))
         timestamp = time.perf_counter() - start_episode_t
 
     print('Eval episode finished')
+    robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_IDLE))
     robot.send_action({
         "vel_x": 0.0, "vel_y": 0.0, "vel_z": 0.0,
         "wrist_speed": 0.0,
         "finger_speed": 0.0
     })
 
-def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda"):
+def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id=None, device="cuda"):
     events = {
-        'episode_start_or_complete': False,
         'episode_abandon': False,
         'end_recording': False,
         'eval_start': False,
@@ -626,17 +642,24 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda")
     robot = StringmanLeRobot(StringmanConfig(uri), events)
     robot.connect()
     
-    init_rerun(session_name="stringman_eval")
-    log_say("Eval Ready. Waiting for start command.")
+    # init_rerun(session_name="stringman_eval")
+    print("Eval Ready. Waiting for start command.")
+    robot.send_session_status(common.LerobotSessionStatus(
+        status=common.LerobotStatus.EVAL_IDLE,
+        policy_repo_id=policy_repo_id,
+    ))
 
     while robot.is_connected:
         time.sleep(0.03)
         
-        if not events['episode_start_or_complete']:
+        if events['end_recording']:
+            events["end_recording"] = False
+            break
+        if not events['eval_start']:
             continue
         
-        events['episode_start_or_complete'] = False
-        log_say("Starting Evaluation Episode")
+        events['eval_start'] = False
+        print("Starting Evaluation Episode")
         
         eval_episode(
             robot=robot,
@@ -650,60 +673,11 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id, device="cuda")
             display_data=True
         )
         
-        log_say("Episode Complete. Waiting...")
+        print("Episode Complete. Waiting...")
             
-    log_say("Eval process stopping.")
+    print("Eval process stopping.")
+    robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_ALL_COMPLETE))
     robot.disconnect()
-
-async def lerobot_process(action, repo_id):
-    # Sanitize and validate repo_id to prevent code injection.
-    # Enforces the Hugging Face Hub format: 'namespace/dataset_name'
-    if not re.match(r"^[a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+$", str(repo_id)):
-        print(f"Warning: Invalid repo_id format '{repo_id}'. Expected 'namespace/dataset_name'. Aborting.")
-        return
-
-    # Run the python function as a command-line script to hook into its stdout and stderr streams asynchronously and use the same virtualenv
-    if action == control.LerobotSessionAction.START_RECORD:
-        func_name = 'record_until_disconnected'
-    elif action == control.LerobotSessionAction.START_EVAL:
-        func_name = 'eval_until_disconnected'
-
-    command = [
-        sys.executable,
-        '-u', '-c',
-        f"from nf_robot.ml.stringman_lerobot import {func_name}; "
-        f"{func_name}('ws://localhost:4245', '{repo_id}')"
-    ]
-
-    process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    print(f"Lerobot process started with PID: {process.pid}")
-
-    async def log_stream(stream, stream_name):
-        while True:
-            line = await stream.readline()
-            if not line:
-                break
-            print(f"[{stream_name}] {line.decode('utf-8').rstrip()}")
-
-    # Create concurrent background tasks to monitor stdout and stderr
-    stdout_task = asyncio.create_task(log_stream(process.stdout, "LEROBOT STDOUT"))
-    stderr_task = asyncio.create_task(log_stream(process.stderr, "LEROBOT STDERR"))
-
-    try:
-        return_code = await process.wait()
-        print(f"Lerobot process exited with code: {return_code}")
-        
-    except asyncio.CancelledError:
-        print("Cancellation requested. Terminating Lerobot process...")
-        try:
-            process.terminate()
-        except ProcessLookupError:
-            pass # Process already died
-        await process.wait()
-        print("Lerobot process terminated.")
-        
-    finally:
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
 if __name__ == "__main__":
     """
@@ -719,6 +693,7 @@ if __name__ == "__main__":
 
     record_parser = subparsers.add_parser('record', parents=[parent_parser], help="Record new episodes")
     record_parser.add_argument("--repo_id", default="naavox/grasping_dataset", help="repo id of dataset to append to")
+    record_parser.add_argument("--upload", default=True, help="upload data to huggingface when complete")
 
     eval_parser = subparsers.add_parser('eval', parents=[parent_parser], help="Evaluate existing policy")
     eval_parser.add_argument("--policy_id", default="naavox/grasping_act_policy", help="repo id of policy to load")
@@ -730,4 +705,4 @@ if __name__ == "__main__":
     if args.command == 'eval':
         eval_until_disconnected(uri, args.policy_id, args.dataset_id)
     else:
-        record_until_disconnected(uri, args.repo_id)
+        record_until_disconnected(uri, args.repo_id, args.upload)

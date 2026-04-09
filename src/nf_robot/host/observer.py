@@ -189,6 +189,7 @@ class AsyncObserver:
         self.local_models = local_models
         self.js = 0.1
         self.lerobot_process_watcher = None
+        self.last_ep_ctrl_status = common.LerobotStatus.NA
 
     async def send_setup_telemetry(self):
         print('Sending setup telemetry')
@@ -215,6 +216,9 @@ class AsyncObserver:
                     local_uri=client.local_video_uri,
                     feed_number=client.feed_number
                 ))
+        if self.lerobot_process_watcher is None or self.lerobot_process_watcher.done():
+            self.last_ep_ctrl_status = common.LerobotStatus.NA
+        self.send_ui(episode_control=common.EpisodeControl(status = self.last_ep_ctrl_status))
         r = await self.flush_tele_buffer()
 
     async def handle_local_client(self, websocket):
@@ -374,11 +378,15 @@ class AsyncObserver:
         elif action == control.LerobotSessionAction.START_EVAL:
             func_name = 'eval_until_disconnected'
 
+        up = ''
+        if item.suppress_upload:
+            up = ' upload=False'
+
         command = [
             sys.executable,
             '-u', '-c',
             f"from nf_robot.ml.stringman_lerobot import {func_name}; "
-            f"{func_name}('ws://localhost:4245', '{repo_id}')"
+            f"{func_name}('ws://localhost:4245', '{repo_id}'{up})"
         ]
 
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -389,7 +397,9 @@ class AsyncObserver:
                 line = await stream.readline()
                 if not line:
                     break
-                print(f"[{stream_name}] {line.decode('utf-8').rstrip()}")
+                sline = line.decode('utf-8').rstrip()
+                if not sline.startswith('[swscaler'):
+                    print(f"[{stream_name}] {sline}")
 
         # Create concurrent background tasks to monitor stdout and stderr
         stdout_task = asyncio.create_task(log_stream(process.stdout, "LEROBOT STDOUT"))
@@ -1648,6 +1658,9 @@ class AsyncObserver:
             item.retain_key = f'component_conn_status_{msg.anchor_num}'
         if key == 'video_ready':
             item.retain_key = f'video_ready_{msg.anchor_num}'
+        if key == 'episode_control' and item.episode_control.status is not None:
+            self.last_ep_ctrl_status = item.episode_control.status
+            item.retain_key = f'lerobot_status'
 
         # Add item to batch
         with self.telemetry_buffer_lock:

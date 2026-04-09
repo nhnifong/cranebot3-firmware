@@ -32,12 +32,14 @@ a binary tight/slack value.
 class ArpeggioAnchorClient(ComponentClient):
     def __init__(self, address, port, anchor_num, datastore, ob, pool, stat, telemetry_env):
         super().__init__(address, port, datastore, ob, pool, stat, telemetry_env)
+        self.anchor_num = anchor_num
         self.conn_status = telemetry.ComponentConnStatus(
             is_gripper=False,
+            anchor_num=self.anchor_num,
             websocket_status=telemetry.ConnStatus.NOT_DETECTED,
             video_status=telemetry.ConnStatus.NOT_DETECTED,
+            gripper_model=nf.telemetry.GripperModel.ARPEGGIO,
         )
-        self.anchor_num = anchor_num
         self.anchor_pose = np.zeros((2, 3))
         self.camera_pose = np.zeros((2, 3))
         self.eye_pos = np.zeros(3)

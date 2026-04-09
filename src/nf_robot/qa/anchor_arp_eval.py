@@ -5,6 +5,7 @@
 import time
 import argparse
 from damiao_motor import DaMiaoController
+from math import pi
 
 import nf_robot.common.definitions as model_constants
 
@@ -37,6 +38,24 @@ def main():
 	
 	# once both motor ids are set.
 	# prepare to wind line on each motor.
+
+	lower_motor = controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="H6220")
+    lower_motor.ensure_control_mode("VEL")
+
+	radius = 0.0362
+	length_to_wind = 7.00
+	circumfrence = 2*pi*radius
+	revs = length_to_wind / circumfrence
+	rads = length_to_wind*2*pi
+	wind_speed = 6
+	seconds = rads/wind_speed
+
+	input("Press Enter to wind lower spool")
+	try:
+		lower_motor.send_cmd_vel(target_velocity=-wind_speed)
+		time.sleep(seconds)
+	finally:
+		lower_motor.send_cmd_vel(target_velocity=0)
 
 
 if __name__ == "__main__":

@@ -181,6 +181,9 @@ message ManageLerobotSession {
   // if action is record, repo_id should be a dataset repo
   // if action is eval, repo_id shoud be a policy/model repo
   string repo_id = 2;
+
+  // Whether to supress upload to huggingface when recording is finished.
+  bool suppress_upload = 3;
 }
 
 // A single kind of update that a UI, ursina or web, is providing to Observer

@@ -37,8 +37,8 @@ class AnchorArpServer(RobotComponentServer):
         # https://jia-xie.github.io/python-damiao-driver/dev/package-usage/python-api/
         self.controller = DaMiaoController(channel="can0", bustype="socketcan")
         # h6220 is probaly the closest to DM-H6215 but they all seem the same to me.
-        self.motor1 = self.controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type="H6220")
-        self.motor2 = self.controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="H6220")
+        self.motor1 = self.controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type="H6220") # high motor
+        self.motor2 = self.controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="H6220") # lower motor
 
         # consider the direct line (high) spool 0 and the indirect line (low) spool 1
 

@@ -53,6 +53,7 @@ class ArpeggioGripperClient(ComponentClient):
             is_gripper=True,
             websocket_status=telemetry.ConnStatus.NOT_DETECTED,
             video_status=telemetry.ConnStatus.NOT_DETECTED,
+            gripper_model=nf.telemetry.GripperModel.ARPEGGIO,
         )
         self.anchor_num = None
         self.pe = pe

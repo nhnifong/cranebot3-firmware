@@ -30,6 +30,7 @@ enum LerobotStatus {
   LEROBOTSTATUS_RECORDING = 1; // recording an episide
   LEROBOTSTATUS_REC_PROCESSING = 2; // Finishing up the encoding of the last recorded episode, or finaizing dataset for upload.
   LEROBOTSTATUS_REC_READY = 3; // Idle and ready to start recording an episode.
+  LEROBOTSTATUS_REC_EP_ABANDONED = 9; // Indicates that an episode was successfully abandoned
   LEROBOTSTATUS_REC_ALL_COMPLETE = 4; // Recording session finished and data uploaded. Expected after sending EPCOMMAND_END_RECORDING
   LEROBOTSTATUS_EVAL_IDLE = 5; // Idle and ready to start inference
   LEROBOTSTATUS_EVAL_ACTIVE = 6; // Actively doing inference and sending control inputs.

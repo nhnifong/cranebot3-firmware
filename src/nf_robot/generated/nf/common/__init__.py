@@ -117,6 +117,11 @@ class LerobotStatus(betterproto2.Enum):
     Idle and ready to start recording an episode.
     """
 
+    REC_EP_ABANDONED = 9
+    """
+    Indicates that an episode was successfully abandoned
+    """
+
     REC_ALL_COMPLETE = 4
     """
     Recording session finished and data uploaded. Expected after sending EPCOMMAND_END_RECORDING
@@ -149,6 +154,7 @@ class LerobotStatus(betterproto2.Enum):
             1: "LEROBOTSTATUS_RECORDING",
             2: "LEROBOTSTATUS_REC_PROCESSING",
             3: "LEROBOTSTATUS_REC_READY",
+            9: "LEROBOTSTATUS_REC_EP_ABANDONED",
             4: "LEROBOTSTATUS_REC_ALL_COMPLETE",
             5: "LEROBOTSTATUS_EVAL_IDLE",
             6: "LEROBOTSTATUS_EVAL_ACTIVE",
@@ -163,6 +169,7 @@ class LerobotStatus(betterproto2.Enum):
             "LEROBOTSTATUS_RECORDING": 1,
             "LEROBOTSTATUS_REC_PROCESSING": 2,
             "LEROBOTSTATUS_REC_READY": 3,
+            "LEROBOTSTATUS_REC_EP_ABANDONED": 9,
             "LEROBOTSTATUS_REC_ALL_COMPLETE": 4,
             "LEROBOTSTATUS_EVAL_IDLE": 5,
             "LEROBOTSTATUS_EVAL_ACTIVE": 6,
