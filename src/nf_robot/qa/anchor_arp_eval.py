@@ -36,6 +36,13 @@ def main():
     # if so, set its ID to the upper motor ID.
     # if not, set its ID to the lower motor ID. 
     
+    # plug lower motor
+    # damiao set-feedback-id --current 0 --target 1
+
+    # plug upper motor
+    # damiao set-feedback-id --current 0 --target 2
+    # damiao set-motor-id --current 1 --target 2
+
     # once both motor ids are set.
     # prepare to wind line on each motor.
 
@@ -44,17 +51,16 @@ def main():
     lower_motor.disable()
     upper_motor.disable()
     motors = [
-        (lower_motor, -1, 'lower'),
-        (upper_motor, 1, 'upper'),
+        (lower_motor, -1, 'lower', 14.0), # lower spool needs more line because it goes around the eyelet
+        (upper_motor, 1, 'upper', 7.0),
     ]
 
-    for motor, direction, name in motors:
+    for motor, direction, name, length in motors:
         val = input(f"Do you need to wind the {name} motor? y/n")
         if val == 'y':
             radius = 0.0362
-            length_to_wind = 7.00
             circumfrence = 2*pi*radius
-            revs = length_to_wind / circumfrence
+            revs = length / circumfrence
             rads = revs*2*pi
             wind_speed = 6
             seconds = rads/wind_speed
