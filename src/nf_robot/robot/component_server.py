@@ -62,6 +62,8 @@ async def asyncmain():
         except FileNotFoundError:
             component_type = 'anchor'
 
+        component_type = component_type.replace('_', ' ')
+
         if component_type == 'anchor':
             from nf_robot.robot.anchor_server import RaspiAnchorServer
             ras = RaspiAnchorServer(False)
