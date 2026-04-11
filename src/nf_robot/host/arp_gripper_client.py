@@ -4,10 +4,12 @@ from scipy.spatial.transform import Rotation
 import json
 import cv2
 import time
+import math
 
 from nf_robot.host.anchor_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
+from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.cv_common import SF_TARGET_SHAPE, stabilize_frame_2
 
@@ -65,6 +67,12 @@ class ArpeggioGripperClient(ComponentClient):
         # State variables added to track and prevent platform drift
         self._swing_position_offset = np.zeros(2)
         self._last_future_time = 0
+
+        # State for looking in direction of motion
+        self.smoothed_error = 0.0
+        self.ema_alpha = 0.3  # Smoothing factor (0 to 1)
+        self.deadband = 0.02  # Radians (~1.1 degrees)
+        self.p_gain = 2.0     # Proportional gain for speed calculation
 
     async def handle_update_from_ws(self, update):
         if 'st' in update:
@@ -212,6 +220,60 @@ class ArpeggioGripperClient(ComponentClient):
             # extra = self.config.gripper.frame_room_spin
             roomspin = roomspin + extra
         return roomspin
+
+    def look_towards_vector(self, vec2):
+        """
+        Turn the head to face in the direction of the given XY vector in room space.
+        vec2: A numpy array [x, y]
+        """
+        # Calculate target angle from vector
+        target_angle_base = math.atan2(vec2[0], vec2[1]) # Result in (-pi, pi]
+
+        # Spin ranges from 0 to 6*pi. Nose @ +Y is spin % 2pi == 0.
+        current_spin = self.get_spin()
+        
+        # Determine the best target within the [0, 6*pi] range
+        # There are 3 possible rotations that face the same direction:
+        # base_angle (normalized to [0, 2pi]), base_angle + 2pi, and base_angle + 4pi.
+        norm_target = target_angle_base % (2 * math.pi)
+        candidates = [norm_target, norm_target + 2 * math.pi, norm_target + 4 * math.pi]
+        
+        # Determine proximity to bounds
+        lower_bound = 0.5 * math.pi
+        upper_bound = 5.5 * math.pi
+        center_point = 3 * math.pi
+
+        if current_spin < lower_bound:
+            # Near lower limit: Force selection of a candidate that moves us toward center
+            # Typically picking the candidate > current_spin
+            target = min([c for c in candidates if c > current_spin] or [candidates[-1]])
+        elif current_spin > upper_bound:
+            # Near upper limit: Force selection of a candidate that moves us toward center
+            target = max([c for c in candidates if c < current_spin] or [candidates[0]])
+        else:
+            # Normal operation: Pick the closest candidate
+            target = min(candidates, key=lambda c: abs(c - current_spin))
+
+        # Calculate raw error
+        raw_error = target - current_spin
+
+        # Apply Deadband
+        if abs(raw_error) < self.deadband:
+            raw_error = 0.0
+
+        # Exponential Moving Average (EMA) Smoothing
+        # smoothed = alpha * new + (1 - alpha) * old
+        self.smoothed_error = (self.ema_alpha * raw_error) + (1.0 - self.ema_alpha) * self.smoothed_error
+
+        # Convert Error to Speed (Degrees per Second)
+        # Convert radians to degrees: radians * (180 / pi)
+        # Apply a proportional gain
+        wrist_speed_deg = self.smoothed_error * self.p_gain * (180.0 / math.pi)
+        print(f'raw_error {raw_error} wrist_speed_deg {wrist_speed_deg}')
+
+        # 8. Clamp and Send
+        wrist_speed = clamp(wrist_speed_deg, -120, 120)
+        asyncio.create_task(self.send_commands({'set_wrist_speed': wrist_speed}))
 
     def process_frame(self, frame_to_encode):
         # an action space in which the gripper camera is not stabilized or rotated.

@@ -1965,6 +1965,8 @@ class AsyncObserver:
                 else:
                     current_speed = max(current_speed - step, target_speed)
 
+                self.gripper_client.look_towards_vector(vector[:2])
+
                 # Normalize vector and command movement
                 await self.move_direction_speed(vector / dist_to_goal, current_speed, self.pe.gant_pos)
                 await asyncio.sleep(LOOP_SLEEP_S)
@@ -2057,7 +2059,6 @@ class AsyncObserver:
             uvec = uvec + np.array([0,0,downward_bias])
             uvec  = uvec / (np.linalg.norm(uvec) + 1e-5)
             velocity = uvec * speed
-
 
         # this commanded velocity overwrites the last velocity with the same key and all velocities are summed
         # currently this is only used to combine swing cancellation with user inputs.
