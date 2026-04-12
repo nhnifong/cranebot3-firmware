@@ -35,6 +35,8 @@ from lerobot.configs.train import TrainPipelineConfig
 from lerobot.utils.control_utils import predict_action
 
 IMG_RES = 384
+ANCHOR_W = 960
+ANCHOR_H = 544
 
 @RobotConfig.register_subclass("stringman")
 @dataclass
@@ -72,10 +74,17 @@ class StringmanLeRobot(Robot):
         self.last_gripper_rot_6d = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=float)
 
         self.events = events
-        self.last_image_frame = np.zeros((IMG_RES, IMG_RES, 3), dtype=np.uint8)
-        self.camera_lock = threading.Lock()
-        self.video_thread = None
-        self.stop_video_event = threading.Event()
+        
+        # State mapping for feeds 0, 1, and 2
+        self.camera_locks = {i: threading.Lock() for i in range(3)}
+        self.video_threads = {}
+        self.stop_video_events = {i: threading.Event() for i in range(3)}
+        
+        self.last_images = {
+            0: np.zeros((IMG_RES, IMG_RES, 3), dtype=np.uint8),
+            1: np.zeros((ANCHOR_H, ANCHOR_W, 3), dtype=np.uint8),
+            2: np.zeros((ANCHOR_H, ANCHOR_W, 3), dtype=np.uint8)
+        }
 
     @cached_property
     def _motors_ft(self) -> dict[str, type]:
@@ -91,6 +100,8 @@ class StringmanLeRobot(Robot):
     def _cameras_ft(self) -> dict[str, tuple]:
         return {
             "gripper_camera": (IMG_RES, IMG_RES, 3),
+            "anchor_camera_1": (ANCHOR_H, ANCHOR_W, 3),
+            "anchor_camera_2": (ANCHOR_H, ANCHOR_W, 3),
         }
 
     @cached_property
@@ -178,10 +189,14 @@ class StringmanLeRobot(Robot):
             self.last_pressure = item.pressure
 
     def _handle_video_ready(self, item: telemetry.VideoReady):
-        if not item.is_gripper:
+        feed_num = item.feed_number
+        
+        # We only record feeds 0, 1, and 2
+        if feed_num not in [0, 1, 2]:
             return
 
-        if self.video_thread is not None and self.video_thread.is_alive():
+        # Return if this feed's stream is already alive
+        if feed_num in self.video_threads and self.video_threads[feed_num].is_alive():
             return
 
         url = item.local_uri if item.local_uri else (f"rtsp://media.neufangled.com:8554/{item.stream_path}" if item.stream_path else "")
@@ -191,19 +206,19 @@ class StringmanLeRobot(Robot):
             hostname = parsed.hostname if parsed.hostname else "localhost"
             is_local = hostname in ["localhost", "127.0.0.1", "::1", "0.0.0.0"]
 
-            print(f"Video ready. Connecting to stream: {url} (Local: {is_local})")
-            self.stop_video_event.clear()
-            self.video_thread = threading.Thread(
+            print(f"Video ready (feed {feed_num}). Connecting to stream: {url} (Local: {is_local})")
+            self.stop_video_events[feed_num].clear()
+            self.video_threads[feed_num] = threading.Thread(
                 target=self._video_stream_loop, 
-                args=(url, is_local), 
+                args=(url, is_local, feed_num), 
                 daemon=True
             )
-            self.video_thread.start()
+            self.video_threads[feed_num].start()
         else:
-            print("Received VideoReady event but could not determine stream URL.")
+            print(f"Received VideoReady event for feed {feed_num} but could not determine stream URL.")
 
-    def _video_stream_loop(self, stream_url, is_local):
-        print(f"Opening PyAV stream: {stream_url}")
+    def _video_stream_loop(self, stream_url, is_local, feed_num):
+        print(f"Opening PyAV stream for feed {feed_num}: {stream_url}")
         
         options = {
             'fflags': 'nobuffer',
@@ -221,19 +236,23 @@ class StringmanLeRobot(Robot):
         
         stream = next(s for s in container.streams if s.type == 'video')
         stream.thread_type = "SLICE"
+        
+        target_h, target_w = (IMG_RES, IMG_RES) if feed_num == 0 else (ANCHOR_H, ANCHOR_W)
 
         for av_frame in container.decode(stream):
-            if self.stop_video_event.is_set():
+            if self.stop_video_events[feed_num].is_set():
                 break
+            
             frame = av_frame.to_ndarray(format='rgb24')
-            if frame.shape[0] != IMG_RES or frame.shape[1] != IMG_RES:
-                frame = cv2.resize(frame, (IMG_RES, IMG_RES))
-            with self.camera_lock:
-                self.last_image_frame = frame
+            if frame.shape[0] != target_h or frame.shape[1] != target_w:
+                frame = cv2.resize(frame, (target_w, target_h))
+                
+            with self.camera_locks[feed_num]:
+                self.last_images[feed_num] = frame
                 
         if 'container' in locals():
             container.close()
-        print(f"Stream {stream_url} closed")
+        print(f"Stream {stream_url} closed (feed {feed_num})")
 
     def _handle_raw_commanded_vel(self, item: telemetry.CommandedVelocity):
         # trained on commanded velocity in the gripper image frame of reference
@@ -256,6 +275,9 @@ class StringmanLeRobot(Robot):
 
     def disconnect(self) -> None:
         print("Disconnecting")
+        for i in range(3):
+            self.stop_video_events[i].set()
+        
         if self.websocket is not None:
             self.websocket.close()
         self.websocket = None
@@ -271,8 +293,10 @@ class StringmanLeRobot(Robot):
         pass
 
     def get_observation(self) -> dict[str, Any]:
-        with self.camera_lock:
-            img_copy = self.last_image_frame.copy()
+        images = {}
+        for feed_num in [0, 1, 2]:
+            with self.camera_locks[feed_num]:
+                images[feed_num] = self.last_images[feed_num].copy()
 
         return {
             'vel_x': float(self.last_observed_vel.x),
@@ -296,7 +320,10 @@ class StringmanLeRobot(Robot):
             "finger_angle": float(self.last_finger_angle),
             "laser_rangefinder": float(self.last_range),
             "finger_pressure": float(self.last_pressure),
-            "gripper_camera": img_copy,
+            
+            "gripper_camera": images[0],
+            "anchor_camera_1": images[1],
+            "anchor_camera_2": images[2],
         }
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
@@ -598,7 +625,7 @@ def eval_episode(
         "finger_speed": 0.0
     })
 
-def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id=None, device="cuda"):
+def eval_until_disconnected(uri, policy_repo_id, device="cuda"):
     events = {
         'episode_abandon': False,
         'end_recording': False,
@@ -606,10 +633,9 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id=None, device="c
         'eval_stop': False,
     }
 
-    if dataset_repo_id is None:
-        # determine dataset repo id this policy was trained on
-        train_config = TrainPipelineConfig.from_pretrained(policy_repo_id)
-        dataset_repo_id = train_config.dataset.repo_id
+    # determine dataset repo id this policy was trained on
+    train_config = TrainPipelineConfig.from_pretrained(policy_repo_id)
+    dataset_repo_id = train_config.dataset.repo_id
 
     print("Fetching training dataset to acquire metadata")
     dataset = LeRobotDataset(
@@ -621,7 +647,7 @@ def eval_until_disconnected(uri, policy_repo_id, dataset_repo_id=None, device="c
     cfg = PreTrainedConfig.from_pretrained(policy_repo_id)
     cfg.pretrained_path = policy_repo_id 
 
-    # Enables ACT to smoothly blend overlapping chunks
+    # smoothly blend overlapping chunks
     cfg.temporal_ensemble_coeff = 0.001
 
     print("Instantiating processors and policy...")
@@ -697,12 +723,11 @@ if __name__ == "__main__":
 
     eval_parser = subparsers.add_parser('eval', parents=[parent_parser], help="Evaluate existing policy")
     eval_parser.add_argument("--policy_id", default="naavox/grasping_act_policy", help="repo id of policy to load")
-    eval_parser.add_argument("--dataset_id", default="naavox/grasping_dataset", help="repo id of dataset for un-normalization stats")
     
     args = parser.parse_args()
     uri = f'{args.server_address}/telemetry/{args.robot_id}'
 
     if args.command == 'eval':
-        eval_until_disconnected(uri, args.policy_id, args.dataset_id)
+        eval_until_disconnected(uri, args.policy_id)
     else:
         record_until_disconnected(uri, args.repo_id, args.upload)
