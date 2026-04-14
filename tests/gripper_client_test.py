@@ -96,9 +96,9 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         # should report to UI: Connecting, connected
         self.ob_mock.assert_has_calls([
             call.send_ui(component_conn_status=telemetry.ComponentConnStatus(
-                is_gripper=True, websocket_status=telemetry.ConnStatus.CONNECTING, ip_address='127.0.0.1')),
+                is_gripper=True, websocket_status=telemetry.ConnStatus.CONNECTING, ip_address='127.0.0.1', gripper_model=telemetry.GripperModel.PILOT)),
             call.send_ui(component_conn_status=telemetry.ComponentConnStatus(
-                is_gripper=True, websocket_status=telemetry.ConnStatus.CONNECTED, ip_address='127.0.0.1')),
+                is_gripper=True, websocket_status=telemetry.ConnStatus.CONNECTED, ip_address='127.0.0.1', gripper_model=telemetry.GripperModel.PILOT)),
         ])
         self.ob_mock.reset_mock()
 
@@ -111,7 +111,7 @@ class TestGripperClient(unittest.IsolatedAsyncioTestCase):
         # note that when making an assertion about generated proto dataclasses with enums, an enum set to it's 0th value will show up as an unset field
         # so here, we are asserting that both websocket and video status are CONNSTATUS_NOT_DETECTED
         self.ob_mock.send_ui.assert_called_once_with(component_conn_status=telemetry.ComponentConnStatus(
-                is_gripper=True, ip_address='127.0.0.1'))
+                is_gripper=True, ip_address='127.0.0.1', gripper_model=telemetry.GripperModel.PILOT))
 
     async def test_line_record(self):
         """
