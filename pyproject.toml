@@ -11,7 +11,7 @@ name = "nf_robot"
 version = "3.9.6"
 description = "Robot control system for Stringman"
 authors = [{name = "Nathaniel Nifong", email = "naavox@gmail.com"}]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.md"
 license = {text = "Apache 2.0"}
 

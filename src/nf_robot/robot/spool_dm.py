@@ -75,7 +75,8 @@ class DamiaoSpoolController:
 
         # Recording and Loops
         self.record = []
-        self.run_spool_loop = True
+        self.run_spool_loop = True # permanent
+        self.spool_pause = False
 
     def _getAbsoluteAngle(self):
         """Get absolute motor angle in revolutions"""
@@ -154,6 +155,12 @@ class DamiaoSpoolController:
         self.last_raw_pos = current_raw_rad
         return self.rev_offset + (current_raw_rad / (2 * math.pi))
 
+    def pauseTrackingLoop(self):
+        self.spool_pause = True
+
+    def resumeTrackingLoop(self):
+        self.spool_pause = False
+
     def trackingLoop(self):
         """
         Constantly try to match the position or speed targets.
@@ -175,6 +182,10 @@ class DamiaoSpoolController:
 
         try:
             while self.run_spool_loop:
+                if self.spool_pause:
+                    time.sleep(0.2)
+                    continue
+
                 loop_start = time.time()
                 dt = loop_start - last_time
                 if dt <= 0:

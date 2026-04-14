@@ -168,9 +168,18 @@ class AnchorArpServer(RobotComponentServer):
             return
         pass
 
-    def identify(self):
+    def identify(self, spool_no=1):
         """ make a noise """
-        pass
+        self.spools[spool_no].pauseTrackingLoop()
+        m = [self.motor1, self.motor2][spool_no]
+
+        m.send_cmd_vel(target_velocity=0.0)
+        for i in range(20):
+            time.sleep(0.005)
+            m.send_cmd_vel(target_velocity=0.2 * (i%2-0.5))
+        m.send_cmd_vel(target_velocity=0.0)
+        
+        self.spools[spool_no].resumeTrackingLoop()
 
     def shutdown(self):
         """must be a synchronous call. triggered by signal handler"""
