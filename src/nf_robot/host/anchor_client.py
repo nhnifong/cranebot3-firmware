@@ -65,6 +65,7 @@ class ComponentClient:
         # saved for setup telemetry
         self.local_video_uri = None
         self.feed_number = None
+        self.remote_stream_path = None
 
         # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
@@ -232,8 +233,6 @@ class ComponentClient:
 
         feed_number identifies which of the preferred cameras this is. 0 is the gripper, 1 and 2 are the two overhead cams.
         """
-
-        # TODO allow these to change when in a teleop mode
         if self.anchor_num is None:
             final_shape = SF_TARGET_SHAPE # resize for centering network input
             final_fps = 60
@@ -245,28 +244,25 @@ class ComponentClient:
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
         localuri = f'http://localhost:{mjpegport}/stream.mjpeg'
         rtmp = None
-        vs = None # duck type MjpegStreamer or VideoStreamer
+        remote_vs = None
 
-        if self.telemetry_env is None:
-            rtmp = None # when in LAN mode do not upload ANYTHING to the cloud.
-            # The UI is still browser based though and mjpeg to an img tag is a pretty good low latency option with few dependencies. 
-            vs = MjpegStreamer(width=final_shape[0], height=final_shape[1], port=mjpegport)
-            print(f'Streaming video locally at {localuri} with res {final_shape}')
-        else:
-            # this is basically an ffmpeg subprocess
+        # Always stream locally via MJPEG (efficient no-op when no client is connected)
+        local_vs = MjpegStreamer(width=final_shape[0], height=final_shape[1], port=mjpegport)
+        local_vs.start()
+        print(f'Streaming video locally at {localuri} with res {final_shape}')
+
+        if self.telemetry_env is not None:
             if self.telemetry_env == "local":
                 rtmp = f'rtmp://localhost:1935/{path}'
-            elif self.telemetry_env == "staging":
-                rtmp = f'rtmp://media.neufangled.com:1935/{path}'
-            elif self.telemetry_env == "production":
+            elif self.telemetry_env in ("staging", "production"):
                 rtmp = f'rtmp://media.neufangled.com:1935/{path}'
             else:
                 raise ValueError(f"unusable value for telemetry_env {self.telemetry_env}")
-            vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
-
-        vs.start()
+            remote_vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
+            remote_vs.start()
         frames_sent = 0
         time_last_frame_taken = time.time()-1
+        self.streaming_active = True
 
         while self.connected:
             with self.new_frame_condition:
@@ -294,21 +290,30 @@ class ComponentClient:
             rgb = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_BGR2RGB)
 
             # send self.last_frame_resized to the UI process
-            vs.send_frame(rgb)
+            local_vs.send_frame(rgb)
+            if remote_vs is not None:
+                remote_vs.send_frame(rgb)
             frames_sent += 1
             if frames_sent == 20:
                 # sending the notification on the 20th frame ensures that the mediamtx server has something to send before clients connect
                 self.local_video_uri = localuri
                 self.feed_number = feed_number
-                self.ob.send_ui(video_ready=telemetry.VideoReady(
+                self.remote_stream_path = path
+                t = telemetry.VideoReady(
                     is_gripper=self.anchor_num is None,
                     anchor_num=self.anchor_num,
                     local_uri=localuri,
                     stream_path=path,
                     feed_number=feed_number,
-                ))
+                )
+                print(f'sending video ready {t}')
+                self.ob.send_ui(video_ready=t)
 
-        vs.stop()
+        self.remote_stream_path = None
+        self.local_video_uri = None
+        local_vs.stop()
+        if remote_vs is not None:
+            remote_vs.stop()
 
     def process_frame(self, frame_to_encode):
         """

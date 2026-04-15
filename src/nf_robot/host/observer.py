@@ -209,12 +209,13 @@ class AsyncObserver:
             ))
         for client in self.bot_clients.values():
             client.send_conn_status()
-            if client.local_video_uri is not None and client.anchor_num in [None, *self.config.preferred_cameras]:
+            if (client.local_video_uri is not None or client.remote_stream_path is not None) and client.anchor_num in [None, *self.config.preferred_cameras]:
                 self.send_ui(video_ready=telemetry.VideoReady(
                     is_gripper=client.anchor_num is None,
                     anchor_num=client.anchor_num,
                     local_uri=client.local_video_uri,
-                    feed_number=client.feed_number
+                    feed_number=client.feed_number,
+                    stream_path=client.remote_stream_path,
                 ))
         if self.lerobot_process_watcher is None or self.lerobot_process_watcher.done():
             self.last_ep_ctrl_status = common.LerobotStatus.NA
@@ -384,11 +385,16 @@ class AsyncObserver:
         if item.suppress_upload:
             up = ' upload=False'
 
+        # A lerobot session running on the local machine must connect to the telemetry socket of the robot.
+        # When telemetry_env is not None, there are two options. connect to the remote stream - this introduces needless latency and requires a token
+        # Or spin up the local telemetry socket and the MJepeg streamers while the lerobot process is active.
+        tele_addr = 'ws://localhost:4245'
+
         command = [
             sys.executable,
             '-u', '-c',
             f"from nf_robot.ml.stringman_lerobot import {func_name}; "
-            f"{func_name}('ws://localhost:4245', '{repo_id}'{up})"
+            f"{func_name}('{tele_addr}', '{repo_id}'{up})"
         ]
 
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -1748,19 +1754,15 @@ class AsyncObserver:
                 # task remains in a lightweight sleep until frames arrive.
                 asyncio.create_task(self.run_perception())
 
-            if self.telemetry_env is None:
-                # start a websocket server to accept incoming connection from local UI
-                async with websockets.serve(self.handle_local_client, "127.0.0.1", self.port):
-                    # await something that will end when the program closes to keep serving and
-                    # keep zeroconf alive and discovering services.
-                    try:
-                        self.startup_complete.set()
-                        result = await self.keeper
-                    except asyncio.exceptions.CancelledError:
-                        pass
-            else:
-                result = await self.keeper
-
+            # start a websocket server to accept incoming connections from either a local UI or local Lerobot session
+            async with websockets.serve(self.handle_local_client, "127.0.0.1", self.port):
+                # await something that will end when the program closes to keep serving and
+                # keep zeroconf alive and discovering services.
+                try:
+                    self.startup_complete.set()
+                    result = await self.keeper
+                except asyncio.exceptions.CancelledError:
+                    pass
 
             await self.async_close()
 

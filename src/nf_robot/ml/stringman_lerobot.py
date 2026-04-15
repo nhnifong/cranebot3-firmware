@@ -178,6 +178,7 @@ class StringmanLeRobot(Robot):
             self.last_pressure = item.pressure
 
     def _handle_video_ready(self, item: telemetry.VideoReady):
+        print(item)
         if not item.is_gripper:
             return
 
@@ -185,6 +186,7 @@ class StringmanLeRobot(Robot):
             return
 
         url = item.local_uri if item.local_uri else (f"rtsp://media.neufangled.com:8554/{item.stream_path}" if item.stream_path else "")
+
 
         if url:
             parsed = urlparse(url)
