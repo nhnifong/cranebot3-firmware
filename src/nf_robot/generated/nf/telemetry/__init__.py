@@ -202,6 +202,9 @@ class ComponentConnStatus(betterproto2.Message):
     gripper_model: "GripperModel | None" = betterproto2.field(
         6, betterproto2.TYPE_ENUM, optional=True
     )
+    """
+    also set to communicate anchor type
+    """
 
     error_message: "str | None" = betterproto2.field(
         7, betterproto2.TYPE_STRING, optional=True
