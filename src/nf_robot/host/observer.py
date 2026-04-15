@@ -362,8 +362,8 @@ class AsyncObserver:
         if item.action == 'jog1':
             self.js = -self.js
             r = await self.send_line_speed(1, self.js, jog=True)
-        if item.action == 'tw':
-            r = await self.tension_and_wait()
+        if item.action == 'stow':
+            r = await self.stow_lines()
 
     async def lerobot_process(self, item: control.ManageLerobotSession):
         repo_id = item.repo_id
@@ -703,6 +703,15 @@ class AsyncObserver:
         # This function does not  wait for confirmation from every anchor, as it would just hold up the processing of the ob_q
         # this is similar to sending a manual move command. it can be overridden by any subsequent command.
         # thus, it should be done while paused.
+
+    async def stow_lines(self):
+        """Request all anchors to reel in all lines until tight and then disable motors"""
+        for client in self.anchors.values():
+            if isinstance(client, RaspiAnchorClient):
+                asyncio.create_task(client.send_commands({'stow': None}))
+            elif isinstance(client, ArpeggioAnchorClient):
+                asyncio.create_task(client.send_commands({'stow': 0}))
+                asyncio.create_task(client.send_commands({'stow': 1}))
 
     async def wait_for_tension(self):
         """this function returns only once all anchors are reporting tight lines in their regular line record"""

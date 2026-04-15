@@ -68,6 +68,9 @@ class AnchorArpServer(RobotComponentServer):
         if 'tighten' in updates:
             spool_no = updates['tighten']
             tg.create_task(self.tighten(spool_no))
+        if 'stow' in updates:
+            spool_no = updates['stow']
+            tg.create_task(self.stow(spool_no))
         if 'relax' in updates:
             spool_no = updates['relax']
             tg.create_task(self.relax(spool_no))
@@ -163,7 +166,7 @@ class AnchorArpServer(RobotComponentServer):
         self.spools[spool_no].setAimSpeed(0)
         logging.error(f"Failed to tighten line after {max_retries} attempts.")
 
-    def stow(self, spool_no):
+    async def stow(self, spool_no):
         """ Pulls the line till tight, then disables the motor for storage """
         if spool_no not in (0, 1):
             return
