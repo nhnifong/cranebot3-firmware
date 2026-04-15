@@ -10,6 +10,7 @@ from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.cv_common import *
 from nf_robot.common.pose_functions  import *
 from nf_robot.common.util import *
+from nf_robot.ml.target_heatmap import HM_IMAGE_RES
 
 # looking for cranebot-anchor-arpeggio-service
 
@@ -140,3 +141,7 @@ class ArpeggioAnchorClient(ComponentClient):
                 position = pose.reshape(6)[3:]
                 # save the position of this object for use in various planning tasks.
                 self.ob.update_avg_named_pos(detection['n'], position)
+
+
+    def process_frame(self, frame_to_encode):
+        return cv2.resize(frame_to_encode, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)

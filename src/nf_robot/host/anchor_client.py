@@ -251,7 +251,7 @@ class ComponentClient:
             rtmp = None # when in LAN mode do not upload ANYTHING to the cloud.
             # The UI is still browser based though and mjpeg to an img tag is a pretty good low latency option with few dependencies. 
             vs = MjpegStreamer(width=final_shape[0], height=final_shape[1], port=mjpegport)
-            print(f'Streaming video locally at {localuri}')
+            print(f'Streaming video locally at {localuri} with res {final_shape}')
         else:
             # this is basically an ffmpeg subprocess
             if self.telemetry_env == "local":
