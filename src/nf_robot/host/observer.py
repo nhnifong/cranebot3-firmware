@@ -362,6 +362,8 @@ class AsyncObserver:
         if item.action == 'jog1':
             self.js = -self.js
             r = await self.send_line_speed(1, self.js, jog=True)
+        if item.action == 'tw':
+            r = await self.tension_and_wait()
 
     async def lerobot_process(self, item: control.ManageLerobotSession):
         repo_id = item.repo_id
@@ -717,7 +719,7 @@ class AsyncObserver:
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
             tension = np.array(records[:,3])
-            # print(f'wait for tension speeds={speeds} tension={tension}')
+            print(f'wait for tension speeds={speeds} tension={tension}')
             complete = np.all(tension > threshold) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
         return True
 

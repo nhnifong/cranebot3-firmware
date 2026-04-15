@@ -86,9 +86,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.patchers.append(self.mock_zc_service_browser_patch)
 
         self.mock_zc_types_patch = patch('zeroconf.asyncio.AsyncZeroconfServiceTypes.async_find', new_callable=AsyncMock)
-        self.mock_zc_types_find.return_value = [] # Return empty list immediately
-        self.patchers.append(self.mock_zc_types_patch)
-
+        self.patchers.append(self.mock_zc_types_patch)\
 
         # The side_effect makes it so that the correct mock anchor client is returned
         self.patchers.append(patch('nf_robot.host.observer.RaspiAnchorClient', side_effect=lambda a, b, num, d, e, f, g, h, : self.mock_anchor_clients[num]))
@@ -99,6 +97,9 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
         for p in self.patchers:
             p.start()
+
+        self.mock_zc_types_find = self.mock_zc_types_patch.return_value 
+        self.mock_zc_types_find.return_value = []
 
         # Create observer with test default config (no components are known)
         self.ob = AsyncObserver(terminate_with_ui=False, config_path=None)

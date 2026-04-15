@@ -39,6 +39,7 @@ class AnchorArpServer(RobotComponentServer):
         # h6220 is probaly the closest to DM-H6215 but they all seem the same to me.
         self.motor1 = self.controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type="H6220") # high motor
         self.motor2 = self.controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="H6220") # lower motor
+        self.motors = [self.motor1, self.motor2]
 
         # consider the direct line (high) spool 0 and the indirect line (low) spool 1
 
@@ -162,6 +163,22 @@ class AnchorArpServer(RobotComponentServer):
         self.spools[spool_no].setAimSpeed(0)
         logging.error(f"Failed to tighten line after {max_retries} attempts.")
 
+    def stow(self, spool_no):
+        """ Pulls the line till tight, then disables the motor for storage """
+        if spool_no not in (0, 1):
+            return
+        check_interval_s = 0.05
+        desired_tension = 1.38 # Newtons
+        current_speed = self.conf['TIGHTENING_SPEED']
+        def slack():
+            return self.spools[spool_no].last_tension < desired_tension
+        while slack():
+            self.spools[spool_no].setAimSpeed(current_speed)
+            await asyncio.sleep(check_interval_s)
+        self.spools[spool_no].setAimSpeed(0)
+        self.spools[spool_no].pauseTrackingLoop()
+        self.motors[spool_no].disable()
+
     async def relax(self, spool_no):
         """ Lets out line until not tight """
         if spool_no not in (0, 1):
@@ -171,7 +188,7 @@ class AnchorArpServer(RobotComponentServer):
     def identify(self, spool_no=1):
         """ make a noise """
         self.spools[spool_no].pauseTrackingLoop()
-        m = [self.motor1, self.motor2][spool_no]
+        m = self.motors[spool_no]
 
         m.send_cmd_vel(target_velocity=0.0)
         for i in range(20):
