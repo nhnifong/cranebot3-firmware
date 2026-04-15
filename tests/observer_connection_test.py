@@ -99,9 +99,6 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         for p in self.patchers:
             p.start()
 
-        self.mock_zc_types_find = self.mock_zc_types_patch.return_value 
-        self.mock_zc_types_find.return_value = []
-
         # Create observer with test default config (no components are known)
         self.ob = AsyncObserver(terminate_with_ui=False, config_path=None)
         # before running main, set it's zeroconf instance to a mock

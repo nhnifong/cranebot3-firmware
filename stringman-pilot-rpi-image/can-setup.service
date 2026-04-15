@@ -1,13 +1,13 @@
 [Unit]
 Description=Setup CAN0 interface for Actuators
-After=network.target
+DefaultDependencies=no
+After=sys-subsystem-net-devices-can0.device
+BindsTo=sys-subsystem-net-devices-can0.device
 
 [Service]
 Type=oneshot
+ExecStart=/usr/local/bin/can-init.sh
 RemainAfterExit=yes
-ExecStartPre=/sbin/ip link set can0 up type can bitrate 1000000
-ExecStart=/sbin/ifconfig can0 txqueuelen 65536
-ExecStartPost=/sbin/ifconfig can0 up
 
 [Install]
 WantedBy=multi-user.target
