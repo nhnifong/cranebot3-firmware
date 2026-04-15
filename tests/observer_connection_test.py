@@ -86,7 +86,6 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.patchers.append(self.mock_zc_service_browser_patch)
 
         self.mock_zc_types_patch = patch('zeroconf.asyncio.AsyncZeroconfServiceTypes.async_find', new_callable=AsyncMock)
-        self.mock_zc_types_find = self.mock_zc_types_patch.start()
         self.mock_zc_types_find.return_value = [] # Return empty list immediately
         self.patchers.append(self.mock_zc_types_patch)
 
