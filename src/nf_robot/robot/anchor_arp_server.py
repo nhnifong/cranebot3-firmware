@@ -201,6 +201,14 @@ class AnchorArpServer(RobotComponentServer):
         
         self.spools[spool_no].resumeTrackingLoop()
 
+    async def process_imu(self, ws):
+        """Runs when a new client connects.
+        TODO don't just piggyback off this, organize it"""
+        for m in self.motors:
+            m.enable()
+        for s in self.spools:
+            s.resumeTrackingLoop()
+
     def shutdown(self):
         """must be a synchronous call. triggered by signal handler"""
         super().shutdown()
