@@ -126,7 +126,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, auto_start=False, local_models=False, port=4245) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, auto_start=False, local_models=False, port=4245, use_arp_grasp=False) -> None:
         self.port = port
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
@@ -157,7 +157,6 @@ class AsyncObserver:
         self.test_gantry_goal_callback = None
         # event used to notify tasks that gripper is connected.
         self.gripper_client_connected = asyncio.Event()
-        self.grpc_server = None
         self.last_user_move_time = time.time()
         self.named_positions = {}
         self.target_model = None
@@ -185,6 +184,7 @@ class AsyncObserver:
         self.active_set = set(['default'])
         self.run_ai = run_ai
         self.auto_start = auto_start
+        self.use_arp_grasp = use_arp_grasp
         self.swing_cancellation_task = None
         self.local_models = local_models
         self.js = 0.1
@@ -1158,9 +1158,6 @@ class AsyncObserver:
             ))
             raise
 
-    async def calibrate_arp_anchor_poses(self):
-        pass
-
     async def calibrate_spin(self):
         """Calibration of the relationship between the wrist and the room frame of reference.
         Must be done over the origin card.
@@ -1777,8 +1774,6 @@ class AsyncObserver:
         if self.cloud_telem:
             self.cloud_telem.cancel()
             tasks.append(self.cloud_telem)
-        if self.grpc_server is not None:
-            tasks.append(self.grpc_server.stop(grace=5))
         if self.aiobrowser is not None:
             tasks.append(self.aiobrowser.async_cancel())
         if self.aiozc is not None:
@@ -1987,25 +1982,6 @@ class AsyncObserver:
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
 
-    async def blind_move_to_goal(self):
-        """Only measures current position once, then moves in the right direction
-        for the amount of time it should take to get to the goal.
-        This is a motion task."""
-        GANTRY_SPEED_MPS = 0.25 # m/s
-        
-        try:
-            self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.gantry_goal_pos), name='gantry_goal_marker'))
-            vector = self.gantry_goal_pos - self.pe.gant_pos
-            dist = np.linalg.norm(vector)
-            if dist > 0:
-                result = await self.move_direction_speed(vector / dist, GANTRY_SPEED_MPS, self.pe.gant_pos)
-                await asyncio.sleep(dist / GANTRY_SPEED_MPS)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self.slow_stop_all_spools()
-            await self.clear_gantry_goal()
-
     async def send_line_speed(self, line_no, speed, jog=False):
         # send the line speed to the client that controls that line
         # when jog==True, speed is interpreted as a length in meters by which to lengthen the line
@@ -2155,7 +2131,8 @@ class AsyncObserver:
         from huggingface_hub import hf_hub_download
         DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
         from nf_robot.ml.target_heatmap import TargetHeatmapNet, extract_targets_from_heatmap, HM_IMAGE_RES
-        # from nf_robot.ml.centering import CenteringNet
+        if self.use_arp_grasp:
+            from nf_robot.ml.centering import CenteringNet
 
         def load_models_sync():
             if self.local_models:
@@ -2167,14 +2144,15 @@ class AsyncObserver:
             t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
             t_model.eval()
 
-            # if self.local_models:
-            #     center_path = "models/square_centering.pth"
-            # else:
-            #     center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
-            # print(f"Loading model from {center_path}...")
-            # c_model = CenteringNet().to(DEVICE)
-            # c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
-            # c_model.eval()
+            if self.use_arp_grasp:
+                if self.local_models:
+                    center_path = "models/square_centering.pth"
+                else:
+                    center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
+                print(f"Loading model from {center_path}...")
+                c_model = CenteringNet().to(DEVICE)
+                c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
+                c_model.eval()
             
             return t_model, None
 
@@ -2391,14 +2369,13 @@ class AsyncObserver:
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
         if isinstance(self.gripper_client, ArpeggioGripperClient):
-            # return await self.arp_execute_grasp()
+            if self.use_arp_grasp:
+                return await self.arp_execute_grasp()
             return await self.act_execute_grasp()
         else:
             return await self.pilot_execute_grasp()
 
     async def pilot_execute_grasp(self):
-        OPEN = -30
-        CLOSED = 85
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.06
@@ -2511,8 +2488,6 @@ class AsyncObserver:
 
     async def arp_execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
-        OPEN = -50
-        CLOSED = 90
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
         FLOOR_GRIPPER_HEIGHT = 0.12 # distance above floor (gripper origin) when grasp should be started
         RANGE_ITEM = 0.04 # range to item below which grip should be started
@@ -2727,10 +2702,11 @@ def main():
     parser.add_argument("--no_ai", action="store_true", help="Disable model execution. Use with small hardware. Only manual movement will be possible")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
+    parser.add_argument("--arp_grasp", action="store_true", help="Use arp_execute_grasp (centering net) instead of act_execute_grasp (ACT policy) for the Arpeggio gripper")
     args = parser.parse_args()
 
     async def run_async():
-        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start, local_models=args.local_models)
+        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start, local_models=args.local_models, use_arp_grasp=args.arp_grasp)
 
         # Idempotent stop trigger
         def stop():
