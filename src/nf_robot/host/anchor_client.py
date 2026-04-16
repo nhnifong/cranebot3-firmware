@@ -1,5 +1,6 @@
 
 import asyncio
+import logging
 import os
 import signal
 import websockets
@@ -23,6 +24,8 @@ import nf_robot.common.definitions as model_constants
 from nf_robot.ml.target_heatmap import HM_IMAGE_RES
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.host.video_streamer import VideoStreamer, MjpegStreamer
+
+logger = logging.getLogger(__name__)
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -129,7 +132,7 @@ class ComponentClient:
             next_full_scan = time.time()
 
             def error_callback_func(error):
-                print(f"Error in pool worker: {error}")
+                logger.error(f"Error in pool worker: {error}")
 
             for av_frame in container.decode(stream):
                 if not self.connected:
@@ -206,7 +209,7 @@ class ComponentClient:
                 encoder_thread.join()
 
         except (av.error.TimeoutError, av.error.ConnectionRefusedError):
-            print('no video stream available')
+            logger.warning('No video stream available')
             self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
             self.notify_video = True
             return
@@ -249,7 +252,7 @@ class ComponentClient:
         # Always stream locally via MJPEG (efficient no-op when no client is connected)
         local_vs = MjpegStreamer(width=final_shape[0], height=final_shape[1], port=mjpegport)
         local_vs.start()
-        print(f'Streaming video locally at {localuri} with res {final_shape}')
+        logger.info(f'Streaming video locally at {localuri} with res {final_shape}')
 
         if self.telemetry_env is not None:
             if self.telemetry_env == "local":
@@ -281,7 +284,7 @@ class ComponentClient:
                 frame_to_encode = self.frame
 
             if frame_to_encode is None:
-                print(f'no frame to encode {self}')
+                logger.debug(f'No frame to encode {self}')
                 continue
 
             # Do the actual work outside the lock
@@ -306,7 +309,7 @@ class ComponentClient:
                     stream_path=path,
                     feed_number=feed_number,
                 )
-                print(f'sending video ready {t}')
+                logger.info(f'Sending video ready {t}')
                 self.ob.send_ui(video_ready=t)
 
         self.remote_stream_path = None
@@ -337,7 +340,7 @@ class ComponentClient:
         try:
             async with websockets.connect(ws_uri, max_size=None, open_timeout=10) as websocket:
                 self.connected = True
-                print(f"Connected to {ws_uri}.")
+                logger.info(f"Connected to {ws_uri}.")
                 # Set an event that the observer is waiting on.
                 if self.connection_established_event is not None:
                     self.connection_established_event.set()
@@ -345,7 +348,7 @@ class ComponentClient:
         except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
             pass # normal close
         except websockets.exceptions.ConnectionClosedError as e:
-            print(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
+            logger.warning(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
             self.abnormal_shutdown = True
         except (OSError, InvalidURI, TimeoutError, InvalidHandshake) as e:
             # normal answer when waiting for component to come online
@@ -359,14 +362,14 @@ class ComponentClient:
 
     async def firmware_update(self):
         # once complete, will be set to True or False
-        print(f'Starting Update on {self.address}')
+        logger.info(f'Starting firmware update on {self.address}')
         self.firmware_update_success = None
         self.firmware_update_pending = False
         await self.send_commands({'run_update': None})
         started = time.time()
         while self.firmware_update_success is None and self.connected:
             if time.time() > started+3 and not self.firmware_update_pending:
-                print(f'Component does not yes support self update. run \nssh pi@{self.address} "/opt/robot/env/bin/pip install --upgrade \\\"nf_robot[pi]\\\"\"\npassword Fo0bar!!')
+                logger.warning(f'Component does not yet support self update. run \nssh pi@{self.address} "/opt/robot/env/bin/pip install --upgrade \\"nf_robot[pi]\\""\npassword Fo0bar!!')
                 return None
             await asyncio.sleep(0.5)
         return self.firmware_update_success
@@ -392,7 +395,7 @@ class ComponentClient:
                 if 'video_ready' in update:
                     port = int(update['video_ready'][0])
                     self.stream_start_ts = float(update['video_ready'][1])
-                    print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
+                    logger.debug(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts:.2f}s ago)')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
                     vid_thread.start()
                 if 'firmware_update_complete' in update:
@@ -402,7 +405,7 @@ class ComponentClient:
                             # this component supports updates
                             self.firmware_update_pending = True
                         if 'returncode' in upd:
-                            print(f'pip install result on {self.address} = {upd["returncode"] == 0}')
+                            logger.info(f'pip install result on {self.address} = {upd["returncode"] == 0}')
                             self.firmware_update_success = upd['returncode'] == 0
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set()
@@ -417,7 +420,7 @@ class ComponentClient:
                 # don't catch websockets.exceptions.ConnectionClosedOK here because we want it to trip the infinite generator in websockets.connect
                 # so it will stop retrying. after it has the intended effect, websockets.connect will raise it again, so we catch it in 
                 # connect_websocket
-                print(f"Connection to {self.address} closed. {e}")
+                logger.warning(f"Connection to {self.address} closed. {e}")
                 self.connected = False
                 self.websocket = None
                 # self.conn_status.websocket_status = telemetry.ConnStatus.NOT_DETECTED
@@ -488,7 +491,7 @@ class ComponentClient:
                     continue
                 except (ConnectionClosedError, TimeoutError):
                     # it's no longer running, either because it lost power, or the server crashed.
-                    print(f'Anchor {self.anchor_num} confirmed down. hasn\'t been seen in {time.time() - last_update} seconds.')
+                    logger.warning(f"Anchor {self.anchor_num} confirmed down. hasn't been seen in {time.time() - last_update:.1f} seconds.")
                     self.connected = False
                     # immediately trigger the "abnormal shutdown" return from the connect_websocket task
                     # this is how the observer is actually notified. follow the control flow by looking at `if abnormal_close:` in observer.py

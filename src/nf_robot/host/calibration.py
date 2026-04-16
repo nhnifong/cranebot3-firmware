@@ -15,8 +15,7 @@ from nf_robot.common.config_loader import *
 from nf_robot.host.position_estimator import find_hang_point
 from nf_robot.generated.nf import config
 
-# Set up logging configuration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 #the number of squares on the board (width and height)
 board_w = 14
@@ -325,10 +324,10 @@ def optimize_anchor_poses(averages):
         ]))
         
         initial_guesses.append(guess)
-    print(f'initial_guesses = {initial_guesses}')
+    logger.debug(f'initial_guesses = {initial_guesses}')
 
     # 'lm' (Levenberg-Marquardt) is standard for unconstrained least squares
-    print('running least squares optimization')
+    logger.info('Running least squares optimization')
     result = optimize.least_squares(
         multi_card_residuals,
         np.array(initial_guesses).flatten(),

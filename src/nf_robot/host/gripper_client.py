@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import numpy as np
 from scipy.spatial.transform import Rotation
 import json
@@ -9,6 +10,8 @@ from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.cv_common import SF_INPUT_SHAPE, stabilize_frame
+
+logger = logging.getLogger(__name__)
 
 R_imu_to_cam = np.array([
     [1,  0,   0],
@@ -69,12 +72,12 @@ class RaspiGripperClient(ComponentClient):
             self.pe.notify_update({'holding': holding})
 
         if 'winch_zero_success' in update:
-            print(f'winch_zero_success = {update["winch_zero_success"]}')
+            logger.info(f'winch_zero_success = {update["winch_zero_success"]}')
             if update['winch_zero_success']:
                 self.winch_zero_event.set()
 
         if 'episode_button_pushed' in update:
-            print('episode_button_pushed')
+            logger.info('Episode button pushed')
 
     async def set_finger_speed(self, speed):
         # UI now only sends finger speed, but pilot gripper only accepts finger angle and internally tracks it with acceleration.
@@ -102,7 +105,7 @@ class RaspiGripperClient(ComponentClient):
 
     async def zero_winch(self):
         """Send the command to zero the winch line and wait for it to complete"""
-        print('Zero Winch Line')
+        logger.info('Zero Winch Line')
         self.winch_zero_event = asyncio.Event()
         await self.send_commands({'zero_winch_line': None})
         await asyncio.wait_for(self.winch_zero_event.wait(), timeout=20)

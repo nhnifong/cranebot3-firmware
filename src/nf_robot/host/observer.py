@@ -7,6 +7,7 @@ import time
 import socket
 import asyncio
 import argparse
+import logging
 from zeroconf import IPVersion, ServiceStateChange, Zeroconf
 from zeroconf.asyncio import (
     AsyncServiceBrowser,
@@ -49,6 +50,8 @@ from nf_robot.host.gripper_client import RaspiGripperClient
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
+
+logger = logging.getLogger(__name__)
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -101,7 +104,7 @@ def capture_gripper_image(ndimage, gripper_occupied=False):
     
     # Save (ensure RGB/BGR consistency)
     cv2.imwrite(img_full_path, ndimage)
-    print(f"Captured: {img_filename} (Gripper: {gripper_occupied})")
+    logger.info(f"Captured: {img_filename} (Gripper: {gripper_occupied})")
 
 class AsyncObserver:
     """
@@ -192,7 +195,7 @@ class AsyncObserver:
         self.last_ep_ctrl_status = common.LerobotStatus.NA
 
     async def send_setup_telemetry(self):
-        print('Sending setup telemetry')
+        logger.debug('Sending setup telemetry')
         if self.config.anchor_type == common.AnchorType.ARPEGGIO:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
@@ -225,7 +228,7 @@ class AsyncObserver:
     async def handle_local_client(self, websocket):
         # Called when Ursina connects to a websocket that is opened to accept control commands
         self.connected_local_clients.add(websocket)
-        print('Connection received from local UI process')
+        logger.info('Connection received from local UI process')
 
         # send anything that it would need up-front
         r = await self.send_setup_telemetry()
@@ -317,7 +320,7 @@ class AsyncObserver:
                 r = await client.send_commands({'relax': None})
 
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
-        print(f'swing cancellation set {item.enabled}')
+        logger.info(f'Swing cancellation set {item.enabled}')
         if item.enabled:
             if not isinstance(self.gripper_client, ArpeggioGripperClient):
                 self.send_ui(pop_message=telemetry.Popup(
@@ -353,7 +356,7 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
     async def _handle_debug_command(self, item: control.Debug):
-        print(f'Debug action "{item.action}"')
+        logger.debug(f'Debug action "{item.action}"')
         if item.action == "spincal":
             r = await self.calibrate_spin()
         if item.action == 'fingercal':
@@ -372,7 +375,7 @@ class AsyncObserver:
         # Sanitize and validate repo_id to prevent code injection.
         # Enforces the Hugging Face Hub format: 'namespace/dataset_name'
         if not re.match(r"^[a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+$", str(repo_id)):
-            print(f"Warning: Invalid repo_id format '{repo_id}'. Expected 'namespace/dataset_name'. Aborting.")
+            logger.warning(f"Invalid repo_id format '{repo_id}'. Expected 'namespace/dataset_name'. Aborting.")
             return
 
         # Run the python function as a command-line script to hook into its stdout and stderr streams asynchronously and use the same virtualenv
@@ -398,7 +401,7 @@ class AsyncObserver:
         ]
 
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        print(f"Lerobot process started with PID: {process.pid}")
+        logger.info(f"Lerobot process started with PID: {process.pid}")
 
         async def log_stream(stream, stream_name):
             while True:
@@ -407,7 +410,7 @@ class AsyncObserver:
                     break
                 sline = line.decode('utf-8').rstrip()
                 if not sline.startswith('[swscaler'):
-                    print(f"[{stream_name}] {sline}")
+                    logger.info(f"[{stream_name}] {sline}")
 
         # Create concurrent background tasks to monitor stdout and stderr
         stdout_task = asyncio.create_task(log_stream(process.stdout, "LEROBOT STDOUT"))
@@ -415,16 +418,16 @@ class AsyncObserver:
 
         try:
             return_code = await process.wait()
-            print(f"Lerobot process exited with code: {return_code}")
+            logger.info(f"Lerobot process exited with code: {return_code}")
             
         except asyncio.CancelledError:
-            print("Cancellation requested. Terminating Lerobot process...")
+            logger.info("Cancellation requested. Terminating Lerobot process...")
             try:
                 process.terminate()
             except ProcessLookupError:
                 pass # Process already died
             await process.wait()
-            print("Lerobot process terminated.")
+            logger.info("Lerobot process terminated.")
             
         finally:
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
@@ -444,7 +447,7 @@ class AsyncObserver:
         if item.anchor_num not in self.anchors:
             return
         floor_points = project_pixels_to_floor(targets2d, self.anchors[item.anchor_num].camera_pose, self.config.camera_cal)
-        print(f'adding target at floor point ({floor_points}) from image point ({targets2d[0]}) in anchor cam {item.anchor_num}')
+        logger.info(f'Adding target at floor point ({floor_points}) from image point ({targets2d[0]}) in anchor cam {item.anchor_num}')
         if (len(floor_points) == 1):
             if item.target_id is not None:
                 self.target_queue.set_target_position(item.target_id, floor_points[0])
@@ -476,7 +479,7 @@ class AsyncObserver:
         # not implemented for arpeggio anchor
         if item.scale:
             # move positions of anchors towards or away from origin
-            print(f'scaling by {item.scale}')
+            logger.info(f'Scaling by {item.scale}')
             anchor_poses = [(client.anchor_pose[0], client.anchor_pose[1]*item.scale) for client in self.anchors.values()]
 
             # update everything
@@ -494,7 +497,7 @@ class AsyncObserver:
             self.pe.set_anchor_points(anchor_points)
 
         if item.tiltcams:
-            print(f'tilting cams inward by {item.tiltcams} deg')
+            logger.info(f'Tilting cams inward by {item.tiltcams} deg')
             for client in self.anchors.values():
                 client.extratilt += item.tiltcams
                 client.updatePose(client.anchor_pose)
@@ -686,7 +689,7 @@ class AsyncObserver:
 
         """
         if self.motion_task is not None and not self.motion_task.done():
-            print(f"Cancelling previous motion task: {self.motion_task.get_name()}")
+            logger.info(f"Cancelling previous motion task: {self.motion_task.get_name()}")
             self.motion_task.cancel()
             try:
                 # Wait briefly for the old task's cleanup to complete.
@@ -734,19 +737,19 @@ class AsyncObserver:
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
             tension = np.array(records[:,3])
-            print(f'wait for tension speeds={speeds} tension={tension}')
+            logger.debug(f'wait for tension speeds={speeds} tension={tension}')
             complete = np.all(tension > threshold) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
         return True
 
     async def tension_and_wait(self):
         """Send tightening command and wait until lines appear tight. This is not a motion task"""
-        print('Tightening all lines')
+        logger.info('Tightening all lines')
         await self.tension_lines()
         await self.wait_for_tension()
 
     async def sendReferenceLengths(self, lengths):
         if len(lengths) != N_LINES:
-            print(f'Cannot send {len(lengths)} ref lengths to anchors')
+            logger.warning(f'Cannot send {len(lengths)} ref lengths to anchors')
             return
         if self.config.anchor_type == common.AnchorType.PILOT:
             # any anchor that receives this and is slack would ignore it
@@ -769,7 +772,7 @@ class AsyncObserver:
         # reset biases on kalman filter
         data = self.datastore.gantry_pos.deepCopy()
         position = np.mean(data[:,2:], axis=0)
-        print(f'reseting filter biases with assumed position of {position}')
+        logger.debug(f'Resetting filter biases with assumed position of {position}')
         self.pe.kf.reset_biases(position)
 
     async def stop_all(self):
@@ -785,7 +788,7 @@ class AsyncObserver:
 
             # Only cancel the task if it's actually still running.
             if not task_to_stop.done():
-                print(f"Cancelling motion task: {task_to_stop.get_name()}")
+                logger.info(f"Cancelling motion task: {task_to_stop.get_name()}")
                 task_to_stop.cancel()
 
             # Now, await the task's completion.
@@ -795,10 +798,10 @@ class AsyncObserver:
                 await task_to_stop
             except asyncio.CancelledError:
                 # This is the expected, non-error outcome of a clean cancellation.
-                print(f"Task '{task_to_stop.get_name()}' was successfully stopped.")
+                logger.info(f"Task '{task_to_stop.get_name()}' was successfully stopped.")
             except Exception as e:
                 # If any other exception occurred, print it now.
-                print(f"An unhandled exception occurred in motion task '{task_to_stop.get_name()}':\n{e}")
+                logger.error(f"An unhandled exception occurred in motion task '{task_to_stop.get_name()}':\n{e}")
                 traceback.print_exc()
 
         self.slow_stop_all_spools()
@@ -855,14 +858,14 @@ class AsyncObserver:
     async def touch_floor(self):
         await self.gripper_client.send_commands({'set_finger_angle': -30})
         laser_range = self.datastore.range_record.getLast()[1]
-        print(f'Touch the floor. current range: {laser_range}')
+        logger.info(f'Touch the floor. current range: {laser_range}')
         try:
             await self.move_direction_speed(np.array([0, 0, -0.1]))
             timeout = time.time()+20
             while laser_range > 0.12 and time.time() < timeout:
                 await asyncio.sleep(0.1)
                 laser_range = self.datastore.range_record.getLast()[1]
-                print(f'r {laser_range}')
+                logger.debug(f'Laser range: {laser_range}')
         finally:
             self.slow_stop_all_spools()
 
@@ -883,7 +886,7 @@ class AsyncObserver:
 
             self.slow_stop_all_spools()
 
-            print('relax the direct lines, tighten the indirect line')
+            logger.info('Relax the direct lines, tighten the indirect line')
             await self.send_line_speed(0,  0.1, jog=True)
             await self.send_line_speed(1, -0.02, jog=True)
             await self.send_line_speed(2,  0.1, jog=True)
@@ -910,7 +913,7 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond bottom",
             ))
-            print('this position is the bottom of the diamond. Observe gantry for 2 seconds')
+            logger.info('This position is the bottom of the diamond. Observe gantry for 2 seconds')
             await asyncio.sleep(5)
             results['bottom'] = self.snapshot_tag_observations()['gantry']
 
@@ -920,7 +923,7 @@ class AsyncObserver:
                 current_action="Observe diamond right",
             ))
             # RIGHT:
-            print('move to RIGHT')
+            logger.info('Move to RIGHT')
             await self.send_line_speed(1, -half_w-half_h, jog=True)
             await self.send_line_speed(3, half_w-half_h, jog=True)
             await line_stops(1)
@@ -935,7 +938,7 @@ class AsyncObserver:
                 current_action="Observe diamond top",
             ))
             # TOP:
-            print('move to TOP')
+            logger.info('Move to TOP')
             await self.send_line_speed(1, half_w-half_h, jog=True)
             await self.send_line_speed(3, -half_w-half_h, jog=True)
             await line_stops(3)
@@ -950,7 +953,7 @@ class AsyncObserver:
                 current_action="Observe diamond left",
             ))
             # LEFT:
-            print('move to LEFT')
+            logger.info('Move to LEFT')
             await self.send_line_speed(1, half_w+half_h, jog=True)
             await self.send_line_speed(3, -half_w+half_h, jog=True)
             await line_stops(1)
@@ -959,7 +962,7 @@ class AsyncObserver:
             await asyncio.sleep(5)
             results['left'] = self.snapshot_tag_observations()['gantry']
 
-            print('return result')
+            logger.info('Return result')
             for a in self.anchors.values():
                 a.save_raw = True
 
@@ -983,7 +986,7 @@ class AsyncObserver:
         
         try:
             if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
-                print('Cannot run half calibration until all anchors are connected')
+                logger.warning('Cannot run half calibration until all anchors are connected')
                 return
 
             if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
@@ -1022,7 +1025,7 @@ class AsyncObserver:
                 ))
                 return
             elif len(self.anchors) > N_ANCHORS[self.config.anchor_type]:
-                print(f'Too many anchors found for type {self.config.anchor_type} \n{self.anchors}')
+                logger.warning(f'Too many anchors found for type {self.config.anchor_type} \n{self.anchors}')
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
             #   it is only necessary to ensure enough have been collected from each client and average them.
@@ -1036,14 +1039,14 @@ class AsyncObserver:
             ))
             detecting_start = time.time()
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
-                print(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
+                logger.debug(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 self.send_ui(visibility_states=telemetry.VisibilityStates(anchors_seeing_origin_card=list(
                     [anum for anum, count in enumerate(num_o_dets) if count > 0] # only anchor nums which see the origin card
                 )))
 
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
-            print(f'collected enough observations {num_o_dets}')
+            logger.info(f'Collected enough observations {num_o_dets}')
 
             raw_obs = self.snapshot_tag_observations()
 
@@ -1057,7 +1060,7 @@ class AsyncObserver:
                 # determine position of two anchors visually and guess at external eyelets.
                 async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, None, None, None))
                 anchor_poses, eyelet_positions = async_result.get(timeout=30)
-                print(f'obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+                logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
                 self.save_poses_arp(anchor_poses, eyelet_positions)
                 self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -1074,7 +1077,7 @@ class AsyncObserver:
                 # optimize again with length_change_data
                 async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None))
                 anchor_poses, eyelet_positions = async_result.get(timeout=30)
-                print(f'obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+                logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
                 self.save_poses_arp(anchor_poses, eyelet_positions)
 
@@ -1085,7 +1088,7 @@ class AsyncObserver:
                 # run optimization in pool
                 async_result = self.pool.apply_async(optimize_anchor_poses, (raw_obs,))
                 anchor_poses = async_result.get(timeout=30)
-                print(f'obtained result from find_cal_params anchor_poses=\n{anchor_poses}')
+                logger.info(f'Obtained result from find_cal_params anchor_poses=\n{anchor_poses}')
                 anchor_poses = np.array(anchor_poses)
 
                 # Use the optimization output to update anchor poses and spool params
@@ -1169,7 +1172,7 @@ class AsyncObserver:
         Must be done over the origin card.
         """
         if self.gripper_client.last_frame_resized is None:
-            print('Warning, cannot calibrate the relationship between gripper zero angle and camera if gripper camera is offline!')
+            logger.warning('Cannot calibrate the relationship between gripper zero angle and camera if gripper camera is offline!')
             return None
 
         # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
@@ -1183,11 +1186,11 @@ class AsyncObserver:
             # wait till within 1 degree of target or up to 10 seconds
             actual_wrist = 100
             end_time = time.time() + 10
-            print(f'Moved wrist to {center_angle}, waiting to reach position')
+            logger.info(f'Moved wrist to {center_angle}, waiting to reach position')
             while abs(actual_wrist - center_angle) > 2.0 and time.time() < end_time:
                 await asyncio.sleep(0.2)
                 actual_wrist = self.datastore.winch_line_record.getLast()[1]
-            print(f'actual_wrist position = {actual_wrist}')
+            logger.info(f'Actual wrist position = {actual_wrist}')
 
         # detect origin card
         try:
@@ -1199,7 +1202,7 @@ class AsyncObserver:
                         # a pose of the origin card in the frame of reference of the stabilized gripper cam.
                         origin_card_pose[0] = d['p']
             end_time = time.time() + 10
-            print('Collecting observations of origin card from gripper cam')
+            logger.info('Collecting observations of origin card from gripper cam')
             while origin_card_pose[0] is None and time.time() < end_time:
                 async_result = self.pool.apply_async(
                     locate_markers_gripper,
@@ -1208,13 +1211,13 @@ class AsyncObserver:
                     callback=partial(special_handle_det, time.time()))
                 detections = async_result.get(timeout=5)
         except Exception as e:
-            print(e)
+            logger.exception(e)
             raise
         if origin_card_pose[0] is None:
             raise RuntimeError("Gripper camera was unable to make any observations of the origin card.")
         
         euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
-        print(f'euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
+        logger.info(f'Euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
         roomspin = euler_rot[0]
         # if isinstance(self.gripper_client, ArpeggioGripperClient):
         # roomspin+=np.pi
@@ -1236,7 +1239,7 @@ class AsyncObserver:
         self.slow_stop_all_spools()
         await asyncio.sleep(1)
         range_at_end = self.datastore.range_record.getLast()[1]
-        print(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
+        logger.info(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
 
     async def record_park(self):
         """Record that the current location is reseted in the parking saddle and save in the config"""
@@ -1288,7 +1291,7 @@ class AsyncObserver:
         HOMING_LOOP_DELAY = 0.1
 
         if isinstance(self.gripper_client, RaspiGripperClient):
-            print("self park unsupported in pilot gripper")
+            logger.warning("Self park unsupported in pilot gripper")
             return
 
         try:
@@ -1326,14 +1329,14 @@ class AsyncObserver:
                 except TypeError:
                     continue
             if pos is None:
-                print("can't see parking tag right now")
+                logger.warning("Can't see parking tag right now")
                 return
 
             timeout = time.time()+HOMING_TIME_S
             while np.linalg.norm(direction) > MARKER_DIST_CLOSE_ENOUGH  and time.time() < timeout:
                 move = np.array([direction[1], direction[0], 0])
                 await self.move_direction_speed(move, HOMING_SPEED_MPS)
-                print(f'distance {np.linalg.norm(direction)} and moving {move}')
+                logger.debug(f'Distance {np.linalg.norm(direction)} and moving {move}')
                 await asyncio.sleep(HOMING_LOOP_DELAY)
                 try:
                     pos = self.gripper_client.park_pose_relative_to_camera[1]
@@ -1354,7 +1357,7 @@ class AsyncObserver:
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': 10}))
 
         except asyncio.CancelledError:
-            print('park cancelled')
+            logger.info('Park cancelled')
             raise
         finally:
             self.slow_stop_all_spools()
@@ -1411,7 +1414,7 @@ class AsyncObserver:
         key  = ".".join(namesplit[:3])
 
         address = socket.inet_ntoa(info.addresses[0])
-        print(namesplit)
+        logger.debug(f'Service discovered: {namesplit}')
 
         is_power_anchor = kind == anchor_power_service_name
         is_standard_anchor = kind == anchor_service_name
@@ -1446,7 +1449,7 @@ class AsyncObserver:
                     self.config.anchors = default_arp_anchors() # imported from config_loader
 
             elif self.config.anchor_type != found_type:
-                print(f'Ignored {found_type} anchor at {address} because config is locked to {self.config.anchor_type}')
+                logger.warning(f'Ignored {found_type} anchor at {address} because config is locked to {self.config.anchor_type}')
                 return
 
             # create a map from service name to anchor num
@@ -1459,7 +1462,7 @@ class AsyncObserver:
                     # Discovering more that four anchors could be a sign that another robot in the same network is turned on.
                     # We need a way to know that, but for now, you'll have to make sure only one is one at a time while discovering.
                     # After discovery, it should be ok to have more than one on at a time.
-                    print(f"Discovered another {found_type} server on the network, but we already know of {N_ANCHORS[self.config.anchor_type]} {key} {address}")
+                    logger.warning(f"Discovered another {found_type} server on the network, but we already know of {N_ANCHORS[self.config.anchor_type]} {key} {address}")
                     return None
             if self.config.anchors[anchor_num].address != address or self.config.anchors[anchor_num].port != info.port:
                 self.config.anchors[anchor_num].num = anchor_num
@@ -1475,9 +1478,9 @@ class AsyncObserver:
                 self.config.gripper.address = address
                 self.config.gripper.port = info.port
                 save_config(self.config, self.config_path)
-                print(f'Discovered gripper at "{address}" and adopted it as the gripper for this robot')
+                logger.info(f'Discovered gripper at "{address}" and adopted it as the gripper for this robot')
             elif address != self.config.gripper.address:
-                print(f'Discovered gripper at "{address}" and ignored it because ours is at {self.config.gripper.address}')
+                logger.info(f'Discovered gripper at "{address}" and ignored it because ours is at {self.config.gripper.address}')
 
     async def update_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
         # when zerconf has detected a change in address or port
@@ -1564,7 +1567,7 @@ class AsyncObserver:
         try:
             name_component = service_name.split('.')[1]
         except IndexError:
-            print(f'invalid service name "{service_name}"')
+            logger.warning(f'Invalid service name "{service_name}"')
             return
 
         is_power_anchor = name_component == anchor_power_service_name
@@ -1600,7 +1603,7 @@ class AsyncObserver:
                 client.connection_established_event = self.any_anchor_connected
                 self.anchors[a.num] = client
         else:
-            print(f'Don\'t know how to connect to {name_component}')
+            logger.warning(f"Don't know how to connect to {name_component}")
 
         if client:
             self.bot_clients[service_name] = client
@@ -1627,10 +1630,10 @@ class AsyncObserver:
             try:
                 use_id = self.config.robot_id
                 ws_path = f"{ws_protocol_and_host}/telemetry/{use_id}"
-                print(f"Connecting to control plane at {ws_path}")
+                logger.info(f"Connecting to control plane at {ws_path}")
                 async with websockets.connect(ws_path, max_size=None, open_timeout=10) as websocket:
                     self.cloud_telem_websocket = websocket
-                    print(f'connected to control_plane {websocket}')
+                    logger.info(f'Connected to control plane {websocket}')
                     # send anything that it would need up-front
                     await self.send_setup_telemetry()
                     try:
@@ -1641,16 +1644,16 @@ class AsyncObserver:
                     except ConnectionClosedOK as e:
                         pass
                     except ConnectionClosedError as e:
-                        print(e)
+                        logger.error(e)
                     finally:
-                        print(f'disconnected from control_plane {websocket}')
+                        logger.info(f'Disconnected from control plane {websocket}')
                         self.cloud_telem_websocket = None
             except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
                 pass # normal close
             except ConnectionRefusedError:
-                print(f'Connection to control plane refused')
+                logger.warning(f'Connection to control plane refused')
             except websockets.exceptions.InvalidMessage:
-                print('Connection to control plane ended due to invalid message')
+                logger.warning('Connection to control plane ended due to invalid message')
             await asyncio.sleep(2)
 
     def send_ui(self, **kwargs):
@@ -1760,6 +1763,19 @@ class AsyncObserver:
                 # keep zeroconf alive and discovering services.
                 try:
                     self.startup_complete.set()
+
+                    if self.telemetry_env == None:
+                        message = f'Listening on localhost:{self.port} To control visit https://neufangled.com/playroom?robotid=lan on this machine'
+                    if self.telemetry_env == 'local':
+                        message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
+                    if self.telemetry_env == 'production':
+                        message = f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}'
+
+                    bar = '=' * (len(message) + 12)
+                    print(bar)
+                    print(f'===== {message} =====')
+                    print(bar)
+                    
                     result = await self.keeper
                 except asyncio.exceptions.CancelledError:
                     pass
@@ -1796,7 +1812,7 @@ class AsyncObserver:
             result = await asyncio.gather(*tasks)
         except asyncio.exceptions.CancelledError:
             pass
-        print('Stringman Controller Shutdown')
+        logger.info('Stringman Controller Shutdown')
 
     async def add_simulated_data_point2point(self):
         """Simulate the gantry moving from random point to random point.
@@ -2141,7 +2157,7 @@ class AsyncObserver:
                 target_path = "models/target_heatmap.pth"
             else:
                 target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
-            print(f"Loading model from {target_path}...")
+            logger.info(f"Loading model from {target_path}...")
             t_model = TargetHeatmapNet().to(DEVICE)
             t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
             t_model.eval()
@@ -2151,7 +2167,7 @@ class AsyncObserver:
                     center_path = "models/square_centering.pth"
                 else:
                     center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
-                print(f"Loading model from {center_path}...")
+                logger.info(f"Loading model from {center_path}...")
                 c_model = CenteringNet().to(DEVICE)
                 c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
                 c_model.eval()
@@ -2159,18 +2175,6 @@ class AsyncObserver:
             return t_model, None
 
         self.target_model, self.centering_model = await asyncio.to_thread(load_models_sync)
-
-        if self.telemetry_env == None:
-            message = f'Listening on localhost:{self.port} To control visit https://neufangled.com/playroom?robotid=lan on this machine'
-        if self.telemetry_env == 'local':
-            message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
-        if self.telemetry_env == 'production':
-            message = f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}'
-
-        bar = '=' * (len(message) + 12)
-        print(bar)
-        print(f'===== {message} =====')
-        print(bar)
 
         counter = 0
         while self.run_command_loop:
@@ -2279,7 +2283,7 @@ class AsyncObserver:
                         gtask.cancel()
                     self.gantry_goal_pos = None
                     if time.time() > target_seen_t + END_LOOP_TIMEOUT:
-                        print('Looks clean enough to me!')
+                        logger.info('Looks clean enough to me!')
                         return
                     await asyncio.sleep(LOOP_DELAY)
                     continue
@@ -2310,14 +2314,14 @@ class AsyncObserver:
                     continue
 
                 if self.gripper_client is None:
-                    print('pick and place aborted because we lost the gripper connection')
+                    logger.warning('Pick and place aborted because we lost the gripper connection')
                     break
 
                 # when we reach this point we arrived over the item. commit to it unless it proves impossible to pick up.
-                print('attempt grasp')
+                logger.info('Attempt grasp')
                 start = time.time()
                 success = await self.execute_grasp()
-                print(f'grasp succeeded {success} took {time.time() - start}s')
+                logger.info(f'Grasp succeeded={success} took {time.time() - start:.2f}s')
                 if not success:
                     # just pick another target, but consider downranking this object or something.
                     self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
@@ -2327,7 +2331,7 @@ class AsyncObserver:
                 else:
                     self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.PICKED_UP)
                     self.send_tq_to_ui()
-                    print('object picked up')
+                    logger.info('Object picked up')
 
                 # tension now just in case.
                 # await self.tension_and_wait()
@@ -2342,11 +2346,11 @@ class AsyncObserver:
                     # otherwise use the origin as a drop point :/
                     # TODO this is not ideal, as we will continue to pick things up from this spot most likely now that we are close to it.
                     # either need to drop it somewhere we know we won't ever see it again, or have a sign for this drop point so we don't touch things inside it.
-                    print("No drop point specified, using (0,0,0) as a drop point")
+                    logger.warning("No drop point specified, using (0,0,0) as a drop point")
                     drop_point = np.zeros(3)
 
                 # fly to to drop point
-                print(f'flying to drop point {drop_point}')
+                logger.info(f'Flying to drop point {drop_point}')
                 self.gantry_goal_pos = drop_point + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF])
                 await self.seek_gantry_goal()
                 # open gripper
@@ -2363,7 +2367,7 @@ class AsyncObserver:
             raise
         finally:
             if gtask is not None:
-                print('pick and place cancelled')
+                logger.info('Pick and place cancelled')
                 gtask.cancel()
             self.slow_stop_all_spools()
             await self.clear_gantry_goal()
@@ -2405,13 +2409,13 @@ class AsyncObserver:
                 while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
                     distance_to_floor = self.datastore.range_record.getLast()[1]
                     if distance_to_floor < FINGER_LENGTH:
-                        print(f'stop going down, distance to floor is {distance_to_floor}')
+                        logger.debug(f'Stop going down, distance to floor is {distance_to_floor}')
                         break
 
                     if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and distance_to_floor > COMMIT_HEIGHT:
                         nothing_seen_countdown -= 1
                         if nothing_seen_countdown == 0:
-                            print('print nothing seen during centering loop')
+                            logger.debug('Nothing seen during centering loop')
                             break
                     else:
                         nothing_seen_countdown = 15
@@ -2440,14 +2444,14 @@ class AsyncObserver:
                         lateral_speed = 0
                     lateral_vector *= lateral_speed
 
-                    print(f'moving {[lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED]}')
+                    logger.debug(f'Moving {[lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED]}')
                     await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
 
                     try:
                         # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
                         # we want to stop immediately.
                         await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
-                        print('detected tip over, must be floor')
+                        logger.debug('Detected tip over, must be floor')
                         break
                     except TimeoutError:
                         pass
@@ -2456,18 +2460,18 @@ class AsyncObserver:
                 self.pe.tip_over.clear()
 
                 if nothing_seen_countdown == 0:
-                    print('Nothing seen')
+                    logger.debug('Nothing seen')
                     continue # find new target?
 
-                print('close gripper')
+                logger.info('Close gripper')
                 await self.gripper_client.send_commands({'set_finger_angle': CLOSED})
-                print(f'wait up to {PRESSURE_SENSE_WAIT} seconds for pad to sense object.')
+                logger.debug(f'Wait up to {PRESSURE_SENSE_WAIT} seconds for pad to sense object.')
                 try:
                     await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), PRESSURE_SENSE_WAIT)
                     self.pe.finger_pressure_rising.clear()
                 except TimeoutError:
                     pressure = self.datastore.finger.getLast()[2]
-                    print(f'did not detect a successful hold. pressure=({pressure}) open and go back up high enough to get a view of the object')
+                    logger.debug(f'Did not detect a successful hold. pressure=({pressure}) open and go back up high enough to get a view of the object')
                     # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
                     await self.move_direction_speed([0,0,0.06])
                     await asyncio.sleep(1.0)
@@ -2478,9 +2482,9 @@ class AsyncObserver:
                     await asyncio.sleep(2.0)
                     self.slow_stop_all_spools()
                     continue
-                print('Successful grasp')
+                logger.info('Successful grasp')
                 return True
-            print(f'Gave up on grasp after {attempts} attempts. self.pe.holding={self.pe.holding}')
+            logger.info(f'Gave up on grasp after {attempts} attempts. self.pe.holding={self.pe.holding}')
             return False
 
         except asyncio.CancelledError:
@@ -2511,7 +2515,7 @@ class AsyncObserver:
             attempts = NUM_ATTEMPTS
             while not self.pe.holding and attempts > 0 and self.run_command_loop:
                 attempts -= 1
-                print(f'open fingers to {OPEN} to clear camera')
+                logger.debug(f'Open fingers to {OPEN} to clear camera')
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
 
                 # move laterally until target is centered
@@ -2528,15 +2532,15 @@ class AsyncObserver:
                     # for small objects, we don't want to, we can't get that low, the fingers would touch the floor and the object
                     # would still be a few cm away from the rangefinder. 
 
-                    print(f'range_to_target {range_to_target} gripper_height = {gripper_height}')
+                    logger.debug(f'range_to_target {range_to_target} gripper_height = {gripper_height}')
                     if range_to_target < RANGE_ITEM or gripper_height < FLOOR_GRIPPER_HEIGHT:
-                        print(f'Reached target at height {gripper_height} and range {range_to_target}')
+                        logger.debug(f'Reached target at height {gripper_height} and range {range_to_target}')
                         break
 
                     if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and range_to_target > COMMIT_HEIGHT:
                         nothing_seen_countdown -= 1
                         if nothing_seen_countdown == 0:
-                            print('print nothing seen during centering loop')
+                            logger.debug('Nothing seen during centering loop')
                             break
                     else:
                         nothing_seen_countdown = 15
@@ -2575,7 +2579,7 @@ class AsyncObserver:
                         # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
                         # we want to stop immediately.
                         await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
-                        print('detected tip over, must be floor')
+                        logger.debug('Detected tip over, must be floor')
                         break
                     except TimeoutError:
                         pass
@@ -2584,10 +2588,10 @@ class AsyncObserver:
                 self.pe.tip_over.clear()
 
                 if nothing_seen_countdown == 0:
-                    print('Nothing seen')
+                    logger.debug('Nothing seen')
                     continue # find new target?
 
-                print('close gripper')
+                logger.info('Close gripper')
                 end_time = time.time() + PRESSURE_SENSE_WAIT
                 self.pe.finger_pressure_rising.clear()
 
@@ -2598,13 +2602,13 @@ class AsyncObserver:
                     await asyncio.sleep(0.03)
                     await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
                     t, angle, pressure = self.datastore.finger.getLast()
-                    print(f'pressure {pressure}')
-                print(f'end grip {self.pe.finger_pressure_rising.is_set()} {self.datastore.finger.getLast()[1]}')
+                    logger.debug(f'Pressure {pressure}')
+                logger.debug(f'End grip finger_pressure_rising={self.pe.finger_pressure_rising.is_set()} angle={self.datastore.finger.getLast()[1]}')
                 await self.gripper_client.send_commands({'set_finger_speed': 0})
 
                 if not self.pe.finger_pressure_rising.is_set():
                     pressure = self.datastore.finger.getLast()[2]
-                    print(f'did not detect a successful hold, pressure=({pressure}) open and go back up high enough to get a view of the object')
+                    logger.debug(f'Did not detect a successful hold, pressure=({pressure}) open and go back up high enough to get a view of the object')
                     # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
                     await self.move_direction_speed([0,0,0.06])
                     await asyncio.sleep(1.0)
@@ -2617,7 +2621,7 @@ class AsyncObserver:
                     continue
 
                 self.pe.finger_pressure_rising.clear()
-                print('Successful grasp')
+                logger.info('Successful grasp')
                 # slowly at first
                 await self.move_direction_speed(np.array([0,0,0.05]))
                 await asyncio.sleep(1.0)
@@ -2625,7 +2629,7 @@ class AsyncObserver:
                 await self.move_direction_speed(np.array([0,0,0.15]))
                 await asyncio.sleep(2.0)
                 return True
-            print(f'Gave up on grasp after {NUM_ATTEMPTS-attempts} attempts. self.pe.holding={self.pe.holding}')
+            logger.info(f'Gave up on grasp after {NUM_ATTEMPTS-attempts} attempts. self.pe.holding={self.pe.holding}')
             return False
 
         except asyncio.CancelledError:
@@ -2654,7 +2658,7 @@ class AsyncObserver:
                 applying_force = self.pe.finger_pressure_rising.is_set()
                 gripper_height = self.pe.grip_pose[1][2]
                 lifted = gripper_height > 0.2
-            print(f'ended grasp lifted={lifted} applying_force={applying_force} time_rem={timeout - time.time()}')
+            logger.info(f'Ended grasp lifted={lifted} applying_force={applying_force} time_rem={timeout - time.time():.1f}s')
             # return value indicates whether grasp was successful
             return lifted and applying_force
         except asyncio.CancelledError:
@@ -2674,11 +2678,11 @@ class AsyncObserver:
         """Collects data for the centering network"""
         while self.run_command_loop and self.run_collect_images:
             if self.gripper_client.last_frame_resized is not None:
-                print(self.gripper_client.last_frame_resized.shape)
+                logger.debug(f'Gripper frame shape: {self.gripper_client.last_frame_resized.shape}')
                 rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
                 capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
             else:
-                print('no resized frame available from gripper')
+                logger.debug('No resized frame available from gripper')
             await asyncio.sleep(3)
 
 def main():
