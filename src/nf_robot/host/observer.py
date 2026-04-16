@@ -319,7 +319,7 @@ class AsyncObserver:
             # derive target position from target
             target = self.target_queue.get_target_info(item.target_id)
             if target is not None:
-                goal_pos = target.position + GRIPPER_HEIGHT_OVER_TARGET + POLE
+                goal_pos = tonp(target.position) + GRIPPER_HEIGHT_OVER_TARGET + POLE
         elif item.pos is not None:
             goal_pos = tonp(item.pos) + POLE
 
@@ -2739,7 +2739,8 @@ def main():
     args = parser.parse_args()
 
     if args.debug:
-        logging.basicConfig(level=logging.DEBUG, format='%(levelname)s %(name)s %(message)s')
+        logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(name)s %(message)s')
+        logging.getLogger('nf_robot').setLevel(logging.DEBUG)
 
     async def run_async():
         runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start, local_models=args.local_models, use_arp_grasp=args.arp_grasp)
