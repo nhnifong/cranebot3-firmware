@@ -34,7 +34,7 @@ DIAMOND_SIZE = (0.1, 1.0)
 # left   -> bottom: Eyelet 1 (Line 3) lengthens by 15cm (back to 'bottom' length)
 # =============================================================================
 
-def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None):
+def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None):
     """
     Computes the vector of residuals (differences) for least_squares.
     
@@ -166,39 +166,48 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                 cost_diamond_planar += res**2
                 
         # 3b. Distance constraints based on the diamond pattern
-        # 3b. Distance constraints based on the diamond pattern
         required_states = ['bottom', 'right', 'top', 'left']
         if all(s in centroids for s in required_states):
             c_bot = centroids['bottom']
             c_rig = centroids['right']
             c_top = centroids['top']
             c_lef = centroids['left']
-            
+
             # Distances to Eyelet 0 (Line 1)
             D0_bot = np.linalg.norm(c_bot - eyelet_positions[0])
             D0_rig = np.linalg.norm(c_rig - eyelet_positions[0])
             D0_top = np.linalg.norm(c_top - eyelet_positions[0])
             D0_lef = np.linalg.norm(c_lef - eyelet_positions[0])
-            
+
             # Distances to Eyelet 1 (Line 3)
             D1_bot = np.linalg.norm(c_bot - eyelet_positions[1])
             D1_rig = np.linalg.norm(c_rig - eyelet_positions[1])
             D1_top = np.linalg.norm(c_top - eyelet_positions[1])
             D1_lef = np.linalg.norm(c_lef - eyelet_positions[1])
-            
-            half_h, half_w = DIAMOND_SIZE
-            
-            # Commanded changes for Eyelet 0 (Line 1)
-            L1_bot_to_rig = -(half_w + half_h)
-            L1_rig_to_top = (half_w - half_h)
-            L1_top_to_lef = (half_w + half_h)
-            L1_lef_to_bot = -(half_w - half_h)
-            
-            # Commanded changes for Eyelet 1 (Line 3)
-            L3_bot_to_rig = (half_w - half_h)
-            L3_rig_to_top = -(half_w + half_h)
-            L3_top_to_lef = -(half_w - half_h)
-            L3_lef_to_bot = (half_w + half_h)
+
+            if line_deltas is not None:
+                # Use measured line length changes instead of commanded values
+                L1_bot_to_rig = line_deltas['bot_to_rig'][0]
+                L3_bot_to_rig = line_deltas['bot_to_rig'][1]
+                L1_rig_to_top = line_deltas['rig_to_top'][0]
+                L3_rig_to_top = line_deltas['rig_to_top'][1]
+                L1_top_to_lef = line_deltas['top_to_lef'][0]
+                L3_top_to_lef = line_deltas['top_to_lef'][1]
+                # lef_to_bot must close the loop
+                L1_lef_to_bot = -(L1_bot_to_rig + L1_rig_to_top + L1_top_to_lef)
+                L3_lef_to_bot = -(L3_bot_to_rig + L3_rig_to_top + L3_top_to_lef)
+            else:
+                half_h, half_w = DIAMOND_SIZE
+                # Commanded changes for Eyelet 0 (Line 1)
+                L1_bot_to_rig = -(half_w + half_h)
+                L1_rig_to_top = (half_w - half_h)
+                L1_top_to_lef = (half_w + half_h)
+                L1_lef_to_bot = -(half_w - half_h)
+                # Commanded changes for Eyelet 1 (Line 3)
+                L3_bot_to_rig = (half_w - half_h)
+                L3_rig_to_top = -(half_w + half_h)
+                L3_top_to_lef = -(half_w - half_h)
+                L3_lef_to_bot = (half_w + half_h)
             
             d_res = [
                 # Eyelet 0 (Line 1) Constraints
@@ -241,7 +250,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
 
     return np.array(residuals)
 
-def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None):
+def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None):
     """
     Finds optimal anchor poses AND external eyelet positions.
     
@@ -292,12 +301,12 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # Configure the state vector and args depending on whether we are freezing anchors
     if fixed_anchor_poses is not None:
         x0 = initial_eyelet_guesses.flatten()
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas)
     else:
         initial_anchor_flat = anchor_poses_to_use.flatten()
         initial_eyelet_flat = initial_eyelet_guesses.flatten()
         x0 = np.concatenate([initial_anchor_flat, initial_eyelet_flat])
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas)
 
     logger.info('Running least squares optimization...')
     result = optimize.least_squares(
@@ -314,7 +323,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
 
     # Run one final time with debug=True to print the cost distribution
     logger.info("Final Optimization Costs:")
-    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses)
+    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas)
 
     # Reshape back to distinct structures based on the freeze flag
     if fixed_anchor_poses is not None:

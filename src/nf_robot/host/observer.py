@@ -897,16 +897,26 @@ class AsyncObserver:
             half_h, half_w = DIAMOND_SIZE
 
             results = {}
+            line_deltas = {}
 
             # keep loosening these the whole time
             await self.send_line_speed(0, 0.05)
             await self.send_line_speed(2, 0.05)
 
-            async def line_stops(line_no):
-                await asyncio.sleep(14)
-                # TODO wait for stop. didn't work.
-                # while abs(self.datastore.anchor_line_record[line_no].getLast()[2]) > 0.01:
-                #     await asyncio.sleep(1/30)
+            def get_eyelet_lengths():
+                l1 = self.datastore.anchor_line_record[1].getLast()[1]
+                l3 = self.datastore.anchor_line_record[3].getLast()[1]
+                return l1, l3
+
+            async def wait_for_lines_to_stop(deadband=0.05, timeout=30):
+                deadline = asyncio.get_event_loop().time() + timeout
+                while asyncio.get_event_loop().time() < deadline:
+                    speed1 = abs(self.datastore.anchor_line_record[1].getLast()[2])
+                    speed3 = abs(self.datastore.anchor_line_record[3].getLast()[2])
+                    if speed1 < deadband and speed3 < deadband:
+                        return
+                    await asyncio.sleep(1/30)
+                logger.warning('wait_for_lines_to_stop timed out; proceeding with current line lengths')
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=20.0,
@@ -924,11 +934,15 @@ class AsyncObserver:
             ))
             # RIGHT:
             logger.info('Move to RIGHT')
+            l1_before, l3_before = get_eyelet_lengths()
             await self.send_line_speed(1, -half_w-half_h, jog=True)
             await self.send_line_speed(3, half_w-half_h, jog=True)
-            await line_stops(1)
+            await wait_for_lines_to_stop()
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
+            l1_after, l3_after = get_eyelet_lengths()
+            line_deltas['bot_to_rig'] = (l1_after - l1_before, l3_after - l3_before)
+            logger.info(f'bot_to_rig actual deltas: line1={line_deltas["bot_to_rig"][0]:.4f}, line3={line_deltas["bot_to_rig"][1]:.4f}')
             await asyncio.sleep(5)
             results['right'] = self.snapshot_tag_observations()['gantry'] # it is to the right from the perspective of camera 0
 
@@ -939,11 +953,15 @@ class AsyncObserver:
             ))
             # TOP:
             logger.info('Move to TOP')
+            l1_before, l3_before = get_eyelet_lengths()
             await self.send_line_speed(1, half_w-half_h, jog=True)
             await self.send_line_speed(3, -half_w-half_h, jog=True)
-            await line_stops(3)
+            await wait_for_lines_to_stop()
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
+            l1_after, l3_after = get_eyelet_lengths()
+            line_deltas['rig_to_top'] = (l1_after - l1_before, l3_after - l3_before)
+            logger.info(f'rig_to_top actual deltas: line1={line_deltas["rig_to_top"][0]:.4f}, line3={line_deltas["rig_to_top"][1]:.4f}')
             await asyncio.sleep(5)
             results['top'] = self.snapshot_tag_observations()['gantry']
 
@@ -954,11 +972,15 @@ class AsyncObserver:
             ))
             # LEFT:
             logger.info('Move to LEFT')
+            l1_before, l3_before = get_eyelet_lengths()
             await self.send_line_speed(1, half_w+half_h, jog=True)
             await self.send_line_speed(3, -half_w+half_h, jog=True)
-            await line_stops(1)
+            await wait_for_lines_to_stop()
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
+            l1_after, l3_after = get_eyelet_lengths()
+            line_deltas['top_to_lef'] = (l1_after - l1_before, l3_after - l3_before)
+            logger.info(f'top_to_lef actual deltas: line1={line_deltas["top_to_lef"][0]:.4f}, line3={line_deltas["top_to_lef"][1]:.4f}')
             await asyncio.sleep(5)
             results['left'] = self.snapshot_tag_observations()['gantry']
 
@@ -968,7 +990,7 @@ class AsyncObserver:
 
             analyze_diamond_data(results)
 
-            return results
+            return results, line_deltas
 
         except asyncio.CancelledError:
             raise
@@ -1070,12 +1092,12 @@ class AsyncObserver:
                 ))
                 await self.half_auto_calibration()
                 # collect length_change_data data to estimate eyelets better
-                diamond_data = await self.collect_arp_anchor_eyelet_experiment_data()
+                diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data()
                 # stop saving raw poses
                 for a in self.anchors.values():
                     a.save_raw = False
                 # optimize again with length_change_data
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None))
+                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None, line_deltas))
                 anchor_poses, eyelet_positions = async_result.get(timeout=30)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
