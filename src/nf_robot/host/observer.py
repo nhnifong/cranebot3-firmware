@@ -16,7 +16,7 @@ from zeroconf.asyncio import (
     AsyncZeroconfServiceTypes,
     InterfaceChoice,
 )
-from multiprocessing import Pool, Process
+from multiprocessing import Process, get_context
 import numpy as np
 import scipy.optimize as optimize
 from scipy.spatial.transform import Rotation
@@ -52,6 +52,10 @@ from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 
 logger = logging.getLogger(__name__)
+
+def _create_worker_pool():
+    """Create a multiprocessing Pool using forkserver to avoid fork-in-multithreaded-process warnings."""
+    return get_context('forkserver').Pool(processes=3)
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -1730,7 +1734,7 @@ class AsyncObserver:
         self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
-        with Pool(processes=3) as pool:
+        with _create_worker_pool() as pool:
             self.pool = pool
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
