@@ -2713,7 +2713,11 @@ def main():
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     parser.add_argument("--arp_grasp", action="store_true", help="Use arp_execute_grasp (centering net) instead of act_execute_grasp (ACT policy) for the Arpeggio gripper")
+    parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     args = parser.parse_args()
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format='%(levelname)s %(name)s %(message)s')
 
     async def run_async():
         runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start, local_models=args.local_models, use_arp_grasp=args.arp_grasp)
