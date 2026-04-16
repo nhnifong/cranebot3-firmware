@@ -91,6 +91,9 @@ CRANEBOT_SERVICE_TYPES = [
 OPEN = -30
 CLOSED = 90
 
+POLE = np.array([0,0,0.5334])
+GRIPPER_HEIGHT_OVER_TARGET = np.array([0,0,0.3])
+
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
     Saves an image to the unprocessed directory. 
@@ -305,6 +308,25 @@ class AsyncObserver:
 
         elif item.manage_lerobot_session is not None:
             self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(item.manage_lerobot_session))
+
+        elif item.move_gripper_to is not None:
+            r = await self._handle_move_gripper_to(item.move_gripper_to)
+
+    async def _handle_move_gripper_to(self, item: control.MoveGripperTo):
+        logging.debug(f'_handle_move_gripper_to {item}')
+        goal_pos = None
+        if item.target_id is not None:
+            # derive target position from target
+            target = self.target_queue.get_target_info(item.target_id)
+            if target is not None:
+                goal_pos = target.position + GRIPPER_HEIGHT_OVER_TARGET + POLE
+        elif item.pos is not None:
+            goal_pos = tonp(item.pos) + POLE
+
+        if goal_pos is None:
+            return
+        self.gantry_goal_pos = goal_pos
+        r = await self.invoke_motion_task(self.seek_gantry_goal())
 
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
         """Issue a special command to a single component"""
@@ -1779,7 +1801,7 @@ class AsyncObserver:
                     print(bar)
                     print(f'===== {message} =====')
                     print(bar)
-                    
+
                     result = await self.keeper
                 except asyncio.exceptions.CancelledError:
                     pass
