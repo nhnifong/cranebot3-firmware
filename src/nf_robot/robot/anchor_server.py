@@ -183,6 +183,15 @@ class RobotComponentServer:
         # wait for the subprocess to exit, whether because we killed it, or it stopped normally
         return await self.rpicam_process.wait()
 
+    async def read_temperature(self):
+        while True:
+            try:
+                with open('/sys/class/thermal/thermal_zone0/temp') as f:
+                    self.update['temp'] = int(f.read()) / 1000.0
+            except OSError:
+                pass
+            await asyncio.sleep(1)
+
     async def process_imu(self, ws):
         pass
 
@@ -255,6 +264,7 @@ class RobotComponentServer:
                 stream = tg.create_task(self.stream_measurements(websocket))
                 mjpeg = tg.create_task(self.stream_video(websocket))
                 stabil = tg.create_task(self.process_imu(websocket))
+                temp = tg.create_task(self.read_temperature())
         except* (ConnectionClosedOK, ConnectionClosedError):
             logging.info("Client disconnected")
             self.have_client = False

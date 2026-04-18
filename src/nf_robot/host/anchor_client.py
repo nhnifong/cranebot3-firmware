@@ -64,6 +64,7 @@ class ComponentClient:
         self.telemetry_env = telemetry_env
         self.firmware_update_success = None
         self.firmware_update_pending = False
+        self.last_temp = 20.0
 
         # saved for setup telemetry
         self.local_video_uri = None
@@ -407,6 +408,8 @@ class ComponentClient:
                         if 'returncode' in upd:
                             logger.info(f'pip install result on {self.address} = {upd["returncode"] == 0}')
                             self.firmware_update_success = upd['returncode'] == 0
+                if 'temp' in update:
+                    self.last_temp = update['temp']
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set()
                 await self.handle_update_from_ws(update)

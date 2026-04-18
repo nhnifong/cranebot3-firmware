@@ -94,7 +94,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
         self.mock_pool = MagicMock()
         self.mock_pool.__enter__.return_value = self.mock_pool
-        self.patchers.append(patch('nf_robot.host.observer._create_worker_pool', return_value=self.mock_pool))
+        self.patchers.append(patch('nf_robot.host.observer.Pool', return_value=self.mock_pool))
 
         for p in self.patchers:
             p.start()

@@ -16,7 +16,7 @@ from zeroconf.asyncio import (
     AsyncZeroconfServiceTypes,
     InterfaceChoice,
 )
-from multiprocessing import Process, get_context
+from multiprocessing import Pool, Process
 import numpy as np
 import scipy.optimize as optimize
 from scipy.spatial.transform import Rotation
@@ -52,10 +52,6 @@ from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 
 logger = logging.getLogger(__name__)
-
-def _create_worker_pool():
-    """Create a multiprocessing Pool using forkserver to avoid fork-in-multithreaded-process warnings."""
-    return get_context('forkserver').Pool(processes=3)
 
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
@@ -200,6 +196,7 @@ class AsyncObserver:
         self.js = 0.1
         self.lerobot_process_watcher = None
         self.last_ep_ctrl_status = common.LerobotStatus.NA
+        self.swing_latency = 0.18
 
     async def send_setup_telemetry(self):
         logger.debug('Sending setup telemetry')
@@ -365,12 +362,13 @@ class AsyncObserver:
         """ Task which adds swing cancellation inputs. """
 
         # TODO attempt to measure this. It is the round trip latency between IMU measurements on the grpper and when our inputs move the spools.
-        latency = 0.18
+        # latency = 0.18 # works best for desktop machine?
+        # latency = 0.22
         try:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True, present='.'))
             self.active_set.add('swingc')
             while self.run_command_loop:
-                vel2 = self.gripper_client.compute_swing_correction(time.time() + latency)
+                vel2 = self.gripper_client.compute_swing_correction(time.time() + self.swing_latency)
                 if vel2 is not None:
                     await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc', downward_bias=0)
                 await asyncio.sleep(1/100)
@@ -394,6 +392,9 @@ class AsyncObserver:
             r = await self.send_line_speed(1, self.js, jog=True)
         if item.action == 'stow':
             r = await self.stow_lines()
+        if item.action.startswith('swinglatency '):
+            parts = item.action.split(' ')
+            self.swing_latency = float(parts[1])
 
     async def lerobot_process(self, item: control.ManageLerobotSession):
         repo_id = item.repo_id
@@ -926,8 +927,8 @@ class AsyncObserver:
             line_deltas = {}
 
             # keep loosening these the whole time
-            await self.send_line_speed(0, 0.05)
-            await self.send_line_speed(2, 0.05)
+            await self.send_line_speed(0, 0.1)
+            await self.send_line_speed(2, 0.1)
 
             def get_eyelet_lengths():
                 l1 = self.datastore.anchor_line_record[1].getLast()[1]
@@ -935,11 +936,13 @@ class AsyncObserver:
                 return l1, l3
 
             async def wait_for_lines_to_stop(deadband=0.05, timeout=30):
+                await asyncio.sleep(2)
                 deadline = asyncio.get_event_loop().time() + timeout
                 while asyncio.get_event_loop().time() < deadline:
                     speed1 = abs(self.datastore.anchor_line_record[1].getLast()[2])
                     speed3 = abs(self.datastore.anchor_line_record[3].getLast()[2])
                     if speed1 < deadband and speed3 < deadband:
+                        await asyncio.sleep(2)
                         return
                     await asyncio.sleep(1/30)
                 logger.warning('wait_for_lines_to_stop timed out; proceeding with current line lengths')
@@ -1778,7 +1781,7 @@ class AsyncObserver:
         self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
-        with _create_worker_pool() as pool:
+        with Pool(processes=3) as pool:
             self.pool = pool
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
