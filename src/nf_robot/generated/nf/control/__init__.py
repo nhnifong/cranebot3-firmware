@@ -17,6 +17,7 @@ __all__ = (
     "JogSpool",
     "LerobotSessionAction",
     "ManageLerobotSession",
+    "MoveGripperTo",
     "ScaleRoom",
     "SetSwingCancellation",
     "SingleComponentAction",
@@ -441,6 +442,10 @@ class ControlItem(betterproto2.Message):
         13, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    move_gripper_to: "MoveGripperTo | None" = betterproto2.field(
+        14, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
@@ -468,6 +473,7 @@ default_message_pool.register_message("nf.control", "DeleteTarget", DeleteTarget
 class GantryGoalPos(betterproto2.Message):
     """
     Set the given goal position for the gantry, it will begin moving there.
+    DEPRECATED, use MoveGripperTo
     """
 
     pos: "_common__.Vec3 | None" = betterproto2.field(
@@ -534,6 +540,35 @@ class ManageLerobotSession(betterproto2.Message):
 default_message_pool.register_message(
     "nf.control", "ManageLerobotSession", ManageLerobotSession
 )
+
+
+@dataclass(eq=False, repr=False)
+class MoveGripperTo(betterproto2.Message):
+    """
+    Send the gripper to a particular position in space
+    Cancels existing motion task if there is one
+    expect this to take a few seconds.
+
+    Oneofs:
+        - dest:
+    """
+
+    pos: "_common__.Vec3 | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True, group="dest"
+    )
+    """
+    Move the gripper to a raw position
+    """
+
+    target_id: "str | None" = betterproto2.field(
+        2, betterproto2.TYPE_STRING, optional=True, group="dest"
+    )
+    """
+    Position the gripper a safe distance over the named target
+    """
+
+
+default_message_pool.register_message("nf.control", "MoveGripperTo", MoveGripperTo)
 
 
 @dataclass(eq=False, repr=False)

@@ -16,7 +16,7 @@ from zeroconf.asyncio import (
     AsyncZeroconfServiceTypes,
     InterfaceChoice,
 )
-from multiprocessing import Pool, Process
+from multiprocessing import Process, get_context
 import numpy as np
 import scipy.optimize as optimize
 from scipy.spatial.transform import Rotation
@@ -53,6 +53,10 @@ from nf_robot.host.position_estimator import Positioner2
 
 logger = logging.getLogger(__name__)
 
+def _create_worker_pool():
+    """Create a multiprocessing Pool using forkserver to avoid fork-in-multithreaded-process warnings."""
+    return get_context('forkserver').Pool(processes=3)
+
 # Define the service names for network discovery
 anchor_service_name = 'cranebot-anchor-service'
 anchor_power_service_name = 'cranebot-anchor-power-service'
@@ -86,6 +90,9 @@ CRANEBOT_SERVICE_TYPES = [
 # finger positions
 OPEN = -30
 CLOSED = 90
+
+POLE = np.array([0,0,0.5334])
+GRIPPER_HEIGHT_OVER_TARGET = np.array([0,0,0.3])
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
@@ -301,6 +308,25 @@ class AsyncObserver:
 
         elif item.manage_lerobot_session is not None:
             self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(item.manage_lerobot_session))
+
+        elif item.move_gripper_to is not None:
+            r = await self._handle_move_gripper_to(item.move_gripper_to)
+
+    async def _handle_move_gripper_to(self, item: control.MoveGripperTo):
+        logging.debug(f'_handle_move_gripper_to {item}')
+        goal_pos = None
+        if item.target_id is not None:
+            # derive target position from target
+            target = self.target_queue.get_target_info(item.target_id)
+            if target is not None:
+                goal_pos = tonp(target.position) + GRIPPER_HEIGHT_OVER_TARGET + POLE
+        elif item.pos is not None:
+            goal_pos = tonp(item.pos) + POLE
+
+        if goal_pos is None:
+            return
+        self.gantry_goal_pos = goal_pos
+        r = await self.invoke_motion_task(self.seek_gantry_goal())
 
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
         """Issue a special command to a single component"""
@@ -1752,7 +1778,7 @@ class AsyncObserver:
         self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
-        with Pool(processes=3) as pool:
+        with _create_worker_pool() as pool:
             self.pool = pool
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
@@ -1797,7 +1823,7 @@ class AsyncObserver:
                     print(bar)
                     print(f'===== {message} =====')
                     print(bar)
-                    
+
                     result = await self.keeper
                 except asyncio.exceptions.CancelledError:
                     pass
@@ -2731,7 +2757,12 @@ def main():
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     parser.add_argument("--arp_grasp", action="store_true", help="Use arp_execute_grasp (centering net) instead of act_execute_grasp (ACT policy) for the Arpeggio gripper")
+    parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     args = parser.parse_args()
+
+    if args.debug:
+        logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(name)s %(message)s')
+        logging.getLogger('nf_robot').setLevel(logging.DEBUG)
 
     async def run_async():
         runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start, local_models=args.local_models, use_arp_grasp=args.arp_grasp)
