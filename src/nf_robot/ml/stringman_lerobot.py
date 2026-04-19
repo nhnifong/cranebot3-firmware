@@ -420,7 +420,9 @@ def record_episode(
         #     log_rerun_data(observation=obs, action=action_sent)
 
         dt_s = time.perf_counter() - start_loop_t
-        time.sleep(1 / fps - dt_s)
+        sleep_time = 1 / fps - dt_s
+        if sleep_time > 0:
+            time.sleep(sleep_time)
         timestamp = time.perf_counter() - start_episode_t
 
     print('ep finished')

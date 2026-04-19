@@ -163,8 +163,8 @@ class RobotComponentServer:
             match = ready_line_re.match(line)
             if match:
                 ready_wall_time = time.time()
+                await asyncio.sleep(1.5) # it's not ready quite yet
                 logging.info('rpicam-vid appears to be ready')
-                await asyncio.sleep(1) # it's not ready quite yet
                 # tell the websocket client to connect to the video stream. it will do so in another thread.
                 self.update['video_ready'] = (8888, ready_wall_time + dts_zero_offset)
             else:
