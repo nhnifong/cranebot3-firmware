@@ -32,6 +32,7 @@ from nf_robot.robot.forget_wifi import forget_all_wifi_networks
 stream_command = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
     "--width=1920", "--height=1080",
+    "--framerate=10",
     "-o", "tcp://0.0.0.0:8888?listen=1",
     "--codec", "libav",
     "--libav-format", "mpegts",
@@ -39,7 +40,7 @@ stream_command = [
     "--autofocus-mode", "manual",
     "--lens-position", "0.1",
     "--low-latency",
-    "--bitrate", "1200kbps"
+    "--bitrate", "400kbps"
 ]
 
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
