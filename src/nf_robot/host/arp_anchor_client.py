@@ -140,3 +140,7 @@ class ArpeggioAnchorClient(ComponentClient):
                 position = pose.reshape(6)[3:]
                 # save the position of this object for use in various planning tasks.
                 self.ob.update_avg_named_pos(detection['n'], position)
+
+
+    def process_frame(self, frame_to_encode):
+        return frame_to_encode

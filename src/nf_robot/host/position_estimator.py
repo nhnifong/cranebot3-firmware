@@ -7,6 +7,7 @@ import time
 import numpy as np
 import asyncio
 import cv2
+import logging
 import scipy.optimize as optimize
 from math import pi, sqrt, sin, cos
 from scipy.spatial.transform import Rotation
@@ -17,6 +18,8 @@ from nf_robot.host.frequency_estimator import SwingFrequencyEstimator
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.util import *
 from nf_robot.common.pose_functions import compose_poses, gripper_imu_inv
+
+logger = logging.getLogger(__name__)
 
 # Pre-allocating common 3D vectors prevents NumPy from suffering allocation overhead 
 # thousands of times per second inside the event loop.
@@ -385,7 +388,7 @@ class Positioner2:
             return # looks like it's moving visually, probably just video latency.
 
         lengths = np.linalg.norm(self.anchor_points - position, axis=1)
-        print(f'auto line calibration lengths={lengths}')
+        logger.info(f'Auto line calibration lengths={lengths}')
         await self.ob.sendReferenceLengths(lengths)
 
     async def predict_forwards(self):
@@ -570,7 +573,7 @@ class Positioner2:
             self.holding = update['holding']
 
     async def main(self):
-        print('Starting position estimator')
+        logger.info('Starting position estimator')
         self.run = True
         try:
             async with asyncio.TaskGroup() as tg:

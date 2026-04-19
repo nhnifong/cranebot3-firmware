@@ -100,9 +100,9 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
         # should report to UI: Connecting, connected
         self.ob_mock.assert_has_calls([
             call.send_ui(component_conn_status=telemetry.ComponentConnStatus(
-                anchor_num=1, websocket_status=telemetry.ConnStatus.CONNECTING, ip_address='127.0.0.1')),
+                anchor_num=1, websocket_status=telemetry.ConnStatus.CONNECTING, ip_address='127.0.0.1', gripper_model=telemetry.GripperModel.PILOT)),
             call.send_ui(component_conn_status=telemetry.ComponentConnStatus(
-                anchor_num=1, websocket_status=telemetry.ConnStatus.CONNECTED, ip_address='127.0.0.1')),
+                anchor_num=1, websocket_status=telemetry.ConnStatus.CONNECTED, ip_address='127.0.0.1', gripper_model=telemetry.GripperModel.PILOT)),
         ])
         self.ob_mock.reset_mock()
 

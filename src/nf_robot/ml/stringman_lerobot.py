@@ -201,6 +201,7 @@ class StringmanLeRobot(Robot):
 
         url = item.local_uri if item.local_uri else (f"rtsp://media.neufangled.com:8554/{item.stream_path}" if item.stream_path else "")
 
+
         if url:
             parsed = urlparse(url)
             hostname = parsed.hostname if parsed.hostname else "localhost"

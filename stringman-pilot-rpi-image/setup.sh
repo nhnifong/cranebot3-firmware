@@ -79,10 +79,14 @@ EOF
 echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"' > "$ROOTFS_DIR/etc/udev/rules.d/99-i2c.rules"
 
 # Install Systemd Services
-install -m 644 can-setup.service "$ROOTFS_DIR/etc/systemd/system/can-setup.service"
-install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
 
-# Enable the service (by creating the symlink manually or using systemctl in chroot)
+# Service to enable can bus communication for Arp anchor
+install -m 755 can-init.sh "$ROOTFS_DIR/usr/local/bin/can-init.sh"
+install -m 644 can-setup.service "$ROOTFS_DIR/etc/systemd/system/can-setup.service"
+run_in_chroot "systemctl enable can-setup.service"
+
+# Main application service
+install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
 run_in_chroot "systemctl enable cranebot.service"
 
 # Install a one time filesystem resize service on first boot to expand to fill the SD card

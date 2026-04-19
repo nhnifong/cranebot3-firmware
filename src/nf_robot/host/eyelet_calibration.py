@@ -3,6 +3,8 @@ from scipy import optimize
 import logging
 
 from nf_robot.common.pose_functions import *
+
+logger = logging.getLogger(__name__)
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
 
@@ -32,7 +34,7 @@ DIAMOND_SIZE = (0.1, 1.0)
 # left   -> bottom: Eyelet 1 (Line 3) lengthens by 15cm (back to 'bottom' length)
 # =============================================================================
 
-def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None):
+def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None):
     """
     Computes the vector of residuals (differences) for least_squares.
     
@@ -164,39 +166,48 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                 cost_diamond_planar += res**2
                 
         # 3b. Distance constraints based on the diamond pattern
-        # 3b. Distance constraints based on the diamond pattern
         required_states = ['bottom', 'right', 'top', 'left']
         if all(s in centroids for s in required_states):
             c_bot = centroids['bottom']
             c_rig = centroids['right']
             c_top = centroids['top']
             c_lef = centroids['left']
-            
+
             # Distances to Eyelet 0 (Line 1)
             D0_bot = np.linalg.norm(c_bot - eyelet_positions[0])
             D0_rig = np.linalg.norm(c_rig - eyelet_positions[0])
             D0_top = np.linalg.norm(c_top - eyelet_positions[0])
             D0_lef = np.linalg.norm(c_lef - eyelet_positions[0])
-            
+
             # Distances to Eyelet 1 (Line 3)
             D1_bot = np.linalg.norm(c_bot - eyelet_positions[1])
             D1_rig = np.linalg.norm(c_rig - eyelet_positions[1])
             D1_top = np.linalg.norm(c_top - eyelet_positions[1])
             D1_lef = np.linalg.norm(c_lef - eyelet_positions[1])
-            
-            half_h, half_w = DIAMOND_SIZE
-            
-            # Commanded changes for Eyelet 0 (Line 1)
-            L1_bot_to_rig = -(half_w + half_h)
-            L1_rig_to_top = (half_w - half_h)
-            L1_top_to_lef = (half_w + half_h)
-            L1_lef_to_bot = -(half_w - half_h)
-            
-            # Commanded changes for Eyelet 1 (Line 3)
-            L3_bot_to_rig = (half_w - half_h)
-            L3_rig_to_top = -(half_w + half_h)
-            L3_top_to_lef = -(half_w - half_h)
-            L3_lef_to_bot = (half_w + half_h)
+
+            if line_deltas is not None:
+                # Use measured line length changes instead of commanded values
+                L1_bot_to_rig = line_deltas['bot_to_rig'][0]
+                L3_bot_to_rig = line_deltas['bot_to_rig'][1]
+                L1_rig_to_top = line_deltas['rig_to_top'][0]
+                L3_rig_to_top = line_deltas['rig_to_top'][1]
+                L1_top_to_lef = line_deltas['top_to_lef'][0]
+                L3_top_to_lef = line_deltas['top_to_lef'][1]
+                # lef_to_bot must close the loop
+                L1_lef_to_bot = -(L1_bot_to_rig + L1_rig_to_top + L1_top_to_lef)
+                L3_lef_to_bot = -(L3_bot_to_rig + L3_rig_to_top + L3_top_to_lef)
+            else:
+                half_h, half_w = DIAMOND_SIZE
+                # Commanded changes for Eyelet 0 (Line 1)
+                L1_bot_to_rig = -(half_w + half_h)
+                L1_rig_to_top = (half_w - half_h)
+                L1_top_to_lef = (half_w + half_h)
+                L1_lef_to_bot = -(half_w - half_h)
+                # Commanded changes for Eyelet 1 (Line 3)
+                L3_bot_to_rig = (half_w - half_h)
+                L3_rig_to_top = -(half_w + half_h)
+                L3_top_to_lef = -(half_w - half_h)
+                L3_lef_to_bot = (half_w + half_h)
             
             d_res = [
                 # Eyelet 0 (Line 1) Constraints
@@ -223,18 +234,23 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         cost_eyelet_reg += np.sum(reg_residuals**2)
 
     if debug:
-        print(f"--- Residual Costs ---")
-        print(f"Origin/Consistency: {cost_origin:.6f}")
+        lines = [
+            "--- Residual Costs ---",
+            f"Origin/Consistency: {cost_origin:.6f}",
+        ]
         if fixed_anchor_poses is None:
-            print(f"Anchor Z-Planarity: {cost_planar:.6f}")
-        print(f"Diamond Planarity:  {cost_diamond_planar:.6f}")
-        print(f"Diamond Distances:  {cost_diamond_dist:.6f}")
-        print(f"Eyelet Reg (drift): {cost_eyelet_reg:.6f}")
-        print(f"----------------------")
+            lines.append(f"Anchor Z-Planarity: {cost_planar:.6f}")
+        lines += [
+            f"Diamond Planarity:  {cost_diamond_planar:.6f}",
+            f"Diamond Distances:  {cost_diamond_dist:.6f}",
+            f"Eyelet Reg (drift): {cost_eyelet_reg:.6f}",
+            "----------------------",
+        ]
+        logger.info("\n".join(lines))
 
     return np.array(residuals)
 
-def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None):
+def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None):
     """
     Finds optimal anchor poses AND external eyelet positions.
     
@@ -265,11 +281,11 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
             initial_guesses.append(guess)
         
         anchor_poses_to_use = np.array(initial_guesses)
-        print(f'initial_anchor_guesses = {initial_guesses}')
+        logger.debug(f'initial_anchor_guesses = {initial_guesses}')
     else:
         # Use the provided fixed anchors
         anchor_poses_to_use = fixed_anchor_poses
-        print('Using provided fixed_anchor_poses. Anchors will NOT be modified.')
+        logger.info('Using provided fixed_anchor_poses. Anchors will NOT be modified.')
     
     # A point on the wall on the anchor's right side at the same height, about five meters away.
     # this is a diagonal in the anchor's local frame of refernce.
@@ -285,14 +301,14 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # Configure the state vector and args depending on whether we are freezing anchors
     if fixed_anchor_poses is not None:
         x0 = initial_eyelet_guesses.flatten()
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas)
     else:
         initial_anchor_flat = anchor_poses_to_use.flatten()
         initial_eyelet_flat = initial_eyelet_guesses.flatten()
         x0 = np.concatenate([initial_anchor_flat, initial_eyelet_flat])
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas)
 
-    print('running least squares optimization...')
+    logger.info('Running least squares optimization...')
     result = optimize.least_squares(
         multi_card_residuals,
         x0,
@@ -306,8 +322,8 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
         return None, None
 
     # Run one final time with debug=True to print the cost distribution
-    print("\nFinal Optimization Costs:")
-    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses)
+    logger.info("Final Optimization Costs:")
+    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas)
 
     # Reshape back to distinct structures based on the freeze flag
     if fixed_anchor_poses is not None:
@@ -334,7 +350,7 @@ def analyze_diamond_data(diamond_observations):
          [-2.26615642,  2.69190574,  2.22807715]]
     ])
 
-    print("=== RAW DIAMOND DATA ANALYSIS ===")
+    logger.info("=== RAW DIAMOND DATA ANALYSIS ===")
 
     all_points = {0: [], 1: [], 'combined': []}
     centroids = {0: {}, 1: {}, 'combined': {}}
@@ -359,16 +375,17 @@ def analyze_diamond_data(diamond_observations):
         all_points[1].extend(pts[1])
         all_points['combined'].extend(pts[0] + pts[1])
         
-        print(f"\nState '{state}':")
+        lines = [f"\nState '{state}':"]
         for c in [0, 1]:
             if pts[c]:
                 centroids[c][state] = np.mean(pts[c], axis=0)
-                print(f"  Cam {c}: {len(pts[c]):02d} obs. Centroid: {np.round(centroids[c][state], 3)}")
+                lines.append(f"  Cam {c}: {len(pts[c]):02d} obs. Centroid: {np.round(centroids[c][state], 3)}")
+        logger.info("\n".join(lines))
         if pts[0] or pts[1]:
             centroids['combined'][state] = np.mean(pts[0] + pts[1], axis=0)
 
     if not all_points['combined']:
-        print("No valid points found. Aborting analysis.")
+        logger.warning("No valid points found. Aborting analysis.")
         return
 
     def analyze_planarity(points_list, label):
@@ -386,29 +403,30 @@ def analyze_diamond_data(diamond_observations):
         if normal_vector[2] < 0:
             normal_vector = -normal_vector
 
-        print(f"\n=== PLANARITY STATS: {label} ===")
-        print(f"Best-fit Plane Normal:     {np.round(normal_vector, 4)}")
-        
         distances_to_plane = np.dot(centered_points, normal_vector)
-        print(f"Mean Absolute Deviation:   {np.mean(np.abs(distances_to_plane))*100:.2f} cm")
-        print(f"Max Deviation from Plane:  {np.max(np.abs(distances_to_plane))*100:.2f} cm")
-        print(f"RMS Deviation from Plane:  {np.sqrt(np.mean(distances_to_plane**2))*100:.2f} cm")
-        print(f"Plane Tilt from Vertical:  {np.degrees(np.arcsin(abs(normal_vector[2]))):.2f} degrees")
+        logger.info(
+            f"\n=== PLANARITY STATS: {label} ===\n"
+            f"Best-fit Plane Normal:     {np.round(normal_vector, 4)}\n"
+            f"Mean Absolute Deviation:   {np.mean(np.abs(distances_to_plane))*100:.2f} cm\n"
+            f"Max Deviation from Plane:  {np.max(np.abs(distances_to_plane))*100:.2f} cm\n"
+            f"RMS Deviation from Plane:  {np.sqrt(np.mean(distances_to_plane**2))*100:.2f} cm\n"
+            f"Plane Tilt from Vertical:  {np.degrees(np.arcsin(abs(normal_vector[2]))):.2f} degrees"
+        )
 
     def analyze_kinematics(cents, label):
         req_states = ['bottom', 'right', 'top', 'left']
         if all(s in cents for s in req_states):
-            print(f"\n=== KINEMATIC DIAMOND DISTANCES: {label} ===")
             c_bot, c_rig = cents['bottom'], cents['right']
             c_top, c_lef = cents['top'], cents['left']
-
-            print(f"Travel Bottom -> Right:  {np.linalg.norm(c_rig - c_bot)*100:.2f} cm")
-            print(f"Travel Right  -> Top:    {np.linalg.norm(c_top - c_rig)*100:.2f} cm")
-            print(f"Travel Top    -> Left:   {np.linalg.norm(c_lef - c_top)*100:.2f} cm")
-            print(f"Travel Left   -> Bottom: {np.linalg.norm(c_bot - c_lef)*100:.2f} cm")
-            
-            print(f"\nDiagonal Bottom -> Top:  {np.linalg.norm(c_top - c_bot)*100:.2f} cm")
-            print(f"Diagonal Right  -> Left: {np.linalg.norm(c_lef - c_rig)*100:.2f} cm")
+            logger.info(
+                f"\n=== KINEMATIC DIAMOND DISTANCES: {label} ===\n"
+                f"Travel Bottom -> Right:  {np.linalg.norm(c_rig - c_bot)*100:.2f} cm\n"
+                f"Travel Right  -> Top:    {np.linalg.norm(c_top - c_rig)*100:.2f} cm\n"
+                f"Travel Top    -> Left:   {np.linalg.norm(c_lef - c_top)*100:.2f} cm\n"
+                f"Travel Left   -> Bottom: {np.linalg.norm(c_bot - c_lef)*100:.2f} cm\n"
+                f"\nDiagonal Bottom -> Top:  {np.linalg.norm(c_top - c_bot)*100:.2f} cm\n"
+                f"Diagonal Right  -> Left: {np.linalg.norm(c_lef - c_rig)*100:.2f} cm"
+            )
 
     # Run analysis for each subset
     for key, label in [(0, "CAMERA 0"), (1, "CAMERA 1"), ('combined', "COMBINED CAMERAS")]:

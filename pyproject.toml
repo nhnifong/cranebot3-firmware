@@ -8,10 +8,10 @@ name = "nf_robot"
 # major when making incompatible API changes,
 # minor when adding functionality in a backwards-compatible manner, and
 # patch, when making backwards-compatible bug fixes.
-version = "3.9.6"
+version = "3.10.0"
 description = "Robot control system for Stringman"
 authors = [{name = "Nathaniel Nifong", email = "naavox@gmail.com"}]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.md"
 license = {text = "Apache 2.0"}
 

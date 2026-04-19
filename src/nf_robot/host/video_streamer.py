@@ -53,15 +53,18 @@ class StreamingHandler(BaseHTTPRequestHandler):
             self.send_header('Pragma', 'no-cache')
             self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
             self.end_headers()
-            
+
+            streamer = self.server.streamer
+            with streamer._client_lock:
+                streamer.client_count += 1
             try:
                 # Loop to send frames to the client
                 while True:
                     # Wait for a new frame from the streamer
-                    with self.server.streamer.frame_condition:
-                        self.server.streamer.frame_condition.wait()
-                        frame = self.server.streamer.latest_frame
-                    
+                    with streamer.frame_condition:
+                        streamer.frame_condition.wait()
+                        frame = streamer.latest_frame
+
                     if frame:
                         self.wfile.write(b'--frame\r\n')
                         self.send_header('Content-Type', 'image/jpeg')
@@ -72,6 +75,9 @@ class StreamingHandler(BaseHTTPRequestHandler):
             except Exception:
                 # Client disconnected
                 pass
+            finally:
+                with streamer._client_lock:
+                    streamer.client_count -= 1
         else:
             self.send_error(404)
 
@@ -93,6 +99,8 @@ class MjpegStreamer:
         self.http_server = None
         self.latest_frame = None
         self.frame_condition = threading.Condition()
+        self.client_count = 0
+        self._client_lock = threading.Lock()
         atexit.register(self.stop)
 
     def start(self):
@@ -108,9 +116,13 @@ class MjpegStreamer:
         Encodes the frame as JPEG and notifies waiting HTTP clients.
         Expects BGR frame (standard OpenCV format).
         """
+        with self._client_lock:
+            if self.client_count == 0:
+                return
+
         # Encode frame to JPEG directly in memory
         success, buffer = cv2.imencode('.jpg', frame) #, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-        
+
         if success:
             with self.frame_condition:
                 self.latest_frame = buffer.tobytes()

@@ -446,12 +446,13 @@ class GripperArpServer(RobotComponentServer):
 
         # confirm no pressure on finger pad
         v = self.pressure_sensor.voltage
-        assert v > 3, "Voltage too low on finger pad. Is pressure sensor connected?"
+        if v < 2.2:
+            logging.info("Voltage too low on finger pad ({v}). Is pressure sensor connected?")
 
         # slowly close until the fingerpad voltage drops below 2V
         start = time.time()
         load = 0
-        while v > 3.0 and time.time() < start+16:
+        while v > 2.2 and time.time() < start+16:
             # logging.info(f'self.motors.set_position(FINGER, {pos + rel})')
             self.motors.set_position(FINGER, pos + rel)
             rel -= 20

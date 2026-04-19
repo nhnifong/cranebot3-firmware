@@ -1,5 +1,6 @@
 
 import asyncio
+import logging
 import os
 import signal
 import websockets
@@ -20,9 +21,10 @@ from nf_robot.common.cv_common import *
 from nf_robot.common.pose_functions  import *
 from nf_robot.common.util import *
 import nf_robot.common.definitions as model_constants
-from nf_robot.ml.target_heatmap import HM_IMAGE_RES
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.host.video_streamer import VideoStreamer, MjpegStreamer
+
+logger = logging.getLogger(__name__)
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -61,10 +63,12 @@ class ComponentClient:
         self.telemetry_env = telemetry_env
         self.firmware_update_success = None
         self.firmware_update_pending = False
+        self.last_temp = 20.0
 
         # saved for setup telemetry
         self.local_video_uri = None
         self.feed_number = None
+        self.remote_stream_path = None
 
         # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
@@ -128,7 +132,7 @@ class ComponentClient:
             next_full_scan = time.time()
 
             def error_callback_func(error):
-                print(f"Error in pool worker: {error}")
+                logger.error(f"Error in pool worker: {error}")
 
             for av_frame in container.decode(stream):
                 if not self.connected:
@@ -205,7 +209,7 @@ class ComponentClient:
                 encoder_thread.join()
 
         except (av.error.TimeoutError, av.error.ConnectionRefusedError):
-            print('no video stream available')
+            logger.warning('No video stream available')
             self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
             self.notify_video = True
             return
@@ -232,41 +236,33 @@ class ComponentClient:
 
         feed_number identifies which of the preferred cameras this is. 0 is the gripper, 1 and 2 are the two overhead cams.
         """
-
-        # TODO allow these to change when in a teleop mode
         if self.anchor_num is None:
             final_shape = SF_TARGET_SHAPE # resize for centering network input
-            final_fps = 60
         else:   
-            final_shape = HM_IMAGE_RES # resize for target heatmap network input
-            final_fps = 10
+            final_shape = (1920, 1080)  # don't resize
 
         path = f'stringman/{self.config.robot_id}/{feed_number}'
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
         localuri = f'http://localhost:{mjpegport}/stream.mjpeg'
         rtmp = None
-        vs = None # duck type MjpegStreamer or VideoStreamer
+        remote_vs = None
 
-        if self.telemetry_env is None:
-            rtmp = None # when in LAN mode do not upload ANYTHING to the cloud.
-            # The UI is still browser based though and mjpeg to an img tag is a pretty good low latency option with few dependencies. 
-            vs = MjpegStreamer(width=final_shape[0], height=final_shape[1], port=mjpegport)
-            print(f'Streaming video locally at {localuri}')
-        else:
-            # this is basically an ffmpeg subprocess
+        # Always stream locally via MJPEG (efficient no-op when no client is connected)
+        local_vs = MjpegStreamer(width=final_shape[0], height=final_shape[1], port=mjpegport)
+        local_vs.start()
+        logger.info(f'Streaming video locally at {localuri} with res {final_shape}')
+
+        if self.telemetry_env is not None:
             if self.telemetry_env == "local":
                 rtmp = f'rtmp://localhost:1935/{path}'
-            elif self.telemetry_env == "staging":
-                rtmp = f'rtmp://media.neufangled.com:1935/{path}'
-            elif self.telemetry_env == "production":
+            elif self.telemetry_env in ("staging", "production"):
                 rtmp = f'rtmp://media.neufangled.com:1935/{path}'
             else:
                 raise ValueError(f"unusable value for telemetry_env {self.telemetry_env}")
-            vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
-
-        vs.start()
+            remote_vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
+            remote_vs.start()
         frames_sent = 0
-        time_last_frame_taken = time.time()-1
+        self.streaming_active = True
 
         while self.connected:
             with self.new_frame_condition:
@@ -276,16 +272,11 @@ class ComponentClient:
                 signaled = self.new_frame_condition.wait(timeout=1.0)
                 if not signaled:
                     continue
-                # only take every nth frame based on framerate target
-                now = time.time()
-                if self.anchor_num is not None and now < (time_last_frame_taken + 1/final_fps):
-                    continue
-                time_last_frame_taken = now
                 # We were woken up, so copy the frame pointer while we have the lock
                 frame_to_encode = self.frame
 
             if frame_to_encode is None:
-                print(f'no frame to encode {self}')
+                logger.debug(f'No frame to encode {self}')
                 continue
 
             # Do the actual work outside the lock
@@ -294,21 +285,31 @@ class ComponentClient:
             rgb = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_BGR2RGB)
 
             # send self.last_frame_resized to the UI process
-            vs.send_frame(rgb)
+            local_vs.send_frame(rgb)
+            if remote_vs is not None:
+                remote_vs.send_frame(rgb)
             frames_sent += 1
-            if frames_sent == 20:
+            frame_count_for_clear = 2 if self.telemetry_env is None else 20
+            if frames_sent == frame_count_for_clear:
                 # sending the notification on the 20th frame ensures that the mediamtx server has something to send before clients connect
                 self.local_video_uri = localuri
                 self.feed_number = feed_number
-                self.ob.send_ui(video_ready=telemetry.VideoReady(
+                self.remote_stream_path = path
+                t = telemetry.VideoReady(
                     is_gripper=self.anchor_num is None,
                     anchor_num=self.anchor_num,
                     local_uri=localuri,
                     stream_path=path,
                     feed_number=feed_number,
-                ))
+                )
+                logger.info(f'Sending video ready {t}')
+                self.ob.send_ui(video_ready=t)
 
-        vs.stop()
+        self.remote_stream_path = None
+        self.local_video_uri = None
+        local_vs.stop()
+        if remote_vs is not None:
+            remote_vs.stop()
 
     def process_frame(self, frame_to_encode):
         """
@@ -332,7 +333,7 @@ class ComponentClient:
         try:
             async with websockets.connect(ws_uri, max_size=None, open_timeout=10) as websocket:
                 self.connected = True
-                print(f"Connected to {ws_uri}.")
+                logger.info(f"Connected to {ws_uri}.")
                 # Set an event that the observer is waiting on.
                 if self.connection_established_event is not None:
                     self.connection_established_event.set()
@@ -340,7 +341,7 @@ class ComponentClient:
         except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
             pass # normal close
         except websockets.exceptions.ConnectionClosedError as e:
-            print(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
+            logger.warning(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
             self.abnormal_shutdown = True
         except (OSError, InvalidURI, TimeoutError, InvalidHandshake) as e:
             # normal answer when waiting for component to come online
@@ -354,14 +355,14 @@ class ComponentClient:
 
     async def firmware_update(self):
         # once complete, will be set to True or False
-        print(f'Starting Update on {self.address}')
+        logger.info(f'Starting firmware update on {self.address}')
         self.firmware_update_success = None
         self.firmware_update_pending = False
         await self.send_commands({'run_update': None})
         started = time.time()
         while self.firmware_update_success is None and self.connected:
             if time.time() > started+3 and not self.firmware_update_pending:
-                print(f'Component does not yes support self update. run \nssh pi@{self.address} "/opt/robot/env/bin/pip install --upgrade \\\"nf_robot[pi]\\\"\"\npassword Fo0bar!!')
+                logger.warning(f'Component does not yet support self update. run \nssh pi@{self.address} "/opt/robot/env/bin/pip install --upgrade \\"nf_robot[pi]\\""\npassword Fo0bar!!')
                 return None
             await asyncio.sleep(0.5)
         return self.firmware_update_success
@@ -387,7 +388,7 @@ class ComponentClient:
                 if 'video_ready' in update:
                     port = int(update['video_ready'][0])
                     self.stream_start_ts = float(update['video_ready'][1])
-                    print(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts}s ago)')
+                    logger.debug(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts:.2f}s ago)')
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
                     vid_thread.start()
                 if 'firmware_update_complete' in update:
@@ -397,8 +398,10 @@ class ComponentClient:
                             # this component supports updates
                             self.firmware_update_pending = True
                         if 'returncode' in upd:
-                            print(f'pip install result on {self.address} = {upd["returncode"] == 0}')
+                            logger.info(f'pip install result on {self.address} = {upd["returncode"] == 0}')
                             self.firmware_update_success = upd['returncode'] == 0
+                if 'temp' in update:
+                    self.last_temp = update['temp']
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set()
                 await self.handle_update_from_ws(update)
@@ -412,7 +415,7 @@ class ComponentClient:
                 # don't catch websockets.exceptions.ConnectionClosedOK here because we want it to trip the infinite generator in websockets.connect
                 # so it will stop retrying. after it has the intended effect, websockets.connect will raise it again, so we catch it in 
                 # connect_websocket
-                print(f"Connection to {self.address} closed. {e}")
+                logger.warning(f"Connection to {self.address} closed. {e}")
                 self.connected = False
                 self.websocket = None
                 # self.conn_status.websocket_status = telemetry.ConnStatus.NOT_DETECTED
@@ -483,7 +486,7 @@ class ComponentClient:
                     continue
                 except (ConnectionClosedError, TimeoutError):
                     # it's no longer running, either because it lost power, or the server crashed.
-                    print(f'Anchor {self.anchor_num} confirmed down. hasn\'t been seen in {time.time() - last_update} seconds.')
+                    logger.warning(f"Anchor {self.anchor_num} confirmed down. hasn't been seen in {time.time() - last_update:.1f} seconds.")
                     self.connected = False
                     # immediately trigger the "abnormal shutdown" return from the connect_websocket task
                     # this is how the observer is actually notified. follow the control flow by looking at `if abnormal_close:` in observer.py
@@ -600,4 +603,4 @@ class RaspiAnchorClient(ComponentClient):
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
 
     def process_frame(self, frame_to_encode):
-        return cv2.resize(frame_to_encode, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)
+        return frame_to_encode

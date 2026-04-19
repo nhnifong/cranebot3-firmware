@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import numpy as np
 from scipy.spatial.transform import Rotation
 import json
@@ -12,6 +13,8 @@ import nf_robot.common.definitions as model_constants
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.cv_common import SF_TARGET_SHAPE, stabilize_frame_2
+
+logger = logging.getLogger(__name__)
 
 """
 "Arpeggio" is the codename of the 2nd revision of the Stringman gripper
@@ -95,7 +98,7 @@ class ArpeggioGripperClient(ComponentClient):
                 self.datastore.range_record.insert([timestamp, distance_measurement])
 
             if 'raw_accel' in gs:
-                print(gs['raw_accel'])
+                logger.debug(f"raw_accel: {gs['raw_accel']}")
 
             if 'vel_from_imu' in gs:
                 self.vel_from_imu = np.array(gs['vel_from_imu'])
@@ -269,7 +272,6 @@ class ArpeggioGripperClient(ComponentClient):
         # Convert radians to degrees: radians * (180 / pi)
         # Apply a proportional gain
         wrist_speed_deg = self.smoothed_error * self.p_gain * (180.0 / math.pi)
-        print(f'raw_error {raw_error} wrist_speed_deg {wrist_speed_deg}')
 
         # 8. Clamp and Send
         wrist_speed = clamp(wrist_speed_deg, -120, 120)

@@ -66,6 +66,7 @@ message JogSpool {
 }
 
 // Set the given goal position for the gantry, it will begin moving there.
+// DEPRECATED, use MoveGripperTo
 message GantryGoalPos {
   nf.common.Vec3 pos = 1;
 }
@@ -186,6 +187,19 @@ message ManageLerobotSession {
   bool suppress_upload = 3;
 }
 
+// Send the gripper to a particular position in space
+// Cancels existing motion task if there is one
+// expect this to take a few seconds.
+message MoveGripperTo {
+  oneof dest {
+    // Move the gripper to a raw position
+    nf.common.Vec3 pos = 1;
+
+    // Position the gripper a safe distance over the named target
+    string target_id = 2; 
+  }
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -202,8 +216,9 @@ message ControlItem {
     SetSwingCancellation set_swing_cancellation = 11;
     SingleComponentAction single_component_action = 12;
     ManageLerobotSession manage_lerobot_session = 13;
+    MoveGripperTo move_gripper_to = 14;
 
-    // next id = 14
+    // next id = 15
   }
 }
 
