@@ -99,6 +99,12 @@ class AnchorArpServer(RobotComponentServer):
                 self.spools[int(spool_no)].jog(float(delta))
             except (TypeError, ValueError, IndexError):
                 logging.warning(f'invalid jog command: {updates["jog"]}')
+        if 'disable_torque' in updates:
+            for spool in self.spools:
+                spool.pauseTrackingLoop(disable_torque=True)
+        if 'enable_torque' in updates:
+            for spool in self.spools:
+                spool.resumeTrackingLoop()
 
     def readOtherSensors(self):
         """ Sends updates about both spools with the form

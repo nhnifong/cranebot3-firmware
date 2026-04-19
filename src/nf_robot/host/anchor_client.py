@@ -238,8 +238,10 @@ class ComponentClient:
         """
         if self.anchor_num is None:
             final_shape = SF_TARGET_SHAPE # resize for centering network input
+            final_fps = 60
         else:   
             final_shape = (1920, 1080)  # don't resize
+            final_fps = 10
 
         path = f'stringman/{self.config.robot_id}/{feed_number}'
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num

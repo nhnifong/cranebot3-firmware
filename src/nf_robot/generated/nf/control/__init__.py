@@ -99,6 +99,16 @@ class Command(betterproto2.Enum):
     Reel every line until tight (by switch)
     """
 
+    DISABLE_TORQUE = 17
+    """
+    Disable motor torque on arpeggio anchors (pauses tracking loop and disables motors)
+    """
+
+    ENABLE_TORQUE = 18
+    """
+    Re-enable motor torque on arpeggio anchors
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -137,6 +147,8 @@ class Command(betterproto2.Enum):
             12: "COMMAND_GRASP",
             13: "COMMAND_SUBMIT_TARGETS_TO_DATASET",
             16: "COMMAND_TIGHTEN_LINES",
+            17: "COMMAND_DISABLE_TORQUE",
+            18: "COMMAND_ENABLE_TORQUE",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -159,6 +171,8 @@ class Command(betterproto2.Enum):
             "COMMAND_GRASP": 12,
             "COMMAND_SUBMIT_TARGETS_TO_DATASET": 13,
             "COMMAND_TIGHTEN_LINES": 16,
+            "COMMAND_DISABLE_TORQUE": 17,
+            "COMMAND_ENABLE_TORQUE": 18,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,

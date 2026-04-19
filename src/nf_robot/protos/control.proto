@@ -36,6 +36,10 @@ enum Command {
   COMMAND_SUBMIT_TARGETS_TO_DATASET = 13;
   // Reel every line until tight (by switch)
   COMMAND_TIGHTEN_LINES = 16;
+  // Disable motor torque on arpeggio anchors (pauses tracking loop and disables motors)
+  COMMAND_DISABLE_TORQUE = 17;
+  // Re-enable motor torque on arpeggio anchors
+  COMMAND_ENABLE_TORQUE = 18;
 
   // =====  Commands intended only for diagnostics =====
 

@@ -563,6 +563,10 @@ class AsyncObserver:
                 self.submitTargets()
             case control.Command.UPDATE_FIRMWARE:
                 r = await self._handle_update_firmware()
+            case control.Command.DISABLE_TORQUE:
+                await self._handle_disable_torque()
+            case control.Command.ENABLE_TORQUE:
+                await self._handle_enable_torque()
 
     async def _handle_update_firmware(self):
         r = await self.stop_all()
@@ -604,6 +608,18 @@ class AsyncObserver:
             name="Update Component Firmware",
             current_action=message,
         ))
+
+    async def _handle_disable_torque(self):
+        if self.config.anchor_type != common.AnchorType.ARPEGGIO:
+            return
+        for client in self.anchors.values():
+            asyncio.create_task(client.send_commands({'disable_torque': None}))
+
+    async def _handle_enable_torque(self):
+        if self.config.anchor_type != common.AnchorType.ARPEGGIO:
+            return
+        for client in self.anchors.values():
+            asyncio.create_task(client.send_commands({'enable_torque': None}))
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""

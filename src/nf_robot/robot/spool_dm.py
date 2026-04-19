@@ -77,6 +77,7 @@ class DamiaoSpoolController:
         self.record = []
         self.run_spool_loop = True # permanent
         self.spool_pause = False
+        self._torque_disabled = False
 
     def _getAbsoluteAngle(self):
         """Get absolute motor angle in revolutions"""
@@ -155,10 +156,16 @@ class DamiaoSpoolController:
         self.last_raw_pos = current_raw_rad
         return self.rev_offset + (current_raw_rad / (2 * math.pi))
 
-    def pauseTrackingLoop(self):
+    def pauseTrackingLoop(self, disable_torque=False):
         self.spool_pause = True
+        if disable_torque:
+            self._torque_disabled = True
+            self.motor.disable()
 
     def resumeTrackingLoop(self):
+        if self._torque_disabled:
+            self._torque_disabled = False
+            self.motor.enable()
         self.spool_pause = False
 
     def trackingLoop(self):
