@@ -2045,6 +2045,8 @@ class AsyncObserver:
                 # Normalize vector and command movement
                 await self.move_direction_speed(vector / dist_to_goal, current_speed, self.pe.gant_pos)
                 await asyncio.sleep(LOOP_SLEEP_S)
+
+            logger.info(f'Goal reached {tuple(self.gantry_goal_pos)}')
         except asyncio.CancelledError:
             raise
         finally:

@@ -272,7 +272,6 @@ class ArpeggioGripperClient(ComponentClient):
         # Convert radians to degrees: radians * (180 / pi)
         # Apply a proportional gain
         wrist_speed_deg = self.smoothed_error * self.p_gain * (180.0 / math.pi)
-        logger.debug(f'raw_error {raw_error} wrist_speed_deg {wrist_speed_deg}')
 
         # 8. Clamp and Send
         wrist_speed = clamp(wrist_speed_deg, -120, 120)
