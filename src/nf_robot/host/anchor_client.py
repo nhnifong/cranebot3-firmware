@@ -21,7 +21,6 @@ from nf_robot.common.cv_common import *
 from nf_robot.common.pose_functions  import *
 from nf_robot.common.util import *
 import nf_robot.common.definitions as model_constants
-from nf_robot.ml.target_heatmap import HM_IMAGE_RES
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.host.video_streamer import VideoStreamer, MjpegStreamer
 
@@ -239,10 +238,8 @@ class ComponentClient:
         """
         if self.anchor_num is None:
             final_shape = SF_TARGET_SHAPE # resize for centering network input
-            final_fps = 60
         else:   
-            final_shape = HM_IMAGE_RES # resize for target heatmap network input
-            final_fps = 10
+            final_shape = (1920, 1080)  # don't resize
 
         path = f'stringman/{self.config.robot_id}/{feed_number}'
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
@@ -265,7 +262,6 @@ class ComponentClient:
             remote_vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
             remote_vs.start()
         frames_sent = 0
-        time_last_frame_taken = time.time()-1
         self.streaming_active = True
 
         while self.connected:
@@ -276,11 +272,6 @@ class ComponentClient:
                 signaled = self.new_frame_condition.wait(timeout=1.0)
                 if not signaled:
                     continue
-                # only take every nth frame based on framerate target
-                now = time.time()
-                if self.anchor_num is not None and now < (time_last_frame_taken + 1/final_fps):
-                    continue
-                time_last_frame_taken = now
                 # We were woken up, so copy the frame pointer while we have the lock
                 frame_to_encode = self.frame
 
@@ -298,7 +289,8 @@ class ComponentClient:
             if remote_vs is not None:
                 remote_vs.send_frame(rgb)
             frames_sent += 1
-            if frames_sent == 20:
+            frame_count_for_clear = 2 if self.telemetry_env is None else 20
+            if frames_sent == frame_count_for_clear:
                 # sending the notification on the 20th frame ensures that the mediamtx server has something to send before clients connect
                 self.local_video_uri = localuri
                 self.feed_number = feed_number
@@ -611,4 +603,4 @@ class RaspiAnchorClient(ComponentClient):
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
 
     def process_frame(self, frame_to_encode):
-        return cv2.resize(frame_to_encode, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)
+        return frame_to_encode

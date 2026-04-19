@@ -2266,8 +2266,10 @@ class AsyncObserver:
             for client in self.anchors.values():
                 if client.last_frame_resized is None or client.anchor_num not in self.config.preferred_cameras:
                     continue
-                # these are already assumed to be at the correct resolution 
-                bgr_image = client.last_frame_resized
+                # Despite the name, resize to the correct resolution for this network only when inference is enabled
+                # this is to save resources on small machines where AI is disabled.
+                bgr_image = cv2.resize(client.last_frame_resized, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)
+
                 img_tensor = torch.from_numpy(bgr_image).permute(2, 0, 1).float() / 255.0
                 img_tensors.append(img_tensor)
                 valid_anchor_clients.append(client)
