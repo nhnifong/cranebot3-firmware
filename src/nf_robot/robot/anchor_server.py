@@ -289,6 +289,7 @@ class RobotComponentServer:
         # thread for controlling stepper motor
         if self.spooler is not None:
             self.extra_tasks.append(asyncio.create_task(asyncio.to_thread(self.spooler.trackingLoop)))
+            self.update['torque'] = True
 
         self.wait_reset_task = asyncio.create_task(self.watch_for_reset())
         self.extra_tasks.append(self.wait_reset_task)

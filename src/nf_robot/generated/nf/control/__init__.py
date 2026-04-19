@@ -210,24 +210,31 @@ class ComponentAction(betterproto2.Enum):
     Un-Reel the line until it is slack (the user can tug on it as long as they would like more line to come out)
     """
 
+    SET_CAM_ANGLE = 5
+    """
+    Set the angle from horizontal of the camera adapter on Arpeggio anchors.
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
-            0: "COMPONENT_ACTION_UNUSED",
-            1: "COMPONENT_ACTION_REBOOT",
-            2: "COMPONENT_ACTION_IDENTIFY",
-            3: "COMPONENT_ACTION_TIGHTEN",
-            4: "COMPONENT_ACTION_RELAX",
+            0: "COMPONENTACTION_UNUSED",
+            1: "COMPONENTACTION_REBOOT",
+            2: "COMPONENTACTION_IDENTIFY",
+            3: "COMPONENTACTION_TIGHTEN",
+            4: "COMPONENTACTION_RELAX",
+            5: "COMPONENTACTION_SET_CAM_ANGLE",
         }
 
     @classmethod
     def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
         return {
-            "COMPONENT_ACTION_UNUSED": 0,
-            "COMPONENT_ACTION_REBOOT": 1,
-            "COMPONENT_ACTION_IDENTIFY": 2,
-            "COMPONENT_ACTION_TIGHTEN": 3,
-            "COMPONENT_ACTION_RELAX": 4,
+            "COMPONENTACTION_UNUSED": 0,
+            "COMPONENTACTION_REBOOT": 1,
+            "COMPONENTACTION_IDENTIFY": 2,
+            "COMPONENTACTION_TIGHTEN": 3,
+            "COMPONENTACTION_RELAX": 4,
+            "COMPONENTACTION_SET_CAM_ANGLE": 5,
         }
 
 
@@ -631,6 +638,13 @@ class SingleComponentAction(betterproto2.Message):
     )
     """
     reseved for future use
+    """
+
+    cam_angle: "float | None" = betterproto2.field(
+        5, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    The robot cannot move the camera, this is for the user to inform the system of the installed adapter in order to perform accurate calculations.
     """
 
 

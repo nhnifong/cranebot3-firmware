@@ -52,6 +52,12 @@ enum ConnStatus {
   CONNSTATUS_CONNECTED = 2;
 }
 
+enum MotorTorque {
+  MOTORTORQUE_UNSPECIFIED = 0;
+  MOTORTORQUE_ENABLED = 1;
+  MOTORTORQUE_DISABLED = 2;
+}
+
 enum GripperModel {
   GRIPPERMODEL_PILOT = 0;
   GRIPPERMODEL_ARPEGGIO = 1;
@@ -67,6 +73,10 @@ message ComponentConnStatus {
 	optional GripperModel gripper_model = 6; // also set to communicate anchor type
 	// Message with additional detail about why the component may not be functioning.
 	optional string error_message = 7;
+	// Tempurature of the Raspberry Pi SOC in degrees celcius
+	optional float temp = 8;
+	// Whether the motor on the component is enabled
+	optional MotorTorque motor_enabled = 9;
 }
 
 // Info on the throughput and latency of video connections and apriltag processing

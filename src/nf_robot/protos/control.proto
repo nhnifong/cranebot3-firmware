@@ -154,16 +154,18 @@ message SetSwingCancellation {
 // A command which can be sent to a single component, usually for setup or diagnostics
 enum ComponentAction {
   // value zero is unavailable for use
-  COMPONENT_ACTION_UNUSED = 0;
+  COMPONENTACTION_UNUSED = 0;
 
   // Reboot component
-  COMPONENT_ACTION_REBOOT = 1;
+  COMPONENTACTION_REBOOT = 1;
   // Identify component by moving some motor or making some sound. it is up to the component exactly what happens
-  COMPONENT_ACTION_IDENTIFY = 2;
+  COMPONENTACTION_IDENTIFY = 2;
   // Reel the line in until it is tight
-  COMPONENT_ACTION_TIGHTEN = 3;
+  COMPONENTACTION_TIGHTEN = 3;
   // Un-Reel the line until it is slack (the user can tug on it as long as they would like more line to come out)
-  COMPONENT_ACTION_RELAX = 4;
+  COMPONENTACTION_RELAX = 4;
+  // Set the angle from horizontal of the camera adapter on Arpeggio anchors.
+  COMPONENTACTION_SET_CAM_ANGLE = 5;
 }
 
 message SingleComponentAction {
@@ -172,6 +174,8 @@ message SingleComponentAction {
   ComponentAction action = 3;
   // reseved for future use
   optional uint32 spool_num = 4;
+  // The robot cannot move the camera, this is for the user to inform the system of the installed adapter in order to perform accurate calculations.
+  optional float cam_angle = 5;
 }
 
 enum LerobotSessionAction {

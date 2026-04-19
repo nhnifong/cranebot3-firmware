@@ -13,6 +13,7 @@ __all__ = (
     "GripCamPredictions",
     "GripperModel",
     "GripperSensors",
+    "MotorTorque",
     "NamedObjectPosition",
     "OneTarget",
     "OperationProgress",
@@ -81,6 +82,30 @@ class GripperModel(betterproto2.Enum):
         return {
             "GRIPPERMODEL_PILOT": 0,
             "GRIPPERMODEL_ARPEGGIO": 1,
+        }
+
+
+class MotorTorque(betterproto2.Enum):
+    UNSPECIFIED = 0
+
+    ENABLED = 1
+
+    DISABLED = 2
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "MOTORTORQUE_UNSPECIFIED",
+            1: "MOTORTORQUE_ENABLED",
+            2: "MOTORTORQUE_DISABLED",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "MOTORTORQUE_UNSPECIFIED": 0,
+            "MOTORTORQUE_ENABLED": 1,
+            "MOTORTORQUE_DISABLED": 2,
         }
 
 
@@ -211,6 +236,18 @@ class ComponentConnStatus(betterproto2.Message):
     )
     """
     Message with additional detail about why the component may not be functioning.
+    """
+
+    temp: "float | None" = betterproto2.field(8, betterproto2.TYPE_FLOAT, optional=True)
+    """
+    Tempurature of the Raspberry Pi SOC in degrees celcius
+    """
+
+    motor_enabled: "MotorTorque | None" = betterproto2.field(
+        9, betterproto2.TYPE_ENUM, optional=True
+    )
+    """
+    Whether the motor on the component is enabled
     """
 
 

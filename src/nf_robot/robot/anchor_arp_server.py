@@ -102,9 +102,11 @@ class AnchorArpServer(RobotComponentServer):
         if 'disable_torque' in updates:
             for spool in self.spools:
                 spool.pauseTrackingLoop(disable_torque=True)
+                self.update['torque'] = False
         if 'enable_torque' in updates:
             for spool in self.spools:
                 spool.resumeTrackingLoop()
+                self.update['torque'] = True
 
     def readOtherSensors(self):
         """ Sends updates about both spools with the form

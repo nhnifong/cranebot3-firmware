@@ -43,8 +43,6 @@ class ArpeggioAnchorClient(ComponentClient):
         self.anchor_pose = np.zeros((2, 3))
         self.camera_pose = np.zeros((2, 3))
         self.eye_pos = np.zeros(3)
-        # TODO inform web frontend of extra tilt.
-        self.extratilt = 22 - self.config.anchors[anchor_num].indirect_line.cam_tilt
         self.raw_gant_poses = deque(maxlen=24)
         self.gantry_pos_sightings = deque(maxlen=100)
         self.gantry_pos_sightings_lock = threading.RLock()
@@ -60,13 +58,16 @@ class ArpeggioAnchorClient(ComponentClient):
         if len(anchor_config_vars) > 0:
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
 
-    def updatePoseAndEye(self, pose, eye):
-        self.anchor_pose = pose
-        self.eye_pos = eye
+    def updatePoseAndEye(self, pose=None, eye=None):
+        if pose is not None:
+            self.anchor_pose = pose
+        if eye is not None:
+            self.eye_pos = eye
+        extratilt = 22 - self.config.anchors[self.anchor_num].indirect_line.cam_tilt
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
             model_constants.arp_anchor_camera,
-            (np.array([0,0,self.extratilt/180*np.pi], dtype=float), np.zeros(3, dtype=float)),
+            (np.array([0,0,extratilt/180*np.pi], dtype=float), np.zeros(3, dtype=float)),
         ]))
 
     async def handle_update_from_ws(self, update):

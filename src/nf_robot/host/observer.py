@@ -341,6 +341,10 @@ class AsyncObserver:
                 r = await client.send_commands({'tighten': None})
             elif item.action == control.ComponentAction.RELAX:
                 r = await client.send_commands({'relax': None})
+            elif item.action == control.ComponentAction.SET_CAM_ANGLE and self.config.anchor_type == common.AnchorType.ARPEGGIO:
+                self.config.anchors[item.anchor_num].indirect_line.cam_tilt = item.cam_angle
+                save_config(self.config, self.config_path)
+                self.anchors[item.anchor_num].updatePoseAndEye()
 
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
         logger.info(f'Swing cancellation set {item.enabled}')
@@ -1850,6 +1854,7 @@ class AsyncObserver:
             await self.async_close()
 
     async def async_close(self) -> None:
+        print('Stringman Controller Shutdown')
         result = await self.stop_all()
         self.run_command_loop = False
         self.stat.run = False
@@ -1879,7 +1884,6 @@ class AsyncObserver:
             result = await asyncio.gather(*tasks)
         except asyncio.exceptions.CancelledError:
             pass
-        logger.info('Stringman Controller Shutdown')
 
     async def add_simulated_data_point2point(self):
         """Simulate the gantry moving from random point to random point.
