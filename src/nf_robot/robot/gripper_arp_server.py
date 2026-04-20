@@ -170,6 +170,35 @@ class GripperArpServer(RobotComponentServer):
             except (json.JSONDecodeError, EOFError):
                 os.remove('arp_gripper_state.json')
 
+    async def resetWrist(self):
+        """Reset the wrist encoder angle to half a revolution above zero,
+        Try to rotate one revolution in the negative direction first so there will be no net wire twisting,
+        then rotate one full revolution in the positive direction,
+        then zero offsets"""
+        self.wrist_torque_reenable_time = time.time() + 3.9
+        a = self.getWristAngle()
+        self.setWrist(a - 360)
+        await asyncio.sleep(4)
+        self.motor_loop_pause = True
+        self.motors.reset_encoder_to_midpoint(WRIST)
+        await asyncio.sleep(0.1)
+        wrist_data = self.motors.get_feedback(WRIST)
+        simple_angle = wrist_data['position'] / STEPS_PER_REV * 360
+        logging.info(f'after encoder reset, wrist reports {simple_angle}. should be 180. moving one rev positive to 540')
+        self.last_simple_wrist_angle = 180.0
+        self.unrolled_wrist_angle = 180.0
+        self.wrist_step_offset = 0.0
+        self.setWrist(180)
+        self.motor_loop_pause = False
+        await asyncio.sleep(0.1)
+        self.setWrist(540)
+        end = time.time() + 4
+        while time.time() < end:
+            logging.info(self.getWristAngle())
+            await asyncio.sleep(0.05)
+        a = self.getWristAngle()
+        logging.info(f'Resest wrist. should be 540. ({a})') 
+
     def getWristAngle(self):
         # motor only reports it's position within one revolution.
         # even though you can command multi turns from it.
@@ -539,6 +568,8 @@ class GripperArpServer(RobotComponentServer):
             asyncio.create_task(self.measureFingerContact())
         if 'identify' in update:
             self.identify()
+        if 'reset_wrist' in update:
+            asyncio.create_task(self.resetWrist())
 
     def identify(self):
         """ make a noise """

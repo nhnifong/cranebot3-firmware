@@ -399,6 +399,8 @@ class AsyncObserver:
         if item.action.startswith('swinglatency '):
             parts = item.action.split(' ')
             self.swing_latency = float(parts[1])
+        if item.action == 'reset_wrist':
+             await asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
 
     async def lerobot_process(self, item: control.ManageLerobotSession):
         repo_id = item.repo_id
@@ -1253,10 +1255,11 @@ class AsyncObserver:
         if isinstance(self.gripper_client, ArpeggioGripperClient):
             # measurement must be taken at the wrist's zero point
             center_angle = 540
-            asyncio.create_task(self.gripper_client.send_commands({'set_wrist_angle': center_angle}))
-            # wait till within 1 degree of target or up to 10 seconds
+            asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
+            await asyncio.sleep(10)
+            # wait till within 1 degree of target
             actual_wrist = 100
-            end_time = time.time() + 10
+            end_time = time.time() + 2
             logger.info(f'Moved wrist to {center_angle}, waiting to reach position')
             while abs(actual_wrist - center_angle) > 2.0 and time.time() < end_time:
                 await asyncio.sleep(0.2)
