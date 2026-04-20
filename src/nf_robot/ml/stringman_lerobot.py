@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 import av
 from huggingface_hub import repo_exists
 import os
+import signal
+import sys
 
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
@@ -427,6 +429,17 @@ def record_episode(
     print('ep finished')
 
 def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_only=False):
+    class GracefulExit(Exception):
+        pass
+
+    def handle_shutdown_signal(signum, frame):
+        print(f"Received termination signal ({signum}). Initiating graceful shutdown...", flush=True)
+        raise GracefulExit()
+
+    # Catch SIGTERM (from GCP Preemption) and SIGINT (Ctrl+C for local dev)
+    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    signal.signal(signal.SIGINT, handle_shutdown_signal)
+
     events={
         'episode_abandon': False,
         'end_recording': False,
@@ -526,10 +539,21 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_only=F
             dataset.save_episode()
             print(f"Ready.")
             recorded_episodes += 1
+            
+            # Checkpoint: Upload data to Hugging Face every 10 episodes
+            if upload and recorded_episodes % 10 == 0:
+                print(f"Checkpoint reached: Uploading dataset to Hugging Face ({recorded_episodes} episodes)...", flush=True)
+                dataset.push_to_hub()
+
             robot.send_session_status(common.LerobotSessionStatus(
                 status=common.LerobotStatus.REC_READY,
                 session_ep_number=recorded_episodes
             ))
+
+    except GracefulExit:
+        print("Shutdown signal caught. Abandoning any active episode.", flush=True)
+        if 'dataset' in locals() and dataset is not None:
+            dataset.clear_episode_buffer()
 
     except Exception as e:
         robot.send_session_status(common.LerobotSessionStatus(
@@ -539,16 +563,16 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_only=F
         raise
 
     finally:
-        print("Recording stopped. Cleaning up.")
+        print("Recording stopped. Cleaning up.", flush=True)
 
         if recorded_episodes > 0:
             robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_PROCESSING))
-            print(f"{recorded_episodes} episodes collected. Encoding remaining video")
+            print(f"{recorded_episodes} episodes collected. Encoding remaining video", flush=True)
             dataset.finalize()
             if upload:
-                print("Encoding complete. Uploading to hugging face.")
+                print("Encoding complete. Uploading to hugging face.", flush=True)
                 dataset.push_to_hub()
-                print("Upload complete.")
+                print("Upload complete.", flush=True)
 
         robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_ALL_COMPLETE))
         time.sleep(0.03)
@@ -718,7 +742,7 @@ def eval_until_disconnected(uri, policy_repo_id, device="cuda", remote_stream_on
 
 if __name__ == "__main__":
     """
-    python -m nf_robot.ml.stringman_lerobot record --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --repo_id=naavox/grasping_dataset
+    python -m nf_robot.ml.stringman_lerobot record --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --repo_id=naavox/grasping_dataset --remote_stream_only
     python -m nf_robot.ml.stringman_lerobot eval --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --policy_id=naavox/grasping_act_policy --dataset_id=naavox/grasping_dataset
     """
     parser = argparse.ArgumentParser(description="Stringman Lerobot Episode Recorder / Evaluator")
