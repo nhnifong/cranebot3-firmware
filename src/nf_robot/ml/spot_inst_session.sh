@@ -16,6 +16,7 @@ PROJECT_ID="nf-web-480214"
 REGION="us-east1"
 ROBOT_ID="8fdab437-3a45-4437-b6d3-0e8a9e380326"
 DATASET_REPO_ID="naavox/test_dataset"
+REMOTE_STREAM_TOKEN="abcdefg"
 
 echo "Submitting batch job: $JOB_NAME"
 
@@ -34,7 +35,7 @@ gcloud batch jobs submit $JOB_NAME \
             "--robot_id=simulated_robot_1",
             "--server_address=wss://neufangled.com/telemetry/${ROBOT_ID}", 
             "--repo_id=${DATASET_REPO_ID}",
-            "--remote_stream_only"
+            "--remote_stream_token=${REMOTE_STREAM_TOKEN}"
           ]
         }
       }],

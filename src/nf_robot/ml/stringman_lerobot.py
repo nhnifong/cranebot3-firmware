@@ -38,7 +38,7 @@ ANCHOR_H = 544
 @dataclass
 class StringmanConfig(RobotConfig):
     uri: str
-    remote_stream_only: bool = False
+    remote_stream_token: str | None = None
 
 def decode_image(jpeg_bytes):
     try:
@@ -55,7 +55,10 @@ class StringmanLeRobot(Robot):
     def __init__(self, config: StringmanConfig, events):
         super().__init__(config)
         self.address = config.uri
-        self.remote_stream_only = config.remote_stream_only
+
+        # when connecting to remote streams, we will need the token of an authorized user in order to access the robot's telemetry
+        self.remote_stream_token = config.remote_stream_token
+
         self.websocket = None
         
         self.last_commanded_vel = np.zeros(3)
@@ -197,11 +200,11 @@ class StringmanLeRobot(Robot):
         if feed_num in self.video_threads and self.video_threads[feed_num].is_alive():
             return
 
-        # Handle stream URL selection based on the remote_stream_only flag
-        if self.remote_stream_only and item.stream_path:
+        # Handle stream URL selection based on the remote_stream_token flag
+        if self.remote_stream_token is not None and item.stream_path:
             url = f"rtsp://media.neufangled.com:8554/{item.stream_path}"
         else:
-            url = item.local_uri if item.local_uri else (f"rtsp://media.neufangled.com:8554/{item.stream_path}" if item.stream_path else "")
+            url = item.local_uri if item.local_uri else (f"rtsp://media.neufangled.com:8554/{item.stream_path}?token={self.remote_stream_token}" if item.stream_path else "")
 
         if url:
             parsed = urlparse(url)
@@ -428,7 +431,7 @@ def record_episode(
 
     print('ep finished')
 
-def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_only=False):
+def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=None):
     class GracefulExit(Exception):
         pass
 
@@ -448,7 +451,7 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_only=F
     }
 
     # connect to the robot right away because it is our channel to send error messages back to the user.
-    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_only=remote_stream_only), events)
+    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token), events)
     robot.connect()
     if not robot.is_connected:
         raise ConnectionError(f"Failed to connect to robot at {uri}")
@@ -655,7 +658,7 @@ def eval_episode(
         "finger_speed": 0.0
     })
 
-def eval_until_disconnected(uri, policy_repo_id, device="cuda", remote_stream_only=False):
+def eval_until_disconnected(uri, policy_repo_id, device="cuda", remote_stream_token=None):
     import torch
     from lerobot.policies.factory import make_policy, make_pre_post_processors
     from lerobot.configs.policies import PreTrainedConfig
@@ -700,7 +703,7 @@ def eval_until_disconnected(uri, policy_repo_id, device="cuda", remote_stream_on
     print("Policy loaded.")
     
     print(f"Connecting to robot...")
-    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_only=remote_stream_only), events)
+    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token), events)
     robot.connect()
     
     # init_rerun(session_name="stringman_eval")
@@ -742,7 +745,7 @@ def eval_until_disconnected(uri, policy_repo_id, device="cuda", remote_stream_on
 
 if __name__ == "__main__":
     """
-    python -m nf_robot.ml.stringman_lerobot record --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --repo_id=naavox/grasping_dataset --remote_stream_only
+    python -m nf_robot.ml.stringman_lerobot record --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --repo_id=naavox/grasping_dataset
     python -m nf_robot.ml.stringman_lerobot eval --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --policy_id=naavox/grasping_act_policy --dataset_id=naavox/grasping_dataset
     """
     parser = argparse.ArgumentParser(description="Stringman Lerobot Episode Recorder / Evaluator")
@@ -751,7 +754,7 @@ if __name__ == "__main__":
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument("--robot_id", default="simulated_robot_1", help="id of robot to record from")
     parent_parser.add_argument("--server_address", default="ws://localhost:4245", help="WebSocket server address")
-    parent_parser.add_argument("--remote_stream_only", action="store_true", help="Force using media.neufangled.com stream URL instead of local URIs")
+    parent_parser.add_argument("--remote_stream_token", help="Token of authorized user. must be supplied in order to access remote streams. When set, recording will only use using media.neufangled.com and ignore local URIs")
 
     record_parser = subparsers.add_parser('record', parents=[parent_parser], help="Record new episodes")
     record_parser.add_argument("--repo_id", default="naavox/grasping_dataset", help="repo id of dataset to append to")
@@ -764,6 +767,6 @@ if __name__ == "__main__":
     uri = f'{args.server_address}/telemetry/{args.robot_id}'
 
     if args.command == 'eval':
-        eval_until_disconnected(uri, args.policy_id, remote_stream_only=args.remote_stream_only)
+        eval_until_disconnected(uri, args.policy_id, remote_stream_token=args.remote_stream_token)
     else:
-        record_until_disconnected(uri, args.repo_id, args.upload, remote_stream_only=args.remote_stream_only)
+        record_until_disconnected(uri, args.repo_id, args.upload, remote_stream_token=args.remote_stream_token)
