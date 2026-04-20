@@ -87,3 +87,38 @@ python -m nf_robot.ml.stringman_lerobot eval \
   --policy_id=naavox/grasp_remote_act \
   --dataset_id=naavox/grasping_dataset
 ```
+
+## Running record script connected to remote streams (media.neufangled.com)
+
+```
+python -m nf_robot.ml.stringman-lerobot record \
+  --robot_id="robot id" \
+  --server_address=wss://neufangled.com/telemetry/8fdab437-3a45-4437-b6d3-0e8a9e380326 \
+  --remote_stream_token="steal a token from prod" \
+  --repo_id=naavox/test_dataset
+```
+
+## Building record script docker container
+
+from repo root
+
+    docker build -t stringman-lerobot -f src/nf_robot/ml/Dockerfile .
+
+upload the container for use in google cloud
+
+```
+docker tag stringman-lerobot us-east1-docker.pkg.dev/nf-web-480214/record-session-containers/stringman-lerobot:latest
+docker push us-east1-docker.pkg.dev/nf-web-480214/record-session-containers/stringman-lerobot:latest'
+```
+
+## Running a record session from a container on local docker server
+
+```
+docker run -it --rm \
+    -e HF_TOKEN="huggingface token" \
+    stringman-lerobot record \
+    --robot_id="robot id" \
+    --server_address=wss://neufangled.com/telemetry/8fdab437-3a45-4437-b6d3-0e8a9e380326 \
+    --remote_stream_token="steal a token from prod" \
+    --repo_id=naavox/test_dataset
+```
