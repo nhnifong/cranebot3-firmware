@@ -12,9 +12,9 @@ fi
 
 # You can generate a unique job name based on the date/time
 JOB_NAME="lerobot-record-$(date +%s)"
-PROJECT_ID="your-gcp-project-id" # Update this
-REGION="us-central1"
-ROBOT_ID=""
+PROJECT_ID="nf-web-480214"
+REGION="us-east1"
+ROBOT_ID="8fdab437-3a45-4437-b6d3-0e8a9e380326"
 DATASET_REPO_ID="naavox/test_dataset"
 
 echo "Submitting batch job: $JOB_NAME"
@@ -28,7 +28,7 @@ gcloud batch jobs submit $JOB_NAME \
     "taskSpec": {
       "runnables": [{
         "container": {
-          "imageUri": "gcr.io/${PROJECT_ID}/stringman-lerobot:latest",
+          "imageUri": "us-east1-docker.pkg.dev/nf-web-480214/record-session-containers/stringman-lerobot:latest",
           "commands": [
             "record",
             "--robot_id=simulated_robot_1",
@@ -61,4 +61,4 @@ gcloud batch jobs submit $JOB_NAME \
 }
 EOF
 
-echo "Job submitted successfully! You can view logs in the GCP Console under 'Batch'."
+echo "Job submitted successfully! You can view logs at https://console.cloud.google.com/batch/jobs?referrer=search&project=${PROJECT_ID}."
