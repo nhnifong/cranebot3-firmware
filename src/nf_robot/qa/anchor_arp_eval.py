@@ -46,8 +46,8 @@ def main():
     # once both motor ids are set.
     # prepare to wind line on each motor.
 
-    lower_motor = controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="H6220")
-    upper_motor = controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type="H6220")
+    lower_motor = controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="G6215")
+    upper_motor = controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type="G6215")
     lower_motor.disable()
     upper_motor.disable()
     motors = [
