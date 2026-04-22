@@ -202,9 +202,13 @@ class StringmanLeRobot(Robot):
 
         # Handle stream URL selection based on the remote_stream_token flag
         if self.remote_stream_token is not None and item.stream_path:
-            url = f"rtsp://media.neufangled.com:8554/{item.stream_path}"
-        else:
-            url = item.local_uri if item.local_uri else (f"rtsp://media.neufangled.com:8554/{item.stream_path}?token={self.remote_stream_token}" if item.stream_path else "")
+            if 'localhost' in self.address:
+                host = 'localhost:8554'
+            else:
+                host = 'media.neufangled.com:8554'
+            url = f"rtsp://{host}/{item.stream_path}?token={self.remote_stream_token}"
+        elif item.local_uri is not None:
+            url = item.local_uri
 
         if url:
             parsed = urlparse(url)
@@ -753,7 +757,7 @@ if __name__ == "__main__":
 
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument("--robot_id", default="simulated_robot_1", help="id of robot to record from")
-    parent_parser.add_argument("--server_address", default="ws://localhost:4245", help="WebSocket server address")
+    parent_parser.add_argument("--server_address", default="ws://localhost:4245", help="WebSocket server address (not including path)")
     parent_parser.add_argument("--remote_stream_token", help="Token of authorized user. must be supplied in order to access remote streams. When set, recording will only use using media.neufangled.com and ignore local URIs")
 
     record_parser = subparsers.add_parser('record', parents=[parent_parser], help="Record new episodes")
@@ -764,7 +768,9 @@ if __name__ == "__main__":
     eval_parser.add_argument("--policy_id", default="naavox/grasping_act_policy", help="repo id of policy to load")
     
     args = parser.parse_args()
-    uri = f'{args.server_address}/telemetry/{args.robot_id}'
+    uri = f'{args.server_address}/control/{args.robot_id}'
+    if args.remote_stream_token:
+        uri += f'?token={args.remote_stream_token}'
 
     if args.command == 'eval':
         eval_until_disconnected(uri, args.policy_id, remote_stream_token=args.remote_stream_token)
