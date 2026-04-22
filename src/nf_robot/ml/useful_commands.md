@@ -88,19 +88,19 @@ python -m nf_robot.ml.stringman_lerobot eval \
   --dataset_id=naavox/grasping_dataset
 ```
 
-## Running record script connected to remote streams (media.neufangled.com)
+## Running record script connected to mediamtx streams (local telemetry stack)
 
 ```
-python -m nf_robot.ml.stringman-lerobot record \
-  --robot_id="robot id" \
-  --server_address=wss://neufangled.com/telemetry/8fdab437-3a45-4437-b6d3-0e8a9e380326 \
-  --remote_stream_token="steal a token from prod" \
+python -m nf_robot.ml.stringman_lerobot record \
+  --robot_id="b9a1f266-4ff5-476f-a84e-ed82f5d85886" \
+  --server_address=ws://localhost:8080 \
+  --remote_stream_token=$TOKEN \
   --repo_id=naavox/test_dataset
 ```
 
 ## Building record script docker container
 
-from repo root
+from repo root. Note that this uses the nf_robot in pypi
 
     docker build -t stringman-lerobot -f src/nf_robot/ml/Dockerfile .
 
