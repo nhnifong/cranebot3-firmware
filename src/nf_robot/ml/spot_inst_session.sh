@@ -33,7 +33,7 @@ gcloud batch jobs submit $JOB_NAME \
           "commands": [
             "record",
             "--robot_id=simulated_robot_1",
-            "--server_address=wss://neufangled.com/telemetry/${ROBOT_ID}", 
+            "--server_address=wss://neufangled.com/control/${ROBOT_ID}", 
             "--repo_id=${DATASET_REPO_ID}",
             "--remote_stream_token=${REMOTE_STREAM_TOKEN}"
           ]
