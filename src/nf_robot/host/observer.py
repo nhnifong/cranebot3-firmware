@@ -1120,6 +1120,9 @@ class AsyncObserver:
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
             logger.info(f'Collected enough observations {num_o_dets}')
+            self.send_ui(visibility_states=telemetry.VisibilityStates(anchors_seeing_origin_card=list(
+                [anum for anum, count in enumerate(num_o_dets) if count > 0] # only anchor nums which see the origin card
+            )))
 
             raw_obs = self.snapshot_tag_observations()
 
