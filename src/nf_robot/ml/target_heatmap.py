@@ -619,7 +619,7 @@ if __name__ == "__main__":
     train_parser = subparsers.add_parser("train")
     train_parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
     train_parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
-    train_parser.add_argument("--epochs", type=int, default=50)
+    train_parser.add_argument("--epochs", type=int, default=250)
     train_parser.add_argument("--batch_size", type=int, default=10)
     train_parser.add_argument("--lr", type=float, default=1e-4)
 
