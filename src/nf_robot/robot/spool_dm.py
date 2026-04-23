@@ -78,6 +78,7 @@ class DamiaoSpoolController:
         self.run_spool_loop = True # permanent
         self.spool_pause = False
         self._torque_disabled = False
+        self.anti_tangle_enabled = True
 
     def _getAbsoluteAngle(self):
         """Get absolute motor angle in revolutions"""
@@ -242,10 +243,11 @@ class DamiaoSpoolController:
                 wanted_motor_vel = self.aim_line_speed / self.meters_per_rev * twopi
 
                 # prevent birdsnest by soft muting velocity when outspooling with no tension
-                self.torque_err = smooth_torque - self.conf['TARGET_TORQUE']
-                mute = 0 if (self.torque_err > 0 and wanted_motor_vel > 0) else 1
-                smooth_mute = mute * sf + smooth_mute * (1 - sf)
-                wanted_motor_vel *= smooth_mute
+                if self.anti_tangle_enabled:
+                    self.torque_err = smooth_torque - self.conf['TARGET_TORQUE']
+                    mute = 0 if (self.torque_err > 0 and wanted_motor_vel > 0) else 1
+                    smooth_mute = mute * sf + smooth_mute * (1 - sf)
+                    wanted_motor_vel *= smooth_mute
                 
                 self.motor.send_cmd_vel(target_velocity=wanted_motor_vel*self.direction)
 
@@ -257,3 +259,5 @@ class DamiaoSpoolController:
         finally:
             self.motor.disable()
 
+    def setAntiTangle(self, val):
+        self.anti_tangle_enabled = val

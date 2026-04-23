@@ -107,6 +107,12 @@ class AnchorArpServer(RobotComponentServer):
             for spool in self.spools:
                 spool.resumeTrackingLoop()
                 self.update['torque'] = True
+        if 'set_anti_tangle' in updates:
+            val, spool_no = updates['set_anti_tangle']
+            spool_no = int(spool_no)
+            val = bool(val)
+            assert spool_no in [0,1]
+            self.spools[spool_no].setAntiTangle(val)
 
     def readOtherSensors(self):
         """ Sends updates about both spools with the form

@@ -936,10 +936,17 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
             logger.info('Relax the direct lines, tighten the indirect line')
-            await self.send_line_speed(0,  0.1, jog=True)
+
+            # relax direct lines
+            await self.anchors[0].send_commands({'set_anti_tangle': (False, 0)})
+            await self.anchors[1].send_commands({'set_anti_tangle': (False, 0)})
+            await self.send_line_speed(0,  0.3, jog=True)
+            await self.send_line_speed(2,  0.3, jog=True)
+
+            # tighten indirect lines
             await self.send_line_speed(1, -0.02, jog=True)
-            await self.send_line_speed(2,  0.1, jog=True)
             await self.send_line_speed(3, -0.02, jog=True)
+
             await asyncio.sleep(1)
             self.slow_stop_all_spools()
 
@@ -948,9 +955,6 @@ class AsyncObserver:
             results = {}
             line_deltas = {}
 
-            # keep loosening these the whole time
-            await self.send_line_speed(0, 0.1)
-            await self.send_line_speed(2, 0.1)
 
             def get_eyelet_lengths():
                 l1 = self.datastore.anchor_line_record[1].getLast()[1]
@@ -988,6 +992,8 @@ class AsyncObserver:
             l1_before, l3_before = get_eyelet_lengths()
             await self.send_line_speed(1, -half_w-half_h, jog=True)
             await self.send_line_speed(3, half_w-half_h, jog=True)
+            await self.send_line_speed(0,  0.1, jog=True)
+            await self.send_line_speed(2,  0.1, jog=True)
             await wait_for_lines_to_stop()
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
@@ -1026,6 +1032,8 @@ class AsyncObserver:
             l1_before, l3_before = get_eyelet_lengths()
             await self.send_line_speed(1, half_w+half_h, jog=True)
             await self.send_line_speed(3, -half_w+half_h, jog=True)
+            await self.send_line_speed(0,  0.1, jog=True)
+            await self.send_line_speed(2,  0.1, jog=True)
             await wait_for_lines_to_stop()
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
@@ -1034,6 +1042,10 @@ class AsyncObserver:
             logger.info(f'top_to_lef actual deltas: line1={line_deltas["top_to_lef"][0]:.4f}, line3={line_deltas["top_to_lef"][1]:.4f}')
             await asyncio.sleep(5)
             results['left'] = self.snapshot_tag_observations()['gantry']
+
+            # set back anti tangle to normal function 
+            await self.anchors[0].send_commands({'set_anti_tangle': (True, 0)})
+            await self.anchors[1].send_commands({'set_anti_tangle': (True, 0)})
 
             logger.info('Return result')
             for a in self.anchors.values():
