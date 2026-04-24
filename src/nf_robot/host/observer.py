@@ -786,8 +786,8 @@ class AsyncObserver:
             records = np.array([alr.getLast() for alr in self.datastore.anchor_line_record])
             speeds = np.array(records[:,2])
             tension = np.array(records[:,3])
-            logger.debug(f'wait for tension speeds={speeds} tension={tension}')
             complete = np.all(tension > threshold) and abs(np.sum(speeds)) < SPEED_SUM_THRESHOLD
+        logger.debug(f'tension on lines = {tension}')
         return True
 
     async def tension_and_wait(self):
@@ -919,10 +919,11 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
 
-    async def collect_arp_anchor_eyelet_experiment_data(self):
+    async def collect_arp_anchor_eyelet_experiment_data(self, anchor_poses):
         """  
         Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
         """
+        tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
 
         try:
             for a in self.anchors.values():
@@ -937,9 +938,22 @@ class AsyncObserver:
 
             logger.info('Relax the direct lines, tighten the indirect line')
 
+            def get_direct_tensions():
+                t0 = self.datastore.anchor_line_record[0].getLast()[3]
+                t2 = self.datastore.anchor_line_record[2].getLast()[3]
+                return t0,t2
+
             # relax direct lines
             await self.anchors[0].send_commands({'set_anti_tangle': (False, 0)})
             await self.anchors[1].send_commands({'set_anti_tangle': (False, 0)})
+            t0,t2 = get_direct_tensions()
+            while t0 > 0.1 and t2 > 0.1:
+                await self.send_line_speed(0,  0.1)
+                await self.send_line_speed(2,  0.1)
+                await asyncio.sleep(0.1)
+                t0,t2 = get_direct_tensions()
+                print((t0,t2))
+            # another 30 cm
             await self.send_line_speed(0,  0.3, jog=True)
             await self.send_line_speed(2,  0.3, jog=True)
 
@@ -992,8 +1006,8 @@ class AsyncObserver:
             l1_before, l3_before = get_eyelet_lengths()
             await self.send_line_speed(1, -half_w-half_h, jog=True)
             await self.send_line_speed(3, half_w-half_h, jog=True)
-            await self.send_line_speed(0,  0.1, jog=True)
-            await self.send_line_speed(2,  0.1, jog=True)
+            await self.send_line_speed(0,  0.3, jog=True)
+            await self.send_line_speed(2,  0.3, jog=True)
             await wait_for_lines_to_stop()
             await self.send_line_speed(1, 0)
             await self.send_line_speed(3, 0)
@@ -1051,7 +1065,7 @@ class AsyncObserver:
             for a in self.anchors.values():
                 a.save_raw = True
 
-            analyze_diamond_data(results)
+            analyze_diamond_data(results, anchor_poses, tilts)
 
             return results, line_deltas
 
@@ -1145,8 +1159,9 @@ class AsyncObserver:
             ))
 
             if self.config.anchor_type == common.AnchorType.ARPEGGIO:
+                tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
                 # determine position of two anchors visually and guess at external eyelets.
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, None, None, None))
+                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, None, None, None, tilts))
                 anchor_poses, eyelet_positions = async_result.get(timeout=30)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
@@ -1158,12 +1173,12 @@ class AsyncObserver:
                 ))
                 await self.half_auto_calibration()
                 # collect length_change_data data to estimate eyelets better
-                diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data()
+                diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data(anchor_poses)
                 # stop saving raw poses
                 for a in self.anchors.values():
                     a.save_raw = False
                 # optimize again with length_change_data
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None, line_deltas))
+                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None, line_deltas, tilts))
                 anchor_poses, eyelet_positions = async_result.get(timeout=30)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
@@ -1296,7 +1311,6 @@ class AsyncObserver:
                 async_result = self.pool.apply_async(
                     locate_markers_gripper,
                     (self.gripper_client.last_frame_resized, self.config.camera_cal_wide),
-                    # self.config.camera_cal if isinstance(self.gripper_client, RaspiGripperClient) else self.config.camera_cal_wide),
                     callback=partial(special_handle_det, time.time()))
                 detections = async_result.get(timeout=5)
         except Exception as e:
@@ -1308,8 +1322,6 @@ class AsyncObserver:
         euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
         logger.info(f'Euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
         roomspin = euler_rot[0]
-        # if isinstance(self.gripper_client, ArpeggioGripperClient):
-        # roomspin+=np.pi
         self.config.gripper.frame_room_spin = roomspin
         self.config.has_been_calibrated = True
         save_config(self.config, self.config_path)

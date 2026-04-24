@@ -459,6 +459,7 @@ class GripperArpServer(RobotComponentServer):
             
     def setFingers(self, angle):
         self.in_force_mode = False
+        self.desired_force = 0
         self.desired_finger_angle = clamp(angle, -90, 90)
             
     def setWrist(self, angle):

@@ -13,6 +13,8 @@ W_PLANAR = 0.9 # increase this to make anchor height deviations from the average
 W_DIAMOND_DIST = 0.8 # weight for the distance changes in the diamond pattern
 W_DIAMOND_PLANAR = 0.2 # weight for forcing the gantry and eyelets into a single vertical plane
 W_EYELET_REG = 0.2 # weight to keep eyelets near their initial 5m guess
+W_SHAPE_MATCH = 1.0 # weight to force distance between anchors to match distance between eyelets
+W_ANCHOR_TILT = 10.0 # weight to penalize anchor pitch/roll changes (locks rotation to Z-axis only)
 
 # half height and half width of diamond
 DIAMOND_SIZE = (0.1, 1.0)
@@ -34,7 +36,7 @@ DIAMOND_SIZE = (0.1, 1.0)
 # left   -> bottom: Eyelet 1 (Line 3) lengthens by 15cm (back to 'bottom' length)
 # =============================================================================
 
-def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None):
+def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22)):
     """
     Computes the vector of residuals (differences) for least_squares.
     
@@ -59,9 +61,17 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     cost_diamond_planar = 0.0
     cost_diamond_dist = 0.0
     cost_eyelet_reg = 0.0
+    cost_shape_match = 0.0
+    cost_anchor_tilt = 0.0
+
+    # Pre-calculate the extra tilt nodes for the cameras
+    tilt_nodes = []
+    for i in range(2):
+        extratilt = 22 - cam_tilts[i]
+        tilt_nodes.append((np.array([0, 0, extratilt / 180.0 * np.pi], dtype=float), np.zeros(3, dtype=float)))
 
     # ---------------------------------------------------------
-    # 1. Existing Camera-based Residuals (Origin & Consistency)
+    # Camera-based Residuals (Origin & Consistency)
     # ---------------------------------------------------------
     for marker_name, sightings in raw_obs.items():
         valid_sightings = []
@@ -75,6 +85,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                 pose_list = [
                     anchor_poses[anchor_idx],
                     model_constants.arp_anchor_camera,
+                    tilt_nodes[anchor_idx],
                     marker_pose_cam
                 ]
                 if marker_name == 'gantry':
@@ -104,7 +115,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             cost_origin += np.sum(current_residuals**2)
 
     # ---------------------------------------------------------
-    # 2. Anchor and Eyelet Z-Plane Constraint
+    # Anchor and Eyelet Z-Plane Constraint
     # ---------------------------------------------------------
         # Extract Z coordinates from the 2 anchors and 2 eyelets
         anchor_zs = anchor_poses[:, 1, 2]
@@ -120,7 +131,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         cost_planar += np.sum(z_residuals**2)
 
     # ---------------------------------------------------------
-    # 3. Diamond Kinematic & Distance Residuals
+    # Diamond Kinematic & Distance Residuals
     # ---------------------------------------------------------
     if diamond_observations is not None:
         all_points_per_state = {}
@@ -136,6 +147,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                     pose_list = [
                         anchor_poses[c],
                         model_constants.arp_anchor_camera,
+                        tilt_nodes[c],
                         pose_cam,
                         gantry_april_inv
                     ]
@@ -226,12 +238,33 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             cost_diamond_dist += sum(r**2 for r in d_res)
 
     # ---------------------------------------------------------
-    # 4. Regularization (Anchor eyelets to initial guesses)
+    # Regularization (Anchor eyelets to initial guesses)
     # ---------------------------------------------------------
     if initial_eyelets is not None:
         reg_residuals = (eyelet_positions - initial_eyelets).flatten() * W_EYELET_REG
         residuals.extend(reg_residuals)
         cost_eyelet_reg += np.sum(reg_residuals**2)
+
+    # ---------------------------------------------------------
+    # Distance Match Constraint (Anchors vs Eyelets)
+    # ---------------------------------------------------------
+    dist_anchors = np.linalg.norm(anchor_poses[0, 1] - anchor_poses[1, 1])
+    dist_eyelets = np.linalg.norm(eyelet_positions[0] - eyelet_positions[1])
+    shape_res = (dist_anchors - dist_eyelets) * W_SHAPE_MATCH
+    residuals.append(shape_res)
+    cost_shape_match += shape_res**2
+
+    # ---------------------------------------------------------
+    # Anchor Tilt Constraint (Only Z-rotation allowed)
+    # ---------------------------------------------------------
+    if fixed_anchor_poses is None:
+        global_z = np.array([0.0, 0.0, 1.0])
+        for i in range(2):
+            R_curr, _ = cv2.Rodrigues(anchor_poses[i, 0])
+            z_curr = R_curr[:, 2]
+            tilt_res = (z_curr - global_z) * W_ANCHOR_TILT
+            residuals.extend(tilt_res)
+            cost_anchor_tilt += np.sum(tilt_res**2)
 
     if debug:
         lines = [
@@ -240,9 +273,11 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         ]
         if fixed_anchor_poses is None:
             lines.append(f"Anchor Z-Planarity: {cost_planar:.6f}")
+            lines.append(f"Anchor Tilt Fixed:  {cost_anchor_tilt:.6f}")
         lines += [
             f"Diamond Planarity:  {cost_diamond_planar:.6f}",
             f"Diamond Distances:  {cost_diamond_dist:.6f}",
+            f"Shape Match (A~E):  {cost_shape_match:.6f}",
             f"Eyelet Reg (drift): {cost_eyelet_reg:.6f}",
             "----------------------",
         ]
@@ -250,7 +285,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
 
     return np.array(residuals)
 
-def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None):
+def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22)):
     """
     Finds optimal anchor poses AND external eyelet positions.
     
@@ -266,6 +301,11 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     """
     if diamond_observations is None:
         diamond_observations = {}
+
+    tilt_nodes = []
+    for i in range(2):
+        extratilt = 22 - cam_tilts[i]
+        tilt_nodes.append((np.array([0, 0, extratilt / 180.0 * np.pi], dtype=float), np.zeros(3, dtype=float)))
         
     if fixed_anchor_poses is None:
         initial_guesses = []
@@ -276,6 +316,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
             origin_marker_pose = origin_sightings[i][0]
             guess = invert_pose(compose_poses([
                 model_constants.arp_anchor_camera,
+                tilt_nodes[i],
                 origin_marker_pose,
             ]))
             initial_guesses.append(guess)
@@ -301,12 +342,12 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # Configure the state vector and args depending on whether we are freezing anchors
     if fixed_anchor_poses is not None:
         x0 = initial_eyelet_guesses.flatten()
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts)
     else:
         initial_anchor_flat = anchor_poses_to_use.flatten()
         initial_eyelet_flat = initial_eyelet_guesses.flatten()
         x0 = np.concatenate([initial_anchor_flat, initial_eyelet_flat])
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts)
 
     logger.info('Running least squares optimization...')
     result = optimize.least_squares(
@@ -323,7 +364,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
 
     # Run one final time with debug=True to print the cost distribution
     logger.info("Final Optimization Costs:")
-    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas)
+    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts)
 
     # Reshape back to distinct structures based on the freeze flag
     if fixed_anchor_poses is not None:
@@ -336,19 +377,23 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     return optimized_anchors, optimized_eyelets
 
 
-def analyze_diamond_data(diamond_observations):
+def analyze_diamond_data(diamond_observations, anchor_poses, cam_tilts=(22, 22)):
     """
     Analyzes the raw diamond observations to determine their inherent planarity 
     and geometric consistency before passing them to the optimizer.
     """
     
-    # Anchors frozen from your 2nd pass
-    anchor_poses = np.array([
-        [[-0.08173866, -0.08760878, -2.27461725],
-         [ 3.4444503,  -2.26444289,  2.22807711]],
-        [[-0.04984111,  0.02871572,  0.82210996],
-         [-2.26615642,  2.69190574,  2.22807715]]
-    ])
+    # anchor_poses = np.array([
+    #     [[-0.08173866, -0.08760878, -2.27461725],
+    #      [ 3.4444503,  -2.26444289,  2.22807711]],
+    #     [[-0.04984111,  0.02871572,  0.82210996],
+    #      [-2.26615642,  2.69190574,  2.22807715]]
+    # ])
+
+    tilt_nodes = []
+    for i in range(2):
+        extratilt = 22 - cam_tilts[i]
+        tilt_nodes.append((np.array([0, 0, extratilt / 180.0 * np.pi], dtype=float), np.zeros(3, dtype=float)))
 
     logger.info("=== RAW DIAMOND DATA ANALYSIS ===")
 
@@ -365,6 +410,7 @@ def analyze_diamond_data(diamond_observations):
                 pose_list = [
                     anchor_poses[c],
                     model_constants.arp_anchor_camera,
+                    tilt_nodes[c],
                     pose_cam,
                     gantry_april_inv
                 ]

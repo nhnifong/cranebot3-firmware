@@ -63,6 +63,7 @@ class ArpeggioAnchorClient(ComponentClient):
             self.anchor_pose = pose
         if eye is not None:
             self.eye_pos = eye
+        # 22 is the tilt of the camera in the model
         extratilt = 22 - self.config.anchors[self.anchor_num].indirect_line.cam_tilt
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
@@ -113,13 +114,12 @@ class ArpeggioAnchorClient(ComponentClient):
                 # you have the pose of gantry_front relative to a particular anchor camera
                 # convert it to a pose relative to the origin
                 pose = np.array(compose_poses([
-                    self.anchor_pose, # obtained from calibration
-                    model_constants.arp_anchor_camera, # constant
+                    self.camera_pose, # config dependent
                     detection['p'], # the pose obtained just now
                     gantry_april_inv, # constant
                 ]))
-                position = pose.reshape(6)[3:]
-                self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position])) # take only the position
+                position = pose[1] # take only the position from the pose
+                self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position]))
                 # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
                 self.datastore.gantry_pos_event.set()
 
@@ -133,8 +133,7 @@ class ArpeggioAnchorClient(ComponentClient):
             if name in OTHER_MARKERS:
                 offset = model_constants.basket_offset_inv if name.endswith('back') else model_constants.basket_offset
                 pose = np.array(compose_poses([
-                    self.anchor_pose,
-                    model_constants.arp_anchor_camera, # constant
+                    self.camera_pose, # config dependent
                     detection['p'], # the pose obtained just now
                     offset, # the named location is out in front of the tag.
                 ]))
