@@ -206,9 +206,11 @@ class StringmanLeRobot(Robot):
         if self.remote_stream_token is not None and item.stream_path:
             if 'localhost' in self.address:
                 host = 'localhost:8554'
+            elif 'host.docker.internal' in self.address:
+                host = 'host.docker.internal:8554'
             else:
                 host = 'media.neufangled.com:8554'
-            url = f"rtsp://{host}/{item.stream_path}?token={self.remote_stream_token}"
+            url = f"rtsp://{host}/{item.stream_path}?ticket={self.remote_stream_token}"
         elif item.local_uri is not None:
             url = item.local_uri
 
@@ -243,7 +245,10 @@ class StringmanLeRobot(Robot):
         elif stream_url.startswith('http'):
             options['timeout'] = '5000000'
 
-        container = av.open(stream_url, options=options)
+        try:
+            container = av.open(stream_url, options=options)
+        except av.error.HTTPUnauthorizedError:
+            self.disconnect()
         
         stream = next(s for s in container.streams if s.type == 'video')
         stream.thread_type = "SLICE"
@@ -459,6 +464,7 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
     # connect to the robot right away because it is our channel to send error messages back to the user.
     robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token), events)
     robot.connect()
+    time.sleep(2)
     if not robot.is_connected:
         raise ConnectionError(f"Failed to connect to robot at {uri}")
 
@@ -547,17 +553,17 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
 
             recorded_episodes += 1
             print(f"Episode {recorded_episodes} complete.")
-            robot.send_session_status(common.LerobotSessionStatus(
-                status=common.LerobotStatus.REC_CHECKPOINT,
-                session_ep_number=recorded_episodes,
-                episodes_until_checkpoint=CHECKPOINT_EVERY,
-            ))
             dataset.save_episode()
             print(f"Ready.")
             
             # Checkpoint: Upload data to Hugging Face every 10 episodes
             if upload and recorded_episodes % CHECKPOINT_EVERY == 0:
                 print(f"Checkpoint reached: Uploading dataset to Hugging Face ({recorded_episodes} episodes)...", flush=True)
+                robot.send_session_status(common.LerobotSessionStatus(
+                    status=common.LerobotStatus.REC_CHECKPOINT,
+                    session_ep_number=recorded_episodes,
+                    episodes_until_checkpoint=CHECKPOINT_EVERY,
+                ))
                 dataset.push_to_hub()
 
             # Tf the user set the ep start event while processing was occuring, clear it. Unexpected episode starts lead to low quality data.
@@ -785,7 +791,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     uri = f'{args.server_address}/control/{args.robot_id}'
     if args.remote_stream_token:
-        uri += f'?token={args.remote_stream_token}'
+        uri += f'?ticket={args.remote_stream_token}'
+    print(f'Connecting to robot at {uri}')
 
     if args.command == 'eval':
         eval_until_disconnected(uri, args.policy_id, remote_stream_token=args.remote_stream_token)

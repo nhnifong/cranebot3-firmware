@@ -1,0 +1,12 @@
+# ignore everything by default
+*
+
+# whitelist only what is needed
+!src/
+!pyproject.toml
+!README.md
+
+# re-ignore cache inside the whitelisted folders
+**/__pycache__/
+**/*.py[cod]
+**/*.so

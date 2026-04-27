@@ -90,11 +90,17 @@ python -m nf_robot.ml.stringman_lerobot eval \
 
 ## Running record script connected to mediamtx streams (local telemetry stack)
 
+First obtain a token from the UI. you have to be logged in to do this and the robot must be connected with --telemetry_env=local
+in UI, run > select maintainence and calibration > stream ticket
+
+Paste the ticket into the command.
+Tickets are single use, once used, you must generate a new one.
+
 ```
 python -m nf_robot.ml.stringman_lerobot record \
   --robot_id="b9a1f266-4ff5-476f-a84e-ed82f5d85886" \
   --server_address=ws://localhost:8080 \
-  --remote_stream_token=$TOKEN \
+  --remote_stream_token=92yHzkzwlyz6ARAD7wyXvoyqn9J2IQLW2tIpETEz6DY \
   --repo_id=naavox/test_dataset
 ```
 
@@ -111,14 +117,18 @@ docker tag stringman-lerobot us-east1-docker.pkg.dev/nf-web-480214/record-sessio
 docker push us-east1-docker.pkg.dev/nf-web-480214/record-session-containers/stringman-lerobot:latest'
 ```
 
+Or build a version of the container that uses local code
+
+    docker build -f src/nf_robot/ml/Dockerfile.dev -t stringman-lerobot:dev .
+
 ## Running a record session from a container on local docker server
 
 ```
-docker run -it --rm \
+docker run --add-host=host.docker.internal:host-gateway -it --rm \
     -e HF_TOKEN="huggingface token" \
-    stringman-lerobot record \
-    --robot_id="robot id" \
-    --server_address=wss://neufangled.com/telemetry/8fdab437-3a45-4437-b6d3-0e8a9e380326 \
-    --remote_stream_token="steal a token from prod" \
+    stringman-lerobot:dev record \
+    --robot_id="b9a1f266-4ff5-476f-a84e-ed82f5d85886" \
+    --server_address=ws://host.docker.internal:8080 \
+    --remote_stream_token="92yHzkzwlyz6ARAD7wyXvoyqn9J2IQLW2tIpETEz6DY" \
     --repo_id=naavox/test_dataset
 ```
