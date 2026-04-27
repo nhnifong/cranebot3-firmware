@@ -542,6 +542,10 @@ default_message_pool.register_message("nf.control", "JogSpool", JogSpool)
 
 @dataclass(eq=False, repr=False)
 class ManageLerobotSession(betterproto2.Message):
+    """
+    Used to start a lerobot session on the same machine running the stringman motion controller.
+    """
+
     action: "LerobotSessionAction" = betterproto2.field(
         1, betterproto2.TYPE_ENUM, default_factory=lambda: LerobotSessionAction(0)
     )
@@ -554,7 +558,7 @@ class ManageLerobotSession(betterproto2.Message):
 
     suppress_upload: "bool" = betterproto2.field(3, betterproto2.TYPE_BOOL)
     """
-    Whether to supress upload to huggingface when recording is finished.
+    Whether to supress upload to huggingface. If true, data remains on the local machine.
     """
 
 

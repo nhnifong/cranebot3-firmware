@@ -29,6 +29,7 @@ enum LerobotStatus {
   LEROBOTSTATUS_NA = 0;
   LEROBOTSTATUS_RECORDING = 1; // recording an episide
   LEROBOTSTATUS_REC_PROCESSING = 2; // Finishing up the encoding of the last recorded episode, or finaizing dataset for upload.
+  LEROBOTSTATUS_REC_CHECKPOINT = 10; // Uploading checkpoint.
   LEROBOTSTATUS_REC_READY = 3; // Idle and ready to start recording an episode.
   LEROBOTSTATUS_REC_EP_ABANDONED = 9; // Indicates that an episode was successfully abandoned
   LEROBOTSTATUS_REC_ALL_COMPLETE = 4; // Recording session finished and data uploaded. Expected after sending EPCOMMAND_END_RECORDING
@@ -59,6 +60,9 @@ message LerobotSessionStatus {
 
   // Error from the lerobot process
   optional string error = 7;
+
+  // Number of episodes until a checkpoint is uploaded
+  optional uint32 episodes_until_checkpoint = 8;
 }
 
 // Both control panel and lerobot sessions act as UIs connected to a single robot.

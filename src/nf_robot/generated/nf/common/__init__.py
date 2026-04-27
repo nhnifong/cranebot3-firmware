@@ -112,6 +112,11 @@ class LerobotStatus(betterproto2.Enum):
     Finishing up the encoding of the last recorded episode, or finaizing dataset for upload.
     """
 
+    REC_CHECKPOINT = 10
+    """
+    Uploading checkpoint.
+    """
+
     REC_READY = 3
     """
     Idle and ready to start recording an episode.
@@ -153,6 +158,7 @@ class LerobotStatus(betterproto2.Enum):
             0: "LEROBOTSTATUS_NA",
             1: "LEROBOTSTATUS_RECORDING",
             2: "LEROBOTSTATUS_REC_PROCESSING",
+            10: "LEROBOTSTATUS_REC_CHECKPOINT",
             3: "LEROBOTSTATUS_REC_READY",
             9: "LEROBOTSTATUS_REC_EP_ABANDONED",
             4: "LEROBOTSTATUS_REC_ALL_COMPLETE",
@@ -168,6 +174,7 @@ class LerobotStatus(betterproto2.Enum):
             "LEROBOTSTATUS_NA": 0,
             "LEROBOTSTATUS_RECORDING": 1,
             "LEROBOTSTATUS_REC_PROCESSING": 2,
+            "LEROBOTSTATUS_REC_CHECKPOINT": 10,
             "LEROBOTSTATUS_REC_READY": 3,
             "LEROBOTSTATUS_REC_EP_ABANDONED": 9,
             "LEROBOTSTATUS_REC_ALL_COMPLETE": 4,
@@ -251,6 +258,13 @@ class LerobotSessionStatus(betterproto2.Message):
     error: "str | None" = betterproto2.field(7, betterproto2.TYPE_STRING, optional=True)
     """
     Error from the lerobot process
+    """
+
+    episodes_until_checkpoint: "int | None" = betterproto2.field(
+        8, betterproto2.TYPE_UINT32, optional=True
+    )
+    """
+    Number of episodes until a checkpoint is uploaded
     """
 
 

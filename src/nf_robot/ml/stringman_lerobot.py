@@ -34,6 +34,8 @@ IMG_RES = 384
 ANCHOR_W = 960
 ANCHOR_H = 544
 
+CHECKPOINT_EVERY = 10
+
 @RobotConfig.register_subclass("stringman")
 @dataclass
 class StringmanConfig(RobotConfig):
@@ -278,9 +280,9 @@ class StringmanLeRobot(Robot):
         if item.command == common.EpCommand.END_RECORDING:
             self.events['end_recording'] = True
         if item.command == common.EpCommand.EVAL_START:
-            self.events['eval_start'] = True
+            self.events['start'] = True
         if item.command == common.EpCommand.EVAL_STOP:
-            self.events['eval_stop'] = True
+            self.events['stop'] = True
 
     def disconnect(self) -> None:
         print("Disconnecting")
@@ -407,9 +409,9 @@ def record_episode(
         
         if events['end_recording']:
             break
-        if events["eval_stop"]:
+        if events["stop"]:
             print('ep complete')
-            events["eval_stop"] = False
+            events["stop"] = False
             break
         if events["episode_abandon"]: 
             print('ep abandon')
@@ -450,8 +452,8 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
     events={
         'episode_abandon': False,
         'end_recording': False,
-        'eval_start': False,
-        'eval_stop': False,
+        'start': False,
+        'stop': False,
     }
 
     # connect to the robot right away because it is our channel to send error messages back to the user.
@@ -503,6 +505,7 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
             session_ep_number=0,
             dataset_ep_count=dataset.num_episodes,
             dataset_repo_id=hf_repo_id,
+            episodes_until_checkpoint=(CHECKPOINT_EVERY - recorded_episodes % CHECKPOINT_EVERY),
         ))
 
         while robot.is_connected and not events["end_recording"]:
@@ -511,9 +514,9 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
             if events['end_recording']:
                 events["end_recording"] = False
                 break
-            if not events['eval_start']:
+            if not events['start']:
                 continue 
-            events['eval_start'] = False 
+            events['start'] = False 
 
             print(f"Recording episode {recorded_episodes + 1}")
             robot.send_session_status(common.LerobotSessionStatus(
@@ -542,19 +545,28 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
                 ))
                 continue
 
-            print(f"Episode {recorded_episodes + 1} complete.")
+            recorded_episodes += 1
+            print(f"Episode {recorded_episodes} complete.")
+            robot.send_session_status(common.LerobotSessionStatus(
+                status=common.LerobotStatus.REC_CHECKPOINT,
+                session_ep_number=recorded_episodes,
+                episodes_until_checkpoint=CHECKPOINT_EVERY,
+            ))
             dataset.save_episode()
             print(f"Ready.")
-            recorded_episodes += 1
             
             # Checkpoint: Upload data to Hugging Face every 10 episodes
-            if upload and recorded_episodes % 10 == 0:
+            if upload and recorded_episodes % CHECKPOINT_EVERY == 0:
                 print(f"Checkpoint reached: Uploading dataset to Hugging Face ({recorded_episodes} episodes)...", flush=True)
                 dataset.push_to_hub()
 
+            # Tf the user set the ep start event while processing was occuring, clear it. Unexpected episode starts lead to low quality data.
+            events['start'] = False
+
             robot.send_session_status(common.LerobotSessionStatus(
                 status=common.LerobotStatus.REC_READY,
-                session_ep_number=recorded_episodes
+                session_ep_number=recorded_episodes,
+                episodes_until_checkpoint=(CHECKPOINT_EVERY - recorded_episodes % CHECKPOINT_EVERY),
             ))
 
     except GracefulExit:
@@ -573,7 +585,10 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
         print("Recording stopped. Cleaning up.", flush=True)
 
         if recorded_episodes > 0:
-            robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_PROCESSING))
+            robot.send_session_status(common.LerobotSessionStatus(
+                status=common.LerobotStatus.REC_PROCESSING,
+                session_ep_number=recorded_episodes,
+            ))
             print(f"{recorded_episodes} episodes collected. Encoding remaining video", flush=True)
             dataset.finalize()
             if upload:
@@ -615,9 +630,9 @@ def eval_episode(
 
         if events['end_recording']:
             break
-        if events["eval_stop"]:
+        if events["stop"]:
             print('Eval stopped via command')
-            events["eval_stop"] = False
+            events["stop"] = False
             break
         obs = robot.get_observation()
         observation_frame = build_dataset_frame(dataset_features, obs, prefix="observation")
@@ -671,8 +686,8 @@ def eval_until_disconnected(uri, policy_repo_id, device="cuda", remote_stream_to
     events = {
         'episode_abandon': False,
         'end_recording': False,
-        'eval_start': False,
-        'eval_stop': False,
+        'start': False,
+        'stop': False,
     }
 
     # determine dataset repo id this policy was trained on
@@ -723,10 +738,10 @@ def eval_until_disconnected(uri, policy_repo_id, device="cuda", remote_stream_to
         if events['end_recording']:
             events["end_recording"] = False
             break
-        if not events['eval_start']:
+        if not events['start']:
             continue
         
-        events['eval_start'] = False
+        events['start'] = False
         print("Starting Evaluation Episode")
         
         eval_episode(

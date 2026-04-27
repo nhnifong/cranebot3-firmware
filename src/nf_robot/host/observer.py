@@ -193,10 +193,10 @@ class AsyncObserver:
         self.use_arp_grasp = use_arp_grasp
         self.swing_cancellation_task = None
         self.local_models = local_models
-        self.js = 0.1
         self.lerobot_process_watcher = None
         self.last_ep_ctrl_status = common.LerobotStatus.NA
         self.swing_latency = 0.18
+        self.lerobot_process_pid = None
 
     async def send_setup_telemetry(self):
         logger.debug('Sending setup telemetry')
@@ -391,9 +391,6 @@ class AsyncObserver:
             asyncio.create_task(self.calibrate_finger_servo())
         if item.action == 'eyelets':
             r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data())
-        if item.action == 'jog1':
-            self.js = -self.js
-            r = await self.send_line_speed(1, self.js, jog=True)
         if item.action == 'stow':
             r = await self.stow_lines()
         if item.action.startswith('swinglatency '):
@@ -403,6 +400,10 @@ class AsyncObserver:
              await asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
 
     async def lerobot_process(self, item: control.ManageLerobotSession):
+        if self.lerobot_process_pid is not None:
+            logger.warning(f"Cannot start lerobot session, one is already active.")
+            return
+
         repo_id = item.repo_id
         action = item.action
         # Sanitize and validate repo_id to prevent code injection.
@@ -435,6 +436,7 @@ class AsyncObserver:
 
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         logger.info(f"Lerobot process started with PID: {process.pid}")
+        self.lerobot_process_pid = process.pid
 
         async def log_stream(stream, stream_name):
             while True:
@@ -464,6 +466,7 @@ class AsyncObserver:
             
         finally:
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            self.lerobot_process_pid = None
 
     async def calibrate_finger_servo(self):
         self.gripper_client.finger_contact_calibration_complete.clear()

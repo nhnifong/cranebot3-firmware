@@ -184,6 +184,7 @@ enum LerobotSessionAction {
   LEROBOTSESSIONACTION_START_EVAL = 2;
 }
 
+// Used to start a lerobot session on the same machine running the stringman motion controller.
 message ManageLerobotSession {
   LerobotSessionAction action = 1;
 
@@ -191,7 +192,7 @@ message ManageLerobotSession {
   // if action is eval, repo_id shoud be a policy/model repo
   string repo_id = 2;
 
-  // Whether to supress upload to huggingface when recording is finished.
+  // Whether to supress upload to huggingface. If true, data remains on the local machine.
   bool suppress_upload = 3;
 }
 
