@@ -132,7 +132,7 @@ upload the container for use in google cloud
 
 ```
 docker tag stringman-lerobot us-east1-docker.pkg.dev/nf-web-480214/record-session-containers/stringman-lerobot:latest
-docker push us-east1-docker.pkg.dev/nf-web-480214/record-session-containers/stringman-lerobot:latest'
+docker push us-east1-docker.pkg.dev/nf-web-480214/record-session-containers/stringman-lerobot:latest
 ```
 
 Or build a version of the container that uses local code

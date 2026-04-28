@@ -204,13 +204,17 @@ class StringmanLeRobot(Robot):
 
         # Handle stream URL selection based on the remote_stream_token flag
         if self.remote_stream_token is not None and item.stream_path:
+            staging = ''
             if 'localhost' in self.address:
                 host = 'localhost:8554'
             elif 'host.docker.internal' in self.address:
                 host = 'host.docker.internal:8554'
+            elif 'nf-site-monolith-staging' in self.address:
+                host = 'media.neufangled.com:8554'
+                staging = '&staging=1'
             else:
                 host = 'media.neufangled.com:8554'
-            url = f"rtsp://{host}/{item.stream_path}?ticket={self.remote_stream_token}"
+            url = f"rtsp://{host}/{item.stream_path}?ticket={self.remote_stream_token}{staging}"
         elif item.local_uri is not None:
             url = item.local_uri
 

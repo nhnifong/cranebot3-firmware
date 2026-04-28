@@ -1734,10 +1734,9 @@ class AsyncObserver:
             try:
                 use_id = self.config.robot_id
                 ws_path = f"{ws_protocol_and_host}/telemetry/{use_id}"
-                logger.info(f"Connecting to control plane at {ws_path}")
                 async with websockets.connect(ws_path, max_size=None, open_timeout=10) as websocket:
                     self.cloud_telem_websocket = websocket
-                    logger.info(f'Connected to control plane {websocket}')
+                    logger.info(f'Connected to control plane {ws_path}')
                     # send anything that it would need up-front
                     await self.send_setup_telemetry()
                     try:
@@ -1746,11 +1745,11 @@ class AsyncObserver:
                             if not self.run_command_loop:
                                 r = await websocket.close()
                     except ConnectionClosedOK as e:
-                        pass
+                        logger.info(f'ConnectionClosedOK from {ws_path}')
                     except ConnectionClosedError as e:
                         logger.error(e)
                     finally:
-                        logger.info(f'Disconnected from control plane {websocket}')
+                        logger.info(f'Disconnected from control plane {ws_path}')
                         self.cloud_telem_websocket = None
             except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
                 pass # normal close
@@ -1874,6 +1873,10 @@ class AsyncObserver:
                         message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
                     if self.telemetry_env == 'production':
                         message = f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}'
+                    if self.telemetry_env == 'staging':
+                        message = f'To control visit https://nf-site-monolith-staging-690802609278.us-east1.run.app/playroom?robotid={self.config.robot_id}'
+                    else:
+                        print(f'invalid telemetry_env {self.telemetry_env}')
 
                     bar = '=' * (len(message) + 12)
                     print(bar)
@@ -2830,6 +2833,9 @@ def main():
         # Idempotent stop trigger
         def stop():
             runner.run_command_loop = False
+            time.sleep(0.5)
+            if runner.cloud_telem_websocket is not None:
+                runner.cloud_telem_websocket.transport.abort()
 
         # On Unix, register signal handler.
         # On Windows, catch keyboard interrupt
