@@ -54,28 +54,46 @@ Example train command
 
 ```
 lerobot-train \
-  --dataset.repo_id=naavox/grasping_dataset_c \
+  --dataset.repo_id=naavox/laundry_grasp \
   --policy.type=act \
-  --output_dir=outputs/train/grasp_remote_act_c \
+  --output_dir=outputs/train/act_laundry_grasp_2 \
   --job_name=act_c \
   --policy.device=cuda \
   --wandb.enable=false \
-  --policy.repo_id=naavox/grasp_remote_policy_c \
+  --policy.repo_id=naavox/act_laundry_grasp_2 \
   --steps=100000 \
-  --batch_size=200 \
+  --batch_size=10 \
   --save_freq=20000
-```
 
-```
 lerobot-train \
-  --dataset.repo_id=naavox/grasping_dataset \
+  --dataset.repo_id=naavox/laundry_grasp \
   --policy.type=diffusion \
-  --output_dir=outputs/train/grasp_remote_diffusion \
+  --output_dir=outputs/train/dif_laundry_grasp \
   --policy.device=cuda \
   --wandb.enable=false \
-  --policy.repo_id=naavox/grasp_remote_diffusion_policy \
+  --policy.repo_id=naavox/dif_laundry_grasp \
   --steps=80000 \
-  --batch_size=220
+  --batch_size=10
+
+lerobot-train \
+    --dataset.repo_id=naavox/laundry_grasp \
+    --policy.type=pi05 \
+    --output_dir=./outputs/pi_laundry_grasp \
+    --job_name=pi05_training \
+    --policy.repo_id=naavox/pi_laundry_grasp \
+    --policy.pretrained_path=lerobot/pi05_base \
+    --policy.compile_model=true \
+    --policy.gradient_checkpointing=true \
+    --wandb.enable=false \
+    --policy.dtype=bfloat16 \
+    --policy.freeze_vision_encoder=true \
+    --policy.train_expert_only=true \
+    --policy.use_relative_actions=true \
+    --steps=20000 \
+    --policy.device=cuda \
+    --batch_size=32
+
+
 ```
 
 Example evaluation command (on robot)

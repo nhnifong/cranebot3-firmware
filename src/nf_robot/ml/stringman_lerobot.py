@@ -346,7 +346,7 @@ class StringmanLeRobot(Robot):
 
         # action['wrist_speed'] *= 30
         # action['finger_speed'] *= 30
-        GAIN = 1.5
+        GAIN = 1.0 # for act model, 1.5 is a little better.
 
         batch = control.ControlBatchUpdate(
             robot_id="0",
