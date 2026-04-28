@@ -105,6 +105,9 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.rec_mod = 1
     config.running_ws_delay = 0.03
 
+    # Swing cancellation
+    config.swing_latency = 0.18 # seconds
+
     return config
 
 def save_config(config: nf_config.StringmanPilotConfig, path: Path=DEFAULT_CONFIG_PATH):

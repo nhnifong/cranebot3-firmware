@@ -195,7 +195,6 @@ class AsyncObserver:
         self.local_models = local_models
         self.lerobot_process_watcher = None
         self.last_ep_ctrl_status = common.LerobotStatus.NA
-        self.swing_latency = 0.18
         self.lerobot_process_pid = None
 
     async def send_setup_telemetry(self):
@@ -367,12 +366,14 @@ class AsyncObserver:
 
         # TODO attempt to measure this. It is the round trip latency between IMU measurements on the grpper and when our inputs move the spools.
         # latency = 0.18 # works best for desktop machine?
-        # latency = 0.22
+        # latency = 0.61 # works best for laptop
+        # when it seems wonky, sometimes it's because the gripper has a different timezone setting than the host!
+        # come up with a way to sync them.
         try:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True, present='.'))
             self.active_set.add('swingc')
             while self.run_command_loop:
-                vel2 = self.gripper_client.compute_swing_correction(time.time() + self.swing_latency)
+                vel2 = self.gripper_client.compute_swing_correction(time.time() + self.config.swing_latency)
                 if vel2 is not None:
                     await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc', downward_bias=0)
                 await asyncio.sleep(1/100)
@@ -395,7 +396,8 @@ class AsyncObserver:
             r = await self.stow_lines()
         if item.action.startswith('swinglatency '):
             parts = item.action.split(' ')
-            self.swing_latency = float(parts[1])
+            self.config.swing_latency = float(parts[1])
+            save_config(self.config, self.config_path)
         if item.action == 'reset_wrist':
              await asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
 

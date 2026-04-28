@@ -79,6 +79,7 @@ message ParkData {
 }
 
 // Message representing the configuration read and written by observer
+// Not necessarily pilot hardware, but the name is frozen now
 message StringmanPilotConfig {
   repeated Anchor anchors = 1;
   
@@ -108,4 +109,8 @@ message StringmanPilotConfig {
 
   // once the anchor type is known, the config must become locked to that type.
   common.AnchorType anchor_type = 12;
+
+  // constant offset in seconds at which swing should be estimated
+  // seems to depend on the machine you run the motion controller on.
+  float swing_latency = 13;
 }

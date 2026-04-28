@@ -196,6 +196,7 @@ default_message_pool.register_message("nf.config", "Resolution", Resolution)
 class StringmanPilotConfig(betterproto2.Message):
     """
     Message representing the configuration read and written by observer
+    Not necessarily pilot hardware, but the name is frozen now
     """
 
     anchors: "list[Anchor]" = betterproto2.field(
@@ -257,6 +258,12 @@ class StringmanPilotConfig(betterproto2.Message):
     )
     """
     once the anchor type is known, the config must become locked to that type.
+    """
+
+    swing_latency: "float" = betterproto2.field(13, betterproto2.TYPE_FLOAT)
+    """
+    constant offset in seconds at which swing should be estimated
+    seems to depend on the machine you run the motion controller on.
     """
 
 
