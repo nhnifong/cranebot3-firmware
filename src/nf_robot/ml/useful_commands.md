@@ -76,11 +76,11 @@ lerobot-train \
   --batch_size=10
 
 lerobot-train \
-    --dataset.repo_id=naavox/laundry_grasp \
+    --dataset.repo_id=naavox/grasp_v \
     --policy.type=pi05 \
-    --output_dir=./outputs/pi_laundry_grasp \
+    --output_dir=./outputs/pi_grasp_v \
     --job_name=pi05_training \
-    --policy.repo_id=naavox/pi_laundry_grasp \
+    --policy.repo_id=naavox/pi_grasp_v \
     --policy.pretrained_path=lerobot/pi05_base \
     --policy.compile_model=true \
     --policy.gradient_checkpointing=true \
@@ -88,7 +88,7 @@ lerobot-train \
     --policy.dtype=bfloat16 \
     --policy.freeze_vision_encoder=true \
     --policy.train_expert_only=true \
-    --policy.use_relative_actions=true \
+    --policy.use_relative_actions=false \
     --steps=20000 \
     --policy.device=cuda \
     --batch_size=32
