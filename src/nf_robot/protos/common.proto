@@ -36,6 +36,7 @@ enum LerobotStatus {
   LEROBOTSTATUS_EVAL_IDLE = 5; // Idle and ready to start inference
   LEROBOTSTATUS_EVAL_ACTIVE = 6; // Actively doing inference and sending control inputs.
   LEROBOTSTATUS_EVAL_ALL_COMPLETE = 8; // Eval session ended
+  LEROBOTSTATUS_EVAL_SELF_COMPLETE = 11; // The eval episode ended itself using a prediction.
   LEROBOTSTATUS_ERROR = 7; // Lerobot process has failed with some kind of error.
 }
 
@@ -74,6 +75,10 @@ message EpisodeControl {
   // The lerobot sessions sends EpisodeControl messages contianing this field. they are forwarded to all UIs
   // When the web UI recives one, it uses it to update the interface.
   optional LerobotSessionStatus status = 2;
+
+  // Reset the current task description
+  // Can be sent in either direction
+  optional string prompt = 3;
 }
 
 enum AnchorType {

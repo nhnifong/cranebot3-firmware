@@ -148,6 +148,11 @@ class LerobotStatus(betterproto2.Enum):
     Eval session ended
     """
 
+    EVAL_SELF_COMPLETE = 11
+    """
+    The eval episode ended itself using a prediction.
+    """
+
     ERROR = 7
     """
     Lerobot process has failed with some kind of error.
@@ -166,6 +171,7 @@ class LerobotStatus(betterproto2.Enum):
             5: "LEROBOTSTATUS_EVAL_IDLE",
             6: "LEROBOTSTATUS_EVAL_ACTIVE",
             8: "LEROBOTSTATUS_EVAL_ALL_COMPLETE",
+            11: "LEROBOTSTATUS_EVAL_SELF_COMPLETE",
             7: "LEROBOTSTATUS_ERROR",
         }
 
@@ -182,6 +188,7 @@ class LerobotStatus(betterproto2.Enum):
             "LEROBOTSTATUS_EVAL_IDLE": 5,
             "LEROBOTSTATUS_EVAL_ACTIVE": 6,
             "LEROBOTSTATUS_EVAL_ALL_COMPLETE": 8,
+            "LEROBOTSTATUS_EVAL_SELF_COMPLETE": 11,
             "LEROBOTSTATUS_ERROR": 7,
         }
 
@@ -206,6 +213,14 @@ class EpisodeControl(betterproto2.Message):
     """
     The lerobot sessions sends EpisodeControl messages contianing this field. they are forwarded to all UIs
     When the web UI recives one, it uses it to update the interface.
+    """
+
+    prompt: "str | None" = betterproto2.field(
+        3, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    Reset the current task description
+    Can be sent in either direction
     """
 
 
