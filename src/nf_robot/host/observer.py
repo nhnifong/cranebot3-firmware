@@ -2776,7 +2776,7 @@ class AsyncObserver:
         """
         self.pe.finger_pressure_rising.clear()
         try:
-            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.START_OR_COMPLETE))
+            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_START))
             timeout = time.time() + 60
             lifted = False
             applying_force = False
@@ -2791,7 +2791,7 @@ class AsyncObserver:
         except asyncio.CancelledError:
             raise
         finally:
-            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.START_OR_COMPLETE))
+            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_STOP))
             self.slow_stop_all_spools()
 
     def _handle_collect_images(self):
