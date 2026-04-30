@@ -92,11 +92,13 @@ class StringmanLeRobot(Robot):
     @cached_property
     def _motors_ft(self) -> dict[str, type]:
         return { 
+            # the velocity is in the frame of reference of the gripper camera
             "vel_x": float,
             "vel_y": float, 
             "vel_z": float,
             "wrist_speed": float,
             "finger_speed": float,
+            "finished": float,
         }
 
     @cached_property
@@ -325,6 +327,7 @@ class StringmanLeRobot(Robot):
             
             "wrist_speed": float(self.last_wrist_speed),
             "finger_speed": float(self.last_finger_speed),
+            "finished": 0.0,
 
             "gripper_pos_x": float(self.last_gripper_pos[0]),
             "gripper_pos_y": float(self.last_gripper_pos[1]),
@@ -389,6 +392,7 @@ class StringmanLeRobot(Robot):
             "vel_z": self.last_commanded_vel[2],
             "wrist_speed": self.last_wrist_speed,
             "finger_speed": self.last_finger_speed,
+            "finished": 0.0,
         }
 
 # --- Recording Configuration ---
@@ -557,6 +561,27 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
 
             recorded_episodes += 1
             print(f"Episode {recorded_episodes} complete.")
+            
+            # --- Retroactively label "finished" for the last 15 frames ---
+            action_keys = list(robot.action_features.keys())
+            if "finished" in action_keys:
+                finished_idx = action_keys.index("finished")
+                if hasattr(dataset, "episode_buffer") and "action" in dataset.episode_buffer:
+                    buffer = dataset.episode_buffer["action"]
+                    start = max(0, len(buffer) - 15)
+                    for i in range(start, len(buffer)):
+                        buffer[i][finished_idx] = 1.0
+
+            obs_state_keys = [k for k, v in robot.observation_features.items() if v is float]
+            if "finished" in obs_state_keys:
+                finished_obs_idx = obs_state_keys.index("finished")
+                if hasattr(dataset, "episode_buffer") and "observation.state" in dataset.episode_buffer:
+                    buffer = dataset.episode_buffer["observation.state"]
+                    start = max(0, len(buffer) - 15)
+                    for i in range(start, len(buffer)):
+                        buffer[i][finished_obs_idx] = 1.0
+            # --------------------------------------------------------------
+
             dataset.save_episode()
             print(f"Ready.")
             
@@ -668,7 +693,13 @@ def eval_episode(
             "vel_z": float(action_vector[2]),
             "wrist_speed": float(action_vector[3]),
             "finger_speed": float(action_vector[4]),
+            "finished": float(action_vector[5]) if len(action_vector) > 5 else 0.0,
         }
+
+        if action_dict["finished"] > 0.5:
+            print('Eval episode task completed autonomously (finished > 0.5)')
+            robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_SELF_COMPLETE))
+            break
 
         robot.send_action(action_dict)
 
