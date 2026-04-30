@@ -2156,16 +2156,6 @@ class AsyncObserver:
         if speed is None:
             speed = np.linalg.norm(uvec)
 
-        # Enforce a height dependent speed limit.
-        # the reason being that as gantry height approaches anchor height, the line tension increases exponentially,
-        # and a slower speed is need to maintain enough torque from the stepper motors.
-        # The speed limit is proportional to how far the gantry hangs below a level 10cm below the average anchor.
-        # This makes the behavior consistent across installations of different heights.
-        hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
-        if self.config.anchor_type == common.AnchorType.PILOT:
-            speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.55)
-            speed = min(speed, speed_limit)
-
         # when a very small speed is provided, clamp it to zero.
         if speed < 0.005:
             speed = 0
@@ -2183,28 +2173,47 @@ class AsyncObserver:
         # currently this is only used to combine swing cancellation with user inputs.
         self.input_velocities[key] = velocity
         total_velocity = np.sum([self.input_velocities.get(k, 0) for k in self.active_set], axis=0)
+        
+        # Determine the total requested speed before limits
         speed = np.linalg.norm(total_velocity)
-        if speed != 0:
-            uvec  = total_velocity / speed
-        else:
-            uvec = np.zeros(3)
+
+        # enforce a model dependent speed limit
+        speed_limit = 0.5
+        if self.config.anchor_type == common.AnchorType.PILOT:
+
+            # On pilot stringman, also enforce a height dependent speed limit on the total combined velocity.
+            # the reason being that as gantry height approaches anchor height, the line tension increases exponentially,
+            # and a slower speed is need to maintain enough torque from the stepper motors.
+            # The speed limit is proportional to how far the gantry hangs below a level 10cm below the average anchor.
+            # This makes the behavior consistent across installations of different heights.
+            # hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
+            speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.25)
+            # If the combined total speed exceeds the limit, scale the vector down
+        elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
+            speed_limit = 0.35
+
+        if speed > speed_limit:
+            total_velocity = total_velocity * (speed_limit / speed)
+            speed = speed_limit
 
         # line lengths at starting pos
         lengths_a = np.linalg.norm(starting_pos - self.pe.anchor_points, axis=1)
         # line lengths at new pos
-        new_pos = starting_pos + (uvec / KINEMATICS_STEP_SCALE)
+        new_pos = starting_pos + (total_velocity / KINEMATICS_STEP_SCALE)
+        
         # zero the speed if this would move the gantry out of the work area
         if not self.pe.point_inside_work_area(new_pos):
             speed = 0
             total_velocity = np.zeros(3)
+            
         lengths_b = np.linalg.norm(new_pos - self.pe.anchor_points, axis=1)
-        # length changes needed to travel a small distance in uvec direction from starting_pos
         deltas = lengths_b - lengths_a
-        line_speeds = deltas * KINEMATICS_STEP_SCALE * speed
+        line_speeds = deltas * KINEMATICS_STEP_SCALE
 
-        # send move
-        for i, speed in enumerate(line_speeds):
-            await self.send_line_speed(i, speed)
+        # send move on each line
+        for i, line_speed in enumerate(line_speeds):
+            await self.send_line_speed(i, line_speed)
+            
         self.pe.record_commanded_vel(total_velocity)
         return total_velocity
 
@@ -2252,6 +2261,7 @@ class AsyncObserver:
         # do nothing until at least one camera from the preferred set is producing frames
         have_gripper_frames = False
         have_anchor_frames = False
+        logging.info('waiting for frames from all cameras to start target model')
         while not (have_gripper_frames or have_anchor_frames):
             await asyncio.sleep(1)
             have_gripper_frames = self.gripper_client is not None and self.gripper_client.last_frame_resized is not None
@@ -2259,6 +2269,7 @@ class AsyncObserver:
                 if anum in self.config.preferred_cameras and client.last_frame_resized is not None:
                     have_anchor_frames = True
 
+        logging.info('starting target model')
         import torch
         from huggingface_hub import hf_hub_download
         DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

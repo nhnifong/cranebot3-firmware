@@ -316,9 +316,9 @@ class Positioner2:
         # noise in visual observations of gantry position from a single camera 
         visual_noise_std_dev=0.01 # experimentally confirmed.
         # noise in hang position as a sensor. This is odd, it will be tightly near some position but make large jumps in z occationally.
-        hang_noise_std_dev=0.015 
+        hang_noise_std_dev=0.005
         # the velocity that was commanded of the robot is also considered a sensor. the actual movement may differ from it somewhat.
-        commanded_vel_std_dev=0.01 
+        commanded_vel_std_dev=0.02
 
         self.visual_noise_covariance = np.diag([visual_noise_std_dev**2] * 3)
         self.hang_noise_covariance = np.diag([hang_noise_std_dev**2] * 3)

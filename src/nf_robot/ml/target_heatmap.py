@@ -139,7 +139,7 @@ class DobbyDataset(Dataset):
             else:
                 continue
                 
-            combined_heatmap = np.maximum(combined_heatmap, generate_blob(x_grid, y_grid, cx, cy, sigma=8))
+            combined_heatmap = np.maximum(combined_heatmap, generate_blob(x_grid, y_grid, cx, cy))
             
         return img_tensor, torch.from_numpy(combined_heatmap).float().unsqueeze(0)
 
