@@ -369,6 +369,14 @@ class CombinedMove(betterproto2.Message):
     Not used in pilot
     """
 
+    overspec_vel: "_common__.OverSpecifiedVel | None" = betterproto2.field(
+        9, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    Overspecified velocity that may be provided instead of direction.
+    When controlling the robot this way, it is up to the controller to decide how to combine these velocities.
+    """
+
 
 default_message_pool.register_message("nf.control", "CombinedMove", CombinedMove)
 

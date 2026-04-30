@@ -33,7 +33,7 @@ from pathlib import Path
 import json
 import re
 
-from nf_robot.common.pose_functions import compose_poses
+from nf_robot.common.pose_functions import compose_poses, global_vel_to_camera_vel, camera_vel_to_global_vel
 from nf_robot.common.cv_common import *
 from nf_robot.common.config_loader import *
 import nf_robot.common.definitions as model_constants
@@ -686,18 +686,33 @@ class AsyncObserver:
                         velocity = direction * move.speed # make sure the network receives information on speed as well
                     else:
                         velocity = direction
-                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(velocity)))
                     # rotate later component of direction into room frame
                     direction[:2] = rotate_vector(direction[:2], -self.gripper_client.get_spin())
-                else:
-                    # direction is already in room frame, and we can use it, but we still want to send the lerobot record script a direction in gripper frame
-                    gf_direction = direction.copy()
-                    gf_direction[:2] = rotate_vector(gf_direction[:2], self.gripper_client.get_spin())
-                    if move.speed is not None:
-                        velocity = gf_direction * move.speed # make sure the network receives information on speed as well
-                    else:
-                        velocity = gf_direction
-                    self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(velocity)))
+                
+                # direction is now in room frame
+
+                # represent commanded velocity in three different reference frames for the model to learn
+                # gripper frame 
+                gf_vel = direction.copy()
+                gf_vel[:2] = rotate_vector(gf_vel[:2], self.gripper_client.get_spin())
+                gf_vel
+
+                # anchor 0 camera
+                a0_vel = global_vel_to_camera_vel(direction, self.anchors[0].camera_pose[0])
+
+                # anchor 1 camera
+                a1_vel = global_vel_to_camera_vel(direction, self.anchors[1].camera_pose[0])
+
+                if move.speed is not None:
+                    gf_vel *= move.speed
+                    a0_vel *= move.speed
+                    a1_vel *= move.speed
+
+                self.send_ui(overspec_vel=common.OverSpecifiedVel(
+                    gripper_vel=fromnp(gf_vel),
+                    anchor0_vel=fromnp(a0_vel),
+                    anchor1_vel=fromnp(a1_vel),
+                ))
 
         commanded_vel = await self.move_direction_speed(direction, move.speed)
 

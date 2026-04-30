@@ -63,7 +63,9 @@ class StringmanLeRobot(Robot):
 
         self.websocket = None
         
-        self.last_commanded_vel = np.zeros(3)
+        self.last_gripper_vel = np.zeros(3)
+        self.last_anchor0_vel = np.zeros(3)
+        self.last_anchor1_vel = np.zeros(3)
         self.last_observed_vel = np.zeros(3)
         
         self.last_wrist_speed = 0.0
@@ -72,6 +74,7 @@ class StringmanLeRobot(Robot):
         self.last_finger_angle = 0.0
         self.last_pressure = 0.0
         self.last_range = 0.0
+        self.last_target_force = 0.0
         
         self.last_gripper_pos = np.zeros(3, dtype=float)
         self.last_gripper_rot_6d = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=float)
@@ -92,10 +95,15 @@ class StringmanLeRobot(Robot):
     @cached_property
     def _motors_ft(self) -> dict[str, type]:
         return { 
-            # the velocity is in the frame of reference of the gripper camera
-            "vel_x": float,
-            "vel_y": float, 
-            "vel_z": float,
+            "gripper_vel_x": float,
+            "gripper_vel_y": float, 
+            "gripper_vel_z": float,
+            "anchor0_vel_x": float,
+            "anchor0_vel_y": float, 
+            "anchor0_vel_z": float,
+            "anchor1_vel_x": float,
+            "anchor1_vel_y": float, 
+            "anchor1_vel_z": float,
             "wrist_speed": float,
             "finger_speed": float,
             "finished": float,
@@ -125,6 +133,7 @@ class StringmanLeRobot(Robot):
             "finger_angle": float,
             "laser_rangefinder": float,
             "finger_pressure": float,
+            "target_force": float,
         }
 
     @cached_property
@@ -159,8 +168,8 @@ class StringmanLeRobot(Robot):
             self._handle_grip_sensors(item.grip_sensors)
         if item.video_ready is not None:
             self._handle_video_ready(item.video_ready)
-        if item.raw_commanded_vel is not None:
-            self._handle_raw_commanded_vel(item.raw_commanded_vel)
+        if item.overspec_vel is not None:
+            self._handle_overspec_vel(item.overspec_vel)
         if item.last_commanded_grip is not None:
             self._handle_last_commanded_grip(item.last_commanded_grip)
         if item.episode_control is not None:
@@ -192,6 +201,8 @@ class StringmanLeRobot(Robot):
             self.last_finger_angle = item.angle
         if item.pressure is not None:
             self.last_pressure = item.pressure
+        if item.target_force is not None:
+            self.last_target_force = item.target_force
 
     def _handle_video_ready(self, item: telemetry.VideoReady):
         feed_num = item.feed_number
@@ -276,9 +287,13 @@ class StringmanLeRobot(Robot):
             container.close()
         print(f"Stream {stream_url} closed (feed {feed_num})")
 
-    def _handle_raw_commanded_vel(self, item: telemetry.CommandedVelocity):
-        # trained on commanded velocity in the gripper image frame of reference
-        self.last_commanded_vel = tonp(item.velocity)
+    def _handle_overspec_vel(self, item: common.OverSpecifiedVel):
+        if item.gripper_vel:
+            self.last_gripper_vel = tonp(item.gripper_vel)
+        if item.anchor0_vel:
+            self.last_anchor0_vel = tonp(item.anchor0_vel)
+        if item.anchor1_vel:
+            self.last_anchor1_vel = tonp(item.anchor1_vel)
 
     def _handle_last_commanded_grip(self, item: telemetry.CommandedGrip):
         self.last_wrist_speed = item.wrist_speed
@@ -321,9 +336,15 @@ class StringmanLeRobot(Robot):
                 images[feed_num] = self.last_images[feed_num].copy()
 
         return {
-            'vel_x': float(self.last_observed_vel.x),
-            'vel_y': float(self.last_observed_vel.y),
-            'vel_z': float(self.last_observed_vel.z),
+            "gripper_vel_x": float(self.last_gripper_vel[0]),
+            "gripper_vel_y": float(self.last_gripper_vel[1]),
+            "gripper_vel_z": float(self.last_gripper_vel[2]),
+            "anchor0_vel_x": float(self.last_anchor0_vel[0]),
+            "anchor0_vel_y": float(self.last_anchor0_vel[1]),
+            "anchor0_vel_z": float(self.last_anchor0_vel[2]),
+            "anchor1_vel_x": float(self.last_anchor1_vel[0]),
+            "anchor1_vel_y": float(self.last_anchor1_vel[1]),
+            "anchor1_vel_z": float(self.last_anchor1_vel[2]),
             
             "wrist_speed": float(self.last_wrist_speed),
             "finger_speed": float(self.last_finger_speed),
@@ -343,6 +364,7 @@ class StringmanLeRobot(Robot):
             "finger_angle": float(self.last_finger_angle),
             "laser_rangefinder": float(self.last_range),
             "finger_pressure": float(self.last_pressure),
+            "target_force": float(self.last_target_force),
             
             "gripper_camera": images[0],
             "anchor_camera_1": images[1],
@@ -353,20 +375,30 @@ class StringmanLeRobot(Robot):
 
         # action['wrist_speed'] *= 30
         # action['finger_speed'] *= 30
-        GAIN = 1.0 # for act model, 1.5 is a little better.
 
         batch = control.ControlBatchUpdate(
             robot_id="0",
             updates=[control.ControlItem(move=control.CombinedMove(
-                direction=common.Vec3(
-                    x=action['vel_x']*GAIN,
-                    y=action['vel_y']*GAIN,
-                    z=action['vel_z']*GAIN,
+                overspec_vel=common.OverSpecifiedVel(
+                    gripper_vel=common.Vec3(
+                        x=action['gripper_vel_x'],
+                        y=action['gripper_vel_y'],
+                        z=action['gripper_vel_z'],
+                    ),
+                    anchor0_vel=common.Vec3(
+                        x=action['anchor0_vel_x'],
+                        y=action['anchor0_vel_y'],
+                        z=action['anchor0_vel_z'],
+                    ),
+                    anchor1_vel=common.Vec3(
+                        x=action['anchor1_vel_x'],
+                        y=action['anchor1_vel_y'],
+                        z=action['anchor1_vel_z'],
+                    )
                 ),
-                finger_speed=action['finger_speed']*GAIN*GAIN,
-                wrist_speed=action['wrist_speed']*GAIN,
+                finger_speed=action['finger_speed'],
+                wrist_speed=action['wrist_speed'],
                 # speed=0.12,
-                direction_is_in_gripper_frame=True,
             ))]
         )
         to_send = bytes(batch)
@@ -387,9 +419,15 @@ class StringmanLeRobot(Robot):
 
     def get_last_action(self):
         return {
-            "vel_x": self.last_commanded_vel[0],
-            "vel_y": self.last_commanded_vel[1],
-            "vel_z": self.last_commanded_vel[2],
+            "gripper_vel_x": self.last_gripper_vel[0],
+            "gripper_vel_y": self.last_gripper_vel[1],
+            "gripper_vel_z": self.last_gripper_vel[2],
+            "anchor0_vel_x": self.last_anchor0_vel[0],
+            "anchor0_vel_y": self.last_anchor0_vel[1],
+            "anchor0_vel_z": self.last_anchor0_vel[2],
+            "anchor1_vel_x": self.last_anchor1_vel[0],
+            "anchor1_vel_y": self.last_anchor1_vel[1],
+            "anchor1_vel_z": self.last_anchor1_vel[2],
             "wrist_speed": self.last_wrist_speed,
             "finger_speed": self.last_finger_speed,
             "finished": 0.0,
@@ -688,12 +726,18 @@ def eval_episode(
         action_vector = np.squeeze(action_vector)
         
         action_dict = {
-            "vel_x": float(action_vector[0]),
-            "vel_y": float(action_vector[1]),
-            "vel_z": float(action_vector[2]),
-            "wrist_speed": float(action_vector[3]),
-            "finger_speed": float(action_vector[4]),
-            "finished": float(action_vector[5]) if len(action_vector) > 5 else 0.0,
+            "gripper_vel_x": float(action_vector[0]),
+            "gripper_vel_y": float(action_vector[1]),
+            "gripper_vel_z": float(action_vector[2]),
+            "anchor0_vel_x": float(action_vector[3]),
+            "anchor0_vel_y": float(action_vector[4]),
+            "anchor0_vel_z": float(action_vector[5]),
+            "anchor1_vel_x": float(action_vector[6]),
+            "anchor1_vel_y": float(action_vector[7]),
+            "anchor1_vel_z": float(action_vector[8]),
+            "wrist_speed": float(action_vector[9]),
+            "finger_speed": float(action_vector[10]),
+            "finished": float(action_vector[11]) if len(action_vector) > 11 else 0.0,
         }
 
         if action_dict["finished"] > 0.5:
@@ -713,7 +757,9 @@ def eval_episode(
     print('Eval episode finished')
     robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_IDLE))
     robot.send_action({
-        "vel_x": 0.0, "vel_y": 0.0, "vel_z": 0.0,
+        "gripper_vel_x": 0.0, "gripper_vel_y": 0.0, "gripper_vel_z": 0.0,
+        "anchor0_vel_x": 0.0, "anchor0_vel_y": 0.0, "anchor0_vel_z": 0.0,
+        "anchor1_vel_x": 0.0, "anchor1_vel_y": 0.0, "anchor1_vel_z": 0.0,
         "wrist_speed": 0.0,
         "finger_speed": 0.0
     })

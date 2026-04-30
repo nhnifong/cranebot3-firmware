@@ -84,3 +84,13 @@ enum AnchorType {
   // two anchors each controlling two lines
   ANCHORTYPE_ARPEGGIO = 2;
 }
+
+// Commanded velocity rotated into three different camera reference frames
+// +X is towards the right in the image
+// +Y is torwards the top of the image
+// +Z is out of the camera. (ie moving in +Z means move in the direction this camera is looking)
+message OverSpecifiedVel {
+  optional nf.common.Vec3 gripper_vel = 1;
+  optional nf.common.Vec3 anchor0_vel = 2;
+  optional nf.common.Vec3 anchor1_vel = 3;
+}

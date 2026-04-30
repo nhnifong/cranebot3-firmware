@@ -91,3 +91,13 @@ def create_lookat_pose(cam_pos, target_pos):
     rvec, _ = cv2.Rodrigues(R_c2w)
     
     return (rvec, cam_pos)
+
+def global_vel_to_camera_vel(global_vel, cam_rvec):
+    """ rotate a velocity in the global frame into a camera's reference frame. """
+    R_cam_to_global, _ = cv2.Rodrigues(cam_rvec)
+    return np.dot(R_cam_to_global.T, global_vel)
+
+def camera_vel_to_global_vel(cam_vel, cam_rvec):
+    """ rotate a velocity in a camera's frame into the global reference frame. """
+    R_cam_to_global, _ = cv2.Rodrigues(cam_rvec)
+    return np.dot(R_cam_to_global, cam_vel)

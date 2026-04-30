@@ -9,6 +9,7 @@ __all__ = (
     "EpisodeControl",
     "LerobotSessionStatus",
     "LerobotStatus",
+    "OverSpecifiedVel",
     "Pose",
     "Vec3",
 )
@@ -271,6 +272,31 @@ class LerobotSessionStatus(betterproto2.Message):
 default_message_pool.register_message(
     "nf.common", "LerobotSessionStatus", LerobotSessionStatus
 )
+
+
+@dataclass(eq=False, repr=False)
+class OverSpecifiedVel(betterproto2.Message):
+    """
+    Commanded velocity rotated into three different camera reference frames
+    +X is towards the right in the image
+    +Y is torwards the top of the image
+    +Z is out of the camera. (ie moving in +Z means move in the direction this camera is looking)
+    """
+
+    gripper_vel: "Vec3 | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True
+    )
+
+    anchor0_vel: "Vec3 | None" = betterproto2.field(
+        2, betterproto2.TYPE_MESSAGE, optional=True
+    )
+
+    anchor1_vel: "Vec3 | None" = betterproto2.field(
+        3, betterproto2.TYPE_MESSAGE, optional=True
+    )
+
+
+default_message_pool.register_message("nf.common", "OverSpecifiedVel", OverSpecifiedVel)
 
 
 @dataclass(eq=False, repr=False)

@@ -244,8 +244,8 @@ message TelemetryItem {
     ComponentConnStatus component_conn_status = 5;
     VidStats vid_stats = 6;
     NamedObjectPosition named_position = 7;
-    CommandedVelocity last_commanded_vel = 8; // Total velocity considering all inputs including the swing cancellation, in the room's frame of reference
-    CommandedVelocity raw_commanded_vel = 21; // "raw" commanded velocity whether from human or AI, where the lateral component is in the un-stabilized gripper image frame of reference
+    CommandedVelocity last_commanded_vel = 8; // Total velocity considering all inputs including the swing cancellation, in the room's frame of reference\
+    CommandedVelocity raw_commanded_vel = 21;     // deprecated
     Popup pop_message = 9;
 		GripperSensors grip_sensors = 10;
 		GripCamPredictions grip_cam_preditions = 11; // note misspelled. not changed for backwards compat
@@ -257,6 +257,7 @@ message TelemetryItem {
 		CommandedGrip last_commanded_grip = 18;
     SwingCancellationState swing_cancellation_state = 19;
     VisibilityStates visibility_states = 20;
+    nf.common.OverSpecifiedVel overspec_vel = 22; // commanded velocity (without stabilization) rotated into multiple reference frames
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

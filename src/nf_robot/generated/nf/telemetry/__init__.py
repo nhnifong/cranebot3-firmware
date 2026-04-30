@@ -622,14 +622,14 @@ class TelemetryItem(betterproto2.Message):
         8, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
     """
-    Total velocity considering all inputs including the swing cancellation, in the room's frame of reference
+    Total velocity considering all inputs including the swing cancellation, in the room's frame of reference\\
     """
 
     raw_commanded_vel: "CommandedVelocity | None" = betterproto2.field(
         21, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
     """
-    "raw" commanded velocity whether from human or AI, where the lateral component is in the un-stabilized gripper image frame of reference
+    deprecated
     """
 
     pop_message: "Popup | None" = betterproto2.field(
@@ -684,6 +684,13 @@ class TelemetryItem(betterproto2.Message):
     visibility_states: "VisibilityStates | None" = betterproto2.field(
         20, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
+
+    overspec_vel: "_common__.OverSpecifiedVel | None" = betterproto2.field(
+        22, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+    """
+    commanded velocity (without stabilization) rotated into multiple reference frames
+    """
 
     retain_key: "str | None" = betterproto2.field(
         14, betterproto2.TYPE_STRING, optional=True
