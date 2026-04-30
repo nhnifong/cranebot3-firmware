@@ -85,6 +85,7 @@ class ComponentClient:
         self.last_known_centers = {}
 
     def send_conn_status(self):
+        print(f'anchor_{self.anchor_num} sending component status {self.conn_status}')
         self.ob.send_ui(component_conn_status=copy.deepcopy(self.conn_status))
 
     def receive_video(self, port):

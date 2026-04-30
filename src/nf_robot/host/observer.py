@@ -1777,7 +1777,10 @@ class AsyncObserver:
         if key == 'new_anchor_poses':
             item.retain_key = 'new_anchor_poses'
         if key == 'component_conn_status':
-            item.retain_key = f'component_conn_status_{msg.anchor_num}'
+            if msg.is_gripper:
+                item.retain_key = f'component_conn_status_g'
+            else:
+                item.retain_key = f'component_conn_status_{msg.anchor_num}'
         if key == 'video_ready':
             item.retain_key = f'video_ready_{msg.anchor_num}'
         if key == 'episode_control' and item.episode_control.status is not None:
@@ -1871,11 +1874,11 @@ class AsyncObserver:
 
                     if self.telemetry_env == None:
                         message = f'Listening on localhost:{self.port} To control visit https://neufangled.com/playroom?robotid=lan on this machine'
-                    if self.telemetry_env == 'local':
+                    elif self.telemetry_env == 'local':
                         message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
-                    if self.telemetry_env == 'production':
+                    elif self.telemetry_env == 'production':
                         message = f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}'
-                    if self.telemetry_env == 'staging':
+                    elif self.telemetry_env == 'staging':
                         message = f'To control visit https://nf-site-monolith-staging-690802609278.us-east1.run.app/playroom?robotid={self.config.robot_id}'
                     else:
                         print(f'invalid telemetry_env {self.telemetry_env}')
