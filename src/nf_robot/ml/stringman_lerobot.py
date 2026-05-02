@@ -624,14 +624,14 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
             print(f"Ready.")
             
             # Checkpoint: Upload data to Hugging Face every 10 episodes
-            if upload and recorded_episodes % CHECKPOINT_EVERY == 0:
-                print(f"Checkpoint reached: Uploading dataset to Hugging Face ({recorded_episodes} episodes)...", flush=True)
-                robot.send_session_status(common.LerobotSessionStatus(
-                    status=common.LerobotStatus.REC_CHECKPOINT,
-                    session_ep_number=recorded_episodes,
-                    episodes_until_checkpoint=CHECKPOINT_EVERY,
-                ))
-                dataset.push_to_hub()
+            # if upload and recorded_episodes % CHECKPOINT_EVERY == 0:
+            #     print(f"Checkpoint reached: Uploading dataset to Hugging Face ({recorded_episodes} episodes)...", flush=True)
+            #     robot.send_session_status(common.LerobotSessionStatus(
+            #         status=common.LerobotStatus.REC_CHECKPOINT,
+            #         session_ep_number=recorded_episodes,
+            #         episodes_until_checkpoint=CHECKPOINT_EVERY,
+            #     ))
+            #     dataset.push_to_hub()
 
             # Tf the user set the ep start event while processing was occuring, clear it. Unexpected episode starts lead to low quality data.
             events['start'] = False

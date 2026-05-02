@@ -196,6 +196,7 @@ class AsyncObserver:
         self.lerobot_process_watcher = None
         self.last_ep_ctrl_status = common.LerobotStatus.NA
         self.lerobot_process_pid = None
+        self.osv_w = [1, 1, 1]
 
     async def send_setup_telemetry(self):
         logger.debug('Sending setup telemetry')
@@ -400,6 +401,9 @@ class AsyncObserver:
             save_config(self.config, self.config_path)
         if item.action == 'reset_wrist':
              await asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
+        if item.action.startswith('osv'):
+            parts = item.action.split()
+            self.osv_w = list(map(float, parts[1:]))
 
     async def lerobot_process(self, item: control.ManageLerobotSession):
         if self.lerobot_process_pid is not None:
@@ -677,7 +681,7 @@ class AsyncObserver:
                 winch, finger, wrist = await self.send_gripper_move_legacy(move.winch, move.finger, move.wrist)
 
         direction = np.zeros(3)
-        if move.direction:
+        if move.direction is not None:
             direction = tonp(move.direction)
 
             if self.gripper_client is not None and isinstance(self.gripper_client, ArpeggioGripperClient):
@@ -713,6 +717,16 @@ class AsyncObserver:
                     anchor0_vel=fromnp(a0_vel),
                     anchor1_vel=fromnp(a1_vel),
                 ))
+
+        elif move.overspec_vel is not None:
+            # model commanding move using all velocities at once.
+            osv = move.overspec_vel
+            direction = (
+                tonp(osv.gripper_vel) * self.osv_w[0]
+                + tonp(osv.anchor0_vel) * self.osv_w[1]
+                + tonp(osv.anchor1_vel) * self.osv_w[2]
+            )
+
 
         commanded_vel = await self.move_direction_speed(direction, move.speed)
 
