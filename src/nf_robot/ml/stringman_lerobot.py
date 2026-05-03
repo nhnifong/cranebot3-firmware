@@ -453,38 +453,43 @@ def record_episode(
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
     timestamp = 0
+    finish_countdown = 0
     start_episode_t = time.perf_counter()
     print('ep started')
     while timestamp < max_episode_duration:
         start_loop_t = time.perf_counter()
-        
+
         if events['end_recording']:
             break
         if events["stop"]:
             print('ep complete')
             events["stop"] = False
-            break
-        if events["episode_abandon"]: 
+            finish_countdown = 15
+        if events["episode_abandon"]:
             print('ep abandon')
             break
 
         obs = robot.get_observation()
+        obs["finished"] = 1.0 if finish_countdown > 0 else 0.0
         observation_frame = build_dataset_frame(dataset.features, obs, prefix=OBS_STR)
-        
+
         action_sent = robot.get_last_action()
+        action_sent["finished"] = obs["finished"]
         action_frame = build_dataset_frame(dataset.features, action_sent, prefix=ACTION)
 
         frame = {**observation_frame, **action_frame, "task": task_description}
         dataset.add_frame(frame)
-
-        # if display_data:
-        #     log_rerun_data(observation=obs, action=action_sent)
 
         dt_s = time.perf_counter() - start_loop_t
         sleep_time = 1 / fps - dt_s
         if sleep_time > 0:
             time.sleep(sleep_time)
         timestamp = time.perf_counter() - start_episode_t
+
+        if finish_countdown > 0:
+            finish_countdown -= 1
+            if finish_countdown == 0:
+                break
 
     print('ep finished')
 
@@ -600,26 +605,6 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
             recorded_episodes += 1
             print(f"Episode {recorded_episodes} complete.")
             
-            # --- Retroactively label "finished" for the last 15 frames ---
-            action_keys = list(robot.action_features.keys())
-            if "finished" in action_keys:
-                finished_idx = action_keys.index("finished")
-                if hasattr(dataset, "episode_buffer") and "action" in dataset.episode_buffer:
-                    buffer = dataset.episode_buffer["action"]
-                    start = max(0, len(buffer) - 15)
-                    for i in range(start, len(buffer)):
-                        buffer[i][finished_idx] = 1.0
-
-            obs_state_keys = [k for k, v in robot.observation_features.items() if v is float]
-            if "finished" in obs_state_keys:
-                finished_obs_idx = obs_state_keys.index("finished")
-                if hasattr(dataset, "episode_buffer") and "observation.state" in dataset.episode_buffer:
-                    buffer = dataset.episode_buffer["observation.state"]
-                    start = max(0, len(buffer) - 15)
-                    for i in range(start, len(buffer)):
-                        buffer[i][finished_obs_idx] = 1.0
-            # --------------------------------------------------------------
-
             dataset.save_episode()
             print(f"Ready.")
             
