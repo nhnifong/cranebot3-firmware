@@ -2186,7 +2186,7 @@ class AsyncObserver:
             # and a slower speed is need to maintain enough torque from the stepper motors.
             # The speed limit is proportional to how far the gantry hangs below a level 10cm below the average anchor.
             # This makes the behavior consistent across installations of different heights.
-            # hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
+            hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
             speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.25)
             # If the combined total speed exceeds the limit, scale the vector down
         elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
