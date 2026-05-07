@@ -25,7 +25,7 @@ from nf_robot.generated.nf import telemetry, control, common
 from lerobot.robots import Robot, RobotConfig
 from lerobot.datasets.image_writer import safe_stop_image_writer
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.feature_utils import build_dataset_frame, hw_to_dataset_features
+from lerobot.utils.feature_utils import build_dataset_frame, hw_to_dataset_features
 from lerobot.utils.constants import OBS_STR, ACTION
 # from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
 # from lerobot.utils.utils import log_say
@@ -623,7 +623,7 @@ def eval_episode(
 ):
     import torch
     from lerobot.policies.utils import get_device_from_parameters
-    from lerobot.utils.control_utils import predict_action
+    from lerobot.common.control_utils import predict_action
 
     timestamp = 0
     start_episode_t = time.perf_counter()
