@@ -207,6 +207,13 @@ class EpisodeControl(betterproto2.Message):
     When the web UI recives one, it uses it to update the interface.
     """
 
+    prompt: "str | None" = betterproto2.field(
+        3, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    The current task description. may be sent either by an actual UI, or by the stringman_lerobot script.
+    """
+
 
 default_message_pool.register_message("nf.common", "EpisodeControl", EpisodeControl)
 

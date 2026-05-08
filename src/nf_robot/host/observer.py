@@ -433,7 +433,7 @@ class AsyncObserver:
             sys.executable,
             '-u', '-c',
             f"from nf_robot.ml.stringman_lerobot import {func_name}; "
-            f"{func_name}('{tele_addr}', '{repo_id}'{up})"
+            f"{func_name}('{tele_addr}', '{repo_id}', '{self.config.robot_id}'{up})"
         ]
 
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)

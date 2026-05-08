@@ -32,6 +32,13 @@ from lerobot.utils.constants import OBS_STR, ACTION
 # from lerobot.utils.visualization_utils import log_rerun_data, init_rerun
 # from lerobot.utils.utils import log_say
 
+# --- Recording Configuration ---
+EPISODE_MAX_TIME_SEC = 600
+FPS = 30
+TASK_DESCRIPTION = "Pick up the item"
+NUM_BUFFERS = 3
+
+
 IMG_RES = 384
 ANCHOR_W = 960
 ANCHOR_H = 544
@@ -509,12 +516,6 @@ class StringmanLeRobot(Robot):
             "finger_speed": self.last_finger_speed,
         }
 
-# --- Recording Configuration ---
-EPISODE_MAX_TIME_SEC = 600
-FPS = 60
-TASK_DESCRIPTION = "Pick up the item"
-NUM_BUFFERS = 3
-
 @safe_stop_image_writer
 def record_episode(
     robot: Robot,
@@ -818,7 +819,7 @@ def eval_episode(
         "finger_speed": 0.0
     })
 
-def eval_until_disconnected(uri, policy_repo_id, device="cuda", remote_stream_token=None):
+def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote_stream_token=None):
     import torch
     from lerobot.policies.factory import make_policy, make_pre_post_processors
     from lerobot.configs.policies import PreTrainedConfig
@@ -930,6 +931,6 @@ if __name__ == "__main__":
     print(f'Connecting to robot at {uri}')
 
     if args.command == 'eval':
-        eval_until_disconnected(uri, args.policy_id, remote_stream_token=args.remote_stream_token)
+        eval_until_disconnected(uri, args.policy_id, args.robot_id, remote_stream_token=args.remote_stream_token)
     else:
         record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token)

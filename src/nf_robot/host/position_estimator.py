@@ -348,7 +348,7 @@ class Positioner2:
         self._imu_mount_rot = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True)
 
         # last tension of each line in newtons
-        self.tension = np.zeros()
+        self.tension = np.zeros(4)
 
     def set_gripper_type(self, t):
         self.gripper_type = t
@@ -459,7 +459,7 @@ class Positioner2:
 
             # if any line is measured to be slack,
             # make its length effectively infinite so it won't play a part in the hang position
-            lengths[tension < 0.0275] = 100
+            lengths[self.tension < 0.0275] = 100
 
             # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)

@@ -364,7 +364,7 @@ class NamedObjectPosition(betterproto2.Message):
     name: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
     """
     Name of the object
-    Could be the name of a tag like 'hamper' or 'gamepad'
+    Could be the name of a tag like 'hamper', 'gamepad', or 'parking_location'
     When the observer is moving the gantry to a particular goal position, it gives this position with the name 'gantry_goal'
     """
 
