@@ -79,6 +79,9 @@ class RaspiGripperClient(ComponentClient):
         if 'episode_button_pushed' in update:
             logger.info('Episode button pushed')
 
+    def get_spin(self):
+        return 0.0
+
     async def set_finger_speed(self, speed):
         # UI now only sends finger speed, but pilot gripper only accepts finger angle and internally tracks it with acceleration.
         self.finger_angle += speed / 8 # arrive at number by magically trying things. why is it not 30?

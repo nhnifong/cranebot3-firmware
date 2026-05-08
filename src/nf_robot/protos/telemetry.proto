@@ -19,6 +19,8 @@ message PositionEstimate {
 	double data_ts = 4; // the wall time in seconds since the epoch UTC when the robot was at this position
 	// an array of bools for each anchor. true meaning the line should be drawn with a droop
 	repeated bool slack = 5;
+	// Exact tension force on each of the four lines in newtons.
+	repeated float tension = 6;
 }
 
 // Diagnostic information about factors used in estimating the robot's positon
@@ -93,9 +95,13 @@ message NamedObjectPosition {
 	// if position is unset, the UI should hide the indicator. 
 	optional nf.common.Vec3 position = 1;
 	// Name of the object
-	// Could be the name of a tag like 'hamper' or 'gamepad'
+	// Could be the name of a tag like 'hamper', 'gamepad', or 'parking_location'
 	// When the observer is moving the gantry to a particular goal position, it gives this position with the name 'gantry_goal'
-	string name = 2; 
+	string name = 2;
+
+	// Bearing and distance to the tag from the gripper camera's frame of reference.
+	optional float bearing = 4; // radians. 0 is dead ahead (+Y), positive is to the right.
+	optional float distance = 5; // meters from gripper to tag
 }
 
 // When the gantry has been commanded to move it gives this velocity to the UI for visualization.

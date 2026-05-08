@@ -368,6 +368,22 @@ class NamedObjectPosition(betterproto2.Message):
     When the observer is moving the gantry to a particular goal position, it gives this position with the name 'gantry_goal'
     """
 
+    bearing: "float | None" = betterproto2.field(
+        4, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    Bearing and distance to the tag from the gripper camera's frame of reference.
+
+    radians. 0 is dead ahead (+Y), positive is to the right.
+    """
+
+    distance: "float | None" = betterproto2.field(
+        5, betterproto2.TYPE_FLOAT, optional=True
+    )
+    """
+    meters from gripper to tag
+    """
+
 
 default_message_pool.register_message(
     "nf.telemetry", "NamedObjectPosition", NamedObjectPosition
@@ -488,6 +504,13 @@ class PositionEstimate(betterproto2.Message):
     slack: "list[bool]" = betterproto2.field(5, betterproto2.TYPE_BOOL, repeated=True)
     """
     an array of bools for each anchor. true meaning the line should be drawn with a droop
+    """
+
+    tension: "list[float]" = betterproto2.field(
+        6, betterproto2.TYPE_FLOAT, repeated=True
+    )
+    """
+    Exact tension force on each of the four lines in newtons.
     """
 
 

@@ -18,6 +18,8 @@ from huggingface_hub import repo_exists
 import os
 import signal
 import sys
+import json
+import importlib.metadata
 
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
@@ -72,9 +74,26 @@ class StringmanLeRobot(Robot):
         self.last_finger_angle = 0.0
         self.last_pressure = 0.0
         self.last_range = 0.0
-        
+        self.last_wrist_angle = 0.0
+        self.last_target_force = 0.0
+
         self.last_gripper_pos = np.zeros(3, dtype=float)
         self.last_gripper_rot_6d = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=float)
+
+        self.last_named_positions = {
+            "hamper":           [0.0, 0.0],
+            "toybox":           [0.0, 0.0],
+            "trashcan":         [0.0, 0.0],
+            "gamepad":          [0.0, 0.0],
+            "parking_location": [0.0, 0.0],
+        }
+        self.last_swing_cancellation_on = 0.0
+        self.last_tensions = np.zeros(4, dtype=float)
+        self.last_gantry_pos = np.zeros(3, dtype=float)
+        self.last_visual_pos = np.zeros(3, dtype=float)
+        self.last_hang_pos = np.zeros(3, dtype=float)
+
+        self.last_task_description = TASK_DESCRIPTION
 
         self.events = events
         
@@ -123,6 +142,36 @@ class StringmanLeRobot(Robot):
             "finger_angle": float,
             "laser_rangefinder": float,
             "finger_pressure": float,
+            "wrist_angle": float,
+            "target_force": float,
+
+            "hamper_bearing": float,
+            "hamper_distance": float,
+            "toybox_bearing": float,
+            "toybox_distance": float,
+            "trashcan_bearing": float,
+            "trashcan_distance": float,
+            "gamepad_bearing": float,
+            "gamepad_distance": float,
+            "parking_location_bearing": float,
+            "parking_location_distance": float,
+
+            "swing_cancellation_on": float,
+
+            "tension_0": float,
+            "tension_1": float,
+            "tension_2": float,
+            "tension_3": float,
+
+            "gantry_position_x": float,
+            "gantry_position_y": float,
+            "gantry_position_z": float,
+            "visual_pos_x": float,
+            "visual_pos_y": float,
+            "visual_pos_z": float,
+            "hang_pos_x": float,
+            "hang_pos_y": float,
+            "hang_pos_z": float,
         }
 
     @cached_property
@@ -153,6 +202,8 @@ class StringmanLeRobot(Robot):
     def process_update(self, item: telemetry.TelemetryItem):
         if item.pos_estimate is not None:
             self._handle_pos_estimate(item.pos_estimate)
+        if item.pos_factors_debug is not None:
+            self._handle_pos_factors(item.pos_factors_debug)
         if item.grip_sensors is not None:
             self._handle_grip_sensors(item.grip_sensors)
         if item.video_ready is not None:
@@ -163,10 +214,22 @@ class StringmanLeRobot(Robot):
             self._handle_last_commanded_grip(item.last_commanded_grip)
         if item.episode_control is not None:
             self._handle_episode_control(item.episode_control)
+        if item.named_position is not None:
+            self._handle_named_position(item.named_position)
+        if item.swing_cancellation_state is not None:
+            self._handle_swing_cancellation(item.swing_cancellation_state)
 
     def _handle_pos_estimate(self, item: telemetry.PositionEstimate):
         self.last_observed_vel = item.gantry_velocity
-        
+
+        if item.gantry_position:
+            self.last_gantry_pos[0] = item.gantry_position.x
+            self.last_gantry_pos[1] = item.gantry_position.y
+            self.last_gantry_pos[2] = item.gantry_position.z
+
+        for i, t in enumerate(item.tension[:4]):
+            self.last_tensions[i] = t
+
         if item.gripper_pose:
             if item.gripper_pose.position:
                 self.last_gripper_pos[0] = item.gripper_pose.position.x
@@ -190,6 +253,28 @@ class StringmanLeRobot(Robot):
             self.last_finger_angle = item.angle
         if item.pressure is not None:
             self.last_pressure = item.pressure
+        if item.wrist is not None:
+            self.last_wrist_angle = item.wrist
+        if item.target_force is not None:
+            self.last_target_force = item.target_force
+
+    def _handle_pos_factors(self, item: telemetry.PositionFactors):
+        if item.visual_pos:
+            self.last_visual_pos[0] = item.visual_pos.x
+            self.last_visual_pos[1] = item.visual_pos.y
+            self.last_visual_pos[2] = item.visual_pos.z
+        if item.hanging_pos:
+            self.last_hang_pos[0] = item.hanging_pos.x
+            self.last_hang_pos[1] = item.hanging_pos.y
+            self.last_hang_pos[2] = item.hanging_pos.z
+
+    def _handle_named_position(self, item: telemetry.NamedObjectPosition):
+        if item.name in self.last_named_positions:
+            self.last_named_positions[item.name][0] = item.bearing if item.bearing is not None else 0.0
+            self.last_named_positions[item.name][1] = item.distance if item.distance is not None else 0.0
+
+    def _handle_swing_cancellation(self, item: telemetry.SwingCancellationState):
+        self.last_swing_cancellation_on = 1.0 if item.enabled else 0.0
 
     def _handle_video_ready(self, item: telemetry.VideoReady):
         feed_num = item.feed_number
@@ -292,6 +377,8 @@ class StringmanLeRobot(Robot):
             self.events['start'] = True
         if item.command == common.EpCommand.EVAL_STOP:
             self.events['stop'] = True
+        if item.prompt is not None:
+            self.last_task_description = item.prompt
 
     def disconnect(self) -> None:
         print("Disconnecting")
@@ -340,7 +427,38 @@ class StringmanLeRobot(Robot):
             "finger_angle": float(self.last_finger_angle),
             "laser_rangefinder": float(self.last_range),
             "finger_pressure": float(self.last_pressure),
-            
+
+            "wrist_angle": float(self.last_wrist_angle),
+            "target_force": float(self.last_target_force),
+
+            "hamper_bearing":   float(self.last_named_positions["hamper"][0]),
+            "hamper_distance":  float(self.last_named_positions["hamper"][1]),
+            "toybox_bearing":   float(self.last_named_positions["toybox"][0]),
+            "toybox_distance":  float(self.last_named_positions["toybox"][1]),
+            "trashcan_bearing": float(self.last_named_positions["trashcan"][0]),
+            "trashcan_distance":float(self.last_named_positions["trashcan"][1]),
+            "gamepad_bearing":  float(self.last_named_positions["gamepad"][0]),
+            "gamepad_distance": float(self.last_named_positions["gamepad"][1]),
+            "parking_location_bearing":  float(self.last_named_positions["parking_location"][0]),
+            "parking_location_distance": float(self.last_named_positions["parking_location"][1]),
+
+            "swing_cancellation_on": float(self.last_swing_cancellation_on),
+
+            "tension_0": float(self.last_tensions[0]),
+            "tension_1": float(self.last_tensions[1]),
+            "tension_2": float(self.last_tensions[2]),
+            "tension_3": float(self.last_tensions[3]),
+
+            "gantry_position_x": float(self.last_gantry_pos[0]),
+            "gantry_position_y": float(self.last_gantry_pos[1]),
+            "gantry_position_z": float(self.last_gantry_pos[2]),
+            "visual_pos_x": float(self.last_visual_pos[0]),
+            "visual_pos_y": float(self.last_visual_pos[1]),
+            "visual_pos_z": float(self.last_visual_pos[2]),
+            "hang_pos_x": float(self.last_hang_pos[0]),
+            "hang_pos_y": float(self.last_hang_pos[1]),
+            "hang_pos_z": float(self.last_hang_pos[2]),
+
             "gripper_camera": images[0],
             "anchor_camera_1": images[1],
             "anchor_camera_2": images[2],
@@ -404,7 +522,6 @@ def record_episode(
     fps: int,
     dataset: LeRobotDataset | None = None,
     max_episode_duration: int | None = None,
-    task_description: str | None = None,
     display_data: bool = False,
 ):
     if dataset is not None and dataset.fps != fps:
@@ -432,7 +549,7 @@ def record_episode(
         action_sent = robot.get_last_action()
         action_frame = build_dataset_frame(dataset.features, action_sent, prefix=ACTION)
 
-        frame = {**observation_frame, **action_frame, "task": task_description}
+        frame = {**observation_frame, **action_frame, "task": robot.last_task_description}
         dataset.add_frame(frame)
 
         # if display_data:
@@ -446,7 +563,21 @@ def record_episode(
 
     print('ep finished')
 
-def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=None):
+def append_episode_metadata(dataset: LeRobotDataset, robot_id: str):
+    try:
+        nf_robot_version = importlib.metadata.version("nf_robot")
+    except importlib.metadata.PackageNotFoundError:
+        nf_robot_version = "unknown"
+    entry = {
+        "episode_index": dataset.num_episodes - 1,
+        "robot_id": robot_id,
+        "nf_robot_version": nf_robot_version,
+    }
+    path = dataset.root / "meta" / "episodes_extra.jsonl"
+    with path.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None):
     class GracefulExit(Exception):
         pass
 
@@ -540,7 +671,6 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
                 fps=FPS,
                 dataset=dataset,
                 max_episode_duration=EPISODE_MAX_TIME_SEC,
-                task_description=TASK_DESCRIPTION,
                 display_data=True,
             )
 
@@ -558,6 +688,7 @@ def record_until_disconnected(uri, hf_repo_id, upload=True, remote_stream_token=
             recorded_episodes += 1
             print(f"Episode {recorded_episodes} complete.")
             dataset.save_episode()
+            append_episode_metadata(dataset, robot_id)
             print(f"Ready.")
             
             # Checkpoint: Upload data to Hugging Face every 10 episodes
@@ -654,7 +785,7 @@ def eval_episode(
             preprocessor=preprocessor,
             postprocessor=postprocessor,
             use_amp=policy.config.use_amp,
-            task=TASK_DESCRIPTION,
+            task=robot.last_task_description,
             robot_type=robot.name,
         )
 
@@ -801,4 +932,4 @@ if __name__ == "__main__":
     if args.command == 'eval':
         eval_until_disconnected(uri, args.policy_id, remote_stream_token=args.remote_stream_token)
     else:
-        record_until_disconnected(uri, args.repo_id, args.upload, remote_stream_token=args.remote_stream_token)
+        record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token)

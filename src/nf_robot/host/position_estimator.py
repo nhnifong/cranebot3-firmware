@@ -347,6 +347,9 @@ class Positioner2:
         # operations every second in estimate_gripper
         self._imu_mount_rot = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True)
 
+        # last tension of each line in newtons
+        self.tension = np.zeros()
+
     def set_gripper_type(self, t):
         self.gripper_type = t
 
@@ -448,7 +451,7 @@ class Positioner2:
             
             # time, length, speed, tension
             lengths = np.array([r[1] for r in records])
-            tension = np.array([r[3] for r in records])
+            self.tension = np.array([r[3] for r in records])
             speeds_sum = sum(r[2] for r in records)
             
             # average timestamp of the four lines contributing to this hang point.
@@ -560,6 +563,7 @@ class Positioner2:
             gantry_velocity=fromnp(self.gant_vel),
             gripper_pose=common.Pose(rotation=fromnp(self.grip_pose[0]), position=fromnp(self.grip_pose[1])),
             slack=list(map(bool, self.slack_lines)),
+            tension=list(self.tension),
         ))
         self.ob.send_ui(pos_factors_debug=telemetry.PositionFactors(
             visual_pos=fromnp(self.visual_pos),

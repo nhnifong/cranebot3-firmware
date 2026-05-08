@@ -74,6 +74,9 @@ message EpisodeControl {
   // The lerobot sessions sends EpisodeControl messages contianing this field. they are forwarded to all UIs
   // When the web UI recives one, it uses it to update the interface.
   optional LerobotSessionStatus status = 2;
+
+  // The current task description. may be sent either by an actual UI, or by the stringman_lerobot script.
+  optional string prompt = 3;
 }
 
 enum AnchorType {
