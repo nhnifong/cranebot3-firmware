@@ -211,7 +211,7 @@ class EpisodeControl(betterproto2.Message):
         3, betterproto2.TYPE_STRING, optional=True
     )
     """
-    The current task description. may be sent either by an actual UI, or by the stringman_lerobot script.
+    The current task description. Send by UI, received by stringman_lerobot script.
     """
 
 
