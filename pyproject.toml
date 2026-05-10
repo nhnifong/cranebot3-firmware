@@ -8,7 +8,7 @@ name = "nf_robot"
 # major when making incompatible API changes,
 # minor when adding functionality in a backwards-compatible manner, and
 # patch, when making backwards-compatible bug fixes.
-version = "3.16.1"
+version = "3.16.2"
 description = "Robot control system for Stringman"
 authors = [{name = "Nathaniel Nifong", email = "naavox@gmail.com"}]
 requires-python = ">=3.12"
@@ -17,10 +17,10 @@ license = {text = "Apache 2.0"}
 
 dependencies = [
     "numpy>=2.0",
-    "zeroconf",
+    "zeroconf==0.148.0",
     "asyncio",
     "websockets",
-    "betterproto2",
+    "betterproto2==0.10.0",
     "opencv-contrib-python-headless>=4.0",
 ]
 
@@ -37,7 +37,7 @@ dev = [
     "pytest",
     "pytest-cov",
     "grpcio-tools",
-    "betterproto2_compiler",
+    "betterproto2_compiler==0.10.0",
     "opencv-contrib-python>=4.0", # for the data labelling tools
     "lerobot==0.5.1", # these guys can't be trusted not to break things
     "build",
