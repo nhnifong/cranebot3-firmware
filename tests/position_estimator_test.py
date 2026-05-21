@@ -141,6 +141,79 @@ class TestPositionEstimator(unittest.TestCase):
         self.assertTrue(slack_lines[2])
         self.assertFalse(slack_lines[3])
 
+    def test_stale_vel_timestamp_causes_jitter(self):
+        """
+        Reproduce: position estimate jitters badly when idle for a long time.
+
+        Root cause: update_commanded_vel feeds kf.update(vel=0, ts=commanded_vel_ts) at 30 Hz.
+        commanded_vel_ts is only refreshed by record_commanded_vel, so during idle it never
+        updates. Inside kf.update() the retrodict propagates state back by delta_t, then
+        re-propagates forward by F(delta_t). F[pos, vel] = delta_t, so any residual velocity
+        noise is amplified into a position correction of ~delta_t * K_vel * vel_residual.
+        After 60 s of idle, a 1 mm/s velocity residual (from noisy position measurements)
+        produces ~1 cm of position error per update call. Combined with continuous position
+        measurements that keep re-introducing small velocity residuals, this creates sustained
+        centimetre-scale position jitter that grows with idle time.
+
+        Moving the robot quiets the jitter because record_commanded_vel resets
+        commanded_vel_ts = time.time(), bringing delta_t back to ~0 and eliminating
+        the amplification.
+
+        The fix is to use the current time (not commanded_vel_ts) when issuing idle
+        zero-velocity updates.
+        """
+        rng = np.random.default_rng(seed=0)
+        sensor_names = ['v0', 'v1', 'v2', 'v3', 'hang']
+        pos_cov = np.diag([0.01**2] * 3)
+        vel_cov = np.diag([0.02**2] * 3)
+        true_pos = np.array([0.0, 0.0, 1.0])
+        IDLE_SECONDS = 60
+
+        def run_idle_scenario(use_stale_timestamp):
+            kf = KalmanFilter(sensor_names, acceleration_std_dev=0.001, bias_std_dev=0.0001)
+            t = 1000.0  # non-zero base time
+            kf.model_time = t
+
+            # Settle the filter with 3 s of noisy position observations
+            for _ in range(3 * 30):
+                t += 1 / 30
+                kf.predict(1 / 30)
+                kf.update(true_pos + rng.normal(0, 0.01, 3), t, pos_cov, 'position', 'hang')
+
+            # Robot stops — this is the stale timestamp that never gets refreshed
+            commanded_vel_ts = t
+
+            # Idle: position obs keep arriving (cameras still running), but commanded_vel_ts is frozen
+            positions = []
+            for _ in range(IDLE_SECONDS * 30):
+                t += 1 / 30
+                kf.predict(1 / 30)
+                kf.update(true_pos + rng.normal(0, 0.01, 3), t, pos_cov, 'position', 'hang')
+                vel_ts = commanded_vel_ts if use_stale_timestamp else t
+                kf.update(np.zeros(3), vel_ts, vel_cov, 'velocity')
+                positions.append(kf.state_estimate[:3].copy())
+
+            return np.array(positions)
+
+        stale = run_idle_scenario(use_stale_timestamp=True)
+        fresh = run_idle_scenario(use_stale_timestamp=False)
+
+        # Peak-to-peak range across the idle window, worst axis
+        stale_jitter = (stale.max(axis=0) - stale.min(axis=0)).max()
+        fresh_jitter = (fresh.max(axis=0) - fresh.min(axis=0)).max()
+
+        # The fix (using time.time() instead of commanded_vel_ts) eliminates the
+        # stale-timestamp path entirely. This assertion captures that fixed behavior.
+        self.assertLess(fresh_jitter, 0.05,
+            f"Fresh-ts jitter too high: {fresh_jitter*100:.1f} cm — filter is unstable even with correct timestamps")
+
+        # Confirm the bug is real: stale timestamps must cause meaningfully more jitter
+        # than fresh ones.
+        self.assertGreater(stale_jitter, fresh_jitter * 3,
+            f"Expected stale-ts jitter to far exceed fresh-ts jitter "
+            f"(stale={stale_jitter*100:.1f} cm, fresh={fresh_jitter*100:.1f} cm)")
+
+
 class TestPositionEstimatorAsync(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
