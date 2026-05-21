@@ -108,27 +108,27 @@ class KalmanFilter:
         else:
             raise ValueError("Invalid measurement_type. Must be 'position' or 'velocity'.")
             
-        # Retrodict (propagate backwards) from current state to measurement time
+        # Retrodict (propagate backwards) from current state to measurement time.
         delta_time = self.model_time - measurement_time
         state_transition_matrix_retro = self._get_F(-delta_time)
-        
+        process_noise = self._get_process_noise_covariance(delta_time)
+
         state_at_meas_time = state_transition_matrix_retro @ self.state_estimate
-        cov_at_meas_time = state_transition_matrix_retro @ self.state_covariance @ state_transition_matrix_retro.T
-        
+        cov_at_meas_time = state_transition_matrix_retro @ (self.state_covariance - process_noise) @ state_transition_matrix_retro.T
+
         # Perform standard update step at the measurement time
         innovation = measurement_vector - measurement_matrix @ state_at_meas_time
         innovation_covariance = measurement_matrix @ cov_at_meas_time @ measurement_matrix.T + sensor_noise_covariance
         kalman_gain = cov_at_meas_time @ measurement_matrix.T @ np.linalg.inv(innovation_covariance)
-        
+
         corrected_state_at_meas_time = state_at_meas_time + kalman_gain @ innovation
         corrected_cov_at_meas_time = (np.eye(self.state_size) - kalman_gain @ measurement_matrix) @ cov_at_meas_time
-        
+
         # Propagate corrected state forward to the current time
         prop_F = self._get_F(delta_time)
-        prop_Q = self._get_process_noise_covariance(delta_time)
-        
+
         self.state_estimate = prop_F @ corrected_state_at_meas_time
-        self.state_covariance = prop_F @ corrected_cov_at_meas_time @ prop_F.T + prop_Q
+        self.state_covariance = prop_F @ corrected_cov_at_meas_time @ prop_F.T + process_noise
 
     def reset_biases(self, perfect_position):
         """
