@@ -1103,8 +1103,10 @@ class AsyncObserver:
                 logger.warning('Cannot run half calibration until all anchors are connected')
                 return
 
+            need_sc_restart = False
             if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
                 self.swing_cancellation_task.cancel()
+                need_sc_restart = True
 
             for direction in [[0,0,-1], [0,0,1]]:
                 await self.tension_and_wait()
@@ -1117,6 +1119,9 @@ class AsyncObserver:
                 await self.move_direction_speed(direction, 0.05, downward_bias=0)
                 await asyncio.sleep(0.25)
                 self.slow_stop_all_spools()
+
+            if need_sc_restart:
+                self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
 
         except asyncio.CancelledError:
             raise
