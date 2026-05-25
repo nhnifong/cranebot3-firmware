@@ -721,16 +721,9 @@ class AsyncObserver:
         # exponential moving average
         self.named_positions[key] = self.named_positions[key] * 0.75 + position * 0.25
         pos = self.named_positions[key]
-        gripper_pos = self.pe.grip_pose[1]
-        delta = pos[:2] - gripper_pos[:2]
-        room_angle = np.arctan2(delta[0], delta[1])
-        spin = self.gripper_client.get_spin()
-        bearing = (room_angle - spin + np.pi) % (2 * np.pi) - np.pi
         self.send_ui(named_position=telemetry.NamedObjectPosition(
             position=fromnp(pos),
             name=key,
-            bearing=float(bearing),
-            distance=float(np.linalg.norm(delta)),
         ))
 
     async def invoke_motion_task(self, coro):

@@ -565,11 +565,15 @@ class Positioner2:
             slack=list(map(bool, self.slack_lines)),
             tension=list(self.tension),
         ))
+        spin = 0
+        if self.ob.gripper_client is not None:
+            spin = self.ob.gripper_client.get_spin()
         self.ob.send_ui(pos_factors_debug=telemetry.PositionFactors(
             visual_pos=fromnp(self.visual_pos),
             visual_vel=fromnp(self.visual_vel),
             hanging_pos=fromnp(self.hang_pos),
             hanging_vel=fromnp(self.hang_vel),
+            spin=spin,
         ))
 
     def notify_update(self, update):

@@ -88,11 +88,11 @@ class StringmanLeRobot(Robot):
         self.last_gripper_rot_6d = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=float)
 
         self.last_named_positions = {
-            "hamper":           [0.0, 0.0],
-            "toybox":           [0.0, 0.0],
-            "trashcan":         [0.0, 0.0],
-            "gamepad":          [0.0, 0.0],
-            "parking_location": [0.0, 0.0],
+            "hamper":           np.zeros(3),
+            "toybox":           np.zeros(3),
+            "trashcan":         np.zeros(3),
+            "gamepad":          np.zeros(3),
+            "parking_location": np.zeros(3),
         }
         self.last_swing_cancellation_on = 0.0
         self.last_tensions = np.zeros(4, dtype=float)
@@ -101,6 +101,8 @@ class StringmanLeRobot(Robot):
         self.last_hang_pos = np.zeros(3, dtype=float)
 
         self.last_task_description = TASK_DESCRIPTION
+
+        self.last_spin = 0.0
 
         self.events = events
         
@@ -230,26 +232,17 @@ class StringmanLeRobot(Robot):
         self.last_observed_vel = item.gantry_velocity
 
         if item.gantry_position:
-            self.last_gantry_pos[0] = item.gantry_position.x
-            self.last_gantry_pos[1] = item.gantry_position.y
-            self.last_gantry_pos[2] = item.gantry_position.z
+            self.last_gantry_pos = tonp(item.gantry_position)
 
         for i, t in enumerate(item.tension[:4]):
             self.last_tensions[i] = t
 
         if item.gripper_pose:
             if item.gripper_pose.position:
-                self.last_gripper_pos[0] = item.gripper_pose.position.x
-                self.last_gripper_pos[1] = item.gripper_pose.position.y
-                self.last_gripper_pos[2] = item.gripper_pose.position.z
+                self.last_gripper_pos = tonp(item.gripper_pose.position)
             
             if item.gripper_pose.rotation:
-                rvec = np.array([
-                    item.gripper_pose.rotation.x,
-                    item.gripper_pose.rotation.y,
-                    item.gripper_pose.rotation.z
-                ], dtype=float)
-                
+                rvec = tonp(item.gripper_pose.rotation)
                 R, _ = cv2.Rodrigues(rvec)
                 self.last_gripper_rot_6d = R[:, :2].flatten()
 
@@ -267,18 +260,15 @@ class StringmanLeRobot(Robot):
 
     def _handle_pos_factors(self, item: telemetry.PositionFactors):
         if item.visual_pos:
-            self.last_visual_pos[0] = item.visual_pos.x
-            self.last_visual_pos[1] = item.visual_pos.y
-            self.last_visual_pos[2] = item.visual_pos.z
+            self.last_visual_pos = tonp(item.visual_pos)
         if item.hanging_pos:
-            self.last_hang_pos[0] = item.hanging_pos.x
-            self.last_hang_pos[1] = item.hanging_pos.y
-            self.last_hang_pos[2] = item.hanging_pos.z
+            self.last_hang_pos = tonp(item.hanging_pos)
+        if item.spin:
+            self.last_spin = item.spin
 
     def _handle_named_position(self, item: telemetry.NamedObjectPosition):
-        if item.name in self.last_named_positions:
-            self.last_named_positions[item.name][0] = item.bearing if item.bearing is not None else 0.0
-            self.last_named_positions[item.name][1] = item.distance if item.distance is not None else 0.0
+        if item.name in self.last_named_positions and item.position is not None:
+            self.last_named_positions[item.name] = tonp(item.position)
 
     def _handle_swing_cancellation(self, item: telemetry.SwingCancellationState):
         self.last_swing_cancellation_on = 1.0 if item.enabled else 0.0
@@ -412,6 +402,15 @@ class StringmanLeRobot(Robot):
             with self.camera_locks[feed_num]:
                 images[feed_num] = self.last_images[feed_num].copy()
 
+
+        # calculate bearing and distance to every target in gripper frame of reference
+        targets = {}
+        for name, pos in self.last_named_positions.items():
+            delta = pos[:2] - self.last_gripper_pos[:2]
+            room_angle = np.arctan2(delta[0], delta[1])
+            bearing = (room_angle - self.last_spin + np.pi) % (2 * np.pi) - np.pi
+            targets[name] = (bearing, float(np.linalg.norm(delta)))
+
         return {
             'vel_x': float(self.last_observed_vel.x),
             'vel_y': float(self.last_observed_vel.y),
@@ -438,16 +437,16 @@ class StringmanLeRobot(Robot):
             "wrist_angle": float(self.last_wrist_angle),
             "target_force": float(self.last_target_force),
 
-            "hamper_bearing":   float(self.last_named_positions["hamper"][0]),
-            "hamper_distance":  float(self.last_named_positions["hamper"][1]),
-            "toybox_bearing":   float(self.last_named_positions["toybox"][0]),
-            "toybox_distance":  float(self.last_named_positions["toybox"][1]),
-            "trashcan_bearing": float(self.last_named_positions["trashcan"][0]),
-            "trashcan_distance":float(self.last_named_positions["trashcan"][1]),
-            "gamepad_bearing":  float(self.last_named_positions["gamepad"][0]),
-            "gamepad_distance": float(self.last_named_positions["gamepad"][1]),
-            "parking_location_bearing":  float(self.last_named_positions["parking_location"][0]),
-            "parking_location_distance": float(self.last_named_positions["parking_location"][1]),
+            "hamper_bearing":   float(targets["hamper"][0]),
+            "hamper_distance":  float(targets["hamper"][1]),
+            "toybox_bearing":   float(targets["toybox"][0]),
+            "toybox_distance":  float(targets["toybox"][1]),
+            "trashcan_bearing": float(targets["trashcan"][0]),
+            "trashcan_distance":float(targets["trashcan"][1]),
+            "gamepad_bearing":  float(targets["gamepad"][0]),
+            "gamepad_distance": float(targets["gamepad"][1]),
+            "parking_location_bearing":  float(targets["parking_location"][0]),
+            "parking_location_distance": float(targets["parking_location"][1]),
 
             "swing_cancellation_on": float(self.last_swing_cancellation_on),
 

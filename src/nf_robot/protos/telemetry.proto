@@ -31,6 +31,8 @@ message PositionFactors {
 	// Encoder determined position and velocity of hang point
 	nf.common.Vec3 hanging_pos = 3;
 	nf.common.Vec3 hanging_vel = 4;
+	// z axis rotation of gripper frame relative to room frame
+	float spin = 5;
 }
 
 // Individual sightings of the gantry by apriltag
@@ -99,9 +101,8 @@ message NamedObjectPosition {
 	// When the observer is moving the gantry to a particular goal position, it gives this position with the name 'gantry_goal'
 	string name = 2;
 
-	// Bearing and distance to the tag from the gripper camera's frame of reference.
-	optional float bearing = 4; // radians. 0 is dead ahead (+Y), positive is to the right.
-	optional float distance = 5; // meters from gripper to tag
+	// DEPRECATED
+	// 3, 4 and 5
 }
 
 // When the gantry has been commanded to move it gives this velocity to the UI for visualization.
