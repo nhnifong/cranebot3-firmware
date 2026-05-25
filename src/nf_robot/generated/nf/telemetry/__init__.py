@@ -368,22 +368,6 @@ class NamedObjectPosition(betterproto2.Message):
     When the observer is moving the gantry to a particular goal position, it gives this position with the name 'gantry_goal'
     """
 
-    bearing: "float | None" = betterproto2.field(
-        4, betterproto2.TYPE_FLOAT, optional=True
-    )
-    """
-    Bearing and distance to the tag from the gripper camera's frame of reference.
-
-    radians. 0 is dead ahead (+Y), positive is to the right.
-    """
-
-    distance: "float | None" = betterproto2.field(
-        5, betterproto2.TYPE_FLOAT, optional=True
-    )
-    """
-    meters from gripper to tag
-    """
-
 
 default_message_pool.register_message(
     "nf.telemetry", "NamedObjectPosition", NamedObjectPosition
@@ -546,6 +530,11 @@ class PositionFactors(betterproto2.Message):
     hanging_vel: "_common__.Vec3 | None" = betterproto2.field(
         4, betterproto2.TYPE_MESSAGE, optional=True
     )
+
+    spin: "float" = betterproto2.field(5, betterproto2.TYPE_FLOAT)
+    """
+    z axis rotation of gripper frame relative to room frame
+    """
 
 
 default_message_pool.register_message(
