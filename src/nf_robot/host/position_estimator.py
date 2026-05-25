@@ -474,7 +474,7 @@ class Positioner2:
             # optional hang velocity (unreviewed)
             if speeds_sum == 0:
                 self.hang_vel = _ZERO_3.copy()
-                self.kf.update(self.hang_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
+                self.kf.update(self.hang_vel, data_ts, self.vel_noise_covariance, 'velocity')
 
             self.hang_time_taken = time.time()-start_time
 
@@ -486,7 +486,7 @@ class Positioner2:
     async def update_commanded_vel(self):
         """provide an observation to the filter based on the commanded velocity"""
         while self.run:
-            self.kf.update(self.commanded_vel, self.commanded_vel_ts, self.vel_noise_covariance, 'velocity')
+            self.kf.update(self.commanded_vel, time.time(), self.vel_noise_covariance, 'velocity')
             await asyncio.sleep(1/30)
 
     def get_pendulum_length(self):
