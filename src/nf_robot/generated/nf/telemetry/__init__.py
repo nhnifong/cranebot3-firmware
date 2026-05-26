@@ -155,7 +155,18 @@ class AnchorPoses(betterproto2.Message):
         2, betterproto2.TYPE_MESSAGE, repeated=True
     )
     """
-    when anchors are arpeggio type, two eyelet positions are also sent.
+    when anchors are arpeggio type, two eyelet positions and tilts are also sent.
+    """
+
+    tilt: "list[float]" = betterproto2.field(3, betterproto2.TYPE_FLOAT, repeated=True)
+    """
+    angle from horizontal in degrees of installed camera tilt adapters.
+    """
+
+    swing_latency: "float" = betterproto2.field(4, betterproto2.TYPE_FLOAT)
+    """
+    Saved swing cancellation latency to use with this robot. Not a camera pose, but part of the setup data.
+    used by UI to pre-set the saved value on the slider.
     """
 
 

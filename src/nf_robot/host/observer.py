@@ -203,6 +203,8 @@ class AsyncObserver:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
                 eyelets=[a.indirect_line.eyelet_pos for a in self.config.anchors],
+                tilt=[a.indirect_line.cam_tilt for a in self.config.anchors],
+                swing_latency=self.config.swing_latency,
             ))
         else:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
@@ -1127,6 +1129,7 @@ class AsyncObserver:
             name="Calibration",
             current_action="Observing markers",
         ))
+        finger_task = None
         DETECTION_WAIT_S = 1.0 # seconds
         try:
             if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
@@ -1186,8 +1189,12 @@ class AsyncObserver:
                 ))
                 await self.half_auto_calibration()
 
-                # measure finger contact while doing the diamond pattern
-                await self.calibrate_finger_servo()
+                # measure finger contact and reset wrist while doing the diamond pattern to save time.
+                async def wait_then_finger():
+                    await asyncio.sleep(10)
+                    await self.calibrate_finger_servo()
+                    await self.gripper_client.send_commands({'reset_wrist': None})
+                finger_task = asyncio.create_task(wait_then_finger())
 
                 # collect length_change_data data to estimate eyelets better
                 diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data(anchor_poses)
@@ -1196,8 +1203,8 @@ class AsyncObserver:
                     a.save_raw = False
                 # debug: save args for experimentation
                 args = (raw_obs, diamond_data, None, None, line_deltas, tilts)
-                with open('arp_opt_data.pkl', 'wb') as f:
-                    pickle.dump(args, f)
+                # with open('arp_opt_data.pkl', 'wb') as f:
+                #     pickle.dump(args, f)
                 # optimize again with length_change_data
                 async_result = self.pool.apply_async(optimize_arp_anchors, args)
                 anchor_poses, eyelet_positions = async_result.get(timeout=30)
@@ -1238,6 +1245,7 @@ class AsyncObserver:
             await self.half_auto_calibration()
 
             # open grip enough that we can see an unobstructed view from the palm camera
+            await finger_task
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
 
             # move over the origin card
@@ -1258,7 +1266,7 @@ class AsyncObserver:
             await self.half_auto_calibration()
 
             # roomspin
-            await self.calibrate_spin()
+            await self.calibrate_spin(reset_wrist_first=False) # already did that during diamond to save time
 
             # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -1268,6 +1276,9 @@ class AsyncObserver:
             ))
 
         except asyncio.CancelledError:
+            if finger_task is not None:
+                finger_task.cancel()
+                await finger_task
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
                 name="Calibration",
@@ -1282,7 +1293,7 @@ class AsyncObserver:
             ))
             raise
 
-    async def calibrate_spin(self):
+    async def calibrate_spin(self, reset_wrist_first=True):
         """Calibration of the relationship between the wrist and the room frame of reference.
         Must be done over the origin card.
         """
@@ -1297,8 +1308,9 @@ class AsyncObserver:
         if isinstance(self.gripper_client, ArpeggioGripperClient):
             # measurement must be taken at the wrist's zero point
             center_angle = 540
-            asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
-            await asyncio.sleep(10)
+            if reset_wrist_first:
+                asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
+                await asyncio.sleep(10)
             # wait till within 1 degree of target
             actual_wrist = 100
             end_time = time.time() + 2
@@ -2197,7 +2209,7 @@ class AsyncObserver:
             speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.25)
             # If the combined total speed exceeds the limit, scale the vector down
         elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
-            speed_limit = 0.35
+            speed_limit = 1.0
 
         if speed > speed_limit:
             total_velocity = total_velocity * (speed_limit / speed)
