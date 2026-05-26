@@ -68,7 +68,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     tilt_nodes = []
     for i in range(2):
         extratilt = 22 - cam_tilts[i]
-        tilt_nodes.append((np.array([0, 0, extratilt / 180.0 * np.pi], dtype=float), np.zeros(3, dtype=float)))
+        tilt_nodes.append((np.array([extratilt / 180.0 * np.pi, 0, 0], dtype=float), np.zeros(3, dtype=float)))
 
     # ---------------------------------------------------------
     # Camera-based Residuals (Origin & Consistency)
@@ -305,8 +305,8 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     tilt_nodes = []
     for i in range(2):
         extratilt = 22 - cam_tilts[i]
-        tilt_nodes.append((np.array([0, 0, extratilt / 180.0 * np.pi], dtype=float), np.zeros(3, dtype=float)))
-        
+        tilt_nodes.append((np.array([extratilt / 180.0 * np.pi, 0, 0], dtype=float), np.zeros(3, dtype=float)))
+
     if fixed_anchor_poses is None:
         initial_guesses = []
         origin_sightings = raw_obs['origin']

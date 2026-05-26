@@ -1185,13 +1185,21 @@ class AsyncObserver:
                     current_action="Collecting proprioceptive data",
                 ))
                 await self.half_auto_calibration()
+
+                # measure finger contact while doing the diamond pattern
+                await self.calibrate_finger_servo()
+
                 # collect length_change_data data to estimate eyelets better
                 diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data(anchor_poses)
                 # stop saving raw poses
                 for a in self.anchors.values():
                     a.save_raw = False
+                # debug: save args for experimentation
+                args = (raw_obs, diamond_data, None, None, line_deltas, tilts)
+                with open('arp_opt_data.pkl', 'wb') as f:
+                    pickle.dump(args, f)
                 # optimize again with length_change_data
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None, line_deltas, tilts))
+                async_result = self.pool.apply_async(optimize_arp_anchors, args)
                 anchor_poses, eyelet_positions = async_result.get(timeout=30)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
@@ -1228,15 +1236,6 @@ class AsyncObserver:
                 current_action="Tensioning lines and Locating Gripper",
             ))
             await self.half_auto_calibration()
-
-            if isinstance(self.gripper_client, ArpeggioGripperClient):
-                self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=50.0,
-                    name="Calibration",
-                    current_action="Measuring point of finger contact",
-                ))
-                # measure finger contact
-                await self.calibrate_finger_servo()
 
             # open grip enough that we can see an unobstructed view from the palm camera
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))

@@ -68,7 +68,7 @@ class ArpeggioAnchorClient(ComponentClient):
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
             model_constants.arp_anchor_camera,
-            (np.array([0,0,extratilt/180*np.pi], dtype=float), np.zeros(3, dtype=float)),
+            (np.array([extratilt/180*np.pi, 0, 0], dtype=float), np.zeros(3, dtype=float)),
         ]))
 
     async def handle_update_from_ws(self, update):
