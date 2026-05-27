@@ -68,10 +68,11 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     )
 
     # Default Intrinsic Matrix.
-    # Empirically measured for the standard FOV Raspberry Pi Camera module 3
-    # with autofocus set to fixed lens position 0.1 (good focus for large rooms).
-    # Derived by anchoring a known room height against solvePnP output; a proper
-    # chessboard calibration would be more accurate.
+    # calcluated for the standard FOV Raspberry Pi Camera module 3
+    # with autofocus set to fixed lens position 0.1
+    # Derived by anchoring a known room height against solvePnP output
+    # a chessboard calibration has been tried, but results were too far off center due to
+    # the difficulty of positioning a large enough chessboard in the room.
     intrinsic_np = np.array([
         [1460.,    0., 960.],
         [   0., 1460., 540.],

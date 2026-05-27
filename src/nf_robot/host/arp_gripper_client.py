@@ -214,12 +214,14 @@ class ArpeggioGripperClient(ComponentClient):
         theta_y = projected_state[1, 1] / OMEGA
         return np.array([theta_x, theta_y, 0])
 
-    def get_spin(self):
+    def get_spin(self, debug=False):
         # return the rotation of the gripper camera relative to the room in radians
         roomspin = self.datastore.winch_line_record.getLast()[1] / 180 * np.pi
         if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
             # undo the rotation that the room would appear to have at the wrist's 540 position
             extra = self.config.gripper.frame_room_spin - np.pi
+            if debug:
+                print(f'gripper spin should be wrist {roomspin} plus extra spin from config {extra}')
             roomspin = roomspin + extra
         return roomspin
 

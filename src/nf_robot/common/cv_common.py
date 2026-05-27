@@ -36,7 +36,7 @@ OTHER_MARKERS = set(['gamepad', 'hamper', 'trash', 'gamepad_back', 'hamper_back'
 # https://github.com/AprilRobotics/apriltag-imgs/tree/master/tag36h11
 
 DEFAULT_MARKER_SIZE = 0.0945 # The default side length of markers in meters
-CAL_MARKER_SIZE = 0.1780
+CAL_MARKER_SIZE = 0.1780 # intentionally one cm larger than true printed size. because it works.
 # Define the physical size of any markers that are not the default size.
 SPECIAL_SIZES = {
     'origin': CAL_MARKER_SIZE,

@@ -402,6 +402,8 @@ class AsyncObserver:
             save_config(self.config, self.config_path)
         if item.action == 'reset_wrist':
              await asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
+        if item.action == 'spind':
+            print(self.gripper_client.get_spin(True))
 
     async def lerobot_process(self, item: control.ManageLerobotSession):
         if self.lerobot_process_pid is not None:
@@ -1193,7 +1195,7 @@ class AsyncObserver:
                 async def wait_then_finger():
                     await asyncio.sleep(10)
                     await self.calibrate_finger_servo()
-                    await self.gripper_client.send_commands({'reset_wrist': None})
+                    # await self.gripper_client.send_commands({'reset_wrist': None})
                 finger_task = asyncio.create_task(wait_then_finger())
 
                 # collect length_change_data data to estimate eyelets better
@@ -1266,7 +1268,7 @@ class AsyncObserver:
             await self.half_auto_calibration()
 
             # roomspin
-            await self.calibrate_spin(reset_wrist_first=False) # already did that during diamond to save time
+            await self.calibrate_spin(reset_wrist_first=True) # already did that during diamond to save time
 
             # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
             self.send_ui(operation_progress=telemetry.OperationProgress(
