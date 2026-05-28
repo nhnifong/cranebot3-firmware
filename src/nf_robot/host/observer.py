@@ -1195,6 +1195,7 @@ class AsyncObserver:
                 async def wait_then_finger():
                     await asyncio.sleep(10)
                     await self.calibrate_finger_servo()
+                    # if you want to re-enable this to make calibration faster, prevent the seek goal function from turning the wrist
                     # await self.gripper_client.send_commands({'reset_wrist': None})
                 finger_task = asyncio.create_task(wait_then_finger())
 
