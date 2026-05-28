@@ -193,7 +193,7 @@ class CalibrationInteractive:
 # calibrate from files locally
 def calibrate_from_files(config_file):
     ce = CalibrationInteractive(config_file)
-    for filepath in glob.glob('images/cal/*.png'):
+    for filepath in glob.glob('images/cap/*.jpg'):
         logging.info(f"Analyzing {filepath}")
         image = cv2.imread(filepath)
         ce.addImage(image)

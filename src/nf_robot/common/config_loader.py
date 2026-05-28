@@ -74,8 +74,8 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # a chessboard calibration has been tried, but results were too far off center due to
     # the difficulty of positioning a large enough chessboard in the room.
     intrinsic_np = np.array([
-        [1460.,    0., 960.],
-        [   0., 1460., 540.],
+        [1424.,    0., 960.],
+        [   0., 1424., 540.],
         [   0.,    0.,   1.]
     ])
     config.camera_cal.intrinsic_matrix = intrinsic_np.flatten().tolist()

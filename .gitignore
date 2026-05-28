@@ -26,3 +26,4 @@ winvenv
 eggs_heatmap_data/
 fixed_dataset_workspace/
 datasets/
+images/
