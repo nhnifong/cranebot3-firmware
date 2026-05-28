@@ -47,6 +47,10 @@ SPECIAL_SIZES = {
     'park_target':       0.0464,
 }
 
+# tell apriltag detector that all markers are slightly bigger than they really are.
+# this is because even with a correctly calibrated camera, it seems to always underestimate the distance.
+GLOBAL_MARKER_SIZE_BIAS = 1.05
+
 # These are the 3D corner points of a generic marker of size 1x1 meter.
 # We will scale this based on the actual marker size.
 BASE_MARKER_POINTS = np.array([
@@ -57,9 +61,9 @@ BASE_MARKER_POINTS = np.array([
 ], dtype=np.float32)
 
 # Pre-calculate marker points for known sizes.
-DEFAULT_OBJ_POINTS = BASE_MARKER_POINTS * DEFAULT_MARKER_SIZE
+DEFAULT_OBJ_POINTS = BASE_MARKER_POINTS * DEFAULT_MARKER_SIZE * GLOBAL_MARKER_SIZE_BIAS
 SPECIAL_OBJ_POINTS = {
-    name: BASE_MARKER_POINTS * size 
+    name: BASE_MARKER_POINTS * size * GLOBAL_MARKER_SIZE_BIAS
     for name, size in SPECIAL_SIZES.items()
 }
 

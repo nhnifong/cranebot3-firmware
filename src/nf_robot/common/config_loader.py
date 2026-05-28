@@ -149,7 +149,7 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
             if c.anchor_type == common.AnchorType.ARPEGGIO:
                 for anchor in c.anchors:
                     if anchor.indirect_line.cam_tilt is None:
-                        anchor.indirect_line.cam_tilt = 22.0
+                        anchor.indirect_line.cam_tilt = 26.0
 
             return c
 
