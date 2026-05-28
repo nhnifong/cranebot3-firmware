@@ -6,7 +6,7 @@ Control code for the Stringman household robotic crane from Neufangled Robotics
 
 Purchase assembled robots or kits at [neufangled.com](https://neufangled.com)
 
-## Installation of stringman controller
+## Installation of stringman controller (Users)
 
 Linux (python 3.11 or later)
 
@@ -20,6 +20,27 @@ The particular robot details will be read from/saved to bedroom.conf
 
     stringman-headless --config=bedroom.conf
 
+The stringman motion controller (stringman-headless) is the program which communicates with the robot components over wifi and acts as the central brain of a single robot. It must be running on the same network as the powered on anchors and gripper in order for the robot to be active and controllable. The main entrypoint is observer.py
+
+It listens on port 4245 for a connection from a UI or local AI policy. The UI can be opened at [neufangled.com/playroom](https://neufangled.com/playroom). Select LAN mode at first.
+
+Refer to the [Usage Guide](https://neufangled.com/docs/usage_guide/) for more detailed instructions on setup and use.
+
+### Arguments to stringman-headless
+
+options:
+
+  --config              A json file where the robot's ID and calibration data are stored. You may use one for a bedroom and one for a playroom for example, even if it is the same hardware being taken
+                        down and put back up in another room 
+  --telemetry_env {local,staging,production}
+                        The cloud telemetry server to connect to (choices: local, staging, production) The default is None, which allows local connections on port 4245 only
+                        When production is used if you have already bound the robot to an account at neufangled.com. This is completely optional.
+  --no_ai               Disable the use of the target identificaiton model.
+  --auto_start          Automatically unpark and start cleaning when all components connect
+  --local_models        Use local models from models/ rather than downloading the production models from huggingface (applicable to the target identification model only)
+  --arp_grasp           Use arp_execute_grasp (centering net) instead of act_execute_grasp (ACT policy) for the Arpeggio gripper
+  --debug               Enable DEBUG level logging
+
 ### Minimum system specs
 
 At least 8 cores and 8GB of ram.
@@ -27,6 +48,31 @@ In order to perform local inference, some kind of pytorch accelertion is necessa
 Mini PC's or laptops based on the Ryzen 7 7840HS are probably about the cheapest machines that can run stringman's motion controller since it has an NPU that can be used to accelerate pytorch. A mac mini is also a viable option.
 
 Otherwise, any gaming PC is usually more than enough.
+
+### Telemetry stream
+
+stringman-headless listens on port 4245 locally for telemetry connections. This is a websocket sending and receiving protobufs defined in `src/nf_robot/protos`
+Every message sent by stringman-headless is a serialized `TelemetryBatchUpdate` and every message received is expected to be a `ControlBatchUpdate`.
+
+Within the telemetry stream, there are `VideoReady` messages containing URIs for connecting to the robot's video streams.
+
+The UI at [neufangled.com/playroom](https://neufangled.com/playroom) sends controls and receives telemetry.
+Any AI policy served by `src/nf_robot/ml/stringman_lerobot.py` also sends controls and receives telemetry.
+Agents wishing to write code to interface with a stringman robot may also follow this pattern.
+
+The expected inputs are basically marker box velocity and finger and wrist speeds. The gripper hangs 50 cm below the marker box.
+Higher level control is achived by having a policy such as DIT or a VLA connected to the robot, and having another client sending `nf.common.EpisodeControl` commands with prompts.
+
+See [Imitation Learning](https://neufangled.com/docs/imitation_learning/) for a more detailed guide.
+
+## Cloud telemetry relay
+
+When stringman-headless is in LAN mode (done by omitting the --telemetry_env argument) it only accepts local telemetry connections and only streams video locally.
+
+If connected to a robot in lan mode from the UI at neufangled.com, you can click "Bind robot" in the run menu, log in with an identity profider, and that robot id (from the config.json file) will be marked as owned by you.
+It is then possible to run with `--telemetry_env=production` and stringman will also send telemetry and video to neufangled.com so that you can view and control the robot remotely over the internet. This is accessed from the "My Robots" option when opening neufangled.com/playroom.
+
+No video or telemetry is saved when you use the cloud relay. The only way video gets shared with us is if you record a public lerobot dataset and inform us of it.
 
 ## Installation of Robot Control Panel (developers)
 
