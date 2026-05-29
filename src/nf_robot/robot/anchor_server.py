@@ -40,7 +40,7 @@ stream_command = [
     "--autofocus-mode", "manual",
     "--lens-position", "0.1",
     "--low-latency",
-    "--bitrate", "400kbps"
+    "--bitrate", "520kbps"
 ]
 
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python

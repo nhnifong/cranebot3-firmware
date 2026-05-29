@@ -168,6 +168,7 @@ class AsyncObserver:
         self.target_model = None
         self.centering_model = None
         self.predicted_lateral_vector = None
+        self.perception_task = None
         # targets
         self.target_queue = TargetQueue()
         self.last_snapshot_hash = None # to spare the UI from too many updates
@@ -196,6 +197,7 @@ class AsyncObserver:
         self.lerobot_process_watcher = None
         self.last_ep_ctrl_status = common.LerobotStatus.NA
         self.lerobot_process_pid = None
+        self.grip_angle = 0
 
     async def send_setup_telemetry(self):
         logger.debug('Sending setup telemetry')
@@ -404,6 +406,63 @@ class AsyncObserver:
              await asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
         if item.action == 'spind':
             print(self.gripper_client.get_spin(True))
+        if item.action == 'chaset':
+            # keep the gripper 10cm over the "trash" tag
+            r = await self.invoke_motion_task(self.chase_tag('trash'))
+        if item.action == 'ferry':
+            r = await self.invoke_motion_task(self.ferry('hamper', 'trash'))
+
+    async def chase_tag(self, name):
+        """Keep the gripper at the named location"""
+        try:
+            chase_task = None
+            while self.run_command_loop:
+                await asyncio.sleep(0.1)
+                if not name in self.named_positions:
+                    continue
+                goal = self.named_positions[name] + POLE
+                self.gantry_goal_pos = goal
+                if chase_task is None or chase_task.done():
+                    chase_task = asyncio.create_task(self.seek_gantry_goal())
+        except asyncio.CancelledError:
+            if chase_task is not None:
+                chase_task.cancel()
+            raise
+
+    async def ferry(self, source, dest):
+        """Carry objectes between one named tag and another.
+        Moves to source, attempt auto grasp, move to test, drop, repeat"""
+        try:
+            while self.run_command_loop:
+                await asyncio.sleep(0.1)
+
+                # wait for source position to be seen
+                while not source in self.named_positions:
+                    await asyncio.sleep(0.5)
+                # go to position
+                goal = self.named_positions[source] + POLE + GRIPPER_HEIGHT_OVER_TARGET
+                self.gantry_goal_pos = goal
+                await self.seek_gantry_goal()
+
+                # auto grasp
+                # await self.gripper_client.send_commands({'set_finger_angle': 30})
+                # await asyncio.sleep(1)
+                await self.execute_grasp()
+
+                # wait for destination position to be seen
+                while not dest in self.named_positions:
+                    await asyncio.sleep(0.5)
+                # go to position
+                goal = self.named_positions[dest] + POLE + GRIPPER_HEIGHT_OVER_TARGET
+                self.gantry_goal_pos = goal
+                await self.seek_gantry_goal()
+
+                # drop
+                await self.gripper_client.send_commands({'set_finger_angle': -30})
+                await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            raise
 
     async def lerobot_process(self, item: control.ManageLerobotSession):
         if self.lerobot_process_pid is not None:
@@ -1885,7 +1944,7 @@ class AsyncObserver:
             # perception model
             if self.run_ai:
                 # task remains in a lightweight sleep until frames arrive.
-                asyncio.create_task(self.run_perception())
+                self.perception_task = asyncio.create_task(self.run_perception())
 
             # start a websocket server to accept incoming connections from either a local UI or local Lerobot session
             async with websockets.serve(self.handle_local_client, "127.0.0.1", self.port):
@@ -1941,6 +2000,9 @@ class AsyncObserver:
         if self.lerobot_process_watcher is not None:
             self.lerobot_process_watcher.cancel()
             tasks.append(self.lerobot_process_watcher)
+        if self.perception_task is not None:
+            self.perception_task.cancel()
+            tasks.append(self.perception_task)
 
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         try:
@@ -2318,8 +2380,9 @@ class AsyncObserver:
                 c_model = CenteringNet().to(DEVICE)
                 c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
                 c_model.eval()
-            
-            return t_model, None
+                return t_model, c_model
+            else:
+                return t_model, None
 
         self.target_model, self.centering_model = await asyncio.to_thread(load_models_sync)
 
@@ -2644,7 +2707,7 @@ class AsyncObserver:
     async def arp_execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        FLOOR_GRIPPER_HEIGHT = 0.12 # distance above floor (gripper origin) when grasp should be started
+        FLOOR_GRIPPER_HEIGHT = 0.11 # distance above floor (gripper origin) when grasp should be started
         RANGE_ITEM = 0.04 # range to item below which grip should be started
         HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_wide_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.07
@@ -2671,8 +2734,9 @@ class AsyncObserver:
                 # at the same time, move downward until tip is detected.
 
                 nothing_seen_countdown = 15
+                approach_timeout = time.time()+10
                 self.pe.tip_over.clear()
-                while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
+                while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set() and time.time() < approach_timeout):
                     range_to_target = self.datastore.range_record.getLast()[1]
                     # compare this rangefinder distance to the distance estimated from other methods
                     gripper_height = self.pe.grip_pose[1][2]
@@ -2718,6 +2782,9 @@ class AsyncObserver:
                         lateral_speed = 0
                     lateral_vector *= lateral_speed
 
+                    # rotate later component of direction from gripper frame into room frame
+                    lateral_vector = rotate_vector(lateral_vector, -self.gripper_client.get_spin())
+
                     await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
 
                     # move wrist to predicted grip angle with smoothing
@@ -2751,7 +2818,6 @@ class AsyncObserver:
                     await asyncio.sleep(0.03)
                     await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
                     t, angle, pressure = self.datastore.finger.getLast()
-                    logger.debug(f'Pressure {pressure}')
                 logger.debug(f'End grip finger_pressure_rising={self.pe.finger_pressure_rising.is_set()} angle={self.datastore.finger.getLast()[1]}')
                 await self.gripper_client.send_commands({'set_finger_speed': 0})
 
@@ -2777,6 +2843,8 @@ class AsyncObserver:
                 # and then all at once
                 await self.move_direction_speed(np.array([0,0,0.15]))
                 await asyncio.sleep(2.0)
+                logger.info('Stop moving')
+                self.slow_stop_all_spools()
                 return True
             logger.info(f'Gave up on grasp after {NUM_ATTEMPTS-attempts} attempts. self.pe.holding={self.pe.holding}')
             return False
