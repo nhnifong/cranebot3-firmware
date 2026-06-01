@@ -40,8 +40,6 @@ NUM_BUFFERS = 3
 
 
 IMG_RES = 384
-ANCHOR_W = 960
-ANCHOR_H = 544
 
 CHECKPOINT_EVERY = 10
 
@@ -106,15 +104,14 @@ class StringmanLeRobot(Robot):
 
         self.events = events
         
-        # State mapping for feeds 0, 1, and 2
-        self.camera_locks = {i: threading.Lock() for i in range(3)}
+        # State mapping for feeds 0 (gripper) and 3 (overhead ortho)
+        self.camera_locks = {0: threading.Lock(), 3: threading.Lock()}
         self.video_threads = {}
-        self.stop_video_events = {i: threading.Event() for i in range(3)}
-        
+        self.stop_video_events = {0: threading.Event(), 3: threading.Event()}
+
         self.last_images = {
             0: np.zeros((IMG_RES, IMG_RES, 3), dtype=np.uint8),
-            1: np.zeros((ANCHOR_H, ANCHOR_W, 3), dtype=np.uint8),
-            2: np.zeros((ANCHOR_H, ANCHOR_W, 3), dtype=np.uint8)
+            3: np.zeros((IMG_RES, IMG_RES, 3), dtype=np.uint8),
         }
 
     @cached_property
@@ -131,8 +128,7 @@ class StringmanLeRobot(Robot):
     def _cameras_ft(self) -> dict[str, tuple]:
         return {
             "gripper_camera": (IMG_RES, IMG_RES, 3),
-            "anchor_camera_1": (ANCHOR_H, ANCHOR_W, 3),
-            "anchor_camera_2": (ANCHOR_H, ANCHOR_W, 3),
+            "overhead_camera": (IMG_RES, IMG_RES, 3),
         }
 
     @cached_property
@@ -275,9 +271,9 @@ class StringmanLeRobot(Robot):
 
     def _handle_video_ready(self, item: telemetry.VideoReady):
         feed_num = item.feed_number
-        
-        # We only record feeds 0, 1, and 2
-        if feed_num not in [0, 1, 2]:
+
+        # feed 0 = gripper camera, feed 3 = overhead ortho projection
+        if feed_num not in [0, 3]:
             return
 
         # Return if this feed's stream is already alive
@@ -339,15 +335,13 @@ class StringmanLeRobot(Robot):
         stream = next(s for s in container.streams if s.type == 'video')
         stream.thread_type = "SLICE"
         
-        target_h, target_w = (IMG_RES, IMG_RES) if feed_num == 0 else (ANCHOR_H, ANCHOR_W)
-
         for av_frame in container.decode(stream):
             if self.stop_video_events[feed_num].is_set():
                 break
-            
+
             frame = av_frame.to_ndarray(format='rgb24')
-            if frame.shape[0] != target_h or frame.shape[1] != target_w:
-                frame = cv2.resize(frame, (target_w, target_h))
+            if frame.shape[0] != IMG_RES or frame.shape[1] != IMG_RES:
+                frame = cv2.resize(frame, (IMG_RES, IMG_RES))
                 
             with self.camera_locks[feed_num]:
                 self.last_images[feed_num] = frame
@@ -379,7 +373,7 @@ class StringmanLeRobot(Robot):
 
     def disconnect(self) -> None:
         print("Disconnecting")
-        for i in range(3):
+        for i in [0, 3]:
             self.stop_video_events[i].set()
         
         if self.websocket is not None:
@@ -398,7 +392,7 @@ class StringmanLeRobot(Robot):
 
     def get_observation(self) -> dict[str, Any]:
         images = {}
-        for feed_num in [0, 1, 2]:
+        for feed_num in [0, 3]:
             with self.camera_locks[feed_num]:
                 images[feed_num] = self.last_images[feed_num].copy()
 
@@ -466,8 +460,7 @@ class StringmanLeRobot(Robot):
             "hang_pos_z": float(self.last_hang_pos[2]),
 
             "gripper_camera": images[0],
-            "anchor_camera_1": images[1],
-            "anchor_camera_2": images[2],
+            "overhead_camera": images[3],
         }
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
@@ -820,9 +813,10 @@ def eval_episode(
 
 def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote_stream_token=None):
     import torch
+    import json
+    from huggingface_hub import hf_hub_download
     from lerobot.policies.factory import make_policy, make_pre_post_processors
     from lerobot.configs.policies import PreTrainedConfig
-    from lerobot.configs.train import TrainPipelineConfig
 
     events = {
         'episode_abandon': False,
@@ -831,9 +825,11 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote
         'stop': False,
     }
 
-    # determine dataset repo id this policy was trained on
-    train_config = TrainPipelineConfig.from_pretrained(policy_repo_id)
-    dataset_repo_id = train_config.dataset.repo_id
+    # Read train_config.json directly to avoid draccus rejecting unknown fields
+    # (e.g. return_uint8 present in the saved config but not in the installed DatasetConfig)
+    _config_file = hf_hub_download(repo_id=policy_repo_id, filename="train_config.json")
+    with open(_config_file) as _f:
+        dataset_repo_id = json.load(_f)["dataset"]["repo_id"]
 
     print("Fetching training dataset to acquire metadata")
     dataset = LeRobotDataset(
