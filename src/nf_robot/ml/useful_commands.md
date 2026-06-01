@@ -94,13 +94,13 @@ lerobot-train \
     --batch_size=32
 
 lerobot-train \
-  --dataset.repo_id=naavox/laundry_grasp_one_cam \
-  --output_dir=./outputs/multitask_dit_training_2 \
+  --dataset.repo_id=naavox/full_featured \
+  --output_dir=./outputs/multitask_dit_training_3 \
   --batch_size=90 \
   --steps=30000 \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
-  --policy.type=^Clti_task_dit \
+  --policy.type=multi_task_dit \
   --policy.device=cuda \
   --policy.horizon=64 \
   --policy.n_action_steps=32 \
@@ -115,7 +115,7 @@ lerobot-train \
   --policy.image_resize_shape=[256,256] \
   --policy.image_crop_shape=[224,224] \
   --policy.image_crop_is_random=true \
-  --policy.repo_id="naavox/multitask-dit-2" \
+  --policy.repo_id="naavox/multitask-dit-3" \
   --wandb.enable=false
 
 ```

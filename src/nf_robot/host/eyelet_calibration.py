@@ -9,6 +9,7 @@ import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
 
 W_ORIGIN = 1.0 # increase this to to make origin errors more expensive
+W_CONSISTENCY = 20.0 # Cards should be in the same place when viewed from different perspectives
 W_PLANAR = 0.9 # increase this to make anchor height deviations from the average plane more expensive
 W_DIAMOND_DIST = 0.8 # weight for the distance changes in the diamond pattern
 W_DIAMOND_PLANAR = 0.2 # weight for forcing the gantry and eyelets into a single vertical plane
@@ -110,7 +111,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         elif len(projected_positions) > 1:
             # constraint 2: Consistency between cameras
             centroid = np.mean(projected_positions, axis=0)
-            current_residuals = projected_positions - centroid
+            current_residuals = (projected_positions - centroid) * W_CONSISTENCY
             residuals.extend(current_residuals.flatten())
             cost_origin += np.sum(current_residuals**2)
 
