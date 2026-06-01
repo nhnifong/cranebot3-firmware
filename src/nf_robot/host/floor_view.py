@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from nf_robot.host.video_streamer import MjpegStreamer, VideoStreamer
+from nf_robot.host.video_streamer import MjpegStreamer, NfVideoStreamer
 
 SIDE_PX = 1000 # width and height of the square output image
 EXTENT_M = 5.0 # Size of the floor area rendered in meters
@@ -32,9 +32,9 @@ def generate_orthographic_floor_maps(
     # Initialize empty combined maps
     combined_heatmap = np.zeros((map_size_px, map_size_px), dtype=np.float32)
     
-    # Use float32 for BGR to allow for averaging overlapping regions cleanly
-    combined_bgr = np.zeros((map_size_px, map_size_px, 3), dtype=np.float32)
-    weight_map = np.zeros((map_size_px, map_size_px, 1), dtype=np.float32)
+    # Use float64 in [0,1] space for multiply blend
+    combined_bgr = np.ones((map_size_px, map_size_px, 3), dtype=np.float64)
+    touched = np.zeros((map_size_px, map_size_px, 1), dtype=bool)
 
     # Extract calibration matrices once
     K = np.array(camera_cal.intrinsic_matrix).reshape((3, 3))
@@ -92,26 +92,25 @@ def generate_orthographic_floor_maps(
         # Final Homography: Undistorted Image Pixels -> Ortho Map Pixels
         H = M @ H_img_to_floor
         
-        # 4. Warp the Heatmap
+        # Warp the Heatmap
         warped_heatmap = cv2.warpPerspective(heatmap_undistorted, H, (map_size_px, map_size_px))
         
         # Add to the combined floor heatmap
         combined_heatmap += warped_heatmap
         
-        # 5. Warp the BGR Image
+        # Warp the BGR Image
         warped_bgr = cv2.warpPerspective(bgr_undistorted, H, (map_size_px, map_size_px))
         
-        # Mask out black areas from the warp so we can average overlapping camera views correctly
-        mask = (warped_bgr.sum(axis=-1, keepdims=True) > 0).astype(np.float32)
-        combined_bgr += warped_bgr * mask
-        weight_map += mask
+        mask = (warped_bgr.sum(axis=-1, keepdims=True) > 0)
+        warped_norm = warped_bgr.astype(np.float64) / 255.0
+        # First camera to cover a pixel sets it; subsequent cameras multiply into it
+        combined_bgr = np.where(mask & ~touched, warped_norm, combined_bgr)
+        combined_bgr = np.where(mask & touched, combined_bgr * warped_norm, combined_bgr)
+        touched |= mask
 
-    # 6. Finalize Image Stacking
-    # Prevent division by zero in non-visible areas
-    weight_map[weight_map == 0] = 1.0 
-    
-    # Average the BGR overlapping regions and cast back to standard uint8
-    combined_bgr_final = (combined_bgr / weight_map).astype(np.uint8)
+    # Finalize Image Stacking
+    # Zero out pixels never covered by any camera, then convert to uint8
+    combined_bgr_final = np.where(touched, combined_bgr * 255, 0).astype(np.uint8)
     
     combined_heatmap_clipped = np.clip(combined_heatmap, 0, 1.0)
 

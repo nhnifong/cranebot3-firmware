@@ -22,7 +22,7 @@ from nf_robot.common.pose_functions  import *
 from nf_robot.common.util import *
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common
-from nf_robot.host.video_streamer import VideoStreamer, MjpegStreamer
+from nf_robot.host.video_streamer import NfVideoStreamer
 
 logger = logging.getLogger(__name__)
 
@@ -244,25 +244,28 @@ class ComponentClient:
 
         path = f'stringman/{self.config.robot_id}/{feed_number}'
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
-        localuri = f'http://localhost:{mjpegport}/stream.mjpeg'
-        rtmp = None
-        remote_vs = None
 
-        # Always stream locally via MJPEG (efficient no-op when no client is connected)
-        local_vs = MjpegStreamer(width=final_shape[0], height=final_shape[1], port=mjpegport)
-        local_vs.start()
-        logger.info(f'Streaming video locally at {localuri} with res {final_shape}')
+        def on_ready(local_uri, stream_path):
+            self.local_video_uri = local_uri
+            self.feed_number = feed_number
+            self.remote_stream_path = stream_path
+            t = telemetry.VideoReady(
+                is_gripper=self.anchor_num is None,
+                anchor_num=self.anchor_num,
+                local_uri=local_uri,
+                stream_path=stream_path,
+                feed_number=feed_number,
+            )
+            logger.info(f'Sending video ready {t}')
+            self.ob.send_ui(video_ready=t)
 
-        if self.telemetry_env is not None:
-            if self.telemetry_env == "local":
-                rtmp = f'rtmp://localhost:1935/{path}'
-            elif self.telemetry_env in ("staging", "production"):
-                rtmp = f'rtmp://media.neufangled.com:1935/{path}'
-            else:
-                raise ValueError(f"unusable value for telemetry_env {self.telemetry_env}")
-            remote_vs = VideoStreamer(width=final_shape[0], height=final_shape[1], fps=final_fps, rtmp_url=rtmp)
-            remote_vs.start()
-        frames_sent = 0
+        vs = NfVideoStreamer(
+            width=final_shape[0], height=final_shape[1], fps=final_fps,
+            mjpeg_port=mjpegport, stream_path=path,
+            telemetry_env=self.telemetry_env, on_ready=on_ready,
+        )
+        vs.start()
+        logger.info(f'Streaming video locally at {vs.local_uri} with res {final_shape}')
         self.streaming_active = True
 
         while self.connected:
@@ -283,34 +286,15 @@ class ComponentClient:
             # Do the actual work outside the lock
             # This lets the receive_video loop add the next frame without waiting for the encode.
             self.last_frame_resized = self.process_frame(frame_to_encode)
+            ortho_event = getattr(self.ob, 'ortho_event', None)
+            if ortho_event is not None:
+                ortho_event.set()
             rgb = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_BGR2RGB)
-
-            # send self.last_frame_resized to the UI process
-            local_vs.send_frame(rgb)
-            if remote_vs is not None:
-                remote_vs.send_frame(rgb)
-            frames_sent += 1
-            frame_count_for_clear = 2 if self.telemetry_env is None else 20
-            if frames_sent == frame_count_for_clear:
-                # sending the notification on the 20th frame ensures that the mediamtx server has something to send before clients connect
-                self.local_video_uri = localuri
-                self.feed_number = feed_number
-                self.remote_stream_path = path
-                t = telemetry.VideoReady(
-                    is_gripper=self.anchor_num is None,
-                    anchor_num=self.anchor_num,
-                    local_uri=localuri,
-                    stream_path=path,
-                    feed_number=feed_number,
-                )
-                logger.info(f'Sending video ready {t}')
-                self.ob.send_ui(video_ready=t)
+            vs.send_frame(rgb)
 
         self.remote_stream_path = None
         self.local_video_uri = None
-        local_vs.stop()
-        if remote_vs is not None:
-            remote_vs.stop()
+        vs.stop()
 
     def process_frame(self, frame_to_encode):
         """

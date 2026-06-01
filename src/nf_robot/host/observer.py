@@ -132,7 +132,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, auto_start=False, local_models=False, port=4245, use_arp_grasp=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, run_ortho=True, auto_start=False, local_models=False, port=4245, use_arp_grasp=False, debug=False) -> None:
         self.port = port
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
@@ -151,6 +151,7 @@ class AsyncObserver:
         self.config_path = config_path
         self.config = load_config(config_path)
         self.telemetry_env = telemetry_env
+        self.debug = debug
         self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -166,6 +167,7 @@ class AsyncObserver:
         self.last_user_move_time = time.time()
         self.named_positions = {}
         self.target_model = None
+        self.centering_model = None
         self.predicted_lateral_vector = None
         self.perception_task = None
         # targets
@@ -189,10 +191,18 @@ class AsyncObserver:
         self.input_velocities = {'default': np.zeros(3)}
         self.active_set = set(['default'])
         self.run_ai = run_ai
+        self.run_ortho = run_ortho
         self.auto_start = auto_start
         self.use_arp_grasp = use_arp_grasp
         self.swing_cancellation_task = None
         self.local_models = local_models
+        # ortho projection state - written by _ortho_worker thread, read by run_perception AI task
+        self.ortho_event = threading.Event()
+        self.last_ortho_bgr = None
+        self.last_ortho_heatmap = None
+        self.last_heatmaps_np = None
+        # list of (NfVideoStreamer, feed_number) for ortho feeds, so send_setup_telemetry can replay them
+        self.ortho_streamers: list = []
         self.lerobot_process_watcher = None
         self.last_ep_ctrl_status = common.LerobotStatus.NA
         self.lerobot_process_pid = None
@@ -225,6 +235,15 @@ class AsyncObserver:
                     local_uri=client.local_video_uri,
                     feed_number=client.feed_number,
                     stream_path=client.remote_stream_path,
+                ))
+        for vs, feed_number in self.ortho_streamers:
+            if vs._ready_sent:
+                self.send_ui(video_ready=telemetry.VideoReady(
+                    is_gripper=None,
+                    anchor_num=None,
+                    local_uri=vs.local_uri,
+                    stream_path=vs.stream_path,
+                    feed_number=feed_number,
                 ))
         if self.lerobot_process_watcher is None or self.lerobot_process_watcher.done():
             self.last_ep_ctrl_status = common.LerobotStatus.NA
@@ -1941,7 +1960,7 @@ class AsyncObserver:
                 return
 
             # perception model
-            if self.run_ai:
+            if self.run_ai or self.run_ortho:
                 # task remains in a lightweight sleep until frames arrive.
                 self.perception_task = asyncio.create_task(self.run_perception())
 
@@ -2329,131 +2348,201 @@ class AsyncObserver:
             self.send_ui(target_list=snapshot)
             self.last_snapshot_hash = current_hash
 
+    def _ortho_worker(self, ortho_floor_vs, heatmap_floor_vs):
+        """
+        Sync thread driven by self.ortho_event, which anchor frame_resizer_loops set on every
+        new processed frame.  Projects all anchor views onto the floor and stores the result so
+        the AI task can read it without re-running the projection.
+        """
+        from nf_robot.host.floor_view import generate_orthographic_floor_maps
+        EXTENT = 5.0
+        while self.run_command_loop:
+            if not self.ortho_event.wait(timeout=1.0):
+                continue
+            self.ortho_event.clear()
+            try:
+                valid_clients = [
+                    c for c in list(self.anchors.values())
+                    if c.last_frame_resized is not None and c.anchor_num in self.config.preferred_cameras
+                ]
+                if not valid_clients:
+                    continue
+
+                heatmaps = self.last_heatmaps_np
+                if heatmaps is None or len(heatmaps) != len(valid_clients):
+                    heatmaps = np.zeros(
+                        (len(valid_clients),) + valid_clients[0].last_frame_resized.shape[:2],
+                        dtype=np.float32,
+                    )
+
+                ortho_heatmap, ortho_bgr = generate_orthographic_floor_maps(
+                    valid_clients, heatmaps, self.config.camera_cal,
+                    map_size_px=1000, map_extent_meters=EXTENT,
+                )
+                self.last_ortho_bgr = ortho_bgr
+                self.last_ortho_heatmap = ortho_heatmap
+
+                if ortho_floor_vs is not None:
+                    ortho_floor_vs.send_frame(cv2.cvtColor(ortho_bgr, cv2.COLOR_BGR2RGB))
+                if heatmap_floor_vs is not None:
+                    heatmap_floor_vs.send_frame(
+                        cv2.applyColorMap((ortho_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+                    )
+            except Exception:
+                logger.exception('_ortho_worker iteration failed')
+
     async def run_perception(self):
         """
-        Run the target heatmap network on preferred cameras at a modest rate.
-        Send heatmaps to UI.
-        Store target candidates and confidence.
+        Orthographic floor projection and target heatmap inference.
+        run_ortho and run_ai are independent: either or both may be active.
         """
         TARGETING_MODEL_REPOID = "naavox/targeting"
         CENTERING_MODEL_REPOID = "naavox/centering"
-        DEVICE = "cpu"
         LOOP_DELAY = 0.1
-        FIND_TARGETS_EVERY = 5 # loops
+        FIND_TARGETS_EVERY = 5
+        EXTENT = 5.0
 
-        # do nothing until at least one camera from the preferred set is producing frames
-        have_gripper_frames = False
-        have_anchor_frames = False
-        logging.info('waiting for frames from all cameras to start target model')
-        while not (have_gripper_frames or have_anchor_frames):
+        # wait until at least one preferred camera is producing frames
+        logging.info('waiting for camera frames')
+        while True:
             await asyncio.sleep(1)
-            have_gripper_frames = self.gripper_client is not None and self.gripper_client.last_frame_resized is not None
-            for anum, client in self.anchors.items():
-                if anum in self.config.preferred_cameras and client.last_frame_resized is not None:
-                    have_anchor_frames = True
+            have_frames = (
+                (self.gripper_client is not None and self.gripper_client.last_frame_resized is not None)
+                or any(
+                    anum in self.config.preferred_cameras and c.last_frame_resized is not None
+                    for anum, c in self.anchors.items()
+                )
+            )
+            if have_frames:
+                break
 
-        logging.info('starting target model')
-        from nf_robot.host.video_streamer import MjpegStreamer
-        from nf_robot.host.floor_view import generate_orthographic_floor_maps
-        vs = MjpegStreamer(width=1000, height=1000, port=8747)
-        vs.start()
-        first_frame_sent = False
+        if self.run_ai:
+            import torch
+            from huggingface_hub import hf_hub_download
+            DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+            from nf_robot.ml.target_heatmap import TargetHeatmapNet, extract_targets_from_heatmap, HM_IMAGE_RES
+            if self.use_arp_grasp:
+                from nf_robot.ml.centering import CenteringNet
 
+            def load_models_sync():
+                if self.local_models:
+                    target_path = "models/target_heatmap.pth"
+                else:
+                    target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
+                logger.info(f"Loading model from {target_path}...")
+                t_model = TargetHeatmapNet().to(DEVICE)
+                t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
+                t_model.eval()
 
-        import torch
-        from huggingface_hub import hf_hub_download
-        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-        from nf_robot.ml.target_heatmap import TargetHeatmapNet, extract_targets_from_heatmap, HM_IMAGE_RES
-        if self.use_arp_grasp:
-            from nf_robot.ml.centering import CenteringNet
+                if self.use_arp_grasp:
+                    if self.local_models:
+                        center_path = "models/square_centering.pth"
+                    else:
+                        center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
+                    logger.info(f"Loading model from {center_path}...")
+                    c_model = CenteringNet().to(DEVICE)
+                    c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
+                    c_model.eval()
+                    return t_model, c_model
+                else:
+                    return t_model, None
 
-        def load_models_sync():
-            if self.local_models:
-                target_path = "models/target_heatmap.pth"
-            else:
-                target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
-            logger.info(f"Loading model from {target_path}...")
-            t_model = TargetHeatmapNet().to(DEVICE)
-            t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
-            t_model.eval()
+            self.target_model, self.centering_model = await asyncio.to_thread(load_models_sync)
 
-            return t_model
+        ortho_floor_vs = None
+        heatmap_floor_vs = None
+        if self.run_ortho:
+            from nf_robot.host.video_streamer import NfVideoStreamer
 
-        self.target_model = await asyncio.to_thread(load_models_sync)
+            def _make_on_ready(feed_number):
+                def on_ready(local_uri, stream_path):
+                    t = telemetry.VideoReady(
+                        is_gripper=None,
+                        anchor_num=None,
+                        local_uri=local_uri,
+                        stream_path=stream_path,
+                        feed_number=feed_number,
+                    )
+                    logger.debug(f'sending {t}')
+                    self.send_ui(video_ready=t)
+                return on_ready
+
+            ortho_floor_vs = NfVideoStreamer(
+                width=1000, height=1000, fps=10,
+                mjpeg_port=8747,
+                stream_path=f'stringman/{self.config.robot_id}/3',
+                telemetry_env=self.telemetry_env,
+                on_ready=_make_on_ready(3),
+            )
+            ortho_floor_vs.start()
+            heatmap_floor_vs = NfVideoStreamer(
+                width=1000, height=1000, fps=10,
+                mjpeg_port=8748,
+                stream_path=f'stringman/{self.config.robot_id}/4',
+                telemetry_env=self.telemetry_env,
+                on_ready=_make_on_ready(4),
+            )
+            heatmap_floor_vs.start()
+            self.ortho_streamers = [(ortho_floor_vs, 3), (heatmap_floor_vs, 4)]
+
+        ortho_thread = threading.Thread(
+            target=self._ortho_worker,
+            args=(ortho_floor_vs, heatmap_floor_vs),
+            daemon=True,
+        )
+        ortho_thread.start()
 
         counter = 0
         while self.run_command_loop:
             await asyncio.sleep(LOOP_DELAY)
+            if not self.run_ai:
+                continue
             counter += 1
-
             if counter < FIND_TARGETS_EVERY:
                 continue
             counter = 0
 
-            # collect images from any anchors that have one
-            valid_anchor_clients = []
-            img_tensors = []
-            for client in self.anchors.values():
-                if client.last_frame_resized is None or client.anchor_num not in self.config.preferred_cameras:
-                    continue
-                # Despite the name, resize to the correct resolution for this network only when inference is enabled
-                # this is to save resources on small machines where AI is disabled.
-                bgr_image = cv2.resize(client.last_frame_resized, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)
+            valid_anchor_clients = [
+                c for c in self.anchors.values()
+                if c.last_frame_resized is not None and c.anchor_num in self.config.preferred_cameras
+            ]
+            if not valid_anchor_clients:
+                continue
 
-                img_tensor = torch.from_numpy(bgr_image).permute(2, 0, 1).float() / 255.0
-                img_tensors.append(img_tensor)
-                valid_anchor_clients.append(client)
-            if img_tensors:
-                # run batch inference on GPU and get targets
-                all_floor_target_arrs = []
-                batch = torch.stack(img_tensors).to(DEVICE)
+            img_tensors = [
+                torch.from_numpy(cv2.resize(c.last_frame_resized, HM_IMAGE_RES, interpolation=cv2.INTER_AREA))
+                     .permute(2, 0, 1).float() / 255.0
+                for c in valid_anchor_clients
+            ]
+            batch = torch.stack(img_tensors).to(DEVICE)
+
+            def infer_sync():
                 with torch.no_grad():
-                    heatmaps_out = self.target_model(batch)
+                    return self.target_model(batch).squeeze(1).cpu().numpy()
 
-                # Shape: (Batch, 1, H, W) -> (Batch, H, W)
-                heatmaps_np = heatmaps_out.squeeze(1).cpu().numpy() # this is the blocking call
+            heatmaps_np = await asyncio.to_thread(infer_sync)
+            self.last_heatmaps_np = heatmaps_np
 
-                # produce a combined heatmap projected onto the floor
-                extent = 5.0 # meters
-                ortho_heatmap, ortho_bgr = generate_orthographic_floor_maps(
-                    valid_anchor_clients, 
-                    heatmaps_np,
-                    self.config.camera_cal, 
-                    map_size_px=1000, 
-                    map_extent_meters=extent
-                )
+            ortho_heatmap = self.last_ortho_heatmap
+            if ortho_heatmap is None:
+                continue
 
-                # make colored version of heatmap and combine with camera for visualization
-                heatmap_color = cv2.applyColorMap((ortho_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
-                overlay = cv2.addWeighted(cv2.cvtColor(ortho_bgr, cv2.COLOR_BGR2RGB), 0.8, heatmap_color, 0.4, 0)
-                vs.send_frame(overlay)
-                # if not first_frame_sent:
-                #     first_frame_sent = True
-                #     self.send_ui(video_ready=telemetry.VideoReady(
-                #         is_gripper=None,
-                #         anchor_num=0,
-                #         local_uri="http://localhost:8747/stream.mjpeg",
-                #         feed_number=0
-                #     ))
+            results = extract_targets_from_heatmap(ortho_heatmap)
+            if len(results) > 0:
+                targets2d = (results[:, :2] + np.array([-0.5, -0.5])) * EXTENT
+                floor_targets = [
+                    {'position': np.array([p[0], p[1], 0]), 'dropoff': 'hamper'}
+                    for p in targets2d
+                    if self.pe.point_inside_work_area_2d(p)
+                ]
+            else:
+                floor_targets = []
+            self.target_queue.add_ai_targets(floor_targets)
+            self.send_tq_to_ui()
 
-                results = extract_targets_from_heatmap(ortho_heatmap)
-
-                if len(results) > 0:
-                    targets2d = (results[:,:2] + np.array([-0.5, -0.5])) * extent # the third number is confidence. Don't have a use for it yet.
-
-                    # filter out targets that are not inside the work area.
-                    floor_targets = [
-                        {'position': np.array([p[0], p[1], 0]), 'dropoff': 'hamper'}
-                        for p in targets2d
-                        if self.pe.point_inside_work_area_2d(p)
-                    ]
-                else:
-                    floor_targets = []
-
-                # add any floor targets dicovered during this batch to the target queue.
-                self.target_queue.add_ai_targets(floor_targets)
-                self.send_tq_to_ui()
-        vs.stop()
+        if self.run_ortho:
+            ortho_floor_vs.stop()
+            heatmap_floor_vs.stop()
 
     async def pick_and_place_loop(self):
         """
@@ -2912,7 +3001,8 @@ def main():
             default=None,
             help="The cloud telemetry server to connect to (choices: local, staging, production) Used in development only. The default is None, which allows local connections on port 4245 only"
         )
-    parser.add_argument("--no_ai", action="store_true", help="Disable model execution. Use with small hardware. Only manual movement will be possible")
+    parser.add_argument("--no_ai", action="store_true", help="Disable target finding and centering model evaluation")
+    parser.add_argument("--no_ortho", action="store_true", help="Disable orthographic floor projection and its video streams")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     parser.add_argument("--arp_grasp", action="store_true", help="Use arp_execute_grasp (centering net) instead of act_execute_grasp (ACT policy) for the Arpeggio gripper")
@@ -2924,7 +3014,7 @@ def main():
         logging.getLogger('nf_robot').setLevel(logging.DEBUG)
 
     async def run_async():
-        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), auto_start=args.auto_start, local_models=args.local_models, use_arp_grasp=args.arp_grasp)
+        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), run_ortho=(not args.no_ortho), auto_start=args.auto_start, local_models=args.local_models, use_arp_grasp=args.arp_grasp, debug=args.debug)
 
         # Idempotent stop trigger
         def stop():

@@ -138,14 +138,14 @@ class MjpegStreamer:
             h.server_close()
             self.http_server = None
 
-class VideoStreamer:
+class RTMPStreamer:
     """
     Streams video to an RTMP server (e.g., MediaMTX) using FFmpeg.
     Ideal for cloud streaming or when a centralized media server is used.
     """
     def __init__(self, width, height, fps=30, rtmp_url=None):
         if not rtmp_url:
-            raise ValueError("VideoStreamer requires an rtmp_url")
+            raise ValueError("RTMPStreamer requires an rtmp_url")
             
         self.rtmp_url = rtmp_url
         self.width = width
@@ -239,6 +239,62 @@ class VideoStreamer:
                 pass
             finally:
                 self.process = None
+
+class NfVideoStreamer:
+    """
+    Combines a local MjpegStreamer with an optional RTMP RTMPStreamer.
+    Calls on_ready(local_uri, stream_path) once after a warmup frame count
+    (2 frames when local-only, 20 when streaming to RTMP).
+    """
+    def __init__(self, width, height, fps, mjpeg_port, stream_path, telemetry_env, on_ready=None):
+        self._local_uri = f'http://localhost:{mjpeg_port}/stream.mjpeg'
+        self._stream_path = stream_path
+        self._on_ready = on_ready
+        self._ready_sent = False
+        self._frames_sent = 0
+
+        self._local = MjpegStreamer(width=width, height=height, port=mjpeg_port)
+
+        rtmp = None
+        if telemetry_env == 'local':
+            rtmp = f'rtmp://localhost:1935/{stream_path}'
+        elif telemetry_env in ('staging', 'production'):
+            rtmp = f'rtmp://media.neufangled.com:1935/{stream_path}'
+        elif telemetry_env is not None:
+            raise ValueError(f"unusable value for telemetry_env {telemetry_env}")
+
+        self._remote = RTMPStreamer(width=width, height=height, fps=fps, rtmp_url=rtmp) if rtmp else None
+        self._frames_before_ready = 2 if rtmp is None else 20
+
+    @property
+    def local_uri(self):
+        return self._local_uri
+
+    @property
+    def stream_path(self):
+        return self._stream_path
+
+    def start(self):
+        self._local.start()
+        if self._remote:
+            self._remote.start()
+        logger.info(f'Streaming locally at {self._local_uri}')
+
+    def send_frame(self, frame):
+        self._local.send_frame(frame)
+        if self._remote:
+            self._remote.send_frame(frame)
+        self._frames_sent += 1
+        if not self._ready_sent and self._frames_sent >= self._frames_before_ready:
+            self._ready_sent = True
+            if self._on_ready:
+                self._on_ready(self._local_uri, self._stream_path)
+
+    def stop(self):
+        self._local.stop()
+        if self._remote:
+            self._remote.stop()
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
