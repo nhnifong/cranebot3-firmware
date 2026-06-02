@@ -452,7 +452,6 @@ class Positioner2:
             # time, length, speed, tension
             lengths = np.array([r[1] for r in records])
             self.tension = np.array([r[3] for r in records])
-            logger.debug(f'tension {self.tension}')
             speeds_sum = sum(r[2] for r in records)
             
             # average timestamp of the four lines contributing to this hang point.
