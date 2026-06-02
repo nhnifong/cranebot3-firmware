@@ -1889,7 +1889,7 @@ class AsyncObserver:
             else:
                 item.retain_key = f'component_conn_status_{msg.anchor_num}'
         if key == 'video_ready':
-            item.retain_key = f'video_ready_{msg.anchor_num}'
+            item.retain_key = f'video_ready_{msg.feed_number}'
         if key == 'episode_control' and item.episode_control.status is not None:
             self.last_ep_ctrl_status = item.episode_control.status
             item.retain_key = f'lerobot_status'
