@@ -68,12 +68,20 @@ async def _video_stream_loop(port: int, width: int, height: int, fps: int, bitra
         f'tcp://0.0.0.0:{port}?listen=1',
         '-y', '-loglevel', 'warning',
     ]
-    while True:
-        logging.info('ffmpeg test stream starting on port %d (%dx%d @ %d fps)', port, width, height, fps)
-        proc = await asyncio.create_subprocess_exec(*cmd)
-        await proc.wait()
-        logging.info('ffmpeg exited on port %d, restarting in 1 s', port)
-        await asyncio.sleep(1)
+    proc = None
+    try:
+        while True:
+            logging.info('ffmpeg test stream starting on port %d (%dx%d @ %d fps)', port, width, height, fps)
+            proc = await asyncio.create_subprocess_exec(*cmd)
+            await proc.wait()
+            proc = None
+            logging.info('ffmpeg exited on port %d, restarting in 1 s', port)
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
+        raise
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
@@ -178,7 +186,10 @@ async def main():
 
     for t in tasks:
         t.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5)
+    except asyncio.TimeoutError:
+        logging.warning('Some tasks did not stop within 5 s')
 
     await zc.async_unregister_all_services()
     await zc.async_close()
