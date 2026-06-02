@@ -793,15 +793,15 @@ class AsyncObserver:
         self.last_user_move_time = time.time()
 
     async def passive_safety(self):
-        """
-        This not only has the effect of stopping the robot if the user disappears mid-move,
-        but by feeding zeros to the kalman filter for commanded velocity every second, jitter is greatly reduced.
-        this task's action is suppressed whenever there is a motion task or the user is actually sending commands.
-        """
-        while self.run_command_loop:
-            if not ((self.motion_task is not None and not self.motion_task.done()) or (self.last_user_move_time > (time.time()-1))):
-                self.slow_stop_all_spools()
-            await asyncio.sleep(1)
+        """If any line becomes too tight, switch all motors to damped movement for one second."""
+        MAX_SAFE_TENSION = 13.0 # Newtons.
+        while self.run_command_loop and self.pe.tension is not None:
+            if np.any(self.pe.tension > MAX_SAFE_TENSION):
+                await self._handle_disable_torque()
+                await asyncio.sleep(1)
+                await self._handle_enable_torque()
+                await asyncio.sleep(1)
+            await asyncio.sleep(0.2)
 
     def update_avg_named_pos(self, key: str, position: np.ndarry):
         """Update the running average of the named position"""
@@ -1190,7 +1190,7 @@ class AsyncObserver:
                 self.swing_cancellation_task.cancel()
                 need_sc_restart = True
 
-            for direction in [[0,0,-1], [0,0,1]]:
+            for direction in [[0,0,1], [0,0,-1]]:
                 await self.tension_and_wait()
                 # wait for some new obs
                 await asyncio.sleep(0.5)
@@ -1931,8 +1931,7 @@ class AsyncObserver:
         monitor = LoopMonitor(interval=0.5, threshold=0.2)
         monitor.start()
 
-        # broken
-        # self.passive_safety_task = asyncio.create_task(self.passive_safety())
+        self.passive_safety_task = asyncio.create_task(self.passive_safety())
 
         if self.telemetry_env is not None:
             self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())
@@ -2029,6 +2028,9 @@ class AsyncObserver:
         if self.perception_task is not None:
             self.perception_task.cancel()
             tasks.append(self.perception_task)
+        if self.passive_safety_task is not None:
+            self.passive_safety_task.cancel()
+            tasks.append(self.passive_safety_task)
 
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         try:
