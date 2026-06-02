@@ -9,7 +9,7 @@ import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
 
 W_ORIGIN = 1.0 # increase this to to make origin errors more expensive
-W_CONSISTENCY = 20.0 # Cards should be in the same place when viewed from different perspectives
+W_CONSISTENCY = 2.0 # Cards should be in the same place when viewed from different perspectives
 W_PLANAR = 0.9 # increase this to make anchor height deviations from the average plane more expensive
 W_DIAMOND_DIST = 0.8 # weight for the distance changes in the diamond pattern
 W_DIAMOND_PLANAR = 0.2 # weight for forcing the gantry and eyelets into a single vertical plane
@@ -356,7 +356,8 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
         x0,
         args=opt_args,
         method='lm', 
-        verbose=0
+        verbose=1,
+        max_nfev=500,
     )
 
     if not result.success:
