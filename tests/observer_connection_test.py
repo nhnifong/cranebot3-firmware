@@ -51,6 +51,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_pe.main = mock_pe_main
         self.mock_pe.anchor_points = self.anchor_points
         self.mock_pe.gant_pos = np.array([0.4, 0.5, 0.6])
+        self.mock_pe.tension = np.zeros(4)
         self.patchers.append(patch('nf_robot.host.observer.Positioner2', self.mock_pe_class))
 
         self.clients_refuse_connections = False
