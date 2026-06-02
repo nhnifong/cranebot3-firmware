@@ -32,6 +32,7 @@ from functools import partial
 from pathlib import Path
 import json
 import re
+import subprocess
 
 from nf_robot.common.pose_functions import compose_poses
 from nf_robot.common.cv_common import *
@@ -429,6 +430,13 @@ class AsyncObserver:
             r = await self.invoke_motion_task(self.chase_tag('trash'))
         if item.action == 'ferry':
             r = await self.invoke_motion_task(self.ferry('hamper', 'trash'))
+        if item.action == 'sync_timezone':
+            self.sync_timezone_to_bots()
+
+    def sync_timezone_to_bots(self):
+        tz = subprocess.check_output(['timedatectl', 'show', '--property=Timezone', '--value']).decode().strip()
+        for client in self.bot_clients.values():
+            asyncio.create_task(client.send_commands({'set_timezone': tz}))
 
     async def chase_tag(self, name):
         """Keep the gripper at the named location"""

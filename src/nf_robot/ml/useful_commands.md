@@ -120,30 +120,31 @@ lerobot-train \
 
 train on modal
 
-lerobot-train-on-modal \
-  --dataset.repo_id naavox/tidy_up \
-  --output_dir /data_volume/tidy_modal_1 \
-  --dataset.root /data_volume/tidy_up \
-  --steps=30000 \
-  --dataset.image_transforms.enable=true \
-  --dataset.image_transforms.max_num_transforms=3 \
-  --policy.type=multi_task_dit \
-  --policy.device=cuda \
-  --policy.horizon=64 \
-  --policy.n_action_steps=32 \
-  --policy.objective=flow_matching \
-  --policy.timestep_sampling_strategy=beta \
-  --policy.timestep_sampling_alpha=1.5 \
-  --policy.timestep_sampling_beta=1.0 \
-  --policy.timestep_sampling_s=0.999 \
-  --policy.num_integration_steps=100 \
-  --policy.integration_method=euler \
-  --policy.sigma_min=0.0 \
-  --policy.image_resize_shape=[256,256] \
-  --policy.image_crop_shape=[224,224] \
-  --policy.image_crop_is_random=true \
-  --policy.repo_id="naavox/multitask-dit-4" \
-  --wandb.enable=false
+python experiments/lerobot_train_modal.py \
+  --dataset.repo_id naavox/tidy_up   \
+  --output_dir /data_volume/tidy_modal_1   \
+  --dataset.root /data_volume/tidy_up   \
+  --steps=30000   \
+  --dataset.image_transforms.enable=true   \
+  --dataset.image_transforms.max_num_transforms=3   \
+  --policy.type=multi_task_dit   \
+  --policy.device=cuda   \
+  --policy.horizon=64   \
+  --policy.n_action_steps=32   \
+  --policy.objective=flow_matching   \
+  --policy.timestep_sampling_strategy=beta   \
+  --policy.timestep_sampling_alpha=1.5   \
+  --policy.timestep_sampling_beta=1.0   \
+  --policy.timestep_sampling_s=0.999   \
+  --policy.num_integration_steps=100   \
+  --policy.integration_method=euler   \
+  --policy.sigma_min=0.0   \
+  --policy.image_resize_shape=[256,256]   \
+  --policy.image_crop_shape=[224,224]   \
+  --policy.image_crop_is_random=true   \
+  --policy.repo_id="naavox/multitask-dit-4"   \
+  --wandb.enable=false \
+  --tolerance_s=0.001
 
 ```
 

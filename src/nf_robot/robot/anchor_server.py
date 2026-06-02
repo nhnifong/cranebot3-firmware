@@ -1,6 +1,7 @@
 import asyncio
 from asyncio.subprocess import PIPE, STDOUT
 import os
+import subprocess
 import signal
 import websockets
 from websockets.exceptions import (
@@ -244,6 +245,11 @@ class RobotComponentServer:
                     self.spooler.setReferenceLength(float(update['reference_length']))
                 if 'set_zero_angle' in update:
                     self.spooler.sc.set_zero_angle(float(update['set_zero_angle']))
+
+            if 'set_timezone' in update:
+                tz = update['set_timezone']
+                subprocess.run(['timedatectl', 'set-timezone', tz], check=True)
+                logging.info(f'Timezone set to {tz}')
 
             # defer to specific server subclass
             result = await self.processOtherUpdates(update,tg)
