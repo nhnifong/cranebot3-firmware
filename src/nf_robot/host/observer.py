@@ -794,9 +794,12 @@ class AsyncObserver:
 
     async def passive_safety(self):
         """If any line becomes too tight, switch all motors to damped movement for one second."""
-        MAX_SAFE_TENSION = 14.0 # Newtons.
+        MAX_SAFE_TENSION = 16.0 # Newtons.
+        ema = np.zeros(4)
         while self.run_command_loop and self.pe.tension is not None:
-            if np.any(self.pe.tension > MAX_SAFE_TENSION):
+            ema = ema * 0.9 + self.pe.tension * 0.1
+            logger.debug(f'tension ema {ema}')
+            if np.any(ema > MAX_SAFE_TENSION):
                 await self._handle_disable_torque()
                 await asyncio.sleep(1)
                 await self._handle_enable_torque()
