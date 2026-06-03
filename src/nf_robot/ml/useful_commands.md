@@ -122,8 +122,8 @@ train on modal
 
 python experiments/lerobot_train_modal.py \
   --dataset.repo_id naavox/tidy_up   \
-  --output_dir /data_volume/tidy_modal_1   \
-  --dataset.root /data_volume/tidy_up   \
+  --output_dir /multitask_dit_data/tidy_modal_2   \
+  --dataset.root /multitask_dit_data/tidy_up   \
   --steps=30000   \
   --dataset.image_transforms.enable=true   \
   --dataset.image_transforms.max_num_transforms=3   \
@@ -142,9 +142,12 @@ python experiments/lerobot_train_modal.py \
   --policy.image_resize_shape=[256,256]   \
   --policy.image_crop_shape=[224,224]   \
   --policy.image_crop_is_random=true   \
-  --policy.repo_id="naavox/multitask-dit-4"   \
+  --policy.repo_id="naavox/multitask-dit-5"   \
+  --policy.push_to_hub=true \
   --wandb.enable=false \
-  --tolerance_s=0.001
+  --batch_size=200 \
+  --tolerance_s=0.001 \
+  --save_freq=5000
 
 ```
 
