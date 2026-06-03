@@ -35,7 +35,7 @@ import modal
 # ---------------------------------------------------------------------------
 _modal_parser = argparse.ArgumentParser(add_help=False)
 _modal_parser.add_argument("--gpu_type", default="H200")
-_modal_parser.add_argument("--timeout_hours", type=float, default=12.0)
+_modal_parser.add_argument("--timeout_hours", type=float, default=24.0)
 _modal_parser.add_argument("--hf_secret", default="huggingface")
 _modal_args, _ = _modal_parser.parse_known_args()
 

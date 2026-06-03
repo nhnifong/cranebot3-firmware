@@ -145,7 +145,7 @@ python experiments/lerobot_train_modal.py \
   --policy.repo_id="naavox/multitask-dit-5"   \
   --policy.push_to_hub=true \
   --wandb.enable=false \
-  --batch_size=200 \
+  --batch_size=210 \
   --tolerance_s=0.001 \
   --save_freq=5000
 
