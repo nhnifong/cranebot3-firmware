@@ -111,6 +111,9 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # Swing cancellation
     config.swing_latency = 0.18 # seconds
 
+    # tension safety
+    config.max_safe_tension = 16 # newtons.
+
     return config
 
 def save_config(config: nf_config.StringmanPilotConfig, path: Path=DEFAULT_CONFIG_PATH):

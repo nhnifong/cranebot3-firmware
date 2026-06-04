@@ -113,4 +113,7 @@ message StringmanPilotConfig {
   // constant offset in seconds at which swing should be estimated
   // seems to depend on the machine you run the motion controller on.
   float swing_latency = 13;
+
+  // Maximum allowed tension in newtons on any line before safety backoff occurs.
+  float max_safe_tension = 14;
 }

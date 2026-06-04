@@ -681,6 +681,8 @@ class AsyncObserver:
                     break
                 await asyncio.sleep(0.5)
         bar = asyncio.create_task(update_bar_task())
+        self.sync_timezone_to_bots()
+        await time.sleep(0.3)
         tasks = []
         keys = []
         for name, client in self.bot_clients.items():
@@ -794,7 +796,10 @@ class AsyncObserver:
 
     async def passive_safety(self):
         """If any line becomes too tight, switch all motors to damped movement for one second."""
-        MAX_SAFE_TENSION = 16.0 # Newtons.
+        max_safe_tension = 16.0
+        if self.config.max_safe_tension is not None:
+            max_safe_tension = self.config.max_safe_tension
+
         ema = np.zeros(4)
         while self.run_command_loop and self.pe.tension is not None:
             ema = ema * 0.9 + self.pe.tension * 0.1

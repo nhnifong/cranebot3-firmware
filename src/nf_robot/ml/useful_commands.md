@@ -94,10 +94,9 @@ lerobot-train \
     --batch_size=32
 
 lerobot-train \
-  --dataset.repo_id=naavox/full_featured \
+  --dataset.repo_id=naavox/tidy_up \
   --output_dir=./outputs/multitask_dit_training_3 \
-  --batch_size=90 \
-  --steps=30000 \
+  --steps=120000 \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
   --policy.type=multi_task_dit \
@@ -115,8 +114,12 @@ lerobot-train \
   --policy.image_resize_shape=[256,256] \
   --policy.image_crop_shape=[224,224] \
   --policy.image_crop_is_random=true \
-  --policy.repo_id="naavox/multitask-dit-3" \
-  --wandb.enable=false
+  --policy.repo_id="naavox/multitask-dit-5" \
+  --wandb.enable=false \
+  --tolerance_s=0.001 \
+  --policy.push_to_hub=true \
+  --save_freq=5000 \
+  --batch_size=92
 
 train on modal
 
@@ -124,7 +127,7 @@ python experiments/lerobot_train_modal.py \
   --dataset.repo_id naavox/tidy_up   \
   --output_dir /multitask_dit_data/tidy_modal_2   \
   --dataset.root /multitask_dit_data/tidy_up   \
-  --steps=30000   \
+  --steps=40000   \
   --dataset.image_transforms.enable=true   \
   --dataset.image_transforms.max_num_transforms=3   \
   --policy.type=multi_task_dit   \
@@ -147,7 +150,8 @@ python experiments/lerobot_train_modal.py \
   --wandb.enable=false \
   --batch_size=210 \
   --tolerance_s=0.001 \
-  --save_freq=5000
+  --save_freq=5000 \
+  --num_workers=14
 
 ```
 

@@ -53,7 +53,7 @@ _LEROBOT_IMAGE = (
 )
 
 app = modal.App("lerobot-train")
-
+data_volume = modal.Volume.from_name("multitask_dit_data", create_if_missing=True)
 
 # ---------------------------------------------------------------------------
 # Remote function — runs inside the Modal container
@@ -63,6 +63,7 @@ app = modal.App("lerobot-train")
     gpu=_GPU_TYPE,
     timeout=_TIMEOUT_S,
     secrets=[modal.Secret.from_name(_HF_SECRET)],
+    volumes={"/multitask_dit_data": data_volume},
 )
 def run_training(train_argv: list[str]) -> None:
     """Execute lerobot-train with the provided argv inside Modal."""
@@ -76,6 +77,7 @@ def run_training(train_argv: list[str]) -> None:
     from lerobot.scripts.lerobot_train import train
 
     train()
+    data_volume.commit()
 
 
 # ---------------------------------------------------------------------------
