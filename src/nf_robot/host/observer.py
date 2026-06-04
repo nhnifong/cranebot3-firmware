@@ -803,7 +803,7 @@ class AsyncObserver:
         ema = np.zeros(4)
         while self.run_command_loop and self.pe.tension is not None:
             ema = ema * 0.9 + self.pe.tension * 0.1
-            if np.any(ema > MAX_SAFE_TENSION):
+            if np.any(ema > max_safe_tension):
                 logger.warning('Tension limit reached! backing off.')
                 await self._handle_disable_torque()
                 await asyncio.sleep(1)

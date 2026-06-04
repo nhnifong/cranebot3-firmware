@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gripper Telemetry</title>
+    <!-- Load Chart.js for the live graph -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Load Protobuf.js to parse the binary websocket stream -->
+    <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 1000px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-sizing: border-box;
+        }
+        h2 { margin-top: 0; }
+        .header-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        #status { font-weight: bold; color: orange; }
+        #debug-text { font-family: monospace; color: #555; background: #eee; padding: 4px 8px; border-radius: 4px;}
+        
+        /* The relative wrapper is MANDATORY to stop Chart.js from growing infinitely */
+        .chart-wrapper {
+            position: relative;
+            height: 500px; 
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Gripper Force & Pressure</h2>
+    <div class="header-info">
+        <span>Status: <span id="status">Connecting...</span></span>
+        <span id="debug-text">Waiting for grip_sensors data...</span>
+    </div>
+    
+    <!-- Wrapped Canvas -->
+    <div class="chart-wrapper">
+        <canvas id="telemetryChart"></canvas>
+    </div>
+</div>
+
+<script>
+    // 1. Minimized Protobuf Schema
+    const protoStr = `
+        syntax = "proto3";
+        package nf.telemetry;
+
+        message GripperSensors {
+            float range = 1;
+            float angle = 2;
+            float pressure = 3;
+            float wrist = 4;
+            optional float target_force = 5;
+        }
+
+        message TelemetryItem {
+            oneof payload {
+                GripperSensors grip_sensors = 10;
+            }
+        }
+
+        message TelemetryBatchUpdate {
+            string robot_id = 1;
+            repeated TelemetryItem updates = 2;
+        }
+    `;
+
+    // Parse the schema
+    const root = protobuf.parse(protoStr).root;
+    const TelemetryBatchUpdate = root.lookupType("nf.telemetry.TelemetryBatchUpdate");
+
+    // 2. Setup Chart.js
+    const ctx = document.getElementById('telemetryChart').getContext('2d');
+    const maxDataPoints = 150; 
+    
+    const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [], 
+            datasets: [
+                {
+                    label: 'Pressure',
+                    data: [],
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.2,
+                    fill: true
+                },
+                {
+                    label: 'Target Force',
+                    data: [],
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    borderWidth: 2,
+                    borderDash: [5, 5], 
+                    pointRadius: 0,
+                    tension: 0.2
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false, // Allows the container to dictate height
+            animation: false, 
+            scales: {
+                y: {
+                    min: 0, 
+                    // Removed max: 1 to allow auto-scaling in case values jump higher
+                    title: { display: true, text: 'Force / Pressure' }
+                },
+                x: {
+                    display: false 
+                }
+            }
+        }
+    });
+
+    // 3. Setup WebSocket
+    const statusEl = document.getElementById('status');
+    const debugEl = document.getElementById('debug-text');
+    
+    // Updated to localhost
+    const ws = new WebSocket('ws://localhost:4245');
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+        statusEl.textContent = 'Connected';
+        statusEl.style.color = 'green';
+    };
+
+    ws.onclose = () => {
+        statusEl.textContent = 'Disconnected';
+        statusEl.style.color = 'red';
+    };
+
+    ws.onerror = (err) => {
+        statusEl.textContent = 'Error connecting';
+        statusEl.style.color = 'red';
+        console.error('WebSocket Error:', err);
+    };
+
+    // Keep track of the first message to log it for debugging
+    let firstMessageLogged = false;
+
+    ws.onmessage = (event) => {
+        try {
+            const buffer = new Uint8Array(event.data);
+            const message = TelemetryBatchUpdate.decode(buffer);
+            
+            if (!firstMessageLogged) {
+                console.log("First decoded batch:", message);
+                firstMessageLogged = true;
+            }
+
+            let chartNeedsUpdate = false;
+
+            if (message.updates && message.updates.length > 0) {
+                for (const item of message.updates) {
+                    
+                    // ProtobufJS translates snake_case to camelCase by default
+                    // We check both just to be absolutely safe
+                    const sensors = item.gripSensors || item.grip_sensors;
+                    
+                    if (sensors) {
+                        // Extract fields, defaulting to 0 if they are omitted (proto3 behavior for exact 0s)
+                        const pressure = sensors.pressure || 0;
+                        const targetForce = sensors.targetForce || sensors.target_force || 0; 
+
+                        // Update Debug Text UI
+                        debugEl.textContent = `P: ${pressure.toFixed(3)} | T: ${targetForce.toFixed(3)}`;
+
+                        // Push to chart
+                        chart.data.labels.push(''); 
+                        chart.data.datasets[0].data.push(pressure);
+                        chart.data.datasets[1].data.push(targetForce);
+
+                        // Slide the window
+                        if (chart.data.labels.length > maxDataPoints) {
+                            chart.data.labels.shift();
+                            chart.data.datasets[0].data.shift();
+                            chart.data.datasets[1].data.shift();
+                        }
+                        
+                        chartNeedsUpdate = true;
+                    }
+                }
+            }
+
+            if (chartNeedsUpdate) {
+                chart.update();
+            }
+
+        } catch (e) {
+            console.error("Failed to decode message:", e);
+        }
+    };
+</script>
+
+</body>
+</html>
