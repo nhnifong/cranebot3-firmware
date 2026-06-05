@@ -104,14 +104,13 @@ class StringmanLeRobot(Robot):
 
         self.events = events
         
-        # State mapping for feeds 0 (gripper) and 3 (overhead ortho)
-        self.camera_locks = {0: threading.Lock(), 3: threading.Lock()}
+        # State mapping for feeds 0 (gripper)
+        self.camera_locks = {0: threading.Lock()}
         self.video_threads = {}
-        self.stop_video_events = {0: threading.Event(), 3: threading.Event()}
+        self.stop_video_events = {0: threading.Event()}
 
         self.last_images = {
             0: np.zeros((IMG_RES, IMG_RES, 3), dtype=np.uint8),
-            3: np.zeros((IMG_RES, IMG_RES, 3), dtype=np.uint8),
         }
 
     @cached_property
@@ -128,7 +127,6 @@ class StringmanLeRobot(Robot):
     def _cameras_ft(self) -> dict[str, tuple]:
         return {
             "gripper_camera": (IMG_RES, IMG_RES, 3),
-            "overhead_camera": (IMG_RES, IMG_RES, 3),
         }
 
     @cached_property
@@ -272,8 +270,8 @@ class StringmanLeRobot(Robot):
     def _handle_video_ready(self, item: telemetry.VideoReady):
         feed_num = item.feed_number
 
-        # feed 0 = gripper camera, feed 3 = overhead ortho projection
-        if feed_num not in [0, 3]:
+        # feed 0 = gripper camera
+        if feed_num not in [0]:
             return
 
         # Return if this feed's stream is already alive
@@ -373,7 +371,7 @@ class StringmanLeRobot(Robot):
 
     def disconnect(self) -> None:
         print("Disconnecting")
-        for i in [0, 3]:
+        for i in [0]:
             self.stop_video_events[i].set()
         
         if self.websocket is not None:
@@ -392,7 +390,7 @@ class StringmanLeRobot(Robot):
 
     def get_observation(self) -> dict[str, Any]:
         images = {}
-        for feed_num in [0, 3]:
+        for feed_num in [0]:
             with self.camera_locks[feed_num]:
                 images[feed_num] = self.last_images[feed_num].copy()
 
@@ -460,7 +458,6 @@ class StringmanLeRobot(Robot):
             "hang_pos_z": float(self.last_hang_pos[2]),
 
             "gripper_camera": images[0],
-            "overhead_camera": images[3],
         }
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
