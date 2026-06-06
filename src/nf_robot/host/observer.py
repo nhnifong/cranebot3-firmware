@@ -396,6 +396,8 @@ class AsyncObserver:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True, present='.'))
             self.active_set.add('swingc')
             while self.run_command_loop:
+                if self.gripper_client is None:
+                    await asyncio.sleep(1)
                 vel2 = self.gripper_client.compute_swing_correction(time.time() + self.config.swing_latency)
                 if vel2 is not None:
                     await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc', downward_bias=0)
@@ -2579,13 +2581,6 @@ class AsyncObserver:
             gtask = None
             while self.run_command_loop:
 
-                # hover over the hamper
-                # await asyncio.sleep(1)
-                # if 'hamper' in self.named_positions:
-                #     self.gantry_goal_pos = self.named_positions['hamper'] + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF])
-                #     await self.seek_gantry_goal()
-                # continue
-
                 next_target = self.target_queue.get_best_target()
                 if next_target is None:
                     if gtask is not None:
@@ -2665,7 +2660,6 @@ class AsyncObserver:
                 # open gripper
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': RELAXED_OPEN}))
                 # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
-                # TODO train network on more data containing examples of this, so it knows that only socks on the floor count.
                 await asyncio.sleep(DELAY_AFTER_DROP)
                 self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.DROPPED)
                 self.send_tq_to_ui()

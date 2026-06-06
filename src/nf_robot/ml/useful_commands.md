@@ -94,9 +94,9 @@ lerobot-train \
     --batch_size=32
 
 lerobot-train \
-  --dataset.repo_id=naavox/tidy_up \
-  --output_dir=./outputs/multitask_dit_training_3 \
-  --steps=120000 \
+  --dataset.repo_id=naavox/simple_grasp \
+  --output_dir=./outputs/multitask_dit_training_8 \
+  --steps=100000 \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
   --policy.type=multi_task_dit \
@@ -114,7 +114,7 @@ lerobot-train \
   --policy.image_resize_shape=[256,256] \
   --policy.image_crop_shape=[224,224] \
   --policy.image_crop_is_random=true \
-  --policy.repo_id="naavox/multitask-dit-5" \
+  --policy.repo_id="naavox/multitask-dit-8" \
   --wandb.enable=false \
   --tolerance_s=0.001 \
   --policy.push_to_hub=true \
