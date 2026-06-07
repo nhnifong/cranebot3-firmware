@@ -341,7 +341,7 @@ class AsyncObserver:
             if target is not None:
                 goal_pos = tonp(target.position) + GRIPPER_HEIGHT_OVER_TARGET + POLE
         elif item.pos is not None:
-            goal_pos = tonp(item.pos) + POLE
+            goal_pos = tonp(item.pos) + GRIPPER_HEIGHT_OVER_TARGET + POLE
 
         if goal_pos is None:
             return
@@ -392,7 +392,7 @@ class AsyncObserver:
         # latency = 0.18 # works best for desktop machine?
         # latency = 0.61 # works best for laptop
         # when it seems wonky, sometimes it's because the gripper has a different timezone setting than the host!
-        # come up with a way to sync them.
+        # run sync_timezone debug command to fix.
         try:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True, present='.'))
             self.active_set.add('swingc')
@@ -968,6 +968,10 @@ class AsyncObserver:
             # Slow stop all spools. gripper too
             asyncio.create_task(client.slow_stop_spool())
         self.pe.record_commanded_vel(np.zeros(3))
+        # this stops the spools directly, bypassing move_direction_speed, so the stale
+        # 'default' velocity must be cleared here too or it'll get summed back in the
+        # next time anything (e.g. swing cancellation) triggers a combined move.
+        self.input_velocities['default'] = np.zeros(3)
 
     def snapshot_tag_observations(self):
         """Recent origin detections and cal_assist marker detections
