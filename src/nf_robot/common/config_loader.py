@@ -154,7 +154,7 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
                     if anchor.indirect_line.cam_tilt is None:
                         anchor.indirect_line.cam_tilt = 26.0
 
-            if not hasattr(c, 'max_safe_tension'):
+            if c.max_safe_tension == 0:
                 c.max_safe_tension = 16
 
             return c

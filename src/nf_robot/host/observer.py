@@ -368,6 +368,12 @@ class AsyncObserver:
                 self.config.anchors[item.anchor_num].indirect_line.cam_tilt = item.cam_angle
                 save_config(self.config, self.config_path)
                 self.anchors[item.anchor_num].updatePoseAndEye()
+                self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
+                    poses=[a.pose for a in self.config.anchors],
+                    eyelets=[a.indirect_line.eyelet_pos for a in self.config.anchors],
+                    tilt=[a.indirect_line.cam_tilt for a in self.config.anchors],
+                    swing_latency=self.config.swing_latency,
+                ))
 
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
         logger.info(f'Swing cancellation set {item.enabled}')
@@ -807,7 +813,7 @@ class AsyncObserver:
         while self.run_command_loop and self.pe.tension is not None:
             ema = ema * 0.9 + self.pe.tension * 0.1
             if np.any(ema > max_safe_tension):
-                logger.warning('Tension limit reached! backing off.')
+                logger.warning(f'Tension limit reached! backing off. limit={max_safe_tension} actual={ema}')
                 await self._handle_disable_torque()
                 await asyncio.sleep(1)
                 await self._handle_enable_torque()
