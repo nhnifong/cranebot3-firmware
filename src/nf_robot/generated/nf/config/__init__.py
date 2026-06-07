@@ -266,6 +266,23 @@ class StringmanPilotConfig(betterproto2.Message):
     seems to depend on the machine you run the motion controller on.
     """
 
+    max_safe_tension: "float" = betterproto2.field(14, betterproto2.TYPE_FLOAT)
+    """
+    Maximum allowed tension in newtons on any line before safety backoff occurs.
+    """
+
+    named_positions: "dict[str, _common__.Vec3]" = betterproto2.field(
+        15,
+        betterproto2.TYPE_MAP,
+        map_meta=betterproto2.map_meta(
+            betterproto2.TYPE_STRING, betterproto2.TYPE_MESSAGE
+        ),
+    )
+    """
+    Last known room position of each named object/location, keyed by tag name (e.g. 'hamper', 'parking_location').
+    Updated as an exponential moving average whenever the tag is observed.
+    """
+
 
 default_message_pool.register_message(
     "nf.config", "StringmanPilotConfig", StringmanPilotConfig

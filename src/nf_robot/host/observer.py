@@ -166,7 +166,8 @@ class AsyncObserver:
         # event used to notify tasks that gripper is connected.
         self.gripper_client_connected = asyncio.Event()
         self.last_user_move_time = time.time()
-        self.named_positions = {}
+        # last known positions of named tags/objects live in self.config.named_positions
+        # (the single source of truth). It's written to disk on shutdown, in async_close.
         self.target_model = None
         self.centering_model = None
         self.predicted_lateral_vector = None
@@ -446,9 +447,9 @@ class AsyncObserver:
             chase_task = None
             while self.run_command_loop:
                 await asyncio.sleep(0.1)
-                if not name in self.named_positions:
+                if not name in self.config.named_positions:
                     continue
-                goal = self.named_positions[name] + POLE
+                goal = tonp(self.config.named_positions[name]) + POLE
                 self.gantry_goal_pos = goal
                 if chase_task is None or chase_task.done():
                     chase_task = asyncio.create_task(self.seek_gantry_goal())
@@ -465,10 +466,10 @@ class AsyncObserver:
                 await asyncio.sleep(0.1)
 
                 # wait for source position to be seen
-                while not source in self.named_positions:
+                while not source in self.config.named_positions:
                     await asyncio.sleep(0.5)
                 # go to position
-                goal = self.named_positions[source] + POLE + GRIPPER_HEIGHT_OVER_TARGET
+                goal = tonp(self.config.named_positions[source]) + POLE + GRIPPER_HEIGHT_OVER_TARGET
                 self.gantry_goal_pos = goal
                 await self.seek_gantry_goal()
 
@@ -478,10 +479,10 @@ class AsyncObserver:
                 await self.execute_grasp()
 
                 # wait for destination position to be seen
-                while not dest in self.named_positions:
+                while not dest in self.config.named_positions:
                     await asyncio.sleep(0.5)
                 # go to position
-                goal = self.named_positions[dest] + POLE + GRIPPER_HEIGHT_OVER_TARGET
+                goal = tonp(self.config.named_positions[dest]) + POLE + GRIPPER_HEIGHT_OVER_TARGET
                 self.gantry_goal_pos = goal
                 await self.seek_gantry_goal()
 
@@ -813,15 +814,15 @@ class AsyncObserver:
                 await asyncio.sleep(1)
             await asyncio.sleep(0.2)
 
-    def update_avg_named_pos(self, key: str, position: np.ndarry):
-        """Update the running average of the named position"""
-        if key not in self.named_positions:
-            self.named_positions[key] = position
-        # exponential moving average
-        self.named_positions[key] = self.named_positions[key] * 0.75 + position * 0.25
-        pos = self.named_positions[key]
+    def update_avg_named_pos(self, key: str, position: np.ndarray):
+        """Update the running average of the named position, keeping self.config.named_positions
+        as the single source of truth so the last known position survives a restart."""
+        if key in self.config.named_positions:
+            # exponential moving average
+            position = tonp(self.config.named_positions[key]) * 0.75 + position * 0.25
+        self.config.named_positions[key] = fromnp(position)
         self.send_ui(named_position=telemetry.NamedObjectPosition(
-            position=fromnp(pos),
+            position=fromnp(position),
             name=key,
         ))
 
@@ -1903,6 +1904,8 @@ class AsyncObserver:
         if key == 'episode_control' and item.episode_control.status is not None:
             self.last_ep_ctrl_status = item.episode_control.status
             item.retain_key = f'lerobot_status'
+        if key == 'swing_cancellation_state':
+            item.retain_key = 'swing_cancellation_state'
 
         # Add item to batch
         with self.telemetry_buffer_lock:
@@ -2012,6 +2015,8 @@ class AsyncObserver:
 
     async def async_close(self) -> None:
         print('Stringman Controller Shutdown')
+        # persist the last observed named positions (e.g. hamper, parking_location) so they survive a restart
+        save_config(self.config, self.config_path)
         result = await self.stop_all()
         self.run_command_loop = False
         self.stat.run = False
@@ -2185,10 +2190,13 @@ class AsyncObserver:
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
         This is a motion task
         """
-        GOAL_PROXIMITY_M = 0.07 
+        GOAL_PROXIMITY_M = 0.1
         MAX_SPEED = 0.24 # GANTRY_SPEED_MPS
         ACCEL = 0.15     # m/s^2
         LOOP_SLEEP_S = 0.1
+
+        if self.gantry_goal_pos is None:
+            return
 
         # Calculate the distance needed to stop from MAX_SPEED: d = v^2 / (2a)
         braking_distance = (MAX_SPEED**2) / (2 * ACCEL)
@@ -2644,8 +2652,8 @@ class AsyncObserver:
                 if not isinstance(next_target.dropoff, str):
                     drop_point = next_target.dropoff
                 # otherwise go to the named drop point
-                if next_target.dropoff in self.named_positions:
-                    drop_point = self.named_positions[next_target.dropoff]
+                if next_target.dropoff in self.config.named_positions:
+                    drop_point = tonp(self.config.named_positions[next_target.dropoff])
                 else:
                     # otherwise use the origin as a drop point :/
                     # TODO this is not ideal, as we will continue to pick things up from this spot most likely now that we are close to it.

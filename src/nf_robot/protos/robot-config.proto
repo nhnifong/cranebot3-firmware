@@ -116,4 +116,8 @@ message StringmanPilotConfig {
 
   // Maximum allowed tension in newtons on any line before safety backoff occurs.
   float max_safe_tension = 14;
+
+  // Last known room position of each named object/location, keyed by tag name (e.g. 'hamper', 'parking_location').
+  // Updated as an exponential moving average whenever the tag is observed.
+  map<string, common.Vec3> named_positions = 15;
 }
