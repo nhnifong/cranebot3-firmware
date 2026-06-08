@@ -209,6 +209,9 @@ class AsyncObserver:
         self.last_ep_ctrl_status = common.LerobotStatus.NA
         self.lerobot_process_pid = None
         self.grip_angle = 0
+        # source and destination for pick and place
+        self.pnp_src = common.RoutePoint.ALL_TARGETS
+        self.pnp_dst = common.RoutePoint.HAMPER
 
     async def send_setup_telemetry(self):
         logger.debug('Sending setup telemetry')
@@ -332,8 +335,21 @@ class AsyncObserver:
         elif item.move_gripper_to is not None:
             r = await self._handle_move_gripper_to(item.move_gripper_to)
 
+        elif item.set_point is not None:
+            asyncio.create_task(self._handle_set_point(item.set_point))
+
+    async def _handle_set_point(self, item: control.SetPoint):
+        logger.debug(f'_handle_set_point {item}')
+        if item.route_source:
+            self.pnp_src = item.route_source
+        if item.route_destination:
+            self.pnp_dst = item.route_destination
+        self.send_ui(task_status=telemetry.TaskStatus(
+            route_source=self.pnp_src, route_destination=self.pnp_dst, 
+        ))
+        r = await self.flush_tele_buffer()
+
     async def _handle_move_gripper_to(self, item: control.MoveGripperTo):
-        logging.debug(f'_handle_move_gripper_to {item}')
         goal_pos = None
         if item.target_id is not None:
             # derive target position from target
@@ -2371,7 +2387,7 @@ class AsyncObserver:
             return image
         return bytes()
 
-    def _handle_add_episode_control_events(self, data: nf.common.EpisodeControl):
+    def _handle_add_episode_control_events(self, data: common.EpisodeControl):
         # forward episode control events back to all telemetry listeners
         self.send_ui(episode_control=data)
         asyncio.create_task(self.flush_tele_buffer())
@@ -2593,6 +2609,9 @@ class AsyncObserver:
         LOOP_DELAY = 0.5
         END_LOOP_TIMEOUT = 10
 
+        # TODO if no lerobot session is connected with an appropriate model or --arp_grasp is false, this cannot work.
+        # check prereqs and warn user with popup message or just start necessary model.
+
         drop_point = np.zeros(3)
         target_seen_t = time.time()
         try:
@@ -2658,17 +2677,26 @@ class AsyncObserver:
                 # tension now just in case.
                 # await self.tension_and_wait()
 
-                # If user specified drop point...
-                if not isinstance(next_target.dropoff, str):
-                    drop_point = next_target.dropoff
-                # otherwise go to the named drop point
-                if next_target.dropoff in self.config.named_positions:
-                    drop_point = tonp(self.config.named_positions[next_target.dropoff])
-                else:
-                    # otherwise use the origin as a drop point :/
-                    # TODO this is not ideal, as we will continue to pick things up from this spot most likely now that we are close to it.
-                    # either need to drop it somewhere we know we won't ever see it again, or have a sign for this drop point so we don't touch things inside it.
-                    logger.warning("No drop point specified, using (0,0,0) as a drop point")
+                # Choose drop point. default to origin
+                drop_point = np.zeros(3)
+
+                if self.pnp_dst == common.RoutePoint.NA:
+                    # read drop point from target
+                    if not isinstance(next_target.dropoff, str):
+                        drop_point = next_target.dropoff
+                    # otherwise go to the named drop point
+                    if next_target.dropoff in self.config.named_positions:
+                        drop_point = tonp(self.config.named_positions[next_target.dropoff])
+
+                elif self.pnp_dst == common.RoutePoint.HAMPER:
+                    drop_point = tonp(self.config.named_positions["hamper"]) # these match MARKER_NAMES in cv_common
+                elif self.pnp_dst == common.RoutePoint.TOYBOX:
+                    drop_point = tonp(self.config.named_positions["toys"])
+                elif self.pnp_dst == common.RoutePoint.TRASH:
+                    drop_point = tonp(self.config.named_positions["trash"])
+                elif self.pnp_dst == common.RoutePoint.GAMEPAD:
+                    drop_point = tonp(self.config.named_positions["gamepad"])
+                elif self.pnp_dst == common.RoutePoint.ORIGIN:
                     drop_point = np.zeros(3)
 
                 # fly to to drop point
