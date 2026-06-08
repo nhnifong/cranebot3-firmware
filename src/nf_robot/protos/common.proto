@@ -87,3 +87,15 @@ enum AnchorType {
   // two anchors each controlling two lines
   ANCHORTYPE_ARPEGGIO = 2;
 }
+
+// Points which can be set as the source or destination for auto pick and drop.
+enum RoutePoint {
+  ROUTEPOINT_NA = 0;
+  ROUTEPOINT_ALL_TARGETS = 1;
+  ROUTEPOINT_USER_TARGETS = 2;
+  ROUTEPOINT_TRASH = 3;
+  ROUTEPOINT_HAMPER = 4;
+  ROUTEPOINT_TOYBOX = 5;
+  ROUTEPOINT_GAMEPAD = 6;
+  ROUTEPOINT_ORIGIN = 7;
+}

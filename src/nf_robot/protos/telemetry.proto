@@ -245,6 +245,13 @@ message VisibilityStates {
   // Add other tag states if needed
 }
 
+message TaskStatus {
+  optional string current_task_name = 1;
+
+  optional nf.common.RoutePoint route_source = 2;
+  optional nf.common.RoutePoint route_destination = 3;
+}
+
 // A single kind of update that the observer is providing to an external UI
 // Typically about the robot's state such as it's position
 message TelemetryItem {
@@ -269,6 +276,7 @@ message TelemetryItem {
     CommandedGrip last_commanded_grip = 18;
     SwingCancellationState swing_cancellation_state = 19;
     VisibilityStates visibility_states = 20;
+    TaskStatus task_status = 22;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

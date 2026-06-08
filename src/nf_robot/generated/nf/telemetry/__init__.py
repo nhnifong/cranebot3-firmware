@@ -23,6 +23,7 @@ __all__ = (
     "SwingCancellationState",
     "TargetList",
     "TargetStatus",
+    "TaskStatus",
     "TelemetryBatchUpdate",
     "TelemetryItem",
     "UplinkStatus",
@@ -586,6 +587,24 @@ default_message_pool.register_message("nf.telemetry", "TargetList", TargetList)
 
 
 @dataclass(eq=False, repr=False)
+class TaskStatus(betterproto2.Message):
+    current_task_name: "str | None" = betterproto2.field(
+        1, betterproto2.TYPE_STRING, optional=True
+    )
+
+    route_source: "_common__.RoutePoint | None" = betterproto2.field(
+        2, betterproto2.TYPE_ENUM, optional=True
+    )
+
+    route_destination: "_common__.RoutePoint | None" = betterproto2.field(
+        3, betterproto2.TYPE_ENUM, optional=True
+    )
+
+
+default_message_pool.register_message("nf.telemetry", "TaskStatus", TaskStatus)
+
+
+@dataclass(eq=False, repr=False)
 class TelemetryBatchUpdate(betterproto2.Message):
     """
     the frame sent over the wire
@@ -706,6 +725,10 @@ class TelemetryItem(betterproto2.Message):
 
     visibility_states: "VisibilityStates | None" = betterproto2.field(
         20, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
+    task_status: "TaskStatus | None" = betterproto2.field(
+        22, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
     retain_key: "str | None" = betterproto2.field(

@@ -10,6 +10,7 @@ __all__ = (
     "LerobotSessionStatus",
     "LerobotStatus",
     "Pose",
+    "RoutePoint",
     "Vec3",
 )
 
@@ -182,6 +183,54 @@ class LerobotStatus(betterproto2.Enum):
             "LEROBOTSTATUS_EVAL_ACTIVE": 6,
             "LEROBOTSTATUS_EVAL_ALL_COMPLETE": 8,
             "LEROBOTSTATUS_ERROR": 7,
+        }
+
+
+class RoutePoint(betterproto2.Enum):
+    """
+    Points which can be set as the source or destination for auto pick and drop.
+    """
+
+    NA = 0
+
+    ALL_TARGETS = 1
+
+    USER_TARGETS = 2
+
+    TRASH = 3
+
+    HAMPER = 4
+
+    TOYBOX = 5
+
+    GAMEPAD = 6
+
+    ORIGIN = 7
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "ROUTEPOINT_NA",
+            1: "ROUTEPOINT_ALL_TARGETS",
+            2: "ROUTEPOINT_USER_TARGETS",
+            3: "ROUTEPOINT_TRASH",
+            4: "ROUTEPOINT_HAMPER",
+            5: "ROUTEPOINT_TOYBOX",
+            6: "ROUTEPOINT_GAMEPAD",
+            7: "ROUTEPOINT_ORIGIN",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "ROUTEPOINT_NA": 0,
+            "ROUTEPOINT_ALL_TARGETS": 1,
+            "ROUTEPOINT_USER_TARGETS": 2,
+            "ROUTEPOINT_TRASH": 3,
+            "ROUTEPOINT_HAMPER": 4,
+            "ROUTEPOINT_TOYBOX": 5,
+            "ROUTEPOINT_GAMEPAD": 6,
+            "ROUTEPOINT_ORIGIN": 7,
         }
 
 

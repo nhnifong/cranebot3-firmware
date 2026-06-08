@@ -209,6 +209,12 @@ message MoveGripperTo {
   }
 }
 
+// Set either the destination or source of auto pick and place
+message SetPoint {
+  optional nf.common.RoutePoint route_source = 1;
+  optional nf.common.RoutePoint route_destination = 2;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -226,8 +232,7 @@ message ControlItem {
     SingleComponentAction single_component_action = 12;
     ManageLerobotSession manage_lerobot_session = 13;
     MoveGripperTo move_gripper_to = 14;
-
-    // next id = 15
+    SetPoint set_point = 15;
   }
 }
 

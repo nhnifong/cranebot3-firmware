@@ -19,6 +19,7 @@ __all__ = (
     "ManageLerobotSession",
     "MoveGripperTo",
     "ScaleRoom",
+    "SetPoint",
     "SetSwingCancellation",
     "SingleComponentAction",
 )
@@ -467,6 +468,10 @@ class ControlItem(betterproto2.Message):
         14, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    set_point: "SetPoint | None" = betterproto2.field(
+        15, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
@@ -608,6 +613,24 @@ class ScaleRoom(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.control", "ScaleRoom", ScaleRoom)
+
+
+@dataclass(eq=False, repr=False)
+class SetPoint(betterproto2.Message):
+    """
+    Set either the destination or source of auto pick and place
+    """
+
+    route_source: "_common__.RoutePoint | None" = betterproto2.field(
+        1, betterproto2.TYPE_ENUM, optional=True
+    )
+
+    route_destination: "_common__.RoutePoint | None" = betterproto2.field(
+        2, betterproto2.TYPE_ENUM, optional=True
+    )
+
+
+default_message_pool.register_message("nf.control", "SetPoint", SetPoint)
 
 
 @dataclass(eq=False, repr=False)
