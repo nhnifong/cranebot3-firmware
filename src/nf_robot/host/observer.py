@@ -3080,7 +3080,7 @@ def main():
             run_ortho=(not args.no_ortho),
             auto_start=args.auto_start,
             local_models=args.local_models,
-            use_arp_grasp=!args.lerobot_grasp,
+            use_arp_grasp=(not args.lerobot_grasp),
             debug=args.debug
         )
 
