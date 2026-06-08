@@ -3063,7 +3063,7 @@ def main():
     parser.add_argument("--no_ortho", action="store_true", help="Disable orthographic floor projection and its video streams")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
-    parser.add_argument("--arp_grasp", action="store_true", help="Use arp_execute_grasp (centering net) instead of act_execute_grasp (ACT policy) for the Arpeggio gripper")
+    parser.add_argument("--lerobot_grasp", action="store_true", help="Use start_episode in a connected lerobot eval session for grasping isntead of centering net")
     parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     args = parser.parse_args()
 
@@ -3072,7 +3072,17 @@ def main():
         logging.getLogger('nf_robot').setLevel(logging.DEBUG)
 
     async def run_async():
-        runner = AsyncObserver(False, args.config, telemetry_env=args.telemetry_env, run_ai=(not args.no_ai), run_ortho=(not args.no_ortho), auto_start=args.auto_start, local_models=args.local_models, use_arp_grasp=args.arp_grasp, debug=args.debug)
+        runner = AsyncObserver(
+            False,
+            args.config,
+            telemetry_env=args.telemetry_env,
+            run_ai=(not args.no_ai),
+            run_ortho=(not args.no_ortho),
+            auto_start=args.auto_start,
+            local_models=args.local_models,
+            use_arp_grasp=!args.lerobot_grasp,
+            debug=args.debug
+        )
 
         # Idempotent stop trigger
         def stop():

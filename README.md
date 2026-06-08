@@ -38,7 +38,7 @@ options:
   --no_ai               Disable the use of the target identificaiton model.
   --auto_start          Automatically unpark and start cleaning when all components connect
   --local_models        Use local models from models/ rather than downloading the production models from huggingface (applicable to the target identification model only)
-  --arp_grasp           Use arp_execute_grasp (centering net) instead of act_execute_grasp (ACT policy) for the Arpeggio gripper
+  --lerobot_grasp       Issue start episode commands to a connected lerobot eval session for grasping. False by default and loads the centering net unless --no_ai is set.
   --debug               Enable DEBUG level logging
 
 ### Minimum system specs
