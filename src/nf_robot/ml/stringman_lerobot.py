@@ -247,7 +247,7 @@ class StringmanLeRobot(Robot):
             self._handle_swing_cancellation(item.swing_cancellation_state)
 
     def _handle_pos_estimate(self, item: telemetry.PositionEstimate):
-        self.last_observed_vel = item.gantry_velocity
+        self.last_observed_vel = tonp(item.gantry_velocity)
 
         if item.gantry_position:
             self.last_gantry_pos = tonp(item.gantry_position)
@@ -428,9 +428,9 @@ class StringmanLeRobot(Robot):
             targets[name] = (bearing, float(np.linalg.norm(delta)))
 
         return {
-            'vel_x': float(self.last_observed_vel.x),
-            'vel_y': float(self.last_observed_vel.y),
-            'vel_z': float(self.last_observed_vel.z),
+            'vel_x': float(self.last_observed_vel[0]),
+            'vel_y': float(self.last_observed_vel[1]),
+            'vel_z': float(self.last_observed_vel[2]),
             
             "wrist_speed": float(self.last_wrist_speed),
             "finger_speed": float(self.last_finger_speed),
