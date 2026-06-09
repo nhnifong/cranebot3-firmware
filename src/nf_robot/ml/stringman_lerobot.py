@@ -356,21 +356,24 @@ class StringmanLeRobot(Robot):
         stream = next(s for s in container.streams if s.type == 'video')
         stream.thread_type = "SLICE"
         
-        for av_frame in container.decode(stream):
-            if self.stop_video_events[feed_num].is_set():
-                break
+        try:
+            for av_frame in container.decode(stream):
+                if self.stop_video_events[feed_num].is_set():
+                    break
 
-            frame = av_frame.to_ndarray(format='rgb24')
-            target_w, target_h = self.camera_specs[feed_num]
-            if frame.shape[0] != target_h or frame.shape[1] != target_w:
-                frame = cv2.resize(frame, (target_w, target_h))
-                
-            with self.camera_locks[feed_num]:
-                self.last_images[feed_num] = frame
-                
-        if 'container' in locals():
-            container.close()
-        print(f"Stream {stream_url} closed (feed {feed_num})")
+                frame = av_frame.to_ndarray(format='rgb24')
+                target_w, target_h = self.camera_specs[feed_num]
+                if frame.shape[0] != target_h or frame.shape[1] != target_w:
+                    frame = cv2.resize(frame, (target_w, target_h))
+                    
+                with self.camera_locks[feed_num]:
+                    self.last_images[feed_num] = frame
+        except av.error.TimeoutError:
+            return
+        finally:
+            if 'container' in locals():
+                container.close()
+            print(f"Stream {stream_url} closed (feed {feed_num})")
 
     def _handle_raw_commanded_vel(self, item: telemetry.CommandedVelocity):
         # trained on commanded velocity in the gripper image frame of reference
@@ -783,7 +786,6 @@ def eval_episode(
 
     timestamp = 0
     start_episode_t = time.perf_counter()
-    print('Eval episode started')
     robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_ACTIVE))
     
     policy.reset()
@@ -797,7 +799,6 @@ def eval_episode(
         if events['end_recording']:
             break
         if events["stop"]:
-            print('Eval stopped via command')
             events["stop"] = False
             break
         obs = robot.get_observation()
@@ -835,7 +836,6 @@ def eval_episode(
         time.sleep(max(0, 1 / fps - dt_s))
         timestamp = time.perf_counter() - start_episode_t
 
-    print('Eval episode finished')
     robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_IDLE))
     robot.send_action({
         "vel_x": 0.0, "vel_y": 0.0, "vel_z": 0.0,
@@ -925,7 +925,6 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote
             continue
         
         events['start'] = False
-        print("Starting Evaluation Episode")
         
         eval_episode(
             robot=robot,

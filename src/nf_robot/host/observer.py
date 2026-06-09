@@ -91,6 +91,14 @@ CLOSED = 90
 POLE = np.array([0,0,0.5334])
 GRIPPER_HEIGHT_OVER_TARGET = np.array([0,0,0.3])
 
+# mapping from enums to MARKER_NAMES in cv_common
+ROUTE_POINT_TAG_NAMES = {
+    common.RoutePoint.HAMPER: "hamper",
+    common.RoutePoint.TOYBOX: "toys",
+    common.RoutePoint.TRASH: "trash",
+    common.RoutePoint.GAMEPAD: "gamepad",
+}
+
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
     Saves an image to the unprocessed directory. 
@@ -350,6 +358,7 @@ class AsyncObserver:
         r = await self.flush_tele_buffer()
 
     async def _handle_move_gripper_to(self, item: control.MoveGripperTo):
+        """Handle the Go Here command"""
         goal_pos = None
         if item.target_id is not None:
             # derive target position from target
@@ -868,6 +877,7 @@ class AsyncObserver:
 
         """
         if self.motion_task is not None and not self.motion_task.done():
+            logger.debug(f'current motion task {self.motion_task} done={self.motion_task.done()}')
             logger.info(f"Cancelling previous motion task: {self.motion_task.get_name()}")
             self.motion_task.cancel()
             try:
@@ -1380,7 +1390,7 @@ class AsyncObserver:
                 current_action="Moving gripper to origin",
             ))
             self.gantry_goal_pos = np.array([0,0,1.2])
-            await self.seek_gantry_goal()
+            await self.seek_gantry_goal(head_turn=False)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=90.0,
@@ -2049,6 +2059,7 @@ class AsyncObserver:
         self.pe.run = False
         self.pe_task.cancel()
         tasks = [self.pe_task, self.keeper]
+        tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         if self.cloud_telem:
             self.cloud_telem.cancel()
             tasks.append(self.cloud_telem)
@@ -2073,7 +2084,6 @@ class AsyncObserver:
             self.passive_safety_task.cancel()
             tasks.append(self.passive_safety_task)
 
-        tasks.extend([client.shutdown() for client in self.bot_clients.values()])
         try:
             result = await asyncio.gather(*tasks)
         except asyncio.exceptions.CancelledError:
@@ -2211,15 +2221,20 @@ class AsyncObserver:
         self.gantry_goal_pos = None
         self.send_ui(named_position=telemetry.NamedObjectPosition(name='gantry_goal_marker')) # not setting position causes it to be hidden
 
-    async def seek_gantry_goal(self):
+    async def seek_gantry_goal(self, head_turn=True, auto_altitude=True):
         """
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
         This is a motion task
+        when head_turn, turn gripper to face direction of motion.
+        when auto_altitude, room traversal is performed at an ideal gantry altitude
         """
         GOAL_PROXIMITY_M = 0.1
-        MAX_SPEED = 0.24 # GANTRY_SPEED_MPS
+        MAX_SPEED = 0.26 # GANTRY_SPEED_MPS
         ACCEL = 0.15     # m/s^2
         LOOP_SLEEP_S = 0.1
+        IDEAL_GANTRY_ALTITUDE = 1.3 # meters. ideal gantry height for room traversal
+        CLIMB_RATE = 0.15 # m/s, constant rate of altitude change for auto_altitude
+        ALTITUDE_DEADBAND_M = 0.05 # meters, tolerance to avoid hunting around target altitude
 
         if self.gantry_goal_pos is None:
             return
@@ -2228,6 +2243,7 @@ class AsyncObserver:
         braking_distance = (MAX_SPEED**2) / (2 * ACCEL)
         start_pos = self.pe.gant_pos
         current_speed = 0.0
+        final_approach = False # latches once True so the altitude target doesn't flip back to cruise
         
         try:
             self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.gantry_goal_pos), name='gantry_goal_marker'))
@@ -2240,16 +2256,17 @@ class AsyncObserver:
                 if dist_to_goal < GOAL_PROXIMITY_M:
                     break
 
-                # Calculate target speed based on distance from start (ramp up) 
+                # Calculate target speed based on distance from start (ramp up)
                 # and distance to goal (ramp down)
                 # v = sqrt(2 * a * d)
+                ramp_dist_to_goal = np.linalg.norm(vector[:2]) if auto_altitude else dist_to_goal
                 speed_ramp_up = np.sqrt(2 * ACCEL * max(dist_from_start, 0.01))
-                speed_ramp_down = np.sqrt(2 * ACCEL * dist_to_goal)
-                
+                speed_ramp_down = np.sqrt(2 * ACCEL * ramp_dist_to_goal)
+
                 # Target speed is the lowest of the ramps or the max allowable speed
                 target_speed = min(speed_ramp_up, speed_ramp_down, MAX_SPEED)
-                
-                # Smoothly interpolate current_speed toward target_speed to prevent 
+
+                # Smoothly interpolate current_speed toward target_speed to prevent
                 # instantaneous velocity jumps between loop iterations
                 step = ACCEL * LOOP_SLEEP_S
                 if current_speed < target_speed:
@@ -2257,14 +2274,42 @@ class AsyncObserver:
                 else:
                     current_speed = max(current_speed - step, target_speed)
 
-                self.gripper_client.look_towards_vector(vector[:2])
+                if head_turn:
+                    self.gripper_client.look_towards_vector(vector[:2])
 
-                # Normalize vector and command movement
-                await self.move_direction_speed(vector / dist_to_goal, current_speed, self.pe.gant_pos)
+                if auto_altitude:
+                    # Like an aircraft: climb/descend at a constant rate, cruising at
+                    # IDEAL_GANTRY_ALTITUDE, then ramp down to the goal's altitude.
+                    # Start descending as soon as the remaining horizontal travel time
+                    # (at best case speed) wouldn't be enough to reach the goal altitude
+                    # at CLIMB_RATE, so short traversals may never reach cruise altitude.
+                    horizontal_dist = np.linalg.norm(vector[:2])
+                    current_altitude = self.pe.gant_pos[2]
+                    goal_altitude = self.gantry_goal_pos[2]
+                    altitude_error = goal_altitude - current_altitude
+                    time_to_arrive = horizontal_dist / MAX_SPEED
+                    time_to_descend = abs(altitude_error) / CLIMB_RATE
+                    if time_to_arrive <= time_to_descend:
+                        final_approach = True
+                    target_altitude = goal_altitude if final_approach else IDEAL_GANTRY_ALTITUDE
+
+                    altitude_diff = target_altitude - current_altitude
+                    if abs(altitude_diff) < ALTITUDE_DEADBAND_M:
+                        vertical_speed = 0.0
+                    else:
+                        vertical_speed = np.sign(altitude_diff) * CLIMB_RATE
+
+                    horizontal_uvec = vector[:2] / horizontal_dist if horizontal_dist > 1e-5 else np.zeros(2)
+                    velocity = np.array([*(horizontal_uvec * current_speed), vertical_speed])
+                    await self.move_direction_speed(velocity, None, self.pe.gant_pos)
+                else:
+                    # Normalize vector and command movement
+                    await self.move_direction_speed(vector / dist_to_goal, current_speed, self.pe.gant_pos)
                 await asyncio.sleep(LOOP_SLEEP_S)
 
             logger.info(f'Goal reached {tuple(self.gantry_goal_pos)}')
         except asyncio.CancelledError:
+            logger.debug('Goal move cancelled')
             raise
         finally:
             self.slow_stop_all_spools()
@@ -2602,11 +2647,11 @@ class AsyncObserver:
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
-        GANTRY_HEIGHT_OVER_TARGET = 0.8
-        GANTRY_HEIGHT_OVER_DROPOFF = 0.7
-        RELAXED_OPEN = 0 # enough to drop something
+        GANTRY_HEIGHT_OVER_TARGET = np.array([0,0,0.9])
+        GANTRY_HEIGHT_OVER_DROPOFF = np.array([0,0,0.7])
+        RELAXED_OPEN = -7 # Open enough to drop and that fingers cannot be seen in frame
         DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
-        LOOP_DELAY = 0.5
+        LOOP_DELAY = 0.4
         END_LOOP_TIMEOUT = 10
 
         # TODO if no lerobot session is connected with an appropriate model or --arp_grasp is false, this cannot work.
@@ -2618,40 +2663,47 @@ class AsyncObserver:
             gtask = None
             while self.run_command_loop:
 
-                next_target = self.target_queue.get_best_target()
-                if next_target is None:
-                    if gtask is not None:
-                        gtask.cancel()
-                    self.gantry_goal_pos = None
-                    if time.time() > target_seen_t + END_LOOP_TIMEOUT:
-                        logger.info('Looks clean enough to me!')
-                        return
-                    await asyncio.sleep(LOOP_DELAY)
-                    continue
-                target_seen_t = time.time()
+                if self.pnp_src in (common.RoutePoint.ALL_TARGETS, common.RoutePoint.USER_TARGETS):
+                    next_target = self.target_queue.get_best_target()
+                    if next_target is None:
+                        if gtask is not None:
+                            gtask.cancel()
+                        self.gantry_goal_pos = None
+                        if time.time() > target_seen_t + END_LOOP_TIMEOUT:
+                            logger.info('Looks clean enough to me!')
+                            return
+                        await asyncio.sleep(LOOP_DELAY)
+                        continue
+                    target_seen_t = time.time()
 
-                self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
-                self.send_tq_to_ui()
+                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
+                    self.send_tq_to_ui()
 
-                # pick Z position for gantry
-                # if we are too close to the drop point right now, the z position has to be our current z so we don't get hung up on the basket by going down too soon.
-                # otherwise use the normal value
-                if np.linalg.norm(self.pe.gant_pos - (drop_point + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF]))) < 0.5:
-                    z_pos = self.pe.gant_pos[2]
-                else:
-                    z_pos = GANTRY_HEIGHT_OVER_TARGET
-                goal_pos = next_target.position + np.array([0, 0, z_pos])
+                    # pick Z position for gantry
+                    # if we are too close to the drop point right now, the z position has to be our current z so we don't get hung up on the basket by going down too soon.
+                    # otherwise use the normal value
+                    if np.linalg.norm(self.pe.gant_pos - (drop_point + GANTRY_HEIGHT_OVER_DROPOFF[2])) < 0.5:
+                        z_pos = self.pe.gant_pos[2]
+                    else:
+                        z_pos = GANTRY_HEIGHT_OVER_TARGET[2]
+                    goal_pos = next_target.position + np.array([0, 0, z_pos])
+
+                elif self.pnp_src in ROUTE_POINT_TAG_NAMES:
+                    next_target = None
+                    goal_pos = tonp(self.config.named_positions[ROUTE_POINT_TAG_NAMES[self.pnp_src]]) + GANTRY_HEIGHT_OVER_TARGET
+                elif self.pnp_src == common.RoutePoint.ORIGIN:
+                    next_target = None
+                    goal_pos = GANTRY_HEIGHT_OVER_TARGET # over origin
+
                 self.gantry_goal_pos = goal_pos
-
-                # gantry is now heading for a position over next_target
-                # wait only one second for it to arrive.
                 if gtask is None or gtask.done():
                     gtask = asyncio.create_task(self.seek_gantry_goal())
                 done, pending = await asyncio.wait([gtask], timeout=1)
                 
                 if gtask in pending:
                     # if doesn't arrive in one second, run target selection again since a better one might have appeared or the user might have put one in their queue
-                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
+                    if next_target is not None:
+                        self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
                     continue
 
                 if self.gripper_client is None:
@@ -2664,14 +2716,16 @@ class AsyncObserver:
                 success = await self.execute_grasp()
                 logger.info(f'Grasp succeeded={success} took {time.time() - start:.2f}s')
                 if not success:
-                    # just pick another target, but consider downranking this object or something.
-                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
-                    self.send_tq_to_ui()
+                    if next_target is not None:
+                        # just pick another target, but consider downranking this object or something.
+                        self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
+                        self.send_tq_to_ui()
                     await asyncio.sleep(LOOP_DELAY)
                     continue
                 else:
-                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.PICKED_UP)
-                    self.send_tq_to_ui()
+                    if next_target is not None:
+                        self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.PICKED_UP)
+                        self.send_tq_to_ui()
                     logger.info('Object picked up')
 
                 # tension now just in case.
@@ -2680,35 +2734,32 @@ class AsyncObserver:
                 # Choose drop point. default to origin
                 drop_point = np.zeros(3)
 
-                if self.pnp_dst == common.RoutePoint.NA:
+                if self.pnp_dst == common.RoutePoint.NA and next_target is not None:
                     # read drop point from target
+                    # TODO currently these are not populated with useful data.
                     if not isinstance(next_target.dropoff, str):
                         drop_point = next_target.dropoff
                     # otherwise go to the named drop point
                     if next_target.dropoff in self.config.named_positions:
                         drop_point = tonp(self.config.named_positions[next_target.dropoff])
 
-                elif self.pnp_dst == common.RoutePoint.HAMPER:
-                    drop_point = tonp(self.config.named_positions["hamper"]) # these match MARKER_NAMES in cv_common
-                elif self.pnp_dst == common.RoutePoint.TOYBOX:
-                    drop_point = tonp(self.config.named_positions["toys"])
-                elif self.pnp_dst == common.RoutePoint.TRASH:
-                    drop_point = tonp(self.config.named_positions["trash"])
-                elif self.pnp_dst == common.RoutePoint.GAMEPAD:
-                    drop_point = tonp(self.config.named_positions["gamepad"])
+                elif self.pnp_dst in ROUTE_POINT_TAG_NAMES:
+                    # Typical path
+                    drop_point = tonp(self.config.named_positions[ROUTE_POINT_TAG_NAMES[self.pnp_dst]])
                 elif self.pnp_dst == common.RoutePoint.ORIGIN:
                     drop_point = np.zeros(3)
 
                 # fly to to drop point
                 logger.info(f'Flying to drop point {drop_point}')
-                self.gantry_goal_pos = drop_point + np.array([0,0,GANTRY_HEIGHT_OVER_DROPOFF])
+                self.gantry_goal_pos = drop_point + GANTRY_HEIGHT_OVER_DROPOFF
                 await self.seek_gantry_goal()
                 # open gripper
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': RELAXED_OPEN}))
-                # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
-                await asyncio.sleep(DELAY_AFTER_DROP)
-                self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.DROPPED)
-                self.send_tq_to_ui()
+                if next_target is not None:
+                    # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
+                    await asyncio.sleep(DELAY_AFTER_DROP)
+                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.DROPPED)
+                    self.send_tq_to_ui()
                 # keep score
 
 
@@ -2726,7 +2777,7 @@ class AsyncObserver:
         if isinstance(self.gripper_client, ArpeggioGripperClient):
             if self.use_arp_grasp:
                 return await self.arp_execute_grasp()
-            return await self.act_execute_grasp()
+            return await self.lerobot_grasp()
         else:
             return await self.pilot_execute_grasp()
 
@@ -2991,7 +3042,7 @@ class AsyncObserver:
         finally:
             self.slow_stop_all_spools()
 
-    async def act_execute_grasp(self):
+    async def lerobot_grasp(self):
         """
         Execute a grasp on an arp gripper using a lerobot ACT policy.
         End the episode either when a timeout is reached, when motion ceases for some time, or when a grasp condition is reached.
@@ -3001,6 +3052,10 @@ class AsyncObserver:
 
         python -m nf_robot.ml.stringman_lerobot eval   --robot_id=lan   --server_address=ws://localhost:4245   --policy_id=outputs/train/grasp_remote_act_eggs_2/checkpoints/last/pretrained_model/   --dataset_id=naavox/grasping_dataset_eggs_fix
         """
+        if self.lerobot_process_pid is None:
+            logger.debug('lerobot_grasp relies on a connected model. No session is started. Either start one or rerun without --lerobot_grasp')
+            return False
+
         self.pe.finger_pressure_rising.clear()
         try:
             self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_START))
@@ -3011,7 +3066,7 @@ class AsyncObserver:
                 await asyncio.sleep(0.2)
                 applying_force = self.pe.finger_pressure_rising.is_set()
                 gripper_height = self.pe.grip_pose[1][2]
-                lifted = gripper_height > 0.2
+                lifted = gripper_height > 0.4
             logger.info(f'Ended grasp lifted={lifted} applying_force={applying_force} time_rem={timeout - time.time():.1f}s')
             # return value indicates whether grasp was successful
             return lifted and applying_force
@@ -3019,6 +3074,7 @@ class AsyncObserver:
             raise
         finally:
             self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_STOP))
+            await asyncio.sleep(0.01)
             self.slow_stop_all_spools()
 
     def _handle_collect_images(self):
