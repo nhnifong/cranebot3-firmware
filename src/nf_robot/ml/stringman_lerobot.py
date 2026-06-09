@@ -43,11 +43,29 @@ IMG_RES = 384
 
 CHECKPOINT_EVERY = 10
 
+# feed_number -> observation key name
+_FEED_NAMES: dict[int, str] = {
+    0: "gripper_camera",
+    1: "anchor_camera_0",
+    2: "anchor_camera_1",
+    3: "overhead_camera",
+}
+
+# camera_mode -> {feed_number: (width, height)}
+_CAMERA_MODES: dict[str, dict[int, tuple[int, int]]] = {
+    "gripper_224":       {0: (224, 224)},
+    "gripper_384":       {0: (384, 384)},
+    "gripper_floor_224": {0: (224, 224), 3: (224, 224)},
+    "gripper_floor_384": {0: (384, 384), 3: (384, 384)},
+    "all":               {0: (384, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
+}
+
 @RobotConfig.register_subclass("stringman")
 @dataclass
 class StringmanConfig(RobotConfig):
     uri: str
     remote_stream_token: str | None = None
+    camera_mode: str = "all"
 
 def decode_image(jpeg_bytes):
     try:
@@ -103,14 +121,19 @@ class StringmanLeRobot(Robot):
         self.last_spin = 0.0
 
         self.events = events
-        
-        # State mapping for feeds 0 (gripper)
-        self.camera_locks = {0: threading.Lock()}
+
+        if config.camera_mode not in _CAMERA_MODES:
+            raise ValueError(f"Unknown camera_mode '{config.camera_mode}'. Valid: {list(_CAMERA_MODES)}")
+        # {feed_number: (width, height)}
+        self.camera_specs: dict[int, tuple[int, int]] = _CAMERA_MODES[config.camera_mode]
+
+        self.camera_locks = {f: threading.Lock() for f in self.camera_specs}
         self.video_threads = {}
-        self.stop_video_events = {0: threading.Event()}
+        self.stop_video_events = {f: threading.Event() for f in self.camera_specs}
 
         self.last_images = {
-            0: np.zeros((IMG_RES, IMG_RES, 3), dtype=np.uint8),
+            f: np.zeros((h, w, 3), dtype=np.uint8)
+            for f, (w, h) in self.camera_specs.items()
         }
 
     @cached_property
@@ -126,7 +149,8 @@ class StringmanLeRobot(Robot):
     @cached_property
     def _cameras_ft(self) -> dict[str, tuple]:
         return {
-            "gripper_camera": (IMG_RES, IMG_RES, 3),
+            _FEED_NAMES[f]: (h, w, 3)
+            for f, (w, h) in self.camera_specs.items()
         }
 
     @cached_property
@@ -270,8 +294,7 @@ class StringmanLeRobot(Robot):
     def _handle_video_ready(self, item: telemetry.VideoReady):
         feed_num = item.feed_number
 
-        # feed 0 = gripper camera
-        if feed_num not in [0]:
+        if feed_num not in self.camera_specs:
             return
 
         # Return if this feed's stream is already alive
@@ -338,8 +361,9 @@ class StringmanLeRobot(Robot):
                 break
 
             frame = av_frame.to_ndarray(format='rgb24')
-            if frame.shape[0] != IMG_RES or frame.shape[1] != IMG_RES:
-                frame = cv2.resize(frame, (IMG_RES, IMG_RES))
+            target_w, target_h = self.camera_specs[feed_num]
+            if frame.shape[0] != target_h or frame.shape[1] != target_w:
+                frame = cv2.resize(frame, (target_w, target_h))
                 
             with self.camera_locks[feed_num]:
                 self.last_images[feed_num] = frame
@@ -371,7 +395,7 @@ class StringmanLeRobot(Robot):
 
     def disconnect(self) -> None:
         print("Disconnecting")
-        for i in [0]:
+        for i in self.stop_video_events:
             self.stop_video_events[i].set()
         
         if self.websocket is not None:
@@ -390,7 +414,7 @@ class StringmanLeRobot(Robot):
 
     def get_observation(self) -> dict[str, Any]:
         images = {}
-        for feed_num in [0]:
+        for feed_num in self.camera_specs:
             with self.camera_locks[feed_num]:
                 images[feed_num] = self.last_images[feed_num].copy()
 
@@ -457,7 +481,7 @@ class StringmanLeRobot(Robot):
             "hang_pos_y": float(self.last_hang_pos[1]),
             "hang_pos_z": float(self.last_hang_pos[2]),
 
-            "gripper_camera": images[0],
+            **{_FEED_NAMES[f]: img for f, img in images.items()},
         }
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
@@ -567,7 +591,14 @@ def append_episode_metadata(dataset: LeRobotDataset, robot_id: str):
     with path.open("a") as f:
         f.write(json.dumps(entry) + "\n")
 
-def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None):
+KNOWN_DATASETS = {
+    'naavox/tidy_up':           'gripper_floor_384',
+    'naavox/tidy_up_test':      'gripper_floor_384',
+    'naavox/simple_grasp':      'gripper_384',
+    'naavox/simple_grasp_224':  'gripper_224',
+}
+
+def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None, camera_mode="all"):
     class GracefulExit(Exception):
         pass
 
@@ -579,6 +610,10 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
     signal.signal(signal.SIGINT, handle_shutdown_signal)
 
+
+    if hf_repo_id in KNOWN_DATASETS:
+        camera_mode = KNOWN_DATASETS[hf_repo_id]
+
     events={
         'episode_abandon': False,
         'end_recording': False,
@@ -587,7 +622,7 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
     }
 
     # connect to the robot right away because it is our channel to send error messages back to the user.
-    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token), events)
+    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode), events)
     robot.connect()
     time.sleep(2)
     if not robot.is_connected:
@@ -808,12 +843,26 @@ def eval_episode(
         "finger_speed": 0.0
     })
 
-def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote_stream_token=None):
+KNOWN_POLICIES = {
+    'naavox/multitask-dit':   'gripper_384',
+    'naavox/multitask-dit-2': 'gripper_384',
+    'naavox/multitask-dit-4': 'gripper_floor_384',
+    'naavox/multitask-dit-3': 'gripper_floor_384',
+    'naavox/multitask-dit-6': 'gripper_floor_384',
+    'naavox/multitask-dit-7': 'gripper_384',
+    'naavox/multitask-dit-8': 'gripper_384',
+    'naavox/dit-grasp-1':     'gripper_224',
+}
+
+def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote_stream_token=None, camera_mode="all"):
     import torch
     import json
     from huggingface_hub import hf_hub_download
     from lerobot.policies.factory import make_policy, make_pre_post_processors
     from lerobot.configs.policies import PreTrainedConfig
+
+    if policy_repo_id in KNOWN_POLICIES:
+        camera_mode = KNOWN_POLICIES[policy_repo_id]
 
     events = {
         'episode_abandon': False,
@@ -856,7 +905,7 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote
     print("Policy loaded.")
     
     print(f"Connecting to robot...")
-    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token), events)
+    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode), events)
     robot.connect()
     
     # init_rerun(session_name="stringman_eval")
@@ -909,12 +958,16 @@ if __name__ == "__main__":
     parent_parser.add_argument("--server_address", default="ws://localhost:4245", help="WebSocket server address (not including path)")
     parent_parser.add_argument("--remote_stream_token", help="Token of authorized user. must be supplied in order to access remote streams. When set, recording will only use using media.neufangled.com and ignore local URIs")
 
+    camera_mode_choices = list(_CAMERA_MODES.keys())
+
     record_parser = subparsers.add_parser('record', parents=[parent_parser], help="Record new episodes")
     record_parser.add_argument("--repo_id", default="naavox/grasping_dataset", help="repo id of dataset to append to")
     record_parser.add_argument("--upload", default=True, help="upload data to huggingface when complete")
+    record_parser.add_argument("--camera_mode", default="all", choices=camera_mode_choices, help="which cameras to record")
 
     eval_parser = subparsers.add_parser('eval', parents=[parent_parser], help="Evaluate existing policy")
     eval_parser.add_argument("--policy_id", default="naavox/grasping_act_policy", help="repo id of policy to load")
+    eval_parser.add_argument("--camera_mode", default="all", choices=camera_mode_choices, help="must match the camera setup the policy was trained on")
     
     args = parser.parse_args()
     uri = f'{args.server_address}/control/{args.robot_id}'
@@ -923,6 +976,6 @@ if __name__ == "__main__":
     print(f'Connecting to robot at {uri}')
 
     if args.command == 'eval':
-        eval_until_disconnected(uri, args.policy_id, args.robot_id, remote_stream_token=args.remote_stream_token)
+        eval_until_disconnected(uri, args.policy_id, args.robot_id, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode)
     else:
-        record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token)
+        record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode)
