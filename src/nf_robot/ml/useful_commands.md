@@ -94,9 +94,10 @@ lerobot-train \
     --batch_size=32
 
 lerobot-train \
-  --dataset.repo_id=naavox/simple_grasp \
-  --output_dir=./outputs/multitask_dit_training_8 \
-  --steps=100000 \
+  --dataset.repo_id=naavox/simple_grasp_224 \
+  --dataset.root=datasets/simple_grasp_224 \
+  --output_dir=./outputs/dit-grasp-1/training \
+  --steps=30000 \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
   --policy.type=multi_task_dit \
@@ -111,23 +112,19 @@ lerobot-train \
   --policy.num_integration_steps=100 \
   --policy.integration_method=euler \
   --policy.sigma_min=0.0 \
-  --policy.image_resize_shape=[256,256] \
-  --policy.image_crop_shape=[224,224] \
-  --policy.image_crop_is_random=true \
-  --policy.repo_id="naavox/multitask-dit-8" \
+  --policy.repo_id="naavox/dit-grasp-1" \
   --wandb.enable=false \
   --tolerance_s=0.001 \
   --policy.push_to_hub=true \
-  --save_freq=5000 \
+  --save_freq=1000 \
   --batch_size=92
 
 train on modal
 
 python experiments/lerobot_train_modal.py \
-  --dataset.repo_id naavox/tidy_up   \
-  --output_dir /multitask_dit_data/tidy_modal_2   \
-  --dataset.root /multitask_dit_data/tidy_up   \
-  --steps=40000   \
+  --dataset.repo_id=naavox/simple_grasp_224 \
+  --output_dir /multitask_dit_data/tidy_modal_10 \
+  --steps=30000 \
   --dataset.image_transforms.enable=true   \
   --dataset.image_transforms.max_num_transforms=3   \
   --policy.type=multi_task_dit   \
@@ -142,16 +139,13 @@ python experiments/lerobot_train_modal.py \
   --policy.num_integration_steps=100   \
   --policy.integration_method=euler   \
   --policy.sigma_min=0.0   \
-  --policy.image_resize_shape=[256,256]   \
-  --policy.image_crop_shape=[224,224]   \
-  --policy.image_crop_is_random=true   \
-  --policy.repo_id="naavox/multitask-dit-5"   \
+  --policy.repo_id="naavox/dit-grasp-1"   \
   --policy.push_to_hub=true \
   --wandb.enable=false \
   --batch_size=210 \
   --tolerance_s=0.001 \
   --save_freq=5000 \
-  --num_workers=14
+  --num_workers=13
 
 ```
 

@@ -2602,8 +2602,8 @@ class AsyncObserver:
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
-        GANTRY_HEIGHT_OVER_TARGET = 0.9
-        GANTRY_HEIGHT_OVER_DROPOFF = 0.9
+        GANTRY_HEIGHT_OVER_TARGET = 0.8
+        GANTRY_HEIGHT_OVER_DROPOFF = 0.7
         RELAXED_OPEN = 0 # enough to drop something
         DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
         LOOP_DELAY = 0.5
