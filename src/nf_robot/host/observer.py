@@ -2224,7 +2224,7 @@ class AsyncObserver:
         self.gantry_goal_pos = None
         self.send_ui(named_position=telemetry.NamedObjectPosition(name='gantry_goal_marker')) # not setting position causes it to be hidden
 
-    async def seek_gantry_goal(self, head_turn=True, auto_altitude=True):
+    async def seek_gantry_goal(self, head_turn=False, auto_altitude=True):
         """
         Move towards a goal position, using the constantly updating gantry position provided by the position estimator
         This is a motion task
@@ -2651,7 +2651,7 @@ class AsyncObserver:
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
         GANTRY_HEIGHT_OVER_TARGET = np.array([0,0,0.9])
-        GANTRY_HEIGHT_OVER_DROPOFF = np.array([0,0,0.7])
+        GANTRY_HEIGHT_OVER_DROPOFF = np.array([0,0,1.1])
         RELAXED_OPEN = -7 # Open enough to drop and that fingers cannot be seen in frame
         DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
         LOOP_DELAY = 0.4
