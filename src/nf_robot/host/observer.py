@@ -261,6 +261,7 @@ class AsyncObserver:
         if self.lerobot_process_watcher is None or self.lerobot_process_watcher.done():
             self.last_ep_ctrl_status = common.LerobotStatus.NA
         self.send_ui(episode_control=common.EpisodeControl(status = self.last_ep_ctrl_status))
+        self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=('swingc' in self.active_set), present='.'))
         r = await self.flush_tele_buffer()
 
     async def handle_local_client(self, websocket):
