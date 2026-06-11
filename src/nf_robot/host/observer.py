@@ -427,6 +427,7 @@ class AsyncObserver:
         # run sync_timezone debug command to fix.
         try:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=True, present='.'))
+            r = await self.flush_tele_buffer()
             self.active_set.add('swingc')
             while self.run_command_loop:
                 if self.gripper_client is None:
@@ -440,6 +441,7 @@ class AsyncObserver:
         finally:
             self.active_set.remove('swingc')
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
+            r = await self.flush_tele_buffer()
             self.slow_stop_all_spools()
 
     async def _handle_debug_command(self, item: control.Debug):
