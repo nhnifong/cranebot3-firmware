@@ -469,6 +469,10 @@ class AsyncObserver:
             r = await self.invoke_motion_task(self.ferry('hamper', 'trash'))
         if item.action == 'sync_timezone':
             self.sync_timezone_to_bots()
+        if item.action.startswith('untwist'):
+            parts = item.action.split()
+            if len(parts)==2 and parts[0]=='untwist':
+                await asyncio.create_task(self.gripper_client.send_commands({'untwist': int(parts[1])}))
 
     def sync_timezone_to_bots(self):
         tz = subprocess.check_output(['timedatectl', 'show', '--property=Timezone', '--value']).decode().strip()

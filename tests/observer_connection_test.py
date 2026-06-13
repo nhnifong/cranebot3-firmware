@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import unittest
 from unittest.mock import patch, Mock, ANY, MagicMock, AsyncMock
 from multiprocessing import Pool, Queue
@@ -100,8 +101,14 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         for p in self.patchers:
             p.start()
 
+        # Bind an ephemeral port instead of the default 4245, since a real
+        # observer/robot may already be running on this machine and holding it.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            self.ui_port = s.getsockname()[1]
+
         # Create observer with test default config (no components are known)
-        self.ob = AsyncObserver(terminate_with_ui=False, config_path=None)
+        self.ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=self.ui_port)
         # before running main, set it's zeroconf instance to a mock
         self.zc = MagicMock()
         self.zc.async_close = self.instant_nothing
@@ -197,9 +204,9 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             return mock_instance
 
     async def test_observer_accepts_local_ui_connection(self):
-        """observer should listen for local UI at localhost:4245"""
+        """observer should listen for local UI on localhost"""
         await self.start_observer()
-        async with websockets.connect("ws://127.0.0.1:4245") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.ui_port}") as ws:
             await asyncio.sleep(0.01)
             self.assertFalse(self.ob_task.done(), "Server should still be running after getting a connection")
             await ws.close()

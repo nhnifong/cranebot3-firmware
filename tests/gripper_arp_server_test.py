@@ -27,13 +27,16 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
             patch('nf_robot.robot.gripper_arp_server.ADS1015'),
             patch('nf_robot.robot.gripper_arp_server.AnalogIn'),
             patch('nf_robot.robot.gripper_arp_server.MPU6050'),
-            patch('nf_robot.robot.gripper_arp_server.SimpleSTS3215')
+            patch('nf_robot.robot.gripper_arp_server.SimpleSTS3215'),
+            # Avoid writing a real arp_gripper_state.json into the test working directory.
+            patch.object(GripperArpServer, 'save_state'),
         ]
-        
+
         # Start all patches and unpack the resulting mock objects
-        (self.mock_board, self.mock_busio, self.mock_mac, 
-         self.mock_vl53l1x_class, self.mock_ads_class, self.mock_analog_class, 
-         self.mock_mpu_class, self.mock_sts_class) = [p.start() for p in self.patchers]
+        (self.mock_board, self.mock_busio, self.mock_mac,
+         self.mock_vl53l1x_class, self.mock_ads_class, self.mock_analog_class,
+         self.mock_mpu_class, self.mock_sts_class,
+         self.mock_save_state) = [p.start() for p in self.patchers]
 
         # Configure Rangefinder Mock
         self.mock_range = self.mock_vl53l1x_class.return_value
@@ -77,10 +80,20 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
     async def test_boot_health_no_state_file(self):
         """
         Verify the server safely initializes default state when the JSON state file is missing.
+
+        With no saved wrist angle (defaults to 0) and the mocked motor reporting a
+        raw position of 2048 (180 degrees), getWristAngle's boot reconciliation finds
+        a one-revolution discrepancy: it re-anchors unrolled_wrist_angle to 180 (within
+        [0, 1080], no motion), shifts saved_unrolled_wrist_angle by the same revolution,
+        and records that revolution in total_wrist_turns.
         """
         self.assertFalse(self.server_task.done(), "Server crashed during startup")
-        self.assertEqual(self.server.saved_unrolled_wrist_angle, 0)
+        self.assertEqual(self.server.saved_unrolled_wrist_angle, 360)
         self.assertEqual(self.server.saved_finger_angle, 0)
+        self.assertEqual(self.server.unrolled_wrist_angle, 180)
+        self.assertEqual(self.server.wrist_step_offset, 0.0)
+        self.assertEqual(self.server.total_wrist_turns, -1)
+        self.mock_save_state.assert_called()
 
     async def test_websocket_connection(self):
         """
@@ -143,3 +156,72 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
             
             self.assertTrue(self.server.in_force_mode, "Failed to enter force mode after detecting pressure drop")
             self.assertGreater(self.server.desired_force, 0)
+
+    async def test_boot_reanchor_broadcasts_total_wrist_turns(self):
+        """
+        The one-revolution re-anchor performed during boot (see test_boot_health_no_state_file)
+        must be reported to clients via the 'total_wrist_turns' update key.
+        """
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            data = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.0))
+            self.assertIn('total_wrist_turns', data)
+            self.assertEqual(data['total_wrist_turns'], -1)
+
+    async def test_untwist_command(self):
+        """
+        Verify the 'untwist' command rotates the wrist by whole revolutions using
+        encoder midpoint resets, updates and persists total_wrist_turns, blocks other
+        wrist commands while in progress, and sends a completion confirmation.
+        """
+        self.server.total_wrist_turns = 1
+        self.mock_save_state.reset_mock()
+
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await ws.send(json.dumps({'untwist': 1}))
+
+            # Give the untwist task a moment to start and claim the busy flag.
+            await asyncio.sleep(0.2)
+            self.assertTrue(self.server.wrist_busy, "untwistWrist should mark the wrist busy")
+
+            # Other wrist commands must be ignored while untwisting.
+            stale_angle = self.server.desired_wrist_angle
+            await ws.send(json.dumps({'set_wrist_angle': 999}))
+            await asyncio.sleep(0.1)
+            self.assertNotEqual(self.server.desired_wrist_angle, 999)
+            self.assertEqual(self.server.desired_wrist_angle, stale_angle)
+
+            # Wait for the operation to complete (two encoder resets, ~4.4s of sleeps).
+            # Poll the instance attribute directly rather than counting broadcasts,
+            # since self.update is flushed (and cleared) every ~40ms by
+            # stream_measurements and could easily be missed between polls.
+            for _ in range(80):
+                if not self.server.wrist_busy:
+                    break
+                await asyncio.sleep(0.1)
+            self.assertFalse(self.server.wrist_busy, "untwistWrist did not clear the busy flag")
+
+        self.assertEqual(self.server.total_wrist_turns, 0)
+        self.assertEqual(self.server.wrist_step_offset, 0.0)
+        self.mock_motors.reset_encoder_to_midpoint.assert_called_with(2)  # WRIST
+        self.assertEqual(self.mock_motors.reset_encoder_to_midpoint.call_count, 2)
+        self.mock_save_state.assert_called()
+
+    async def test_untwist_default_uses_total_wrist_turns(self):
+        """
+        Sending 'untwist': null should default to fully untwisting (turns = total_wrist_turns).
+        With total_wrist_turns already at 0, this should be a no-op that still confirms.
+        """
+        self.server.total_wrist_turns = 0
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await ws.send(json.dumps({'untwist': None}))
+
+            completion = None
+            for _ in range(20):
+                data = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.0))
+                if 'untwist_complete' in data:
+                    completion = data['untwist_complete']
+                    break
+            self.assertIsNotNone(completion, "Never received untwist_complete confirmation")
+            self.assertEqual(completion, {'turns_done': 0, 'total_wrist_turns': 0})
+
+        self.assertFalse(self.server.wrist_busy)
