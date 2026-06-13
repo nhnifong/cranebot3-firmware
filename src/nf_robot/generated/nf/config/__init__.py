@@ -9,6 +9,7 @@ __all__ = (
     "Gripper",
     "IndirectLine",
     "ParkData",
+    "PickAndPlaceConstants",
     "Resolution",
     "StringmanPilotConfig",
 )
@@ -183,6 +184,52 @@ default_message_pool.register_message("nf.config", "ParkData", ParkData)
 
 
 @dataclass(eq=False, repr=False)
+class PickAndPlaceConstants(betterproto2.Message):
+    """
+    Tunable constants used by AsyncObserver.pick_and_place_loop
+    """
+
+    gantry_height_over_target: "_common__.Vec3 | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    Gantry height offset held while approaching a target to pick up.
+    """
+
+    gantry_height_over_dropoff: "_common__.Vec3 | None" = betterproto2.field(
+        2, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    Gantry height offset held while flying to and dropping off at the destination.
+    """
+
+    relaxed_open: "float" = betterproto2.field(3, betterproto2.TYPE_FLOAT)
+    """
+    Finger angle the gripper opens to when dropping off, open enough that fingers leave the camera frame.
+    """
+
+    delay_after_drop: "float" = betterproto2.field(4, betterproto2.TYPE_FLOAT)
+    """
+    Delay after dropping off, long enough that the payload is no longer visible in the gripper camera.
+    """
+
+    loop_delay: "float" = betterproto2.field(5, betterproto2.TYPE_FLOAT)
+    """
+    Delay between iterations of the pick and place loop.
+    """
+
+    end_loop_timeout: "float" = betterproto2.field(6, betterproto2.TYPE_FLOAT)
+    """
+    If no target has been seen for this many seconds, the loop ends.
+    """
+
+
+default_message_pool.register_message(
+    "nf.config", "PickAndPlaceConstants", PickAndPlaceConstants
+)
+
+
+@dataclass(eq=False, repr=False)
 class Resolution(betterproto2.Message):
     width: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)
 
@@ -281,6 +328,41 @@ class StringmanPilotConfig(betterproto2.Message):
     """
     Last known room position of each named object/location, keyed by tag name (e.g. 'hamper', 'parking_location').
     Updated as an exponential moving average whenever the tag is observed.
+    """
+
+    last_gantry_pos: "_common__.Vec3 | None" = betterproto2.field(
+        16, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    Last known room position of the gantry, saved on clean shutdown so it can be restored on the next boot.
+    """
+
+    last_lerobot_model: "str" = betterproto2.field(17, betterproto2.TYPE_STRING)
+    """
+    Repo id or local path of the model last used for a local lerobot eval session.
+    """
+
+    last_lerobot_prompt: "str" = betterproto2.field(18, betterproto2.TYPE_STRING)
+    """
+    Last task description (prompt) used in a lerobot episode.
+    """
+
+    last_route_source: "_common__.RoutePoint" = betterproto2.field(
+        19, betterproto2.TYPE_ENUM, default_factory=lambda: _common__.RoutePoint(0)
+    )
+    """
+    Last source and destination used for automatic pick and place routing.
+    """
+
+    last_route_destination: "_common__.RoutePoint" = betterproto2.field(
+        20, betterproto2.TYPE_ENUM, default_factory=lambda: _common__.RoutePoint(0)
+    )
+
+    pick_and_place: "PickAndPlaceConstants | None" = betterproto2.field(
+        21, betterproto2.TYPE_MESSAGE, optional=True
+    )
+    """
+    Tunable constants used by pick_and_place_loop.
     """
 
 

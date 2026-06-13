@@ -114,6 +114,23 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # tension safety
     config.max_safe_tension = 16 # newtons.
 
+    # last known gantry position, lerobot history and route source/destination
+    config.last_gantry_pos = common.Vec3(x=0, y=0, z=0)
+    config.last_lerobot_model = ""
+    config.last_lerobot_prompt = ""
+    config.last_route_source = common.RoutePoint.ALL_TARGETS
+    config.last_route_destination = common.RoutePoint.HAMPER
+
+    # pick and place tunables
+    config.pick_and_place = nf_config.PickAndPlaceConstants(
+        gantry_height_over_target=common.Vec3(x=0, y=0, z=0.9),
+        gantry_height_over_dropoff=common.Vec3(x=0, y=0, z=1.1),
+        relaxed_open=-7, # Open enough to drop and that fingers cannot be seen in frame
+        delay_after_drop=0.6, # long enough that the payload is not visible anymore in the hand
+        loop_delay=0.4,
+        end_loop_timeout=10,
+    )
+
     return config
 
 def save_config(config: nf_config.StringmanPilotConfig, path: Path=DEFAULT_CONFIG_PATH):
@@ -156,6 +173,17 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
 
             if c.max_safe_tension == 0:
                 c.max_safe_tension = 16
+
+            # Backfill fields added after this config was first saved.
+            default = create_default_config()
+            if c.last_gantry_pos is None:
+                c.last_gantry_pos = default.last_gantry_pos
+            if c.last_route_source == common.RoutePoint.NA:
+                c.last_route_source = default.last_route_source
+            if c.last_route_destination == common.RoutePoint.NA:
+                c.last_route_destination = default.last_route_destination
+            if c.pick_and_place is None:
+                c.pick_and_place = default.pick_and_place
 
             return c
 

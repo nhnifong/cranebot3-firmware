@@ -217,9 +217,13 @@ class AsyncObserver:
         self.last_ep_ctrl_status = common.LerobotStatus.NA
         self.lerobot_process_pid = None
         self.grip_angle = 0
-        # source and destination for pick and place
-        self.pnp_src = common.RoutePoint.ALL_TARGETS
-        self.pnp_dst = common.RoutePoint.HAMPER
+        # source and destination for pick and place. self.config is the source of truth;
+        # these are kept in sync with self.config.last_route_source/last_route_destination.
+        self.pnp_src = self.config.last_route_source
+        self.pnp_dst = self.config.last_route_destination
+
+        # restore the last known gantry position so the position estimator doesn't start at the origin.
+        self.pe.gant_pos = tonp(self.config.last_gantry_pos)
 
     async def send_setup_telemetry(self):
         logger.debug('Sending setup telemetry')
@@ -351,8 +355,10 @@ class AsyncObserver:
         logger.debug(f'_handle_set_point {item}')
         if item.route_source:
             self.pnp_src = item.route_source
+            self.config.last_route_source = item.route_source
         if item.route_destination:
             self.pnp_dst = item.route_destination
+            self.config.last_route_destination = item.route_destination
         self.send_ui(task_status=telemetry.TaskStatus(
             route_source=self.pnp_src, route_destination=self.pnp_dst, 
         ))
@@ -549,6 +555,7 @@ class AsyncObserver:
             func_name = 'record_until_disconnected'
         elif action == control.LerobotSessionAction.START_EVAL:
             func_name = 'eval_until_disconnected'
+            self.config.last_lerobot_model = repo_id
 
         up = ''
         if item.suppress_upload:
@@ -2059,6 +2066,7 @@ class AsyncObserver:
     async def async_close(self) -> None:
         print('Stringman Controller Shutdown')
         # persist the last observed named positions (e.g. hamper, parking_location) so they survive a restart
+        self.config.last_gantry_pos = fromnp(self.pe.gant_pos)
         save_config(self.config, self.config_path)
         result = await self.stop_all()
         self.run_command_loop = False
@@ -2440,6 +2448,8 @@ class AsyncObserver:
         return bytes()
 
     def _handle_add_episode_control_events(self, data: common.EpisodeControl):
+        if data.prompt:
+            self.config.last_lerobot_prompt = data.prompt
         # forward episode control events back to all telemetry listeners
         self.send_ui(episode_control=data)
         asyncio.create_task(self.flush_tele_buffer())
@@ -2654,12 +2664,13 @@ class AsyncObserver:
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
         """
-        GANTRY_HEIGHT_OVER_TARGET = np.array([0,0,0.9])
-        GANTRY_HEIGHT_OVER_DROPOFF = np.array([0,0,1.1])
-        RELAXED_OPEN = -7 # Open enough to drop and that fingers cannot be seen in frame
-        DELAY_AFTER_DROP = 0.6 # long enough that the payload is not visible anymore in the hand
-        LOOP_DELAY = 0.4
-        END_LOOP_TIMEOUT = 10
+        ppc = self.config.pick_and_place
+        GANTRY_HEIGHT_OVER_TARGET = tonp(ppc.gantry_height_over_target)
+        GANTRY_HEIGHT_OVER_DROPOFF = tonp(ppc.gantry_height_over_dropoff)
+        RELAXED_OPEN = ppc.relaxed_open # Open enough to drop and that fingers cannot be seen in frame
+        DELAY_AFTER_DROP = ppc.delay_after_drop # long enough that the payload is not visible anymore in the hand
+        LOOP_DELAY = ppc.loop_delay
+        END_LOOP_TIMEOUT = ppc.end_loop_timeout
 
         # TODO if no lerobot session is connected with an appropriate model or --arp_grasp is false, this cannot work.
         # check prereqs and warn user with popup message or just start necessary model.

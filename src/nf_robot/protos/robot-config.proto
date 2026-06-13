@@ -120,4 +120,41 @@ message StringmanPilotConfig {
   // Last known room position of each named object/location, keyed by tag name (e.g. 'hamper', 'parking_location').
   // Updated as an exponential moving average whenever the tag is observed.
   map<string, common.Vec3> named_positions = 15;
+
+  // Last known room position of the gantry, saved on clean shutdown so it can be restored on the next boot.
+  common.Vec3 last_gantry_pos = 16;
+
+  // Repo id or local path of the model last used for a local lerobot eval session.
+  string last_lerobot_model = 17;
+
+  // Last task description (prompt) used in a lerobot episode.
+  string last_lerobot_prompt = 18;
+
+  // Last source and destination used for automatic pick and place routing.
+  common.RoutePoint last_route_source = 19;
+  common.RoutePoint last_route_destination = 20;
+
+  // Tunable constants used by pick_and_place_loop.
+  PickAndPlaceConstants pick_and_place = 21;
+}
+
+// Tunable constants used by AsyncObserver.pick_and_place_loop
+message PickAndPlaceConstants {
+  // Gantry height offset held while approaching a target to pick up.
+  common.Vec3 gantry_height_over_target = 1;
+
+  // Gantry height offset held while flying to and dropping off at the destination.
+  common.Vec3 gantry_height_over_dropoff = 2;
+
+  // Finger angle the gripper opens to when dropping off, open enough that fingers leave the camera frame.
+  float relaxed_open = 3;
+
+  // Delay after dropping off, long enough that the payload is no longer visible in the gripper camera.
+  float delay_after_drop = 4;
+
+  // Delay between iterations of the pick and place loop.
+  float loop_delay = 5;
+
+  // If no target has been seen for this many seconds, the loop ends.
+  float end_loop_timeout = 6;
 }
