@@ -213,13 +213,16 @@ class RobotComponentServer:
         returncode = await pip_subprocess.wait()
         await stdout_task
         await stderr_task
-        logging.info('Self update complete. Restarting.')
         self.update['firmware_update_complete'] = {'returncode': returncode}
-        await ws.send(json.dumps(self.update))
-        await asyncio.sleep(0.2)
-        if returncode==0:
+        if returncode == 0:
+            logging.info('Self update complete. Restarting.')
+            # give stream_measurements a chance to flush firmware_update_complete before we exit.
+            await asyncio.sleep(0.2)
             self.shutdown()
-            quit() # systemctl will bring us back up.
+            # Exit the whole process so systemd restarts us on the new one.
+            os._exit(0)
+        else:
+            logging.error(f'Self update failed with returncode {returncode}. Not restarting.')
 
     async def read_updates_from_client(self,websocket,tg):
         while True:
@@ -231,7 +234,6 @@ class RobotComponentServer:
             if 'host_time' in update:
                 logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
             if 'run_update' in update:
-                self.run_update()
                 self.extra_tasks.append(asyncio.create_task(self.run_update()))
 
             if self.spooler is not None:
@@ -374,7 +376,7 @@ class RobotComponentServer:
             if not self.have_client:
                 forget_all_wifi_networks()
                 self.shutdown()
-                quit() # systemctl will bring us back up. User must show new wifi share code.
+                os._exit(0) # systemctl will bring us back up. User must show new wifi share code.
         except asyncio.exceptions.CancelledError:
             pass
 
