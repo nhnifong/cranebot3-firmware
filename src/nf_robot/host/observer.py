@@ -222,9 +222,6 @@ class AsyncObserver:
         self.pnp_src = self.config.last_route_source
         self.pnp_dst = self.config.last_route_destination
 
-        # restore the last known gantry position so the position estimator doesn't start at the origin.
-        self.pe.gant_pos = tonp(self.config.last_gantry_pos)
-
     async def send_setup_telemetry(self):
         logger.debug('Sending setup telemetry')
         if self.config.anchor_type == common.AnchorType.ARPEGGIO:

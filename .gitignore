@@ -27,3 +27,4 @@ eggs_heatmap_data/
 fixed_dataset_workspace/
 datasets/
 images/
+arp_gripper_state.json

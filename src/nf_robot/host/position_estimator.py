@@ -277,16 +277,20 @@ class Positioner2:
 
         self.data_ts = time.time()
 
+        # seed all positional estimates with the last known gantry position from config,
+        # so the filter doesn't snap from the origin to the real position on the first update.
+        last_gant_pos = tonp(self.config.last_gantry_pos)
+
         # the gantry position and velocity estimated from reported line length and speeds.
-        self.hang_pos = np.zeros(3, dtype=float)
+        self.hang_pos = last_gant_pos.copy()
         self.hang_vel = np.zeros(3, dtype=float)
 
         # gantry position and velocity as last determined by the kalman filter
-        self.gant_pos = np.zeros(3, dtype=float)
+        self.gant_pos = last_gant_pos.copy()
         self.gant_vel = np.zeros(3, dtype=float)
 
         # last visual estimate of gantry position
-        self.visual_pos = np.zeros(3, dtype=float)
+        self.visual_pos = last_gant_pos.copy()
         self.visual_vel = np.zeros(3, dtype=float)
 
         # the time at which all reported line speeds became zero.
@@ -327,6 +331,7 @@ class Positioner2:
         # Initialize the Kalman filter
         self.sensor_names = ['v0', 'v1' ,'v2' ,'v3', 'hang']
         self.kf = KalmanFilter(self.sensor_names, acceleration_std_dev, bias_std_dev)
+        self.kf.state_estimate[:3] = last_gant_pos
 
         # recorded amount of time take to perform various update steps
         self.predict_time_taken = 0
