@@ -744,7 +744,7 @@ class AsyncObserver:
                 await asyncio.sleep(0.5)
         bar = asyncio.create_task(update_bar_task())
         self.sync_timezone_to_bots()
-        await time.sleep(0.3)
+        await asyncio.sleep(0.3)
         tasks = []
         keys = []
         for name, client in self.bot_clients.items():

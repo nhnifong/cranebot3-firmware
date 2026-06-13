@@ -121,7 +121,7 @@ lerobot-train \
 
 train on modal
 
-python experiments/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot_train_modal.py \
   --dataset.repo_id=naavox/simple_grasp_224 \
   --output_dir /multitask_dit_data/tidy_modal_10 \
   --steps=30000 \

@@ -9,7 +9,7 @@ conventions as lerobot-edit-dataset.
 Usage examples:
 
 Resize observation.images.top to 320x240 in a new dataset:
-    python experiments/lerobot_resize_video_feature.py \
+    python src/nf_robot/ml/lerobot_resize_video_feature.py \
         --repo_id my/dataset \
         --root /path/to/dataset \
         --new_root /path/to/dataset_resized \
@@ -18,7 +18,7 @@ Resize observation.images.top to 320x240 in a new dataset:
         --height 240
 
 Resize in-place (creates backup at dataset_old/):
-    python experiments/lerobot_resize_video_feature.py \
+    python src/nf_robot/ml/lerobot_resize_video_feature.py \
         --repo_id my/dataset \
         --root /path/to/dataset \
         --feature_key observation.images.top \
@@ -181,8 +181,8 @@ def resize_video_feature(
         # Update shape if present
         feature_entry = info["features"][feature_key]
         if "shape" in feature_entry:
-            channels = new_video_info.get("video.channels", feature_entry["shape"][0])
-            feature_entry["shape"] = [channels, height, width]
+            channels = feature_entry["shape"][2]
+            feature_entry["shape"] = [height, width, channels]
 
     info["repo_id"] = repo_id
     write_info(info, output_dir)
