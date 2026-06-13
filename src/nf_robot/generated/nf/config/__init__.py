@@ -337,9 +337,9 @@ class StringmanPilotConfig(betterproto2.Message):
     Last known room position of the gantry, saved on clean shutdown so it can be restored on the next boot.
     """
 
-    last_lerobot_model: "str" = betterproto2.field(17, betterproto2.TYPE_STRING)
+    last_lerobot_policy: "str" = betterproto2.field(17, betterproto2.TYPE_STRING)
     """
-    Repo id or local path of the model last used for a local lerobot eval session.
+    Repo id or local path of the policy last used for a local lerobot eval session.
     """
 
     last_lerobot_prompt: "str" = betterproto2.field(18, betterproto2.TYPE_STRING)
@@ -363,6 +363,13 @@ class StringmanPilotConfig(betterproto2.Message):
     )
     """
     Tunable constants used by pick_and_place_loop.
+    """
+
+    last_lerobot_dataset_repo_id: "str" = betterproto2.field(
+        22, betterproto2.TYPE_STRING
+    )
+    """
+    Repo id last used for a local lerobot recording session.
     """
 
 

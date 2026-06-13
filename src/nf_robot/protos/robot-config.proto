@@ -124,8 +124,8 @@ message StringmanPilotConfig {
   // Last known room position of the gantry, saved on clean shutdown so it can be restored on the next boot.
   common.Vec3 last_gantry_pos = 16;
 
-  // Repo id or local path of the model last used for a local lerobot eval session.
-  string last_lerobot_model = 17;
+  // Repo id or local path of the policy last used for a local lerobot eval session.
+  string last_lerobot_policy = 17;
 
   // Last task description (prompt) used in a lerobot episode.
   string last_lerobot_prompt = 18;
@@ -136,6 +136,9 @@ message StringmanPilotConfig {
 
   // Tunable constants used by pick_and_place_loop.
   PickAndPlaceConstants pick_and_place = 21;
+
+  // Repo id last used for a local lerobot recording session.
+  string last_lerobot_dataset_repo_id = 22;
 }
 
 // Tunable constants used by AsyncObserver.pick_and_place_loop

@@ -261,7 +261,21 @@ class AsyncObserver:
                 ))
         if self.lerobot_process_watcher is None or self.lerobot_process_watcher.done():
             self.last_ep_ctrl_status = common.LerobotStatus.NA
-        self.send_ui(episode_control=common.EpisodeControl(status = self.last_ep_ctrl_status))
+        if isinstance(self.last_ep_ctrl_status, common.LerobotSessionStatus):
+            ep_status = self.last_ep_ctrl_status
+        else:
+            ep_status = common.LerobotSessionStatus(
+                status=self.last_ep_ctrl_status,
+                policy_repo_id=self.config.last_lerobot_policy,
+                dataset_repo_id=self.config.last_lerobot_dataset_repo_id,
+            )
+        self.send_ui(episode_control=common.EpisodeControl(
+            status=ep_status,
+            prompt=self.config.last_lerobot_prompt,
+        ))
+        self.send_ui(task_status=telemetry.TaskStatus(
+            route_source=self.pnp_src, route_destination=self.pnp_dst,
+        ))
         self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=('swingc' in self.active_set), present='.'))
         r = await self.flush_tele_buffer()
 
@@ -550,9 +564,12 @@ class AsyncObserver:
         # Run the python function as a command-line script to hook into its stdout and stderr streams asynchronously and use the same virtualenv
         if action == control.LerobotSessionAction.START_RECORD:
             func_name = 'record_until_disconnected'
+            if self.local_models:
+                self.config.last_lerobot_dataset_repo_id = repo_id
         elif action == control.LerobotSessionAction.START_EVAL:
             func_name = 'eval_until_disconnected'
-            self.config.last_lerobot_model = repo_id
+            if self.local_models:
+                self.config.last_lerobot_policy = repo_id
 
         up = ''
         if item.suppress_upload:
@@ -1953,6 +1970,8 @@ class AsyncObserver:
             item.retain_key = f'lerobot_status'
         if key == 'swing_cancellation_state':
             item.retain_key = 'swing_cancellation_state'
+        if key == 'task_status':
+            item.retain_key = 'task_status'
 
         # Add item to batch
         with self.telemetry_buffer_lock:

@@ -116,7 +116,8 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
 
     # last known gantry position, lerobot history and route source/destination
     config.last_gantry_pos = common.Vec3(x=0, y=0, z=0)
-    config.last_lerobot_model = ""
+    config.last_lerobot_policy = ""
+    config.last_lerobot_dataset_repo_id = ""
     config.last_lerobot_prompt = ""
     config.last_route_source = common.RoutePoint.ALL_TARGETS
     config.last_route_destination = common.RoutePoint.HAMPER
