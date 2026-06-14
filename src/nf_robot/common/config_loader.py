@@ -112,7 +112,7 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.swing_latency = 0.18 # seconds
 
     # tension safety
-    config.max_safe_tension = 16 # newtons.
+    config.max_safe_tension = 18 # newtons.
 
     # last known gantry position, lerobot history and route source/destination
     config.last_gantry_pos = common.Vec3(x=0, y=0, z=0)
