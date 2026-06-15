@@ -145,6 +145,7 @@ message GripperSensors {
   float pressure = 3;
 
   // Wrist angle in degrees [0,1080]
+  // If you are looking for angle of gripper camera relative to room, it's position_factors.spin
   float wrist = 4;
 
   // The target force the gripper is aiming for in constant force mode [0,1]
