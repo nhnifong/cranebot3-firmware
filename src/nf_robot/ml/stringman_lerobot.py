@@ -60,12 +60,101 @@ _CAMERA_MODES: dict[str, dict[int, tuple[int, int]]] = {
     "all":               {0: (384, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
 }
 
+# action_space -> ordered list of action component names.
+# "gripper_vel" is the original 5-dim action space used by older policies/datasets.
+# "dual_vel_contact" additionally commands velocity in the room frame of reference
+# (fused with the gripper-frame velocity at send_action time, see _CONTROL_ACTION_ROLES),
+# and reserves slots for "eventual contact position" and "episode end" predictions.
+# Those last three are not knowable live during recording/teleop and are recorded as
+# zero placeholders; a future post-processing script can fill them in retroactively.
+_ACTION_SPACES: dict[str, list[str]] = {
+    "gripper_vel": ["vel_x", "vel_y", "vel_z", "wrist_speed", "finger_speed"],
+    "gripper_vel_contact": [
+        "vel_x", "vel_y", "vel_z",
+        "wrist_speed", "finger_speed",
+        "contact_vec_x", "contact_vec_y", "contact_vec_z",
+        "episode_end",
+    ],
+    "dual_vel_contact": [
+        "vel_x", "vel_y", "vel_z",
+        "room_vel_x", "room_vel_y",
+        "wrist_speed", "finger_speed",
+        "contact_vec_x", "contact_vec_y", "contact_vec_z",
+        "episode_end",
+    ],
+}
+DEFAULT_ACTION_SPACE = "dual_vel_contact"
+
+# action component name -> control role used by send_action to build a single CombinedMove.
+# Action components not listed here (e.g. contact_vec_*, episode_end) are auxiliary
+# prediction targets and are ignored for control purposes.
+_CONTROL_ACTION_ROLES: dict[str, str] = {
+    "vel_x": "gripper_x",
+    "vel_y": "gripper_y",
+    "vel_z": "z",
+    "room_vel_x": "room_x",
+    "room_vel_y": "room_y",
+    "wrist_speed": "wrist_speed",
+    "finger_speed": "finger_speed",
+}
+
+# Debugging switches: at eval time, force the gripper-frame or room-frame xy velocity
+# components to zero so their individual contribution to visual servoing can be assessed.
+IGNORE_GRIPPER_FRAME_VEL = False
+IGNORE_ROOM_FRAME_VEL = False
+
+
+def rotate_vector(vec, rad):
+    """Rotates a 2D vector [x, y] by a given angle in radians."""
+    cos_a, sin_a = np.cos(rad), np.sin(rad)
+    return np.array([
+        vec[0] * cos_a - vec[1] * sin_a,
+        vec[0] * sin_a + vec[1] * cos_a,
+    ])
+
+
+def camera_mode_from_features(features: dict) -> str:
+    """Infer a camera_mode name from a dataset's feature dict (e.g. dataset.meta.features)."""
+    found: dict[int, tuple[int, int]] = {}
+    for feed_num, name in _FEED_NAMES.items():
+        key = f"observation.images.{name}"
+        if key in features:
+            shape = features[key]["shape"]  # [height, width, channels]
+            found[feed_num] = (shape[1], shape[0])
+
+    for mode, spec in _CAMERA_MODES.items():
+        if spec == found:
+            return mode
+    raise ValueError(f"No known camera_mode matches camera feature set {found}")
+
+
+def action_space_from_features(features: dict) -> str:
+    """Infer an action_space name from a dataset's feature dict (e.g. dataset.meta.features)."""
+    names = list(features["action"]["names"])
+    for space, action_names in _ACTION_SPACES.items():
+        if action_names == names:
+            return space
+    raise ValueError(f"No known action_space matches action names {names}")
+
+
+def describe_session_spaces(camera_mode: str, action_space: str, observation_features: dict, action_features: dict) -> str:
+    """Human-readable description of the camera/action/observation configuration for a session."""
+    lines = [
+        f"camera_mode: {camera_mode} -> {_CAMERA_MODES[camera_mode]}",
+        f"action_space: {action_space} -> {_ACTION_SPACES[action_space]}",
+        f"observation_features ({len(observation_features)}): {list(observation_features)}",
+        f"action_features ({len(action_features)}): {list(action_features)}",
+    ]
+    return "\n".join(lines)
+
+
 @RobotConfig.register_subclass("stringman")
 @dataclass
 class StringmanConfig(RobotConfig):
     uri: str
     remote_stream_token: str | None = None
     camera_mode: str = "all"
+    action_space: str = DEFAULT_ACTION_SPACE
 
 def decode_image(jpeg_bytes):
     try:
@@ -127,6 +216,10 @@ class StringmanLeRobot(Robot):
         # {feed_number: (width, height)}
         self.camera_specs: dict[int, tuple[int, int]] = _CAMERA_MODES[config.camera_mode]
 
+        if config.action_space not in _ACTION_SPACES:
+            raise ValueError(f"Unknown action_space '{config.action_space}'. Valid: {list(_ACTION_SPACES)}")
+        self.action_space = config.action_space
+
         self.camera_locks = {f: threading.Lock() for f in self.camera_specs}
         self.video_threads = {}
         self.stop_video_events = {f: threading.Event() for f in self.camera_specs}
@@ -138,13 +231,17 @@ class StringmanLeRobot(Robot):
 
     @cached_property
     def _motors_ft(self) -> dict[str, type]:
-        return { 
+        return {
             "vel_x": float,
-            "vel_y": float, 
+            "vel_y": float,
             "vel_z": float,
             "wrist_speed": float,
             "finger_speed": float,
         }
+
+    @cached_property
+    def _action_ft(self) -> dict[str, type]:
+        return {name: float for name in _ACTION_SPACES[self.action_space]}
 
     @cached_property
     def _cameras_ft(self) -> dict[str, tuple]:
@@ -165,7 +262,8 @@ class StringmanLeRobot(Robot):
             "gripper_rot_3": float,
             "gripper_rot_4": float,
             "gripper_rot_5": float,
-            
+            "spin": float,
+
             "finger_angle": float,
             "laser_rangefinder": float,
             "finger_pressure": float,
@@ -203,7 +301,7 @@ class StringmanLeRobot(Robot):
 
     @cached_property
     def action_features(self) -> dict:
-        return self._motors_ft
+        return self._action_ft
 
     @property
     def is_connected(self) -> bool:
@@ -448,7 +546,8 @@ class StringmanLeRobot(Robot):
             "gripper_rot_3": float(self.last_gripper_rot_6d[3]),
             "gripper_rot_4": float(self.last_gripper_rot_6d[4]),
             "gripper_rot_5": float(self.last_gripper_rot_6d[5]),
-            
+            "spin": float(self.last_spin),
+
             "finger_angle": float(self.last_finger_angle),
             "laser_rangefinder": float(self.last_range),
             "finger_pressure": float(self.last_pressure),
@@ -493,16 +592,35 @@ class StringmanLeRobot(Robot):
         # action['finger_speed'] *= 30
         GAIN = 1.0 # for act model, 1.5 is a little better.
 
+        # Fuse whichever control-relevant action components are present into a single
+        # gripper-frame CombinedMove. Components not in _CONTROL_ACTION_ROLES (e.g.
+        # contact_vec_*, episode_end) are auxiliary predictions and are ignored here.
+        gripper_xy = np.zeros(2)
+        z = 0.0
+        wrist_speed = 0.0
+        finger_speed = 0.0
+
+        if not IGNORE_GRIPPER_FRAME_VEL:
+            gripper_xy += [action.get('vel_x', 0.0), action.get('vel_y', 0.0)]
+        z += action.get('vel_z', 0.0)
+
+        if not IGNORE_ROOM_FRAME_VEL:
+            room_xy = np.array([action.get('room_vel_x', 0.0), action.get('room_vel_y', 0.0)])
+            gripper_xy += rotate_vector(room_xy, self.last_spin)
+
+        wrist_speed += action.get('wrist_speed', 0.0)
+        finger_speed += action.get('finger_speed', 0.0)
+
         batch = control.ControlBatchUpdate(
             robot_id="0",
             updates=[control.ControlItem(move=control.CombinedMove(
                 direction=common.Vec3(
-                    x=action['vel_x']*GAIN,
-                    y=action['vel_y']*GAIN,
-                    z=action['vel_z']*GAIN,
+                    x=gripper_xy[0]*GAIN,
+                    y=gripper_xy[1]*GAIN,
+                    z=z*GAIN,
                 ),
-                finger_speed=action['finger_speed']*GAIN*GAIN,
-                wrist_speed=action['wrist_speed']*GAIN,
+                finger_speed=finger_speed*GAIN*GAIN,
+                wrist_speed=wrist_speed*GAIN,
                 # speed=0.12,
                 direction_is_in_gripper_frame=True,
             ))]
@@ -524,13 +642,25 @@ class StringmanLeRobot(Robot):
             self.websocket.send(to_send)
 
     def get_last_action(self):
-        return {
+        # last_commanded_vel is in the gripper's frame of reference; convert to room
+        # frame for room_vel_x/y (gripper -> room, see observer.py _handle_movement).
+        room_vel = rotate_vector(self.last_commanded_vel[:2], -self.last_spin)
+
+        values = {
             "vel_x": self.last_commanded_vel[0],
             "vel_y": self.last_commanded_vel[1],
             "vel_z": self.last_commanded_vel[2],
+            "room_vel_x": room_vel[0],
+            "room_vel_y": room_vel[1],
             "wrist_speed": self.last_wrist_speed,
             "finger_speed": self.last_finger_speed,
+            # Not knowable live; placeholders for a future post-processing script.
+            "contact_vec_x": 0.0,
+            "contact_vec_y": 0.0,
+            "contact_vec_z": 0.0,
+            "episode_end": 0.0,
         }
+        return {name: values[name] for name in _ACTION_SPACES[self.action_space]}
 
 @safe_stop_image_writer
 def record_episode(
@@ -594,14 +724,7 @@ def append_episode_metadata(dataset: LeRobotDataset, robot_id: str):
     with path.open("a") as f:
         f.write(json.dumps(entry) + "\n")
 
-KNOWN_DATASETS = {
-    'naavox/tidy_up':           'gripper_floor_384',
-    'naavox/tidy_up_test':      'gripper_floor_384',
-    'naavox/simple_grasp':      'gripper_384',
-    'naavox/simple_grasp_224':  'gripper_224',
-}
-
-def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None, camera_mode="all"):
+def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None, camera_mode="all", action_space=DEFAULT_ACTION_SPACE):
     class GracefulExit(Exception):
         pass
 
@@ -613,9 +736,13 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
     signal.signal(signal.SIGINT, handle_shutdown_signal)
 
-
-    if hf_repo_id in KNOWN_DATASETS:
-        camera_mode = KNOWN_DATASETS[hf_repo_id]
+    # If resuming an existing dataset, match its existing camera_mode/action_space
+    # rather than whatever was requested, so new episodes stay consistent with old ones.
+    if repo_exists(hf_repo_id, repo_type="dataset"):
+        from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+        existing_meta = LeRobotDatasetMetadata(repo_id=hf_repo_id)
+        camera_mode = camera_mode_from_features(existing_meta.features)
+        action_space = action_space_from_features(existing_meta.features)
 
     events={
         'episode_abandon': False,
@@ -625,7 +752,8 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
     }
 
     # connect to the robot right away because it is our channel to send error messages back to the user.
-    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode), events)
+    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode, action_space=action_space), events)
+    print(describe_session_spaces(camera_mode, action_space, robot.observation_features, robot.action_features))
     robot.connect()
     time.sleep(2)
     if not robot.is_connected:
@@ -818,14 +946,8 @@ def eval_episode(
         action_vector = action_values.get('action', action_values) if isinstance(action_values, dict) else action_values
         action_vector = action_vector.cpu().numpy() if torch.is_tensor(action_vector) else action_vector
         action_vector = np.squeeze(action_vector)
-        
-        action_dict = {
-            "vel_x": float(action_vector[0]),
-            "vel_y": float(action_vector[1]),
-            "vel_z": float(action_vector[2]),
-            "wrist_speed": float(action_vector[3]),
-            "finger_speed": float(action_vector[4]),
-        }
+
+        action_dict = dict(zip(dataset_features["action"]["names"], (float(v) for v in action_vector)))
 
         robot.send_action(action_dict)
 
@@ -843,26 +965,12 @@ def eval_episode(
         "finger_speed": 0.0
     })
 
-KNOWN_POLICIES = {
-    'naavox/multitask-dit':   'gripper_384',
-    'naavox/multitask-dit-2': 'gripper_384',
-    'naavox/multitask-dit-4': 'gripper_floor_384',
-    'naavox/multitask-dit-3': 'gripper_floor_384',
-    'naavox/multitask-dit-6': 'gripper_floor_384',
-    'naavox/multitask-dit-7': 'gripper_384',
-    'naavox/multitask-dit-8': 'gripper_384',
-    'naavox/dit-grasp-1':     'gripper_224',
-}
-
-def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote_stream_token=None, camera_mode="all"):
+def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote_stream_token=None, camera_mode=None):
     import torch
     import json
     from huggingface_hub import hf_hub_download
     from lerobot.policies.factory import make_policy, make_pre_post_processors
     from lerobot.configs.policies import PreTrainedConfig
-
-    if policy_repo_id in KNOWN_POLICIES:
-        camera_mode = KNOWN_POLICIES[policy_repo_id]
 
     events = {
         'episode_abandon': False,
@@ -882,7 +990,11 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote
         repo_id=dataset_repo_id,
         download_videos=False,
     )
-    
+
+    if camera_mode is None:
+        camera_mode = camera_mode_from_features(dataset.meta.features)
+    action_space = action_space_from_features(dataset.meta.features)
+
     print(f"Loading policy config from {policy_repo_id}...")
     cfg = PreTrainedConfig.from_pretrained(policy_repo_id)
     cfg.pretrained_path = policy_repo_id 
@@ -910,9 +1022,10 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote
     print("Policy loaded.")
     
     print(f"Connecting to robot...")
-    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode), events)
+    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode, action_space=action_space), events)
+    print(describe_session_spaces(camera_mode, action_space, robot.observation_features, robot.action_features))
     robot.connect()
-    
+
     # init_rerun(session_name="stringman_eval")
     print("Eval Ready. Waiting for start command.")
     robot.send_session_status(common.LerobotSessionStatus(
@@ -963,16 +1076,18 @@ if __name__ == "__main__":
     parent_parser.add_argument("--remote_stream_token", help="Token of authorized user. must be supplied in order to access remote streams. When set, recording will only use using media.neufangled.com and ignore local URIs")
 
     camera_mode_choices = list(_CAMERA_MODES.keys())
+    action_space_choices = list(_ACTION_SPACES.keys())
 
     record_parser = subparsers.add_parser('record', parents=[parent_parser], help="Record new episodes")
     record_parser.add_argument("--repo_id", default="naavox/grasping_dataset", help="repo id of dataset to append to")
     record_parser.add_argument("--upload", default=True, help="upload data to huggingface when complete")
     record_parser.add_argument("--camera_mode", default="all", choices=camera_mode_choices, help="which cameras to record")
+    record_parser.add_argument("--action_space", default=DEFAULT_ACTION_SPACE, choices=action_space_choices, help="action space to record (ignored when resuming an existing dataset)")
 
     eval_parser = subparsers.add_parser('eval', parents=[parent_parser], help="Evaluate existing policy")
     eval_parser.add_argument("--policy_id", default="naavox/grasping_act_policy", help="repo id of policy to load")
-    eval_parser.add_argument("--camera_mode", default="all", choices=camera_mode_choices, help="must match the camera setup the policy was trained on")
-    
+    eval_parser.add_argument("--camera_mode", default=None, choices=camera_mode_choices, help="override the camera setup inferred from the policy's training dataset")
+
     args = parser.parse_args()
     uri = f'{args.server_address}/control/{args.robot_id}'
     if args.remote_stream_token:
@@ -982,4 +1097,4 @@ if __name__ == "__main__":
     if args.command == 'eval':
         eval_until_disconnected(uri, args.policy_id, args.robot_id, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode)
     else:
-        record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode)
+        record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode, action_space=args.action_space)
