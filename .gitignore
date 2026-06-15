@@ -26,5 +26,6 @@ winvenv
 eggs_heatmap_data/
 fixed_dataset_workspace/
 datasets/
+models/
 images/
 arp_gripper_state.json

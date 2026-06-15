@@ -122,12 +122,13 @@ lerobot-train \
 train on modal
 
 python src/nf_robot/ml/lerobot_train_modal.py \
-  --dataset.repo_id=naavox/simple_grasp_224 \
-  --output_dir /multitask_dit_data/tidy_modal_10 \
-  --steps=30000 \
+  --dataset.repo_id=naavox/merged_224 \
+  --output_dir /multitask_dit_data/tidy_modal_12 \
+  --steps=35000 \
   --dataset.image_transforms.enable=true   \
   --dataset.image_transforms.max_num_transforms=3   \
   --policy.type=multi_task_dit   \
+  --policy.pretrained_path=naavox/dit-grasp-1   \
   --policy.device=cuda   \
   --policy.horizon=64   \
   --policy.n_action_steps=32   \
@@ -139,13 +140,37 @@ python src/nf_robot/ml/lerobot_train_modal.py \
   --policy.num_integration_steps=100   \
   --policy.integration_method=euler   \
   --policy.sigma_min=0.0   \
-  --policy.repo_id="naavox/dit-grasp-1"   \
+  --policy.repo_id="naavox/dit-grasp-3"   \
   --policy.push_to_hub=true \
   --wandb.enable=false \
-  --batch_size=210 \
+  --batch_size=400 \
   --tolerance_s=0.001 \
   --save_freq=5000 \
   --num_workers=13
+
+
+SmolVLA
+
+First, build a local copy of smolvla_base with max_state_dim expanded to fit our 43-dim
+observation.state (the state_proj input is zero-padded from 32 to 64, preserving pretrained
+behavior at init):
+
+python src/nf_robot/ml/lerobot_expand_smolvla_state_dim.py \
+    --source lerobot/smolvla_base \
+    --output_dir models/smolvla_base_state64 \
+    --max_state_dim 64
+
+lerobot-train \
+  --policy.path=models/smolvla_base_state64 \
+  --policy.repo_id=naavox/g224_smolvla \
+  --dataset.repo_id=naavox/merged_224 \
+  --rename_map='{"observation.images.gripper_camera": "observation.images.camera1"}' \
+  --batch_size=64 \
+  --steps=20000 \
+  --output_dir=outputs/train/my_smolvla \
+  --job_name=my_smolvla_training \
+  --policy.device=cuda \
+  --wandb.enable=false
 
 ```
 
@@ -203,3 +228,34 @@ docker run --add-host=host.docker.internal:host-gateway -it --rm \
     --remote_stream_token="92yHzkzwlyz6ARAD7wyXvoyqn9J2IQLW2tIpETEz6DY" \
     --repo_id=naavox/test_dataset
 ```
+
+
+### derivation of naavox/merged_224
+
+python src/nf_robot/ml/lerobot_derive_dataset.py \
+    --repo_id naavox/la_june \
+    --new_repo_id naavox/la_june_224 \
+    --new_root datasets/la_june_224 \
+    --camera_mode gripper_224
+
+python src/nf_robot/ml/lerobot_derive_dataset.py \
+    --repo_id naavox/toys_june_12 \
+    --new_repo_id naavox/toys_june_12_224 \
+    --new_root datasets/toys_june_12_224 \
+    --camera_mode gripper_224
+
+hf upload naavox/toys_june_12_224 datasets/toys_june_12_224 --repo-type dataset
+hf upload naavox/la_june_224 datasets/la_june_224 --repo-type dataset
+
+lerobot-edit-dataset \
+    --repo_id naavox/merged_224 \
+    --operation.type merge \
+    --operation.repo_ids "['naavox/simple_grasp_224', 'naavox/toys_june_12_224', 'naavox/la_june_224']"
+
+lerobot-edit-dataset \
+    --repo_id naavox/merged_224 \
+    --root datasets/merged_224 \
+    --new_repo_id naavox/merged_224 \
+    --new_root datasets/merged_224 \
+    --operation.type recompute_stats \
+    --push_to_hub true

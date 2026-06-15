@@ -897,9 +897,14 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote
         dataset_stats=dataset.meta.stats,
     )
 
+    rm=None
+    if policy_repo_id == "naavox/g224_smolvla":
+        rm={"observation.images.gripper_camera": "observation.images.camera1"}
+
     policy = make_policy(
         cfg=cfg,
         ds_meta=dataset.meta,
+        rename_map=rm
     )
     policy.eval()
     print("Policy loaded.")

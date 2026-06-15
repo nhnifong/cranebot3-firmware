@@ -157,6 +157,9 @@ def main() -> None:
     parser.add_argument(
         "--num_workers", type=int, default=None, help="Parallel encoding workers (default: all CPU cores)"
     )
+    parser.add_argument(
+        "--push_to_hub", action="store_true", help="Upload the derived dataset to the Hugging Face Hub"
+    )
     args = parser.parse_args()
 
     input_root = Path(args.root) if args.root else HF_LEROBOT_HOME / args.repo_id
@@ -170,7 +173,7 @@ def main() -> None:
 
     logging.info(f"Deriving camera_mode '{args.camera_mode}' from '{args.repo_id}'")
 
-    derive_dataset(
+    derived = derive_dataset(
         dataset=dataset,
         camera_mode=args.camera_mode,
         output_dir=output_root,
@@ -181,6 +184,10 @@ def main() -> None:
         g=args.g,
         num_workers=args.num_workers,
     )
+
+    if args.push_to_hub:
+        logging.info(f"Pushing '{output_repo_id}' to the Hugging Face Hub")
+        derived.push_to_hub()
 
 
 if __name__ == "__main__":
