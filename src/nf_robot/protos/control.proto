@@ -215,6 +215,17 @@ message SetPoint {
   optional nf.common.RoutePoint route_destination = 2;
 }
 
+enum TargetModelAction {
+  TARGET_MODEL_ACTION_UNUSED = 0;
+  TARGET_MODEL_DISABLE = 1;
+  TARGET_MODEL_ENABLE_DEFAULT = 2;
+}
+
+// Enable or disable the target-finding model at runtime
+message SetTargetModel {
+  TargetModelAction action = 1;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -233,6 +244,7 @@ message ControlItem {
     ManageLerobotSession manage_lerobot_session = 13;
     MoveGripperTo move_gripper_to = 14;
     SetPoint set_point = 15;
+    SetTargetModel set_target_model = 16;
   }
 }
 

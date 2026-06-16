@@ -35,10 +35,8 @@ options:
   --telemetry_env {local,staging,production}
                         The cloud telemetry server to connect to (choices: local, staging, production) The default is None, which allows local connections on port 4245 only
                         When production is used if you have already bound the robot to an account at neufangled.com. This is completely optional.
-  --no_ai               Disable the use of the target identificaiton model.
   --auto_start          Automatically unpark and start cleaning when all components connect
-  --local_models        Use local models from models/ rather than downloading the production models from huggingface (applicable to the target identification model only)
-  --lerobot_grasp       Issue start episode commands to a connected lerobot eval session for grasping. False by default and loads the centering net unless --no_ai is set.
+  --local_models        Use local models from models/ for the targeting and centering models rather than downloading the production models from huggingface
   --debug               Enable DEBUG level logging
 
 ### Minimum system specs

@@ -346,6 +346,7 @@ class GripperSensors(betterproto2.Message):
     wrist: "float" = betterproto2.field(4, betterproto2.TYPE_FLOAT)
     """
     Wrist angle in degrees [0,1080]
+    If you are looking for angle of gripper camera relative to room, it's position_factors.spin
     """
 
     target_force: "float | None" = betterproto2.field(

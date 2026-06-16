@@ -21,7 +21,9 @@ __all__ = (
     "ScaleRoom",
     "SetPoint",
     "SetSwingCancellation",
+    "SetTargetModel",
     "SingleComponentAction",
+    "TargetModelAction",
 )
 
 from dataclasses import dataclass
@@ -263,6 +265,14 @@ class LerobotSessionAction(betterproto2.Enum):
         }
 
 
+class TargetModelAction(betterproto2.Enum):
+    TARGET_MODEL_ACTION_UNUSED = 0
+
+    TARGET_MODEL_DISABLE = 1
+
+    TARGET_MODEL_ENABLE_DEFAULT = 2
+
+
 @dataclass(eq=False, repr=False)
 class AddTargetFromAnchorCam(betterproto2.Message):
     """
@@ -472,6 +482,10 @@ class ControlItem(betterproto2.Message):
         15, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    set_target_model: "SetTargetModel | None" = betterproto2.field(
+        16, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
@@ -646,6 +660,20 @@ class SetSwingCancellation(betterproto2.Message):
 default_message_pool.register_message(
     "nf.control", "SetSwingCancellation", SetSwingCancellation
 )
+
+
+@dataclass(eq=False, repr=False)
+class SetTargetModel(betterproto2.Message):
+    """
+    Enable or disable the target-finding model at runtime
+    """
+
+    action: "TargetModelAction" = betterproto2.field(
+        1, betterproto2.TYPE_ENUM, default_factory=lambda: TargetModelAction(0)
+    )
+
+
+default_message_pool.register_message("nf.control", "SetTargetModel", SetTargetModel)
 
 
 @dataclass(eq=False, repr=False)

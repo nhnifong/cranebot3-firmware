@@ -141,7 +141,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ai=True, run_ortho=True, auto_start=False, local_models=False, port=4245, use_arp_grasp=False, debug=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, auto_start=False, local_models=False, port=4245, debug=False) -> None:
         self.port = port
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
@@ -200,10 +200,9 @@ class AsyncObserver:
         # dict of vectors representing last velocities commanded by different subsystems. all keys in active_set are summard
         self.input_velocities = {'default': np.zeros(3)}
         self.active_set = set(['default'])
-        self.run_ai = run_ai
         self.run_ortho = run_ortho
         self.auto_start = auto_start
-        self.use_arp_grasp = use_arp_grasp
+        self._device = None
         self.swing_cancellation_task = None
         self.local_models = local_models
         # ortho projection state - written by _ortho_worker thread, read by run_perception AI task
@@ -361,6 +360,9 @@ class AsyncObserver:
 
         elif item.set_point is not None:
             asyncio.create_task(self._handle_set_point(item.set_point))
+
+        elif item.set_target_model is not None:
+            asyncio.create_task(self._handle_set_target_model(item.set_target_model))
 
     async def _handle_set_point(self, item: control.SetPoint):
         logger.debug(f'_handle_set_point {item}')
@@ -2045,10 +2047,8 @@ class AsyncObserver:
                 await self.aiozc.async_close()
                 return
 
-            # perception model
-            if self.run_ai or self.run_ortho:
-                # task remains in a lightweight sleep until frames arrive.
-                self.perception_task = asyncio.create_task(self.run_perception())
+            # perception model — always started; target inference activates via SetTargetModel at runtime
+            self.perception_task = asyncio.create_task(self.run_perception())
 
             # start a websocket server to accept incoming connections from either a local UI or local Lerobot session
             async with websockets.serve(self.handle_local_client, "127.0.0.1", self.port):
@@ -2526,10 +2526,9 @@ class AsyncObserver:
     async def run_perception(self):
         """
         Orthographic floor projection and target heatmap inference.
-        run_ortho and run_ai are independent: either or both may be active.
+        run_ortho and target model inference are independent; the target model is loaded at
+        runtime via SetTargetModel control messages.
         """
-        TARGETING_MODEL_REPOID = "naavox/targeting"
-        CENTERING_MODEL_REPOID = "naavox/centering"
         LOOP_DELAY = 0.1
         FIND_TARGETS_EVERY = 5
         EXTENT = 5.0
@@ -2548,38 +2547,10 @@ class AsyncObserver:
             if have_frames:
                 break
 
-        if self.run_ai:
-            import torch
-            from huggingface_hub import hf_hub_download
-            DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-            from nf_robot.ml.target_heatmap import TargetHeatmapNet, extract_targets_from_heatmap, HM_IMAGE_RES
-            if self.use_arp_grasp:
-                from nf_robot.ml.centering import CenteringNet
-
-            def load_models_sync():
-                if self.local_models:
-                    target_path = "models/target_heatmap.pth"
-                else:
-                    target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
-                logger.info(f"Loading model from {target_path}...")
-                t_model = TargetHeatmapNet().to(DEVICE)
-                t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
-                t_model.eval()
-
-                if self.use_arp_grasp:
-                    if self.local_models:
-                        center_path = "models/square_centering.pth"
-                    else:
-                        center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
-                    logger.info(f"Loading model from {center_path}...")
-                    c_model = CenteringNet().to(DEVICE)
-                    c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
-                    c_model.eval()
-                    return t_model, c_model
-                else:
-                    return t_model, None
-
-            self.target_model, self.centering_model = await asyncio.to_thread(load_models_sync)
+        import torch
+        from nf_robot.ml.target_heatmap import extract_targets_from_heatmap, HM_IMAGE_RES
+        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+        self._device = DEVICE
 
         ortho_floor_vs = None
         heatmap_floor_vs = None
@@ -2627,7 +2598,7 @@ class AsyncObserver:
         counter = 0
         while self.run_command_loop:
             await asyncio.sleep(LOOP_DELAY)
-            if not self.run_ai:
+            if self.target_model is None:
                 continue
             counter += 1
             if counter < FIND_TARGETS_EVERY:
@@ -2810,9 +2781,11 @@ class AsyncObserver:
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
         if isinstance(self.gripper_client, ArpeggioGripperClient):
-            if self.use_arp_grasp:
-                return await self.arp_execute_grasp()
-            return await self.lerobot_grasp()
+            if self.lerobot_process_pid is not None:
+                return await self.lerobot_grasp()
+            if self.centering_model is None:
+                await self._load_centering_model()
+            return await self.arp_execute_grasp()
         else:
             return await self.pilot_execute_grasp()
 
@@ -3077,6 +3050,55 @@ class AsyncObserver:
         finally:
             self.slow_stop_all_spools()
 
+    async def _load_centering_model(self):
+        import torch
+        from huggingface_hub import hf_hub_download
+        from nf_robot.ml.centering import CenteringNet
+        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
+        CENTERING_MODEL_REPOID = "naavox/centering"
+
+        def load_sync():
+            if self.local_models:
+                center_path = "models/square_centering.pth"
+            else:
+                center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
+            logger.info(f"Loading centering model from {center_path}...")
+            c_model = CenteringNet().to(DEVICE)
+            c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
+            c_model.eval()
+            return c_model
+
+        self.centering_model = await asyncio.to_thread(load_sync)
+
+    async def _load_target_model(self):
+        import torch
+        from huggingface_hub import hf_hub_download
+        from nf_robot.ml.target_heatmap import TargetHeatmapNet
+        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
+        TARGETING_MODEL_REPOID = "naavox/targeting"
+
+        def load_sync():
+            if self.local_models:
+                target_path = "models/target_heatmap.pth"
+            else:
+                target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
+            logger.info(f"Loading targeting model from {target_path}...")
+            t_model = TargetHeatmapNet().to(DEVICE)
+            t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
+            t_model.eval()
+            return t_model
+
+        self.target_model = await asyncio.to_thread(load_sync)
+
+    async def _handle_set_target_model(self, item: control.SetTargetModel):
+        if item.action == control.TargetModelAction.TARGET_MODEL_DISABLE:
+            self.target_model = None
+            logger.info('Target model disabled')
+        elif item.action == control.TargetModelAction.TARGET_MODEL_ENABLE_DEFAULT:
+            logger.info('Loading default target model...')
+            await self._load_target_model()
+            logger.info('Target model ready')
+
     async def lerobot_grasp(self):
         """
         Execute a grasp on an arp gripper using a lerobot ACT policy.
@@ -3088,7 +3110,7 @@ class AsyncObserver:
         python -m nf_robot.ml.stringman_lerobot eval   --robot_id=lan   --server_address=ws://localhost:4245   --policy_id=outputs/train/grasp_remote_act_eggs_2/checkpoints/last/pretrained_model/   --dataset_id=naavox/grasping_dataset_eggs_fix
         """
         if self.lerobot_process_pid is None:
-            logger.debug('lerobot_grasp relies on a connected model. No session is started. Either start one or rerun without --lerobot_grasp')
+            logger.debug('lerobot_grasp relies on a connected lerobot session. No session is active.')
             return False
 
         self.pe.finger_pressure_rising.clear()
@@ -3151,11 +3173,9 @@ def main():
             default=None,
             help="The cloud telemetry server to connect to (choices: local, staging, production) Used in development only. The default is None, which allows local connections on port 4245 only"
         )
-    parser.add_argument("--no_ai", action="store_true", help="Disable target finding and centering model evaluation")
     parser.add_argument("--no_ortho", action="store_true", help="Disable orthographic floor projection and its video streams")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
-    parser.add_argument("--lerobot_grasp", action="store_true", help="Use start_episode in a connected lerobot eval session for grasping isntead of centering net")
     parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     args = parser.parse_args()
 
@@ -3168,11 +3188,9 @@ def main():
             False,
             args.config,
             telemetry_env=args.telemetry_env,
-            run_ai=(not args.no_ai),
             run_ortho=(not args.no_ortho),
             auto_start=args.auto_start,
             local_models=args.local_models,
-            use_arp_grasp=(not args.lerobot_grasp),
             debug=args.debug
         )
 

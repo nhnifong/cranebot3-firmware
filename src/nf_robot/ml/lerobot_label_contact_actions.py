@@ -50,7 +50,7 @@ from nf_robot.ml.stringman_lerobot import _ACTION_SPACES, rotate_vector
 CONTACT_ACTION_NAMES = ["contact_vec_x", "contact_vec_y", "contact_vec_z", "episode_end"]
 
 
-def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: float, rotate_contact_vec: bool) -> None:
+def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: float, rotate_contact_vec: bool, blend_seconds: float = 0.5) -> None:
     info_path = root / "meta" / "info.json"
     info = json.loads(info_path.read_text())
 
@@ -116,13 +116,21 @@ def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: fl
         if contact_row is None:
             episodes_without_contact += 1
         contact_pos = contact_row["gripper_pos"] if contact_row is not None else None
+        contact_ts = contact_row["timestamp"] if contact_row is not None else None
+        episode_end_pos = rows[-1]["gripper_pos"]
 
         episode_duration = rows[-1]["timestamp"]
         for r in rows:
             if contact_pos is None:
                 contact_vec = np.zeros(3)
             else:
-                contact_vec = contact_pos - r["gripper_pos"]
+                # Before contact: point toward contact position.
+                # After contact: blend toward the episode-end position over blend_seconds,
+                # so the model is guided through pick-up and to the final resting location.
+                t_after = max(0.0, r["timestamp"] - contact_ts)
+                alpha = min(t_after / blend_seconds, 1.0) if blend_seconds > 0 else float(t_after > 0)
+                target_pos = (1.0 - alpha) * contact_pos + alpha * episode_end_pos
+                contact_vec = target_pos - r["gripper_pos"]
                 if rotate_contact_vec:
                     contact_vec = contact_vec.copy()
                     contact_vec[:2] = rotate_vector(contact_vec[:2], r["spin"])
@@ -197,6 +205,7 @@ def main() -> None:
     parser.add_argument("--new_root", help="local root for the labeled dataset (default datasets/<new name>)")
     parser.add_argument("--pressure_threshold", type=float, default=0.1, help="finger_pressure threshold marking contact")
     parser.add_argument("--episode_end_seconds", type=float, default=1.0, help="duration of the 'episode end' window")
+    parser.add_argument("--blend_seconds", type=float, default=0.5, help="seconds after contact over which contact_vec blends from pointing at contact position to pointing at episode-end position")
     parser.add_argument("--rotate_contact_vec", action="store_true", help="rotate contact_vec x/y into the gripper's frame using observation.state's spin (requires 'spin' to be present)")
     parser.add_argument("--push_to_hub", action="store_true", help="upload the labeled dataset to the Hugging Face Hub")
     args = parser.parse_args()
@@ -222,7 +231,7 @@ def main() -> None:
         new_repo_id = args.repo_id
         work_root = root
 
-    label_dataset(work_root, args.pressure_threshold, args.episode_end_seconds, args.rotate_contact_vec)
+    label_dataset(work_root, args.pressure_threshold, args.episode_end_seconds, args.rotate_contact_vec, args.blend_seconds)
 
     if args.push_to_hub:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
