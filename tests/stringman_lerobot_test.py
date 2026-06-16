@@ -22,7 +22,9 @@ import numpy as np
 from nf_robot.generated.nf import common, telemetry
 from nf_robot.ml.stringman_lerobot import (
     CHECKPOINT_EVERY,
+    DEFAULT_ACTION_SPACE,
     FPS,
+    _ACTION_SPACES,
     _CAMERA_MODES,
     _FEED_NAMES,
     StringmanConfig,
@@ -267,9 +269,9 @@ class TestFeatures(unittest.TestCase):
             self.assertIn(f"{name}_bearing", obs_ft)
             self.assertIn(f"{name}_distance", obs_ft)
 
-    def test_action_features_are_motor_only(self):
+    def test_action_features_match_default_action_space(self):
         robot = _make_robot()
-        expected = {"vel_x", "vel_y", "vel_z", "wrist_speed", "finger_speed"}
+        expected = set(_ACTION_SPACES[DEFAULT_ACTION_SPACE])
         self.assertEqual(set(robot.action_features.keys()), expected)
 
     def test_no_camera_keys_in_action_features(self):
@@ -531,6 +533,7 @@ class TestCameraModeForwarding(unittest.TestCase):
         with patch.object(_hfh, "hf_hub_download", return_value="/tmp/fake.json"), \
              patch("builtins.open", unittest.mock.mock_open(read_data='{"dataset": {"repo_id": "naavox/ds"}}')), \
              patch("nf_robot.ml.stringman_lerobot.LeRobotDataset"), \
+             patch("nf_robot.ml.stringman_lerobot.action_space_from_features", return_value="gripper_vel"), \
              patch.object(_lcp, "PreTrainedConfig"), \
              patch.object(_lpf, "make_pre_post_processors", return_value=(Mock(), Mock())), \
              patch.object(_lpf, "make_policy", return_value=mock_policy):
