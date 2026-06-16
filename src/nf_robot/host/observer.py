@@ -2788,7 +2788,8 @@ class AsyncObserver:
                 self.gantry_goal_pos = drop_point + GANTRY_HEIGHT_OVER_DROPOFF
                 await self.seek_gantry_goal()
                 # open gripper
-                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': RELAXED_OPEN}))
+                open_target = max(-90, min(RELAXED_OPEN, self.gripper_client.finger_angle - 10))
+                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': open_target}))
                 if next_target is not None:
                     # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
                     await asyncio.sleep(DELAY_AFTER_DROP)
@@ -3093,7 +3094,7 @@ class AsyncObserver:
         self.pe.finger_pressure_rising.clear()
         try:
             self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_START))
-            timeout = time.time() + 60
+            timeout = time.time() + 30
             lifted = False
             applying_force = False
             while not (lifted and applying_force) and time.time() < timeout:
@@ -3103,7 +3104,8 @@ class AsyncObserver:
                 lifted = gripper_height > 0.4
             logger.info(f'Ended grasp lifted={lifted} applying_force={applying_force} time_rem={timeout - time.time():.1f}s')
             # return value indicates whether grasp was successful
-            return lifted and applying_force
+            # todo future models will predict grasp success on their own
+            return lifted # and applying_force
         except asyncio.CancelledError:
             raise
         finally:
