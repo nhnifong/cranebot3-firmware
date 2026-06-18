@@ -13,6 +13,7 @@ __all__ = (
     "GripCamPredictions",
     "GripperModel",
     "GripperSensors",
+    "Logs",
     "MotorTorque",
     "NamedObjectPosition",
     "OneTarget",
@@ -358,6 +359,18 @@ class GripperSensors(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.telemetry", "GripperSensors", GripperSensors)
+
+
+@dataclass(eq=False, repr=False)
+class Logs(betterproto2.Message):
+    """
+    One or more log lines forwarded over telemetry
+    """
+
+    line: "list[str]" = betterproto2.field(1, betterproto2.TYPE_STRING, repeated=True)
+
+
+default_message_pool.register_message("nf.telemetry", "Logs", Logs)
 
 
 @dataclass(eq=False, repr=False)
@@ -730,6 +743,10 @@ class TelemetryItem(betterproto2.Message):
 
     task_status: "TaskStatus | None" = betterproto2.field(
         22, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
+    logs: "Logs | None" = betterproto2.field(
+        23, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
     retain_key: "str | None" = betterproto2.field(

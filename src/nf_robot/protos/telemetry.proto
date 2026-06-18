@@ -253,6 +253,11 @@ message TaskStatus {
   optional nf.common.RoutePoint route_destination = 3;
 }
 
+// One or more log lines forwarded over telemetry
+message Logs {
+  repeated string line = 1;
+}
+
 // A single kind of update that the observer is providing to an external UI
 // Typically about the robot's state such as it's position
 message TelemetryItem {
@@ -278,6 +283,7 @@ message TelemetryItem {
     SwingCancellationState swing_cancellation_state = 19;
     VisibilityStates visibility_states = 20;
     TaskStatus task_status = 22;
+    Logs logs = 23;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

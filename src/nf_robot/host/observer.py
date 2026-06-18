@@ -118,6 +118,21 @@ def capture_gripper_image(ndimage, gripper_occupied=False):
     cv2.imwrite(img_full_path, ndimage)
     logger.info(f"Captured: {img_filename} (Gripper: {gripper_occupied})")
 
+class TelemetryLogHandler(logging.Handler):
+    """Forwards log records to the telemetry stream via send_ui."""
+
+    def __init__(self, observer):
+        super().__init__()
+        self._observer = observer
+
+    def emit(self, record):
+        try:
+            line = self.format(record)
+            self._observer.send_ui(logs=telemetry.Logs(line=[line]))
+        except Exception:
+            self.handleError(record)
+
+
 class AsyncObserver:
     """
     Manager of multiple tasks running clients connected to each robot component
@@ -203,6 +218,7 @@ class AsyncObserver:
         self.run_ortho = run_ortho
         self.auto_start = auto_start
         self._device = None
+        self._telem_log_handler: TelemetryLogHandler | None = None
         self.swing_cancellation_task = None
         self.local_models = local_models
         # ortho projection state - written by _ortho_worker thread, read by run_perception AI task
@@ -731,6 +747,19 @@ class AsyncObserver:
                 await self._handle_disable_torque()
             case control.Command.ENABLE_TORQUE:
                 await self._handle_enable_torque()
+            case control.Command.DEBUG_LOG_OVER_T:
+                self._enable_debug_log_over_telemetry()
+
+    def _enable_debug_log_over_telemetry(self):
+        if self._telem_log_handler is not None:
+            return
+        nf_logger = logging.getLogger('nf_robot')
+        nf_logger.setLevel(logging.DEBUG)
+        handler = TelemetryLogHandler(self)
+        handler.setFormatter(logging.Formatter('%(levelname)s %(name)s %(message)s'))
+        nf_logger.addHandler(handler)
+        self._telem_log_handler = handler
+        logger.info('Debug logging over telemetry enabled')
 
     async def _handle_update_firmware(self):
         r = await self.stop_all()

@@ -51,6 +51,8 @@ enum Command {
   COMMAND_SHUTDOWN = 8;
   // Run a firmware update on every connected component.
   COMMAND_UPDATE_FIRMWARE = 14;
+  // Start sending debug level logs over telemetry
+  COMMAND_DEBUG_LOG_OVER_T = 19;
 }
 
 // Start one of several common tasks which take no arguments.

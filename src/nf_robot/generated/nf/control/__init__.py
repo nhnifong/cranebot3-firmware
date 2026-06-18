@@ -134,6 +134,11 @@ class Command(betterproto2.Enum):
     Run a firmware update on every connected component.
     """
 
+    DEBUG_LOG_OVER_T = 19
+    """
+    Start sending debug level logs over telemetry
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -156,6 +161,7 @@ class Command(betterproto2.Enum):
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
             14: "COMMAND_UPDATE_FIRMWARE",
+            19: "COMMAND_DEBUG_LOG_OVER_T",
         }
 
     @classmethod
@@ -180,6 +186,7 @@ class Command(betterproto2.Enum):
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,
             "COMMAND_UPDATE_FIRMWARE": 14,
+            "COMMAND_DEBUG_LOG_OVER_T": 19,
         }
 
 
