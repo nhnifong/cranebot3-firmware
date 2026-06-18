@@ -23,9 +23,11 @@ ANCHOR_MOTOR_TARGETS = [
 def scan_motors(controller, motor_type=MOTOR_TYPE, ids=MOTOR_ID_SCAN_RANGE, duration=0.5):
     """
     Probe a range of candidate motor IDs with a zero command and listen for responses.
-    Returns {motor_id: feedback_id} for every motor that responded, leaving the
-    controller's motor map exactly as it was before the call.
+    Returns {motor_id: feedback_id} for every motor that responded. Self-contained:
+    leaves the controller's motor map empty afterward.
     """
+    controller.motors.clear()
+    controller._motors_by_feedback.clear()
     controller.flush_bus()
     for motor_id in ids:
         motor = controller.add_motor(motor_id=motor_id, feedback_id=0x00, motor_type=motor_type)
@@ -51,15 +53,23 @@ def scan_motors(controller, motor_type=MOTOR_TYPE, ids=MOTOR_ID_SCAN_RANGE, dura
     return found
 
 
-def configure_one_motor(controller, label, target_motor_id, target_feedback_id, motor_type=MOTOR_TYPE):
+def configure_one_motor(controller, label, target_motor_id, target_feedback_id, motor_type=MOTOR_TYPE, attempts=3):
     """
-    Prompt for a single motor to be connected, then write its motor_id (ESC_ID) and
-    feedback_id (MST_ID) to the requested targets. Returns True if the motor_id
-    (ESC_ID) was changed, since that requires a power cycle to take effect.
+    Prompt for a single motor to be connected, then write its feedback_id (MST_ID)
+    and motor_id (ESC_ID) to the requested targets, verifying the writes actually
+    persisted to flash. Returns True if the motor_id (ESC_ID) was changed.
+
+    Important: when ESC_ID (register 8) is written, the motor starts listening on
+    the new id immediately. The flash store therefore has to be addressed to the
+    NEW id, not the old one. The CLI (and an earlier version of this script) store
+    against the old id, which is why their writes silently fail to persist. This
+    mirrors the web GUI's working sequence: write a register, point the motor object
+    at its new id, store; then a final explicit store like the GUI's button.
     """
     if target_motor_id == 0:
         raise ValueError("target_motor_id cannot be 0 (motor_id 0 bricks the motor)")
 
+    # Wait until exactly one motor is on the bus.
     while True:
         input(f"Plug in ONLY the {label} motor, then press Enter...")
         found = scan_motors(controller, motor_type=motor_type)
@@ -75,30 +85,55 @@ def configure_one_motor(controller, label, target_motor_id, target_feedback_id, 
         print(f"  {label} motor already has motor_id={target_motor_id}, feedback_id={target_feedback_id}.")
         return False
 
-    motor = controller.add_motor(motor_id=current_motor_id, feedback_id=0x00, motor_type=motor_type)
-    time.sleep(0.1)
-    controller.poll_feedback()
-
-    needs_store = False
-    if current_feedback_id != target_feedback_id:
-        motor.write_register(FEEDBACK_ID_REGISTER, target_feedback_id)
-        needs_store = True
-
     motor_id_changed = current_motor_id != target_motor_id
-    if motor_id_changed:
-        motor.write_register(MOTOR_ID_REGISTER, target_motor_id)
-        needs_store = True
 
-    if needs_store:
-        time.sleep(0.05)
-        motor.store_parameters()
+    for attempt in range(1, attempts + 1):
+        controller.motors.clear()
+        controller._motors_by_feedback.clear()
+        controller.flush_bus()
+        # Address the motor at whatever id it currently answers on.
+        motor = controller.add_motor(motor_id=current_motor_id, feedback_id=0x00, motor_type=motor_type)
         time.sleep(0.1)
+        controller.poll_feedback()
 
-    print(f"  Set {label} motor to motor_id={target_motor_id}, feedback_id={target_feedback_id}.")
+        # Feedback_id (MST_ID) first, while the motor is still at its current id.
+        if current_feedback_id != target_feedback_id:
+            motor.write_register(FEEDBACK_ID_REGISTER, target_feedback_id)
+            time.sleep(0.1)
+            motor.store_parameters()
+            time.sleep(0.3)
 
-    controller.motors.pop(motor.motor_id, None)
-    controller._motors_by_feedback.pop(motor.motor_id, None)
-    return motor_id_changed
+        # Motor_id (ESC_ID) next. After the write the motor listens on the new id,
+        # so repoint the motor object there before storing.
+        if motor_id_changed:
+            motor.write_register(MOTOR_ID_REGISTER, target_motor_id)
+            motor.motor_id = target_motor_id
+            time.sleep(0.1)
+            motor.store_parameters()
+            time.sleep(0.3)
+
+        # Final explicit store, like the GUI's "store parameters" button.
+        motor.store_parameters()
+        time.sleep(0.5)
+
+        controller.motors.clear()
+        controller._motors_by_feedback.clear()
+
+        # Verify it persisted. The motor may now answer at its old OR new id, so
+        # match on the feedback value rather than the id. A persisted feedback_id is
+        # our proxy that store_parameters committed all params (including ESC_ID).
+        verify = scan_motors(controller, motor_type=motor_type)
+        if len(verify) == 1 and target_feedback_id in verify.values():
+            answering_id = next(iter(verify))
+            print(f"  Set {label} motor to motor_id={target_motor_id}, feedback_id={target_feedback_id} "
+                  f"(currently answering at id {answering_id}).")
+            return motor_id_changed
+
+        if len(verify) == 1:
+            current_motor_id, current_feedback_id = next(iter(verify.items()))
+        print(f"  Write did not persist (attempt {attempt}/{attempts}), retrying...")
+
+    raise RuntimeError(f"Failed to configure {label} motor after {attempts} attempts (writes not persisting to flash).")
 
 
 def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TARGETS):
@@ -127,10 +162,14 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
         input("Power cycle both motors now, then press Enter once they're back on...")
 
     print("Confirming final motor IDs...")
-    found = scan_motors(controller, motor_type=motor_type)
-    if found != expected:
-        raise RuntimeError(f"Motor IDs still incorrect after configuration. Expected {expected}, found {found}.")
-    print("Motor IDs confirmed correct.")
+    found = {}
+    for _ in range(3):  # motors may need a moment to come up after a power cycle
+        found = scan_motors(controller, motor_type=motor_type)
+        if found == expected:
+            print("Motor IDs confirmed correct.")
+            return
+        time.sleep(0.5)
+    raise RuntimeError(f"Motor IDs still incorrect after configuration. Expected {expected}, found {found}.")
 
 
 def main():
