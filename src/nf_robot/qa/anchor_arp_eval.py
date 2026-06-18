@@ -3,9 +3,11 @@
 # test camera
 
 import time
+import socket
+import subprocess
 import argparse
 from damiao_motor import DaMiaoController
-from math import pi
+from math import pi, sqrt
 
 import nf_robot.common.definitions as model_constants
 
@@ -136,13 +138,55 @@ def configure_one_motor(controller, label, target_motor_id, target_feedback_id, 
     raise RuntimeError(f"Failed to configure {label} motor after {attempts} attempts (writes not persisting to flash).")
 
 
+def configure_feedback_in_place(controller, label, target_motor_id, target_feedback_id, motor_type=MOTOR_TYPE, attempts=3):
+    """
+    Set a motor's feedback_id (MST_ID) in place, while both motors are connected,
+    without changing its motor_id (ESC_ID). Because the motor keeps the id it
+    already answers on, addressing target_motor_id reaches only that motor even
+    with the other motor present on the bus. Used for the lower motor, which stays
+    on the factory motor_id (1), so it never needs to be unplugged on its own.
+    """
+    for attempt in range(1, attempts + 1):
+        controller.motors.clear()
+        controller._motors_by_feedback.clear()
+        controller.flush_bus()
+        motor = controller.add_motor(motor_id=target_motor_id, feedback_id=0x00, motor_type=motor_type)
+        time.sleep(0.1)
+        controller.poll_feedback()
+
+        motor.write_register(FEEDBACK_ID_REGISTER, target_feedback_id)
+        time.sleep(0.1)
+        motor.store_parameters()
+        time.sleep(0.3)
+        # Final explicit store, like the GUI's "store parameters" button.
+        motor.store_parameters()
+        time.sleep(0.5)
+
+        controller.motors.clear()
+        controller._motors_by_feedback.clear()
+
+        verify = scan_motors(controller, motor_type=motor_type)
+        if verify.get(target_motor_id) == target_feedback_id:
+            print(f"  Set {label} motor to motor_id={target_motor_id}, feedback_id={target_feedback_id}.")
+            return
+        print(f"  Write did not persist (attempt {attempt}/{attempts}), retrying...")
+
+    raise RuntimeError(f"Failed to configure {label} motor after {attempts} attempts (writes not persisting to flash).")
+
+
 def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TARGETS):
     """
     Make sure the anchor's two motors are set to their expected motor_id/feedback_id.
-    If they're already correct, returns immediately. Otherwise walks the user through
-    plugging in each motor individually to set its IDs, then both together to confirm.
+    If they're already correct, returns immediately. Otherwise configures the upper
+    motor on its own first (moving it off the factory id 1 to id 2). Once the upper
+    motor is on id 2, the lower motor is the only one still answering on the factory
+    id 1, so it can be configured in place with both motors connected, no further
+    unplugging required.
     """
     expected = {motor_id: feedback_id for _, motor_id, feedback_id in targets}
+    targets_by_label = {label: (motor_id, feedback_id) for label, motor_id, feedback_id in targets}
+    upper_motor_id, upper_feedback_id = targets_by_label["upper"]
+    lower_motor_id, lower_feedback_id = targets_by_label["lower"]
 
     print("Scanning for connected motors...")
     if scan_motors(controller, motor_type=motor_type) == expected:
@@ -150,16 +194,21 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
         return
 
     print("Motor IDs need to be configured.")
-    motor_id_changed = False
-    for label, target_motor_id, target_feedback_id in targets:
-        if configure_one_motor(controller, label, target_motor_id, target_feedback_id, motor_type=motor_type):
-            motor_id_changed = True
+
+    # Configure the upper motor by itself, moving it off the factory id 1 to id 2.
+    motor_id_changed = configure_one_motor(
+        controller, "upper", upper_motor_id, upper_feedback_id, motor_type=motor_type)
 
     input("Plug in both motors, then press Enter...")
 
     if motor_id_changed:
-        print("A motor_id (ESC_ID) was changed; that only takes effect after a power cycle.")
+        print("The upper motor's motor_id (ESC_ID) was changed; that only takes effect after a power cycle.")
         input("Power cycle both motors now, then press Enter once they're back on...")
+
+    # With the upper motor now on id 2, the lower motor is the only one still on the
+    # factory id 1, so set its feedback_id in place without unplugging anything.
+    configure_feedback_in_place(
+        controller, "lower", lower_motor_id, lower_feedback_id, motor_type=motor_type)
 
     print("Confirming final motor IDs...")
     found = {}
@@ -172,12 +221,86 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
     raise RuntimeError(f"Motor IDs still incorrect after configuration. Expected {expected}, found {found}.")
 
 
+def wind_with_ramp(motor, direction, total_revs, max_rev_per_s=4.0, accel_rev_per_s2=2.0, dt=0.02):
+    """
+    Wind `total_revs` revolutions of line onto the spool using a trapezoidal speed
+    profile: ramp up to max_rev_per_s, cruise, then ramp back down before stopping.
+    The integral of the velocity profile equals total_revs by construction, so the
+    correct amount of line is wound regardless of the ramp shape.
+
+    send_cmd_vel expects rad/s, so rev/s values are converted with 2*pi.
+    """
+    ramp_time = max_rev_per_s / accel_rev_per_s2
+    ramp_revs = 0.5 * max_rev_per_s * ramp_time  # revs covered during one ramp
+
+    if 2 * ramp_revs > total_revs:
+        # Too little line to reach max speed: triangular profile (ramp up then down).
+        ramp_time = sqrt(total_revs / accel_rev_per_s2)
+        peak_rev_per_s = accel_rev_per_s2 * ramp_time
+        cruise_time = 0.0
+    else:
+        peak_rev_per_s = max_rev_per_s
+        cruise_revs = total_revs - 2 * ramp_revs
+        cruise_time = cruise_revs / max_rev_per_s
+
+    def hold(vel_rev_per_s):
+        motor.send_cmd_vel(target_velocity=direction * vel_rev_per_s * 2 * pi)
+        time.sleep(dt)
+
+    # ramp up
+    t = 0.0
+    while t < ramp_time:
+        hold(accel_rev_per_s2 * t)
+        t += dt
+    # cruise
+    t = 0.0
+    while t < cruise_time:
+        hold(peak_rev_per_s)
+        t += dt
+    # ramp down
+    t = 0.0
+    while t < ramp_time:
+        hold(max(peak_rev_per_s - accel_rev_per_s2 * t, 0.0))
+        t += dt
+
+    motor.send_cmd_vel(target_velocity=0)
+
+
+def test_camera():
+    print('Starting Camera...')
+
+    stream_command = """
+    /usr/bin/rpicam-vid -t 0 -n \
+      --width=1920 --height=1080 \
+      -o tcp://0.0.0.0:8888?listen=1 \
+      --codec libav \
+      --libav-format mpegts \
+      --autofocus-mode continuous \
+      --bitrate 2000kbps
+    """.split()
+
+    # get my ip address
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    addr = s.getsockname()[0]
+    s.close()
+    print('Please run the following on your host machine and confirm good video, then close the video window.')
+    print(f'========\n\nffplay -fast -fflags nobuffer -flags low_delay "tcp://{addr}:8888"\n\n========')
+
+    subprocess.run(stream_command)
+
+
 def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--power", action="store_true",
                         help="Configures this anchor as the one which has the power line")
     args = parser.parse_args()
+
+    # The cranebot service grabs the can bus and camera, so it must be stopped first.
+    print('Stopping cranebot service...')
+    subprocess.run(["sudo", "systemctl", "stop", "cranebot.service"])
+
     if args.power:
         anchor_type = "arpeggio power anchor"
         full_diameter=model_constants.damiao_full_spool_diameter_power_line
@@ -210,20 +333,18 @@ def main():
             radius = 0.0362
             circumfrence = 2*pi*radius
             revs = length / circumfrence
-            rads = revs*2*pi
-            wind_speed = 6
-            seconds = rads/wind_speed
 
             input("When ready press Enter...")
             try:
                 motor.enable()
-                motor.send_cmd_vel(target_velocity=direction*wind_speed)
-                time.sleep(seconds)
+                wind_with_ramp(motor, direction, revs, max_rev_per_s=4.0)
             finally:
                 motor.send_cmd_vel(target_velocity=0)
                 motor.disable()
         else:
             continue
+
+    test_camera()
 
 
 if __name__ == "__main__":

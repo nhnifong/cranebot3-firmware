@@ -184,7 +184,7 @@ def main():
     addr = s.getsockname()[0]
     s.close()
     print('Please run the following on your host machine and confirm good video, then close the video window.')
-    print(f'ffplay -fast -fflags nobuffer -flags low_delay "tcp://{addr}:8888"')
+    print(f'========\n\nffplay -fast -fflags nobuffer -flags low_delay "tcp://{addr}:8888"\n\n========')
 
     subprocess.run(stream_command)
 
