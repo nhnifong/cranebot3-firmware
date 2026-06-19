@@ -1968,6 +1968,17 @@ class AsyncObserver:
                         self.cloud_telem_websocket = None
             except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
                 pass # normal close
+            except websockets.exceptions.InvalidStatus as e:
+                if e.response.status_code == 409:
+                    logger.warning(
+                        f'Control plane rejected connection (HTTP 409): another robot is '
+                        f'already connected with id "{self.config.robot_id}".'
+                    )
+                else:
+                    logger.warning(
+                        f'Control plane rejected connection: HTTP {e.response.status_code}'
+                    )
+                await asyncio.sleep(10) # still could be considered a transient error, but probably not.
             except ConnectionRefusedError:
                 logger.warning(f'Connection to control plane refused')
             except websockets.exceptions.InvalidMessage:
