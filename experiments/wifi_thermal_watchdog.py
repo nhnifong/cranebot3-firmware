@@ -14,8 +14,9 @@ Every INTERVAL seconds it:
      each recovery step brought us back.
 
 Everything is appended (with flush + fsync) to a log file on the SD card. The
-default lives on the FAT /boot/firmware partition so you can yank the card and
-read the log on any laptop even if the Pi has wedged itself.
+default is the invoking user's home dir (e.g. /home/pi/wifi_thermal_watchdog.log,
+resolved via SUDO_USER so it lands there even under sudo). Point --logfile at
+/boot/firmware/... instead if you want a copy you can read by pulling the card.
 
 Recovery escalates from least to most disruptive. A soft radio toggle often is
 NOT enough to revive a chip that has thermally shut down, so we escalate to
@@ -36,8 +37,7 @@ To leave it running across an ssh logout:
 
     sudo nohup experiments/wifi_thermal_watchdog.py >/dev/null 2>&1 &
 
-Then later, pull the SD card (or scp the file) and read
-/boot/firmware/wifi_thermal_watchdog.log.
+Then later read ~/wifi_thermal_watchdog.log (or scp it off the Pi).
 """
 
 import argparse
@@ -50,8 +50,26 @@ from datetime import datetime, timezone
 
 # ---- Defaults (override via CLI) -------------------------------------------
 DEFAULT_INTERVAL = 600  # seconds between samples (10 minutes)
-DEFAULT_LOGFILE = "/boot/firmware/wifi_thermal_watchdog.log"
 DEFAULT_IFACE = "wlan0"
+
+
+def _invoking_home():
+    """Home dir of the real user, even when launched via sudo.
+
+    Under `sudo` os.path.expanduser('~') resolves to /root, but we want the
+    log to land in the pi user's home so it is easy to find and read.
+    """
+    user = os.environ.get("SUDO_USER")
+    if user:
+        try:
+            import pwd
+            return pwd.getpwnam(user).pw_dir
+        except (KeyError, ImportError):
+            pass
+    return os.path.expanduser("~")
+
+
+DEFAULT_LOGFILE = os.path.join(_invoking_home(), "wifi_thermal_watchdog.log")
 SETTLE_SECONDS = 8  # how long to wait for the link to come back after a step
 PING_COUNT = 2
 PING_TIMEOUT = 3  # seconds per ping
