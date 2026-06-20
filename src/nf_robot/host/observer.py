@@ -1372,6 +1372,7 @@ class AsyncObserver:
                 return
             elif len(self.anchors) > N_ANCHORS[self.config.anchor_type]:
                 logger.warning(f'Too many anchors found for type {self.config.anchor_type} \n{self.anchors}')
+            await self._handle_enable_torque()
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
             #   it is only necessary to ensure enough have been collected from each client and average them.
@@ -1867,6 +1868,9 @@ class AsyncObserver:
                 del self.anchors[client.anchor_num]
             elif kind == gripper_service_name or kind == arp_gripper_service_name:
                 self.gripper_client = None
+                # persist the last observed named positions so they survive losing the gripper
+                self.config.last_gantry_pos = fromnp(self.pe.gant_pos)
+                save_config(self.config, self.config_path)
             del self.bot_clients[key]
 
     async def startup_action(self, event):
