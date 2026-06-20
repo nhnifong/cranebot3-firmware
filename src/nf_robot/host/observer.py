@@ -1329,7 +1329,7 @@ class AsyncObserver:
         we return without doing anything rather than upgrading without permission."""
         VERTICAL_TOLERANCE_DEG = 10.0
         MAX_LIFT_M = 1.0
-        MAX_LIFT_S = 6.0
+        MAX_LIFT_S = 10.0
         vertical_start_pos = self.pe.gant_pos
         vertical_start_time = time.time()
         while True:
@@ -1425,8 +1425,7 @@ class AsyncObserver:
                 
                 # This might be the first time the lines are tightened after connecting the carabiners, and the gripper pole could be horizontal.
                 # even if predictable motion is not yet possible do some basic checks to ensure the gripper is veritcal and in the middle of the room
-                # TODO enable once testedd
-                #await self.ensure_pole_upright()
+                await self.ensure_pole_upright()
 
                 # measure finger contact and reset wrist while doing the diamond pattern to save time.
                 async def wait_then_finger():
