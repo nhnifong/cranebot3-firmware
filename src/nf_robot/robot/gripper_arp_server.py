@@ -382,6 +382,20 @@ class GripperArpServer(RobotComponentServer):
         else:
             return 0
 
+    def getAngleFromVertical(self):
+        """Return the tilt angle in degrees between the gripper's down axis (Z)
+        and true vertical, derived from the accelerometer's gravity reading.
+
+        When the gripper hangs straight down and is roughly stationary, the
+        accelerometer reads gravity along Z, so this returns ~0; a fully
+        horizontal gripper reads ~90. The result is unsigned (0-180) and does
+        not indicate tilt direction. It is only meaningful while the gripper is
+        approximately stationary, since the accelerometer cannot distinguish
+        gravity from motion-induced acceleration."""
+        ax, ay, az = self.imu.acceleration  # m/s^2
+        horizontal = math.sqrt(ax * ax + ay * ay)
+        return math.degrees(math.atan2(horizontal, az))
+
     def readOtherSensors(self):
         t = time.time()
         finger_angle = self.getFingerAngle()
@@ -701,6 +715,8 @@ class GripperArpServer(RobotComponentServer):
             self.setWristSpeed(float(update['set_wrist_speed']))
         if 'measure_finger_contact' in update:
             asyncio.create_task(self.measureFingerContact())
+        if 'query_angle_from_vertical' in update:
+            self.update['angle_from_vertical'] = self.getAngleFromVertical()
         if 'identify' in update:
             self.identify()
         if 'reset_wrist' in update and not self.wrist_busy:

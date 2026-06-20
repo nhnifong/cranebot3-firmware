@@ -66,6 +66,9 @@ class ArpeggioGripperClient(ComponentClient):
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
         self.finger_contact_calibration_complete = asyncio.Event()
+        # set when the gripper replies to a query_angle_from_vertical request
+        self.angle_from_vertical_received = asyncio.Event()
+        self.last_angle_from_vertical = None
         
         # State variables added to track and prevent platform drift
         self._swing_position_offset = np.zeros(2)
@@ -133,6 +136,23 @@ class ArpeggioGripperClient(ComponentClient):
 
         if 'finger_contact_calibration_complete' in update:
             self.finger_contact_calibration_complete.set()
+
+        if 'angle_from_vertical' in update:
+            self.last_angle_from_vertical = float(update['angle_from_vertical'])
+            self.angle_from_vertical_received.set()
+
+    async def query_angle_from_vertical(self, timeout=2.0):
+        """Ask the gripper for a one-shot reading of how many degrees its pole is
+        tilted from vertical (from the accelerometer) and return it. Returns None
+        if the gripper does not reply within `timeout` seconds."""
+        self.angle_from_vertical_received.clear()
+        await self.send_commands({'query_angle_from_vertical': None})
+        try:
+            await asyncio.wait_for(self.angle_from_vertical_received.wait(), timeout)
+        except asyncio.TimeoutError:
+            logger.warning('Timed out waiting for angle_from_vertical reply from gripper')
+            return None
+        return self.last_angle_from_vertical
 
     def compute_swing_correction(self, future_time):
         """Compute a corrective velocity to be applied at a future time in order to cancel the swing"""

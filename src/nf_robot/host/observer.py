@@ -489,6 +489,8 @@ class AsyncObserver:
             r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data())
         if item.action == 'stow':
             r = await self.stow_lines()
+        if item.action == 'upright':
+            r = await self.invoke_motion_task(self.ensure_pole_upright())
         if item.action.startswith('swinglatency '):
             parts = item.action.split(' ')
             self.config.swing_latency = float(parts[1])
@@ -1314,6 +1316,42 @@ class AsyncObserver:
         except asyncio.CancelledError:
             raise
 
+    async def ensure_pole_upright(self):
+        """Raise the gripper until its pole is within 10 degrees of vertical.
+
+        Raising the gripper tends to pull a horizontal pole upright, and vertical
+        motion is usable even before calibration. Move slowly upward until the
+        accelerometer reports the pole is within tolerance, but give up after
+        1 meter of travel or 6 seconds since further lifting could break things.
+        On giving up, stops the spools, shows a popup, and raises RuntimeError.
+
+        If the gripper never answers the query, its server is too old to support it;
+        we return without doing anything rather than upgrading without permission."""
+        VERTICAL_TOLERANCE_DEG = 10.0
+        MAX_LIFT_M = 1.0
+        MAX_LIFT_S = 6.0
+        vertical_start_pos = self.pe.gant_pos
+        vertical_start_time = time.time()
+        while True:
+            angle = await self.gripper_client.query_angle_from_vertical()
+            if angle is None:
+                # No reply means the gripper is running an older server
+                logger.warning('Gripper did not answer angle_from_vertical query (server likely out of date); skipping ensure_pole_upright')
+                self.slow_stop_all_spools()
+                return
+            if angle <= VERTICAL_TOLERANCE_DEG:
+                break
+            if (np.linalg.norm(self.pe.gant_pos - vertical_start_pos) >= MAX_LIFT_M
+                    or time.time() - vertical_start_time >= MAX_LIFT_S):
+                self.slow_stop_all_spools()
+                self.send_ui(pop_message=telemetry.Popup(
+                    message='Could not achive a vertical pose to begin calibration. manually position the gripper in the center of the room hovering just over the floor and restart calibration.'
+                ))
+                raise RuntimeError('Could not achieve a vertical gripper pose to begin calibration')
+            await self.move_direction_speed([0, 0, 1], 0.1, downward_bias=0)
+            await asyncio.sleep(0.25)
+        self.slow_stop_all_spools()
+
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
@@ -1380,7 +1418,13 @@ class AsyncObserver:
                     name="Calibration",
                     current_action="Collecting proprioceptive data",
                 ))
+
+                # Tighten lines
                 await self.half_auto_calibration()
+                
+                # This might be the first time the lines are tightened after connecting the carabiners, and the gripper pole could be horizontal.
+                # even if predictable motion is not yet possible do some basic checks to ensure the gripper is veritcal and in the middle of the room
+                await self.ensure_pole_upright()
 
                 # measure finger contact and reset wrist while doing the diamond pattern to save time.
                 async def wait_then_finger():
