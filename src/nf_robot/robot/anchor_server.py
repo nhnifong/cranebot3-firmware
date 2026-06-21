@@ -15,7 +15,6 @@ from zeroconf.asyncio import (
     AsyncZeroconf,
 )
 import uuid
-import socket
 import time
 import re
 from getmac import get_mac_address
@@ -26,6 +25,7 @@ import nf_robot.common.definitions as model_constants
 from nf_robot.robot.spools import SpoolController
 from nf_robot.robot.mks42c_motor import MKSSERVO42C
 from nf_robot.robot.forget_wifi import forget_all_wifi_networks
+from nf_robot.common.util import get_local_ip
 
 # using libav makes it possible to send a containerized stream with pts
 # hardware h264 encoding is still used as long as resolution is below 1080
@@ -332,26 +332,13 @@ class RobotComponentServer:
                 logging.info('Stopping Spool Motor')
                 self.spooler.fastStop()
 
-    def get_wifi_ip(self):
-        """Gets the Raspberry Pi's IP address on the Wi-Fi interface."""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception as e:
-            logging.error(f"Error getting IP address: {e}")
-            # todo just wait 10 seconds and try again
-            return None
-
     async def register_mdns_service(self, name, service_type, port, properties={}):
         """Registers an mDNS service on the network."""
 
         ip = "127.0.0.1" # if ip remains unchanged, we are in a unit test
         if self.zc is None:
             self.zc = AsyncZeroconf(ip_version=zeroconf.IPVersion.V4Only)
-            ip = self.get_wifi_ip()
+            ip = get_local_ip()
 
         logging.info(f'zeroconf instance advertising on {ip}')
         await asyncio.sleep(1)

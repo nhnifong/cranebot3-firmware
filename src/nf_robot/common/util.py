@@ -1,5 +1,22 @@
+import logging
+import socket
+
 import numpy as np
 from nf_robot.generated.nf import common
+
+logger = logging.getLogger(__name__)
+
+def get_local_ip():
+    """Returns this host's IP address on the default outbound interface."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception as e:
+        logger.error(f"Error getting local IP address: {e}")
+        return None
 
 def tonp(vec: common.Vec3):
     return np.array([vec.x, vec.y, vec.z], dtype=float)

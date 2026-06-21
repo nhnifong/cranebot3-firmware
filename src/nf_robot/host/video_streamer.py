@@ -2,7 +2,6 @@ import subprocess
 import time
 import logging
 import atexit
-import socket
 import threading
 import numpy as np
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -10,6 +9,8 @@ from socketserver import ThreadingMixIn
 import io
 import cv2
 from urllib.parse import urlparse
+
+from nf_robot.common.util import get_local_ip
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,7 @@ class NfVideoStreamer:
     (2 frames when local-only, 20 when streaming to RTMP).
     """
     def __init__(self, width, height, fps, mjpeg_port, stream_path, telemetry_env, on_ready=None):
-        self._local_uri = f'http://localhost:{mjpeg_port}/stream.mjpeg'
+        self._local_uri = f'http://{get_local_ip() or "localhost"}:{mjpeg_port}/stream.mjpeg'
         self._stream_path = stream_path
         self._on_ready = on_ready
         self._ready_sent = False
