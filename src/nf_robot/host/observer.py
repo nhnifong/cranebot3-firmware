@@ -1704,6 +1704,7 @@ class AsyncObserver:
         MEASURE_TIMEOUT_S = 5.0  # give up on a trial if the tag isn't seen in this long
         RANDOM_ALTITUDE_RANGE_M = (1.0, 1.6)
         RANDOM_MARGIN_M = 0.4    # keep random points this far inside the anchor footprint
+        MOVE_TAG_PROMPT_S = 10   # time given to relocate the tag between trials
 
         # The route source must be a floor tag we have a saved position for.
         if self.pnp_src not in ROUTE_POINT_TAG_NAMES:
@@ -1715,7 +1716,6 @@ class AsyncObserver:
             return
 
         GANTRY_HEIGHT_OVER_TARGET = tonp(self.config.pick_and_place.gantry_height_over_target)
-        goal_pos = tonp(self.config.named_positions[tag_name]) + GANTRY_HEIGHT_OVER_TARGET
 
         # TODO(nathaniel): the gripper camera is tilted, so when the gripper is centered
         # over the tag at the correct altitude the tag does NOT appear straight down. Derive
@@ -1758,7 +1758,8 @@ class AsyncObserver:
             self.gantry_goal_pos = random_point
             await self.seek_gantry_goal(auto_altitude=True)
 
-            # goal-seek to the tag
+            # goal-seek to the tag's current saved position
+            goal_pos = tonp(self.config.named_positions[tag_name]) + GANTRY_HEIGHT_OVER_TARGET
             self.gantry_goal_pos = goal_pos
             await self.seek_gantry_goal(auto_altitude=True)
             await asyncio.sleep(SETTLE_S)
@@ -1771,6 +1772,12 @@ class AsyncObserver:
             logger.info(f'Goalseek trial {trial + 1}: deviation {deviation * 100}cm '
                         f'(magnitude {np.linalg.norm(deviation) * 100:.2f}cm)')
             deviations.append(deviation)
+
+            # ask the user to relocate the tag, then resume automatically
+            if trial < NUM_TRIALS - 1:
+                self.send_ui(pop_message=telemetry.Popup(
+                    message=f'Move the "{tag_name}" tag to a new spot. Resuming in {MOVE_TAG_PROMPT_S}s...'))
+                await asyncio.sleep(MOVE_TAG_PROMPT_S)
 
         if not deviations:
             logger.warning('Goalseek diagnostic collected no measurements')
