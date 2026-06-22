@@ -5,7 +5,6 @@
 import time
 import socket
 import subprocess
-import argparse
 from damiao_motor import DaMiaoController
 from math import pi, sqrt
 
@@ -203,7 +202,7 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
 
     if motor_id_changed:
         print("The upper motor's motor_id (ESC_ID) was changed; that only takes effect after a power cycle.")
-        input("Power cycle both motors now, then press Enter once they're back on...")
+        input("Power cycle both motors now by pulling the barrel jack connector and re-plugging it, then press Enter. If you are not powering the pi any other way, just come back and start this script again, and it will pick up where it left off.")
 
     # With the upper motor now on id 2, the lower motor is the only one still on the
     # factory id 1, so set its feedback_id in place without unplugging anything.
@@ -284,7 +283,7 @@ def test_camera():
     s.connect(("8.8.8.8", 80))
     addr = s.getsockname()[0]
     s.close()
-    print('Please run the following on your host machine and confirm good video, then close the video window.')
+    print('Please run the following on your host machine and confirm good video, then close the video window by pressing q.')
     print(f'========\n\nffplay -fast -fflags nobuffer -flags low_delay "tcp://{addr}:8888"\n\n========')
 
     subprocess.run(stream_command)
@@ -292,25 +291,9 @@ def test_camera():
 
 def main():
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--power", action="store_true",
-                        help="Configures this anchor as the one which has the power line")
-    args = parser.parse_args()
-
     # The cranebot service grabs the can bus and camera, so it must be stopped first.
     print('Stopping cranebot service...')
     subprocess.run(["sudo", "systemctl", "stop", "cranebot.service"])
-
-    if args.power:
-        anchor_type = "arpeggio power anchor"
-        full_diameter=model_constants.damiao_full_spool_diameter_power_line
-    else:
-        anchor_type = "arpeggio anchor"
-        full_diameter=model_constants.damiao_full_spool_diameter_fishing_line
-
-    # Write the file that differentiates power anchors from regular anchors
-    with open('/opt/robot/server.conf', 'w') as f:
-        f.write(anchor_type + '\n')
 
     print('Setting up can bus interface')
     controller = DaMiaoController(channel="can0", bustype="socketcan")
@@ -323,9 +306,21 @@ def main():
     lower_motor.disable()
     upper_motor.disable()
     motors = [
-        (lower_motor, -1, 'lower', 14.0), # lower spool needs more line because it goes around the eyelet
-        (upper_motor, 1, 'upper', 7.0),
+        (lower_motor, -1, 'lower', 15.0), # lower spool needs more line because it goes around the eyelet
+        (upper_motor, 1, 'upper', 7.5),
     ]
+
+    # Differentiate power anchors from regular anchors before winding line.
+    if input("Does this anchor have a powerline spool? y/n").strip().lower() == 'y':
+        anchor_type = "arpeggio power anchor"
+        full_diameter = model_constants.damiao_full_spool_diameter_power_line
+    else:
+        anchor_type = "arpeggio anchor"
+        full_diameter = model_constants.damiao_full_spool_diameter_fishing_line
+
+    # Write the file that differentiates power anchors from regular anchors
+    with open('/opt/robot/server.conf', 'w') as f:
+        f.write(anchor_type + '\n')
 
     for motor, direction, name, length in motors:
         val = input(f"Do you need to wind the {name} motor? y/n")
@@ -344,7 +339,8 @@ def main():
         else:
             continue
 
-    test_camera()
+    if input("Do you want to run the camera test? y/n").strip().lower() == 'y':
+        test_camera()
 
 
 if __name__ == "__main__":
