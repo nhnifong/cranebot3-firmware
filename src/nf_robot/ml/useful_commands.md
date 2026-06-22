@@ -116,8 +116,38 @@ lerobot-train \
   --wandb.enable=false \
   --tolerance_s=0.001 \
   --policy.push_to_hub=true \
-  --save_freq=1000 \
+  --save_freq=5000 \
   --batch_size=92
+
+train locally with dinov3 patches
+
+lerobot-train \
+  --dataset.repo_id=naavox/move_clutter_384 \
+  --dataset.root=/media/nhn/nfdrive/datasets/move_clutter_384/ \
+  --output_dir=./outputs/dit-dino-1/training \
+  --steps=30000 \
+  --dataset.image_transforms.enable=true \
+  --dataset.image_transforms.max_num_transforms=3 \
+  --policy.type=multi_task_dit \
+  --policy.device=cuda \
+  --policy.vision_encoder_name=facebook/dinov3-vitb16-pretrain-lvd1689m \
+  --policy.use_visual_cross_attention=true \
+  --policy.horizon=64 \
+  --policy.n_action_steps=32 \
+  --policy.objective=flow_matching \
+  --policy.timestep_sampling_strategy=beta \
+  --policy.timestep_sampling_alpha=1.5 \
+  --policy.timestep_sampling_beta=1.0 \
+  --policy.timestep_sampling_s=0.999 \
+  --policy.num_integration_steps=100 \
+  --policy.integration_method=euler \
+  --policy.sigma_min=0.0 \
+  --policy.repo_id="naavox/dit-dino-1" \
+  --wandb.enable=false \
+  --tolerance_s=0.001 \
+  --policy.push_to_hub=true \
+  --save_freq=5000 \
+  --batch_size=44
 
 train on modal
 

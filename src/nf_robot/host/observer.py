@@ -504,6 +504,10 @@ class AsyncObserver:
             r = await self.invoke_motion_task(self.chase_tag('trash'))
         if item.action == 'ferry':
             r = await self.invoke_motion_task(self.ferry('hamper', 'trash'))
+        if item.action == 'linear':
+            r = await self.invoke_motion_task(self.linear_height_check_task())
+        if item.action == 'goalseek':
+            r = await self.invoke_motion_task(self.goalseek_diagnostic_task())
         if item.action == 'sync_timezone':
             self.sync_timezone_to_bots()
         if item.action.startswith('untwist'):
@@ -728,7 +732,7 @@ class AsyncObserver:
             case control.Command.PICK_AND_DROP:
                 r = await self.invoke_motion_task(self.pick_and_place_loop())
             case control.Command.HORIZONTAL_CHECK:
-                r = await self.invoke_motion_task(self.horizontal_line_task())
+                r = await self.invoke_motion_task(self.linear_height_check_task())
             case control.Command.COLLECT_GRIPPER_IMAGES:
                 self._handle_collect_images()
             case control.Command.SHUTDOWN:
@@ -1590,20 +1594,196 @@ class AsyncObserver:
         save_config(self.config, self.config_path)
         self.gripper_client.calibrating_room_spin = False
 
-    async def horizontal_line_task(self):
+    async def linear_height_check_task(self):
         """
-        Attempt to move the gantry in a perfectly horizontal line. How hard could this be?
-        This is a motion task
+        Measure the average deviation from an ideal constant height, as reported by the
+        laser rangefinder, while traversing the work area from one wall to the other.
+        Triggered by the debug command "linear". This is a motion task.
+
+        The gantry starts in the middle of the work area, 1.5m above the origin, performs
+        a half calibration, then moves to a point between anchor 0 and eyelet 0 and across
+        to the opposite point between anchor 1 and eyelet 1, both at 1.5m altitude. Through
+        an ideal wall-to-wall move the laser should read (1.5 - laser_offset) the whole way.
+        Aborts if the laser altitude drops below 0.2m or if the gantry comes within 0.4m of
+        the ceiling (the z position of anchor 0).
         """
-        await self.tension_and_wait()
-        await asyncio.sleep(1)
-        range_at_start = self.datastore.range_record.getLast()[1]
-        result = await self.move_direction_speed([1,0,0], 0.2, downward_bias=0)
-        await asyncio.sleep(4)
-        self.slow_stop_all_spools()
-        await asyncio.sleep(1)
-        range_at_end = self.datastore.range_record.getLast()[1]
-        logger.info(f'During attempted horizontal move, height rose by {range_at_end - range_at_start} meters')
+        TEST_ALTITUDE_M = 1.5
+        MIN_LASER_ALTITUDE_M = 0.2
+        CEILING_MARGIN_M = 0.4
+        WALL_STANDOFF_M = 0.15  # pull the endpoints this far back toward the origin from the wall
+        SAMPLE_INTERVAL_S = 0.02
+        ideal_laser_range = TEST_ALTITUDE_M - POLE[2] - model_constants.laser_offset
+
+        # Live geometry model. For the arpeggio system the pull points are ordered
+        # [anchor0, eyelet0, anchor1, eyelet1].
+        if len(self.pe.anchor_points) < 4:
+            logger.warning('Linear height check needs the eyelet/anchor geometry of the arpeggio system')
+            return
+        anchor0, eyelet0, anchor1, eyelet1 = self.pe.anchor_points[:4]
+        ceiling_z = anchor0[2]
+
+        # Wall-to-wall endpoints: midpoint of each wall's two pull points, at test altitude,
+        # pulled WALL_STANDOFF_M back toward the origin because right next to the wall is a deadzone.
+        def standoff_point(wall_xy):
+            toward_origin = -wall_xy
+            dist = np.linalg.norm(toward_origin)
+            if dist > 1e-6:
+                wall_xy = wall_xy + toward_origin / dist * WALL_STANDOFF_M
+            return np.array([*wall_xy, TEST_ALTITUDE_M])
+
+        point_a = standoff_point((anchor0[:2] + eyelet0[:2]) / 2)
+        point_b = standoff_point((anchor1[:2] + eyelet1[:2]) / 2)
+
+        # Start in the middle of the work area, 1.5m over the origin, and calibrate.
+        self.gantry_goal_pos = np.array([0, 0, TEST_ALTITUDE_M])
+        await self.seek_gantry_goal(auto_altitude=True)
+        await self.half_auto_calibration()
+
+        # Move to the first wall (straight line).
+        self.gantry_goal_pos = point_a
+        await self.seek_gantry_goal(auto_altitude=True)
+
+        # Traverse to the far wall, sampling the laser the whole way.
+        # disable altitude cruise during test
+        deviations = []
+        aborted = None
+        self.gantry_goal_pos = point_b
+        move_task = asyncio.create_task(self.seek_gantry_goal(auto_altitude=False))
+        try:
+            while not move_task.done():
+                await asyncio.sleep(SAMPLE_INTERVAL_S)
+                laser_range = self.datastore.range_record.getLast()[1]
+                gant_z = self.pe.gant_pos[2]
+                if laser_range < MIN_LASER_ALTITUDE_M:
+                    aborted = f'laser altitude {laser_range:.3f}m dropped below {MIN_LASER_ALTITUDE_M}m'
+                    break
+                if ceiling_z - gant_z < CEILING_MARGIN_M:
+                    aborted = (f'gantry came within {CEILING_MARGIN_M}m of the ceiling '
+                               f'(gantry z={gant_z:.3f}m, ceiling z={ceiling_z:.3f}m)')
+                    break
+                deviations.append(laser_range - ideal_laser_range)
+        finally:
+            move_task.cancel()
+            try:
+                await move_task
+            except asyncio.CancelledError:
+                pass
+            self.slow_stop_all_spools()
+
+        if aborted is not None:
+            logger.warning(f'Linear height check aborted: {aborted}')
+            return
+
+        if not deviations:
+            logger.warning('Linear height check collected no laser samples')
+            return
+
+        deviations_cm = np.array(deviations) * 100
+        logger.info(
+            f'Linear height check complete over {len(deviations_cm)} samples. '
+            f'Ideal laser range {ideal_laser_range * 100:.1f}cm. '
+            f'Mean deviation {deviations_cm.mean():+.2f}cm, '
+            f'mean abs deviation {np.abs(deviations_cm).mean():.2f}cm, '
+            f'RMS {np.sqrt((deviations_cm ** 2).mean()):.2f}cm, '
+            f'min {deviations_cm.min():+.2f}cm, max {deviations_cm.max():+.2f}cm')
+
+    async def goalseek_diagnostic_task(self):
+        """
+        Measure how accurately seek_gantry_goal parks the gripper over a route-point tag.
+        Triggered by the debug command "goalseek". This is a motion task.
+
+        For each of NUM_TRIALS, fly to a random spot in the room, then goal-seek to the
+        current route source tag (assumed to be lying flat on the floor, facing up). Once
+        parked, read where the tag appears in the gripper camera and compare it against the
+        ideal pose it would have if it were directly under the gripper at the correct
+        altitude. The RMS of those deviations across all trials is reported in cm.
+        """
+        NUM_TRIALS = 10
+        SETTLE_S = 2.0           # let the gripper swing settle before measuring
+        MEASURE_WINDOW_S = 1.0   # average tag readings over this window
+        MEASURE_TIMEOUT_S = 5.0  # give up on a trial if the tag isn't seen in this long
+        RANDOM_ALTITUDE_RANGE_M = (1.0, 1.6)
+        RANDOM_MARGIN_M = 0.4    # keep random points this far inside the anchor footprint
+
+        # The route source must be a floor tag we have a saved position for.
+        if self.pnp_src not in ROUTE_POINT_TAG_NAMES:
+            logger.warning('Goalseek diagnostic requires the route source to be a tag (hamper/toys/trash/gamepad)')
+            return
+        tag_name = ROUTE_POINT_TAG_NAMES[self.pnp_src]
+        if tag_name not in self.config.named_positions:
+            logger.warning(f'Goalseek diagnostic has no saved position for tag "{tag_name}"')
+            return
+
+        GANTRY_HEIGHT_OVER_TARGET = tonp(self.config.pick_and_place.gantry_height_over_target)
+        goal_pos = tonp(self.config.named_positions[tag_name]) + GANTRY_HEIGHT_OVER_TARGET
+
+        # TODO(nathaniel): the gripper camera is tilted, so when the gripper is centered
+        # over the tag at the correct altitude the tag does NOT appear straight down. Derive
+        # the exact (position) the tag should have in the camera frame and fill it in here;
+        # deviation is measured against this reference.
+        IDEAL_TAG_POSITION_IN_CAMERA = np.array([0.0, 0.0, GANTRY_HEIGHT_OVER_TARGET[2]])
+
+        # random-point bounds from the anchor footprint
+        anchor_xy = self.pe.anchor_points[:, :2]
+        xy_min = anchor_xy.min(axis=0) + RANDOM_MARGIN_M
+        xy_max = anchor_xy.max(axis=0) - RANDOM_MARGIN_M
+
+        async def measure_tag_position():
+            """Average the tag position seen in the gripper camera over a short window."""
+            samples = []
+            deadline = time.time() + MEASURE_TIMEOUT_S
+            window_end = None
+            while time.time() < deadline:
+                pose = self.gripper_client.route_tag_poses_relative_to_camera.get(tag_name)
+                if pose is not None:
+                    samples.append(np.array(pose[1]))
+                    if window_end is None:
+                        window_end = time.time() + MEASURE_WINDOW_S
+                if window_end is not None and time.time() >= window_end:
+                    break
+                await asyncio.sleep(0.1)
+            if not samples:
+                return None
+            return np.mean(samples, axis=0)
+
+        deviations = []
+        for trial in range(NUM_TRIALS):
+            # fly to a random place in the room
+            random_point = np.array([
+                np.random.uniform(xy_min[0], xy_max[0]),
+                np.random.uniform(xy_min[1], xy_max[1]),
+                np.random.uniform(*RANDOM_ALTITUDE_RANGE_M),
+            ])
+            logger.info(f'Goalseek trial {trial + 1}/{NUM_TRIALS}: random point {random_point}')
+            self.gantry_goal_pos = random_point
+            await self.seek_gantry_goal(auto_altitude=True)
+
+            # goal-seek to the tag
+            self.gantry_goal_pos = goal_pos
+            await self.seek_gantry_goal(auto_altitude=True)
+            await asyncio.sleep(SETTLE_S)
+
+            observed = await measure_tag_position()
+            if observed is None:
+                logger.warning(f'Goalseek trial {trial + 1}: tag "{tag_name}" not seen in gripper camera, skipping')
+                continue
+            deviation = observed - IDEAL_TAG_POSITION_IN_CAMERA
+            logger.info(f'Goalseek trial {trial + 1}: deviation {deviation * 100}cm '
+                        f'(magnitude {np.linalg.norm(deviation) * 100:.2f}cm)')
+            deviations.append(deviation)
+
+        if not deviations:
+            logger.warning('Goalseek diagnostic collected no measurements')
+            return
+
+        deviations = np.array(deviations)
+        magnitudes_cm = np.linalg.norm(deviations, axis=1) * 100
+        rms_cm = np.sqrt((magnitudes_cm ** 2).mean())
+        per_axis_rms_cm = np.sqrt((deviations ** 2).mean(axis=0)) * 100
+        logger.info(
+            f'Goalseek diagnostic complete over {len(deviations)} trials. '
+            f'RMS deviation {rms_cm:.2f}cm '
+            f'(per-axis x={per_axis_rms_cm[0]:.2f}cm y={per_axis_rms_cm[1]:.2f}cm z={per_axis_rms_cm[2]:.2f}cm)')
 
     async def record_park(self):
         """Record that the current location is reseted in the parking saddle and save in the config"""

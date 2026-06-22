@@ -12,7 +12,7 @@ from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, common
-from nf_robot.common.cv_common import SF_TARGET_SHAPE, stabilize_frame_2
+from nf_robot.common.cv_common import SF_TARGET_SHAPE, stabilize_frame_2, OTHER_MARKERS
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,9 @@ class ArpeggioGripperClient(ComponentClient):
         self.anchor_num = None
         self.pe = pe
         self.park_pose_relative_to_camera = None
+        # latest (rotvec, position) pose of each route-point tag relative to the gripper
+        # camera, keyed by tag name. Reset every frame so a present entry means in-frame now.
+        self.route_tag_poses_relative_to_camera = {}
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
         self.finger_contact_calibration_complete = asyncio.Event()
@@ -202,11 +205,15 @@ class ArpeggioGripperClient(ComponentClient):
         self.stat.detection_count += len(detections)
         # setting to none every frame so we know whether it's in frame by looking at this variable
         self.park_pose_relative_to_camera = None
+        self.route_tag_poses_relative_to_camera = {}
 
         for detection in detections:
             if detection['n'] == 'park_target':
                 # pose of parking target relative to gripper camera
                 self.park_pose_relative_to_camera = detection['p']
+            elif detection['n'] in OTHER_MARKERS:
+                # (rotvec, position) of a route-point tag relative to the gripper camera
+                self.route_tag_poses_relative_to_camera[detection['n']] = detection['p']
 
     async def send_config(self):
         pass
