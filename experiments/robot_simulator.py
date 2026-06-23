@@ -2,6 +2,9 @@
 """
 Local robot component simulator — run without physical hardware.
 
+requires all optional dependencies of nf_robot
+pip install nf_robot[host,dev,pi]
+
 Spins up two ARP anchor servers and one ARP gripper server on localhost with all
 I2C / CAN-bus hardware stubbed out.  Each server also gets an ffmpeg test-pattern
 video stream (h264 mpegts over TCP) matching the resolution, framerate, and codec
