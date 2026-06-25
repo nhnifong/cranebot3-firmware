@@ -188,76 +188,73 @@ class DamiaoSpoolController:
         smooth_mute = 1
         twopi = 2*math.pi 
 
-        try:
-            while self.run_spool_loop:
-                if self.spool_pause:
-                    time.sleep(0.2)
-                    continue
+        while self.run_spool_loop:
+            if self.spool_pause:
+                time.sleep(0.2)
+                continue
 
-                loop_start = time.time()
-                dt = loop_start - last_time
-                if dt <= 0:
-                    dt = 1e-4  # Prevent zero division errors if loop runs too fast
-                last_time = loop_start
-                
-                # Read feedback from motor. flip if necessary.
-                states = self.motor.get_states()
-                motor_pos = self.direction * states.get('pos', 0.0) # radians from -12 to +12
-                motor_vel = self.direction * states.get('vel', 0.0) # radians per second
-                motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
-                # we could also read status status_code, t_mos, t_rotor (temps)
+            loop_start = time.time()
+            dt = loop_start - last_time
+            if dt <= 0:
+                dt = 1e-4  # Prevent zero division errors if loop runs too fast
+            last_time = loop_start
+            
+            # Read feedback from motor. flip if necessary.
+            states = self.motor.get_states()
+            motor_pos = self.direction * states.get('pos', 0.0) # radians from -12 to +12
+            motor_vel = self.direction * states.get('vel', 0.0) # radians per second
+            motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
+            # we could also read status status_code, t_mos, t_rotor (temps)
 
-                # Convert to absolute position in revolutions
-                self.last_angle = self._update_absolute_angle(motor_pos)
-                
-                # low pass filter torque
-                sf = self.conf['SMOOTH_FACTOR']
-                smooth_torque = motor_torque * sf + smooth_torque * (1 - sf)
+            # Convert to absolute position in revolutions
+            self.last_angle = self._update_absolute_angle(motor_pos)
+            
+            # low pass filter torque
+            sf = self.conf['SMOOTH_FACTOR']
+            smooth_torque = motor_torque * sf + smooth_torque * (1 - sf)
 
-                # calculate line data from motor data
-                self.last_length = self.sc.get_unspooled_length(self.last_angle)
-                self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
-                current_line_speed = (motor_vel / twopi) * self.meters_per_rev
-                self.last_tension = (-smooth_torque * twopi) / self.meters_per_rev
+            # calculate line data from motor data
+            self.last_length = self.sc.get_unspooled_length(self.last_angle)
+            self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
+            current_line_speed = (motor_vel / twopi) * self.meters_per_rev
+            self.last_tension = (-smooth_torque * twopi) / self.meters_per_rev
 
-                # Position control logic (using during jog)
-                if self.target_length is not None:
-                    dist_err = self.target_length - self.last_length
-                    if dist_err > 0:
-                        self.aim_line_speed = self.conf['CRUISE_SPEED']
-                    else:
-                        self.aim_line_speed = -self.conf['CRUISE_SPEED']
-                    # If we are within the deadband, stop and clear target
-                    if abs(dist_err) < self.conf['POS_DEADBAND']:
-                        self.target_length = None
-                        self.aim_line_speed = 0
-                        logging.info(f'cur_len {self.last_length}')
+            # Position control logic (using during jog)
+            if self.target_length is not None:
+                dist_err = self.target_length - self.last_length
+                if dist_err > 0:
+                    self.aim_line_speed = self.conf['CRUISE_SPEED']
+                else:
+                    self.aim_line_speed = -self.conf['CRUISE_SPEED']
+                # If we are within the deadband, stop and clear target
+                if abs(dist_err) < self.conf['POS_DEADBAND']:
+                    self.target_length = None
+                    self.aim_line_speed = 0
+                    logging.info(f'cur_len {self.last_length}')
 
-                # accumulate these. parent class will send them on the websocket at it's own rate
-                row = (loop_start, self.last_length, current_line_speed, self.last_tension)
-                self.record.append(row)
+            # accumulate these. parent class will send them on the websocket at it's own rate
+            row = (loop_start, self.last_length, current_line_speed, self.last_tension)
+            self.record.append(row)
 
-                # convert last commanded speed from motion controller in meters per second
-                # to motor velocity in radians per second based on current circumfrence
-                # let motor enforce acceleration limit
-                wanted_motor_vel = self.aim_line_speed / self.meters_per_rev * twopi
+            # convert last commanded speed from motion controller in meters per second
+            # to motor velocity in radians per second based on current circumfrence
+            # let motor enforce acceleration limit
+            wanted_motor_vel = self.aim_line_speed / self.meters_per_rev * twopi
 
-                # prevent birdsnest by soft muting velocity when outspooling with no tension
-                if self.anti_tangle_enabled:
-                    self.torque_err = smooth_torque - self.conf['TARGET_TORQUE']
-                    mute = 0 if (self.torque_err > 0 and wanted_motor_vel > 0) else 1
-                    smooth_mute = mute * sf + smooth_mute * (1 - sf)
-                    wanted_motor_vel *= smooth_mute
-                
-                self.motor.send_cmd_vel(target_velocity=wanted_motor_vel*self.direction)
+            # prevent birdsnest by soft muting velocity when outspooling with no tension
+            if self.anti_tangle_enabled:
+                self.torque_err = smooth_torque - self.conf['TARGET_TORQUE']
+                mute = 0 if (self.torque_err > 0 and wanted_motor_vel > 0) else 1
+                smooth_mute = mute * sf + smooth_mute * (1 - sf)
+                wanted_motor_vel *= smooth_mute
+            
+            self.motor.send_cmd_vel(target_velocity=wanted_motor_vel*self.direction)
 
-                time_to_sleep = 1.0 / self.conf['LOOP_FREQ_HZ'] - (time.time() - loop_start)
-                if time_to_sleep > 0:
-                    time.sleep(time_to_sleep)
-            logging.info(f'Spool tracking loop stopped')
+            time_to_sleep = 1.0 / self.conf['LOOP_FREQ_HZ'] - (time.time() - loop_start)
+            if time_to_sleep > 0:
+                time.sleep(time_to_sleep)
+        logging.info(f'Spool tracking loop stopped')
 
-        finally:
-            self.motor.disable()
 
     def setAntiTangle(self, val):
         self.anti_tangle_enabled = val

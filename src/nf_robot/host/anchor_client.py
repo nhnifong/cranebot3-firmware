@@ -63,6 +63,9 @@ class ComponentClient:
         self.telemetry_env = telemetry_env
         self.firmware_update_success = None
         self.firmware_update_pending = False
+        # set after a successful firmware update; the component restarts to apply it,
+        # so the next dropped connection is expected rather than an abnormal shutdown.
+        self.expect_disconnect_from_update = False
 
         # saved for setup telemetry
         self.local_video_uri = None
@@ -326,8 +329,12 @@ class ComponentClient:
         except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
             pass # normal close
         except websockets.exceptions.ConnectionClosedError as e:
-            logger.warning(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
-            self.abnormal_shutdown = True
+            if self.expect_disconnect_from_update:
+                logger.info(f"Component server anum={self.anchor_num} disconnected to restart after a firmware update")
+                self.expect_disconnect_from_update = False
+            else:
+                logger.warning(f"Component server anum={self.anchor_num} disconnected abnormally: {e}")
+                self.abnormal_shutdown = True
         except (OSError, InvalidURI, TimeoutError, InvalidHandshake) as e:
             # normal answer when waiting for component to come online
             self.failed_to_connect = True
@@ -385,6 +392,10 @@ class ComponentClient:
                         if 'returncode' in upd:
                             logger.info(f'pip install result on {self.address} = {upd["returncode"] == 0}')
                             self.firmware_update_success = upd['returncode'] == 0
+                            if self.firmware_update_success:
+                                # the component will restart to apply the update, dropping
+                                # the connection. treat that next drop as a normal shutdown.
+                                self.expect_disconnect_from_update = True
                 if 'temp' in update:
                     self.conn_status.temp = update['temp']
                 if 'torque' in update:

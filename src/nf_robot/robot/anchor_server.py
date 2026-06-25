@@ -250,7 +250,7 @@ class RobotComponentServer:
 
             if 'set_timezone' in update:
                 tz = update['set_timezone']
-                subprocess.run(['timedatectl', 'set-timezone', tz], check=True)
+                subprocess.run(['sudo', 'timedatectl', 'set-timezone', tz], check=True)
                 logging.info(f'Timezone set to {tz}')
 
             # defer to specific server subclass

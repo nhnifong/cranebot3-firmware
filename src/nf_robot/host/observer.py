@@ -184,6 +184,9 @@ class AsyncObserver:
         self.locate_anchor_task = None
         # only one motion task can be active at a time
         self.motion_task = None
+        # set by passive_safety when it aborts an in-progress calibration, so the
+        # calibration's CancelledError handler can report the real reason.
+        self.calibration_aborted_by_safety = False
         # only used for integration test only to allow some code to run right after sending the gantry to a goal point
         self.test_gantry_goal_callback = None
         # event used to notify tasks that gripper is connected.
@@ -783,10 +786,13 @@ class AsyncObserver:
         self.sync_timezone_to_bots()
         await asyncio.sleep(0.3)
         tasks = []
-        keys = []
+        # capture each client's address now, while it still exists in bot_clients. a
+        # successful update restarts the component, which removes it from the dict before
+        # we build the results table below, so we can't look it up again afterward.
+        addresses = []
         for name, client in self.bot_clients.items():
             tasks.append(client.firmware_update())
-            keys.append(name)
+            addresses.append(client.address)
         results = await asyncio.gather(*tasks)
         bar.cancel()
         lines = []
@@ -796,7 +802,7 @@ class AsyncObserver:
                 a = "Success"
             elif r == False:
                 a = "Failed"
-            lines.append(f"({self.bot_clients[keys[i]].address}) {a}")
+            lines.append(f"({addresses[i]}) {a}")
         table = '\n'.join(lines)
         if any(x is False for x in results):
             message = f"Failed on one or more components \n\n{table}"
@@ -894,7 +900,10 @@ class AsyncObserver:
         self.last_user_move_time = time.time()
 
     async def passive_safety(self):
-        """If any line becomes too tight, switch all motors to damped movement for one second."""
+        """If any line becomes too tight, switch all motors to damped movement for one second.
+        If the overload happens while an automatic calibration is running, abort the
+        calibration: backing off mid-step corrupts the collected data and continuing
+        under overload is unsafe."""
         max_safe_tension = 16.0
         if self.config.max_safe_tension is not None:
             max_safe_tension = self.config.max_safe_tension
@@ -904,6 +913,11 @@ class AsyncObserver:
             ema = ema * 0.9 + self.pe.tension * 0.1
             if np.any(ema > max_safe_tension):
                 logger.warning(f'Tension limit reached! backing off. limit={max_safe_tension} actual={ema}')
+                if (self.motion_task is not None and not self.motion_task.done()
+                        and self.motion_task.get_name() == 'full_auto_calibration'):
+                    logger.warning('Tension overload during calibration - aborting calibration')
+                    self.calibration_aborted_by_safety = True
+                    self.motion_task.cancel()
                 await self._handle_disable_torque()
                 await asyncio.sleep(1)
                 await self._handle_enable_torque()
@@ -1522,10 +1536,15 @@ class AsyncObserver:
             if finger_task is not None:
                 finger_task.cancel()
                 await finger_task
+            if self.calibration_aborted_by_safety:
+                self.calibration_aborted_by_safety = False
+                current_action = "Aborted: line tension exceeded the safe limit"
+            else:
+                current_action = "Cancelled by user"
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
                 name="Calibration",
-                current_action="Cancelled by user",
+                current_action=current_action,
             ))
             raise
         except Exception as e:
