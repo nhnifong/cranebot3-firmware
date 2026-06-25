@@ -171,7 +171,7 @@ class TestDamiaoSpoolController(unittest.TestCase):
         # Verify setups and teardowns
         self.mock_motor.enable.assert_called_once()
         self.mock_motor.ensure_control_mode.assert_called_with("VEL")
-        self.mock_motor.disable.assert_called_once()
+        # do not expect motor to be disabled, we leave it on intentionally.
         
         # Verify that record tracking gathered 1 record tuple
         self.assertEqual(len(self.controller.record), 1)

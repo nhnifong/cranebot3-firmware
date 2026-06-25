@@ -1445,6 +1445,11 @@ class AsyncObserver:
                 # even if predictable motion is not yet possible do some basic checks to ensure the gripper is veritcal and in the middle of the room
                 await self.ensure_pole_upright()
 
+                # even without full calibration we should be able to make crude movements. go to the center of the room just above the floor
+                FLOOR_CLEARANCE_M = 0.1 # how far above the floor to hover the gripper
+                self.gantry_goal_pos = np.array([0, 0, POLE[2] + FLOOR_CLEARANCE_M])
+                await self.seek_gantry_goal()
+
                 # measure finger contact and reset wrist while doing the diamond pattern to save time.
                 async def wait_then_finger():
                     await asyncio.sleep(10)

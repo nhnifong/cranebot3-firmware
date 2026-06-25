@@ -154,7 +154,7 @@ then at this repo's root, build the module. Artifacts will be in dist/
 
 Upload the particular version you just built to PyPi
 
-    python3 -m twine upload dist/nf_robot-3.4.4*
+    python3 -m twine upload dist/nf_robot-4.0.5*
 
 ### QA scripts
 
@@ -171,6 +171,7 @@ Run QA scripts for the specific component type
     /opt/robot/env/bin/qa-anchor anchor|power_anchor
     /opt/robot/env/bin/qa-gripper
     /opt/robot/env/bin/qa-gripper-arp
+    /opt/robot/env/bin/qa-anchor-arp
 
 These scripts both check whether everything is connected as it should be and in the case of anchors, set whether it is a power anchor or not.
 
