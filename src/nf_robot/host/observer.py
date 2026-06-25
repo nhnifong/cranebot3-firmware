@@ -489,7 +489,9 @@ class AsyncObserver:
         if item.action == 'fingercal':
             asyncio.create_task(self.calibrate_finger_servo())
         if item.action == 'eyelets':
-            r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data())
+            # use the currently calibrated anchor poses from the config
+            anchor_poses = [poseProtoToTuple(a.pose) for a in self.config.anchors]
+            r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data(anchor_poses))
         if item.action == 'stow':
             r = await self.stow_lines()
         if item.action == 'upright':
@@ -1146,16 +1148,19 @@ class AsyncObserver:
         """  
         Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
         """
+        # target tension in newtons to hold the direct (anchor) lines at during the diamond
+        # eyelet experiment. starts near TENSION_THRESH but is separate so it can be tuned
+        # just for collect_arp_anchor_eyelet_experiment_data.
+        DIAMOND_DIRECT_TENSION_N = 1.38
+
         tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
 
         try:
             for a in self.anchors.values():
                 a.save_raw = True
-            
-            # move to the center of the room.
 
             # touch the floor using the rangefinder
-            await self.touch_floor()
+            # await self.touch_floor()
 
             self.slow_stop_all_spools()
 
@@ -1166,32 +1171,31 @@ class AsyncObserver:
                 t2 = self.datastore.anchor_line_record[2].getLast()[3]
                 return t0,t2
 
-            # relax direct lines
-            await self.anchors[0].send_commands({'set_anti_tangle': (False, 0)})
-            await self.anchors[1].send_commands({'set_anti_tangle': (False, 0)})
-            t0,t2 = get_direct_tensions()
-            while t0 > 0.1 and t2 > 0.1:
-                await self.send_line_speed(0,  0.1)
-                await self.send_line_speed(2,  0.1)
-                await asyncio.sleep(0.1)
-                t0,t2 = get_direct_tensions()
-                print((t0,t2))
-            # another 30 cm
-            await self.send_line_speed(0,  0.3, jog=True)
-            await self.send_line_speed(2,  0.3, jog=True)
+            # # relax direct lines
+            # await self.anchors[0].send_commands({'set_anti_tangle': (False, 0)})
+            # await self.anchors[1].send_commands({'set_anti_tangle': (False, 0)})
+            # t0,t2 = get_direct_tensions()
+            # while t0 > 0.1 and t2 > 0.1:
+            #     await self.send_line_speed(0,  0.1)
+            #     await self.send_line_speed(2,  0.1)
+            #     await asyncio.sleep(0.1)
+            #     t0,t2 = get_direct_tensions()
+            #     print((t0,t2))
+            # # another 30 cm
+            # await self.send_line_speed(0,  0.3, jog=True)
+            # await self.send_line_speed(2,  0.3, jog=True)
 
-            # tighten indirect lines
-            await self.send_line_speed(1, -0.02, jog=True)
-            await self.send_line_speed(3, -0.02, jog=True)
+            # # tighten indirect lines
+            # await self.send_line_speed(1, -0.02, jog=True)
+            # await self.send_line_speed(3, -0.02, jog=True)
 
-            await asyncio.sleep(1)
-            self.slow_stop_all_spools()
+            # await asyncio.sleep(1)
+            # self.slow_stop_all_spools()
 
             half_h, half_w = DIAMOND_SIZE
 
             results = {}
             line_deltas = {}
-
 
             def get_eyelet_lengths():
                 l1 = self.datastore.anchor_line_record[1].getLast()[1]
@@ -1202,13 +1206,58 @@ class AsyncObserver:
                 await asyncio.sleep(2)
                 deadline = asyncio.get_event_loop().time() + timeout
                 while asyncio.get_event_loop().time() < deadline:
-                    speed1 = abs(self.datastore.anchor_line_record[1].getLast()[2])
-                    speed3 = abs(self.datastore.anchor_line_record[3].getLast()[2])
-                    if speed1 < deadband and speed3 < deadband:
+                    speeds = [abs(self.datastore.anchor_line_record[i].getLast()[2]) for i in range(N_LINES)]
+                    if all(s < deadband for s in speeds):
                         await asyncio.sleep(2)
                         return
                     await asyncio.sleep(1/30)
                 logger.warning('wait_for_lines_to_stop timed out; proceeding with current line lengths')
+
+            async def hold_anchor_line_tension(line_no, stop_event):
+                """Regulate a direct (anchor) line to roughly DIAMOND_DIRECT_TENSION_N,
+                paying it out when it gets too tight and reeling it in when it goes too
+                slack, so it stays lightly tensioned throughout a diamond move. Runs until
+                stop_event is set, then stops the spool."""
+                SPEED_MPS = 0.1
+                # hysteresis band around the target so the spool doesn't chatter
+                BAND_N = 0.6
+                state = 0  # -1 reeling in, 0 stopped, +1 paying out
+                try:
+                    while not stop_event.is_set():
+                        tension = self.datastore.anchor_line_record[line_no].getLast()[3]
+                        if tension > DIAMOND_DIRECT_TENSION_N + BAND_N:
+                            desired = 1   # too tight: pay out (positive speed lengthens)
+                        elif tension < DIAMOND_DIRECT_TENSION_N - BAND_N:
+                            desired = -1  # too slack: reel in (negative speed shortens)
+                        else:
+                            desired = 0
+                        if desired != state:
+                            await self.send_line_speed(line_no, desired * SPEED_MPS)
+                            state = desired
+                        await asyncio.sleep(1/30)
+                finally:
+                    await self.send_line_speed(line_no, 0)
+
+            async def move_to_diamond_point(jog1=0.0, jog3=0.0):
+                """Reposition the gantry to a diamond point by jogging the two eyelet
+                (indirect) lines, while regulating the two anchor (direct) lines to roughly
+                DIAMOND_DIRECT_TENSION_N. Returns once every line has stopped moving."""
+                stop_event = asyncio.Event()
+                tension_tasks = [
+                    asyncio.create_task(hold_anchor_line_tension(0, stop_event)),
+                    asyncio.create_task(hold_anchor_line_tension(2, stop_event)),
+                ]
+                try:
+                    if jog1:
+                        await self.send_line_speed(1, jog1, jog=True)
+                    if jog3:
+                        await self.send_line_speed(3, jog3, jog=True)
+                    await wait_for_lines_to_stop()
+                finally:
+                    stop_event.set()
+                    await asyncio.gather(*tension_tasks)
+                    await self.send_line_speed(1, 0)
+                    await self.send_line_speed(3, 0)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=20.0,
@@ -1216,6 +1265,8 @@ class AsyncObserver:
                 current_action="Observe diamond bottom",
             ))
             logger.info('This position is the bottom of the diamond. Observe gantry for 2 seconds')
+            # regulate the anchor lines to the target tension and wait for everything to settle before measuring
+            await move_to_diamond_point()
             await asyncio.sleep(5)
             results['bottom'] = self.snapshot_tag_observations()['gantry']
 
@@ -1227,13 +1278,7 @@ class AsyncObserver:
             # RIGHT:
             logger.info('Move to RIGHT')
             l1_before, l3_before = get_eyelet_lengths()
-            await self.send_line_speed(1, -half_w-half_h, jog=True)
-            await self.send_line_speed(3, half_w-half_h, jog=True)
-            await self.send_line_speed(0,  0.3, jog=True)
-            await self.send_line_speed(2,  0.3, jog=True)
-            await wait_for_lines_to_stop()
-            await self.send_line_speed(1, 0)
-            await self.send_line_speed(3, 0)
+            await move_to_diamond_point(jog1=-half_w-half_h, jog3=half_w-half_h)
             l1_after, l3_after = get_eyelet_lengths()
             line_deltas['bot_to_rig'] = (l1_after - l1_before, l3_after - l3_before)
             logger.info(f'bot_to_rig actual deltas: line1={line_deltas["bot_to_rig"][0]:.4f}, line3={line_deltas["bot_to_rig"][1]:.4f}')
@@ -1248,11 +1293,7 @@ class AsyncObserver:
             # TOP:
             logger.info('Move to TOP')
             l1_before, l3_before = get_eyelet_lengths()
-            await self.send_line_speed(1, half_w-half_h, jog=True)
-            await self.send_line_speed(3, -half_w-half_h, jog=True)
-            await wait_for_lines_to_stop()
-            await self.send_line_speed(1, 0)
-            await self.send_line_speed(3, 0)
+            await move_to_diamond_point(jog1=half_w-half_h, jog3=-half_w-half_h)
             l1_after, l3_after = get_eyelet_lengths()
             line_deltas['rig_to_top'] = (l1_after - l1_before, l3_after - l3_before)
             logger.info(f'rig_to_top actual deltas: line1={line_deltas["rig_to_top"][0]:.4f}, line3={line_deltas["rig_to_top"][1]:.4f}')
@@ -1267,13 +1308,7 @@ class AsyncObserver:
             # LEFT:
             logger.info('Move to LEFT')
             l1_before, l3_before = get_eyelet_lengths()
-            await self.send_line_speed(1, half_w+half_h, jog=True)
-            await self.send_line_speed(3, -half_w+half_h, jog=True)
-            await self.send_line_speed(0,  0.1, jog=True)
-            await self.send_line_speed(2,  0.1, jog=True)
-            await wait_for_lines_to_stop()
-            await self.send_line_speed(1, 0)
-            await self.send_line_speed(3, 0)
+            await move_to_diamond_point(jog1=half_w+half_h, jog3=-half_w+half_h)
             l1_after, l3_after = get_eyelet_lengths()
             line_deltas['top_to_lef'] = (l1_after - l1_before, l3_after - l3_before)
             logger.info(f'top_to_lef actual deltas: line1={line_deltas["top_to_lef"][0]:.4f}, line3={line_deltas["top_to_lef"][1]:.4f}')
@@ -1444,6 +1479,10 @@ class AsyncObserver:
                 # This might be the first time the lines are tightened after connecting the carabiners, and the gripper pole could be horizontal.
                 # even if predictable motion is not yet possible do some basic checks to ensure the gripper is veritcal and in the middle of the room
                 await self.ensure_pole_upright()
+
+                await self.move_direction_speed([0, 0, 1], 0.1, downward_bias=0)
+                await asyncio.sleep(0.5)
+                self.slow_stop_all_spools()
 
                 # even without full calibration we should be able to make crude movements. go to the center of the room just above the floor
                 FLOOR_CLEARANCE_M = 0.1 # how far above the floor to hover the gripper
