@@ -519,6 +519,33 @@ class AsyncObserver:
             parts = item.action.split()
             if len(parts)==2 and parts[0]=='untwist':
                 await asyncio.create_task(self.gripper_client.send_commands({'untwist': int(parts[1])}))
+        if item.action.startswith('setvar '):
+            # 'setvar KEY VALUE' broadcasts a live config override to every component.
+            # used for bench tuning of onboard loop constants without restarting firmware.
+            parts = item.action.split()
+            if len(parts) == 3:
+                key = parts[1]
+                try:
+                    value = float(parts[2])
+                except ValueError:
+                    value = parts[2]
+                logger.info(f'Broadcasting set_config_vars {key}={value} to all components')
+                for client in self.bot_clients.values():
+                    asyncio.create_task(client.send_commands({'set_config_vars': {key: value}}))
+            else:
+                logger.warning(f'invalid setvar command, expected "setvar KEY VALUE": {item.action}')
+        if item.action.startswith('holdtension '):
+            # 'holdtension LINE VALUE|off' engages onboard two-sided tension hold on one
+            # arpeggio line, or clears it with 'off'. for bench testing hold mode.
+            parts = item.action.split()
+            if len(parts) == 3:
+                line_no = int(parts[1])
+                value = None if parts[2] == 'off' else float(parts[2])
+                await self.send_line_speed(line_no, 0)
+                await self.set_line_tension_target(line_no, value)
+                logger.info(f'set tension target on line {line_no} to {value}')
+            else:
+                logger.warning(f'invalid holdtension command, expected "holdtension LINE VALUE|off": {item.action}')
 
     def sync_timezone_to_bots(self):
         tz = subprocess.check_output(['timedatectl', 'show', '--property=Timezone', '--value']).decode().strip()
@@ -1149,9 +1176,7 @@ class AsyncObserver:
         Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
         """
         # target tension in newtons to hold the direct (anchor) lines at during the diamond
-        # eyelet experiment. starts near TENSION_THRESH but is separate so it can be tuned
-        # just for collect_arp_anchor_eyelet_experiment_data.
-        DIAMOND_DIRECT_TENSION_N = 1.38
+        DIAMOND_DIRECT_TENSION_N = 0.65
 
         tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
 
@@ -1165,11 +1190,6 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
             logger.info('Relax the direct lines, tighten the indirect line')
-
-            def get_direct_tensions():
-                t0 = self.datastore.anchor_line_record[0].getLast()[3]
-                t2 = self.datastore.anchor_line_record[2].getLast()[3]
-                return t0,t2
 
             half_h, half_w = DIAMOND_SIZE
 
@@ -1192,51 +1212,26 @@ class AsyncObserver:
                     await asyncio.sleep(1/30)
                 logger.warning('wait_for_lines_to_stop timed out; proceeding with current line lengths')
 
-            async def hold_anchor_line_tension(line_no, stop_event):
-                """Regulate a direct (anchor) line to roughly DIAMOND_DIRECT_TENSION_N,
-                paying it out when it gets too tight and reeling it in when it goes too
-                slack, so it stays lightly tensioned throughout a diamond move. Runs until
-                stop_event is set, then stops the spool."""
-                SPEED_MPS = 0.1
-                # hysteresis band around the target so the spool doesn't chatter
-                BAND_N = 0.6
-                state = 0  # -1 reeling in, 0 stopped, +1 paying out
-                try:
-                    while not stop_event.is_set():
-                        tension = self.datastore.anchor_line_record[line_no].getLast()[3]
-                        if tension > DIAMOND_DIRECT_TENSION_N + BAND_N:
-                            desired = 1   # too tight: pay out (positive speed lengthens)
-                        elif tension < DIAMOND_DIRECT_TENSION_N - BAND_N:
-                            desired = -1  # too slack: reel in (negative speed shortens)
-                        else:
-                            desired = 0
-                        if desired != state:
-                            await self.send_line_speed(line_no, desired * SPEED_MPS)
-                            state = desired
-                        await asyncio.sleep(1/30)
-                finally:
-                    await self.send_line_speed(line_no, 0)
-
             async def move_to_diamond_point(jog1=0.0, jog3=0.0):
                 """Reposition the gantry to a diamond point by jogging the two eyelet
-                (indirect) lines, while regulating the two anchor (direct) lines to roughly
-                DIAMOND_DIRECT_TENSION_N. Returns once every line has stopped moving."""
-                stop_event = asyncio.Event()
-                tension_tasks = [
-                    asyncio.create_task(hold_anchor_line_tension(0, stop_event)),
-                    asyncio.create_task(hold_anchor_line_tension(2, stop_event)),
-                ]
-                try:
-                    if jog1:
-                        await self.send_line_speed(1, jog1, jog=True)
-                    if jog3:
-                        await self.send_line_speed(3, jog3, jog=True)
-                    await wait_for_lines_to_stop()
-                finally:
-                    stop_event.set()
-                    await asyncio.gather(*tension_tasks)
-                    await self.send_line_speed(1, 0)
-                    await self.send_line_speed(3, 0)
+                (indirect) lines. The two anchor (direct) lines are held at
+                DIAMOND_DIRECT_TENSION_N by the onboard tension loop (set up below), so we
+                only have to wait until every line has stopped moving before measuring."""
+                if jog1:
+                    await self.send_line_speed(1, jog1, jog=True)
+                if jog3:
+                    await self.send_line_speed(3, jog3, jog=True)
+                await wait_for_lines_to_stop()
+                await self.send_line_speed(1, 0)
+                await self.send_line_speed(3, 0)
+
+            # hand the direct lines to the onboard tension loop to hold at the target.
+            # this runs at the component's loop rate with no wifi round trip, replacing the
+            # host-side regulator that suffered from latency.
+            await self.send_line_speed(0, 0)
+            await self.send_line_speed(2, 0)
+            await self.set_line_tension_target(0, DIAMOND_DIRECT_TENSION_N)
+            await self.set_line_tension_target(2, DIAMOND_DIRECT_TENSION_N)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=20.0,
@@ -1294,9 +1289,9 @@ class AsyncObserver:
             await asyncio.sleep(5)
             results['left'] = self.snapshot_tag_observations()['gantry']
 
-            # set back anti tangle to normal function 
-            await self.anchors[0].send_commands({'set_anti_tangle': (True, 0)})
-            await self.anchors[1].send_commands({'set_anti_tangle': (True, 0)})
+            # release the direct lines back to the normal tension floor
+            await self.set_line_tension_target(0, None)
+            await self.set_line_tension_target(2, None)
 
             logger.info('Return result')
             for a in self.anchors.values():
@@ -1309,8 +1304,12 @@ class AsyncObserver:
         except asyncio.CancelledError:
             raise
         finally:
+            # always release the direct lines from hold mode, even on cancel, so they
+            # don't stay regulating to the diamond target after the experiment ends.
+            await self.set_line_tension_target(0, None)
+            await self.set_line_tension_target(2, None)
             self.slow_stop_all_spools()
-    
+
     async def half_auto_calibration(self):
         """
         Set line lengths from observation
@@ -2675,6 +2674,13 @@ class AsyncObserver:
                 spool_no = line_no%2
                 # we consider the lower line number to be the direct line
                 asyncio.create_task(self.anchors[line_no//2].send_commands({command: (speed, spool_no)}))
+
+    async def set_line_tension_target(self, line_no, value):
+        """Set (or clear, with None) the onboard two-sided tension hold target in newtons
+        for one arpeggio line. The onboard loop then holds that line at the target."""
+        if self.config.anchor_type == common.AnchorType.ARPEGGIO and line_no//2 in self.anchors:
+            spool_no = line_no % 2
+            await self.anchors[line_no//2].send_commands({'set_tension_target': (value, spool_no)})
 
     async def move_direction_speed(self, uvec, speed=None, starting_pos=None, downward_bias=-0.04, key='default'):
         """Move in the direction of the given unit vector at the given speed.

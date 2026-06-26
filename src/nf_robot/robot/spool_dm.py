@@ -21,11 +21,22 @@ default_conf_dm = {
     # default cruise speed in meters/sec for position moves
     'CRUISE_SPEED': 0.15,
     # factor controlling how torque is smoothed with ema.
-    'SMOOTH_FACTOR': 0.08,
+    'SMOOTH_FACTOR': 1.0,
     # maximum safe line speed in meters per second
     'MAX_SAFE_LINE_SPEED': 2.0,
     # Distance in meters within which we consider a jog "complete"
-    'POS_DEADBAND': 0.015
+    'POS_DEADBAND': 0.015,
+
+    # --- onboard tension regulation (generalizes the old anti-tangle soft mute) ---
+    # minimum tension in newtons to keep on the line when no hold target is set.
+    # the loop reels in to restore at least this much tension while still obeying speed commands.
+    'TENSION_FLOOR_N': 1.0,
+    # proportional gain converting a tension error (N) into a correction line speed (m/s).
+    'TENSION_KP': 0.3,
+    # clamp on the magnitude of the tension correction line speed in meters per second.
+    'MAX_TENSION_CORRECTION_MPS': 0.5,
+    # hysteresis half-band in newtons. no correction is applied within +/- this of the target.
+    'TENSION_BAND_N': 0.1,
 }
 
 class DamiaoSpoolController:
@@ -78,7 +89,13 @@ class DamiaoSpoolController:
         self.run_spool_loop = True # permanent
         self.spool_pause = False
         self._torque_disabled = False
-        self.anti_tangle_enabled = True
+        # when True (default) the loop maintains a minimum tension floor and never pays
+        # out into slack. Set False to let the line go fully slack (e.g. while relaxing).
+        self.tension_reg_enabled = True
+        # when not None, regulate two-sided toward this tension (newtons) instead of just
+        # enforcing the floor: reel in when below it and pay out when above it. Used to
+        # hold the direct lines at a target during the diamond eyelet experiment.
+        self.tension_target = None
 
     def _getAbsoluteAngle(self):
         """Get absolute motor angle in revolutions"""
@@ -179,14 +196,15 @@ class DamiaoSpoolController:
 
         self.motor.set_acceleration(self.conf['MAX_ACCEL'])
         self.motor.set_deceleration(-self.conf['MAX_ACCEL'])
+        last_applied_accel = self.conf['MAX_ACCEL']
 
         self.motor.send_cmd_vel(target_velocity=0.0)
-        
+
         start_time = time.time()
         last_time = start_time
         smooth_torque = 0
         smooth_mute = 1
-        twopi = 2*math.pi 
+        twopi = 2*math.pi
 
         while self.run_spool_loop:
             if self.spool_pause:
@@ -198,7 +216,14 @@ class DamiaoSpoolController:
             if dt <= 0:
                 dt = 1e-4  # Prevent zero division errors if loop runs too fast
             last_time = loop_start
-            
+
+            # re-apply accel/decel limits live if MAX_ACCEL was changed via set_config_vars.
+            # only resend on change so we don't spam the motor every loop.
+            if self.conf['MAX_ACCEL'] != last_applied_accel:
+                last_applied_accel = self.conf['MAX_ACCEL']
+                self.motor.set_acceleration(last_applied_accel)
+                self.motor.set_deceleration(-last_applied_accel)
+
             # Read feedback from motor. flip if necessary.
             states = self.motor.get_states()
             motor_pos = self.direction * states.get('pos', 0.0) # radians from -12 to +12
@@ -236,18 +261,38 @@ class DamiaoSpoolController:
             row = (loop_start, self.last_length, current_line_speed, self.last_tension)
             self.record.append(row)
 
-            # convert last commanded speed from motion controller in meters per second
-            # to motor velocity in radians per second based on current circumfrence
-            # let motor enforce acceleration limit
-            wanted_motor_vel = self.aim_line_speed / self.meters_per_rev * twopi
+            # slack indicator, kept current every loop because setReferenceLength() reads it
+            self.torque_err = smooth_torque - self.conf['TARGET_TORQUE'] # >0 means slack
 
-            # prevent birdsnest by soft muting velocity when outspooling with no tension
-            if self.anti_tangle_enabled:
-                self.torque_err = smooth_torque - self.conf['TARGET_TORQUE']
-                mute = 0 if (self.torque_err > 0 and wanted_motor_vel > 0) else 1
+            # line speed commanded by the motion controller (meters per second)
+            wanted_line_speed = self.aim_line_speed
+
+            if self.tension_reg_enabled:
+                # 1) soft mute (unchanged behavior): never pay out while slack, smoothed
+                #    so the velocity eases to zero instead of stepping. prevents birdsnest.
+                mute = 0 if (self.torque_err > 0 and wanted_line_speed > 0) else 1
                 smooth_mute = mute * sf + smooth_mute * (1 - sf)
-                wanted_motor_vel *= smooth_mute
-            
+                wanted_line_speed *= smooth_mute
+
+                # 2) active tension correction toward a target, with a hysteresis band.
+                #    floor mode (no target): one-sided, only reels in below the floor.
+                #    hold mode (target set): two-sided, also pays out above the target.
+                band = self.conf['TENSION_BAND_N']
+                kp = self.conf['TENSION_KP']
+                max_corr = self.conf['MAX_TENSION_CORRECTION_MPS']
+                target = self.tension_target if self.tension_target is not None else self.conf['TENSION_FLOOR_N']
+                if self.last_tension < target - band:
+                    correction = -min(max_corr, kp * (target - self.last_tension)) # reel in
+                elif self.tension_target is not None and self.last_tension > target + band:
+                    correction = min(max_corr, kp * (self.last_tension - target))  # pay out (hold mode only)
+                else:
+                    correction = 0.0
+                wanted_line_speed += correction
+
+            # convert commanded line speed in meters per second to motor velocity in
+            # radians per second based on current circumfrence; motor enforces accel limit
+            wanted_motor_vel = wanted_line_speed / self.meters_per_rev * twopi
+
             self.motor.send_cmd_vel(target_velocity=wanted_motor_vel*self.direction)
 
             time_to_sleep = 1.0 / self.conf['LOOP_FREQ_HZ'] - (time.time() - loop_start)
@@ -256,5 +301,10 @@ class DamiaoSpoolController:
         logging.info(f'Spool tracking loop stopped')
 
 
-    def setAntiTangle(self, val):
-        self.anti_tangle_enabled = val
+    def setTensionRegEnabled(self, val):
+        """Enable/disable onboard tension regulation (the floor + soft mute)."""
+        self.tension_reg_enabled = bool(val)
+
+    def setTensionTarget(self, val):
+        """Set a two-sided hold target in newtons, or None to fall back to the floor."""
+        self.tension_target = None if val is None else float(val)
