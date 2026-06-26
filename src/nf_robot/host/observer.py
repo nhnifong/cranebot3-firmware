@@ -1739,28 +1739,19 @@ class AsyncObserver:
         Measure how accurately seek_gantry_goal parks the gripper over a route-point tag.
         Triggered by the debug command "goalseek". This is a motion task.
 
-        For each of NUM_TRIALS, fly to a random spot in the room, then goal-seek to the
-        current route source tag (assumed to be lying flat on the floor, facing up). Once
-        parked, read where the tag appears in the gripper camera and compare it against the
-        ideal pose it would have if it were directly under the gripper at the correct
-        altitude. The RMS of those deviations across all trials is reported in cm.
+        Cycles through the four floor tags ("gamepad", "trash", "hamper", "toys"),
+        goal-seeking to each one's saved position in turn until every tag has been visited
+        VISITS_PER_TAG times. Flying between tags naturally provides varied approaches, so
+        no random points are generated and the operator is never prompted to move anything.
+        Once parked over a tag, read where it appears in the gripper camera and compare it
+        against the ideal pose it would have if it were directly under the gripper at the
+        correct altitude. The RMS of those deviations across all trials is reported in cm.
         """
-        NUM_TRIALS = 10
+        TAG_CYCLE = ['gamepad', 'trash', 'hamper', 'toys']
+        VISITS_PER_TAG = 3
         SETTLE_S = 2.0           # let the gripper swing settle before measuring
         MEASURE_WINDOW_S = 1.0   # average tag readings over this window
         MEASURE_TIMEOUT_S = 5.0  # give up on a trial if the tag isn't seen in this long
-        RANDOM_ALTITUDE_RANGE_M = (1.0, 1.6)
-        RANDOM_MARGIN_M = 0.4    # keep random points this far inside the anchor footprint
-        MOVE_TAG_PROMPT_S = 10   # time given to relocate the tag between trials
-
-        # The route source must be a floor tag we have a saved position for.
-        if self.pnp_src not in ROUTE_POINT_TAG_NAMES:
-            logger.warning('Goalseek diagnostic requires the route source to be a tag (hamper/toys/trash/gamepad)')
-            return
-        tag_name = ROUTE_POINT_TAG_NAMES[self.pnp_src]
-        if tag_name not in self.config.named_positions:
-            logger.warning(f'Goalseek diagnostic has no saved position for tag "{tag_name}"')
-            return
 
         GANTRY_HEIGHT_OVER_TARGET = tonp(self.config.pick_and_place.gantry_height_over_target)
 
@@ -1770,12 +1761,7 @@ class AsyncObserver:
         # deviation is measured against this reference.
         IDEAL_TAG_POSITION_IN_CAMERA = np.array([0.0, 0.0, GANTRY_HEIGHT_OVER_TARGET[2]])
 
-        # random-point bounds from the anchor footprint
-        anchor_xy = self.pe.anchor_points[:, :2]
-        xy_min = anchor_xy.min(axis=0) + RANDOM_MARGIN_M
-        xy_max = anchor_xy.max(axis=0) - RANDOM_MARGIN_M
-
-        async def measure_tag_position():
+        async def measure_tag_position(tag_name):
             """Average the tag position seen in the gripper camera over a short window."""
             samples = []
             deadline = time.time() + MEASURE_TIMEOUT_S
@@ -1793,38 +1779,32 @@ class AsyncObserver:
                 return None
             return np.mean(samples, axis=0)
 
-        deviations = []
-        for trial in range(NUM_TRIALS):
-            # fly to a random place in the room
-            random_point = np.array([
-                np.random.uniform(xy_min[0], xy_max[0]),
-                np.random.uniform(xy_min[1], xy_max[1]),
-                np.random.uniform(*RANDOM_ALTITUDE_RANGE_M),
-            ])
-            logger.info(f'Goalseek trial {trial + 1}/{NUM_TRIALS}: random point {random_point}')
-            self.gantry_goal_pos = random_point
-            await self.seek_gantry_goal(auto_altitude=True)
+        # the order of visits: each tag VISITS_PER_TAG times, cycling through the list
+        visit_order = TAG_CYCLE * VISITS_PER_TAG
+        num_trials = len(visit_order)
 
-            # goal-seek to the tag's current saved position
+        deviations = []
+        for trial, tag_name in enumerate(visit_order):
+            if tag_name not in self.config.named_positions:
+                logger.warning(f'Goalseek trial {trial + 1}: no saved position for tag "{tag_name}", skipping')
+                continue
+
+            logger.info(f'Goalseek trial {trial + 1}/{num_trials}: seeking to tag "{tag_name}"')
+
+            # goal-seek to the tag's saved position
             goal_pos = tonp(self.config.named_positions[tag_name]) + GANTRY_HEIGHT_OVER_TARGET
             self.gantry_goal_pos = goal_pos
             await self.seek_gantry_goal(auto_altitude=True)
             await asyncio.sleep(SETTLE_S)
 
-            observed = await measure_tag_position()
+            observed = await measure_tag_position(tag_name)
             if observed is None:
                 logger.warning(f'Goalseek trial {trial + 1}: tag "{tag_name}" not seen in gripper camera, skipping')
                 continue
             deviation = observed - IDEAL_TAG_POSITION_IN_CAMERA
-            logger.info(f'Goalseek trial {trial + 1}: deviation {deviation * 100}cm '
+            logger.info(f'Goalseek trial {trial + 1}: "{tag_name}" deviation {deviation * 100}cm '
                         f'(magnitude {np.linalg.norm(deviation) * 100:.2f}cm)')
             deviations.append(deviation)
-
-            # ask the user to relocate the tag, then resume automatically
-            if trial < NUM_TRIALS - 1:
-                self.send_ui(pop_message=telemetry.Popup(
-                    message=f'Move the "{tag_name}" tag to a new spot. Resuming in {MOVE_TAG_PROMPT_S}s...'))
-                await asyncio.sleep(MOVE_TAG_PROMPT_S)
 
         if not deviations:
             logger.warning('Goalseek diagnostic collected no measurements')
