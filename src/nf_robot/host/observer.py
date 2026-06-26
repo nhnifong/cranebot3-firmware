@@ -1171,27 +1171,6 @@ class AsyncObserver:
                 t2 = self.datastore.anchor_line_record[2].getLast()[3]
                 return t0,t2
 
-            # # relax direct lines
-            # await self.anchors[0].send_commands({'set_anti_tangle': (False, 0)})
-            # await self.anchors[1].send_commands({'set_anti_tangle': (False, 0)})
-            # t0,t2 = get_direct_tensions()
-            # while t0 > 0.1 and t2 > 0.1:
-            #     await self.send_line_speed(0,  0.1)
-            #     await self.send_line_speed(2,  0.1)
-            #     await asyncio.sleep(0.1)
-            #     t0,t2 = get_direct_tensions()
-            #     print((t0,t2))
-            # # another 30 cm
-            # await self.send_line_speed(0,  0.3, jog=True)
-            # await self.send_line_speed(2,  0.3, jog=True)
-
-            # # tighten indirect lines
-            # await self.send_line_speed(1, -0.02, jog=True)
-            # await self.send_line_speed(3, -0.02, jog=True)
-
-            # await asyncio.sleep(1)
-            # self.slow_stop_all_spools()
-
             half_h, half_w = DIAMOND_SIZE
 
             results = {}
