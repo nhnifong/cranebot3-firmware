@@ -1644,53 +1644,56 @@ class AsyncObserver:
     async def linear_height_check_task(self):
         """
         Measure the average deviation from an ideal constant height, as reported by the
-        laser rangefinder, while traversing the work area from one wall to the other.
+        laser rangefinder, while traversing the floor along the currently selected route.
         Triggered by the debug command "linear". This is a motion task.
 
-        The gantry starts in the middle of the work area, 1.5m above the origin, performs
-        a half calibration, then moves to a point between anchor 0 and eyelet 0 and across
-        to the opposite point between anchor 1 and eyelet 1, both at 1.5m altitude. Through
-        an ideal wall-to-wall move the laser should read (1.5 - laser_offset) the whole way.
-        Aborts if the laser altitude drops below 0.2m or if the gantry comes within 0.4m of
-        the ceiling (the z position of anchor 0).
+        Every room is different and only the operator can pick a path across the floor with
+        no obstructions, so the traverse runs between the route source and destination
+        (self.pnp_src -> self.pnp_dst), both at 1.5m altitude. The gantry starts over the
+        origin, performs a half calibration, flies to the source, then traverses to the
+        destination. Through an ideal move the laser should read (1.5 - POLE - laser_offset)
+        the whole way. Aborts if the laser altitude drops below 0.2m or if the gantry comes
+        within 0.4m of the ceiling (the z position of anchor 0).
         """
         TEST_ALTITUDE_M = 1.5
         MIN_LASER_ALTITUDE_M = 0.2
         CEILING_MARGIN_M = 0.4
-        WALL_STANDOFF_M = 0.15  # pull the endpoints this far back toward the origin from the wall
         SAMPLE_INTERVAL_S = 0.02
         ideal_laser_range = TEST_ALTITUDE_M - POLE[2] - model_constants.laser_offset
 
-        # Live geometry model. For the arpeggio system the pull points are ordered
-        # [anchor0, eyelet0, anchor1, eyelet1].
-        if len(self.pe.anchor_points) < 4:
-            logger.warning('Linear height check needs the eyelet/anchor geometry of the arpeggio system')
+        # ceiling height for the proximity abort
+        ceiling_z = self.pe.anchor_points[0][2]
+
+        # Resolve the route endpoints to floor positions chosen by the operator.
+        def route_point_floor_pos(route_point, label):
+            if route_point in ROUTE_POINT_TAG_NAMES:
+                name = ROUTE_POINT_TAG_NAMES[route_point]
+                if name not in self.config.named_positions:
+                    logger.warning(f'Linear height check: no saved position for {label} tag "{name}"')
+                    return None
+                return tonp(self.config.named_positions[name])
+            if route_point == common.RoutePoint.ORIGIN:
+                return np.zeros(3)
+            logger.warning(f'Linear height check needs the {label} to be a tag or the origin, not {route_point}')
+            return None
+
+        src_pos = route_point_floor_pos(self.pnp_src, 'route source')
+        dst_pos = route_point_floor_pos(self.pnp_dst, 'route destination')
+        if src_pos is None or dst_pos is None:
             return
-        anchor0, eyelet0, anchor1, eyelet1 = self.pe.anchor_points[:4]
-        ceiling_z = anchor0[2]
+        point_a = np.array([src_pos[0], src_pos[1], TEST_ALTITUDE_M])
+        point_b = np.array([dst_pos[0], dst_pos[1], TEST_ALTITUDE_M])
 
-        # Wall-to-wall endpoints: midpoint of each wall's two pull points, at test altitude,
-        # pulled WALL_STANDOFF_M back toward the origin because right next to the wall is a deadzone.
-        def standoff_point(wall_xy):
-            toward_origin = -wall_xy
-            dist = np.linalg.norm(toward_origin)
-            if dist > 1e-6:
-                wall_xy = wall_xy + toward_origin / dist * WALL_STANDOFF_M
-            return np.array([*wall_xy, TEST_ALTITUDE_M])
-
-        point_a = standoff_point((anchor0[:2] + eyelet0[:2]) / 2)
-        point_b = standoff_point((anchor1[:2] + eyelet1[:2]) / 2)
-
-        # Start in the middle of the work area, 1.5m over the origin, and calibrate.
+        # Start over the origin, 1.5m up, and calibrate.
         self.gantry_goal_pos = np.array([0, 0, TEST_ALTITUDE_M])
         await self.seek_gantry_goal(auto_altitude=True)
         await self.half_auto_calibration()
 
-        # Move to the first wall (straight line).
+        # Fly to the route source (straight line).
         self.gantry_goal_pos = point_a
         await self.seek_gantry_goal(auto_altitude=True)
 
-        # Traverse to the far wall, sampling the laser the whole way.
+        # Traverse to the route destination, sampling the laser the whole way.
         # disable altitude cruise during test
         deviations = []
         aborted = None
