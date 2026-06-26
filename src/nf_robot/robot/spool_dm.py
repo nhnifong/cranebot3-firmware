@@ -191,114 +191,117 @@ class DamiaoSpoolController:
         Constantly try to match the position or speed targets.
         """
 
-        self.motor.enable()
-        self.motor.ensure_control_mode("VEL")
+        try:
+            self.motor.enable()
+            self.motor.ensure_control_mode("VEL")
 
-        self.motor.set_acceleration(self.conf['MAX_ACCEL'])
-        self.motor.set_deceleration(-self.conf['MAX_ACCEL'])
-        last_applied_accel = self.conf['MAX_ACCEL']
+            self.motor.set_acceleration(self.conf['MAX_ACCEL'])
+            self.motor.set_deceleration(-self.conf['MAX_ACCEL'])
+            last_applied_accel = self.conf['MAX_ACCEL']
 
-        self.motor.send_cmd_vel(target_velocity=0.0)
+            self.motor.send_cmd_vel(target_velocity=0.0)
 
-        start_time = time.time()
-        last_time = start_time
-        smooth_torque = 0
-        smooth_mute = 1
-        twopi = 2*math.pi
+            start_time = time.time()
+            last_time = start_time
+            smooth_torque = 0
+            smooth_mute = 1
+            twopi = 2*math.pi
 
-        while self.run_spool_loop:
-            if self.spool_pause:
-                time.sleep(0.2)
-                continue
+            while self.run_spool_loop:
+                if self.spool_pause:
+                    time.sleep(0.2)
+                    continue
 
-            loop_start = time.time()
-            dt = loop_start - last_time
-            if dt <= 0:
-                dt = 1e-4  # Prevent zero division errors if loop runs too fast
-            last_time = loop_start
+                loop_start = time.time()
+                dt = loop_start - last_time
+                if dt <= 0:
+                    dt = 1e-4  # Prevent zero division errors if loop runs too fast
+                last_time = loop_start
 
-            # re-apply accel/decel limits live if MAX_ACCEL was changed via set_config_vars.
-            # only resend on change so we don't spam the motor every loop.
-            if self.conf['MAX_ACCEL'] != last_applied_accel:
-                last_applied_accel = self.conf['MAX_ACCEL']
-                self.motor.set_acceleration(last_applied_accel)
-                self.motor.set_deceleration(-last_applied_accel)
+                # re-apply accel/decel limits live if MAX_ACCEL was changed via set_config_vars.
+                # only resend on change so we don't spam the motor every loop.
+                if self.conf['MAX_ACCEL'] != last_applied_accel:
+                    last_applied_accel = self.conf['MAX_ACCEL']
+                    self.motor.set_acceleration(last_applied_accel)
+                    self.motor.set_deceleration(-last_applied_accel)
 
-            # Read feedback from motor. flip if necessary.
-            states = self.motor.get_states()
-            motor_pos = self.direction * states.get('pos', 0.0) # radians from -12 to +12
-            motor_vel = self.direction * states.get('vel', 0.0) # radians per second
-            motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
-            # we could also read status status_code, t_mos, t_rotor (temps)
+                # Read feedback from motor. flip if necessary.
+                states = self.motor.get_states()
+                motor_pos = self.direction * states.get('pos', 0.0) # radians from -12 to +12
+                motor_vel = self.direction * states.get('vel', 0.0) # radians per second
+                motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
+                # we could also read status status_code, t_mos, t_rotor (temps)
 
-            # Convert to absolute position in revolutions
-            self.last_angle = self._update_absolute_angle(motor_pos)
-            
-            # low pass filter torque
-            sf = self.conf['SMOOTH_FACTOR']
-            smooth_torque = motor_torque * sf + smooth_torque * (1 - sf)
+                # Convert to absolute position in revolutions
+                self.last_angle = self._update_absolute_angle(motor_pos)
+                
+                # low pass filter torque
+                sf = self.conf['SMOOTH_FACTOR']
+                smooth_torque = motor_torque * sf + smooth_torque * (1 - sf)
 
-            # calculate line data from motor data
-            self.last_length = self.sc.get_unspooled_length(self.last_angle)
-            self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
-            current_line_speed = (motor_vel / twopi) * self.meters_per_rev
-            self.last_tension = (-smooth_torque * twopi) / self.meters_per_rev
+                # calculate line data from motor data
+                self.last_length = self.sc.get_unspooled_length(self.last_angle)
+                self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
+                current_line_speed = (motor_vel / twopi) * self.meters_per_rev
+                self.last_tension = (-smooth_torque * twopi) / self.meters_per_rev
 
-            # Position control logic (using during jog)
-            if self.target_length is not None:
-                dist_err = self.target_length - self.last_length
-                if dist_err > 0:
-                    self.aim_line_speed = self.conf['CRUISE_SPEED']
-                else:
-                    self.aim_line_speed = -self.conf['CRUISE_SPEED']
-                # If we are within the deadband, stop and clear target
-                if abs(dist_err) < self.conf['POS_DEADBAND']:
-                    self.target_length = None
-                    self.aim_line_speed = 0
-                    logging.info(f'cur_len {self.last_length}')
+                # Position control logic (using during jog)
+                if self.target_length is not None:
+                    dist_err = self.target_length - self.last_length
+                    if dist_err > 0:
+                        self.aim_line_speed = self.conf['CRUISE_SPEED']
+                    else:
+                        self.aim_line_speed = -self.conf['CRUISE_SPEED']
+                    # If we are within the deadband, stop and clear target
+                    if abs(dist_err) < self.conf['POS_DEADBAND']:
+                        self.target_length = None
+                        self.aim_line_speed = 0
+                        logging.info(f'cur_len {self.last_length}')
 
-            # accumulate these. parent class will send them on the websocket at it's own rate
-            row = (loop_start, self.last_length, current_line_speed, self.last_tension)
-            self.record.append(row)
+                # accumulate these. parent class will send them on the websocket at it's own rate
+                row = (loop_start, self.last_length, current_line_speed, self.last_tension)
+                self.record.append(row)
 
-            # slack indicator, kept current every loop because setReferenceLength() reads it
-            self.torque_err = smooth_torque - self.conf['TARGET_TORQUE'] # >0 means slack
+                # slack indicator, kept current every loop because setReferenceLength() reads it
+                self.torque_err = smooth_torque - self.conf['TARGET_TORQUE'] # >0 means slack
 
-            # line speed commanded by the motion controller (meters per second)
-            wanted_line_speed = self.aim_line_speed
+                # line speed commanded by the motion controller (meters per second)
+                wanted_line_speed = self.aim_line_speed
 
-            if self.tension_reg_enabled:
-                # 1) soft mute (unchanged behavior): never pay out while slack, smoothed
-                #    so the velocity eases to zero instead of stepping. prevents birdsnest.
-                mute = 0 if (self.torque_err > 0 and wanted_line_speed > 0) else 1
-                smooth_mute = mute * sf + smooth_mute * (1 - sf)
-                wanted_line_speed *= smooth_mute
+                if self.tension_reg_enabled:
+                    # 1) soft mute (unchanged behavior): never pay out while slack, smoothed
+                    #    so the velocity eases to zero instead of stepping. prevents birdsnest.
+                    mute = 0 if (self.torque_err > 0 and wanted_line_speed > 0) else 1
+                    smooth_mute = mute * sf + smooth_mute * (1 - sf)
+                    wanted_line_speed *= smooth_mute
 
-                # 2) active tension correction toward a target, with a hysteresis band.
-                #    floor mode (no target): one-sided, only reels in below the floor.
-                #    hold mode (target set): two-sided, also pays out above the target.
-                band = self.conf['TENSION_BAND_N']
-                kp = self.conf['TENSION_KP']
-                max_corr = self.conf['MAX_TENSION_CORRECTION_MPS']
-                target = self.tension_target if self.tension_target is not None else self.conf['TENSION_FLOOR_N']
-                if self.last_tension < target - band:
-                    correction = -min(max_corr, kp * (target - self.last_tension)) # reel in
-                elif self.tension_target is not None and self.last_tension > target + band:
-                    correction = min(max_corr, kp * (self.last_tension - target))  # pay out (hold mode only)
-                else:
-                    correction = 0.0
-                wanted_line_speed += correction
+                    # 2) active tension correction toward a target, with a hysteresis band.
+                    #    floor mode (no target): one-sided, only reels in below the floor.
+                    #    hold mode (target set): two-sided, also pays out above the target.
+                    band = self.conf['TENSION_BAND_N']
+                    kp = self.conf['TENSION_KP']
+                    max_corr = self.conf['MAX_TENSION_CORRECTION_MPS']
+                    target = self.tension_target if self.tension_target is not None else self.conf['TENSION_FLOOR_N']
+                    if self.last_tension < target - band:
+                        correction = -min(max_corr, kp * (target - self.last_tension)) # reel in
+                    elif self.tension_target is not None and self.last_tension > target + band:
+                        correction = min(max_corr, kp * (self.last_tension - target))  # pay out (hold mode only)
+                    else:
+                        correction = 0.0
+                    wanted_line_speed += correction
 
-            # convert commanded line speed in meters per second to motor velocity in
-            # radians per second based on current circumfrence; motor enforces accel limit
-            wanted_motor_vel = wanted_line_speed / self.meters_per_rev * twopi
+                # convert commanded line speed in meters per second to motor velocity in
+                # radians per second based on current circumfrence; motor enforces accel limit
+                wanted_motor_vel = wanted_line_speed / self.meters_per_rev * twopi
 
-            self.motor.send_cmd_vel(target_velocity=wanted_motor_vel*self.direction)
+                self.motor.send_cmd_vel(target_velocity=wanted_motor_vel*self.direction)
 
-            time_to_sleep = 1.0 / self.conf['LOOP_FREQ_HZ'] - (time.time() - loop_start)
-            if time_to_sleep > 0:
-                time.sleep(time_to_sleep)
-        logging.info(f'Spool tracking loop stopped')
+                time_to_sleep = 1.0 / self.conf['LOOP_FREQ_HZ'] - (time.time() - loop_start)
+                if time_to_sleep > 0:
+                    time.sleep(time_to_sleep)
+        finally:
+            self.motor.send_cmd_vel(target_velocity=0)
+            logging.info(f'Spool tracking loop stopped')
 
 
     def setTensionRegEnabled(self, val):
