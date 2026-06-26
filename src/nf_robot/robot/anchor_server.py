@@ -9,6 +9,7 @@ from websockets.exceptions import (
     ConnectionClosedError,
 )
 import json
+import importlib.metadata
 import threading
 import zeroconf
 from zeroconf.asyncio import (
@@ -268,6 +269,8 @@ class RobotComponentServer:
         # If the thrown exception is not one of the type caught here, the server stops.
         try:
             self.have_client = True
+            # tell the client which version of nf_robot this component server is running
+            await websocket.send(json.dumps({'nf_robot_v': importlib.metadata.version('nf_robot')}))
             async with asyncio.TaskGroup() as tg:
                 read_updates = tg.create_task(self.read_updates_from_client(websocket, tg))
                 stream = tg.create_task(self.stream_measurements(websocket))

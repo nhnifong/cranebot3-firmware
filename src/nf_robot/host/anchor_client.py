@@ -66,6 +66,9 @@ class ComponentClient:
         # set after a successful firmware update; the component restarts to apply it,
         # so the next dropped connection is expected rather than an abnormal shutdown.
         self.expect_disconnect_from_update = False
+        # version of the nf_robot module running on the component server, reported by the
+        # server right after connecting. None until reported (older firmware never sends it).
+        self.nf_robot_v = None
 
         # saved for setup telemetry
         self.local_video_uri = None
@@ -396,6 +399,8 @@ class ComponentClient:
                                 # the component will restart to apply the update, dropping
                                 # the connection. treat that next drop as a normal shutdown.
                                 self.expect_disconnect_from_update = True
+                if 'nf_robot_v' in update:
+                    self.nf_robot_v = update['nf_robot_v']
                 if 'temp' in update:
                     self.conn_status.temp = update['temp']
                 if 'torque' in update:

@@ -33,6 +33,7 @@ from pathlib import Path
 import json
 import re
 import subprocess
+from packaging.version import parse as parse_version, InvalidVersion
 
 from nf_robot.common.pose_functions import compose_poses
 from nf_robot.common.cv_common import *
@@ -97,6 +98,11 @@ ROUTE_POINT_TAG_NAMES = {
     common.RoutePoint.TOYBOX: "toys",
     common.RoutePoint.TRASH: "trash",
     common.RoutePoint.GAMEPAD: "gamepad",
+}
+
+# feature key -> minimum nf_robot version every connected component must run to use it
+VERSION_GATES = {
+    "speed_0.45": "4.1.0",
 }
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
@@ -2204,15 +2210,53 @@ class AsyncObserver:
             self.bot_clients[service_name] = client
             # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
             abnormal_close = await client.startup()
+            # build a friendly name and capture the address before the client is torn down
+            if is_power_anchor or is_standard_anchor or is_arp_anchor:
+                display_name = f'Anchor {client.anchor_num}'
+            elif is_standard_gripper or is_arp_gripper:
+                display_name = 'Gripper'
+            else:
+                display_name = name_component
+            address = client.address
             # remove client
             r = await self.remove_service(None, service_name)
-            if abnormal_close:
-                self.send_ui(pop_message=telemetry.Popup(
-                    message=f'lost connection to {service_name}'
-                ))
-                await self.stop_all()
-            # delete this task from the dict as it ends, so keep_robot_connected will try agian. 
+            # delete this task from the dict as it ends, so keep_robot_connected will try agian.
+            # do this before the reconnect check below so a reconnect attempt can start.
             del self.connection_tasks[service_name]
+            if abnormal_close:
+                # don't alarm on a momentary drop (e.g. a firmware restart); only alert and
+                # stop if the component is still gone after a brief grace period.
+                asyncio.create_task(self._alert_if_not_reconnected(service_name, display_name, address))
+
+    async def _alert_if_not_reconnected(self, service_name, display_name, address):
+        """After a component disconnects abnormally, wait a couple seconds and only alert
+        the user and stop the robot if it has not reconnected by then."""
+        RECONNECT_GRACE_S = 2.0
+        await asyncio.sleep(RECONNECT_GRACE_S)
+        client = self.bot_clients.get(service_name)
+        if client is not None and client.connected:
+            logger.info(f'{display_name} reconnected within {RECONNECT_GRACE_S}s; suppressing lost-connection alert')
+            return
+        self.send_ui(pop_message=telemetry.Popup(
+            message=f'Lost connection to {display_name} at {address}'
+        ))
+        await self.stop_all()
+
+    def feature_supported(self, feature_key):
+        """Return True if every connected component runs an nf_robot version at or above the
+        minimum required for the given feature (a key in VERSION_GATES). A component that has
+        not reported a version (older firmware) is treated as not meeting the requirement."""
+        required_v = parse_version(VERSION_GATES[feature_key])
+        for client in self.bot_clients.values():
+            if client.nf_robot_v is None:
+                return False
+            try:
+                if parse_version(client.nf_robot_v) < required_v:
+                    return False
+            except InvalidVersion:
+                logger.warning(f'component at {client.address} reported unparseable version {client.nf_robot_v!r}')
+                return False
+        return True
 
     async def connect_cloud_telemetry(self):
         ws_protocol_and_host = CONTROL_PLANE_LOCAL
@@ -2733,7 +2777,7 @@ class AsyncObserver:
         speed = np.linalg.norm(total_velocity)
 
         # enforce a model dependent speed limit
-        speed_limit = 0.5
+        speed_limit = 0.35
         if self.config.anchor_type == common.AnchorType.PILOT:
 
             # On pilot stringman, also enforce a height dependent speed limit on the total combined velocity.
@@ -2745,7 +2789,9 @@ class AsyncObserver:
             speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.25)
             # If the combined total speed exceeds the limit, scale the vector down
         elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
-            speed_limit = 1.0
+            speed_limit = 0.35
+            if self.feature_supported("speed_0.45"):
+                speed_limit = 0.45
 
         if speed > speed_limit:
             total_velocity = total_velocity * (speed_limit / speed)
