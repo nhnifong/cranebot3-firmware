@@ -15,6 +15,16 @@ import time
 
 from nf_robot.robot.gripper_arp_server import GripperArpServer
 
+async def recv_until(ws, key, timeout=1.0, max_messages=20):
+    """Receive websocket messages until one contains the given key, and return it.
+    Tests must look for messages by key rather than assuming ordering, since the server
+    sends other messages too (e.g. nf_robot_v right after the client connects)."""
+    for _ in range(max_messages):
+        data = json.loads(await asyncio.wait_for(ws.recv(), timeout=timeout))
+        if key in data:
+            return data
+    raise AssertionError(f'did not receive a message containing key {key!r} within {max_messages} messages')
+
 class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # Establish a clean environment by patching out all hardware-dependent libraries before the server instantiates.
@@ -110,8 +120,8 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         Avoids hardcoded assertions to remain robust against tuning tweaks.
         """
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
-            data = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.0))
-            
+            data = await recv_until(ws, 'grip_sensors')
+
             self.assertIn('grip_sensors', data, "Telemetry missing critical root key")
             sensors = data['grip_sensors']
             
@@ -163,7 +173,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         must be reported to clients via the 'total_wrist_turns' update key.
         """
         async with websockets.connect("ws://127.0.0.1:8765") as ws:
-            data = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.0))
+            data = await recv_until(ws, 'total_wrist_turns')
             self.assertIn('total_wrist_turns', data)
             self.assertEqual(data['total_wrist_turns'], -1)
 

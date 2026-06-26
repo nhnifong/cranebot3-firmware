@@ -67,6 +67,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client.connection_established_event = asyncio.Event()
         self.mock_gripper_client.last_frame_resized = None
         self.mock_gripper_client.connected = False
+        self.mock_gripper_client.address = '127.0.0.1'
 
         self.patchers.append(patch('nf_robot.host.observer.ArpeggioGripperClient', self.mock_gripper_client_class))
 
@@ -77,6 +78,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             client.shutdown = self.event_shutdown
             client.slow_stop_spool = self.instant_nothing
             client.anchor_num = i
+            client.address = '127.0.0.1'
             client.last_frame_resized = None
             client.connected = False
 
