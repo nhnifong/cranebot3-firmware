@@ -122,9 +122,9 @@ lerobot-train \
 train locally with dinov3 patches
 
 lerobot-train \
-  --dataset.repo_id=naavox/move_clutter_384 \
-  --dataset.root=/media/nhn/nfdrive/datasets/move_clutter_384/ \
-  --output_dir=./outputs/dit-dino-1/training \
+  --dataset.repo_id=naavox/move_clutter_combined_384 \
+  --dataset.root=/media/nhn/nfdrive/datasets/move_clutter_combined_384/ \
+  --output_dir=./outputs/dit-dino-3/training \
   --steps=30000 \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
@@ -142,7 +142,7 @@ lerobot-train \
   --policy.num_integration_steps=100 \
   --policy.integration_method=euler \
   --policy.sigma_min=0.0 \
-  --policy.repo_id="naavox/dit-dino-1" \
+  --policy.repo_id="naavox/dit-dino-3" \
   --wandb.enable=false \
   --tolerance_s=0.001 \
   --policy.push_to_hub=true \
@@ -152,14 +152,15 @@ lerobot-train \
 train on modal
 
 python src/nf_robot/ml/lerobot_train_modal.py \
-  --dataset.repo_id=naavox/merged_224 \
-  --output_dir /multitask_dit_data/tidy_modal_12 \
-  --steps=35000 \
+  --dataset.repo_id=naavox/move_clutter_combined_384 \
+  --output_dir /multitask_dit_data/tidy_modal_13 \
+  --steps=50000 \
   --dataset.image_transforms.enable=true   \
   --dataset.image_transforms.max_num_transforms=3   \
   --policy.type=multi_task_dit   \
-  --policy.pretrained_path=naavox/dit-grasp-1   \
   --policy.device=cuda   \
+  --policy.vision_encoder_name=facebook/dinov3-vitb16-pretrain-lvd1689m \
+  --policy.use_visual_cross_attention=true \
   --policy.horizon=64   \
   --policy.n_action_steps=32   \
   --policy.objective=flow_matching   \
@@ -170,13 +171,13 @@ python src/nf_robot/ml/lerobot_train_modal.py \
   --policy.num_integration_steps=100   \
   --policy.integration_method=euler   \
   --policy.sigma_min=0.0   \
-  --policy.repo_id="naavox/dit-grasp-3"   \
+  --policy.repo_id="naavox/dit-dino-3"   \
   --policy.push_to_hub=true \
   --wandb.enable=false \
-  --batch_size=400 \
+  --batch_size=128 \
   --tolerance_s=0.001 \
   --save_freq=5000 \
-  --num_workers=13
+  --num_workers=10
 
 
 SmolVLA

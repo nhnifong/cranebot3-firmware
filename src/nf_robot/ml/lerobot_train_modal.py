@@ -14,6 +14,12 @@ Modal-specific flags
   --detach        When true, submit as a background job and return immediately (default: true)
   --num_workers   DataLoader num_workers; injected into training args when not already set (default: 10)
   --hf_secret     Name of the Modal secret that holds HUGGING_FACE_HUB_TOKEN (default: huggingface)
+  --lerobot_ref   Which lerobot to install in the image. A git ref (commit/branch/tag) of the
+                  nhnifong/lerobot fork installs that fork (default: a pinned fork commit); the
+                  literal "public" installs the published lerobot from PyPI instead. The ref must
+                  already be pushed to GitHub for Modal to fetch it. Pin a commit (not a branch):
+                  Modal caches the image layer by the pip spec string, so a branch name would keep
+                  reusing a stale build, whereas a new commit hash forces a rebuild.
 
 Prerequisites
 -------------
@@ -28,6 +34,12 @@ import sys
 
 import modal
 
+# Default git ref of the nhnifong/lerobot fork to install in the Modal image.
+# Bump this to a newly-pushed commit hash after changing the fork (pin a commit,
+# not a branch, so Modal rebuilds the cached image layer). Use --lerobot_ref to override,
+# or --lerobot_ref public to install the published lerobot from PyPI instead.
+_DEFAULT_LEROBOT_REF = "022fe150"
+
 # ---------------------------------------------------------------------------
 # Parse Modal-specific flags at import time so they can be baked into the
 # @app.function decorator (Modal 1.x removed with_options).
@@ -37,19 +49,31 @@ _modal_parser = argparse.ArgumentParser(add_help=False)
 _modal_parser.add_argument("--gpu_type", default="H200")
 _modal_parser.add_argument("--timeout_hours", type=float, default=24.0)
 _modal_parser.add_argument("--hf_secret", default="huggingface")
+_modal_parser.add_argument("--lerobot_ref", default=_DEFAULT_LEROBOT_REF)
 _modal_args, _ = _modal_parser.parse_known_args()
 
 _GPU_TYPE = _modal_args.gpu_type
 _TIMEOUT_S = int(_modal_args.timeout_hours * 3600)
 _HF_SECRET = _modal_args.hf_secret
+_LEROBOT_REF = _modal_args.lerobot_ref
 
 # ---------------------------------------------------------------------------
-# Modal image — installs lerobot and its training extras with system ffmpeg
+# Modal image — installs lerobot and its training extras with system ffmpeg.
+# --lerobot_ref selects the source: "public" -> published PyPI lerobot;
+# any other value -> the nhnifong/lerobot fork at that git ref (commit/branch/tag).
+# The fork carries the multi_task_dit + dinov3 / use_visual_cross_attention code.
 # ---------------------------------------------------------------------------
+_LEROBOT_EXTRAS = "lerobot[training,multi_task_dit]"
+_LEROBOT_FORK_URL = "git+https://github.com/nhnifong/lerobot.git"
+if _LEROBOT_REF.lower() == "public":
+    _LEROBOT_SPEC = _LEROBOT_EXTRAS
+else:
+    _LEROBOT_SPEC = f"{_LEROBOT_EXTRAS} @ {_LEROBOT_FORK_URL}@{_LEROBOT_REF}"
+
 _LEROBOT_IMAGE = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "git")
-    .pip_install("lerobot[training,multi_task_dit]")
+    .pip_install(_LEROBOT_SPEC)
 )
 
 app = modal.App("lerobot-train")
@@ -108,6 +132,16 @@ def main() -> None:
         default="huggingface",
         help="Name of the Modal secret containing HUGGING_FACE_HUB_TOKEN",
     )
+    parser.add_argument(
+        "--lerobot_ref",
+        default=_DEFAULT_LEROBOT_REF,
+        help=(
+            "lerobot to install in the image: a git ref of the nhnifong/lerobot fork, "
+            "or 'public' for the published PyPI lerobot. Registered here so it is consumed "
+            "rather than forwarded to lerobot-train (the image is actually built from the "
+            "import-time parse above)."
+        ),
+    )
 
     args, train_argv = parser.parse_known_args()
 
@@ -122,6 +156,7 @@ def main() -> None:
     print(f"  timeout       : {_modal_args.timeout_hours}h")
     print(f"  detach        : {detach}")
     print(f"  hf_secret     : {_HF_SECRET}")
+    print(f"  lerobot       : {_LEROBOT_SPEC}")
     print(f"  training args : {' '.join(train_argv)}")
 
     with modal.enable_output():

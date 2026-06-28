@@ -30,7 +30,6 @@ from pathlib import Path
 from tqdm import tqdm
 
 from lerobot.datasets.dataset_tools import modify_features
-from lerobot.datasets.io_utils import write_info
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.video_utils import get_video_info
 from lerobot.utils.constants import HF_LEROBOT_HOME
@@ -38,6 +37,15 @@ from lerobot.utils.utils import init_logging
 
 from nf_robot.ml.lerobot_resize_video_feature import resize_video
 from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, _FEED_NAMES
+
+
+def _write_info_json(info: dict, root: Path) -> None:
+    """Write meta/info.json directly from a plain dict.
+
+    Bypasses lerobot's write_info, whose signature changed across versions
+    (0.5.1 took a dict; >=0.6 takes a DatasetInfo and calls .to_dict()).
+    """
+    (Path(root) / "meta" / "info.json").write_text(json.dumps(info, indent=4))
 
 
 def derive_dataset(
@@ -91,10 +99,13 @@ def derive_dataset(
         info_path = output_dir / "meta" / "info.json"
         info = json.loads(info_path.read_text())
         info["repo_id"] = repo_id
-        write_info(info, output_dir)
+        _write_info_json(info, output_dir)
         dataset = LeRobotDataset(repo_id=repo_id, root=output_dir)
 
-    info = dict(dataset.meta.info)
+    # lerobot >=0.6 wraps meta.info in a DatasetInfo object (use .to_dict());
+    # 0.5.1 exposes a plain dict. Support both so this script survives version switches.
+    meta_info = dataset.meta.info
+    info = meta_info.to_dict() if hasattr(meta_info, "to_dict") else dict(meta_info)
     fps = dataset.meta.fps
     workers = num_workers if num_workers is not None else os.cpu_count()
 
@@ -134,7 +145,7 @@ def derive_dataset(
         info["features"][key]["info"] = new_video_info
         info["features"][key]["shape"] = [target_h, target_w, channels]
 
-    write_info(info, dataset.root)
+    _write_info_json(info, dataset.root)
     logging.info(f"Done. Derived '{camera_mode}' dataset written to {dataset.root}")
     return LeRobotDataset(repo_id=repo_id, root=dataset.root)
 
