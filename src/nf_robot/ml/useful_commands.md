@@ -203,6 +203,25 @@ lerobot-train \
   --policy.device=cuda \
   --wandb.enable=false
 
+JEPA
+
+lerobot-train \
+  --policy.path=lerobot/VLA-JEPA-LIBERO \
+  --policy.repo_id=naavox/jepa-1 \
+  --policy.freeze_qwen=true \
+  --policy.reinit_modules='["model.action_model.action_encoder", "model.action_model.action_decoder", "model.action_model.state_encoder"]' \
+  --policy.gripper_dim=4 \
+  --dataset.repo_id=naavox/move_clutter_combined_384 \
+  --dataset.root=/media/nhn/nfdrive/datasets/move_clutter_combined_384/ \
+  --output_dir=./outputs/jepa-1/training \
+  --dataset.image_transforms.enable=true \
+  --dataset.image_transforms.max_num_transforms=3 \
+  --wandb.enable=false \
+  --rename_map='{"observation.images.gripper_camera": "observation.images.image", "observation.images.overhead_camera": "observation.images.image2"}' \
+  --steps=20000 \
+  --save_freq=5000 \
+  --batch_size=44
+
 ```
 
 Example evaluation command (on robot)
