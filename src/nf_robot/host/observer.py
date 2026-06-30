@@ -552,6 +552,18 @@ class AsyncObserver:
                 logger.info(f'set tension target on line {line_no} to {value}')
             else:
                 logger.warning(f'invalid holdtension command, expected "holdtension LINE VALUE|off": {item.action}')
+        if item.action.startswith('tensionreg '):
+            # 'tensionreg on|off' enables or disables onboard tension regulation (the floor +
+            # soft mute) on both spools of every anchor. for bench testing.
+            parts = item.action.split()
+            if len(parts) == 2 and parts[1] in ('on', 'off'):
+                enabled = parts[1] == 'on'
+                logger.info(f'setting tension reg {"on" if enabled else "off"} for all anchors')
+                for anchor in self.anchors.values():
+                    for spool_no in (0, 1):
+                        asyncio.create_task(anchor.send_commands({'set_tension_reg': (enabled, spool_no)}))
+            else:
+                logger.warning(f'invalid tensionreg command, expected "tensionreg on|off": {item.action}')
 
     def sync_timezone_to_bots(self):
         tz = subprocess.check_output(['timedatectl', 'show', '--property=Timezone', '--value']).decode().strip()
@@ -3111,7 +3123,8 @@ class AsyncObserver:
                 self.gantry_goal_pos = drop_point + GANTRY_HEIGHT_OVER_DROPOFF
                 await self.seek_gantry_goal()
                 # open gripper
-                open_target = max(-90, min(RELAXED_OPEN, self.gripper_client.finger_angle - 10))
+                current_finger_angle = self.datastore.finger.getLast()[1]
+                open_target = max(-90, min(RELAXED_OPEN, current_finger_angle - 10))
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': open_target}))
                 if next_target is not None:
                     # don't immediately select a new target, because there's a chance it'll be the sock you're holding.

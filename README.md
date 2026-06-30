@@ -168,8 +168,6 @@ log back in
 
 Run QA scripts for the specific component type
 
-    /opt/robot/env/bin/qa-anchor anchor|power_anchor
-    /opt/robot/env/bin/qa-gripper
     /opt/robot/env/bin/qa-gripper-arp
     /opt/robot/env/bin/qa-anchor-arp
 

@@ -30,13 +30,18 @@ default_conf_dm = {
     # --- onboard tension regulation (generalizes the old anti-tangle soft mute) ---
     # minimum tension in newtons to keep on the line when no hold target is set.
     # the loop reels in to restore at least this much tension while still obeying speed commands.
-    'TENSION_FLOOR_N': 1.0,
+    # while a negative tension here seems rediculous - you can't push on a string - it just works.
+    'TENSION_FLOOR_N': -0.1,
     # proportional gain converting a tension error (N) into a correction line speed (m/s).
     'TENSION_KP': 0.3,
     # clamp on the magnitude of the tension correction line speed in meters per second.
     'MAX_TENSION_CORRECTION_MPS': 0.5,
     # hysteresis half-band in newtons. no correction is applied within +/- this of the target.
     'TENSION_BAND_N': 0.1,
+    # enable the soft mute that refuses to pay a line out while it is slack. 0 disables it.
+    # keeping a would-be-slack cable taut over-constrains the gantry, so this is the knob to
+    # A/B test the workspace convexity independently of the tension floor.
+    'SOFT_MUTE_ENABLED': 1,
 }
 
 class DamiaoSpoolController:
@@ -269,11 +274,14 @@ class DamiaoSpoolController:
                 wanted_line_speed = self.aim_line_speed
 
                 if self.tension_reg_enabled:
-                    # 1) soft mute (unchanged behavior): never pay out while slack, smoothed
-                    #    so the velocity eases to zero instead of stepping. prevents birdsnest.
-                    mute = 0 if (self.torque_err > 0 and wanted_line_speed > 0) else 1
-                    smooth_mute = mute * sf + smooth_mute * (1 - sf)
-                    wanted_line_speed *= smooth_mute
+                    # 1) soft mute: never pay out while slack, smoothed so the velocity eases
+                    #    to zero instead of stepping. prevents birdsnest. gated by a flag so it
+                    #    can be A/B tested live (it keeps the would-be-slack cable taut, which
+                    #    over-constrains the gantry and warps open-loop moves).
+                    if self.conf['SOFT_MUTE_ENABLED']:
+                        mute = 0 if (self.torque_err > 0 and wanted_line_speed > 0) else 1
+                        smooth_mute = mute * sf + smooth_mute * (1 - sf)
+                        wanted_line_speed *= smooth_mute
 
                     # 2) active tension correction toward a target, with a hysteresis band.
                     #    floor mode (no target): one-sided, only reels in below the floor.
