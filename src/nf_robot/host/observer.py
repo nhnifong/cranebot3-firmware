@@ -510,9 +510,6 @@ class AsyncObserver:
              await asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
         if item.action == 'spind':
             print(self.gripper_client.get_spin(True))
-        if item.action == 'chaset':
-            # keep the gripper 10cm over the "trash" tag
-            r = await self.invoke_motion_task(self.chase_tag('trash'))
         if item.action == 'ferry':
             r = await self.invoke_motion_task(self.ferry('hamper', 'trash'))
         if item.action == 'linear':
@@ -1661,8 +1658,8 @@ class AsyncObserver:
 
         Every room is different and only the operator can pick a path across the floor with
         no obstructions, so the traverse runs between the route source and destination
-        (self.pnp_src -> self.pnp_dst), both at 1.5m altitude. The gantry starts over the
-        origin, performs a half calibration, flies to the source, then traverses to the
+        (self.pnp_src -> self.pnp_dst), both at 1.5m altitude. The gantry flies directly to
+        the source, pauses for 2 seconds, then traverses to the
         destination. Through an ideal move the laser should read (1.5 - POLE - laser_offset)
         the whole way. Aborts if the laser altitude drops below 0.2m or if the gantry comes
         within 0.4m of the ceiling (the z position of anchor 0).
@@ -1696,14 +1693,10 @@ class AsyncObserver:
         point_a = np.array([src_pos[0], src_pos[1], TEST_ALTITUDE_M])
         point_b = np.array([dst_pos[0], dst_pos[1], TEST_ALTITUDE_M])
 
-        # Start over the origin, 1.5m up, and calibrate.
-        self.gantry_goal_pos = np.array([0, 0, TEST_ALTITUDE_M])
-        await self.seek_gantry_goal(auto_altitude=True)
-        await self.half_auto_calibration()
-
-        # Fly to the route source (straight line).
+        # Fly directly to the route source with auto altitude, then pause before the test.
         self.gantry_goal_pos = point_a
         await self.seek_gantry_goal(auto_altitude=True)
+        await asyncio.sleep(2.0)
 
         # Traverse to the route destination, sampling the laser the whole way.
         # disable altitude cruise during test
@@ -1741,13 +1734,15 @@ class AsyncObserver:
             return
 
         deviations_cm = np.array(deviations) * 100
-        logger.info(
+        result_message = (
             f'Linear height check complete over {len(deviations_cm)} samples. '
             f'Ideal laser range {ideal_laser_range * 100:.1f}cm. '
             f'Mean deviation {deviations_cm.mean():+.2f}cm, '
             f'mean abs deviation {np.abs(deviations_cm).mean():.2f}cm, '
             f'RMS {np.sqrt((deviations_cm ** 2).mean()):.2f}cm, '
             f'min {deviations_cm.min():+.2f}cm, max {deviations_cm.max():+.2f}cm')
+        logger.info(result_message)
+        self.send_ui(pop_message=telemetry.Popup(message=result_message))
 
     async def goalseek_diagnostic_task(self):
         """
@@ -3422,6 +3417,15 @@ class AsyncObserver:
         DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
         CENTERING_MODEL_REPOID = "naavox/centering"
 
+        if DEVICE == "cpu":
+            logger.warning("Refusing to load centering model on CPU; hardware acceleration required.")
+            self.centering_model = None
+            self.send_ui(pop_message=telemetry.Popup(
+                message="The arp grasp (centering model) cannot be used without some kind of "
+                        "hardware acceleration. Loading was aborted because the torch device is CPU."
+            ))
+            return
+
         def load_sync():
             if self.local_models:
                 center_path = "models/square_centering.pth"
@@ -3441,6 +3445,16 @@ class AsyncObserver:
         from nf_robot.ml.target_heatmap import TargetHeatmapNet
         DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
         TARGETING_MODEL_REPOID = "naavox/targeting"
+
+        if DEVICE == "cpu":
+            logger.warning("Refusing to load targeting model on CPU; hardware acceleration required.")
+            self.target_model = None
+            self.send_ui(pop_message=telemetry.Popup(
+                message="Automatic target identification (targeting model) cannot be used without "
+                        "some kind of hardware acceleration. Loading was aborted because the torch "
+                        "device is CPU."
+            ))
+            return
 
         def load_sync():
             if self.local_models:
