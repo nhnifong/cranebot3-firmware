@@ -507,7 +507,7 @@ class AsyncObserver:
             self.config.swing_latency = float(parts[1])
             save_config(self.config, self.config_path)
         if item.action == 'reset_wrist':
-             await asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
+             r = await self.gripper_client.send_commands({'reset_wrist': None})
         if item.action == 'spind':
             print(self.gripper_client.get_spin(True))
         if item.action == 'ferry':
@@ -517,11 +517,11 @@ class AsyncObserver:
         if item.action == 'goalseek':
             r = await self.invoke_motion_task(self.goalseek_diagnostic_task())
         if item.action == 'sync_timezone':
-            self.sync_timezone_to_bots()
+            await self.sync_timezone_to_bots()
         if item.action.startswith('untwist'):
             parts = item.action.split()
             if len(parts)==2 and parts[0]=='untwist':
-                await asyncio.create_task(self.gripper_client.send_commands({'untwist': int(parts[1])}))
+                r = await self.gripper_client.send_commands({'untwist': int(parts[1])})
         if item.action.startswith('setvar '):
             # 'setvar KEY VALUE' broadcasts a live config override to every component.
             # used for bench tuning of onboard loop constants without restarting firmware.
@@ -533,8 +533,10 @@ class AsyncObserver:
                 except ValueError:
                     value = parts[2]
                 logger.info(f'Broadcasting set_config_vars {key}={value} to all components')
-                for client in self.bot_clients.values():
-                    asyncio.create_task(client.send_commands({'set_config_vars': {key: value}}))
+                await asyncio.gather(*[
+                    client.send_commands({'set_config_vars': {key: value}})
+                    for client in self.bot_clients.values()
+                ])
             else:
                 logger.warning(f'invalid setvar command, expected "setvar KEY VALUE": {item.action}')
         if item.action.startswith('holdtension '):
@@ -549,23 +551,23 @@ class AsyncObserver:
                 logger.info(f'set tension target on line {line_no} to {value}')
             else:
                 logger.warning(f'invalid holdtension command, expected "holdtension LINE VALUE|off": {item.action}')
-        if item.action.startswith('tensionreg '):
-            # 'tensionreg on|off' enables or disables onboard tension regulation (the floor +
-            # soft mute) on both spools of every anchor. for bench testing.
-            parts = item.action.split()
-            if len(parts) == 2 and parts[1] in ('on', 'off'):
-                enabled = parts[1] == 'on'
-                logger.info(f'setting tension reg {"on" if enabled else "off"} for all anchors')
-                for anchor in self.anchors.values():
-                    for spool_no in (0, 1):
-                        asyncio.create_task(anchor.send_commands({'set_tension_reg': (enabled, spool_no)}))
-            else:
-                logger.warning(f'invalid tensionreg command, expected "tensionreg on|off": {item.action}')
 
-    def sync_timezone_to_bots(self):
+    async def set_tension_reg(self, enabled: bool):
+        """Enable or disable onboard tension regulation (the floor + soft mute) on both
+        spools of every anchor."""
+        logger.info(f'setting tension reg {"on" if enabled else "off"} for all anchors')
+        await asyncio.gather(*[
+            anchor.send_commands({'set_tension_reg': (enabled, spool_no)})
+            for anchor in self.anchors.values()
+            for spool_no in (0, 1)
+        ])
+
+    async def sync_timezone_to_bots(self):
         tz = subprocess.check_output(['timedatectl', 'show', '--property=Timezone', '--value']).decode().strip()
-        for client in self.bot_clients.values():
-            asyncio.create_task(client.send_commands({'set_timezone': tz}))
+        await asyncio.gather(*[
+            client.send_commands({'set_timezone': tz})
+            for client in self.bot_clients.values()
+        ])
 
     async def chase_tag(self, name):
         """Keep the gripper at the named location"""
@@ -802,6 +804,10 @@ class AsyncObserver:
                 await self._handle_enable_torque()
             case control.Command.DEBUG_LOG_OVER_T:
                 self._enable_debug_log_over_telemetry()
+            case control.Command.ENABLE_TENSION_REG:
+                r = await self.set_tension_reg(True)
+            case control.Command.DISABLE_TENSION_REG:
+                r = await self.set_tension_reg(False)
 
     def _enable_debug_log_over_telemetry(self):
         if self._telem_log_handler is not None:
@@ -827,7 +833,7 @@ class AsyncObserver:
                     break
                 await asyncio.sleep(0.5)
         bar = asyncio.create_task(update_bar_task())
-        self.sync_timezone_to_bots()
+        await self.sync_timezone_to_bots()
         await asyncio.sleep(0.3)
         tasks = []
         # capture each client's address now, while it still exists in bot_clients. a
@@ -863,14 +869,18 @@ class AsyncObserver:
     async def _handle_disable_torque(self):
         if self.config.anchor_type != common.AnchorType.ARPEGGIO:
             return
-        for client in self.anchors.values():
-            asyncio.create_task(client.send_commands({'disable_torque': None}))
+        await asyncio.gather(*[
+            client.send_commands({'disable_torque': None})
+            for client in self.anchors.values()
+        ])
 
     async def _handle_enable_torque(self):
         if self.config.anchor_type != common.AnchorType.ARPEGGIO:
             return
-        for client in self.anchors.values():
-            asyncio.create_task(client.send_commands({'enable_torque': None}))
+        await asyncio.gather(*[
+            client.send_commands({'enable_torque': None})
+            for client in self.anchors.values()
+        ])
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
@@ -878,9 +888,9 @@ class AsyncObserver:
         client = None
         if jog.is_gripper:
             if jog.speed is not None:
-                asyncio.create_task(self.gripper_client.send_commands({'jog': jog.offset}))
+                r = await self.gripper_client.send_commands({'aim_speed': jog.speed})
             elif jog.offset is not None:
-                asyncio.create_task(self.gripper_client.send_commands({'aim_speed': jog.speed}))
+                r = await self.gripper_client.send_commands({'jog': jog.offset})
         else:
             if jog.speed is not None:
                 await self.send_line_speed(jog.anchor_num, jog.speed)
@@ -895,11 +905,11 @@ class AsyncObserver:
     async def _handle_slow_stop_one(self, stop_data: dict):
         """Handles stopping a single spool motor."""
         if stop_data.get('id') == 'gripper' and self.gripper_client:
-            asyncio.create_task(self.gripper_client.slow_stop_spool())
+            r = await self.gripper_client.slow_stop_spool()
         else:
             for client in self.anchors.values():
                 if client.anchor_num == stop_data.get('id'):
-                    asyncio.create_task(client.slow_stop_spool())
+                    r = await client.slow_stop_spool()
 
     async def _handle_zero_winch_line(self):
         if self.gripper_client is not None and isinstance(self.gripper_client, RaspiGripperClient):
@@ -1013,26 +1023,31 @@ class AsyncObserver:
         self.motion_task.set_name(coro.__name__)
 
     async def tension_lines(self):
-        """Request all anchors to reel in all lines until tight.
-        This is a fire and forget function"""
+        """Request all anchors to reel in all lines until tight."""
+        sends = []
         for client in self.anchors.values():
             if isinstance(client, RaspiAnchorClient):
-                asyncio.create_task(client.send_commands({'tighten': None}))
+                sends.append(client.send_commands({'tighten': None}))
             elif isinstance(client, ArpeggioAnchorClient):
-                asyncio.create_task(client.send_commands({'tighten': 0}))
-                asyncio.create_task(client.send_commands({'tighten': 1}))
-        # This function does not  wait for confirmation from every anchor, as it would just hold up the processing of the ob_q
+                sends.append(client.send_commands({'tighten': 0}))
+                sends.append(client.send_commands({'tighten': 1}))
+        # Awaiting only delivers the command; it does not wait for confirmation that every
+        # anchor has finished tightening, as that would just hold up the processing of the ob_q.
         # this is similar to sending a manual move command. it can be overridden by any subsequent command.
         # thus, it should be done while paused.
+        await asyncio.gather(*sends)
 
     async def stow_lines(self):
         """Request all anchors to reel in all lines until tight and then disable motors"""
+        await self.set_tension_reg(False)
+        sends = []
         for client in self.anchors.values():
             if isinstance(client, RaspiAnchorClient):
-                asyncio.create_task(client.send_commands({'stow': None}))
+                sends.append(client.send_commands({'stow': None}))
             elif isinstance(client, ArpeggioAnchorClient):
-                asyncio.create_task(client.send_commands({'stow': 0}))
-                asyncio.create_task(client.send_commands({'stow': 1}))
+                sends.append(client.send_commands({'stow': 0}))
+                sends.append(client.send_commands({'stow': 1}))
+        await asyncio.gather(*sends)
 
     async def wait_for_tension(self):
         """this function returns only once all anchors are reporting tight lines in their regular line record"""
@@ -2702,12 +2717,12 @@ class AsyncObserver:
         command = 'jog' if jog else 'aim_speed'
         if self.config.anchor_type == common.AnchorType.PILOT:
             if line_no in self.anchors:
-                asyncio.create_task(self.anchors[line_no].send_commands({command: speed}))
+                r = await self.anchors[line_no].send_commands({command: speed})
         elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
             if line_no//2 in self.anchors:
                 spool_no = line_no%2
                 # we consider the lower line number to be the direct line
-                asyncio.create_task(self.anchors[line_no//2].send_commands({command: (speed, spool_no)}))
+                r = await self.anchors[line_no//2].send_commands({command: (speed, spool_no)})
 
     async def set_line_tension_target(self, line_no, value):
         """Set (or clear, with None) the onboard two-sided tension hold target in newtons
@@ -2801,9 +2816,11 @@ class AsyncObserver:
         deltas = lengths_b - lengths_a
         line_speeds = deltas * KINEMATICS_STEP_SCALE
 
-        # send move on each line
-        for i, line_speed in enumerate(line_speeds):
-            await self.send_line_speed(i, line_speed)
+        # send the move on every line at once
+        await asyncio.gather(*[
+            self.send_line_speed(i, line_speed)
+            for i, line_speed in enumerate(line_speeds)
+        ])
             
         self.pe.record_commanded_vel(total_velocity)
         return total_velocity

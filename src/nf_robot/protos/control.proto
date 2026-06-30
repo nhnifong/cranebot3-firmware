@@ -40,6 +40,10 @@ enum Command {
   COMMAND_DISABLE_TORQUE = 17;
   // Re-enable motor torque on arpeggio anchors
   COMMAND_ENABLE_TORQUE = 18;
+  // Enable onboard tension regulation (floor + soft mute) on both spools of every anchor
+  COMMAND_ENABLE_TENSION_REG = 20;
+  // Disable onboard tension regulation on both spools of every anchor
+  COMMAND_DISABLE_TENSION_REG = 21;
 
   // =====  Commands intended only for diagnostics =====
 

@@ -112,6 +112,16 @@ class Command(betterproto2.Enum):
     Re-enable motor torque on arpeggio anchors
     """
 
+    ENABLE_TENSION_REG = 20
+    """
+    Enable onboard tension regulation (floor + soft mute) on both spools of every anchor
+    """
+
+    DISABLE_TENSION_REG = 21
+    """
+    Disable onboard tension regulation on both spools of every anchor
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -157,6 +167,8 @@ class Command(betterproto2.Enum):
             16: "COMMAND_TIGHTEN_LINES",
             17: "COMMAND_DISABLE_TORQUE",
             18: "COMMAND_ENABLE_TORQUE",
+            20: "COMMAND_ENABLE_TENSION_REG",
+            21: "COMMAND_DISABLE_TENSION_REG",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -182,6 +194,8 @@ class Command(betterproto2.Enum):
             "COMMAND_TIGHTEN_LINES": 16,
             "COMMAND_DISABLE_TORQUE": 17,
             "COMMAND_ENABLE_TORQUE": 18,
+            "COMMAND_ENABLE_TENSION_REG": 20,
+            "COMMAND_DISABLE_TENSION_REG": 21,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,
