@@ -6,8 +6,6 @@ import subprocess
 import board
 import busio
 import json
-# import adafruit_bno08x
-# from adafruit_bno08x.i2c import BNO08X_I2C
 from adafruit_vl53l1x import VL53L1X # rangefinder
 from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital converter for pressure
 
@@ -15,13 +13,45 @@ from nf_robot.robot.simple_st3215 import SimpleSTS3215
 
 FINGER_MOTOR_ID = 1
 WRIST_MOTOR_ID = 2
+# Expected I2C devices: 0x29 rangefinder (VL53L1X), 0x48 pressure ADC (ADS1015), 0x68 IMU
+EXPECTED_I2C_ADDRESSES = {0x29, 0x48, 0x68}
 STEPS_PER_REV = 4096
 GEAR_RATIO = 10/45 # a finger lever makes this many revolutions per revolution of the drive gear
 FINGER_TRAVEL_DEG = 59 # actually 60 but need small margin of space at wide open. 
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 
+def verify_i2c_bus(i2c):
+    """Scan the I2C bus and confirm exactly the expected devices are present.
+
+    A hung scan (e.g. a reversed connector holding the bus) or a mismatch in
+    addresses is reported clearly instead of failing deep inside a sensor read.
+    """
+    print("Scanning I2C bus...")
+    while not i2c.try_lock():
+        pass
+    try:
+        found = set(i2c.scan())
+    finally:
+        i2c.unlock()
+
+    missing = EXPECTED_I2C_ADDRESSES - found
+    unexpected = found - EXPECTED_I2C_ADDRESSES
+    if missing or unexpected:
+        expected_str = ", ".join(f"0x{a:02x}" for a in sorted(EXPECTED_I2C_ADDRESSES))
+        found_str = ", ".join(f"0x{a:02x}" for a in sorted(found)) or "none"
+        msg = f"I2C bus check failed. Expected [{expected_str}], found [{found_str}]."
+        if missing:
+            msg += " Missing: " + ", ".join(f"0x{a:02x}" for a in sorted(missing)) + "."
+        if unexpected:
+            msg += " Unexpected: " + ", ".join(f"0x{a:02x}" for a in sorted(unexpected)) + "."
+        msg += " Check I2C connectors (a reversed connector can hold the bus) and wiring."
+        raise SystemExit(msg)
+    print("I2C bus check passed.")
+
+
 def main():
     i2c = busio.I2C(board.SCL, board.SDA)
+    verify_i2c_bus(i2c)
     sts = SimpleSTS3215()
 
     def wiggle_motor(mid):
@@ -142,16 +172,6 @@ def main():
     sts.set_position(FINGER_MOTOR_ID, int(finger_closed_pos+FINGER_TRAVEL_STEPS*0.3))
     time.sleep(0.75)
     sts.torque_enable(FINGER_MOTOR_ID, False)
-
-    # confim readings from IMU
-    # i2c = busio.I2C(board.SCL, board.SDA)
-    # imu = BNO08X_I2C(i2c, address=0x4b)
-    # imu.enable_feature(adafruit_bno08x.BNO_REPORT_ROTATION_VECTOR)
-    # time.sleep(0.5)
-
-    # start_quat = imu.quaternion
-    # assert sum(start_quat)!=0, "IMU readings appeard to be zero. it may be dead or there may be a continuity problem in the I2C bus wire"
-    # print('IMU readings appear normal')
 
     # confirm readings from Rangefinder.
     rangefinder = VL53L1X(i2c)
