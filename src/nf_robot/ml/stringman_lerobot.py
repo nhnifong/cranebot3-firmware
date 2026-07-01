@@ -1022,6 +1022,8 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote
     rm=None
     if policy_repo_id == "naavox/g224_smolvla":
         rm={"observation.images.gripper_camera": "observation.images.camera1"}
+    elif policy_repo_id.startswith("naavox/jepa"):
+        rm={"observation.images.gripper_camera": "observation.images.image", "observation.images.overhead_camera": "observation.images.image2"}
 
     policy = make_policy(
         cfg=cfg,
