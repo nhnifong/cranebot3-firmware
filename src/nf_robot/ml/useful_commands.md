@@ -209,6 +209,8 @@ lerobot-train \
   --policy.path=lerobot/VLA-JEPA-LIBERO \
   --policy.repo_id=naavox/jepa-1 \
   --policy.freeze_qwen=true \
+  --policy.pre_snap_gripper_action=false \
+  --policy.binarize_gripper_action=false \
   --policy.reinit_modules='["model.action_model.action_encoder", "model.action_model.action_decoder", "model.action_model.state_encoder"]' \
   --policy.gripper_dim=4 \
   --dataset.repo_id=naavox/move_clutter_combined_384 \
