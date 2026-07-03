@@ -72,12 +72,14 @@ It is then possible to run with `--telemetry_env=production` and stringman will 
 
 No video or telemetry is saved when you use the cloud relay. The only way video gets shared with us is if you record a public lerobot dataset and inform us of it.
 
-## Installation of Robot Control Panel (developers)
+## Installation (developers)
 
     git clone https://github.com/nhnifong/cranebot3-firmware.git
 
-    sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
-    python -m virtualenv venv
+if your python version is 3.13 or above, go for it. otherwise make the venv with a specific version.
+
+    sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg build-essential git-lfs
+    python3 -m virtualenv venv
     source venv/bin/activate
     pip install -e ".[host,dev,pi]"
 
@@ -86,6 +88,13 @@ No video or telemetry is saved when you use the cloud relay. The only way video 
     pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
 
 ### Run tests
+
+for certain tests, image files are required
+
+    git lfs install
+    git lfs pull
+
+run all tests
 
     pytest tests
 
