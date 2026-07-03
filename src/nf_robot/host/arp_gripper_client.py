@@ -241,6 +241,26 @@ class ArpeggioGripperClient(ComponentClient):
         theta_y = projected_state[1, 1] / OMEGA
         return np.array([theta_x, theta_y, 0])
 
+    def get_swing_amplitude(self):
+        """Return the current angular amplitude of the gripper's swing, in radians.
+
+        The swing model's two columns hold the [A*sin, A*cos] quadrature
+        components of the angular velocity for each axis (x, y). As real time
+        advances the model just rotates in that quadrature plane (see
+        get_gripper_rvec), so each row's norm is the phase-independent velocity
+        amplitude of that axis, and the Frobenius norm of the whole matrix is the
+        combined velocity amplitude. Dividing by OMEGA converts that velocity
+        envelope into an angular-displacement envelope.
+
+        This is a phase-independent measure of "how much it is swinging" that can
+        be read at any instant without watching for peaks over a full period.
+        Returns 0.0 when there is no swing (or no IMU populating the model).
+        """
+        sm = self.gripper_swing_model
+        if sm is None:
+            return 0.0
+        return float(np.linalg.norm(sm) / OMEGA)
+
     def get_spin(self, debug=False):
         # return the rotation of the gripper camera relative to the room in radians
         roomspin = self.datastore.winch_line_record.getLast()[1] / 180 * np.pi

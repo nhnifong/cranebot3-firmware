@@ -49,7 +49,7 @@ from nf_robot.host.calibration import optimize_anchor_poses
 from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
 from nf_robot.host.anchor_client import RaspiAnchorClient, max_origin_detections
 from nf_robot.host.gripper_client import RaspiGripperClient
-from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector
+from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector, OMEGA
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 
@@ -488,6 +488,153 @@ class AsyncObserver:
             r = await self.flush_tele_buffer()
             self.slow_stop_all_spools()
 
+    async def _induce_swing(self, direction=np.array([1.0, 0.0, 0.0]), cycles=2, speed=0.2):
+        """Pump the gripper into a swing by driving the gantry back and forth at
+        the pendulum's resonant frequency.
+
+        Moving the pivot (gantry) one way for half a pendulum period and back for
+        the other half repeatedly adds energy in phase with the swing, the same
+        way you pump a playground swing. A couple of cycles builds a clean,
+        repeatable swing to measure against. The gantry returns to roughly where
+        it started, so this does not require an accurate absolute position.
+        """
+        half_period = np.pi / OMEGA  # T/2, since T = 2*pi/OMEGA
+        direction = np.asarray(direction, dtype=float)
+        try:
+            for _ in range(cycles):
+                await self.move_direction_speed(direction, speed, downward_bias=0)
+                await asyncio.sleep(half_period)
+                await self.move_direction_speed(-direction, speed, downward_bias=0)
+                await asyncio.sleep(half_period)
+        finally:
+            self.slow_stop_all_spools()
+
+    async def _measure_swing_decay_rate(self, latency, measure_duration=3.0, safety_amp_rad=0.5):
+        """Run swing cancellation at a specific `latency` and return how fast the
+        swing decays, as the normalized rate -d(ln A)/dt in units of 1/s.
+
+        A positive result means the swing is shrinking; larger is better (faster
+        cancellation). A negative result means this latency is so far out of phase
+        that the "correction" is actually pumping the swing up. Using the slope of
+        the log-amplitude makes the measurement independent of the starting
+        amplitude, so trials that begin with different swing sizes are comparable.
+
+        This mirrors the inner loop of run_swing_cancellation, but applies the
+        correction at the supplied latency (instead of self.config.swing_latency)
+        and samples the amplitude, so a candidate can be evaluated without
+        committing it to the config.
+        """
+        gc = self.gripper_client
+        # Reset the cancellation integrator so a previous trial's accumulated
+        # centering offset does not contaminate this one.
+        gc._swing_position_offset = np.zeros(2)
+        gc._last_future_time = 0
+
+        ts, amps = [], []
+        self.active_set.add('swingc')
+        start = time.time()
+        try:
+            while time.time() - start < measure_duration:
+                now = time.time()
+                vel2 = gc.compute_swing_correction(now + latency)
+                if vel2 is not None:
+                    await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc', downward_bias=0)
+                amp = gc.get_swing_amplitude()
+                if amp is not None and amp > 1e-6:
+                    ts.append(now - start)
+                    amps.append(amp)
+                    if amp > safety_amp_rad:
+                        logger.warning(f'Swing amplitude {amp:.3f} rad exceeded safety cap {safety_amp_rad}; stopping trial early')
+                        break
+                await asyncio.sleep(1 / 100)
+        finally:
+            self.input_velocities['swingc'] = np.zeros(3)
+            self.active_set.discard('swingc')
+            self.slow_stop_all_spools()
+
+        if len(amps) < 5:
+            logger.warning(f'Not enough swing samples ({len(amps)}) to estimate decay rate at latency {latency:.3f}s')
+            return None
+
+        # slope of ln(amplitude) vs time; negate so that decaying swings score positive.
+        slope = np.polyfit(np.array(ts), np.log(np.array(amps)), 1)[0]
+        return float(-slope)
+
+    async def calibrate_swing_latency(self):
+        """Automatically tune config.swing_latency.
+
+        swing_latency is the look-ahead (seconds) at which the sine swing model is
+        evaluated to produce a cancelling velocity; it exists to compensate the
+        round-trip latency between the gripper's IMU and the spools actually
+        moving. If it is wrong, the correction is applied at the wrong phase and
+        either does nothing or amplifies the swing.
+
+        Because compute_swing_correction only depends on latency through the phase
+        OMEGA*(future_time - model_ts), the correction is periodic in latency with
+        the pendulum period T = 2*pi/OMEGA. So every physically distinct latency is
+        covered by sweeping a single period [0, T). For each candidate we induce a
+        fresh swing, run cancellation at that latency, and measure the decay rate.
+        The latency with the fastest decay wins. A short second pass refines around
+        the coarse winner.
+
+        This automates the manual tuning procedure customers currently follow by
+        hand (induce swing, toggle cancellation, watch whether it grows or shrinks,
+        nudge the latency, repeat).
+        """
+        if not isinstance(self.gripper_client, ArpeggioGripperClient):
+            logger.warning('Swing latency calibration is only supported on the Arpeggio gripper')
+            return None
+
+        period = 2 * np.pi / OMEGA
+        original_latency = self.config.swing_latency
+
+        async def sweep(candidates):
+            rates = {}
+            for lat in candidates:
+                lat = float(np.clip(lat, 0.0, period))
+                await self._induce_swing()
+                await asyncio.sleep(0.3)  # let the model settle onto the fresh swing
+                rate = await self._measure_swing_decay_rate(lat)
+                if rate is not None:
+                    rates[lat] = rate
+                    logger.info(f'swing_latency candidate {lat:.3f}s -> decay rate {rate:+.3f} /s')
+                await asyncio.sleep(0.3)
+            return rates
+
+        # Coarse pass across one full period.
+        N_COARSE = 8
+        coarse = np.linspace(0.0, period, N_COARSE, endpoint=False)
+        rates = await sweep(coarse)
+
+        if not rates:
+            logger.warning('Swing latency calibration collected no usable measurements; keeping existing value')
+            self.config.swing_latency = original_latency
+            return None
+
+        best_coarse = max(rates, key=rates.get)
+
+        # Fine pass: refine within +/- one coarse step of the best candidate.
+        step = period / N_COARSE
+        fine = np.linspace(best_coarse - step, best_coarse + step, 5)
+        rates.update(await sweep(fine))
+
+        best_latency = max(rates, key=rates.get)
+        best_rate = rates[best_latency]
+
+        if best_rate <= 0:
+            logger.warning(
+                f'No swing_latency produced a net decay (best rate {best_rate:+.3f} /s at {best_latency:.3f}s); '
+                f'keeping existing value {original_latency:.3f}s'
+            )
+            self.config.swing_latency = original_latency
+            return None
+
+        self.config.swing_latency = float(best_latency)
+        save_config(self.config, self.config_path)
+        self.send_ui(new_anchor_poses=telemetry.AnchorPoses(swing_latency=self.config.swing_latency))
+        logger.info(f'Calibrated swing_latency = {best_latency:.3f}s (decay rate {best_rate:+.3f} /s)')
+        return best_latency
+
     async def _handle_debug_command(self, item: control.Debug):
         logger.debug(f'Debug action "{item.action}"')
         if item.action == "spincal":
@@ -506,6 +653,9 @@ class AsyncObserver:
             parts = item.action.split(' ')
             self.config.swing_latency = float(parts[1])
             save_config(self.config, self.config_path)
+        if item.action == 'swinglatencycal':
+            # Test the automatic swing_latency tuning in isolation.
+            r = await self.invoke_motion_task(self.calibrate_swing_latency())
         if item.action == 'reset_wrist':
              r = await self.gripper_client.send_commands({'reset_wrist': None})
         if item.action == 'spind':
@@ -1577,7 +1727,17 @@ class AsyncObserver:
             # roomspin
             await self.calibrate_spin(reset_wrist_first=True) # already did that during diamond to save time
 
-            # TODO "Calibration complete. Would you like stringman to pick up the cards and put them in the trash? yes/no"
+            # Tune swing_latency by inducing swings and finding the look-ahead that
+            # damps them fastest. Only meaningful on the Arpeggio gripper (which has
+            # the IMU-driven swing model); the helper no-ops on other grippers.
+            if isinstance(self.gripper_client, ArpeggioGripperClient):
+                self.send_ui(operation_progress=telemetry.OperationProgress(
+                    percent_complete=95.0,
+                    name="Calibration",
+                    current_action="Tuning swing cancellation latency",
+                ))
+                await self.calibrate_swing_latency()
+
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
                 name="Calibration",
