@@ -1423,6 +1423,7 @@ class AsyncObserver:
         ))
         finger_task = None
         DETECTION_WAIT_S = 1.0 # seconds
+        FLOOR_CLEARANCE_M = 0.1 # how far above the floor to hover the gripper
         try:
             if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
                 self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -1471,14 +1472,14 @@ class AsyncObserver:
                 tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
                 # determine position of two anchors visually and guess at external eyelets.
                 async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, None, None, None, tilts))
-                anchor_poses, eyelet_positions = async_result.get(timeout=30)
+                anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=30)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
                 self.save_poses_arp(anchor_poses, eyelet_positions)
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=15.0,
                     name="Calibration",
-                    current_action="Collecting proprioceptive data",
+                    current_action="Locating eyelets",
                 ))
 
                 # Tighten lines
@@ -1492,9 +1493,15 @@ class AsyncObserver:
                 await asyncio.sleep(0.5)
                 self.slow_stop_all_spools()
 
+                # top of work area
+                upper_z = np.mean(self.pe.anchor_points[:, 2])
+
                 # even without full calibration we should be able to make crude movements. go to the center of the room just above the floor
-                FLOOR_CLEARANCE_M = 0.1 # how far above the floor to hover the gripper
-                self.gantry_goal_pos = np.array([0, 0, POLE[2] + FLOOR_CLEARANCE_M])
+                gant_z = min(
+                    upper_z-0.1, # stay at least 0.1 under the top of the work area
+                    POLE[2] + FLOOR_CLEARANCE_M - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
+                )
+                self.gantry_goal_pos = np.array([0, 0, gant_z])
                 await self.seek_gantry_goal()
 
                 # measure finger contact and reset wrist while doing the diamond pattern to save time.
@@ -1516,11 +1523,10 @@ class AsyncObserver:
                 #     pickle.dump(args, f)
                 # optimize again with length_change_data
                 async_result = self.pool.apply_async(optimize_arp_anchors, args)
-                anchor_poses, eyelet_positions = async_result.get(timeout=30)
+                anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=60)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
                 self.save_poses_arp(anchor_poses, eyelet_positions)
-
             else:
                 for a in self.anchors.values():
                     a.save_raw = False
@@ -1545,7 +1551,6 @@ class AsyncObserver:
                 anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
                 self.pe.set_anchor_points(anchor_points)
 
-
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=40.0,
                 name="Calibration",
@@ -1563,13 +1568,14 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Moving gripper to origin",
             ))
-            self.gantry_goal_pos = np.array([0,0,1.2])
+            gant_z = min(upper_z-0.1, POLE[2] + 0.8 - floor_z)
+            self.gantry_goal_pos = np.array([0,0,gant_z])
             await self.seek_gantry_goal(head_turn=False)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=90.0,
                 name="Calibration",
-                current_action="Measuring spin",
+                current_action="Measuring spin. Gripper camera must see origin card to complete this step.",
             ))
             # there should be some swing when we get there. 
             await self.half_auto_calibration()

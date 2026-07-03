@@ -469,9 +469,9 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     optimized_anchors, optimized_eyelets, floor_z = floor_align_origin(
         optimized_anchors, optimized_eyelets, raw_obs, cam_tilts=cam_tilts
     )
-    logger.debug(f'Floor Z = {floor_z}')
+    logger.debug(f'Floor Z = {floor_z}') # negative meaning that the actual floor is below the origin card.
 
-    return optimized_anchors, optimized_eyelets
+    return optimized_anchors, optimized_eyelets, floor_z
 
 
 def analyze_diamond_data(diamond_observations, anchor_poses, cam_tilts=(22, 22)):
