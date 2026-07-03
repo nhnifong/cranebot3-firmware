@@ -286,6 +286,92 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
 
     return np.array(residuals)
 
+def floor_align_origin(anchor_poses, eyelet_positions, raw_obs, cam_tilts=(22, 22)):
+    """
+    Re-levels the provisional origin (fixed at the origin card by the optimizer)
+    down to floor height.
+
+    The optimizer pins the origin card to [0, 0, 0], so when the origin card is
+    placed on a raised surface such as a bed, the entire solved room frame sits
+    at bed height. This function keeps the horizontal placement (the point
+    directly under the origin card stays at x=y=0) but slides z=0 down to the
+    floor. The floor height is estimated as the average z of the lowest observed
+    calibration card.
+
+    Every calibration card is a candidate, including the origin card itself. The
+    user's only rules are: the origin card is level and visible to both cameras,
+    and at least one of the four cards is on the floor. When the origin card is
+    itself the lowest card (the classic "all cards on the floor" setup) the
+    lowest average z is ~0 and this shift is a no-op, exactly reproducing the
+    previous behavior. No special-casing is needed.
+
+    The correction is a pure translation along z, so it does not disturb any of
+    the relative geometry the optimizer solved for (inter-anchor distances,
+    diamond kinematics, planarity, etc.).
+
+    Args:
+        anchor_poses: (2, 2, 3) array of solved anchor poses (rvec, tvec).
+        eyelet_positions: (2, 3) array of solved eyelet positions.
+        raw_obs: the raw observation dict passed to the optimizer.
+        cam_tilts: per-camera tilt in degrees, matching the optimizer.
+
+    Returns:
+        tuple: (aligned_anchor_poses, aligned_eyelet_positions, floor_z)
+        floor_z is the height (in the provisional frame) that was mapped to 0.
+    """
+    # Rebuild the camera tilt nodes exactly as multi_card_residuals does so that
+    # the projection into room coordinates is consistent with the optimizer.
+    tilt_nodes = []
+    for i in range(2):
+        extratilt = 22 - cam_tilts[i]
+        tilt_nodes.append((np.array([extratilt / 180.0 * np.pi, 0, 0], dtype=float), np.zeros(3, dtype=float)))
+
+    # For every calibration card, gather the z of every sighting projected into
+    # the room, then average per card. CAL_MARKERS = origin + cal_assist_1..3.
+    per_card_avg_z = {}
+    for marker_name in CAL_MARKERS:
+        sightings = raw_obs.get(marker_name)
+        if sightings is None:
+            continue
+        card_zs = []
+        for anchor_idx, marker_pose_cams in enumerate(sightings):
+            for marker_pose_cam in marker_pose_cams:
+                if marker_pose_cam is None or np.all(marker_pose_cam == 0):
+                    continue
+                pose_in_room = compose_poses([
+                    anchor_poses[anchor_idx],
+                    model_constants.arp_anchor_camera,
+                    tilt_nodes[anchor_idx],
+                    marker_pose_cam,
+                ])
+                card_zs.append(pose_in_room[1][2])
+        if card_zs:
+            per_card_avg_z[marker_name] = float(np.mean(card_zs))
+
+    if not per_card_avg_z:
+        # The origin card is required to be visible to both cameras, so this
+        # should be unreachable; guard defensively rather than divide by zero.
+        logger.warning("floor_align_origin: no calibration cards observed; leaving origin unshifted.")
+        return anchor_poses, eyelet_positions, 0.0
+
+    # The lowest card is taken to be resting on the floor.
+    lowest_marker = min(per_card_avg_z, key=per_card_avg_z.get)
+    floor_z = per_card_avg_z[lowest_marker]
+    logger.info(
+        f"floor_align_origin: card average heights (m): "
+        f"{ {k: round(v, 4) for k, v in per_card_avg_z.items()} }. "
+        f"Lowest is '{lowest_marker}' at z={floor_z:.4f}; shifting origin down to it."
+    )
+
+    # Apply the pure-z translation: subtract floor_z from every z coordinate.
+    aligned_anchor_poses = np.array(anchor_poses, dtype=float)
+    aligned_anchor_poses[:, 1, 2] -= floor_z  # tvec is index 1; z is index 2
+    aligned_eyelet_positions = np.array(eyelet_positions, dtype=float)
+    aligned_eyelet_positions[:, 2] -= floor_z
+
+    return aligned_anchor_poses, aligned_eyelet_positions, floor_z
+
+
 def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22)):
     """
     Finds optimal anchor poses AND external eyelet positions.
@@ -375,7 +461,16 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     else:
         optimized_anchors = result.x[:12].reshape((2, 2, 3))
         optimized_eyelets = result.x[12:].reshape((2, 3))
-    
+
+    # The optimizer solves in a "provisional" frame with the origin card pinned
+    # to [0, 0, 0]. Re-level that frame so z=0 sits on the floor rather than on
+    # (a possibly elevated) origin card. This is a pure z translation and leaves
+    # the solved geometry intact.
+    optimized_anchors, optimized_eyelets, floor_z = floor_align_origin(
+        optimized_anchors, optimized_eyelets, raw_obs, cam_tilts=cam_tilts
+    )
+    logger.debug(f'Floor Z = {floor_z}')
+
     return optimized_anchors, optimized_eyelets
 
 
