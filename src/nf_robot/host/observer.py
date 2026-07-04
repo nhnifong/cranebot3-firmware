@@ -739,6 +739,17 @@ class AsyncObserver:
                     pickle.dump(out, f)
                 logger.info(f'Saved gripper card survey to gripper_card_obs.pkl: {list(gripper_obs.keys())}')
             r = await self.invoke_motion_task(survey_and_save())
+        if item.action == 'gripcardsmulti':
+            # multi-round survey: scan, prompt the operator to relocate the assist cards, wait
+            # for a debug 'confirm', repeat. accumulates many gantry hover points.
+            r = await self.invoke_motion_task(self.survey_cards_multi_round())
+        if item.action.startswith('confirm'):
+            # operator acknowledgement used by prompts that pause a running motion task
+            # (e.g. survey_cards_multi_round). 'confirm done' ends the survey; 'confirm' continues.
+            parts = item.action.split()
+            self._confirm_arg = parts[1] if len(parts) > 1 else 'continue'
+            if getattr(self, '_confirm_event', None) is not None:
+                self._confirm_event.set()
         if item.action == 'stow':
             r = await self.stow_lines()
         if item.action == 'upright':
@@ -1697,6 +1708,10 @@ class AsyncObserver:
                 gripper_obs[name] = {
                     'gantry_minus_card': gantry_minus_card,
                     'line_lengths': line_lengths,
+                    # card room position measured by the anchor cameras at collection time.
+                    # Stored per-observation so rounds where the operator has moved the card stay
+                    # self-contained (the card is at a different room location each round).
+                    'card_room_pos': np.array(cpos),
                 }
 
                 # Sanity check the new open-loop camera->room conversion against the position
@@ -1763,6 +1778,82 @@ class AsyncObserver:
             )
         logger.info(f'Gripper card survey collected {len(gripper_obs)} card observations: {list(gripper_obs.keys())}')
         return gripper_obs
+
+    async def _await_confirm(self):
+        """Wait for the operator to send the debug command 'confirm'. Returns the argument that
+        followed it ('done', or 'continue' when bare). Used to pause a motion task for a manual
+        step (e.g. relocating cards) without blocking the message loop."""
+        self._confirm_event = asyncio.Event()
+        self._confirm_arg = None
+        await self._confirm_event.wait()
+        self._confirm_event = None
+        return self._confirm_arg
+
+    async def _refresh_cal_card_detections(self, wait_s=3.0):
+        """Drop stored anchor-camera detections of the movable assist cards and wait for fresh
+        ones, so card_room_positions() reflects their CURRENT locations after the operator has
+        relocated them. The origin card is left alone since it never moves."""
+        for client in self.anchors.values():
+            for name in ['cal_assist_1', 'cal_assist_2', 'cal_assist_3']:
+                if name in client.origin_poses:
+                    client.origin_poses[name].clear()
+        await asyncio.sleep(wait_s)
+
+    async def survey_cards_multi_round(self):
+        """Repeatedly survey the calibration cards, prompting the operator to relocate the three
+        assist cards between rounds, to build up a large cloud of gantry hover points. This is a
+        motion task, started by the debug command 'gripcardsmulti'.
+
+        Flow per round: refresh the anchor-camera view of the (possibly moved) cards, fly the
+        gripper over each and record the close-range gantry offset + line lengths, save
+        everything to gripper_card_obs_multi.pkl, then pop a message asking the operator to move
+        the assist cards and send debug 'confirm' (or 'confirm done' to finish).
+
+        Many well-spread points (vary card height and spread them across the room) let the
+        offline analysis separate a genuine per-line length-reference bias (constant residual
+        across points) from an anchor/eyelet position error (residual that varies with position),
+        and give the optimizer far more leverage than the 3-4 clustered points of a single run.
+        """
+        rounds = []
+        try:
+            round_num = 0
+            while True:
+                round_num += 1
+                if round_num > 1:
+                    # cards were just moved; forget their old anchor-camera positions
+                    self.send_ui(pop_message=telemetry.Popup(
+                        message=f'Round {round_num}: re-locating the moved cards, hold on...'))
+                    await self._refresh_cal_card_detections()
+
+                obs = await self.collect_gripper_card_observations()
+                rounds.append({
+                    'round': round_num,
+                    'gripper_obs': obs,
+                    'diagnostics': getattr(self, 'last_gripper_survey', None),
+                })
+                # save incrementally so a mid-survey abort still keeps the collected rounds
+                with open('gripper_card_obs_multi.pkl', 'wb') as f:
+                    pickle.dump({'robot_id': getattr(self.config, 'robot_id', None), 'rounds': rounds}, f)
+
+                total = sum(len(r['gripper_obs']) for r in rounds)
+                logger.info(f'Multi-round survey: round {round_num} captured {list(obs.keys())}; {total} total observations across {round_num} rounds')
+                self.send_ui(pop_message=telemetry.Popup(message=(
+                    f'Round {round_num}: captured {sorted(obs.keys())} ({total} total points). '
+                    f'Move the 3 assist cards to NEW spots (vary height and spread them out), '
+                    f'then send debug "confirm" to scan again, or "confirm done" to finish.')))
+
+                resp = await self._await_confirm()
+                if resp == 'done':
+                    break
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+
+        logger.info(f'Multi-round card survey finished: {len(rounds)} rounds saved to gripper_card_obs_multi.pkl')
+        self.send_ui(pop_message=telemetry.Popup(
+            message=f'Card survey finished: {len(rounds)} rounds saved. Cards can be removed.'))
+        return rounds
 
     async def half_auto_calibration(self):
         """
