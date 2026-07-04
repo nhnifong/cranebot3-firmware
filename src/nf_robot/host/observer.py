@@ -264,6 +264,11 @@ class AsyncObserver:
                 name = 'parking_location',
                 position = self.config.park_data.pos
             ))
+        for name, position in self.config.named_positions.items():
+            self.send_ui(named_position=telemetry.NamedObjectPosition(
+                name = name,
+                position = position
+            ))
         for client in self.bot_clients.values():
             client.send_conn_status()
             if (client.local_video_uri is not None or client.remote_stream_path is not None) and client.anchor_num in [None, *self.config.preferred_cameras]:
