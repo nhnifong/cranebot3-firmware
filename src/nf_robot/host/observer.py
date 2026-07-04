@@ -544,7 +544,7 @@ class AsyncObserver:
           - pumped past the safety cap  -> residual = cap (definitively bad)
           - drifted out of the workspace -> residual = None (never settled, ignore)
         """
-        RUN_PERIODS = 8            # how long to run cancellation before measuring
+        RUN_PERIODS = 6.4          # how many pendulum periods to run cancellation per trial (main time cost)
         MEASURE_PERIODS = 3        # average the swing over this many final periods
         SETTLE_S = 0.5             # pause after inducing, before turning cancellation on
         SAFETY_AMP_RAD = 0.4       # stop early if the swing grows past this
@@ -603,15 +603,17 @@ class AsyncObserver:
         residual = float(np.mean(late)) if len(late) else float(np.mean(amps))
         return residual, aborted
 
-    async def calibrate_swing_latency(self):
+    async def calibrate_swing_latency(self, fine_pass=False):
         """Tune config.swing_latency by finding the value that damps the swing best.
 
         A good latency drives the swing to nothing; a bad one leaves a steady
         residual swing. So we try a range of latencies, measure the leftover swing at
-        each, and keep the one that leaves the least. A coarse pass locates the good
-        region, then a fine pass refines within it. Every candidate stays close
+        each, and keep the one that leaves the least. Every candidate stays close
         enough to the ideal that it damps (rather than pumps), so nothing gets
         thrown around.
+
+        The coarse pass alone lands within the working range. Set fine_pass=True to
+        add a slower second pass that refines around the coarse best.
         """
         COARSE_RANGE = (0.0, 0.30)   # seconds; stays close enough to ideal that all candidates damp
         COARSE_COUNT = 6
@@ -646,7 +648,7 @@ class AsyncObserver:
 
         try:
             coarse = await sweep(np.linspace(COARSE_RANGE[0], COARSE_RANGE[1], COARSE_COUNT))
-            if coarse:
+            if coarse and fine_pass:
                 best_coarse = min(coarse, key=lambda r: r[1])[0]
                 # Recenter before the fine pass so the trials we care about start with
                 # full drift headroom and don't get cut short.
