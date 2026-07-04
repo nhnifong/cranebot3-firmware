@@ -241,6 +241,18 @@ class ArpeggioGripperClient(ComponentClient):
         theta_y = projected_state[1, 1] / OMEGA
         return np.array([theta_x, theta_y, 0])
 
+    def get_swing_amplitude(self):
+        """Return the current angular amplitude of the gripper's swing, in radians.
+        
+        This is a phase-independent measure of "how much it is swinging" that can
+        be read at any instant without watching for peaks over a full period.
+        Returns 0.0 when there is no swing (or no IMU populating the model).
+        """
+        sm = self.gripper_swing_model
+        if sm is None:
+            return 0.0
+        return float(np.linalg.norm(sm) / OMEGA)
+
     def get_spin(self, debug=False):
         # return the rotation of the gripper camera relative to the room in radians
         roomspin = self.datastore.winch_line_record.getLast()[1] / 180 * np.pi
