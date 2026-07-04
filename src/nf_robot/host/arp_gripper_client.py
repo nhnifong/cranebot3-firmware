@@ -12,7 +12,7 @@ from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, common
-from nf_robot.common.cv_common import SF_TARGET_SHAPE, stabilize_frame_2, OTHER_MARKERS
+from nf_robot.common.cv_common import SF_TARGET_SHAPE, stabilize_frame_2, OTHER_MARKERS, CAL_MARKERS
 
 logger = logging.getLogger(__name__)
 
@@ -214,8 +214,12 @@ class ArpeggioGripperClient(ComponentClient):
             if name == 'park_target':
                 # pose of parking target relative to gripper camera
                 self.park_pose_relative_to_camera = detection['p']
-            elif name in OTHER_MARKERS:
-                # (rotvec, position) of a route-point tag relative to the gripper camera
+            elif name in OTHER_MARKERS or name in CAL_MARKERS:
+                # (rotvec, position) of a route-point tag relative to the gripper camera.
+                # CAL_MARKERS (origin + cal_assist_*) are included so that the end-of-calibration
+                # gripper card survey (collect_gripper_card_observations) can read where each
+                # calibration card sits relative to the gripper camera. These poses are in the
+                # raw (unstabilized, tilted) camera optical frame, not the room frame.
                 self.route_tag_poses_relative_to_camera[name] = detection['p']
 
     async def send_config(self):
@@ -266,6 +270,54 @@ class ArpeggioGripperClient(ComponentClient):
                 print(f'gripper spin should be wrist {roomspin} plus extra spin from config {extra}')
             roomspin = roomspin + extra
         return roomspin
+
+    def gripper_body_room_rotation(self):
+        """Rotation taking a vector in the z-up gripper body frame (the frame the position
+        estimator uses: pole pointing down -z, x/y horizontal) to the room frame, right now.
+
+        Two parts:
+        * heading about the room's vertical axis. get_spin() is defined so that spin==0 puts
+          the nose at +Y in the room. In the body frame the camera's forward throw is -y, so
+          Rz(spin + pi) sends -y_body to +Y_room at spin==0. (Verified: Rz(pi)@[0,-1,0]=[0,1,0].)
+        * the small swing tilt from get_gripper_rvec (z-component always 0), the same rotvec
+          the position estimator applies to the pole; applied inside the heading.
+        """
+        R_heading = Rotation.from_rotvec([0.0, 0.0, self.get_spin() + np.pi])
+        R_tilt = Rotation.from_rotvec(self.get_gripper_rvec())
+        return R_heading * R_tilt
+
+    def measure_gantry_minus_card(self, pose_cam):
+        """Given a calibration card's pose in the raw gripper camera optical frame (rvec, tvec,
+        as stored in route_tag_poses_relative_to_camera), return the measured room-frame vector
+        from the card to the gantry point (i.e. gantry_position - card_position).
+
+        The gantry is the point where the four lines converge, at the top of the rigid pole; the
+        camera hangs a fixed distance below it. Because both the camera offset and the observed
+        card are rigidly tied to the gripper body, the gantry's absolute room position cancels
+        and this vector depends only on the body orientation and the observed card pose. That is
+        exactly the close-range, accurate measurement the calibration anchors on: the caller adds
+        the card's known room position to recover the gantry position at that hover.
+
+        Frame chain (see model_constants and the position estimator's grip_pose):
+        * model_constants.gripper_camera places the card in the CAD 'gripper frame', which is
+          y-up (grommet at +y, optical axis looking down -y).
+        * Rx(90 deg) re-expresses that in the z-up body frame the rest of the system uses.
+        * the gantry sits arp_pole_length up the +z body axis from the gripper origin.
+        * gripper_body_room_rotation() rotates the body frame into the room.
+
+        NOTE: this open-loop camera->room conversion is new and has not been validated on
+        hardware; collect_gripper_card_observations logs the reconstructed gantry position next
+        to the position estimator's live gant_pos so the convention (heading base, Rx sign) can
+        be checked and corrected on the robot.
+        """
+        # card position in the CAD y-up gripper frame
+        card_in_gripper = compose_poses([model_constants.gripper_camera, pose_cam])[1]
+        # re-express in the z-up body frame, then measure relative to the gantry (pole up +z)
+        y_up_to_z_up = Rotation.from_euler('x', 90, degrees=True)
+        card_in_body = y_up_to_z_up.apply(card_in_gripper) - np.array([0.0, 0.0, model_constants.arp_pole_length])
+        # rotate the card-relative-to-gantry vector into the room, then negate for gantry-card
+        card_minus_gantry_room = self.gripper_body_room_rotation().apply(card_in_body)
+        return -card_minus_gantry_room
 
     def look_towards_vector(self, vec2):
         """

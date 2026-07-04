@@ -722,6 +722,23 @@ class AsyncObserver:
             # use the currently calibrated anchor poses from the config
             anchor_poses = [poseProtoToTuple(a.pose) for a in self.config.anchors]
             r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data(anchor_poses))
+        if item.action == 'gripcards':
+            # collect the close-range gripper-camera survey of the calibration cards and pickle
+            # it for offline experimentation with the optimizer. cards must still be in place.
+            async def survey_and_save():
+                gripper_obs = await self.collect_gripper_card_observations()
+                # Save both the clean optimizer input and the rich per-sample diagnostics
+                # (raw camera poses, spins, tilts, line samples, estimator positions) so the
+                # camera->room convention can be validated/re-derived offline from real runs.
+                out = {
+                    'robot_id': getattr(self.config, 'robot_id', None),
+                    'gripper_obs': gripper_obs,
+                    'diagnostics': getattr(self, 'last_gripper_survey', None),
+                }
+                with open('gripper_card_obs.pkl', 'wb') as f:
+                    pickle.dump(out, f)
+                logger.info(f'Saved gripper card survey to gripper_card_obs.pkl: {list(gripper_obs.keys())}')
+            r = await self.invoke_motion_task(survey_and_save())
         if item.action == 'stow':
             r = await self.stow_lines()
         if item.action == 'upright':
@@ -1566,6 +1583,187 @@ class AsyncObserver:
             await self.set_line_tension_target(2, None)
             self.slow_stop_all_spools()
 
+    def card_room_positions(self):
+        """Best current estimate of each calibration card's room position, from the anchor
+        cameras. Projects every stored anchor-camera sighting of each CAL marker into the room
+        using the anchors' calibrated camera poses and averages them. Returns a dict keyed by
+        marker name; markers never seen by any anchor are absent. Used to know where to fly the
+        gripper for the close-range card survey, and to anchor those measurements in the room."""
+        positions = {}
+        for name in CAL_MARKERS:
+            pts = []
+            for client in self.anchors.values():
+                for pose_cam in list(client.origin_poses.get(name, [])):
+                    pts.append(compose_poses([client.camera_pose, pose_cam])[1])
+            if pts:
+                positions[name] = np.mean(pts, axis=0)
+        return positions
+
+    async def collect_gripper_card_observations(self):
+        """Fly the gripper over each calibration card in turn and record, from the gripper
+        camera's close-range view, where the gantry sits relative to that card, together with
+        the four line lengths at that moment. This is a motion task.
+
+        The anchor cameras see the gantry tag from ~5 m with poor depth resolution; the gripper
+        camera sees a card from < 1 m, so pairing its accurate gantry position with the line
+        lengths (via line-length deltas between cards) is a strong new constraint on the pull
+        point geometry. Tension regulation and swing cancellation keep all four lines taut and
+        the gripper vertical while hovering, which is what makes the line lengths meaningful.
+
+        Cards may sit at different heights (floor, bed, table); each hover altitude is taken
+        relative to that card's own height. Returns a dict keyed by card name, each value a dict
+        with 'gantry_minus_card' (room vector) and 'line_lengths' (length-4 array), suitable for
+        passing to optimize_arp_anchors as gripper_obs. Cards not seen by the gripper are skipped.
+        """
+        HOVER_CAMERA_HEIGHT_M = 0.8   # gripper camera height over the card while measuring
+        SETTLE_S = 4.0                # let swing cancellation settle the gripper before measuring
+        MEASURE_WINDOW_S = 3.0        # average camera + line readings over this window
+        MEASURE_TIMEOUT_S = 6.0       # give up on a card if the gripper never sees it
+
+        if not isinstance(self.gripper_client, ArpeggioGripperClient):
+            logger.warning('collect_gripper_card_observations only supports the Arpeggio gripper')
+            return {}
+
+        # keep the gripper vertical and the lines taut throughout the survey
+        if self.swing_cancellation_task is None or self.swing_cancellation_task.done():
+            self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
+
+        card_positions = self.card_room_positions()
+        if not card_positions:
+            logger.warning('No calibration cards visible to the anchor cameras; cannot run gripper card survey')
+            return {}
+
+        # don't fly higher than just under the top of the work area
+        upper_z = np.mean(self.pe.anchor_points[:, 2])
+
+        # Rich per-card diagnostics captured for offline analysis across robot installations.
+        # Kept separate from the clean gripper_obs the optimizer consumes; the 'gripcards' debug
+        # command pickles this so the raw inputs to the camera->room conversion can be re-derived.
+        survey_diag = {
+            'anchor_points': np.array(self.pe.anchor_points),
+            'card_room_positions': {k: np.array(v) for k, v in card_positions.items()},
+            'cards': {},
+        }
+        self.last_gripper_survey = survey_diag
+
+        gripper_obs = {}
+        try:
+            for name in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3']:
+                if name not in card_positions:
+                    continue
+                cpos = card_positions[name]
+                gant_z = min(upper_z - 0.1, cpos[2] + POLE[2] + HOVER_CAMERA_HEIGHT_M)
+                self.gantry_goal_pos = np.array([cpos[0], cpos[1], gant_z])
+                logger.info(f'Gripper card survey: flying over {name} at goal {np.round(self.gantry_goal_pos, 3)} (card at {np.round(cpos, 3)})')
+                await self.seek_gantry_goal(head_turn=False)
+                await asyncio.sleep(SETTLE_S)
+
+                # capture every raw ingredient of the conversion so a bad convention can be
+                # diagnosed and corrected offline without another robot run.
+                gantry_offsets = []      # measure_gantry_minus_card output per sample
+                line_samples = []        # 4 line lengths per sample
+                pose_cam_tvecs = []      # raw card position in the camera optical frame
+                pose_cam_rvecs = []      # raw card orientation in the camera optical frame
+                spins = []               # gripper_client.get_spin() per sample
+                tilts = []               # gripper_client.get_gripper_rvec() per sample
+                pe_gantries = []         # position estimator's gant_pos per sample
+                deadline = time.time() + MEASURE_TIMEOUT_S
+                window_end = None
+                while time.time() < deadline:
+                    pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
+                    if pose_cam is not None:
+                        gantry_offsets.append(self.gripper_client.measure_gantry_minus_card(pose_cam))
+                        line_samples.append([self.datastore.anchor_line_record[i].getLast()[1] for i in range(N_LINES)])
+                        pose_cam_rvecs.append(np.asarray(pose_cam[0]))
+                        pose_cam_tvecs.append(np.asarray(pose_cam[1]))
+                        spins.append(self.gripper_client.get_spin())
+                        tilts.append(np.asarray(self.gripper_client.get_gripper_rvec()))
+                        pe_gantries.append(np.array(self.pe.gant_pos))
+                        if window_end is None:
+                            window_end = time.time() + MEASURE_WINDOW_S
+                    if window_end is not None and time.time() >= window_end:
+                        break
+                    await asyncio.sleep(0.05)
+
+                if not gantry_offsets:
+                    logger.warning(f'Gripper card survey: never saw {name} in the gripper camera; skipping')
+                    survey_diag['cards'][name] = {'n_samples': 0}
+                    continue
+
+                gantry_offsets = np.array(gantry_offsets)
+                line_samples = np.array(line_samples)
+                gantry_minus_card = np.mean(gantry_offsets, axis=0)
+                line_lengths = np.mean(line_samples, axis=0)
+                gripper_obs[name] = {
+                    'gantry_minus_card': gantry_minus_card,
+                    'line_lengths': line_lengths,
+                }
+
+                # Sanity check the new open-loop camera->room conversion against the position
+                # estimator: card_room + (gantry - card) should land near the live gant_pos.
+                reconstructed_gantry = cpos + gantry_minus_card
+                pe_gant = np.mean(pe_gantries, axis=0)
+                offset_std = np.std(gantry_offsets, axis=0)
+                line_std = np.std(line_samples, axis=0)
+                mean_tvec = np.mean(pose_cam_tvecs, axis=0)
+                mean_spin = float(np.mean(spins))
+                mean_tilt = np.mean(tilts, axis=0)
+
+                survey_diag['cards'][name] = {
+                    'n_samples': len(gantry_offsets),
+                    'card_room_pos': np.array(cpos),
+                    'gantry_minus_card': gantry_minus_card,
+                    'gantry_minus_card_std': offset_std,
+                    'line_lengths': line_lengths,
+                    'line_lengths_std': line_std,
+                    'reconstructed_gantry': reconstructed_gantry,
+                    'pe_gant_pos': pe_gant,
+                    'pose_cam_tvec_mean': mean_tvec,
+                    'spin_mean': mean_spin,
+                    'tilt_mean': mean_tilt,
+                    # full raw sample arrays for offline re-derivation of the convention
+                    'raw_pose_cam_rvecs': np.array(pose_cam_rvecs),
+                    'raw_pose_cam_tvecs': np.array(pose_cam_tvecs),
+                    'raw_spins': np.array(spins),
+                    'raw_tilts': np.array(tilts),
+                    'raw_line_samples': line_samples,
+                    'raw_gantry_offsets': gantry_offsets,
+                }
+
+                logger.info(
+                    f'Gripper card survey: {name} n={len(gantry_offsets)} '
+                    f'reconstructed_gantry={np.round(reconstructed_gantry, 3)} '
+                    f'pe.gant_pos={np.round(pe_gant, 3)} '
+                    f'disagreement={np.linalg.norm(reconstructed_gantry - pe_gant)*100:.1f}cm | '
+                    f'cam_tvec={np.round(mean_tvec, 3)} spin={np.degrees(mean_spin):.1f}deg '
+                    f'tilt={np.round(np.degrees(mean_tilt), 1)}deg | '
+                    f'gantry_minus_card={np.round(gantry_minus_card, 3)} (std {np.round(offset_std*100, 2)}cm) | '
+                    f'lines={np.round(line_lengths, 3)} (std {np.round(line_std*100, 2)}cm)'
+                )
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+
+        # Cross-card summary: the disagreement between the gripper reconstruction and the
+        # estimator should be a nearly CONSTANT offset across cards if the convention is right
+        # (a constant reflects estimator bias / a fixed frame offset, whereas a disagreement that
+        # swings in direction from card to card points to a wrong heading/axis convention).
+        disagreements = {
+            n: d['reconstructed_gantry'] - d['pe_gant_pos']
+            for n, d in survey_diag['cards'].items() if d.get('n_samples', 0) > 0
+        }
+        if disagreements:
+            arr = np.array(list(disagreements.values()))
+            logger.info(
+                f'Gripper card survey: reconstruction-minus-estimator across cards: '
+                f'mean={np.round(np.mean(arr, axis=0), 3)} '
+                f'spread(std)={np.round(np.std(arr, axis=0)*100, 2)}cm. '
+                f'Large spread implies a wrong camera->room convention; a consistent mean is just a fixed offset.'
+            )
+        logger.info(f'Gripper card survey collected {len(gripper_obs)} card observations: {list(gripper_obs.keys())}')
+        return gripper_obs
+
     async def half_auto_calibration(self):
         """
         Set line lengths from observation
@@ -1818,6 +2016,32 @@ class AsyncObserver:
                     current_action="Tuning swing cancellation latency",
                 ))
                 await self.calibrate_swing_latency()
+
+            # Refine the pull-point geometry with close-range gripper-camera views of the
+            # calibration cards. The cards are still in place at this point (they are only
+            # removed once calibration reports complete), and tension reg + swing cancellation
+            # keep all four lines taut while hovering, so the measured (gantry, line-length)
+            # pairs are a strong constraint on the anchors and eyelets.
+            if (self.config.anchor_type == common.AnchorType.ARPEGGIO
+                    and isinstance(self.gripper_client, ArpeggioGripperClient)):
+                self.send_ui(operation_progress=telemetry.OperationProgress(
+                    percent_complete=97.0,
+                    name="Calibration",
+                    current_action="Refining geometry with gripper card views",
+                ))
+                gripper_obs = await self.collect_gripper_card_observations()
+                if len(gripper_obs) >= 2:
+                    args = (raw_obs, diamond_data, None, None, line_deltas, tilts, gripper_obs)
+                    async_result = self.pool.apply_async(optimize_arp_anchors, args)
+                    refined_anchors, refined_eyelets, refined_floor_z = async_result.get(timeout=60)
+                    if refined_anchors is not None:
+                        anchor_poses, eyelet_positions, floor_z = refined_anchors, refined_eyelets, refined_floor_z
+                        logger.info(f'Refined with gripper card views:\nanchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+                        self.save_poses_arp(anchor_poses, eyelet_positions)
+                    else:
+                        logger.warning('Gripper-card refinement optimization failed; keeping previous geometry')
+                else:
+                    logger.warning(f'Only {len(gripper_obs)} gripper card observation(s); need >=2 to refine. Skipping.')
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,

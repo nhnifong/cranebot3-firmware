@@ -16,6 +16,7 @@ W_DIAMOND_PLANAR = 0.2 # weight for forcing the gantry and eyelets into a single
 W_EYELET_REG = 0.2 # weight to keep eyelets near their initial 5m guess
 W_SHAPE_MATCH = 1.0 # weight to force distance between anchors to match distance between eyelets
 W_ANCHOR_TILT = 10.0 # weight to penalize anchor pitch/roll changes (locks rotation to Z-axis only)
+W_GRIPPER_DIST = 1.5 # weight for close-range gripper-over-card line-length-delta constraints
 
 # half height and half width of diamond
 DIAMOND_SIZE = (0.1, 1.0)
@@ -37,14 +38,23 @@ DIAMOND_SIZE = (0.1, 1.0)
 # left   -> bottom: Eyelet 1 (Line 3) lengthens by 15cm (back to 'bottom' length)
 # =============================================================================
 
-def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22)):
+def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None):
     """
     Computes the vector of residuals (differences) for least_squares.
-    
+
     If fixed_anchor_poses is None:
         x contains 18 elements: 2 anchors (12) + 2 eyelets (6)
     If fixed_anchor_poses is provided:
         x contains 6 elements: 2 eyelets (6)
+
+    gripper_obs, when provided, is a dict keyed by calibration card name (as returned by
+    Observer.collect_gripper_card_observations). Each value has 'gantry_minus_card' (the room
+    vector from the card to the gantry, measured close-range by the gripper camera) and
+    'line_lengths' (the four line lengths at that hover). These add multilateration constraints
+    on the four pull points: the gantry position over each card is the card's room position plus
+    the measured offset, and the CHANGE in each line length between two cards must equal the
+    change in that pull point's distance to the gantry. Using deltas (rather than absolute
+    lengths) makes the constraint immune to any bias in the absolute line-length reference.
     """
     # Unpack state vector based on whether anchors are frozen
     if fixed_anchor_poses is not None:
@@ -64,6 +74,12 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     cost_eyelet_reg = 0.0
     cost_shape_match = 0.0
     cost_anchor_tilt = 0.0
+    cost_gripper = 0.0
+
+    # room position of each calibration card at the current parameters, so the gripper-camera
+    # constraints below can anchor their measured gantry offsets to the same cards the anchor
+    # cameras see (keeps the two views consistent as the geometry moves).
+    card_centroids = {}
 
     # Pre-calculate the extra tilt nodes for the cameras
     tilt_nodes = []
@@ -101,7 +117,8 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             continue
             
         projected_positions = np.array(valid_sightings)
-        
+        card_centroids[marker_name] = np.mean(projected_positions, axis=0)
+
         if marker_name == 'origin':
             # constraint 1: Origin must be at [0,0,0]
             current_residuals = (projected_positions - np.zeros(3)) * W_ORIGIN
@@ -239,6 +256,48 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             cost_diamond_dist += sum(r**2 for r in d_res)
 
     # ---------------------------------------------------------
+    # Gripper-over-card line-length-delta constraints
+    # ---------------------------------------------------------
+    if gripper_obs:
+        # The four pull points (where the lines leave the machine), in the same line order the
+        # firmware reports lengths: 0 = anchor0 direct eyelet, 1 = anchor0 external eyelet,
+        # 2 = anchor1 direct eyelet, 3 = anchor1 external eyelet.
+        pull_points = [
+            compose_poses([anchor_poses[0], model_constants.arp_anchor_right_eyelet])[1],
+            eyelet_positions[0],
+            compose_poses([anchor_poses[1], model_constants.arp_anchor_right_eyelet])[1],
+            eyelet_positions[1],
+        ]
+
+        # Gantry room position over each observed card = card room position + measured offset.
+        gantry_samples = []  # (name, gantry_room_position, line_lengths)
+        for name, obs in gripper_obs.items():
+            if name not in card_centroids:
+                continue
+            gantry_room = card_centroids[name] + np.asarray(obs['gantry_minus_card'])
+            gantry_samples.append((name, gantry_room, np.asarray(obs['line_lengths'])))
+
+        # For every pair of hovers and every line, the modelled change in distance from the pull
+        # point to the gantry must match the measured change in line length.
+        for a in range(len(gantry_samples)):
+            for b in range(a + 1, len(gantry_samples)):
+                name_a, g_a, L_a = gantry_samples[a]
+                name_b, g_b, L_b = gantry_samples[b]
+                for k in range(4):
+                    modelled = np.linalg.norm(g_b - pull_points[k]) - np.linalg.norm(g_a - pull_points[k])
+                    measured = L_b[k] - L_a[k]
+                    res = (modelled - measured) * W_GRIPPER_DIST
+                    residuals.append(res)
+                    cost_gripper += res ** 2
+                    if debug:
+                        # per-pair-per-line breakdown pinpoints an inconsistent card or line
+                        logger.info(
+                            f'  gripper resid {name_a}->{name_b} line{k}: '
+                            f'modelled_delta={modelled*100:+.2f}cm measured_delta={measured*100:+.2f}cm '
+                            f'residual={(modelled-measured)*100:+.2f}cm'
+                        )
+
+    # ---------------------------------------------------------
     # Regularization (Anchor eyelets to initial guesses)
     # ---------------------------------------------------------
     if initial_eyelets is not None:
@@ -278,6 +337,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         lines += [
             f"Diamond Planarity:  {cost_diamond_planar:.6f}",
             f"Diamond Distances:  {cost_diamond_dist:.6f}",
+            f"Gripper Cards:      {cost_gripper:.6f}",
             f"Shape Match (A~E):  {cost_shape_match:.6f}",
             f"Eyelet Reg (drift): {cost_eyelet_reg:.6f}",
             "----------------------",
@@ -372,7 +432,7 @@ def floor_align_origin(anchor_poses, eyelet_positions, raw_obs, cam_tilts=(22, 2
     return aligned_anchor_poses, aligned_eyelet_positions, floor_z
 
 
-def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22)):
+def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None):
     """
     Finds optimal anchor poses AND external eyelet positions.
     
@@ -429,12 +489,12 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # Configure the state vector and args depending on whether we are freezing anchors
     if fixed_anchor_poses is not None:
         x0 = initial_eyelet_guesses.flatten()
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts, gripper_obs)
     else:
         initial_anchor_flat = anchor_poses_to_use.flatten()
         initial_eyelet_flat = initial_eyelet_guesses.flatten()
         x0 = np.concatenate([initial_anchor_flat, initial_eyelet_flat])
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts, gripper_obs)
 
     logger.info('Running least squares optimization...')
     result = optimize.least_squares(
@@ -452,7 +512,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
 
     # Run one final time with debug=True to print the cost distribution
     logger.info("Final Optimization Costs:")
-    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts)
+    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs)
 
     # Reshape back to distinct structures based on the freeze flag
     if fixed_anchor_poses is not None:
