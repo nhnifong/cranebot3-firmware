@@ -89,8 +89,12 @@ def is_blurry(image, threshold=6.0):
 
 # calibrate interactively
 class CalibrationInteractive:
-    def __init__(self, config_file):
+    def __init__(self, config_file, board_w=board_w, board_h=board_h, board_dim=board_dim, cal_field='camera_cal', display=True):
         #Initializing variables
+        self.board_w = board_w
+        self.board_h = board_h
+        self.cal_field = cal_field
+        self.display = display
         board_n = board_w * board_h
         self.opts = []
         self.ipts = []
@@ -117,7 +121,7 @@ class CalibrationInteractive:
         #Find chessboard corners
         logging.debug(f'Searching image {self.cnt}')
         self.cnt+=1
-        found, corners = cv2.findChessboardCornersSB(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
+        found, corners = cv2.findChessboardCornersSB(grey_image, (self.board_w,self.board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_ACCURACY)
         # found, corners = cv2.findChessboardCorners(grey_image, (board_w,board_h), cv2.CALIB_CB_EXHAUSTIVE + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_ADAPTIVE_THRESH)
 
         if found == True:
@@ -128,11 +132,17 @@ class CalibrationInteractive:
             self.images_obtained += 1 
             logging.info(f"Chessboards obtained: {self.images_obtained}")
 
-            image = cv2.drawChessboardCorners(image, (14,9), corners, found)
+            image = cv2.drawChessboardCorners(image, (self.board_w,self.board_h), corners, found)
         # this resize is only for display and should not affect calibration
-        image = cv2.resize(image, (1920, 1080),  interpolation = cv2.INTER_LINEAR)
-        cv2.imshow('img', image)
-        cv2.waitKey(500)
+        if self.display:
+            image = cv2.resize(image, (1920, 1080),  interpolation = cv2.INTER_LINEAR)
+            try:
+                cv2.imshow('img', image)
+                cv2.waitKey(500)
+            except cv2.error as e:
+                # headless opencv builds have no GUI support; keep calibrating without preview
+                logging.warning(f'Disabling image preview (no GUI support in this OpenCV build): {e}')
+                self.display = False
 
     def calibrate(self):
         if self.images_obtained < 20:
@@ -181,19 +191,23 @@ class CalibrationInteractive:
         terr = tot_error/len(self.opts)
         logging.info(f"Total reprojection error: {terr}")
 
-    def save(self): 
-        logging.info(f'Saving data to {self.config_file}...')
+    def save(self):
+        logging.info(f'Saving data to {self.config_file} field "{self.cal_field}"...')
         cfg = load_config(path=self.config_file)
-        cfg.camera_cal.intrinsic_matrix = self.intrinsic_matrix.flatten().tolist()
-        cfg.camera_cal.distortion_coeff = self.distCoeff.flatten().tolist()
-        cfg.camera_cal.resolution.width = self.image_shape[0]
-        cfg.camera_cal.resolution.height = self.image_shape[1]
+        cal = getattr(cfg, self.cal_field)
+        cal.intrinsic_matrix = self.intrinsic_matrix.flatten().tolist()
+        cal.distortion_coeff = self.distCoeff.flatten().tolist()
+        cal.resolution.width = self.image_shape[0]
+        cal.resolution.height = self.image_shape[1]
         save_config(cfg, self.config_file)
 
 # calibrate from files locally
-def calibrate_from_files(config_file):
-    ce = CalibrationInteractive(config_file)
-    for filepath in glob.glob('images/cap/*.jpg'):
+def calibrate_from_files(config_file, image_dir='images/cap', board_w=board_w, board_h=board_h, board_dim=board_dim, cal_field='camera_cal'):
+    ce = CalibrationInteractive(config_file, board_w=board_w, board_h=board_h, board_dim=board_dim, cal_field=cal_field)
+    filepaths = glob.glob(f'{image_dir}/*.jpg') + glob.glob(f'{image_dir}/*.png')
+    if not filepaths:
+        raise RuntimeError(f'No .jpg or .png images found in {image_dir}')
+    for filepath in filepaths:
         logging.info(f"Analyzing {filepath}")
         image = cv2.imread(filepath)
         ce.addImage(image)
@@ -365,15 +379,33 @@ def main():
                         help='The resolution for the camera on the Raspberry Pi (e.g., "4608x2592"). Used with "collect-images-locally-raspi" mode.')
     parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_PATH,
                         help='Path of the config file to write/update with calibrated values.')
+    parser.add_argument('--image-dir', type=str, default='images/cap',
+                        help='Directory of .jpg/.png images to calibrate from (used with "calibrate-from-files").')
+    parser.add_argument('--board-width', type=int, default=board_w,
+                        help='Number of inner corners along the board width.')
+    parser.add_argument('--board-height', type=int, default=board_h,
+                        help='Number of inner corners along the board height.')
+    parser.add_argument('--square-size', type=float, default=board_dim * 1000.0,
+                        help='Side length of a single checkerboard square, in millimeters.')
+    parser.add_argument('--wide', action='store_true',
+                        help='Save the result to the config\'s wide camera calibration field (camera_cal_wide) instead of camera_cal.')
 
     args = parser.parse_args()
+    cal_field = 'camera_cal_wide' if args.wide else 'camera_cal'
 
     if args.mode == 'collect-images-locally-raspi':
         collect_images_locally_raspi(args.num_images, args.resolution)
     elif args.mode == 'collect-images-stream':
         collect_images_stream(args.address, args.num_images)
     elif args.mode == 'calibrate-from-files':
-        calibrate_from_files(args.config)
+        calibrate_from_files(
+            args.config,
+            image_dir=args.image_dir,
+            board_w=args.board_width,
+            board_h=args.board_height,
+            board_dim=args.square_size / 1000.0,
+            cal_field=cal_field,
+        )
     elif args.mode == 'calibrate-from-stream':
         calibrate_from_stream(args.address, args.config)
 

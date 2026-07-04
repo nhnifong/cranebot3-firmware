@@ -85,15 +85,17 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.camera_cal.distortion_coeff = distortion_np.flatten().tolist()
 
     # Camera Calibration Wide
+    # Chessboard calibration (14x9 board, 21mm squares) of the 384x384 center-cropped
+    # wide camera stream. Recovered HFOV ~44 deg, reprojection error < 0.2px.
     config.camera_cal_wide = nf_config.CameraCalibration()
-    config.camera_cal_wide.resolution = nf_config.Resolution(width=1920, height=1080)
+    config.camera_cal_wide.resolution = nf_config.Resolution(width=384, height=384)
     intrinsic_np = np.array([
-        [791.15,    0., 960.],
-        [   0., 791.57, 540.],
-        [   0.,    0.,   1.]
+        [480.17664910462,   0.,               192.],
+        [  0.,              493.0030592351347, 192.],
+        [  0.,                0.,                1.]
     ])
     config.camera_cal_wide.intrinsic_matrix = intrinsic_np.flatten().tolist()
-    distortion_np = np.array([-0.06742619,  0.1546371, -0.00232347, 0.00080991, -0.13094542])
+    distortion_np = np.array([-0.06436906351496063, 1.0605201293238598, 0.008085329077499237, 0.004239599951585602, -3.9237751238638947])
     config.camera_cal_wide.distortion_coeff = distortion_np.flatten().tolist()
 
     # Gripper

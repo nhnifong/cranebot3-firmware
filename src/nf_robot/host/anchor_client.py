@@ -99,6 +99,10 @@ class ComponentClient:
         self.conn_status.video_status = telemetry.ConnStatus.CONNECTING
         # cannot send here, not in event loop
         self.notify_video = True
+        if self.anchor_num is None: # gripper
+            camera_cal = self.config.camera_cal_wide
+        else:
+            camera_cal = self.config.camera_cal
 
         options = {
             'rtsp_transport': 'tcp',
@@ -169,7 +173,7 @@ class ComponentClient:
                             
                             self.pool.apply_async(
                                 locate_markers,
-                                (self.frame, self.config.camera_cal, None),
+                                (self.frame, camera_cal, None),
                                 callback=partial(self.handle_detections, timestamp=timestamp),
                                 error_callback=error_callback_func
                             )
@@ -194,7 +198,7 @@ class ComponentClient:
                             self.stat.pending_frames_in_pool += 1
                             self.pool.apply_async(
                                 locate_markers,
-                                (None, self.config.camera_cal, crops_data),
+                                (None, camera_cal, crops_data),
                                 callback=partial(self.handle_detections, timestamp=timestamp),
                                 error_callback=error_callback_func
                             )

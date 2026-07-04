@@ -208,12 +208,15 @@ class ArpeggioGripperClient(ComponentClient):
         self.route_tag_poses_relative_to_camera = {}
 
         for detection in detections:
-            if detection['n'] == 'park_target':
+            name = detection['n']
+            self.last_known_centers[name] = detection['center']
+
+            if name == 'park_target':
                 # pose of parking target relative to gripper camera
                 self.park_pose_relative_to_camera = detection['p']
-            elif detection['n'] in OTHER_MARKERS:
+            elif name in OTHER_MARKERS:
                 # (rotvec, position) of a route-point tag relative to the gripper camera
-                self.route_tag_poses_relative_to_camera[detection['n']] = detection['p']
+                self.route_tag_poses_relative_to_camera[name] = detection['p']
 
     async def send_config(self):
         pass

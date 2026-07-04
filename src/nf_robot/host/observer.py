@@ -1998,7 +1998,7 @@ class AsyncObserver:
             f'RMS {np.sqrt((deviations_cm ** 2).mean()):.2f}cm, '
             f'min {deviations_cm.min():+.2f}cm, max {deviations_cm.max():+.2f}cm')
         logger.info(result_message)
-        self.send_ui(pop_message=telemetry.Popup(message=result_message))
+        self.send_ui(pop_message=telemetry.Popup(message=f'RMS {np.sqrt((deviations_cm ** 2).mean()):.2f}cm'))
 
     async def goalseek_diagnostic_task(self):
         """
@@ -2016,16 +2016,14 @@ class AsyncObserver:
         TAG_CYCLE = ['gamepad', 'trash', 'hamper', 'toys']
         VISITS_PER_TAG = 3
         SETTLE_S = 2.0           # let the gripper swing settle before measuring
-        MEASURE_WINDOW_S = 1.0   # average tag readings over this window
+        MEASURE_WINDOW_S = 50.0   # average tag readings over this window
         MEASURE_TIMEOUT_S = 5.0  # give up on a trial if the tag isn't seen in this long
 
-        GANTRY_HEIGHT_OVER_TARGET = tonp(self.config.pick_and_place.gantry_height_over_target)
+        GANTRY_HEIGHT_OVER_TARGET = 0.9
 
         # TODO(nathaniel): the gripper camera is tilted, so when the gripper is centered
-        # over the tag at the correct altitude the tag does NOT appear straight down. Derive
-        # the exact (position) the tag should have in the camera frame and fill it in here;
-        # deviation is measured against this reference.
-        IDEAL_TAG_POSITION_IN_CAMERA = np.array([0.0, 0.0, GANTRY_HEIGHT_OVER_TARGET[2]])
+        # over the tag at the correct altitude the tag does not appear straight down.
+        IDEAL_TAG_POSITION_IN_CAMERA = np.array([0.0, 0.03, GANTRY_HEIGHT_OVER_TARGET])
 
         async def measure_tag_position(tag_name):
             """Average the tag position seen in the gripper camera over a short window."""
@@ -2058,7 +2056,7 @@ class AsyncObserver:
             logger.info(f'Goalseek trial {trial + 1}/{num_trials}: seeking to tag "{tag_name}"')
 
             # goal-seek to the tag's saved position
-            goal_pos = tonp(self.config.named_positions[tag_name]) + GANTRY_HEIGHT_OVER_TARGET
+            goal_pos = tonp(self.config.named_positions[tag_name]) + np.array([0,0,GANTRY_HEIGHT_OVER_TARGET])
             self.gantry_goal_pos = goal_pos
             await self.seek_gantry_goal(auto_altitude=True)
             await asyncio.sleep(SETTLE_S)
@@ -2069,7 +2067,7 @@ class AsyncObserver:
                 continue
             deviation = observed - IDEAL_TAG_POSITION_IN_CAMERA
             logger.info(f'Goalseek trial {trial + 1}: "{tag_name}" deviation {deviation * 100}cm '
-                        f'(magnitude {np.linalg.norm(deviation) * 100:.2f}cm)')
+                        f'(magnitude {np.linalg.norm(deviation) * 100:.2f}cm)\nobserved={observed}')
             deviations.append(deviation)
 
         if not deviations:
@@ -3788,7 +3786,7 @@ class AsyncObserver:
                 capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
             else:
                 logger.debug('No resized frame available from gripper')
-            await asyncio.sleep(3)
+            await asyncio.sleep(1)
 
 def main():
     """

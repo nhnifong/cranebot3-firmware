@@ -48,7 +48,6 @@ SPECIAL_SIZES = {
 }
 
 # tell apriltag detector that all markers are slightly bigger than they really are.
-# this is because even with a correctly calibrated camera, it seems to always underestimate the distance.
 GLOBAL_MARKER_SIZE_BIAS = 1.00
 
 # These are the 3D corner points of a generic marker of size 1x1 meter.
