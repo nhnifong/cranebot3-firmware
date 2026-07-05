@@ -1601,7 +1601,7 @@ class AsyncObserver:
                 positions[name] = np.mean(pts, axis=0)
         return positions
 
-    async def collect_gripper_card_observations(self):
+    async def collect_gripper_card_observations(self, progress_range=None):
         """Fly the gripper over each calibration card in turn and record, from the gripper
         camera's close-range view, the room vector from the card to the gantry together with the
         four line lengths at that moment. This is a motion task.
@@ -1609,7 +1609,10 @@ class AsyncObserver:
         Returns a dict keyed by card name, each value a dict with 'gantry_minus_card' (room
         vector) and 'line_lengths' (length-4 array), for passing to optimize_arp_anchors as
         gripper_obs. Cards the gripper never sees are skipped. Each hover altitude is taken
-        relative to that card's own height, so cards may sit on the floor or raised."""
+        relative to that card's own height, so cards may sit on the floor or raised.
+
+        If progress_range=(start_pct, end_pct) is given, a Calibration operation_progress message
+        is sent as each card is surveyed, spread across that percent range."""
         HOVER_CAMERA_HEIGHT_M = 1.0   # gripper camera height over the card while measuring
         SETTLE_S = 4.0                # let swing cancellation settle the gripper before measuring
         MEASURE_WINDOW_S = 3.0        # average camera + line readings over this window
@@ -1631,11 +1634,19 @@ class AsyncObserver:
         # don't fly higher than just under the top of the work area
         upper_z = np.mean(self.pe.anchor_points[:, 2])
 
+        survey_names = [n for n in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'] if n in card_positions]
+
         gripper_obs = {}
         try:
-            for name in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3']:
-                if name not in card_positions:
-                    continue
+            for idx, name in enumerate(survey_names):
+                if progress_range is not None:
+                    start_pct, end_pct = progress_range
+                    pct = start_pct + (end_pct - start_pct) * (idx + 1) / (len(survey_names) + 1)
+                    self.send_ui(operation_progress=telemetry.OperationProgress(
+                        percent_complete=pct,
+                        name="Calibration",
+                        current_action=f"Refining geometry: surveying card {idx + 1}/{len(survey_names)} ({name})",
+                    ))
                 cpos = card_positions[name]
                 gant_z = min(upper_z - 0.1, cpos[2] + POLE[2] + HOVER_CAMERA_HEIGHT_M)
                 self.gantry_goal_pos = np.array([cpos[0], cpos[1], gant_z])
@@ -2029,7 +2040,7 @@ class AsyncObserver:
                     name="Calibration",
                     current_action="Refining geometry with gripper card views",
                 ))
-                gripper_obs = await self.collect_gripper_card_observations()
+                gripper_obs = await self.collect_gripper_card_observations(progress_range=(61.0, 98.0))
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=98.0,
                     name="Calibration",
