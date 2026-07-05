@@ -90,6 +90,9 @@ OPEN = -30
 CLOSED = 90
 
 POLE = np.array([0,0,0.5334])
+# distance from the tip of the pole (POLE[2] below the gantry) down to the bottom of the
+# arp gripper fingers when they hang straight. gantry -> fingertip is POLE[2] + this.
+GRIPPER_FINGER_LEN_M = 0.18
 GRIPPER_HEIGHT_OVER_TARGET = np.array([0,0,0.3])
 
 # mapping from enums to MARKER_NAMES in cv_common
@@ -731,7 +734,8 @@ class AsyncObserver:
         if item.action == 'eyelets':
             # use the currently calibrated anchor poses from the config
             anchor_poses = [poseProtoToTuple(a.pose) for a in self.config.anchors]
-            r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data(anchor_poses))
+            upper_z = np.mean(self.pe.anchor_points[:, 2]) # top of work area
+            r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data(anchor_poses, upper_z))
         if item.action == 'gripcards':
             # run the gripper card survey standalone and pickle the result for offline
             # experimentation with the optimizer. cards must still be in place.
@@ -1456,9 +1460,14 @@ class AsyncObserver:
             self.slow_stop_all_spools()
 
 
-    async def collect_arp_anchor_eyelet_experiment_data(self, anchor_poses):
-        """  
+    async def collect_arp_anchor_eyelet_experiment_data(self, anchor_poses, upper_z):
+        """
         Perform experiments in which only the eyelet lines are tight and a diamond pattern is observed
+
+        upper_z is the height (top of the work area, i.e. mean anchor z) in the room frame whose
+        floor is at z=0. The diamond's vertical extent is sized automatically from it so that the
+        top point leaves TOP_MARGIN_M of headroom below the work area while the bottom point (the
+        gantry's current settled height) keeps the gripper fingers off the floor.
         """
         # target tension in newtons to hold the direct (anchor) lines at during the diamond
         DIAMOND_DIRECT_TENSION_N = 0.65
@@ -1476,7 +1485,12 @@ class AsyncObserver:
 
             logger.info('Relax the direct lines, tighten the indirect line')
 
-            half_h, half_w = DIAMOND_SIZE
+            # half_h (the diamond's vertical half-extent, as an eyelet line-length delta) is sized
+            # automatically once the gantry has settled at the bottom point; see below. half_w (the
+            # horizontal half-extent) keeps its configured value.
+            _, half_w = DIAMOND_SIZE
+            # how far below the top of the work area (upper_z) the gantry's top point should stay.
+            TOP_MARGIN_M = 1.0
 
             results = {}
             line_deltas = {}
@@ -1528,6 +1542,32 @@ class AsyncObserver:
             await move_to_diamond_point()
             await asyncio.sleep(5)
             results['bottom'] = self.snapshot_tag_observations()['gantry']
+
+            # Now that the gantry has settled at the bottom point, size the diamond's vertical
+            # extent. Bottom is fixed (the gantry is here, with the fingers held off the floor by
+            # the pre-diamond seek); the top point should sit TOP_MARGIN_M below the work area, so
+            # the vertical travel we need is:
+            gantry_pos = np.array(self.pe.gant_pos, dtype=float)
+            target_span = (upper_z - TOP_MARGIN_M) - gantry_pos[2]
+            # Convert that metric rise into an eyelet line-length delta. Raising the gantry straight
+            # up by dz shortens each eyelet line by dz*cos(theta), where theta is that line's angle
+            # from vertical. Over bottom->top each eyelet line shortens by 2*half_h, so
+            # half_h = 0.5 * mean(cos theta) * span, using the current eyelet estimate.
+            cosines = []
+            for anchor in self.config.anchors:
+                to_eyelet = tonp(anchor.indirect_line.eyelet_pos) - gantry_pos
+                line_len = np.linalg.norm(to_eyelet)
+                if line_len > 1e-6:
+                    cosines.append((to_eyelet[2]) / line_len)
+            cos_mean = float(np.mean(cosines)) if cosines else 1.0
+            half_h = 0.5 * cos_mean * target_span
+            # guard against a non-positive/degenerate span collapsing or inverting the diamond
+            half_h = max(half_h, 0.05)
+            logger.info(
+                f'Sized diamond: bottom gantry z={gantry_pos[2]:.3f}, upper_z={upper_z:.3f}, '
+                f'target vertical span={target_span:.3f} m, mean cos(theta)={cos_mean:.3f} '
+                f'-> half_h={half_h:.3f} m (half_w={half_w:.3f} m)'
+            )
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=6.0,
@@ -1854,7 +1894,7 @@ class AsyncObserver:
         ))
         finger_task = None
         DETECTION_WAIT_S = 1.0 # seconds
-        FLOOR_CLEARANCE_M = 0.1 # how far above the floor to hover the gripper
+        FLOOR_CLEARANCE_M = 0.2 # how far above the floor to hold the gripper fingertips at the diamond's bottom point
         try:
             if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
                 self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -1928,10 +1968,13 @@ class AsyncObserver:
                 # top of work area
                 upper_z = np.mean(self.pe.anchor_points[:, 2])
 
-                # even without full calibration we should be able to make crude movements. go to the center of the room just above the floor
+                # even without full calibration we should be able to make crude movements. go to the center
+                # of the room just above the floor. This is the diamond's bottom point, so place the gantry
+                # such that the gripper fingertips (POLE[2] + GRIPPER_FINGER_LEN_M below the gantry) sit
+                # FLOOR_CLEARANCE_M above the floor.
                 gant_z = min(
                     upper_z-0.1, # stay at least 0.1 under the top of the work area
-                    POLE[2] + FLOOR_CLEARANCE_M - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
+                    POLE[2] + GRIPPER_FINGER_LEN_M + FLOOR_CLEARANCE_M - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
                 )
                 self.gantry_goal_pos = np.array([0, 0, gant_z])
                 await self.seek_gantry_goal()
@@ -1940,12 +1983,11 @@ class AsyncObserver:
                 async def wait_then_finger():
                     await asyncio.sleep(10)
                     await self.calibrate_finger_servo()
-                    # if you want to re-enable this to make calibration faster, prevent the seek goal function from turning the wrist
-                    # await self.gripper_client.send_commands({'reset_wrist': None})
+                    await self.gripper_client.send_commands({'reset_wrist': None})
                 finger_task = asyncio.create_task(wait_then_finger())
 
                 # collect length_change_data data to estimate eyelets better
-                diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data(anchor_poses)
+                diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data(anchor_poses, upper_z)
                 # stop saving raw poses
                 for a in self.anchors.values():
                     a.save_raw = False
@@ -2020,7 +2062,7 @@ class AsyncObserver:
             await self._center_card_in_view('origin')
 
             # roomspin
-            await self.calibrate_spin(reset_wrist_first=True) # already did that during diamond to save time
+            await self.calibrate_spin(reset_wrist_first=False) # already did that during diamond to save time
 
             # Tune swing_latency by inducing swings and finding the value that damps
             # them best. Only the Arpeggio gripper has the IMU-driven swing model.
