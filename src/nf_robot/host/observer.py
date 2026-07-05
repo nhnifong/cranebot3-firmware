@@ -103,8 +103,7 @@ ROUTE_POINT_TAG_NAMES = {
 # feature key -> minimum nf_robot version every connected component must run to use it
 VERSION_GATES = {
     "speed_0.45": "4.1.0",
-    "gripper_card_survey": "4.1.0", # temporary trick
-    # "gripper_card_survey": "4.2.0",
+    "gripper_card_survey": "4.2.0",
 }
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
