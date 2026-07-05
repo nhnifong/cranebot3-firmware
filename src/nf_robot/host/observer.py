@@ -739,17 +739,6 @@ class AsyncObserver:
                     pickle.dump(out, f)
                 logger.info(f'Saved gripper card survey to gripper_card_obs.pkl: {list(gripper_obs.keys())}')
             r = await self.invoke_motion_task(survey_and_save())
-        if item.action == 'gripcardsmulti':
-            # multi-round survey: scan, prompt the operator to relocate the assist cards, wait
-            # for a debug 'confirm', repeat. accumulates many gantry hover points.
-            r = await self.invoke_motion_task(self.survey_cards_multi_round())
-        if item.action.startswith('confirm'):
-            # operator acknowledgement used by prompts that pause a running motion task
-            # (e.g. survey_cards_multi_round). 'confirm done' ends the survey; 'confirm' continues.
-            parts = item.action.split()
-            self._confirm_arg = parts[1] if len(parts) > 1 else 'continue'
-            if getattr(self, '_confirm_event', None) is not None:
-                self._confirm_event.set()
         if item.action == 'stow':
             r = await self.stow_lines()
         if item.action == 'upright':
@@ -805,6 +794,14 @@ class AsyncObserver:
                 logger.info(f'set tension target on line {line_no} to {value}')
             else:
                 logger.warning(f'invalid holdtension command, expected "holdtension LINE VALUE|off": {item.action}')
+        if item.action.startswith('tensionreg'):
+            parts = item.action.split()
+            if len(parts) == 2:
+                offon = parts[1]
+                if offon == 'on':
+                    r = await self.set_tension_reg(True)
+                else:
+                    r = await self.set_tension_reg(False)
 
     async def set_tension_reg(self, enabled: bool):
         """Enable or disable onboard tension regulation (the floor + soft mute) on both
@@ -1626,7 +1623,7 @@ class AsyncObserver:
         with 'gantry_minus_card' (room vector) and 'line_lengths' (length-4 array), suitable for
         passing to optimize_arp_anchors as gripper_obs. Cards not seen by the gripper are skipped.
         """
-        HOVER_CAMERA_HEIGHT_M = 0.8   # gripper camera height over the card while measuring
+        HOVER_CAMERA_HEIGHT_M = 1.0   # gripper camera height over the card while measuring
         SETTLE_S = 4.0                # let swing cancellation settle the gripper before measuring
         MEASURE_WINDOW_S = 3.0        # average camera + line readings over this window
         MEASURE_TIMEOUT_S = 6.0       # give up on a card if the gripper never sees it
@@ -1666,8 +1663,33 @@ class AsyncObserver:
                 gant_z = min(upper_z - 0.1, cpos[2] + POLE[2] + HOVER_CAMERA_HEIGHT_M)
                 self.gantry_goal_pos = np.array([cpos[0], cpos[1], gant_z])
                 logger.info(f'Gripper card survey: flying over {name} at goal {np.round(self.gantry_goal_pos, 3)} (card at {np.round(cpos, 3)})')
-                await self.seek_gantry_goal(head_turn=False)
+
+                # Fly toward the anchor-camera estimate, but STOP the moment the gripper camera
+                # actually sees the card: the card's true spot can differ from the estimate, and
+                # continuing to the estimate can carry it back out of the narrow gripper FOV.
+                seek_task = asyncio.create_task(self.seek_gantry_goal(head_turn=False))
+                try:
+                    while not seek_task.done():
+                        if self.gripper_client.route_tag_poses_relative_to_camera.get(name) is not None:
+                            logger.info(f'Gripper card survey: sighted {name} during approach; stopping to hold it in view')
+                            break
+                        await asyncio.sleep(0.03)
+                finally:
+                    if not seek_task.done():
+                        seek_task.cancel()
+                    try:
+                        await seek_task
+                    except asyncio.CancelledError:
+                        pass
+                self.slow_stop_all_spools()
                 await asyncio.sleep(SETTLE_S)
+
+                # Nudge the gantry until the card is centered in the gripper camera. Centering
+                # both keeps it framed and removes the horizontal error the (straight-down) camera
+                # model has when the card is off-axis, so the measurement is taken where the
+                # camera->room conversion is most accurate.
+                await self._center_card_in_view(name)
+                await asyncio.sleep(1.5)
 
                 # capture every raw ingredient of the conversion so a bad convention can be
                 # diagnosed and corrected offline without another robot run.
@@ -1708,10 +1730,6 @@ class AsyncObserver:
                 gripper_obs[name] = {
                     'gantry_minus_card': gantry_minus_card,
                     'line_lengths': line_lengths,
-                    # card room position measured by the anchor cameras at collection time.
-                    # Stored per-observation so rounds where the operator has moved the card stay
-                    # self-contained (the card is at a different room location each round).
-                    'card_room_pos': np.array(cpos),
                 }
 
                 # Sanity check the new open-loop camera->room conversion against the position
@@ -1779,81 +1797,50 @@ class AsyncObserver:
         logger.info(f'Gripper card survey collected {len(gripper_obs)} card observations: {list(gripper_obs.keys())}')
         return gripper_obs
 
-    async def _await_confirm(self):
-        """Wait for the operator to send the debug command 'confirm'. Returns the argument that
-        followed it ('done', or 'continue' when bare). Used to pause a motion task for a manual
-        step (e.g. relocating cards) without blocking the message loop."""
-        self._confirm_event = asyncio.Event()
-        self._confirm_arg = None
-        await self._confirm_event.wait()
-        self._confirm_event = None
-        return self._confirm_arg
+    async def _nudge_gantry_xy(self, delta_xy, speed=0.04):
+        """Move the gantry a small horizontal step of (approximately) delta_xy meters, then stop.
+        Uses a bias-free velocity command (the onboard tension floor keeps lines taut), so the
+        move stays in the horizontal plane rather than drifting down like a normal biased move."""
+        dist = float(np.linalg.norm(delta_xy))
+        if dist < 0.005:
+            return
+        dist = min(dist, 0.15)  # cap a single nudge for safety
+        uvec = np.array([delta_xy[0], delta_xy[1], 0.0])
+        uvec = uvec / (np.linalg.norm(uvec) + 1e-9)
+        await self.move_direction_speed(uvec * speed, None, self.pe.gant_pos)
+        await asyncio.sleep(dist / speed)
+        self.slow_stop_all_spools()
+        await asyncio.sleep(0.5)  # let it settle before the next observation
 
-    async def _refresh_cal_card_detections(self, wait_s=3.0):
-        """Drop stored anchor-camera detections of the movable assist cards and wait for fresh
-        ones, so card_room_positions() reflects their CURRENT locations after the operator has
-        relocated them. The origin card is left alone since it never moves."""
-        for client in self.anchors.values():
-            for name in ['cal_assist_1', 'cal_assist_2', 'cal_assist_3']:
-                if name in client.origin_poses:
-                    client.origin_poses[name].clear()
-        await asyncio.sleep(wait_s)
-
-    async def survey_cards_multi_round(self):
-        """Repeatedly survey the calibration cards, prompting the operator to relocate the three
-        assist cards between rounds, to build up a large cloud of gantry hover points. This is a
-        motion task, started by the debug command 'gripcardsmulti'.
-
-        Flow per round: refresh the anchor-camera view of the (possibly moved) cards, fly the
-        gripper over each and record the close-range gantry offset + line lengths, save
-        everything to gripper_card_obs_multi.pkl, then pop a message asking the operator to move
-        the assist cards and send debug 'confirm' (or 'confirm done' to finish).
-
-        Many well-spread points (vary card height and spread them across the room) let the
-        offline analysis separate a genuine per-line length-reference bias (constant residual
-        across points) from an anchor/eyelet position error (residual that varies with position),
-        and give the optimizer far more leverage than the 3-4 clustered points of a single run.
-        """
-        rounds = []
-        try:
-            round_num = 0
-            while True:
-                round_num += 1
-                if round_num > 1:
-                    # cards were just moved; forget their old anchor-camera positions
-                    self.send_ui(pop_message=telemetry.Popup(
-                        message=f'Round {round_num}: re-locating the moved cards, hold on...'))
-                    await self._refresh_cal_card_detections()
-
-                obs = await self.collect_gripper_card_observations()
-                rounds.append({
-                    'round': round_num,
-                    'gripper_obs': obs,
-                    'diagnostics': getattr(self, 'last_gripper_survey', None),
-                })
-                # save incrementally so a mid-survey abort still keeps the collected rounds
-                with open('gripper_card_obs_multi.pkl', 'wb') as f:
-                    pickle.dump({'robot_id': getattr(self.config, 'robot_id', None), 'rounds': rounds}, f)
-
-                total = sum(len(r['gripper_obs']) for r in rounds)
-                logger.info(f'Multi-round survey: round {round_num} captured {list(obs.keys())}; {total} total observations across {round_num} rounds')
-                self.send_ui(pop_message=telemetry.Popup(message=(
-                    f'Round {round_num}: captured {sorted(obs.keys())} ({total} total points). '
-                    f'Move the 3 assist cards to NEW spots (vary height and spread them out), '
-                    f'then send debug "confirm" to scan again, or "confirm done" to finish.')))
-
-                resp = await self._await_confirm()
-                if resp == 'done':
-                    break
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self.slow_stop_all_spools()
-
-        logger.info(f'Multi-round card survey finished: {len(rounds)} rounds saved to gripper_card_obs_multi.pkl')
-        self.send_ui(pop_message=telemetry.Popup(
-            message=f'Card survey finished: {len(rounds)} rounds saved. Cards can be removed.'))
-        return rounds
+    async def _center_card_in_view(self, name, tol_m=0.05, gain=0.6, max_steps=5):
+        """Bounded visual-centering: nudge the gantry so the named card sits under the gripper
+        camera. measure_gantry_minus_card gives the room offset from card to gantry; moving the
+        gantry by the negative of its horizontal part drives that toward zero (gantry over card,
+        card centered). Stops early if centered, if the card is lost, or if it stops improving
+        (a guard against a wrong-sign convention driving the card out of frame)."""
+        prev = None
+        for step in range(max_steps):
+            pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
+            if pose_cam is None:
+                # brief reacquire attempt before giving up
+                deadline = time.time() + 1.0
+                while time.time() < deadline and pose_cam is None:
+                    await asyncio.sleep(0.05)
+                    pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
+                if pose_cam is None:
+                    logger.info(f'Centering {name}: lost from view at step {step}; measuring as-is')
+                    return
+            err_xy = self.gripper_client.measure_gantry_minus_card(pose_cam)[:2]
+            err = float(np.linalg.norm(err_xy))
+            if err < tol_m:
+                logger.info(f'Centering {name}: within {err*100:.1f}cm after {step} steps')
+                return
+            if prev is not None and err > prev + 0.02:
+                logger.info(f'Centering {name}: error grew ({prev*100:.1f}->{err*100:.1f}cm); stopping to avoid pushing it out of frame')
+                return
+            prev = err
+            await self._nudge_gantry_xy(-gain * err_xy)
+        logger.info(f'Centering {name}: reached max steps')
 
     async def half_auto_calibration(self):
         """
@@ -3178,7 +3165,7 @@ class AsyncObserver:
         when head_turn, turn gripper to face direction of motion.
         when auto_altitude, room traversal is performed at an ideal gantry altitude
         """
-        GOAL_PROXIMITY_M = 0.1
+        GOAL_PROXIMITY_M = 0.08
         MAX_SPEED = 0.26 # GANTRY_SPEED_MPS
         ACCEL = 0.15     # m/s^2
         LOOP_SLEEP_S = 0.1
