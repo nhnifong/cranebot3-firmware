@@ -155,12 +155,12 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
         with open(path, 'r') as f:
             print(f'Loaded config from {path}')
             c = nf_config.StringmanPilotConfig().from_json(f.read())
-            if c.camera_cal is None or c.camera_cal_wide is None:
-                default = create_default_config()
-                if c.camera_cal is None:
-                    c.camera_cal = default.camera_cal
-                if c.camera_cal_wide is None:
-                    c.camera_cal_wide = default.camera_cal_wide
+            if c.camera_cal is None:
+                c.camera_cal = create_default_config().camera_cal
+            # This version requires the new full-FOV (684x384) wide camera calibration. Older
+            # configs hold the 384x384 center-crop intrinsics, so always override whatever wide
+            # cal was saved with the current default rather than only filling it in when missing.
+            c.camera_cal_wide = create_default_config().camera_cal_wide
             if c.park_data is None:
                 c.park_data = nf_config.ParkData()
 

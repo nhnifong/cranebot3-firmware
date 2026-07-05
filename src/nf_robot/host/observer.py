@@ -1110,7 +1110,7 @@ class AsyncObserver:
         if any(x is False for x in results):
             message = f"Failed on one or more components \n\n{table}"
         elif all(results):
-            message = "Completed successfully"
+            message = "Updated successfully. Components are now rebooting. Please wait 10 to 20 seconds."
         else:
             message = f"Successful on some components, others require manual updating \n\n{table}"
         self.send_ui(operation_progress=telemetry.OperationProgress(
