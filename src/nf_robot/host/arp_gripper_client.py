@@ -276,13 +276,15 @@ class ArpeggioGripperClient(ComponentClient):
         estimator uses: pole pointing down -z, x/y horizontal) to the room frame, right now.
 
         Two parts:
-        * heading about the room's vertical axis. get_spin() is defined so that spin==0 puts
-          the nose at +Y in the room. In the body frame the camera's forward throw is -y, so
-          Rz(spin + pi) sends -y_body to +Y_room at spin==0. (Verified: Rz(pi)@[0,-1,0]=[0,1,0].)
+        * heading about the room's vertical axis, straight from get_spin(). An earlier version
+          added a +pi base here; on-robot data (the visual-centering nudge diverging by a factor
+          of ~1+gain, plus the reconstructed gantry landing ~180 deg opposite the true offset for
+          off-center cards) showed that base was wrong -- get_spin() already carries the correct
+          heading. The +pi was invisible while cards happened to sit near the image center.
         * the small swing tilt from get_gripper_rvec (z-component always 0), the same rotvec
           the position estimator applies to the pole; applied inside the heading.
         """
-        R_heading = Rotation.from_rotvec([0.0, 0.0, self.get_spin() + np.pi])
+        R_heading = Rotation.from_rotvec([0.0, 0.0, self.get_spin()])
         R_tilt = Rotation.from_rotvec(self.get_gripper_rvec())
         return R_heading * R_tilt
 

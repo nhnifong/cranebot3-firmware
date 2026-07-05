@@ -1812,13 +1812,21 @@ class AsyncObserver:
         self.slow_stop_all_spools()
         await asyncio.sleep(0.5)  # let it settle before the next observation
 
-    async def _center_card_in_view(self, name, tol_m=0.05, gain=0.6, max_steps=5):
+    async def _center_card_in_view(self, name, tol_m=0.05, gain=0.6, max_steps=6):
         """Bounded visual-centering: nudge the gantry so the named card sits under the gripper
         camera. measure_gantry_minus_card gives the room offset from card to gantry; moving the
         gantry by the negative of its horizontal part drives that toward zero (gantry over card,
-        card centered). Stops early if centered, if the card is lost, or if it stops improving
-        (a guard against a wrong-sign convention driving the card out of frame)."""
+        card centered).
+
+        The nudge direction depends on the camera->room heading convention. If that convention is
+        off (e.g. a 180 deg heading error), a nudge makes the error grow instead of shrink -- so
+        rather than trust it blindly we flip the nudge sign the first time the error grows and
+        keep going. Only if it keeps growing after flipping do we give up. This keeps centering
+        working even when the heading is wrong, which also protects the survey from a bad
+        frame_room_spin calibration."""
         prev = None
+        sign = 1.0
+        flipped = False
         for step in range(max_steps):
             pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
             if pose_cam is None:
@@ -1836,10 +1844,15 @@ class AsyncObserver:
                 logger.info(f'Centering {name}: within {err*100:.1f}cm after {step} steps')
                 return
             if prev is not None and err > prev + 0.02:
-                logger.info(f'Centering {name}: error grew ({prev*100:.1f}->{err*100:.1f}cm); stopping to avoid pushing it out of frame')
-                return
+                if not flipped:
+                    sign = -sign
+                    flipped = True
+                    logger.info(f'Centering {name}: error grew ({prev*100:.1f}->{err*100:.1f}cm); flipping nudge direction')
+                else:
+                    logger.info(f'Centering {name}: still growing after flip ({prev*100:.1f}->{err*100:.1f}cm); stopping')
+                    return
             prev = err
-            await self._nudge_gantry_xy(-gain * err_xy)
+            await self._nudge_gantry_xy(sign * -gain * err_xy)
         logger.info(f'Centering {name}: reached max steps')
 
     async def half_auto_calibration(self):
