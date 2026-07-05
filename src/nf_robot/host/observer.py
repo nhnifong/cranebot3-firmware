@@ -2058,6 +2058,16 @@ class AsyncObserver:
                 ))
                 r = await self.flush_tele_buffer()
                 if len(gripper_obs) >= 2:
+                    # Final safety measure: turn swing cancellation off before applying the refined
+                    # geometry, and turn it back on afterwards only if it still damps. Even with the
+                    # anchors frozen (so the room frame cannot rotate), the new eyelets change the
+                    # velocity->line-speed mapping swing cancellation depends on, so a bad refinement
+                    # could make it pump and throw the gripper around.
+                    if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
+                        self.swing_cancellation_task.cancel()
+                        self.swing_cancellation_task = None
+                    self.slow_stop_all_spools()
+
                     # Freeze the anchors during the gripper refinement so it can only move the
                     # eyelets. The room's absolute rotation about z is unobservable to the
                     # distance-based constraints, so with anchors free the gripper term (whose
@@ -2075,6 +2085,27 @@ class AsyncObserver:
                         self.save_poses_arp(anchor_poses, eyelet_positions)
                     else:
                         logger.warning('Gripper-card refinement optimization failed; keeping previous geometry')
+
+                    # Re-enable swing cancellation only if it still damps a test swing with the new
+                    # geometry. _measure_swing_residual induces a swing, runs cancellation, and
+                    # reports the leftover swing (or the safety cap / no reading if it pumped or
+                    # drifted). Anything that isn't a clearly-damped low residual leaves it OFF.
+                    self.send_ui(operation_progress=telemetry.OperationProgress(
+                        percent_complete=99.0,
+                        name="Calibration",
+                        current_action="Verifying swing cancellation is safe",
+                    ))
+                    DAMPING_RESIDUAL_MAX_RAD = 0.15  # a settled swing sits well below this; pumping hits the cap
+                    center_pos = np.array(self.pe.gant_pos, dtype=float)
+                    residual, aborted = await self._measure_swing_residual(self.config.swing_latency, center_pos)
+                    if residual is not None and residual < DAMPING_RESIDUAL_MAX_RAD:
+                        logger.info(f'Swing cancellation damps with refined geometry (residual {np.degrees(residual):.1f} deg); enabling.')
+                        self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
+                    else:
+                        detail = aborted or (f'{np.degrees(residual):.1f} deg residual' if residual is not None else 'no reading')
+                        logger.warning(f'Swing cancellation did not damp with refined geometry ({detail}); leaving it OFF.')
+                        self.send_ui(pop_message=telemetry.Popup(
+                            message='Swing cancellation did not damp after calibration refinement and was left OFF. Re-check the calibration before running.'))
                 else:
                     logger.warning(f'Only {len(gripper_obs)} gripper card observation(s); need >=2 to refine. Skipping.')
 
