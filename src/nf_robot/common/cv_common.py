@@ -67,7 +67,10 @@ SPECIAL_OBJ_POINTS = {
 }
 
 SF_INPUT_SHAPE = (960, 540)      # Size of the raw frame coming from gripper camera
-SF_TARGET_SHAPE = (384, 384)     # Size of the final neural net input (Square)
+# Gripper stream is now 684x384 (full-sensor 16:9 FOV). Setting the target shape to match means
+# process_frame does not resize, so AprilTag detection and the UI get the whole wide field of
+# view. Downstream ML models resize their own inputs. (Was a square 384x384 center crop.)
+SF_TARGET_SHAPE = (684, 384)
 SF_SCALE_FACTOR = 1.4  # Zoom factor (values less than 1 zoom in)
 
 saved_matrices = {}

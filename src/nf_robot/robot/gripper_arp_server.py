@@ -70,7 +70,10 @@ class GripperArpServer(RobotComponentServer):
 
         self.stream_command = [
             "/usr/bin/rpicam-vid", "-t", "0", "-n",
-            "--width=384", "--height=384",
+            # Force the full-FOV 2304x1296 sensor mode and output 684x384 (16:9) so we keep the
+            # whole wide-camera field of view instead of the center crop a square output forces.
+            "--mode", "2304:1296:10",
+            "--width=684", "--height=384",
             "--framerate=60",
             "-o", "tcp://0.0.0.0:8888?listen=1",
             "--codec", "libav",
