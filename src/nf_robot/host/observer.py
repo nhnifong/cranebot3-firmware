@@ -1746,8 +1746,6 @@ class AsyncObserver:
         direction is flipped once; if it still grows, centering gives up. Stops when centered,
         when the card is lost, or after max_steps."""
         prev = None
-        sign = 1.0
-        flipped = False
         for step in range(max_steps):
             pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
             if pose_cam is None:
@@ -1765,15 +1763,10 @@ class AsyncObserver:
                 logger.info(f'Centering {name}: within {err*100:.1f}cm after {step} steps')
                 return
             if prev is not None and err > prev + 0.02:
-                if not flipped:
-                    sign = -sign
-                    flipped = True
-                    logger.info(f'Centering {name}: error grew ({prev*100:.1f}->{err*100:.1f}cm); flipping nudge direction')
-                else:
-                    logger.info(f'Centering {name}: still growing after flip ({prev*100:.1f}->{err*100:.1f}cm); stopping')
-                    return
+                logger.info(f'Centering {name}: error grew ({prev*100:.1f}->{err*100:.1f}cm); flipping nudge direction')
+                return
             prev = err
-            await self._nudge_gantry_xy(sign * -gain * err_xy)
+            await self._nudge_gantry_xy(gain * err_xy)
         logger.info(f'Centering {name}: reached max steps')
 
     async def half_auto_calibration(self):
