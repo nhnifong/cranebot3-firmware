@@ -2043,6 +2043,7 @@ class AsyncObserver:
             ))
 
         except asyncio.CancelledError:
+            self._calibration_abort_cleanup()
             if finger_task is not None:
                 finger_task.cancel()
                 await finger_task
@@ -2058,12 +2059,22 @@ class AsyncObserver:
             ))
             raise
         except Exception as e:
+            self._calibration_abort_cleanup()
+            if finger_task is not None:
+                finger_task.cancel()
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
                 name="Calibration",
                 current_action='Calibration failed, see motion controller console',
             ))
             raise
+
+    def _calibration_abort_cleanup(self):
+        """On any calibration abort (safety tension trip, user cancel, or error) stop all spools
+        and disable swing cancellation so the gripper does not keep moving."""
+        self.slow_stop_all_spools()
+        if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
+            self.swing_cancellation_task.cancel()
 
     async def calibrate_spin(self, reset_wrist_first=True):
         """Calibration of the relationship between the wrist and the room frame of reference.

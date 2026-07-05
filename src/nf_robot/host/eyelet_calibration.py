@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import optimize
 import logging
+import time
 
 from nf_robot.common.pose_functions import *
 
@@ -432,7 +433,12 @@ def floor_align_origin(anchor_poses, eyelet_positions, raw_obs, cam_tilts=(22, 2
     return aligned_anchor_poses, aligned_eyelet_positions, floor_z
 
 
-def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None):
+class _OptTimeout(Exception):
+    """Raised from the residual function to stop least_squares once the time budget is spent."""
+    pass
+
+
+def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, time_budget_s=8.0):
     """
     Finds optimal anchor poses AND external eyelet positions.
     
@@ -497,30 +503,49 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
         opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts, gripper_obs)
 
     logger.info('Running least squares optimization...')
-    result = optimize.least_squares(
-        multi_card_residuals,
-        x0,
-        args=opt_args,
-        method='lm', 
-        verbose=1,
-        max_nfev=500,
-    )
+    # Bound the wall-clock time: least_squares can occasionally thrash for many iterations on a
+    # poorly conditioned problem. Track the best point seen and raise out of the residual once the
+    # budget is spent, then fall back to that best point so the call always returns promptly.
+    deadline = time.time() + time_budget_s
+    best = {'x': np.array(x0, dtype=float), 'cost': np.inf}
 
-    if not result.success:
-        logging.error(f"Optimization failed. Status: {result.status}, Msg: {result.message}")
-        return None, None
+    def residuals_with_deadline(x, *resid_args):
+        r = multi_card_residuals(x, *resid_args)
+        cost = float(np.dot(r, r))
+        if cost < best['cost']:
+            best['cost'] = cost
+            best['x'] = np.array(x, dtype=float)
+        if time.time() > deadline:
+            raise _OptTimeout()
+        return r
+
+    try:
+        result = optimize.least_squares(
+            residuals_with_deadline,
+            x0,
+            args=opt_args,
+            method='lm',
+            verbose=1,
+            max_nfev=500,
+        )
+        result_x = result.x
+        if not result.success:
+            logger.warning(f"Optimization did not converge (status {result.status}: {result.message}); using best point found.")
+    except _OptTimeout:
+        logger.warning(f"Optimization exceeded {time_budget_s:.0f}s budget; using best point found (cost={best['cost']:.4f}).")
+        result_x = best['x']
 
     # Run one final time with debug=True to print the cost distribution
     logger.info("Final Optimization Costs:")
-    multi_card_residuals(result.x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs)
+    multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs)
 
     # Reshape back to distinct structures based on the freeze flag
     if fixed_anchor_poses is not None:
         optimized_anchors = fixed_anchor_poses
-        optimized_eyelets = result.x.reshape((2, 3))
+        optimized_eyelets = result_x.reshape((2, 3))
     else:
-        optimized_anchors = result.x[:12].reshape((2, 2, 3))
-        optimized_eyelets = result.x[12:].reshape((2, 3))
+        optimized_anchors = result_x[:12].reshape((2, 2, 3))
+        optimized_eyelets = result_x[12:].reshape((2, 3))
 
     # The optimizer solves in a "provisional" frame with the origin card pinned
     # to [0, 0, 0]. Re-level that frame so z=0 sits on the floor rather than on
