@@ -610,7 +610,7 @@ class AsyncObserver:
         residual = float(np.mean(late)) if len(late) else float(np.mean(amps))
         return residual, aborted
 
-    async def calibrate_swing_latency(self, fine_pass=False):
+    async def calibrate_swing_latency(self, fine_pass=False, progress_range=None):
         """Tune config.swing_latency by finding the value that damps the swing best.
 
         A good latency drives the swing to nothing; a bad one leaves a steady
@@ -639,7 +639,16 @@ class AsyncObserver:
 
         async def sweep(cands):
             out = []
-            for lat in cands:
+            for idx,lat in enumerate(cands):
+                if progress_range is not None:
+                    start_pct, end_pct = progress_range
+                    pct = start_pct + (end_pct - start_pct) * (idx + 1) / (len(cands) + 1)
+                    self.send_ui(operation_progress=telemetry.OperationProgress(
+                        percent_complete=pct,
+                        name="Calibration",
+                        current_action=f"Tuning swing cancellation {idx + 1}/{len(cands)} ({lat})",
+                    ))
+
                 lat = float(lat)
                 await self._recenter_gantry_if_drifted(center_pos, DRIFT_LIMIT_M)
                 residual, aborted = await self._measure_swing_residual(lat, center_pos)
@@ -1895,6 +1904,7 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Running 1st optimization pass",
             ))
+            r = await self.flush_tele_buffer()
 
             if self.config.anchor_type == common.AnchorType.ARPEGGIO:
                 tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
@@ -1945,25 +1955,24 @@ class AsyncObserver:
                 # stop saving raw poses
                 for a in self.anchors.values():
                     a.save_raw = False
-                # debug: save args for experimentation
-                args = (raw_obs, diamond_data, None, None, line_deltas, tilts)
-                # with open('arp_opt_data.pkl', 'wb') as f:
-                #     pickle.dump(args, f)
-                # optimize again with length_change_data
-                async_result = self.pool.apply_async(optimize_arp_anchors, args)
+
+                self.send_ui(operation_progress=telemetry.OperationProgress(
+                    percent_complete=22.0,
+                    name="Calibration",
+                    current_action="Running 2nd optimization pass",
+                ))
+                r = await self.flush_tele_buffer()
+
+                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None, line_deltas, tilts))
                 anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=60)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
                 self.save_poses_arp(anchor_poses, eyelet_positions)
+
             else:
+                # Pilot anchors path
                 for a in self.anchors.values():
                     a.save_raw = False
-
-                self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=40.0,
-                    name="Calibration",
-                    current_action="Running 2nd optimization pass",
-                ))
 
                 # run optimization in pool
                 async_result = self.pool.apply_async(optimize_anchor_poses, (raw_obs,))
@@ -1990,6 +1999,7 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Tensioning lines and Locating Gripper",
             ))
+            r = await self.flush_tele_buffer()
             await self.half_auto_calibration()
 
             # open grip enough that we can see an unobstructed view from the palm camera
@@ -2013,6 +2023,7 @@ class AsyncObserver:
             ))
             # there should be some swing when we get there. 
             await self.half_auto_calibration()
+            await self._center_card_in_view('origin')
 
             # roomspin
             await self.calibrate_spin(reset_wrist_first=True) # already did that during diamond to save time
@@ -2023,9 +2034,9 @@ class AsyncObserver:
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=34.0,
                     name="Calibration",
-                    current_action="Tuning swing cancellation latency",
+                    current_action="Tuning swing cancellation",
                 ))
-                await self.calibrate_swing_latency()
+                await self.calibrate_swing_latency(progress_range=(30.0, 61.0))
 
             # Refine the pull-point geometry with close-range gripper-camera views of the
             # calibration cards. The cards are still in place at this point (they are only
@@ -2046,6 +2057,7 @@ class AsyncObserver:
                     name="Calibration",
                     current_action="Running 3rd optimization pass",
                 ))
+                r = await self.flush_tele_buffer()
                 if len(gripper_obs) >= 2:
                     args = (raw_obs, diamond_data, None, None, line_deltas, tilts, gripper_obs)
                     async_result = self.pool.apply_async(optimize_arp_anchors, args)
@@ -2064,6 +2076,7 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Calibration completed. Sanity check anchor positions before moving. Cards can be removed from the floor. Parking location must be re-recorded.",
             ))
+            r = await self.flush_tele_buffer()
 
         except asyncio.CancelledError:
             self._calibration_abort_cleanup()
@@ -3115,7 +3128,7 @@ class AsyncObserver:
         when auto_altitude, room traversal is performed at an ideal gantry altitude
         """
         GOAL_PROXIMITY_M = 0.08
-        MAX_SPEED = 0.26 # GANTRY_SPEED_MPS
+        MAX_SPEED = 0.3 # GANTRY_SPEED_MPS
         ACCEL = 0.15     # m/s^2
         LOOP_SLEEP_S = 0.1
         IDEAL_GANTRY_ALTITUDE = 1.3 # meters. ideal gantry height for room traversal
