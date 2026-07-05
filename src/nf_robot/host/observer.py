@@ -804,6 +804,8 @@ class AsyncObserver:
                     r = await self.set_tension_reg(True)
                 else:
                     r = await self.set_tension_reg(False)
+        if item.action == 'centerorigin':
+            r = await self.invoke_motion_task(self._center_card_in_view('origin'))
 
     async def set_tension_reg(self, enabled: bool):
         """Enable or disable onboard tension regulation (the floor + soft mute) on both
