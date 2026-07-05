@@ -560,6 +560,8 @@ class AsyncObserver:
         DRIFT_LIMIT_M = 0.6        # stop early if the gantry wanders this far
         LOOP_S = 1 / 100
         MIN_SAMPLES = 10
+        ALTITUDE_HOLD_GAIN = 2.0       # 1/s, proportional gain pulling z back to the start altitude
+        ALTITUDE_HOLD_MAX_MPS = 0.15   # cap on the vertical hold speed
 
         gc = self.gripper_client
         period = 2 * np.pi / OMEGA
@@ -582,8 +584,11 @@ class AsyncObserver:
             while (t := time.time() - start) < RUN_PERIODS * period:
                 now = time.time()
                 v = gc.compute_swing_correction(now + latency)
-                if v is not None:
-                    await self.move_direction_speed(np.array([v[0], v[1], 0]), key='swingc', downward_bias=0)
+                vx, vy = (float(v[0]), float(v[1])) if v is not None else (0.0, 0.0)
+                # Actively hold altitude. 
+                z_error = center_pos[2] - self.pe.gant_pos[2]
+                vz = float(np.clip(ALTITUDE_HOLD_GAIN * z_error, -ALTITUDE_HOLD_MAX_MPS, ALTITUDE_HOLD_MAX_MPS))
+                await self.move_direction_speed(np.array([vx, vy, vz]), key='swingc', downward_bias=0)
                 amp = gc.get_swing_amplitude()
                 if amp is not None:
                     ts.append(t)
@@ -624,7 +629,7 @@ class AsyncObserver:
         The coarse pass alone lands within the working range. Set fine_pass=True to
         add a slower second pass that refines around the coarse best.
         """
-        COARSE_RANGE = (0.0, 0.30)   # seconds; stays close enough to ideal that all candidates damp
+        COARSE_RANGE = (0.0, 0.44)   # seconds; stays close enough to ideal that all candidates damp
         COARSE_COUNT = 6
         FINE_HALF_WIDTH = 0.06       # fine pass spans +/- this around the coarse best
         FINE_COUNT = 5
