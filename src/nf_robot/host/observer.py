@@ -2058,7 +2058,15 @@ class AsyncObserver:
                 ))
                 r = await self.flush_tele_buffer()
                 if len(gripper_obs) >= 2:
-                    args = (raw_obs, diamond_data, None, None, line_deltas, tilts, gripper_obs)
+                    # Freeze the anchors during the gripper refinement so it can only move the
+                    # eyelets. The room's absolute rotation about z is unobservable to the
+                    # distance-based constraints, so with anchors free the gripper term (whose
+                    # measured vectors live in the real room frame) can spin the whole solution
+                    # about z. That silently invalidates the room-spin constant from the spin
+                    # step and can flip swing cancellation from damping to pumping. Fixing the
+                    # anchors pins the room frame; the well-determined anchors don't need this
+                    # refinement anyway, while the weakly-constrained eyelets still get it.
+                    args = (raw_obs, diamond_data, eyelet_positions, anchor_poses, line_deltas, tilts, gripper_obs)
                     async_result = self.pool.apply_async(optimize_arp_anchors, args)
                     refined_anchors, refined_eyelets, refined_floor_z = async_result.get(timeout=60)
                     if refined_anchors is not None:
