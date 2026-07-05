@@ -103,6 +103,7 @@ ROUTE_POINT_TAG_NAMES = {
 # feature key -> minimum nf_robot version every connected component must run to use it
 VERSION_GATES = {
     "speed_0.45": "4.1.0",
+    "gripper_card_survey": "4.2.0",
 }
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
@@ -2014,7 +2015,8 @@ class AsyncObserver:
             # keep all four lines taut while hovering, so the measured (gantry, line-length)
             # pairs are a strong constraint on the anchors and eyelets.
             if (self.config.anchor_type == common.AnchorType.ARPEGGIO
-                    and isinstance(self.gripper_client, ArpeggioGripperClient)):
+                    and isinstance(self.gripper_client, ArpeggioGripperClient)
+                    and self.feature_supported("gripper_card_survey")):
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=97.0,
                     name="Calibration",
