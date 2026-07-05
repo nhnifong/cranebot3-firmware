@@ -103,7 +103,8 @@ ROUTE_POINT_TAG_NAMES = {
 # feature key -> minimum nf_robot version every connected component must run to use it
 VERSION_GATES = {
     "speed_0.45": "4.1.0",
-    "gripper_card_survey": "4.2.0",
+    "gripper_card_survey": "4.1.0", # temporary trick
+    # "gripper_card_survey": "4.2.0",
 }
 
 def capture_gripper_image(ndimage, gripper_occupied=False):
@@ -194,10 +195,6 @@ class AsyncObserver:
         # set by passive_safety when it aborts an in-progress calibration, so the
         # calibration's CancelledError handler can report the real reason.
         self.calibration_aborted_by_safety = False
-        # while non-None, send_ui timestamps each operation_progress message into
-        # _calibration_timings (persisted to calibration_timings.pkl) for tuning percent_complete.
-        self._calibration_start_time = None
-        self._calibration_timings = []
         # only used for integration test only to allow some code to run right after sending the gantry to a goal point
         self.test_gantry_goal_callback = None
         # event used to notify tasks that gripper is connected.
@@ -1512,7 +1509,7 @@ class AsyncObserver:
             await self.set_line_tension_target(2, DIAMOND_DIRECT_TENSION_N)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=20.0,
+                percent_complete=3.0,
                 name="Calibration",
                 current_action="Observe diamond bottom",
             ))
@@ -1523,7 +1520,7 @@ class AsyncObserver:
             results['bottom'] = self.snapshot_tag_observations()['gantry']
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=25.0,
+                percent_complete=6.0,
                 name="Calibration",
                 current_action="Observe diamond right",
             ))
@@ -1538,7 +1535,7 @@ class AsyncObserver:
             results['right'] = self.snapshot_tag_observations()['gantry'] # it is to the right from the perspective of camera 0
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=30.0,
+                percent_complete=12.0,
                 name="Calibration",
                 current_action="Observe diamond top",
             ))
@@ -1553,7 +1550,7 @@ class AsyncObserver:
             results['top'] = self.snapshot_tag_observations()['gantry']
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=35.0,
+                percent_complete=17.0,
                 name="Calibration",
                 current_action="Observe diamond left",
             ))
@@ -1836,11 +1833,6 @@ class AsyncObserver:
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
-        # Instrument progress-message timing: while this is set, send_ui records the elapsed time
-        # of every operation_progress message to calibration_timings.pkl, used to tune the
-        # percent_complete values to real step durations.
-        self._calibration_start_time = time.time()
-        self._calibration_timings = []
         self.send_ui(operation_progress=telemetry.OperationProgress(
             percent_complete=0.0,
             name="Calibration",
@@ -1867,7 +1859,7 @@ class AsyncObserver:
                 a.save_raw = True
             num_o_dets = []
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=2.0,
+                percent_complete=0.0,
                 name="Calibration",
                 current_action="Observing markers",
             ))
@@ -1888,7 +1880,7 @@ class AsyncObserver:
             raw_obs = self.snapshot_tag_observations()
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=12.0,
+                percent_complete=1.0,
                 name="Calibration",
                 current_action="Running 1st optimization pass",
             ))
@@ -1902,7 +1894,7 @@ class AsyncObserver:
 
                 self.save_poses_arp(anchor_poses, eyelet_positions)
                 self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=15.0,
+                    percent_complete=1.0,
                     name="Calibration",
                     current_action="Moving to safe position",
                 ))
@@ -1983,7 +1975,7 @@ class AsyncObserver:
                 self.pe.set_anchor_points(anchor_points)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=45.0,
+                percent_complete=24.0,
                 name="Calibration",
                 current_action="Tensioning lines and Locating Gripper",
             ))
@@ -1995,7 +1987,7 @@ class AsyncObserver:
 
             # move over the origin card
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=60.0,
+                percent_complete=27.0,
                 name="Calibration",
                 current_action="Moving gripper to origin",
             ))
@@ -2004,7 +1996,7 @@ class AsyncObserver:
             await self.seek_gantry_goal(head_turn=False)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
-                percent_complete=90.0,
+                percent_complete=29.0,
                 name="Calibration",
                 current_action="Measuring spin. Gripper camera must see origin card to complete this step.",
             ))
@@ -2018,7 +2010,7 @@ class AsyncObserver:
             # them best. Only the Arpeggio gripper has the IMU-driven swing model.
             if isinstance(self.gripper_client, ArpeggioGripperClient):
                 self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=95.0,
+                    percent_complete=34.0,
                     name="Calibration",
                     current_action="Tuning swing cancellation latency",
                 ))
@@ -2033,7 +2025,7 @@ class AsyncObserver:
                     and isinstance(self.gripper_client, ArpeggioGripperClient)
                     and self.feature_supported("gripper_card_survey")):
                 self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=97.0,
+                    percent_complete=61.0,
                     name="Calibration",
                     current_action="Refining geometry with gripper card views",
                 ))
@@ -2088,9 +2080,6 @@ class AsyncObserver:
                 current_action='Calibration failed, see motion controller console',
             ))
             raise
-        finally:
-            # stop timing progress messages once calibration has ended (success or abort)
-            self._calibration_start_time = None
 
     def _calibration_abort_cleanup(self):
         """On any calibration abort (safety tension trip, user cancel, or error) stop all spools
@@ -2810,21 +2799,6 @@ class AsyncObserver:
         if len(kwargs.keys()) != 1:
             raise ValueError
         key, msg = list(kwargs.items())[0]
-
-        # While a calibration is running, record the elapsed time of each progress message so the
-        # percent_complete values can be tuned to real step durations. Written every message so an
-        # aborted run still leaves a usable file.
-        if key == 'operation_progress' and self._calibration_start_time is not None:
-            self._calibration_timings.append({
-                'elapsed_s': time.time() - self._calibration_start_time,
-                'percent_complete': msg.percent_complete,
-                'current_action': msg.current_action,
-            })
-            try:
-                with open('calibration_timings.pkl', 'wb') as f:
-                    pickle.dump(self._calibration_timings, f)
-            except Exception:
-                logger.exception('Failed to write calibration_timings.pkl')
 
         # mark certain messages with a retain key. the server will resend them to new UIs
         item = telemetry.TelemetryItem(**kwargs)
