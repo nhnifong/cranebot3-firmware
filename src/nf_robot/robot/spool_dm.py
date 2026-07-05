@@ -26,12 +26,13 @@ default_conf_dm = {
     'MAX_SAFE_LINE_SPEED': 2.0,
     # Distance in meters within which we consider a jog "complete"
     'POS_DEADBAND': 0.015,
+    # Torque beyond this limit causes the motor to enter damped mode until reactivated
+    'MAX_SAFE_TORQUE': 0.45,
 
     # --- onboard tension regulation (generalizes the old anti-tangle soft mute) ---
     # minimum tension in newtons to keep on the line when no hold target is set.
     # the loop reels in to restore at least this much tension while still obeying speed commands.
-    # while a negative tension here seems rediculous - you can't push on a string - it just works.
-    'TENSION_FLOOR_N': -0.1,
+    'TENSION_FLOOR_N': 0.1,
     # proportional gain converting a tension error (N) into a correction line speed (m/s).
     'TENSION_KP': 0.3,
     # clamp on the magnitude of the tension correction line speed in meters per second.
@@ -236,6 +237,11 @@ class DamiaoSpoolController:
                 motor_vel = self.direction * states.get('vel', 0.0) # radians per second
                 motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
                 # we could also read status status_code, t_mos, t_rotor (temps)
+
+                if motor_torque > self.conf['MAX_SAFE_TORQUE']:
+                    self.pauseTrackingLoop(disable_torque=True)
+                    logging.warning(f'Read a torque of {motor_torque} and disabled motor to protect lines')
+                    continue
 
                 # Convert to absolute position in revolutions
                 self.last_angle = self._update_absolute_angle(motor_pos)

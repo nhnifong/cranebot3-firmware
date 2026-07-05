@@ -284,6 +284,9 @@ class RobotComponentServer:
         # stop spool motors just in case some task left it running
         if self.spooler is not None:
             self.spooler.setAimSpeed(0)
+        # the arp anchor drives two spools instead of a single spooler; stop both of them too
+        for spool in getattr(self, 'spools', None) or []:
+            spool.setAimSpeed(0)
 
     async def main(self, port=8765, name=None):
         logging.info('Starting cranebot server')
