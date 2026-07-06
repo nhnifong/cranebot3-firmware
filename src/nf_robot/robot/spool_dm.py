@@ -26,8 +26,6 @@ default_conf_dm = {
     'MAX_SAFE_LINE_SPEED': 2.0,
     # Distance in meters within which we consider a jog "complete"
     'POS_DEADBAND': 0.015,
-    # Torque beyond this limit causes the motor to enter damped mode until reactivated
-    'MAX_SAFE_TORQUE': 0.45,
 
     # --- onboard tension regulation (generalizes the old anti-tangle soft mute) ---
     # minimum tension in newtons to keep on the line when no hold target is set.
@@ -43,6 +41,9 @@ default_conf_dm = {
     # keeping a would-be-slack cable taut over-constrains the gantry, so this is the knob to
     # A/B test the workspace convexity independently of the tension floor.
     'SOFT_MUTE_ENABLED': 1,
+    # Tension beyond this limit (even without a connection to a controller) will disable motor torque.
+    # Newtons
+    'NO_CONN_TENSION_LIMIT': 40.0,
 }
 
 class DamiaoSpoolController:
@@ -238,14 +239,9 @@ class DamiaoSpoolController:
                 motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
                 # we could also read status status_code, t_mos, t_rotor (temps)
 
-                if motor_torque > self.conf['MAX_SAFE_TORQUE']:
-                    self.pauseTrackingLoop(disable_torque=True)
-                    logging.warning(f'Read a torque of {motor_torque} and disabled motor to protect lines')
-                    continue
-
                 # Convert to absolute position in revolutions
                 self.last_angle = self._update_absolute_angle(motor_pos)
-                
+
                 # low pass filter torque
                 sf = self.conf['SMOOTH_FACTOR']
                 smooth_torque = motor_torque * sf + smooth_torque * (1 - sf)
@@ -255,6 +251,11 @@ class DamiaoSpoolController:
                 self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
                 current_line_speed = (motor_vel / twopi) * self.meters_per_rev
                 self.last_tension = (-smooth_torque * twopi) / self.meters_per_rev
+
+                if self.last_tension > self.conf['NO_CONN_TENSION_LIMIT']:
+                    self.pauseTrackingLoop(disable_torque=True)
+                    logging.warning(f'Read a tension of {self.last_tension} and disabled motor to protect line.')
+                    continue
 
                 # Position control logic (using during jog)
                 if self.target_length is not None:
