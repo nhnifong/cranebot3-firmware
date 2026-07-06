@@ -10,12 +10,14 @@ import numpy as np
 import cv2
 import argparse
 import threading
+import websockets.exceptions
 from websockets.sync.client import connect as websocket_connect_sync
 import time
 from urllib.parse import urlparse
 import av
 from huggingface_hub import repo_exists
 import os
+import shutil
 import signal
 import sys
 import json
@@ -644,7 +646,12 @@ class StringmanLeRobot(Robot):
         )
         to_send = bytes(batch)
         if self.websocket and to_send:
-            self.websocket.send(to_send)
+            try:
+                self.websocket.send(to_send)
+            except websockets.exceptions.WebSocketException as e:
+                # Status updates are best-effort telemetry; a dropped connection
+                # must not abort cleanup/finalization or mask the real error.
+                print(f"Failed to send session status (connection closed?): {e}", flush=True)
 
     def get_last_action(self):
         # last_commanded_vel is in the gripper's frame of reference; convert to room
@@ -764,6 +771,9 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
     if not robot.is_connected:
         raise ConnectionError(f"Failed to connect to robot at {uri}")
 
+    recorded_episodes = 0
+    dataset = None
+
     try:
         action_features = hw_to_dataset_features(robot.action_features, "action")
         obs_features = hw_to_dataset_features(robot.observation_features, "observation")
@@ -786,7 +796,7 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
             # dataset.start_image_writer(num_threads=8)
         else:
             print(f"Creating new dataset {hf_repo_id}...")
-            dataset = LeRobotDataset.create(
+            create_kwargs = dict(
                 repo_id=hf_repo_id,
                 root=root,
                 # private=True, # coming soon?
@@ -797,8 +807,15 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
                 # image_writer_threads=8,
                 streaming_encoding=True,
             )
-        
-        recorded_episodes = 0 
+            try:
+                dataset = LeRobotDataset.create(**create_kwargs)
+            except FileExistsError:
+                # A leftover local dir with no resumable dataset makes create()
+                # refuse to overwrite. Since the HF repo doesn't exist, it's just trash;
+                # remove it and retry.
+                print(f"Local dir {root} exists but isn't resumable; removing and retrying...")
+                shutil.rmtree(root)
+                dataset = LeRobotDataset.create(**create_kwargs)
 
         # init_rerun(session_name="stringman_record")
         print("System ready. Press start.")
@@ -835,10 +852,14 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
                 display_data=True,
             )
 
-            if events["episode_abandon"]:
-                print("Discarding episode.")
+            if events["episode_abandon"] or not dataset.has_pending_frames():
+                if events["episode_abandon"]:
+                    print("Discarding episode.")
+                else:
+                    print("Episode contained no frames; discarding.")
                 events["episode_abandon"] = False
-                dataset.clear_episode_buffer()
+                if dataset.has_pending_frames():
+                    dataset.clear_episode_buffer()
                 robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_EP_ABANDONED))
                 robot.send_session_status(common.LerobotSessionStatus(
                     status=common.LerobotStatus.REC_READY,
