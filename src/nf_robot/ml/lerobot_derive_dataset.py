@@ -17,6 +17,14 @@ Derive a gripper_224 dataset from one recorded with camera_mode="all":
         --new_repo_id naavox/simple_grasp_224 \
         --new_root datasets/simple_grasp_224 \
         --camera_mode gripper_224
+
+Derive a gripper_anchors_384 dataset (gripper + both overhead/anchor cams at
+384 square, no floor cam) from one recorded with camera_mode="all":
+    python src/nf_robot/ml/lerobot_derive_dataset.py \
+        --repo_id naavox/simple_grasp \
+        --new_repo_id naavox/simple_grasp_ga384 \
+        --new_root datasets/simple_grasp_ga384 \
+        --camera_mode gripper_anchors_384
 """
 
 import argparse
