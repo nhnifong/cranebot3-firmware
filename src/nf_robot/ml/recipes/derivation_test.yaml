@@ -1,0 +1,18 @@
+# Practice recipe: merge two small test datasets, convert to gripper_floor_384,
+# label contact actions, and upload the result as naavox/derivation_test.
+output_repo_id: naavox/derivation_test
+camera_mode: gripper_floor_384
+center_crop: false
+
+merge:
+  - naavox/test_dataset_4
+  - naavox/laptop_test_dataset
+
+label_contact_actions:
+  enabled: true
+  pressure_threshold: 0.1
+  episode_end_seconds: 1.0
+  blend_seconds: 0.5
+  rotate_contact_vec: false
+
+upload: true

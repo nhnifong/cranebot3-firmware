@@ -58,6 +58,7 @@ def derive_dataset(
     crf: int = 30,
     g: int = 2,
     num_workers: int | None = None,
+    center_crop: bool = False,
 ) -> LeRobotDataset:
     if camera_mode not in _CAMERA_MODES:
         raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
@@ -131,10 +132,11 @@ def derive_dataset(
             for rel_path in sorted_files:
                 path = dataset.root / rel_path
                 tmp_path = path.with_suffix(".tmp.mp4")
-                futures[pool.submit(resize_video, path, tmp_path, target_w, target_h, fps, vcodec, pix_fmt, crf, g)] = (
-                    path,
-                    tmp_path,
-                )
+                futures[
+                    pool.submit(
+                        resize_video, path, tmp_path, target_w, target_h, fps, vcodec, pix_fmt, crf, g, center_crop
+                    )
+                ] = (path, tmp_path)
             for future in tqdm(as_completed(futures), total=len(futures), desc=f"Resizing {key}"):
                 future.result()  # re-raises any encoding exception
             for path, tmp_path in futures.values():
@@ -169,6 +171,10 @@ def main() -> None:
         "--num_workers", type=int, default=None, help="Parallel encoding workers (default: all CPU cores)"
     )
     parser.add_argument(
+        "--center_crop", action="store_true",
+        help="Center-crop to the target aspect ratio before resizing instead of stretching (default: stretch)",
+    )
+    parser.add_argument(
         "--push_to_hub", action="store_true", help="Upload the derived dataset to the Hugging Face Hub"
     )
     args = parser.parse_args()
@@ -194,6 +200,7 @@ def main() -> None:
         crf=args.crf,
         g=args.g,
         num_workers=args.num_workers,
+        center_crop=args.center_crop,
     )
 
     if args.push_to_hub:

@@ -35,6 +35,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import av
+import numpy as np
 from tqdm import tqdm
 
 from lerobot.datasets.io_utils import write_info
@@ -54,8 +55,15 @@ def resize_video(
     pix_fmt: str = "yuv420p",
     crf: int = 30,
     g: int = 2,
+    center_crop: bool = False,
 ) -> None:
-    """Re-encode a video file at a new resolution using PyAV."""
+    """Re-encode a video file at a new resolution using PyAV.
+
+    If center_crop is True and the source aspect ratio differs from the target
+    (width/height), each frame is first center-cropped to the target aspect
+    ratio so the resize preserves geometry instead of stretching. If False, the
+    frame is stretched to fit (the default, matching legacy behavior).
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     in_container = av.open(str(input_path))
@@ -79,11 +87,35 @@ def resize_video(
 
     out.start_encoding()
 
+    target_aspect = width / height
+
+    def crop_to_aspect(frame):
+        """Center-crop a frame to target_aspect, returning a new VideoFrame."""
+        src_w, src_h = frame.width, frame.height
+        src_aspect = src_w / src_h
+        if abs(src_aspect - target_aspect) < 1e-6:
+            return frame
+        arr = frame.to_ndarray(format="rgb24")  # (H, W, 3)
+        if src_aspect > target_aspect:
+            # Source too wide: trim columns.
+            new_w = round(src_h * target_aspect)
+            x0 = (src_w - new_w) // 2
+            arr = arr[:, x0:x0 + new_w, :]
+        else:
+            # Source too tall: trim rows.
+            new_h = round(src_w / target_aspect)
+            y0 = (src_h - new_h) // 2
+            arr = arr[y0:y0 + new_h, :, :]
+        cropped = av.VideoFrame.from_ndarray(np.ascontiguousarray(arr), format="rgb24")
+        return cropped
+
     frame_count = 0
     for packet in in_container.demux(v_in):
         for frame in packet.decode():
             if frame is None:
                 continue
+            if center_crop:
+                frame = crop_to_aspect(frame)
             resized = frame.reformat(width=width, height=height, format=pix_fmt)
             resized.pts = frame_count
             resized.time_base = Fraction(1, int(fps))
@@ -110,6 +142,7 @@ def resize_video_feature(
     crf: int = 30,
     g: int = 2,
     num_workers: int | None = None,
+    center_crop: bool = False,
 ) -> LeRobotDataset:
     if feature_key not in dataset.meta.video_keys:
         raise ValueError(
@@ -138,7 +171,7 @@ def resize_video_feature(
                 resize_video,
                 dataset.root / rel_path,
                 output_dir / rel_path,
-                width, height, fps, vcodec, pix_fmt, crf, g,
+                width, height, fps, vcodec, pix_fmt, crf, g, center_crop,
             ): rel_path
             for rel_path in sorted_files
         }
@@ -210,6 +243,10 @@ def main() -> None:
         "--num_workers", type=int, default=None,
         help="Parallel encoding workers (default: all CPU cores)",
     )
+    parser.add_argument(
+        "--center_crop", action="store_true",
+        help="Center-crop to the target aspect ratio before resizing instead of stretching",
+    )
     args = parser.parse_args()
 
     input_root = Path(args.root) if args.root else HF_LEROBOT_HOME / args.repo_id
@@ -243,6 +280,7 @@ def main() -> None:
         crf=args.crf,
         g=args.g,
         num_workers=args.num_workers,
+        center_crop=args.center_crop,
     )
 
 

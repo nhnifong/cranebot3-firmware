@@ -282,6 +282,23 @@ docker run --add-host=host.docker.internal:host-gateway -it --rm \
 ```
 
 
+### building a dataset from a recipe (offline, one command)
+
+`lerobot_build_dataset.py` runs the whole convert -> merge -> label -> (recompute) ->
+upload pipeline from a single declarative recipe, fully offline (no intermediate Hub
+uploads). Camera conversion happens per source *before* the merge, a validity check
+runs after every step, and intermediate copies go under `--temp_dir` (put it on a drive
+with space). See `recipes/derivation_test.yaml` for the format.
+
+    python src/nf_robot/ml/lerobot_build_dataset.py \
+        --recipe src/nf_robot/ml/recipes/derivation_test.yaml \
+        --temp_dir /media/nhn/nfdrive/tmp_build \
+        --output_root /media/nhn/nfdrive/datasets/derivation_test \
+        [--upload] [--num_workers N] [--keep_intermediate]
+
+The manual sequence below (derive each -> upload -> merge -> recompute_stats) is the
+old way of doing the same thing; the recipe tool replaces it.
+
 ### derivation of naavox/merged_224
 
 python src/nf_robot/ml/lerobot_derive_dataset.py \
