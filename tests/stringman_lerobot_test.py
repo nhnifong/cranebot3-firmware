@@ -67,7 +67,10 @@ def _make_robot_ready(camera_mode="all"):
 class TestConstants(unittest.TestCase):
 
     def test_all_modes_defined(self):
-        expected = {"gripper_224", "gripper_384", "gripper_floor_224", "gripper_floor_384", "all"}
+        expected = {
+            "gripper_224", "gripper_384", "gripper_floor_224", "gripper_floor_384",
+            "gripper_anchors_384", "all_square", "all",
+        }
         self.assertEqual(set(_CAMERA_MODES.keys()), expected)
 
     def test_feed_names_cover_all_feeds_used(self):
@@ -105,12 +108,19 @@ class TestConstants(unittest.TestCase):
                 self.assertEqual(h, 224, f"{mode_name} feed {feed} height")
 
     def test_384_modes_use_384_for_gripper(self):
+        # "all" intentionally uses a non-square (684x384) gripper feed; "all_square"
+        # keeps the square gripper. See camera_mode "new video size format".
         gripper_feed = 0
-        for mode_name in ["gripper_384", "gripper_floor_384", "all"]:
+        for mode_name in ["gripper_384", "gripper_floor_384", "gripper_anchors_384", "all_square"]:
             if gripper_feed in _CAMERA_MODES[mode_name]:
                 w, h = _CAMERA_MODES[mode_name][gripper_feed]
                 self.assertEqual(w, 384)
                 self.assertEqual(h, 384)
+
+    def test_all_mode_gripper_is_684x384(self):
+        w, h = _CAMERA_MODES["all"][0]
+        self.assertEqual(w, 684)
+        self.assertEqual(h, 384)
 
     def test_all_mode_anchor_cameras_are_960x544(self):
         for feed in [1, 2]:
@@ -220,8 +230,8 @@ class TestFeatures(unittest.TestCase):
     def test_cameras_ft_shape_tuples_are_hwc(self):
         robot = _make_robot("all")
         ft = robot._cameras_ft
-        # gripper: 384x384
-        self.assertEqual(ft["gripper_camera"], (384, 384, 3))
+        # gripper: 684x384 (non-square in "all" mode; hwc -> (384, 684, 3))
+        self.assertEqual(ft["gripper_camera"], (384, 684, 3))
         # floor: 512x512
         self.assertEqual(ft["overhead_camera"], (512, 512, 3))
         # anchors: height=544, width=960
