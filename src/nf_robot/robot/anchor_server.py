@@ -68,6 +68,8 @@ class RobotComponentServer:
         self.update = {}
         self.ws_delay = self.conf['RUNNING_WS_DELAY']
         self.rpicam_process = None
+        # the currently running stream_video task, so it can be stopped before a firmware update
+        self.stream_video_task = None
         self.zc = None # zerconf instance.
         self.mock_camera_port = None
         self.extra_tasks = []
@@ -202,8 +204,29 @@ class RobotComponentServer:
         async for line in stream:
             logger_func(line.decode('utf-8').rstrip())
 
+    async def stop_camera_stream(self):
+        """Stop the camera stream and kill rpicam-vid. Cancelling stream_video makes
+        it kill the subprocess and return without restarting it (it swallows the
+        cancellation), so the task completes normally and its TaskGroup siblings —
+        notably stream_measurements, which still needs to flush update progress —
+        keep running."""
+        if self.stream_video_task is not None and not self.stream_video_task.done():
+            self.stream_video_task.cancel()
+            try:
+                await self.stream_video_task
+            except asyncio.CancelledError:
+                pass
+        if self.rpicam_process is not None:
+            try:
+                self.rpicam_process.kill()
+            except (ProcessLookupError, AttributeError):
+                pass
+
     async def run_update(self):
         logging.info('Performing Update')
+        # Stop the camera first so rpicam-vid isn't holding the camera or burning CPU
+        # while pip upgrades and we restart onto the new version.
+        await self.stop_camera_stream()
         self.update['firmware_update_complete'] = {'pending': None}
         pip_subprocess = await asyncio.create_subprocess_exec(
             '/opt/robot/env/bin/pip', 'install', '--upgrade', 'nf_robot[pi]', '-q',
@@ -274,7 +297,7 @@ class RobotComponentServer:
             async with asyncio.TaskGroup() as tg:
                 read_updates = tg.create_task(self.read_updates_from_client(websocket, tg))
                 stream = tg.create_task(self.stream_measurements(websocket))
-                mjpeg = tg.create_task(self.stream_video(websocket))
+                self.stream_video_task = tg.create_task(self.stream_video(websocket))
                 stabil = tg.create_task(self.process_imu(websocket))
                 temp = tg.create_task(self.read_temperature())
         except* (ConnectionClosedOK, ConnectionClosedError):
