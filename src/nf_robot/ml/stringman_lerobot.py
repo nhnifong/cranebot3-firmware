@@ -15,7 +15,8 @@ from websockets.sync.client import connect as websocket_connect_sync
 import time
 from urllib.parse import urlparse
 import av
-from huggingface_hub import repo_exists
+from huggingface_hub import repo_exists, get_token, whoami
+from huggingface_hub.errors import HfHubHTTPError
 import os
 import shutil
 import signal
@@ -738,7 +739,31 @@ def append_episode_metadata(dataset: LeRobotDataset, robot_id: str):
     with path.open("a") as f:
         f.write(json.dumps(entry) + "\n")
 
+def ensure_hf_auth():
+    """Fail fast with a clear message if HuggingFace auth isn't set up.
+
+    A recording session resumes or creates a dataset under the user's HF
+    namespace and (when uploading) pushes to the hub, all of which need a valid
+    token.
+    """
+    token = get_token()
+    if token is None:
+        raise RuntimeError(
+            "Not logged in to HuggingFace. Run `hf auth login` before recording."
+        )
+    try:
+        user = whoami(token)
+    except HfHubHTTPError as e:
+        raise RuntimeError(
+            "HuggingFace token is invalid or expired. Run `hf auth login` to re-authenticate."
+        ) from e
+    print(f"HuggingFace auth OK (logged in as {user['name']}).")
+
+
 def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None, camera_mode="all", action_space=DEFAULT_ACTION_SPACE):
+    # Verify HF auth before doing anything else: dataset resume/create and upload all need it.
+    ensure_hf_auth()
+
     class GracefulExit(Exception):
         pass
 
