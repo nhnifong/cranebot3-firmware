@@ -19,18 +19,21 @@ def generate_orthographic_floor_maps(
     
     Args:
         valid_anchor_clients: List of camera clients containing .last_frame_resized and .camera_pose
-        heatmaps_np: List/array of numpy heatmaps corresponding to the clients
+        heatmaps_np: List/array of numpy heatmaps corresponding to the clients, or
+            None to skip the heatmap channel entirely (returns combined_heatmap=None).
         camera_cal: Camera calibration data to pass into projection
         map_size_px: Output square resolution
         map_extent_meters: How many real-world meters the map_size_px covers (e.g. 10m x 10m)
-        
+
     Returns:
-        combined_heatmap: 1800x1800 np.ndarray representing the summed floor heatmaps
+        combined_heatmap: 1800x1800 np.ndarray representing the summed floor heatmaps,
+            or None when heatmaps_np is None
         combined_bgr: 1800x1800x3 np.ndarray representing the stitched floor images
     """
-    
-    # Initialize empty combined maps
-    combined_heatmap = np.zeros((map_size_px, map_size_px), dtype=np.float32)
+
+    # Initialize empty combined maps. combined_heatmap stays None when the caller
+    # passes heatmaps_np=None (no target model), so we skip all heatmap warp work.
+    combined_heatmap = None if heatmaps_np is None else np.zeros((map_size_px, map_size_px), dtype=np.float32)
     
     # Use float64 in [0,1] space for multiply blend
     combined_bgr = np.ones((map_size_px, map_size_px, 3), dtype=np.float64)
@@ -44,8 +47,7 @@ def generate_orthographic_floor_maps(
     
     for i, client in enumerate(valid_anchor_clients):
         bgr_image = client.last_frame_resized
-        heatmap = heatmaps_np[i]
-        
+
         h, w = bgr_image.shape[:2]
         
         # Scale the intrinsic matrix to match the current image resolution
@@ -58,12 +60,15 @@ def generate_orthographic_floor_maps(
         # 1. Undistort the incoming BGR image
         bgr_undistorted = cv2.undistort(bgr_image, K_scaled, D)
 
-        # 2. Resize and undistort the heatmap
-        if heatmap.shape[:2] != (h, w):
-            heatmap_resized = cv2.resize(heatmap, (w, h), interpolation=cv2.INTER_LINEAR)
-        else:
-            heatmap_resized = heatmap
-        heatmap_undistorted = cv2.undistort(heatmap_resized, K_scaled, D)
+        # 2. Resize and undistort the heatmap (skipped entirely when no heatmaps)
+        heatmap_undistorted = None
+        if combined_heatmap is not None:
+            heatmap = heatmaps_np[i]
+            if heatmap.shape[:2] != (h, w):
+                heatmap_resized = cv2.resize(heatmap, (w, h), interpolation=cv2.INTER_LINEAR)
+            else:
+                heatmap_resized = heatmap
+            heatmap_undistorted = cv2.undistort(heatmap_resized, K_scaled, D)
 
         # 3. Compute Analytical Homography
         rvec = np.array(client.camera_pose[0], dtype=np.float64)
@@ -92,12 +97,11 @@ def generate_orthographic_floor_maps(
         # Final Homography: Undistorted Image Pixels -> Ortho Map Pixels
         H = M @ H_img_to_floor
         
-        # Warp the Heatmap
-        warped_heatmap = cv2.warpPerspective(heatmap_undistorted, H, (map_size_px, map_size_px))
-        
-        # Add to the combined floor heatmap
-        combined_heatmap += warped_heatmap
-        
+        # Warp the Heatmap and add to the combined floor heatmap (skipped when no heatmaps)
+        if combined_heatmap is not None:
+            warped_heatmap = cv2.warpPerspective(heatmap_undistorted, H, (map_size_px, map_size_px))
+            combined_heatmap += warped_heatmap
+
         # Warp the BGR Image
         warped_bgr = cv2.warpPerspective(bgr_undistorted, H, (map_size_px, map_size_px))
         
@@ -111,10 +115,9 @@ def generate_orthographic_floor_maps(
     # Finalize Image Stacking
     # Zero out pixels never covered by any camera, then convert to uint8
     combined_bgr_final = np.where(touched, combined_bgr * 255, 0).astype(np.uint8)
-    
-    combined_heatmap_clipped = np.clip(combined_heatmap, 0, 1.0)
 
-    
+    combined_heatmap_clipped = None if combined_heatmap is None else np.clip(combined_heatmap, 0, 1.0)
+
     return combined_heatmap_clipped, combined_bgr_final
 
 # class responsible for combining camrea views and heatmaps into a single image on the floor of the room aligned with it's coordinate space.

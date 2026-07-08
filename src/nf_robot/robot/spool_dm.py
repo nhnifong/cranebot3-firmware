@@ -56,7 +56,7 @@ class DamiaoSpoolController:
         should be set to 1 for the motor on the right when facing the front of the device.
         in other words should be 1 when negative motor commands reel in the line.
     """
-    def __init__(self, motor:DaMiaoMotor, empty_diameter, full_diameter, full_length, config, direction):
+    def __init__(self, motor:DaMiaoMotor, empty_diameter, full_diameter, full_length, config, direction, extra_tension_n=0.0):
         """
         Create a controller for a spool of line.
 
@@ -64,9 +64,12 @@ class DamiaoSpoolController:
         full_diameter is the diameter in mm of the bulk of wrapped line when full_length meters of line are wrapped.
         line_capacity_m is the length of line in meters that is attached to this spool.
             if all of it were reeled in, the object at the end would reach the limit switch, if there is one.
+        extra_tension_n is added to TENSION_FLOOR_N, e.g. to account for the slightly heavier powerline.
         """
         self.motor = motor
         self.direction = direction
+        # added to TENSION_FLOOR_N. per-instance because self.conf is shared across spools.
+        self.extra_tension_n = extra_tension_n
         # spiral always dir -1, we're hiding that from it.
         self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, 1, -1)
 
@@ -296,7 +299,7 @@ class DamiaoSpoolController:
                     band = self.conf['TENSION_BAND_N']
                     kp = self.conf['TENSION_KP']
                     max_corr = self.conf['MAX_TENSION_CORRECTION_MPS']
-                    target = self.tension_target if self.tension_target is not None else self.conf['TENSION_FLOOR_N']
+                    target = self.tension_target if self.tension_target is not None else self.conf['TENSION_FLOOR_N'] + self.extra_tension_n
                     if self.last_tension < target - band:
                         correction = -min(max_corr, kp * (target - self.last_tension)) # reel in
                     elif self.tension_target is not None and self.last_tension > target + band:

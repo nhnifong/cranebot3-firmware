@@ -50,7 +50,9 @@ class AnchorArpServer(RobotComponentServer):
             empty_diameter=model_constants.damiao_empty_spool_diameter,
             full_diameter=fulld,
             full_length=model_constants.assumed_full_line_length,
-            config=self.conf, direction=-1)
+            config=self.conf, direction=-1,
+            # the stiffer powerline needs extra tension to stay taut.
+            extra_tension_n=0.4 if self.has_power_line else 0.0)
 
         # Create a spool controller for each spool
         spooler2 = DamiaoSpoolController(

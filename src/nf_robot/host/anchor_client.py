@@ -496,7 +496,11 @@ class ComponentClient:
                     continue
                 except (ConnectionClosedError, TimeoutError):
                     # it's no longer running, either because it lost power, or the server crashed.
-                    logger.warning(f"Anchor {self.anchor_num} confirmed down. hasn't been seen in {time.time() - last_update:.1f} seconds.")
+                    if self.anchor_num is None:
+                        name = 'Gripper'
+                    else:
+                        name = "Anchor {self.anchor_num}"
+                    logger.warning(f"{name} confirmed down. hasn't been seen in {time.time() - last_update:.1f} seconds.")
                     self.connected = False
                     # immediately trigger the "abnormal shutdown" return from the connect_websocket task
                     # this is how the observer is actually notified. follow the control flow by looking at `if abnormal_close:` in observer.py

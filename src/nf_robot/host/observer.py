@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import faulthandler
 import threading
 import time
 import socket
@@ -166,7 +167,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, auto_start=False, local_models=False, port=4245, debug=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False) -> None:
         self.port = port
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
@@ -186,6 +187,7 @@ class AsyncObserver:
         self.config = load_config(config_path)
         self.telemetry_env = telemetry_env
         self.debug = debug
+        self.loop_monitor = None  # only created in main() when --debug is passed
         self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -229,6 +231,7 @@ class AsyncObserver:
         self.input_velocities = {'default': np.zeros(3)}
         self.active_set = set(['default'])
         self.run_ortho = run_ortho
+        self.stream_heatmap = stream_heatmap
         self.auto_start = auto_start
         self._device = None
         self._telem_log_handler: TelemetryLogHandler | None = None
@@ -901,12 +904,10 @@ class AsyncObserver:
         # Run the python function as a command-line script to hook into its stdout and stderr streams asynchronously and use the same virtualenv
         if action == control.LerobotSessionAction.START_RECORD:
             func_name = 'record_until_disconnected'
-            if self.local_models:
-                self.config.last_lerobot_dataset_repo_id = repo_id
+            self.config.last_lerobot_dataset_repo_id = repo_id
         elif action == control.LerobotSessionAction.START_EVAL:
             func_name = 'eval_until_disconnected'
-            if self.local_models:
-                self.config.last_lerobot_policy = repo_id
+            self.config.last_lerobot_policy = repo_id
 
         up = ''
         if item.suppress_upload:
@@ -2955,10 +2956,10 @@ class AsyncObserver:
 
     async def main(self) -> None:
         self.startup_complete.clear()
-
-        from nf_robot.host.loop_monitor import LoopMonitor
-        monitor = LoopMonitor(interval=0.5, threshold=0.2)
-        monitor.start()
+        if self.debug:
+            from nf_robot.host.loop_monitor import LoopMonitor
+            self.loop_monitor = LoopMonitor(interval=0.5, threshold=0.2)
+            self.loop_monitor.start()
 
         self.passive_safety_task = asyncio.create_task(self.passive_safety())
 
@@ -3006,7 +3007,7 @@ class AsyncObserver:
                     self.startup_complete.set()
 
                     if self.telemetry_env == None:
-                        message = f'Listening on localhost:{self.port} To control visit https://neufangled.com/playroom?robotid=lan on this machine'
+                        message = f'To control visit https://neufangled.com/playroom?robotid=lan on this machine'
                     elif self.telemetry_env == 'local':
                         message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
                     elif self.telemetry_env == 'production':
@@ -3029,9 +3030,48 @@ class AsyncObserver:
 
     async def async_close(self) -> None:
         print('Stringman Controller Shutdown')
+
+        # Disable the per-client safety watchdogs first.
+        for client in self.bot_clients.values():
+            if client.safety_task is not None:
+                client.safety_task.cancel()
+
+        # Start watchdog that prints diagnostics if shutdown isn't fast
+        # This runs in a *thread*, not an asyncio task, on purpose.
+        loop = asyncio.get_running_loop()
+        watchdog = threading.Timer(3.0, self._dump_shutdown_diagnostics, args=(loop,))
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            await self._async_close_impl()
+        finally:
+            watchdog.cancel()
+
+    def _dump_shutdown_diagnostics(self, loop) -> None:
+        """Watchdog callback (runs in a thread) when async_close() runs long."""
+        print('\n=== async_close() still running after 3s — dumping diagnostics ===',
+              file=sys.stderr, flush=True)
+        # Every thread's Python stack. This reveals the main thread even when it
+        # is blocked in synchronous code holding up the event loop.
+        faulthandler.dump_traceback()
+        # Suspended coroutines won't show up above (they aren't on any thread's
+        # stack), so also list the pending asyncio tasks and where each parked.
+        try:
+            for task in asyncio.all_tasks(loop):
+                if task.done():
+                    continue
+                print(f'--- pending task {task!r} ---', file=sys.stderr, flush=True)
+                task.print_stack(file=sys.stderr)
+        except Exception as e:
+            print(f'  could not enumerate asyncio tasks: {e!r}', file=sys.stderr, flush=True)
+
+    async def _async_close_impl(self) -> None:
         # persist the last observed named positions (e.g. hamper, parking_location) so they survive a restart
         self.config.last_gantry_pos = fromnp(self.pe.gant_pos)
         save_config(self.config, self.config_path)
+        # Stop the loop monitor (also restores the patched Handle._run).
+        if self.loop_monitor is not None:
+            await self.loop_monitor.stop()
         result = await self.stop_all()
         self.run_command_loop = False
         self.stat.run = False
@@ -3459,23 +3499,24 @@ class AsyncObserver:
                 if not valid_clients:
                     continue
 
+                # Pass heatmaps=None when the target model isn't producing them so
+                # generate_orthographic_floor_maps skips all heatmap warp work and
+                # only computes the ortho BGR floor projection.
                 heatmaps = self.last_heatmaps_np
-                if heatmaps is None or len(heatmaps) != len(valid_clients):
-                    heatmaps = np.zeros(
-                        (len(valid_clients),) + valid_clients[0].last_frame_resized.shape[:2],
-                        dtype=np.float32,
-                    )
+                if heatmaps is not None and len(heatmaps) != len(valid_clients):
+                    heatmaps = None  # stale/mismatched batch; skip the heatmap channel
 
                 ortho_heatmap, ortho_bgr = generate_orthographic_floor_maps(
                     valid_clients, heatmaps, self.config.camera_cal,
                     map_size_px=1000, map_extent_meters=EXTENT,
                 )
                 self.last_ortho_bgr = ortho_bgr
-                self.last_ortho_heatmap = ortho_heatmap
+                if ortho_heatmap is not None:
+                    self.last_ortho_heatmap = ortho_heatmap
 
                 if ortho_floor_vs is not None:
                     ortho_floor_vs.send_frame(cv2.cvtColor(ortho_bgr, cv2.COLOR_BGR2RGB))
-                if heatmap_floor_vs is not None:
+                if heatmap_floor_vs is not None and ortho_heatmap is not None:
                     heatmap_floor_vs.send_frame(
                         cv2.applyColorMap((ortho_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
                     )
@@ -3506,11 +3547,6 @@ class AsyncObserver:
             if have_frames:
                 break
 
-        import torch
-        from nf_robot.ml.target_heatmap import extract_targets_from_heatmap, HM_IMAGE_RES
-        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-        self._device = DEVICE
-
         ortho_floor_vs = None
         heatmap_floor_vs = None
         if self.run_ortho:
@@ -3537,15 +3573,17 @@ class AsyncObserver:
                 on_ready=_make_on_ready(3),
             )
             ortho_floor_vs.start()
-            heatmap_floor_vs = NfVideoStreamer(
-                width=1000, height=1000, fps=10,
-                mjpeg_port=8748,
-                stream_path=f'stringman/{self.config.robot_id}/4',
-                telemetry_env=self.telemetry_env,
-                on_ready=_make_on_ready(4),
-            )
-            heatmap_floor_vs.start()
-            self.ortho_streamers = [(ortho_floor_vs, 3), (heatmap_floor_vs, 4)]
+            self.ortho_streamers = [(ortho_floor_vs, 3)]
+            if self.stream_heatmap:
+                heatmap_floor_vs = NfVideoStreamer(
+                    width=1000, height=1000, fps=10,
+                    mjpeg_port=8748,
+                    stream_path=f'stringman/{self.config.robot_id}/4',
+                    telemetry_env=self.telemetry_env,
+                    on_ready=_make_on_ready(4),
+                )
+                heatmap_floor_vs.start()
+                self.ortho_streamers.append((heatmap_floor_vs, 4))
 
         ortho_thread = threading.Thread(
             target=self._ortho_worker,
@@ -3564,6 +3602,11 @@ class AsyncObserver:
                 continue
             counter = 0
 
+            # Lazy imports: only reached once a target model is loaded, so torch
+            # stays off the startup path. Both are import-cached after first use.
+            import torch
+            from nf_robot.ml.target_heatmap import extract_targets_from_heatmap, HM_IMAGE_RES
+
             valid_anchor_clients = [
                 c for c in self.anchors.values()
                 if c.last_frame_resized is not None and c.anchor_num in self.config.preferred_cameras
@@ -3576,7 +3619,7 @@ class AsyncObserver:
                      .permute(2, 0, 1).float() / 255.0
                 for c in valid_anchor_clients
             ]
-            batch = torch.stack(img_tensors).to(DEVICE)
+            batch = torch.stack(img_tensors).to(self._device)
 
             def infer_sync():
                 with torch.no_grad():
@@ -3604,7 +3647,8 @@ class AsyncObserver:
 
         if self.run_ortho:
             ortho_floor_vs.stop()
-            heatmap_floor_vs.stop()
+            if heatmap_floor_vs is not None:
+                heatmap_floor_vs.stop()
 
     async def pick_and_place_loop(self):
         """
@@ -4015,6 +4059,7 @@ class AsyncObserver:
         from huggingface_hub import hf_hub_download
         from nf_robot.ml.centering import CenteringNet
         DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self._device = DEVICE
         CENTERING_MODEL_REPOID = "naavox/centering"
 
         if DEVICE == "cpu":
@@ -4044,6 +4089,7 @@ class AsyncObserver:
         from huggingface_hub import hf_hub_download
         from nf_robot.ml.target_heatmap import TargetHeatmapNet
         DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self._device = DEVICE
         TARGETING_MODEL_REPOID = "naavox/targeting"
 
         if DEVICE == "cpu":
@@ -4153,6 +4199,7 @@ def main():
             help="The cloud telemetry server to connect to (choices: local, staging, production) Used in development only. The default is None, which allows local connections on port 4245 only"
         )
     parser.add_argument("--no_ortho", action="store_true", help="Disable orthographic floor projection and its video streams")
+    parser.add_argument("--stream_heatmap", action="store_true", help="Generate and stream the target heatmap video feed (off by default)")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
@@ -4168,17 +4215,21 @@ def main():
             args.config,
             telemetry_env=args.telemetry_env,
             run_ortho=(not args.no_ortho),
+            stream_heatmap=args.stream_heatmap,
             auto_start=args.auto_start,
             local_models=args.local_models,
             debug=args.debug
         )
 
-        # Idempotent stop trigger
+        # Idempotent stop trigger. Runs as a signal-handler callback on the event
+        # loop thread, so it must not block: schedule the telemetry-socket abort
+        # for later instead of time.sleep()-ing on the loop.
         def stop():
             runner.run_command_loop = False
-            time.sleep(0.5)
-            if runner.cloud_telem_websocket is not None:
-                runner.cloud_telem_websocket.transport.abort()
+            def _abort_telem():
+                if runner.cloud_telem_websocket is not None:
+                    runner.cloud_telem_websocket.transport.abort()
+            asyncio.get_running_loop().call_later(0.5, _abort_telem)
 
         # On Unix, register signal handler.
         # On Windows, catch keyboard interrupt
