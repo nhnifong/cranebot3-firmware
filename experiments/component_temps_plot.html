@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Component Temperatures vs Frame Rate</title>
+<style>
+  :root {
+    /* chart chrome & ink (light) */
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    /* categorical slots, ordered by frame rate (10 / 20 / 30 fps) */
+    --fps10: #2a78d6;  /* blue  */
+    --fps20: #1baf7a;  /* aqua  */
+    --fps30: #eda100;  /* yellow*/
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --fps10: #3987e5;
+      --fps20: #199e70;
+      --fps30: #c98500;
+    }
+  }
+  :root[data-theme="dark"] {
+    --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #ffffff;
+    --text-secondary: #c3c2b7; --muted: #898781; --grid: #2c2c2a;
+    --baseline: #383835; --border: rgba(255,255,255,0.10);
+    --fps10: #3987e5; --fps20: #199e70; --fps30: #c98500;
+  }
+  :root[data-theme="light"] {
+    --surface-1: #fcfcfb; --page: #f9f9f7; --text-primary: #0b0b0b;
+    --text-secondary: #52514e; --muted: #898781; --grid: #e1e0d9;
+    --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --fps10: #2a78d6; --fps20: #1baf7a; --fps30: #eda100;
+  }
+
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+    margin: 0;
+    padding: 24px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 650; margin: 0 0 2px; }
+  .sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 18px; }
+
+  .legend { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .legend .item { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-secondary); }
+  .legend .swatch { width: 22px; height: 3px; border-radius: 2px; }
+  .toolbar { margin-left: auto; display: flex; gap: 8px; }
+  button {
+    font: inherit; font-size: 12px; color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  button:hover { color: var(--text-primary); }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px 8px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  .card .final { font-size: 12px; color: var(--muted); margin: 0 0 6px; font-variant-numeric: tabular-nums; }
+  .chart { position: relative; width: 100%; }
+  svg { display: block; width: 100%; overflow: visible; }
+  .grid line { stroke: var(--grid); stroke-width: 1; }
+  .axis line { stroke: var(--baseline); stroke-width: 1; }
+  .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .axis-title { fill: var(--muted); font-size: 11px; }
+  .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .endlabel { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .crosshair { stroke: var(--baseline); stroke-width: 1; stroke-dasharray: 3 3; visibility: hidden; }
+  .dot { stroke: var(--surface-1); stroke-width: 2; visibility: hidden; }
+  .tooltip {
+    position: absolute; pointer-events: none; visibility: hidden;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.12); white-space: nowrap; z-index: 5;
+  }
+  .tooltip .tt-t { color: var(--muted); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+  .tooltip .tt-row { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .tooltip .tt-sw { width: 10px; height: 10px; border-radius: 2px; }
+  .tooltip .tt-val { margin-left: auto; font-weight: 600; color: var(--text-primary); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  #tableView { display: none; }
+  .msg { color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+  .msg code { background: var(--page); padding: 1px 5px; border-radius: 4px; }
+  input[type=file] { font: inherit; font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Component temperatures vs camera frame rate</h1>
+  <p class="sub">Raspberry Pi SoC temperature (°C) over each run's elapsed time. Baseline 10&nbsp;fps vs experimental 20 &amp; 30&nbsp;fps.</p>
+
+  <div class="legend">
+    <div class="item"><span class="swatch" style="background:var(--fps10)"></span>10&nbsp;fps</div>
+    <div class="item"><span class="swatch" style="background:var(--fps20)"></span>20&nbsp;fps</div>
+    <div class="item"><span class="swatch" style="background:var(--fps30)"></span>30&nbsp;fps</div>
+    <div class="toolbar">
+      <button id="toggleTable">Table view</button>
+      <button id="toggleTheme">Toggle theme</button>
+    </div>
+  </div>
+
+  <div id="charts"></div>
+  <div id="tableView" class="card"></div>
+  <div id="loaderMsg"></div>
+</div>
+
+<script>
+const FILES = {
+  10: 'component_temps_10fps.json',
+  20: 'component_temps_20fps.json',
+  30: 'component_temps_30fps.json',
+};
+const FPS_ORDER = [10, 20, 30];
+const COLORS = { 10: 'var(--fps10)', 20: 'var(--fps20)', 30: 'var(--fps30)' };
+const COMPONENTS = ['gripper', 'anchor_0', 'anchor_1'];
+const COMP_LABEL = { gripper: 'Gripper', anchor_0: 'Anchor 0', anchor_1: 'Anchor 1' };
+
+// runs[fps][component] = [{x: elapsed_s, y: temp}], plus runs[fps]._t0
+let runs = {};
+
+function ingest(fps, data) {
+  const samples = (data.samples || []).filter(s => s.temps && Object.keys(s.temps).length);
+  if (!samples.length) return;
+  const t0 = samples[0].t;
+  const run = { _t0: t0 };
+  for (const c of COMPONENTS) run[c] = [];
+  for (const s of samples) {
+    for (const c of COMPONENTS) {
+      const v = s.temps[c];
+      if (v !== undefined && v !== null) run[c].push({ x: s.t - t0, y: v });
+    }
+  }
+  runs[fps] = run;
+}
+
+async function loadAll() {
+  let ok = true;
+  for (const fps of FPS_ORDER) {
+    try {
+      const r = await fetch(FILES[fps]);
+      if (!r.ok) throw new Error(r.status);
+      ingest(fps, await r.json());
+    } catch (e) { ok = false; }
+  }
+  if (Object.keys(runs).length) { render(); }
+  if (!ok || !Object.keys(runs).length) showPicker();
+}
+
+function showPicker() {
+  document.getElementById('loaderMsg').innerHTML =
+    `<div class="card msg">Couldn't auto-load the JSON files (browsers block <code>fetch</code> on
+     <code>file://</code>). Either serve this folder with
+     <code>python3 -m http.server</code> and reload, or pick the three JSON files here:
+     <br><input type="file" id="filePick" accept=".json" multiple></div>`;
+  document.getElementById('filePick').addEventListener('change', async (ev) => {
+    for (const file of ev.target.files) {
+      const m = file.name.match(/(\d+)\s*fps/i);
+      if (!m) continue;
+      ingest(parseInt(m[1], 10), JSON.parse(await file.text()));
+    }
+    document.getElementById('loaderMsg').innerHTML = '';
+    render();
+  });
+}
+
+// ---- scales shared across all component charts for comparability ----
+function globalExtents() {
+  let xMax = 0, yMin = Infinity, yMax = -Infinity;
+  for (const fps of FPS_ORDER) {
+    const run = runs[fps]; if (!run) continue;
+    for (const c of COMPONENTS) for (const p of run[c]) {
+      if (p.x > xMax) xMax = p.x;
+      if (p.y < yMin) yMin = p.y;
+      if (p.y > yMax) yMax = p.y;
+    }
+  }
+  const pad = Math.max(0.5, (yMax - yMin) * 0.08);
+  return { xMax, yMin: Math.floor(yMin - pad), yMax: Math.ceil(yMax + pad) };
+}
+
+const M = { top: 10, right: 52, bottom: 30, left: 40 };
+const H = 190;
+const SVGNS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs) { const n = document.createElementNS(SVGNS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; }
+function niceTicks(min, max, n) {
+  const span = max - min, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const norm = step0 / mag, step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
+  const out = []; for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) out.push(v); return out;
+}
+
+function render() {
+  const ext = globalExtents();
+  const host = document.getElementById('charts');
+  host.innerHTML = '';
+  for (const c of COMPONENTS) {
+    if (!FPS_ORDER.some(f => runs[f] && runs[f][c].length)) continue;
+    host.appendChild(makeCard(c, ext));
+  }
+  buildTable();
+}
+
+function makeCard(comp, ext) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  const finals = FPS_ORDER.filter(f => runs[f] && runs[f][comp].length)
+    .map(f => `${f}fps ${runs[f][comp].at(-1).y.toFixed(1)}°`).join('  ·  ');
+  card.innerHTML = `<h2>${COMP_LABEL[comp]}</h2><div class="final">final: ${finals}</div>`;
+  const chart = document.createElement('div');
+  chart.className = 'chart';
+  card.appendChild(chart);
+
+  const draw = () => {
+    chart.querySelectorAll('svg,.tooltip').forEach(n => n.remove());
+    const W = chart.clientWidth || 760;
+    const plotW = W - M.left - M.right, plotH = H - M.top - M.bottom;
+    const xS = v => M.left + (ext.xMax ? v / ext.xMax * plotW : 0);
+    const yS = v => M.top + (ext.yMax - v) / (ext.yMax - ext.yMin) * plotH;
+
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, height: H });
+
+    // gridlines + y ticks
+    const g = el('g', { class: 'grid' });
+    for (const t of niceTicks(ext.yMin, ext.yMax, 4)) {
+      g.appendChild(el('line', { x1: M.left, x2: M.left + plotW, y1: yS(t), y2: yS(t) }));
+      const tx = el('text', { class: 'tick', x: M.left - 6, y: yS(t) + 3.5, 'text-anchor': 'end' });
+      tx.textContent = t; svg.appendChild(tx);
+    }
+    svg.appendChild(g);
+    // x axis
+    const ax = el('g', { class: 'axis' });
+    ax.appendChild(el('line', { x1: M.left, x2: M.left + plotW, y1: yS(ext.yMin), y2: yS(ext.yMin) }));
+    svg.appendChild(ax);
+    for (const t of niceTicks(0, ext.xMax, 5)) {
+      const tx = el('text', { class: 'tick', x: xS(t), y: H - M.bottom + 16, 'text-anchor': 'middle' });
+      tx.textContent = t; svg.appendChild(tx);
+    }
+    const xtitle = el('text', { class: 'axis-title', x: M.left + plotW, y: H - 2, 'text-anchor': 'end' });
+    xtitle.textContent = 'elapsed (s)'; svg.appendChild(xtitle);
+
+    // lines + direct end labels (relief for light-mode contrast)
+    for (const fps of FPS_ORDER) {
+      const run = runs[fps]; if (!run || !run[comp].length) continue;
+      const pts = run[comp];
+      const d = pts.map((p, i) => `${i ? 'L' : 'M'}${xS(p.x).toFixed(1)},${yS(p.y).toFixed(1)}`).join(' ');
+      svg.appendChild(el('path', { class: 'line', d, stroke: COLORS[fps] }));
+      const last = pts.at(-1);
+      const lbl = el('text', { class: 'endlabel', x: xS(last.x) + 6, y: yS(last.y) + 3.5, fill: COLORS[fps] });
+      lbl.textContent = `${fps}`; svg.appendChild(lbl);
+    }
+
+    // hover layer
+    const cross = el('line', { class: 'crosshair', y1: M.top, y2: M.top + plotH });
+    svg.appendChild(cross);
+    const dots = {};
+    for (const fps of FPS_ORDER) { const dc = el('circle', { class: 'dot', r: 4, fill: COLORS[fps] }); dots[fps] = dc; svg.appendChild(dc); }
+    const tip = document.createElement('div'); tip.className = 'tooltip'; chart.appendChild(tip);
+
+    const overlay = el('rect', { x: M.left, y: M.top, width: plotW, height: plotH, fill: 'transparent' });
+    svg.appendChild(overlay);
+    overlay.addEventListener('mousemove', ev => {
+      const rect = svg.getBoundingClientRect();
+      const px = (ev.clientX - rect.left) / rect.width * W;
+      const xVal = ext.xMax * (px - M.left) / plotW;
+      cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.style.visibility = 'visible';
+      let rows = '';
+      for (const fps of FPS_ORDER) {
+        const run = runs[fps]; if (!run || !run[comp].length) { dots[fps].style.visibility = 'hidden'; continue; }
+        const pts = run[comp];
+        let best = pts[0]; for (const p of pts) if (Math.abs(p.x - xVal) < Math.abs(best.x - xVal)) best = p;
+        dots[fps].setAttribute('cx', xS(best.x)); dots[fps].setAttribute('cy', yS(best.y)); dots[fps].style.visibility = 'visible';
+        rows += `<div class="tt-row"><span class="tt-sw" style="background:${COLORS[fps]}"></span>${fps} fps<span class="tt-val">${best.y.toFixed(1)}°</span></div>`;
+      }
+      tip.innerHTML = `<div class="tt-t">t ≈ ${xVal.toFixed(1)} s</div>${rows}`;
+      tip.style.visibility = 'visible';
+      let tx = px + 14; if (tx + tip.offsetWidth > W) tx = px - tip.offsetWidth - 14;
+      tip.style.left = (tx / W * rect.width) + 'px';
+      tip.style.top = M.top + 'px';
+    });
+    overlay.addEventListener('mouseleave', () => {
+      cross.style.visibility = 'hidden'; tip.style.visibility = 'hidden';
+      for (const fps of FPS_ORDER) dots[fps].style.visibility = 'hidden';
+    });
+
+    chart.appendChild(svg);
+  };
+  draw();
+  new ResizeObserver(draw).observe(chart);
+  return card;
+}
+
+function buildTable() {
+  const t = document.getElementById('tableView');
+  let html = '<h2 style="font-size:14px;margin:0 0 8px">Final temperatures (°C)</h2>';
+  html += '<table><thead><tr><th>Component</th>' + FPS_ORDER.map(f => `<th>${f} fps</th>`).join('') +
+          '<th>Δ 30−10</th></tr></thead><tbody>';
+  for (const c of COMPONENTS) {
+    const vals = FPS_ORDER.map(f => (runs[f] && runs[f][c].length) ? runs[f][c].at(-1).y : null);
+    const delta = (vals[0] != null && vals[2] != null) ? (vals[2] - vals[0]).toFixed(1) : '—';
+    html += `<tr><td>${COMP_LABEL[c]}</td>` +
+      vals.map(v => `<td>${v == null ? '—' : v.toFixed(1)}</td>`).join('') +
+      `<td>${delta === '—' ? '—' : (delta > 0 ? '+' : '') + delta}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  t.innerHTML = html;
+}
+
+document.getElementById('toggleTable').addEventListener('click', () => {
+  const tv = document.getElementById('tableView'), ch = document.getElementById('charts');
+  const show = tv.style.display !== 'block';
+  tv.style.display = show ? 'block' : 'none';
+  ch.style.display = show ? 'none' : 'block';
+});
+document.getElementById('toggleTheme').addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark'
+    : (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+  document.documentElement.setAttribute('data-theme', next);
+});
+
+loadAll();
+</script>
+</body>
+</html>

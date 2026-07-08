@@ -34,7 +34,7 @@ from nf_robot.common.util import get_local_ip
 stream_command = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
     "--width=1920", "--height=1080",
-    "--framerate=10",
+    "--framerate=20",
     "-o", "tcp://0.0.0.0:8888?listen=1",
     "--codec", "libav",
     "--libav-format", "mpegts",
