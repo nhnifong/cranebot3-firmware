@@ -31,7 +31,7 @@ def default_arp_anchors():
         )
         anchor.indirect_line = nf_config.IndirectLine(
             eyelet_pos=common.Vec3(x=eye[0], y=eye[1], z=eye[2]),
-            cam_tilt=22,
+            cam_tilt=26,
         )
         anch_list.append(anchor)  
     return anch_list
