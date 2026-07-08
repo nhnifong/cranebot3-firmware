@@ -9,5 +9,11 @@ Type=oneshot
 ExecStart=/usr/local/bin/can-init.sh
 RemainAfterExit=yes
 
+# Start only when the CAN device actually appears (pulled in by udev via the
+# device unit). On components without an MCP2515 (e.g. grippers) can0 never
+# shows up, so this service is never queued and cannot stall boot waiting on a
+# nonexistent device. Previously WantedBy=multi-user.target queued it every
+# boot, and its BindsTo/After on can0.device forced a 90s DefaultDeviceTimeoutSec
+# wait on grippers, which also delayed cranebot.service (ordered After= this).
 [Install]
-WantedBy=multi-user.target
+WantedBy=sys-subsystem-net-devices-can0.device
