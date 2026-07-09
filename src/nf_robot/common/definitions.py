@@ -52,8 +52,9 @@ gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float)
 basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.10], dtype=float))
 basket_offset_inv = (np.array([0,0,0], dtype=float), np.array([0,0,-0.10], dtype=float))
 
-# spool parameters
+# pilot spool parameters
 empty_spool_diameter = 22.9
+
 assumed_full_line_length = 7.5 # meters
 full_spool_diameter_fishing_line = 27.5
 full_spool_diameter_power_line = 43.7
