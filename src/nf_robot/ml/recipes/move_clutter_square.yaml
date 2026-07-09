@@ -1,0 +1,30 @@
+# Merge the move_clutter datasets, convert to gripper_anchors_384, label contact
+# actions, and produce naavox/move_clutter_square.
+# This dataset contains the overhead cameras but not the warped floor composite.
+# all frames are square and have the same dimensions so they can be used with multitask dit
+# prefer resize to center crop
+
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe move_clutter_square.yaml \
+#     --temp_dir /home/nick/data_scratch \
+#     --output_root /home/nick/data_scratch/move_clutter_square \
+#     --upload
+
+output_repo_id: naavox/move_clutter_square
+camera_mode: gripper_floor_384
+center_crop: false
+
+merge:
+  - naavox/move_clutter
+  - naavox/move_clutter_2
+  - naavox/move_clutter_hawes_1
+  - naavox/move_clutter_chuck_1
+  - naavox/move_clutter_79west4
+  - naavox/move_clutter_nick_2
+
+label_contact_actions:
+  enabled: true
+  pressure_threshold: 0.1
+  episode_end_seconds: 1.0
+  blend_seconds: 0.5
+  rotate_contact_vec: false
