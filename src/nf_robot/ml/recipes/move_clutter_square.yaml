@@ -1,4 +1,4 @@
-# Merge the move_clutter datasets, convert to gripper_anchors_384, label contact
+# Merge the move_clutter datasets, convert to gripper_anchors_rect, label contact
 # actions, and produce naavox/move_clutter_square.
 # This dataset contains the overhead cameras but not the warped floor composite.
 # all frames are square and have the same dimensions so they can be used with multitask dit
@@ -11,7 +11,7 @@
 #     --upload
 
 output_repo_id: naavox/move_clutter_square
-camera_mode: gripper_floor_384
+camera_mode: gripper_anchors_384
 center_crop: false
 
 merge:
