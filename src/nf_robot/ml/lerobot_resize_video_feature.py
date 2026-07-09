@@ -56,6 +56,7 @@ def resize_video(
     crf: int = 30,
     g: int = 2,
     center_crop: bool = False,
+    threads: int | None = None,
 ) -> None:
     """Re-encode a video file at a new resolution using PyAV.
 
@@ -63,6 +64,12 @@ def resize_video(
     (width/height), each frame is first center-cropped to the target aspect
     ratio so the resize preserves geometry instead of stretching. If False, the
     frame is stretched to fit (the default, matching legacy behavior).
+
+    threads caps the encoder's internal thread pool. This matters because
+    SVT-AV1 (and most modern encoders) otherwise grab every logical core for a
+    single encode, so parallelizing across worker processes without also
+    capping per-encode threads oversubscribes the CPU. None leaves the encoder
+    at its default (all cores).
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -83,6 +90,15 @@ def resize_video(
     codec_options = {"crf": str(crf), "g": str(g)}
     if vcodec == "libsvtav1":
         codec_options = {"crf": str(crf), "preset": "8"}
+    if threads is not None:
+        # Generic FFmpeg thread cap; honored by most encoders.
+        v_out.thread_count = threads
+        # SVT-AV1 ignores thread_count on some builds and instead sizes its
+        # thread pool from `lp` (logical processors); set it explicitly so the
+        # cap actually takes effect. pin=0 avoids core-affinity pinning that
+        # would fight the other worker processes.
+        if vcodec == "libsvtav1":
+            codec_options["svtav1-params"] = f"lp={threads}:pin=0"
     v_out.options = codec_options
 
     out.start_encoding()
@@ -141,7 +157,7 @@ def resize_video_feature(
     pix_fmt: str = "yuv420p",
     crf: int = 30,
     g: int = 2,
-    num_workers: int | None = None,
+    headroom: int = 0,
     center_crop: bool = False,
 ) -> LeRobotDataset:
     if feature_key not in dataset.meta.video_keys:
@@ -160,11 +176,18 @@ def resize_video_feature(
             continue
 
     fps = dataset.meta.fps
-    workers = num_workers if num_workers is not None else os.cpu_count()
+    # All-file parallelism: one single-threaded encode per worker, one worker per
+    # available core, leaving `headroom` cores free. This beats fewer multi-threaded
+    # encodes because encoder-internal threading scales poorly vs. independent files.
+    workers = max(1, (os.cpu_count() or 1) - headroom)
+    threads_per_worker = 1
     sorted_files = sorted(video_files)
 
     # Re-encode each video file at the new resolution, one job per file
-    logging.info(f"Resizing {len(sorted_files)} video file(s) with {workers} workers")
+    logging.info(
+        f"Resizing {len(sorted_files)} video file(s) with {workers} workers x "
+        f"{threads_per_worker} encoder thread(s)"
+    )
     with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
@@ -172,6 +195,7 @@ def resize_video_feature(
                 dataset.root / rel_path,
                 output_dir / rel_path,
                 width, height, fps, vcodec, pix_fmt, crf, g, center_crop,
+                threads_per_worker,
             ): rel_path
             for rel_path in sorted_files
         }
@@ -240,8 +264,8 @@ def main() -> None:
     parser.add_argument("--crf", type=int, default=30, help="Constant rate factor (default: 30)")
     parser.add_argument("--g", type=int, default=2, help="GOP size (default: 2)")
     parser.add_argument(
-        "--num_workers", type=int, default=None,
-        help="Parallel encoding workers (default: all CPU cores)",
+        "--headroom", type=int, default=0,
+        help="CPU cores to leave free; the rest run one single-threaded encode each (default: 0)",
     )
     parser.add_argument(
         "--center_crop", action="store_true",
@@ -279,7 +303,7 @@ def main() -> None:
         pix_fmt=args.pix_fmt,
         crf=args.crf,
         g=args.g,
-        num_workers=args.num_workers,
+        headroom=args.headroom,
         center_crop=args.center_crop,
     )
 

@@ -241,7 +241,7 @@ def build(
     temp_dir: Path,
     output_root: Path,
     upload: bool,
-    num_workers: int | None,
+    headroom: int,
     keep_intermediate: bool,
 ) -> LeRobotDataset:
     output_repo_id = recipe["output_repo_id"]
@@ -274,7 +274,7 @@ def build(
             camera_mode=camera_mode,
             output_dir=converted_root,
             repo_id=repo_id,
-            num_workers=num_workers,
+            headroom=headroom,
             center_crop=center_crop,
         )
         validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode)
@@ -346,8 +346,9 @@ def main() -> None:
         help="Upload the final dataset to the Hub (also settable via recipe 'upload: true')",
     )
     parser.add_argument(
-        "--num_workers", type=int, default=None,
-        help="Parallel video-encoding workers for conversion (default: all CPU cores)",
+        "--headroom", type=int, default=2,
+        help="CPU cores to leave free during conversion; the rest run one single-threaded "
+             "encode each (default: 0)",
     )
     parser.add_argument(
         "--keep_intermediate", action="store_true",
@@ -370,7 +371,7 @@ def main() -> None:
         temp_dir=temp_dir,
         output_root=output_root,
         upload=args.upload,
-        num_workers=args.num_workers,
+        headroom=args.headroom,
         keep_intermediate=args.keep_intermediate,
     )
 

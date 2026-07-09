@@ -295,7 +295,7 @@ with space). See `recipes/derivation_test.yaml` for the format.
         --recipe src/nf_robot/ml/recipes/derivation_test.yaml \
         --temp_dir /media/nhn/nfdrive/tmp_build \
         --output_root /media/nhn/nfdrive/datasets/derivation_test \
-        [--upload] [--num_workers N] [--keep_intermediate]
+        [--upload] [--headroom N] [--keep_intermediate]
 
 The manual sequence below (derive each -> upload -> merge -> recompute_stats) is the
 old way of doing the same thing; the recipe tool replaces it.

@@ -65,7 +65,7 @@ def derive_dataset(
     pix_fmt: str = "yuv420p",
     crf: int = 30,
     g: int = 2,
-    num_workers: int | None = None,
+    headroom: int = 0,
     center_crop: bool = False,
 ) -> LeRobotDataset:
     if camera_mode not in _CAMERA_MODES:
@@ -116,7 +116,12 @@ def derive_dataset(
     meta_info = dataset.meta.info
     info = meta_info.to_dict() if hasattr(meta_info, "to_dict") else dict(meta_info)
     fps = dataset.meta.fps
-    workers = num_workers if num_workers is not None else os.cpu_count()
+    # All-file parallelism: one single-threaded encode per worker, one worker per
+    # available core. For many independent files this beats fewer multi-threaded
+    # encodes, because encoder-internal threading (esp. SVT-AV1) scales poorly
+    # while independent files scale nearly linearly. `headroom` cores are left free.
+    workers = max(1, (os.cpu_count() or 1) - headroom)
+    threads_per_worker = 1
 
     for key, (target_w, target_h) in target_keys.items():
         src_h, src_w = dataset.meta.features[key]["shape"][:2]
@@ -133,7 +138,8 @@ def derive_dataset(
 
         logging.info(
             f"Resizing '{key}' from {src_w}x{src_h} to {target_w}x{target_h} "
-            f"({len(sorted_files)} file(s)) with {workers} workers"
+            f"({len(sorted_files)} file(s)) with {workers} workers x "
+            f"{threads_per_worker} encoder thread(s)"
         )
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {}
@@ -142,7 +148,8 @@ def derive_dataset(
                 tmp_path = path.with_suffix(".tmp.mp4")
                 futures[
                     pool.submit(
-                        resize_video, path, tmp_path, target_w, target_h, fps, vcodec, pix_fmt, crf, g, center_crop
+                        resize_video, path, tmp_path, target_w, target_h, fps, vcodec, pix_fmt, crf, g, center_crop,
+                        threads_per_worker,
                     )
                 ] = (path, tmp_path)
             for future in tqdm(as_completed(futures), total=len(futures), desc=f"Resizing {key}"):
@@ -176,7 +183,8 @@ def main() -> None:
     parser.add_argument("--crf", type=int, default=30, help="Constant rate factor (default: 30)")
     parser.add_argument("--g", type=int, default=2, help="GOP size (default: 2)")
     parser.add_argument(
-        "--num_workers", type=int, default=None, help="Parallel encoding workers (default: all CPU cores)"
+        "--headroom", type=int, default=0,
+        help="CPU cores to leave free; the rest run one single-threaded encode each (default: 0)",
     )
     parser.add_argument(
         "--center_crop", action="store_true",
@@ -207,7 +215,7 @@ def main() -> None:
         pix_fmt=args.pix_fmt,
         crf=args.crf,
         g=args.g,
-        num_workers=args.num_workers,
+        headroom=args.headroom,
         center_crop=args.center_crop,
     )
 
