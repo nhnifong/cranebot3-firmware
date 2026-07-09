@@ -498,9 +498,15 @@ class TestCameraModeForwarding(unittest.TestCase):
     """Verify that record_until_disconnected and eval_until_disconnected pass
     camera_mode into StringmanConfig."""
 
+    # Patch out HF auth and the repo-existence check so the test reaches
+    # StringmanConfig deterministically. Without this the test depends on a
+    # cached HF token being present (true on a dev machine, false on CI), so
+    # ensure_hf_auth() raises before StringmanConfig is ever constructed.
+    @patch("nf_robot.ml.stringman_lerobot.repo_exists", return_value=False)
+    @patch("nf_robot.ml.stringman_lerobot.ensure_hf_auth")
     @patch("nf_robot.ml.stringman_lerobot.StringmanLeRobot")
     @patch("nf_robot.ml.stringman_lerobot.StringmanConfig")
-    def test_record_forwards_camera_mode(self, MockConfig, MockRobot):
+    def test_record_forwards_camera_mode(self, MockConfig, MockRobot, _mock_auth, _mock_repo_exists):
         from nf_robot.ml.stringman_lerobot import record_until_disconnected
 
         robot_instance = MockRobot.return_value
