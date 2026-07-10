@@ -379,6 +379,15 @@ class CombinedMove(betterproto2.Message):
     Certain ACT models are trained on this type of input.
     """
 
+    source_key: "str | None" = betterproto2.field(
+        9, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    A key to identify the issuer of this move.
+    Moves from different keys are expected to be mixed by the motion controller
+    For instance this may be used to mix input from an AI and a human operator or multiple people.
+    """
+
     finger: "float | None" = betterproto2.field(
         3, betterproto2.TYPE_FLOAT, optional=True
     )

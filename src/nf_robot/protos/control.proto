@@ -110,6 +110,11 @@ message CombinedMove {
   // Certain ACT models are trained on this type of input.
   optional bool direction_is_in_gripper_frame = 8;
 
+  // A key to identify the issuer of this move.
+  // Moves from different keys are expected to be mixed by the motion controller
+  // For instance this may be used to mix input from an AI and a human operator or multiple people.
+  optional string source_key = 9;
+
   ///// deprecated fields /////
 
   // DEPRECATED AND IGNORED use finger_speed

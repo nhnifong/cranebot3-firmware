@@ -68,6 +68,7 @@ N_ANCHORS = {
     common.AnchorType.ARPEGGIO: 2,
 }
 N_LINES = 4
+INPUT_VELOCITY_TTL_S = 2.0 # a commanded velocity keyed by a source expires this long after its last update
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
 CONTROL_PLANE_PRODUCTION = "wss://neufangled.com"
 CONTROL_PLANE_STAGING = "wss://nf-site-monolith-staging-690802609278.us-east1.run.app"
@@ -227,8 +228,10 @@ class AsyncObserver:
         self.connection_tasks: dict[str, asyncio.Task] = {}
         self.run_collect_images = False
         self.time_last_grip_sensors_retain_key = 0
-        # dict of vectors representing last velocities commanded by different subsystems. all keys in active_set are summard
-        self.input_velocities = {'default': np.zeros(3)}
+        # {key: (velocity, monotonic_timestamp)} last velocities commanded by different subsystems. all keys in active_set are summed.
+        # Entries expire INPUT_VELOCITY_TTL_S after their last update; expiration is lazy (pruned at read time in move_direction_speed),
+        # so a source key that stops sending moves stops contributing without needing any timer or background task.
+        self.input_velocities = {'default': (np.zeros(3), time.monotonic())}
         self.active_set = set(['default'])
         self.run_ortho = run_ortho
         self.stream_heatmap = stream_heatmap
@@ -247,6 +250,10 @@ class AsyncObserver:
         self.lerobot_process_watcher = None
         self.last_ep_ctrl_status = common.LerobotStatus.NA
         self.lerobot_process_pid = None
+        # fires whenever any lerobot session (our own subprocess or one connected remotely
+        # through the telemetry relay) reports a status. Used to detect whether a session is
+        # actually listening after we broadcast an eval-start.
+        self.lerobot_session_status_event = asyncio.Event()
         self.grip_angle = 0
         # source and destination for pick and place. self.config is the source of truth;
         # these are kept in sync with self.config.last_route_source/last_route_destination.
@@ -334,9 +341,33 @@ class AsyncObserver:
         #     traceback.print_exc()
         finally:
             self.connected_local_clients.remove(websocket)
+            self.zero_input_velocities()
             if len(self.connected_local_clients) == 0 and self.terminate_with_ui:
                 # The only local UI has disconnected and we were asked to shutdown when it disconnects
                 self.run_command_loop = False
+
+    def zero_input_velocities(self):
+        """ Reset all commanded velocities to zero.
+
+        Called when a websocket connection (local UI or control plane) is lost so
+        that the last velocity commanded from a now-disconnected source key does
+        not keep driving the robot indefinitely. Since source keys are arbitrary
+        and not tracked per-connection, we clear them all; subsystems like swing
+        cancellation recompute their entry on the next tick.
+        """
+        self.input_velocities = {'default': (np.zeros(3), time.monotonic())}
+
+    def _prune_input_velocities(self):
+        """ Lazily drop commanded velocities older than INPUT_VELOCITY_TTL_S.
+
+        Called at read time (from move_direction_speed) rather than on a timer, so
+        stale source keys are cleaned up as a side effect of the next combined move.
+        The common case where nothing has expired is a cheap scan with no deletions.
+        """
+        now = time.monotonic()
+        expired = [k for k, (_, ts) in self.input_velocities.items() if now - ts > INPUT_VELOCITY_TTL_S]
+        for k in expired:
+            del self.input_velocities[k]
 
     async def handle_command(self, message: bytes):
         """ Decodes a binary batch of commands """
@@ -457,6 +488,20 @@ class AsyncObserver:
                     swing_latency=self.config.swing_latency,
                 ))
 
+    def set_swing_cancellation(self, enabled: bool) -> bool:
+        """Start or stop the swing cancellation task, idempotently.
+
+        Enabling when it is already running (or disabling when it is already stopped) is a
+        no-op, so callers can just declare the state they want. Returns whether the task was
+        running before this call, which lets a caller decide if it needs to restart it later.
+        """
+        was_running = self.swing_cancellation_task is not None and not self.swing_cancellation_task.done()
+        if enabled and not was_running:
+            self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
+        elif not enabled and was_running:
+            self.swing_cancellation_task.cancel()
+        return was_running
+
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
         logger.info(f'Swing cancellation set {item.enabled}')
         if item.enabled:
@@ -465,13 +510,7 @@ class AsyncObserver:
                     message=f'Swing cancellation only supported on Arpeggio Gripper'
                 ))
                 return
-            # Does it need to be enabled?
-            if self.swing_cancellation_task is None or self.swing_cancellation_task.done():
-                self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
-        else:
-            # does it need to be disabled?
-            if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
-                self.swing_cancellation_task.cancel()
+        self.set_swing_cancellation(item.enabled)
 
     async def run_swing_cancellation(self):
         """ Task which adds swing cancellation inputs. """
@@ -606,7 +645,7 @@ class AsyncObserver:
                     break
                 await asyncio.sleep(LOOP_S)
         finally:
-            self.input_velocities['swingc'] = np.zeros(3)
+            self.input_velocities['swingc'] = (np.zeros(3), time.monotonic())
             self.active_set.discard('swingc')
             self.slow_stop_all_spools()
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
@@ -682,7 +721,7 @@ class AsyncObserver:
                 fine = np.clip(np.linspace(best_coarse - FINE_HALF_WIDTH, best_coarse + FINE_HALF_WIDTH, FINE_COUNT), 0.0, 0.40)
                 await sweep(sorted(set(np.round(fine, 3))))
         finally:
-            self.input_velocities['swingc'] = np.zeros(3)
+            self.input_velocities['swingc'] = (np.zeros(3), time.monotonic())
             self.active_set.discard('swingc')
             self.slow_stop_all_spools()
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
@@ -1214,7 +1253,8 @@ class AsyncObserver:
                         velocity = gf_direction
                     self.send_ui(raw_commanded_vel=telemetry.CommandedVelocity(velocity=fromnp(velocity)))
 
-        commanded_vel = await self.move_direction_speed(direction, move.speed)
+        # Allow source keys to be used to distinguish the input
+        commanded_vel = await self.move_direction_speed(direction, move.speed, key=move.source_key)
 
         self.last_user_move_time = time.time()
 
@@ -1368,6 +1408,12 @@ class AsyncObserver:
         self.pe.kf.reset_biases(position)
 
     async def stop_all(self):
+        # stop swing cancellation so it does not keep commanding moves
+        self.set_swing_cancellation(False)
+
+        # zero input velocities from all sources
+        self.zero_input_velocities()
+
         # If lerobot scripts are connected this must also stop them
         self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.ABANDON))
 
@@ -1383,18 +1429,16 @@ class AsyncObserver:
                 logger.info(f"Cancelling motion task: {task_to_stop.get_name()}")
                 task_to_stop.cancel()
 
-            # Now, await the task's completion.
+            # await the task's completion.
             try:
-                # Awaiting a task will re-raise any exception it had,
-                # or raise CancelledError if we just cancelled it.
+                # Awaiting a task will re-raise any exception it had, or raise CancelledError if we just cancelled it.
                 await task_to_stop
             except asyncio.CancelledError:
                 # This is the expected, non-error outcome of a clean cancellation.
-                logger.info(f"Task '{task_to_stop.get_name()}' was successfully stopped.")
-            except Exception as e:
-                # If any other exception occurred, print it now.
-                logger.error(f"An unhandled exception occurred in motion task '{task_to_stop.get_name()}':\n{e}")
-                traceback.print_exc()
+                logger.debug(f"Task '{task_to_stop.get_name()}' was successfully stopped.")
+            except Exception:
+                # If any other exception occurred, log it with traceback so it reaches every handler, not just stdout.
+                logger.exception(f"An unhandled exception occurred in motion task '{task_to_stop.get_name()}'")
 
         self.slow_stop_all_spools()
 
@@ -1406,7 +1450,7 @@ class AsyncObserver:
         # this stops the spools directly, bypassing move_direction_speed, so the stale
         # 'default' velocity must be cleared here too or it'll get summed back in the
         # next time anything (e.g. swing cancellation) triggers a combined move.
-        self.input_velocities['default'] = np.zeros(3)
+        self.input_velocities['default'] = (np.zeros(3), time.monotonic())
 
     def snapshot_tag_observations(self):
         """Recent origin detections and cal_assist marker detections
@@ -1679,8 +1723,7 @@ class AsyncObserver:
             return {}
 
         # keep the gripper vertical and the lines taut throughout the survey
-        if self.swing_cancellation_task is None or self.swing_cancellation_task.done():
-            self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
+        self.set_swing_cancellation(True)
 
         card_positions = self.card_room_positions()
         if not card_positions:
@@ -1831,10 +1874,7 @@ class AsyncObserver:
                 logger.warning('Cannot run half calibration until all anchors are connected')
                 return
 
-            need_sc_restart = False
-            if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
-                self.swing_cancellation_task.cancel()
-                need_sc_restart = True
+            need_sc_restart = self.set_swing_cancellation(False)
 
             for direction in [[0,0,1], [0,0,-1]]:
                 await self.tension_and_wait()
@@ -1849,7 +1889,7 @@ class AsyncObserver:
                 self.slow_stop_all_spools()
 
             if need_sc_restart:
-                self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
+                self.set_swing_cancellation(True)
 
         except asyncio.CancelledError:
             raise
@@ -2106,9 +2146,7 @@ class AsyncObserver:
                     # anchors frozen (so the room frame cannot rotate), the new eyelets change the
                     # velocity->line-speed mapping swing cancellation depends on, so a bad refinement
                     # could make it pump and throw the gripper around.
-                    if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
-                        self.swing_cancellation_task.cancel()
-                        self.swing_cancellation_task = None
+                    self.set_swing_cancellation(False)
                     self.slow_stop_all_spools()
 
                     # Freeze the anchors during the gripper refinement so it can only move the
@@ -2143,7 +2181,7 @@ class AsyncObserver:
                     residual, aborted = await self._measure_swing_residual(self.config.swing_latency, center_pos)
                     if residual is not None and residual < DAMPING_RESIDUAL_MAX_RAD:
                         logger.info(f'Swing cancellation damps with refined geometry (residual {np.degrees(residual):.1f} deg); enabling.')
-                        self.swing_cancellation_task = asyncio.create_task(self.run_swing_cancellation())
+                        self.set_swing_cancellation(True)
                     else:
                         detail = aborted or (f'{np.degrees(residual):.1f} deg residual' if residual is not None else 'no reading')
                         logger.warning(f'Swing cancellation did not damp with refined geometry ({detail}); leaving it OFF.')
@@ -2190,8 +2228,7 @@ class AsyncObserver:
         """On any calibration abort (safety tension trip, user cancel, or error) stop all spools
         and disable swing cancellation so the gripper does not keep moving."""
         self.slow_stop_all_spools()
-        if self.swing_cancellation_task is not None and not self.swing_cancellation_task.done():
-            self.swing_cancellation_task.cancel()
+        self.set_swing_cancellation(False)
 
     async def calibrate_spin(self, reset_wrist_first=True):
         """Calibration of the relationship between the wrist and the room frame of reference.
@@ -2875,6 +2912,7 @@ class AsyncObserver:
                     finally:
                         logger.info(f'Disconnected from control plane {ws_path}')
                         self.cloud_telem_websocket = None
+                        self.zero_input_velocities()
             except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
                 pass # normal close
             except websockets.exceptions.InvalidStatus as e:
@@ -3398,8 +3436,10 @@ class AsyncObserver:
 
         # this commanded velocity overwrites the last velocity with the same key and all velocities are summed
         # currently this is only used to combine swing cancellation with user inputs.
-        self.input_velocities[key] = velocity
-        total_velocity = np.sum([self.input_velocities.get(k, 0) for k in self.active_set], axis=0)
+        self.input_velocities[key] = (velocity, time.monotonic())
+        self._prune_input_velocities() # drop any source keys that have gone stale
+        # the key we just set is always fresh, so if it's in the active set the sum is guaranteed a 3-vector
+        total_velocity = np.sum([self.input_velocities[k][0] for k in self.active_set if k in self.input_velocities], axis=0)
         
         # Determine the total requested speed before limits
         speed = np.linalg.norm(total_velocity)
@@ -3465,11 +3505,12 @@ class AsyncObserver:
     def _handle_add_episode_control_events(self, data: common.EpisodeControl):
         if data.prompt:
             self.config.last_lerobot_prompt = data.prompt
+        # A status here means some lerobot session is alive and answering, wherever it's connected.
+        if data.status is not None:
+            self.lerobot_session_status_event.set()
         # forward episode control events back to all telemetry listeners
         self.send_ui(episode_control=data)
         asyncio.create_task(self.flush_tele_buffer())
-        # TODO if the EpisodeControl message has a command, and we are running a session as a subprocess, forward it directly to that subprocess.
-        # the subprocess may also send us EpisodeControl messages containing a status. forward these as telemetry.
 
     def send_tq_to_ui(self):
         snapshot = self.target_queue.get_queue_snapshot()
@@ -3785,8 +3826,13 @@ class AsyncObserver:
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
         if isinstance(self.gripper_client, ArpeggioGripperClient):
-            if self.lerobot_process_pid is not None:
-                return await self.lerobot_grasp()
+            # A lerobot session may be driving from our own subprocess or connected remotely
+            # through the prod telemetry relay, so we can't tell locally if one is present.
+            # lerobot_grasp broadcasts the eval-start and returns None if no session answers,
+            # in which case we fall back to the older centering model.
+            result = await self.lerobot_grasp()
+            if result is not None:
+                return result
             if self.centering_model is None:
                 await self._load_centering_model()
             return await self.arp_execute_grasp()
@@ -4129,18 +4175,28 @@ class AsyncObserver:
         Execute a grasp on an arp gripper using a lerobot ACT policy.
         End the episode either when a timeout is reached, when motion ceases for some time, or when a grasp condition is reached.
         A grasp condition is a certain amount of force being exerted by the fingers while being at a certain altitude off the floor.
-        
+
+        Returns True/False for grasp success once a session takes over, or None if no session
+        answered the eval-start (so the caller can fall back to the centering model).
+
         A seperate process must be connected to the telemetry stream to manage the act policy at this time. It can be started with
 
         python -m nf_robot.ml.stringman_lerobot eval   --robot_id=lan   --server_address=ws://localhost:4245   --policy_id=outputs/train/grasp_remote_act_eggs_2/checkpoints/last/pretrained_model/   --dataset_id=naavox/grasping_dataset_eggs_fix
         """
-        if self.lerobot_process_pid is None:
-            logger.debug('lerobot_grasp relies on a connected lerobot session. No session is active.')
-            return False
+        SESSION_PING_TIMEOUT_S = 10  # how long to wait for any session to answer the eval-start
 
         self.pe.finger_pressure_rising.clear()
+        self.lerobot_session_status_event.clear()
         try:
+            # Broadcast the eval-start: any listening lerobot session (local subprocess or one
+            # connected remotely through the relay) starts controlling and answers with a status.
             self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_START))
+            try:
+                await asyncio.wait_for(self.lerobot_session_status_event.wait(), timeout=SESSION_PING_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                logger.debug(f'No lerobot session answered the eval-start within {SESSION_PING_TIMEOUT_S}s; no session active.')
+                return None
+
             timeout = time.time() + 30
             lifted = False
             applying_force = False
@@ -4149,7 +4205,7 @@ class AsyncObserver:
                 applying_force = self.pe.finger_pressure_rising.is_set()
                 gripper_height = self.pe.grip_pose[1][2]
                 lifted = gripper_height > 0.4
-            logger.info(f'Ended grasp lifted={lifted} applying_force={applying_force} time_rem={timeout - time.time():.1f}s')
+            logger.debug(f'Ended grasp lifted={lifted} applying_force={applying_force} time_rem={timeout - time.time():.1f}s')
             # return value indicates whether grasp was successful
             # todo future models will predict grasp success on their own
             return lifted # and applying_force
