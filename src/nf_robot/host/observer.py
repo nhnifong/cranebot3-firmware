@@ -2204,7 +2204,7 @@ class AsyncObserver:
 
             # Tune swing_latency by inducing swings and finding the value that damps
             # them best. Only the Arpeggio gripper has the IMU-driven swing model.
-            if False and isinstance(self.gripper_client, ArpeggioGripperClient):
+            if and isinstance(self.gripper_client, ArpeggioGripperClient):
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=34.0,
                     name="Calibration",
