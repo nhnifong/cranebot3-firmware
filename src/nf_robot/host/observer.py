@@ -197,9 +197,13 @@ class AsyncObserver:
         self.locate_anchor_task = None
         # only one motion task can be active at a time
         self.motion_task = None
-        # set by passive_safety when it aborts an in-progress calibration, so the
-        # calibration's CancelledError handler can report the real reason.
-        self.calibration_aborted_by_safety = False
+        # set by passive_safety when line tension exceeds the safe limit during a running
+        # calibration. Swing latency cal polls it to back off and retry the current trial;
+        # any other calibration step is aborted (passive_safety cancels the task).
+        self.tension_over_limit = False
+        # true while swing latency cal is running, so passive_safety recovers instead of
+        # aborting on a tension trip during that step.
+        self.swing_cal_in_progress = False
         # only used for integration test only to allow some code to run right after sending the gantry to a goal point
         self.test_gantry_goal_callback = None
         # event used to notify tasks that gripper is connected.
@@ -602,7 +606,7 @@ class AsyncObserver:
         DRIFT_LIMIT_M = 0.6        # stop early if the gantry wanders this far
         LOOP_S = 1 / 100
         MIN_SAMPLES = 10
-        ALTITUDE_HOLD_GAIN = 2.0       # 1/s, proportional gain pulling z back to the start altitude
+        ALTITUDE_HOLD_GAIN = 4.0       # 1/s, proportional gain pulling z back to the start altitude
         ALTITUDE_HOLD_MAX_MPS = 0.15   # cap on the vertical hold speed
 
         gc = self.gripper_client
@@ -631,6 +635,11 @@ class AsyncObserver:
                 z_error = center_pos[2] - self.pe.gant_pos[2]
                 vz = float(np.clip(ALTITUDE_HOLD_GAIN * z_error, -ALTITUDE_HOLD_MAX_MPS, ALTITUDE_HOLD_MAX_MPS))
                 await self.move_direction_speed(np.array([vx, vy, vz]), key='swingc', downward_bias=0)
+                # passive_safety raised a tension trip; bail out so the caller can back off and retry.
+                if self.tension_over_limit:
+                    aborted = 'tension'
+                    logger.warning(f'latency {latency:.3f}s tripped the tension limit; stopping to recover')
+                    break
                 amp = gc.get_swing_amplitude()
                 if amp is not None:
                     ts.append(t)
@@ -651,6 +660,8 @@ class AsyncObserver:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
 
         ts, amps = np.array(ts), np.array(amps)
+        if aborted == 'tension':
+            return None, aborted
         if aborted == 'amp_cap':
             return SAFETY_AMP_RAD, aborted
         if aborted == 'drift' or len(amps) < MIN_SAMPLES:
@@ -668,15 +679,22 @@ class AsyncObserver:
         enough to the ideal that it damps (rather than pumps), so nothing gets
         thrown around.
 
-        The coarse pass alone lands within the working range. Set fine_pass=True to
-        add a slower second pass that refines around the coarse best.
+        The coarse pass deliberately spreads its candidates wide (0, 0.6, 0.3) rather
+        than sweeping a narrow range: the ideal latency depends on host event-loop
+        contention and can land as high as ~0.6s. A spread this wide means some
+        candidates pump hard rather than damp, but the safety amplitude cap stops those
+        early, and whichever candidate is nearest the ideal still yields a clean, low
+        residual to lock onto. Set fine_pass=True to add a second pass that refines
+        around the coarse best.
         """
-        COARSE_RANGE = (0.0, 0.44)   # seconds; stays close enough to ideal that all candidates damp
-        COARSE_COUNT = 6
-        FINE_HALF_WIDTH = 0.06       # fine pass spans +/- this around the coarse best
-        FINE_COUNT = 5
+        COARSE_CANDS = (0.0, 0.6, 0.3)  # seconds; spread wide enough to bracket the ideal even under heavy loop contention
+        FINE_HALF_WIDTH = 0.15       # fine pass spans +/- this around the coarse best (covers the gap between coarse samples)
+        FINE_COUNT = 7
+        FINE_CLIP = (0.0, 0.75)      # keep refined candidates within a sane latency range
         DRIFT_LIMIT_M = 0.6          # recenter between trials once drift exceeds this
         MIN_TRIALS = 3               # need at least this many good trials to choose
+        TENSION_BACKOFF_S = 1.1      # wait this long after a tension trip before retrying a trial
+        MAX_TENSION_RETRIES = 3      # give up (and abort) if a single trial keeps tripping tension
 
         if not isinstance(self.gripper_client, ArpeggioGripperClient):
             logger.warning('Swing latency calibration is only supported on the Arpeggio gripper')
@@ -699,8 +717,26 @@ class AsyncObserver:
                     ))
 
                 lat = float(lat)
-                await self._recenter_gantry_if_drifted(center_pos, DRIFT_LIMIT_M)
-                residual, aborted = await self._measure_swing_residual(lat, center_pos)
+                # A tension trip during a trial is recoverable: wait for the back-off, move
+                # back to the swing cal starting position, and retry this same latency. Only a
+                # trial that keeps tripping gives up and aborts the whole calibration.
+                attempts = 0
+                while True:
+                    await self._recenter_gantry_if_drifted(center_pos, DRIFT_LIMIT_M)
+                    residual, aborted = await self._measure_swing_residual(lat, center_pos)
+                    if aborted != 'tension':
+                        break
+                    attempts += 1
+                    if attempts > MAX_TENSION_RETRIES:
+                        logger.warning(f'Tension kept exceeding the limit at latency {lat:.3f}s; aborting calibration')
+                        # leave tension_over_limit set so the abort reports the real reason
+                        self.motion_task.cancel()
+                        await asyncio.sleep(0)  # let the cancellation take effect
+                        return out
+                    logger.warning(f'Tension over limit during latency {lat:.3f}s trial (attempt {attempts}); waiting {TENSION_BACKOFF_S}s and returning to start')
+                    await asyncio.sleep(TENSION_BACKOFF_S)
+                    self.tension_over_limit = False  # cleared after the back-off so the retry starts fresh
+                    await self._recenter_gantry(center_pos)
                 tag = f' [{aborted}]' if aborted else ''
                 if residual is not None:
                     out.append((lat, residual))
@@ -711,16 +747,21 @@ class AsyncObserver:
                 await asyncio.sleep(0.3)
             return out
 
+        self.tension_over_limit = False  # clear any stale trip so the first trial isn't cut short
+        self.swing_cal_in_progress = True  # let passive_safety recover (not abort) on a tension trip here
         try:
-            coarse = await sweep(np.linspace(COARSE_RANGE[0], COARSE_RANGE[1], COARSE_COUNT))
+            coarse = await sweep(COARSE_CANDS)
             if coarse and fine_pass:
                 best_coarse = min(coarse, key=lambda r: r[1])[0]
                 # Recenter before the fine pass so the trials we care about start with
                 # full drift headroom and don't get cut short.
                 await self._recenter_gantry(center_pos)
-                fine = np.clip(np.linspace(best_coarse - FINE_HALF_WIDTH, best_coarse + FINE_HALF_WIDTH, FINE_COUNT), 0.0, 0.40)
+                fine = np.clip(np.linspace(best_coarse - FINE_HALF_WIDTH, best_coarse + FINE_HALF_WIDTH, FINE_COUNT), *FINE_CLIP)
                 await sweep(sorted(set(np.round(fine, 3))))
         finally:
+            # Do not clear tension_over_limit here: on a max-retry abort it must survive to the
+            # calibration's CancelledError handler so it can report the tension reason.
+            self.swing_cal_in_progress = False
             self.input_velocities['swingc'] = (np.zeros(3), time.monotonic())
             self.active_set.discard('swingc')
             self.slow_stop_all_spools()
@@ -801,7 +842,9 @@ class AsyncObserver:
             self.config.swing_latency = float(parts[1])
             save_config(self.config, self.config_path)
         if item.action == 'swinglatencycal':
-            r = await self.invoke_motion_task(self.calibrate_swing_latency())
+            # Run the fine pass and emit progress so the debug-triggered run refines around
+            # the coarse best and reports status just like the in-calibration invocation.
+            r = await self.invoke_motion_task(self.calibrate_swing_latency(fine_pass=True, progress_range=(0.0, 100.0)))
         if item.action == 'reset_wrist':
              r = await self.gripper_client.send_commands({'reset_wrist': None})
         if item.action == 'spind':
@@ -1260,9 +1303,10 @@ class AsyncObserver:
 
     async def passive_safety(self):
         """If any line becomes too tight, switch all motors to damped movement for one second.
-        If the overload happens while an automatic calibration is running, abort the
-        calibration: backing off mid-step corrupts the collected data and continuing
-        under overload is unsafe."""
+        If the overload happens while a motion task is running, abort it by cancelling the
+        task, since backing off mid-motion corrupts whatever it was doing. The one exception
+        is swing latency cal: it sets swing_cal_in_progress so we only raise the
+        tension_over_limit flag, which it polls to back off and retry the current trial."""
         max_safe_tension = 16.0
         if self.config.max_safe_tension is not None:
             max_safe_tension = self.config.max_safe_tension
@@ -1272,11 +1316,11 @@ class AsyncObserver:
             ema = ema * 0.9 + self.pe.tension * 0.1
             if np.any(ema > max_safe_tension):
                 logger.warning(f'Tension limit reached! backing off. limit={max_safe_tension} actual={ema}')
-                if (self.motion_task is not None and not self.motion_task.done()
-                        and self.motion_task.get_name() == 'full_auto_calibration'):
-                    logger.warning('Tension overload during calibration - aborting calibration')
-                    self.calibration_aborted_by_safety = True
-                    self.motion_task.cancel()
+                if self.motion_task is not None and not self.motion_task.done():
+                    self.tension_over_limit = True
+                    if not self.swing_cal_in_progress:
+                        logger.warning(f'Tension overload during motion task "{self.motion_task.get_name()}" - aborting it')
+                        self.motion_task.cancel()
                 await self._handle_disable_torque()
                 await asyncio.sleep(1)
                 await self._handle_enable_torque()
@@ -1706,17 +1750,27 @@ class AsyncObserver:
         camera's close-range view, the room vector from the card to the gantry together with the
         four line lengths at that moment. This is a motion task.
 
-        Returns a dict keyed by card name, each value a dict with 'gantry_minus_card' (room
-        vector) and 'line_lengths' (length-4 array), for passing to optimize_arp_anchors as
-        gripper_obs. Cards the gripper never sees are skipped. Each hover altitude is taken
-        relative to that card's own height, so cards may sit on the floor or raised.
+        Returns a dict keyed by card name, each value a list of per-height samples; each sample is
+        a dict with 'gantry_minus_card' (room vector) and 'line_lengths' (length-4 array), for
+        passing to optimize_arp_anchors as gripper_obs. Each card is visited at several altitudes so
+        the samples span a vertical baseline. Cards (or individual heights) the gripper never sees
+        are skipped. Hover altitudes are taken relative to each card's own height, so cards may sit
+        on the floor or raised.
 
         If progress_range=(start_pct, end_pct) is given, a Calibration operation_progress message
         is sent as each card is surveyed, spread across that percent range."""
-        HOVER_CAMERA_HEIGHT_M = 1.0   # gripper camera height over the card while measuring
+        HOVER_CAMERA_HEIGHTS_M = [1.4, 1.0, 0.4]  # camera heights over each card to sample. Visiting a
+                                                  # card from several altitudes gives the length-delta
+                                                  # constraints a vertical baseline, which is what lets
+                                                  # them begin to observe the far external eyelets (a
+                                                  # single-height cluster leaves the eyelet radial
+                                                  # direction free). The spread is deliberately wide -
+                                                  # a wider baseline recovers more of a bad pass-2 - but
+                                                  # each height is clamped under the work-area ceiling.
         SETTLE_S = 4.0                # let swing cancellation settle the gripper before measuring
         MEASURE_WINDOW_S = 3.0        # average camera + line readings over this window
         MEASURE_TIMEOUT_S = 6.0       # give up on a card if the gripper never sees it
+        SEEK_TIMEOUT_S = 20.0         # cap the move to each hover altitude
 
         if not isinstance(self.gripper_client, ArpeggioGripperClient):
             logger.warning('collect_gripper_card_observations only supports the Arpeggio gripper')
@@ -1735,6 +1789,34 @@ class AsyncObserver:
 
         survey_names = [n for n in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'] if n in card_positions]
 
+        async def measure_hover(name):
+            """Center on the card and average the card-to-gantry offset and line lengths over a short
+            window. Returns a sample dict, or None if the gripper never sees the card here."""
+            # center the card in view so the measurement is taken on the camera's axis
+            await self._center_card_in_view(name)
+            await asyncio.sleep(1.5)
+            gantry_offsets = []
+            line_samples = []
+            deadline = time.time() + MEASURE_TIMEOUT_S
+            window_end = None
+            while time.time() < deadline:
+                pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
+                if pose_cam is not None:
+                    gantry_offsets.append(self.gripper_client.measure_gantry_minus_card(pose_cam))
+                    line_samples.append([self.datastore.anchor_line_record[i].getLast()[1] for i in range(N_LINES)])
+                    if window_end is None:
+                        window_end = time.time() + MEASURE_WINDOW_S
+                if window_end is not None and time.time() >= window_end:
+                    break
+                await asyncio.sleep(0.05)
+            if not gantry_offsets:
+                return None
+            return {
+                'gantry_minus_card': np.mean(gantry_offsets, axis=0),
+                'line_lengths': np.mean(line_samples, axis=0),
+                'n': len(gantry_offsets),
+            }
+
         gripper_obs = {}
         try:
             for idx, name in enumerate(survey_names):
@@ -1747,13 +1829,18 @@ class AsyncObserver:
                         current_action=f"Refining geometry: surveying card {idx + 1}/{len(survey_names)} ({name})",
                     ))
                 cpos = card_positions[name]
-                gant_z = min(upper_z - 0.1, cpos[2] + POLE[2] + HOVER_CAMERA_HEIGHT_M)
-                self.gantry_goal_pos = np.array([cpos[0], cpos[1], gant_z])
-                logger.info(f'Gripper card survey: flying over {name} at goal {np.round(self.gantry_goal_pos, 3)} (card at {np.round(cpos, 3)})')
+                # gantry altitudes to sample this card from, clamped under the top of the work area,
+                # deduplicated (a low ceiling can collapse several requests onto the same height), and
+                # ordered highest-first so we approach high and descend through the samples.
+                gant_zs = sorted({min(upper_z - 0.1, cpos[2] + POLE[2] + h) for h in HOVER_CAMERA_HEIGHTS_M}, reverse=True)
 
-                # Fly toward the anchor-camera estimate, but stop the moment the gripper camera
-                # sees the card: its true spot can differ from the estimate, and continuing can
-                # carry it back out of the narrow gripper FOV.
+                # Fly toward the anchor-camera estimate at the highest sampled height (widest view, so
+                # the best chance to catch and center the card), but stop the moment the gripper camera
+                # sees the card: its true spot can differ from the estimate, and continuing can carry it
+                # back out of the narrow gripper FOV.
+                approach_z = gant_zs[0]
+                self.gantry_goal_pos = np.array([cpos[0], cpos[1], approach_z])
+                logger.info(f'Gripper card survey: flying over {name} at goal {np.round(self.gantry_goal_pos, 3)} (card at {np.round(cpos, 3)})')
                 seek_task = asyncio.create_task(self.seek_gantry_goal(head_turn=False))
                 try:
                     while not seek_task.done():
@@ -1769,49 +1856,43 @@ class AsyncObserver:
                     except asyncio.CancelledError:
                         pass
                 self.slow_stop_all_spools()
-                await asyncio.sleep(SETTLE_S)
 
-                # center the card in view so the measurement is taken on the camera's axis
-                await self._center_card_in_view(name)
-                await asyncio.sleep(1.5)
+                # Measure the card from each altitude in turn. The spread in height is the whole point:
+                # it gives the length-delta constraints a vertical baseline to triangulate the eyelets.
+                samples = []
+                for gz in gant_zs:
+                    self.gantry_goal_pos = np.array([cpos[0], cpos[1], gz])
+                    # hold the exact target altitude (auto_altitude would cruise at a fixed height and
+                    # defeat the point of sampling several).
+                    seek_task = asyncio.create_task(self.seek_gantry_goal(head_turn=False, auto_altitude=False))
+                    try:
+                        await asyncio.wait_for(seek_task, timeout=SEEK_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        logger.warning(f'Gripper card survey: did not reach z={gz:.2f} over {name} within {SEEK_TIMEOUT_S:.0f}s; measuring anyway')
+                    self.slow_stop_all_spools()
+                    await asyncio.sleep(SETTLE_S)
 
-                # average the card-to-gantry offset and the line lengths over a short window
-                gantry_offsets = []
-                line_samples = []
-                deadline = time.time() + MEASURE_TIMEOUT_S
-                window_end = None
-                while time.time() < deadline:
-                    pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
-                    if pose_cam is not None:
-                        gantry_offsets.append(self.gripper_client.measure_gantry_minus_card(pose_cam))
-                        line_samples.append([self.datastore.anchor_line_record[i].getLast()[1] for i in range(N_LINES)])
-                        if window_end is None:
-                            window_end = time.time() + MEASURE_WINDOW_S
-                    if window_end is not None and time.time() >= window_end:
-                        break
-                    await asyncio.sleep(0.05)
+                    sample = await measure_hover(name)
+                    if sample is None:
+                        logger.warning(f'Gripper card survey: never saw {name} at gantry z={gz:.2f}; skipping this height')
+                        continue
+                    samples.append(sample)
+                    logger.info(
+                        f'Gripper card survey: {name} z={gz:.2f} n={sample["n"]} '
+                        f'gantry_minus_card={np.round(sample["gantry_minus_card"], 3)} '
+                        f'lines={np.round(sample["line_lengths"], 3)}'
+                    )
 
-                if not gantry_offsets:
-                    logger.warning(f'Gripper card survey: never saw {name} in the gripper camera; skipping')
-                    continue
-
-                gantry_minus_card = np.mean(gantry_offsets, axis=0)
-                line_lengths = np.mean(line_samples, axis=0)
-                gripper_obs[name] = {
-                    'gantry_minus_card': gantry_minus_card,
-                    'line_lengths': line_lengths,
-                }
-                logger.info(
-                    f'Gripper card survey: {name} n={len(gantry_offsets)} '
-                    f'gantry_minus_card={np.round(gantry_minus_card, 3)} '
-                    f'lines={np.round(line_lengths, 3)}'
-                )
+                if samples:
+                    gripper_obs[name] = samples
         except asyncio.CancelledError:
             raise
         finally:
             self.slow_stop_all_spools()
 
-        logger.info(f'Gripper card survey collected {len(gripper_obs)} card observations: {list(gripper_obs.keys())}')
+        total = sum(len(s) for s in gripper_obs.values())
+        logger.info(f'Gripper card survey collected {total} hover samples across {len(gripper_obs)} cards: '
+                    f'{ {k: len(v) for k, v in gripper_obs.items()} }')
         return gripper_obs
 
     async def _nudge_gantry_xy(self, delta_xy, speed=0.04):
@@ -1941,6 +2022,7 @@ class AsyncObserver:
         finger_task = None
         DETECTION_WAIT_S = 1.0 # seconds
         FLOOR_CLEARANCE_M = 0.2 # how far above the floor to hold the gripper fingertips at the diamond's bottom point
+        self.tension_over_limit = False  # clear any stale trip from a previous run
         try:
             if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
                 self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -1963,12 +2045,22 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observing markers",
             ))
+            ORIGIN_VISIBILITY_TIMEOUT_S = 30.0 # give up if some anchor camera never sees the origin card
             detecting_start = time.time()
             while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
                 logger.debug(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
                 self.send_ui(visibility_states=telemetry.VisibilityStates(anchors_seeing_origin_card=list(
                     [anum for anum, count in enumerate(num_o_dets) if count > 0] # only anchor nums which see the origin card
                 )))
+
+                if time.time() - detecting_start >= ORIGIN_VISIBILITY_TIMEOUT_S:
+                    self.slow_stop_all_spools()
+                    self.send_ui(pop_message=telemetry.Popup(
+                        message="The origin card must be placed at a location visible to both cameras. "
+                                "If there is no overlap in the camera's views of the room. "
+                                "either mount them closer, or install different camera tilt adapters."
+                    ))
+                    raise RuntimeError('Origin card not visible to all anchor cameras within timeout')
 
                 await asyncio.sleep(DETECTION_WAIT_S)
                 num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
@@ -2086,7 +2178,7 @@ class AsyncObserver:
 
             # open grip enough that we can see an unobstructed view from the palm camera
             await finger_task
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -30}))
+            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -40}))
 
             # move over the origin card
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -2112,13 +2204,17 @@ class AsyncObserver:
 
             # Tune swing_latency by inducing swings and finding the value that damps
             # them best. Only the Arpeggio gripper has the IMU-driven swing model.
-            if isinstance(self.gripper_client, ArpeggioGripperClient):
+            if False and isinstance(self.gripper_client, ArpeggioGripperClient):
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=34.0,
                     name="Calibration",
                     current_action="Tuning swing cancellation",
                 ))
-                await self.calibrate_swing_latency(progress_range=(30.0, 61.0))
+                # Perform swing cancellation measurements lower than the spin-measurement
+                SWING_MEASURE_DROP_M = 0.4
+                self.gantry_goal_pos = np.array([0, 0, gant_z - SWING_MEASURE_DROP_M])
+                await self.seek_gantry_goal(head_turn=False)
+                await self.calibrate_swing_latency(fine_pass=True, progress_range=(30.0, 61.0))
 
             # Refine the pull-point geometry with close-range gripper-camera views of the
             # calibration cards. The cards are still in place at this point (they are only
@@ -2140,7 +2236,16 @@ class AsyncObserver:
                     current_action="Running 3rd optimization pass",
                 ))
                 r = await self.flush_tele_buffer()
-                if len(gripper_obs) >= 2:
+
+                # move over the origin card
+                self.gantry_goal_pos = np.array([0,0,gant_z])
+                await self.seek_gantry_goal(head_turn=False)
+
+                # Require a reading from all four cards (origin + 3 cal_assist). With fewer hovers the
+                # gripper term has too few length-delta pairs to pin the two far eyelets, and the
+                # under-constrained refinement distorts a good rectangular layout into a diamond.
+                REQUIRED_GRIPPER_CARDS = 4
+                if len(gripper_obs) >= REQUIRED_GRIPPER_CARDS:
                     # Final safety measure: turn swing cancellation off before applying the refined
                     # geometry, and turn it back on afterwards only if it still damps. Even with the
                     # anchors frozen (so the room frame cannot rotate), the new eyelets change the
@@ -2188,7 +2293,7 @@ class AsyncObserver:
                         self.send_ui(pop_message=telemetry.Popup(
                             message='Swing cancellation did not damp after calibration refinement and was left OFF. Re-check the calibration before running.'))
                 else:
-                    logger.warning(f'Only {len(gripper_obs)} gripper card observation(s); need >=2 to refine. Skipping.')
+                    logger.warning(f'Only {len(gripper_obs)} of {REQUIRED_GRIPPER_CARDS} gripper card observations; need all four to refine. Skipping 3rd pass.')
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
@@ -2202,8 +2307,8 @@ class AsyncObserver:
             if finger_task is not None:
                 finger_task.cancel()
                 await finger_task
-            if self.calibration_aborted_by_safety:
-                self.calibration_aborted_by_safety = False
+            if self.tension_over_limit:
+                self.tension_over_limit = False
                 current_action = "Aborted: line tension exceeded the safe limit"
             else:
                 current_action = "Cancelled by user"
@@ -3434,11 +3539,16 @@ class AsyncObserver:
             uvec  = uvec / (np.linalg.norm(uvec) + 1e-5)
             velocity = uvec * speed
 
+        # An empty/unset source key maps to the shared 'default' source.
+        if not key:
+            key = 'default'
         # this commanded velocity overwrites the last velocity with the same key and all velocities are summed
         # currently this is only used to combine swing cancellation with user inputs.
         self.input_velocities[key] = (velocity, time.monotonic())
+        # ensure this source contributes to the sum; stale sources expire lazily via TTL pruning.
+        self.active_set.add(key)
         self._prune_input_velocities() # drop any source keys that have gone stale
-        # the key we just set is always fresh, so if it's in the active set the sum is guaranteed a 3-vector
+        # the key we just set is always fresh and in the active set, so the sum is guaranteed a 3-vector
         total_velocity = np.sum([self.input_velocities[k][0] for k in self.active_set if k in self.input_velocities], axis=0)
         
         # Determine the total requested speed before limits

@@ -7,7 +7,12 @@ from math import pi, sqrt
 # rotation vectors are Rodrigues
 
 # rotation and translation vectors of the gripper camera (the frame of reference used in marker detection) in the gripper reference frame
-gripper_camera = (np.array([pi/2,0,0], dtype=float), np.array([0,0.004,-0.026], dtype=float))
+# The camera is not pointed straight down: it sits ~2.7cm toward the front (-z, the nose side) of the
+# CAD origin (~4cm from the hang centerline at the grommet) and is tilted 9.06 deg back toward center.
+# That tilt is a rotation about the gripper x axis, the same axis as the pi/2 that maps the optical
+# axis to straight-down, so it adds to that term. Tilting the optical axis from -y toward +z (center)
+# is a negative x rotation, hence pi/2 minus the tilt.
+gripper_camera = (np.array([pi/2 - np.radians(9.06),0,0], dtype=float), np.array([0,0.006,-0.027], dtype=float))
 
 # rotation and translation vectors of the gripper IMU in the gripper reference frame
 # the BNO085 is mounted in the gripper with it's y axis up, x axis out of the grippers right ear, and X axis pointing out of the back of it's head.

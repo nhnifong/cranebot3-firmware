@@ -14,10 +14,10 @@ W_CONSISTENCY = 2.0 # Cards should be in the same place when viewed from differe
 W_PLANAR = 0.9 # increase this to make anchor height deviations from the average plane more expensive
 W_DIAMOND_DIST = 0.8 # weight for the distance changes in the diamond pattern
 W_DIAMOND_PLANAR = 0.2 # weight for forcing the gantry and eyelets into a single vertical plane
-W_EYELET_REG = 0.2 # weight to keep eyelets near their initial 5m guess
+W_EYELET_REG = 0.4 # weight to keep eyelets near their initial 5m guess
 W_SHAPE_MATCH = 1.0 # weight to force distance between anchors to match distance between eyelets
 W_ANCHOR_TILT = 10.0 # weight to penalize anchor pitch/roll changes (locks rotation to Z-axis only)
-W_GRIPPER_DIST = 1.5 # weight for close-range gripper-over-card line-length-delta constraints
+W_GRIPPER_DIST = 1.0 # weight for close-range gripper-over-card line-length-delta constraints
 
 # half height and half width of diamond
 DIAMOND_SIZE = (0.1, 1.0)
@@ -49,13 +49,15 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         x contains 6 elements: 2 eyelets (6)
 
     gripper_obs, when provided, is a dict keyed by calibration card name (as returned by
-    Observer.collect_gripper_card_observations). Each value has 'gantry_minus_card' (the room
-    vector from the card to the gantry, measured close-range by the gripper camera) and
-    'line_lengths' (the four line lengths at that hover). These add multilateration constraints
-    on the four pull points: the gantry position over each card is the card's room position plus
-    the measured offset, and the CHANGE in each line length between two cards must equal the
-    change in that pull point's distance to the gantry. Using deltas (rather than absolute
-    lengths) makes the constraint immune to any bias in the absolute line-length reference.
+    Observer.collect_gripper_card_observations). Each value is a list of per-height samples; each
+    sample has 'gantry_minus_card' (the room vector from the card to the gantry, measured
+    close-range by the gripper camera) and 'line_lengths' (the four line lengths at that hover).
+    These add multilateration constraints on the four pull points: the gantry position for a sample
+    is its card's room position plus the measured offset, and the CHANGE in each line length between
+    any two samples must equal the change in that pull point's distance to the gantry. Sampling each
+    card at several heights spreads the gantry samples vertically, which is what lets the deltas
+    triangulate the far eyelets. Using deltas (rather than absolute lengths) makes the constraint
+    immune to any bias in the absolute line-length reference.
     """
     # Unpack state vector based on whether anchors are frozen
     if fixed_anchor_poses is not None:
@@ -270,13 +272,16 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             eyelet_positions[1],
         ]
 
-        # Gantry room position over each observed card = card room position + measured offset.
+        # Gantry room position for each hover = its card's room position + measured offset. Every
+        # card contributes several samples (one per surveyed height), and all samples across all
+        # cards are paired below, so the vertical spread within a card constrains the eyelets too.
         gantry_samples = []  # (name, gantry_room_position, line_lengths)
-        for name, obs in gripper_obs.items():
+        for name, samples in gripper_obs.items():
             if name not in card_centroids:
                 continue
-            gantry_room = card_centroids[name] + np.asarray(obs['gantry_minus_card'])
-            gantry_samples.append((name, gantry_room, np.asarray(obs['line_lengths'])))
+            for obs in samples:
+                gantry_room = card_centroids[name] + np.asarray(obs['gantry_minus_card'])
+                gantry_samples.append((name, gantry_room, np.asarray(obs['line_lengths'])))
 
         # For every pair of hovers and every line, the modelled change in distance from the pull
         # point to the gantry must match the measured change in line length.

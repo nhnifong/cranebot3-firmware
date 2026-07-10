@@ -3,6 +3,7 @@ pytestmark = pytest.mark.pi
 pytest.importorskip("gpiodevice")
 
 import asyncio
+import time
 import unittest
 import numpy as np
 from unittest.mock import patch, Mock, MagicMock, ANY
@@ -19,7 +20,7 @@ from nf_robot.robot.anchor_server import RaspiAnchorServer
 from nf_robot.robot.gripper_arp_server import GripperArpServer
 from nf_robot.robot.debug_motor import DebugMotor
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
-from nf_robot.host.observer import AsyncObserver
+from nf_robot.host.observer import AsyncObserver, INPUT_VELOCITY_TTL_S
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, control, common
@@ -273,6 +274,29 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(marker_telem)
         if marker_telem:
             self.assertEqual(marker_telem.name, 'gantry_goal_marker')
+
+    async def test_stale_default_velocity_still_yields_3vector(self):
+        """Regression: a move issued after the 'default' velocity source has expired
+        must still produce a genuine 3-vector, not a scalar.
+
+        Previously an unset source_key wrote its velocity under a key that was never
+        added to active_set, while the stale 'default' entry got pruned by the TTL. The
+        summed velocity then collapsed to np.sum([], axis=0) == scalar 0.0, which crashed
+        the Kalman filter velocity update on its (3,) shape assertion on the first move."""
+        await self._setup_fully_connected_system()
+
+        # Age the 'default' entry past its TTL so the next move prunes it.
+        self.ob.input_velocities['default'] = (np.zeros(3), time.monotonic() - INPUT_VELOCITY_TTL_S - 1.0)
+
+        # Move with an unset source key (key defaults to None -> 'default').
+        total_velocity = await self.ob.move_direction_speed(np.array([1.0, 0.0, 0.0]), speed=0.2, key=None)
+
+        # The summed velocity must be a genuine 3-vector, not a scalar 0.0.
+        self.assertEqual(np.shape(total_velocity), (3,))
+
+        # And it must survive a real Kalman filter velocity update without asserting.
+        self.ob.pe.kf.update(np.asarray(total_velocity), time.time(),
+                             self.ob.pe.vel_noise_covariance, 'velocity')
 
     async def test_system_commands(self):
         """Tests full system actions like Stop, Half Calibration, and Episode Control."""
