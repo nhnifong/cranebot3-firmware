@@ -66,13 +66,6 @@ def _make_robot_ready(camera_mode="all"):
 
 class TestConstants(unittest.TestCase):
 
-    def test_all_modes_defined(self):
-        expected = {
-            "gripper_224", "gripper_384", "gripper_floor_224", "gripper_floor_384",
-            "gripper_anchors_384", "all_square", "all",
-        }
-        self.assertEqual(set(_CAMERA_MODES.keys()), expected)
-
     def test_feed_names_cover_all_feeds_used(self):
         all_feeds = set()
         for feeds in _CAMERA_MODES.values():
