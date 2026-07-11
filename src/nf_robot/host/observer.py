@@ -912,11 +912,38 @@ class AsyncObserver:
         ])
 
     async def sync_timezone_to_bots(self):
-        tz = subprocess.check_output(['timedatectl', 'show', '--property=Timezone', '--value']).decode().strip()
+        tz = self._get_local_timezone_name()
+        if not tz:
+            logger.warning("Could not determine local timezone; skipping timezone sync to bots")
+            return
         await asyncio.gather(*[
             client.send_commands({'set_timezone': tz})
             for client in self.bot_clients.values()
         ])
+
+    @staticmethod
+    def _get_local_timezone_name():
+        """Return the host's IANA timezone name (e.g. 'America/New_York').
+
+        The bots run Linux and expect an IANA name. On Linux `timedatectl` is
+        authoritative, but it doesn't exist on Windows (and Windows names zones
+        differently), so fall back to tzlocal, which maps to IANA on every platform.
+        """
+        if sys.platform != 'win32':
+            try:
+                tz = subprocess.check_output(
+                    ['timedatectl', 'show', '--property=Timezone', '--value']
+                ).decode().strip()
+                if tz:
+                    return tz
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                pass
+        try:
+            from tzlocal import get_localzone_name
+            return get_localzone_name()
+        except Exception:
+            logger.exception("Failed to determine local timezone name")
+            return None
 
     async def chase_tag(self, name):
         """Keep the gripper at the named location"""
