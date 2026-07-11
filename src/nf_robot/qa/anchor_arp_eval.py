@@ -202,7 +202,7 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
 
     if motor_id_changed:
         print("The upper motor's motor_id (ESC_ID) was changed; that only takes effect after a power cycle.")
-        input("Power cycle both motors now by pulling the barrel jack connector and re-plugging it, then press Enter. If you are not powering the pi any other way, just come back and start this script again, and it will pick up where it left off.")
+        input("Power cycle both motors now by re-plugging the AC wall plug, then press Enter. If you are not powering the pi any other way, just come back and start this script again, and it will pick up where it left off.")
 
     # With the upper motor now on id 2, the lower motor is the only one still on the
     # factory id 1, so set its feedback_id in place without unplugging anything.

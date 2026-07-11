@@ -113,8 +113,11 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # Swing cancellation
     config.swing_latency = 0.18 # seconds
 
-    # tension safety
-    config.max_safe_tension = 18 # newtons.
+    # tension safety in newtons
+    # ~18 is low enough that it gives up near the ceiling with no payload
+    # ~28 is enough to lift 2kg in an average room but you have to pull really hard at the ceiling empty to trigger it.
+    # ~50 breaks the powerline, don't go that high.
+    config.max_safe_tension = 28 # newtons. 
 
     # last known gantry position, lerobot history and route source/destination
     config.last_gantry_pos = common.Vec3(x=0, y=0, z=0)
