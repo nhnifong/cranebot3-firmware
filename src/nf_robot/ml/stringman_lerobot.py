@@ -1024,7 +1024,7 @@ def eval_episode(
         "finger_speed": 0.0
     })
 
-def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote_stream_token=None, camera_mode=None):
+def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=None, camera_mode=None):
     import torch
     import json
     from huggingface_hub import hf_hub_download
@@ -1066,6 +1066,8 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, device="cuda", remote
         policy_cfg=cfg,
         pretrained_path=policy_repo_id,
         dataset_stats=dataset.meta.stats,
+        preprocessor_overrides={"device_processor": {"device": str(cfg.device)}},
+        postprocessor_overrides={"device_processor": {"device": str(cfg.device)}}
     )
 
     rm=None

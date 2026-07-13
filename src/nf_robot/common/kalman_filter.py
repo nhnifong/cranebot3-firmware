@@ -1,5 +1,9 @@
 import numpy as np
 import time
+import sys
+
+if sys.platform == 'darwin':
+    np.seterr(divide='ignore', invalid='ignore', over='ignore')
 
 class KalmanFilter:
     """A Kalman Filter to estimate a 3D position, velocity, and sensor biases.
