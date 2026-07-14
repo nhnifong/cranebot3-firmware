@@ -57,6 +57,7 @@ def resize_video(
     g: int = 2,
     center_crop: bool = False,
     threads: int | None = None,
+    pad_clamp: bool = False,
 ) -> None:
     """Re-encode a video file at a new resolution using PyAV.
 
@@ -65,12 +66,21 @@ def resize_video(
     ratio so the resize preserves geometry instead of stretching. If False, the
     frame is stretched to fit (the default, matching legacy behavior).
 
+    If pad_clamp is True, no scaling is applied at all: the source frame is
+    centered on a target_w x target_h canvas, cropping any axis where the
+    source is larger than the target and padding any axis where it's smaller
+    by replicating the nearest edge pixels (clamp-to-edge). Mutually exclusive
+    with center_crop.
+
     threads caps the encoder's internal thread pool. This matters because
     SVT-AV1 (and most modern encoders) otherwise grab every logical core for a
     single encode, so parallelizing across worker processes without also
     capping per-encode threads oversubscribes the CPU. None leaves the encoder
     at its default (all cores).
     """
+    if center_crop and pad_clamp:
+        raise ValueError("center_crop and pad_clamp are mutually exclusive")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     in_container = av.open(str(input_path))
@@ -125,14 +135,49 @@ def resize_video(
         cropped = av.VideoFrame.from_ndarray(np.ascontiguousarray(arr), format="rgb24")
         return cropped
 
+    def pad_to_target(frame):
+        """Center frame on a width x height canvas without scaling.
+
+        Axes where the source is larger than the target are center-cropped;
+        axes where it's smaller are padded by replicating the nearest edge
+        pixel (clamp-to-edge), so upscaling never introduces black bars.
+        """
+        arr = frame.to_ndarray(format="rgb24")  # (H, W, 3)
+        src_h, src_w = arr.shape[:2]
+
+        if src_w > width:
+            x0 = (src_w - width) // 2
+            arr = arr[:, x0:x0 + width, :]
+            src_w = width
+        if src_h > height:
+            y0 = (src_h - height) // 2
+            arr = arr[y0:y0 + height, :, :]
+            src_h = height
+
+        pad_w = width - src_w
+        pad_h = height - src_h
+        if pad_w > 0 or pad_h > 0:
+            left = pad_w // 2
+            top = pad_h // 2
+            arr = np.pad(
+                arr,
+                ((top, pad_h - top), (left, pad_w - left), (0, 0)),
+                mode="edge",
+            )
+        return av.VideoFrame.from_ndarray(np.ascontiguousarray(arr), format="rgb24")
+
     frame_count = 0
     for packet in in_container.demux(v_in):
         for frame in packet.decode():
             if frame is None:
                 continue
-            if center_crop:
-                frame = crop_to_aspect(frame)
-            resized = frame.reformat(width=width, height=height, format=pix_fmt)
+            if pad_clamp:
+                frame = pad_to_target(frame)
+                resized = frame.reformat(format=pix_fmt)
+            else:
+                if center_crop:
+                    frame = crop_to_aspect(frame)
+                resized = frame.reformat(width=width, height=height, format=pix_fmt)
             resized.pts = frame_count
             resized.time_base = Fraction(1, int(fps))
             for pkt in v_out.encode(resized):
@@ -159,6 +204,7 @@ def resize_video_feature(
     g: int = 2,
     headroom: int = 0,
     center_crop: bool = False,
+    pad_clamp: bool = False,
 ) -> LeRobotDataset:
     if feature_key not in dataset.meta.video_keys:
         raise ValueError(
@@ -195,7 +241,7 @@ def resize_video_feature(
                 dataset.root / rel_path,
                 output_dir / rel_path,
                 width, height, fps, vcodec, pix_fmt, crf, g, center_crop,
-                threads_per_worker,
+                threads_per_worker, pad_clamp,
             ): rel_path
             for rel_path in sorted_files
         }
@@ -271,6 +317,12 @@ def main() -> None:
         "--center_crop", action="store_true",
         help="Center-crop to the target aspect ratio before resizing instead of stretching",
     )
+    parser.add_argument(
+        "--pad_clamp", action="store_true",
+        help="Center the frame on the target canvas with no scaling, padding any "
+             "smaller axis by replicating edge pixels instead of stretching "
+             "(mutually exclusive with --center_crop)",
+    )
     args = parser.parse_args()
 
     input_root = Path(args.root) if args.root else HF_LEROBOT_HOME / args.repo_id
@@ -305,6 +357,7 @@ def main() -> None:
         g=args.g,
         headroom=args.headroom,
         center_crop=args.center_crop,
+        pad_clamp=args.pad_clamp,
     )
 
 

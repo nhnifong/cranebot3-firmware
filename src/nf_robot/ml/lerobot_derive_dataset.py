@@ -67,6 +67,7 @@ def derive_dataset(
     g: int = 2,
     headroom: int = 0,
     center_crop: bool = False,
+    pad_clamp: bool = False,
 ) -> LeRobotDataset:
     if camera_mode not in _CAMERA_MODES:
         raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
@@ -86,10 +87,11 @@ def derive_dataset(
 
     for key, (target_w, target_h) in target_keys.items():
         src_h, src_w = dataset.meta.features[key]["shape"][:2]
-        if target_w > src_w or target_h > src_h:
+        if not pad_clamp and (target_w > src_w or target_h > src_h):
             raise ValueError(
                 f"Cannot derive camera_mode '{camera_mode}': target resolution "
-                f"{target_w}x{target_h} for '{key}' exceeds source resolution {src_w}x{src_h}"
+                f"{target_w}x{target_h} for '{key}' exceeds source resolution {src_w}x{src_h}. "
+                f"Pass pad_clamp=True to center and pad the smaller axis instead of failing."
             )
 
     features_to_remove = [key for key in dataset.meta.video_keys if key not in target_keys]
@@ -149,7 +151,7 @@ def derive_dataset(
                 futures[
                     pool.submit(
                         resize_video, path, tmp_path, target_w, target_h, fps, vcodec, pix_fmt, crf, g, center_crop,
-                        threads_per_worker,
+                        threads_per_worker, pad_clamp,
                     )
                 ] = (path, tmp_path)
             for future in tqdm(as_completed(futures), total=len(futures), desc=f"Resizing {key}"):
@@ -191,6 +193,12 @@ def main() -> None:
         help="Center-crop to the target aspect ratio before resizing instead of stretching (default: stretch)",
     )
     parser.add_argument(
+        "--pad_clamp", action="store_true",
+        help="Allow target resolutions larger than the source: center the frame on the "
+             "target canvas with no scaling and pad the smaller axis by replicating edge "
+             "pixels, instead of raising (mutually exclusive with --center_crop)",
+    )
+    parser.add_argument(
         "--push_to_hub", action="store_true", help="Upload the derived dataset to the Hugging Face Hub"
     )
     args = parser.parse_args()
@@ -217,6 +225,7 @@ def main() -> None:
         g=args.g,
         headroom=args.headroom,
         center_crop=args.center_crop,
+        pad_clamp=args.pad_clamp,
     )
 
     if args.push_to_hub:
