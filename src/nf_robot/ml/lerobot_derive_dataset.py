@@ -130,6 +130,16 @@ def derive_dataset(
         if (target_w, target_h) == (src_w, src_h):
             continue
 
+        # Decide per-key (i.e. per source stream) which strategy applies: a stream
+        # that's too small in some axis needs pad_clamp (cropping/stretching can't
+        # enlarge without either failing or fabricating detail), while a stream
+        # that already covers the target in both axes can use center_crop. This
+        # lets a single merge recipe combine sources of different native
+        # resolutions without the two strategies conflicting on any one stream.
+        needs_pad = target_w > src_w or target_h > src_h
+        key_pad_clamp = pad_clamp and needs_pad
+        key_center_crop = center_crop and not needs_pad
+
         video_files: set[Path] = set()
         for ep_idx in range(dataset.meta.total_episodes):
             try:
@@ -150,8 +160,8 @@ def derive_dataset(
                 tmp_path = path.with_suffix(".tmp.mp4")
                 futures[
                     pool.submit(
-                        resize_video, path, tmp_path, target_w, target_h, fps, vcodec, pix_fmt, crf, g, center_crop,
-                        threads_per_worker, pad_clamp,
+                        resize_video, path, tmp_path, target_w, target_h, fps, vcodec, pix_fmt, crf, g, key_center_crop,
+                        threads_per_worker, key_pad_clamp,
                     )
                 ] = (path, tmp_path)
             for future in tqdm(as_completed(futures), total=len(futures), desc=f"Resizing {key}"):
@@ -194,9 +204,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--pad_clamp", action="store_true",
-        help="Allow target resolutions larger than the source: center the frame on the "
-             "target canvas with no scaling and pad the smaller axis by replicating edge "
-             "pixels, instead of raising (mutually exclusive with --center_crop)",
+        help="Allow target resolutions larger than the source: for any stream where the "
+             "source is smaller than the target in some axis, center it on the target "
+             "canvas with no scaling and pad by replicating edge pixels, instead of "
+             "raising. Streams that are already as large as the target still use "
+             "--center_crop if set, so both flags may be combined for a merge whose "
+             "source datasets have different native resolutions.",
     )
     parser.add_argument(
         "--push_to_hub", action="store_true", help="Upload the derived dataset to the Hugging Face Hub"
