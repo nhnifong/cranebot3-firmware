@@ -12,7 +12,8 @@
 
 output_repo_id: naavox/move_clutter_rect
 camera_mode: gripper_anchors_rect
-center_crop: false
+center_crop: true
+pad_clamp: true
 
 merge:
   - naavox/move_clutter
