@@ -15,10 +15,17 @@ Linux (python 3.11 or later)
     source venv/bin/activate
     pip install "nf_robot[host]"
 
-Start headless robot controller in LAN-only mode.
-The particular robot details will be read from/saved to bedroom.conf
+Mac (python 3.13 or later)
 
-    stringman-headless --config=bedroom.conf
+    brew install ffmpeg python@3.13
+    python3.13 -m venv venv
+    source venv/bin/activate
+    pip install "nf_robot[host]"
+
+Start headless robot controller in LAN-only mode.
+The particular robot details will be read from/saved to bedroom.json
+
+    stringman-headless --config=bedroom.json
 
 The stringman motion controller (stringman-headless) is the program which communicates with the robot components over wifi and acts as the central brain of a single robot. It must be running on the same network as the powered on anchors and gripper in order for the robot to be active and controllable. The main entrypoint is observer.py
 

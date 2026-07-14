@@ -111,6 +111,9 @@ VERSION_GATES = {
     "gripper_card_survey": "4.2.0",
 }
 
+def _ignore_sigint():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
     Saves an image to the unprocessed directory. 
@@ -3144,7 +3147,7 @@ class AsyncObserver:
         self.pe_task = asyncio.create_task(self.start_pe_when_ready())
 
         # main process must own pool, and there's only one. multiple subprocesses may submit work.
-        with Pool(processes=3) as pool:
+        with Pool(processes=3, initializer=_ignore_sigint) as pool:
             self.pool = pool
 
             # zeroconf only discovers services and keeps their addresses and ports up to date in the config.
