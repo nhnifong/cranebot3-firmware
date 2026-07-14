@@ -30,6 +30,7 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     output_repo_id: naavox/derivation_test   # id for the final dataset
     camera_mode: gripper_floor_384           # target camera format (see stringman_lerobot._CAMERA_MODES)
     center_crop: false                       # center-crop to target aspect instead of stretching (optional)
+    pad_clamp: false                          # center + clamp-pad instead of stretching when target exceeds source (optional)
     merge:                                    # source datasets to merge (>= 1)
       - naavox/test_dataset_3
       - naavox/laptop_test_dataset
@@ -247,6 +248,7 @@ def build(
     output_repo_id = recipe["output_repo_id"]
     camera_mode = recipe["camera_mode"]
     center_crop = bool(recipe.get("center_crop", False))
+    pad_clamp = bool(recipe.get("pad_clamp", False))
     source_repo_ids = list(recipe["merge"])
     label_cfg = recipe.get("label_contact_actions") or {}
     do_label = bool(label_cfg.get("enabled", False))
@@ -276,6 +278,7 @@ def build(
             repo_id=repo_id,
             headroom=headroom,
             center_crop=center_crop,
+            pad_clamp=pad_clamp,
         )
         validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode)
         converted.append((repo_id, converted_root))
