@@ -74,6 +74,10 @@ _LEROBOT_IMAGE = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "git")
     .pip_install(_LEROBOT_SPEC)
+    # Force classic LFS HTTPS downloads instead of the Xet CAS protocol.
+    # hf_xet deadlocks at "Fetching N files: 0%" inside Modal containers
+    # (old kernel / restricted egress), hanging dataset loading indefinitely.
+    .env({"HF_HUB_DISABLE_XET": "1"})
 )
 
 app = modal.App("lerobot-train")

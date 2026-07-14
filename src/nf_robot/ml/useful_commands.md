@@ -152,15 +152,12 @@ lerobot-train \
 train on modal
 
 python src/nf_robot/ml/lerobot_train_modal.py \
-  --dataset.repo_id=naavox/move_clutter_combined_384 \
-  --output_dir /multitask_dit_data/tidy_modal_13 \
-  --steps=50000 \
+  --dataset.repo_id=naavox/move_clutter_rect \
+  --output_dir /multitask_dit_data/tidy_modal_14 \
+  --steps=60000 \
   --dataset.image_transforms.enable=true   \
   --dataset.image_transforms.max_num_transforms=3   \
-  --policy.type=multi_task_dit   \
-  --policy.device=cuda   \
-  --policy.vision_encoder_name=facebook/dinov3-vitb16-pretrain-lvd1689m \
-  --policy.use_visual_cross_attention=true \
+  --policy.type=multi_task_dit \
   --policy.horizon=64   \
   --policy.n_action_steps=32   \
   --policy.objective=flow_matching   \
@@ -171,13 +168,18 @@ python src/nf_robot/ml/lerobot_train_modal.py \
   --policy.num_integration_steps=100   \
   --policy.integration_method=euler   \
   --policy.sigma_min=0.0   \
-  --policy.repo_id="naavox/dit-dino-3"   \
+  --policy.repo_id="naavox/dit-move"   \
   --policy.push_to_hub=true \
   --wandb.enable=false \
-  --batch_size=128 \
+  --batch_size=400 \
   --tolerance_s=0.001 \
   --save_freq=5000 \
   --num_workers=10
+
+arguments for experimental dino encoder
+
+  --policy.vision_encoder_name=facebook/dinov3-vitb16-pretrain-lvd1689m \
+  --policy.use_visual_cross_attention=true \
 
 
 SmolVLA
@@ -205,24 +207,25 @@ lerobot-train \
 
 JEPA
 
-lerobot-train \
-  --policy.path=lerobot/VLA-JEPA-LIBERO \
-  --policy.repo_id=naavox/jepa-2 \
+python src/nf_robot/ml/lerobot_train_modal.py \
+  --output_dir /multitask_dit_data/tidy_modal_14 \
+  --policy.path=lerobot/VLA-JEPA-Pretrain \
+  --policy.repo_id=naavox/jepa-3 \
   --policy.freeze_qwen=true \
   --policy.pre_snap_gripper_action=false \
   --policy.binarize_gripper_action=false \
   --policy.reinit_modules='["model.action_model.action_encoder", "model.action_model.action_decoder", "model.action_model.state_encoder"]' \
   --policy.gripper_dim=4 \
-  --dataset.repo_id=naavox/move_clutter_combined_384_2 \
-  --dataset.root=/media/nhn/nfdrive/datasets/move_clutter_combined_384_2/ \
-  --output_dir=./outputs/jepa-2/training \
+  --dataset.repo_id=naavox/move_clutter_rect \
+  --dataset.root=/media/nhn/nfdrive/datasets/move_clutter_rect/ \
+  --output_dir=./outputs/jepa-3/training \
   --dataset.image_transforms.enable=true \
   --dataset.image_transforms.max_num_transforms=3 \
   --wandb.enable=false \
-  --rename_map='{"observation.images.gripper_camera": "observation.images.image", "observation.images.overhead_camera": "observation.images.image2"}' \
+  --rename_map='{"observation.images.gripper_camera": "observation.images.image", "observation.images.anchor_camera_0": "observation.images.exterior_1_left", "observation.images.anchor_camera_1": "observation.images.exterior_2_left"}' \
   --steps=30000 \
   --save_freq=5000 \
-  --batch_size=44 \
+  --batch_size=320 \
   --num_workers=12
 
 ```
