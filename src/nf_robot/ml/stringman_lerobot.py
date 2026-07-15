@@ -22,6 +22,7 @@ import shutil
 import signal
 import sys
 import json
+import traceback
 import importlib.metadata
 
 from nf_robot.common.util import *
@@ -762,9 +763,6 @@ def ensure_hf_auth():
 
 
 def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None, camera_mode="all", action_space=DEFAULT_ACTION_SPACE):
-    # Verify HF auth before doing anything else: dataset resume/create and upload all need it.
-    ensure_hf_auth()
-
     class GracefulExit(Exception):
         pass
 
@@ -801,8 +799,14 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
 
     recorded_episodes = 0
     dataset = None
+    had_error = False
 
     try:
+        # Verify HF auth before doing anything else: dataset resume/create and upload all need it.
+        # Done here (rather than at the top of the function) so a failure can still be
+        # reported back through the robot, which is now connected.
+        ensure_hf_auth()
+
         action_features = hw_to_dataset_features(robot.action_features, "action")
         obs_features = hw_to_dataset_features(robot.observation_features, "observation")
         dataset_features = {**action_features, **obs_features}
@@ -925,10 +929,11 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
         if 'dataset' in locals() and dataset is not None:
             dataset.clear_episode_buffer()
 
-    except Exception as e:
+    except Exception:
+        had_error = True
         robot.send_session_status(common.LerobotSessionStatus(
             status=common.LerobotStatus.ERROR,
-            error=str(e)
+            error=f'Lerobot session failed.\n\n{traceback.format_exc()}'
         ))
         raise
 
@@ -947,7 +952,8 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
                 dataset.push_to_hub()
                 print("Upload complete.", flush=True)
 
-        robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_ALL_COMPLETE))
+        if not had_error:
+            robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.REC_ALL_COMPLETE))
         time.sleep(0.03)
         robot.disconnect()
 
@@ -1054,76 +1060,88 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
         camera_mode = camera_mode_from_features(dataset.meta.features)
     action_space = action_space_from_features(dataset.meta.features)
 
-    print(f"Loading policy config from {policy_repo_id}...")
-    cfg = PreTrainedConfig.from_pretrained(policy_repo_id)
-    cfg.pretrained_path = policy_repo_id 
-
-    # smoothly blend overlapping chunks
-    cfg.temporal_ensemble_coeff = 0.001
-
-    print("Instantiating processors and policy...")
-    preprocessor, postprocessor = make_pre_post_processors(
-        policy_cfg=cfg,
-        pretrained_path=policy_repo_id,
-        dataset_stats=dataset.meta.stats,
-        preprocessor_overrides={"device_processor": {"device": str(cfg.device)}},
-        postprocessor_overrides={"device_processor": {"device": str(cfg.device)}}
-    )
-
-    rm=None
-    if policy_repo_id == "naavox/g224_smolvla":
-        rm={"observation.images.gripper_camera": "observation.images.camera1"}
-    elif policy_repo_id.startswith("naavox/jepa"):
-        rm={"observation.images.gripper_camera": "observation.images.image", "observation.images.overhead_camera": "observation.images.image2"}
-
-    policy = make_policy(
-        cfg=cfg,
-        ds_meta=dataset.meta,
-        rename_map=rm
-    )
-    policy.eval()
-    print("Policy loaded.")
-    
+    # connect to the robot right away because it is our channel to send error messages back to the user.
     print(f"Connecting to robot...")
     robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode, action_space=action_space), events)
     print(describe_session_spaces(camera_mode, action_space, robot.observation_features, robot.action_features))
     robot.connect()
 
-    # init_rerun(session_name="stringman_eval")
-    print("Eval Ready. Waiting for start command.")
-    robot.send_session_status(common.LerobotSessionStatus(
-        status=common.LerobotStatus.EVAL_IDLE,
-        policy_repo_id=policy_repo_id,
-    ))
+    try:
+        print(f"Loading policy config from {policy_repo_id}...")
+        cfg = PreTrainedConfig.from_pretrained(policy_repo_id)
+        cfg.pretrained_path = policy_repo_id
 
-    while robot.is_connected:
-        time.sleep(0.03)
-        
-        if events['end_recording']:
-            events["end_recording"] = False
-            break
-        if not events['start']:
-            continue
-        
-        events['start'] = False
-        
-        eval_episode(
-            robot=robot,
-            policy=policy,
-            preprocessor=preprocessor,
-            postprocessor=postprocessor,
-            dataset_features=dataset.meta.features,
-            events=events,
-            fps=FPS,
-            max_episode_duration=EPISODE_MAX_TIME_SEC,
-            display_data=True
+        # smoothly blend overlapping chunks
+        cfg.temporal_ensemble_coeff = 0.001
+
+        print("Instantiating processors and policy...")
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy_cfg=cfg,
+            pretrained_path=policy_repo_id,
+            dataset_stats=dataset.meta.stats,
+            preprocessor_overrides={"device_processor": {"device": str(cfg.device)}},
+            postprocessor_overrides={"device_processor": {"device": str(cfg.device)}}
         )
-        
-        print("Episode Complete. Waiting...")
-            
-    print("Eval process stopping.")
-    robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_ALL_COMPLETE))
-    robot.disconnect()
+
+        rm=None
+        if policy_repo_id == "naavox/g224_smolvla":
+            rm={"observation.images.gripper_camera": "observation.images.camera1"}
+        elif policy_repo_id.startswith("naavox/jepa"):
+            rm={"observation.images.gripper_camera": "observation.images.image", "observation.images.overhead_camera": "observation.images.image2"}
+
+        policy = make_policy(
+            cfg=cfg,
+            ds_meta=dataset.meta,
+            rename_map=rm
+        )
+        policy.eval()
+        print("Policy loaded.")
+
+        # init_rerun(session_name="stringman_eval")
+        print("Eval Ready. Waiting for start command.")
+        robot.send_session_status(common.LerobotSessionStatus(
+            status=common.LerobotStatus.EVAL_IDLE,
+            policy_repo_id=policy_repo_id,
+        ))
+
+        while robot.is_connected:
+            time.sleep(0.03)
+
+            if events['end_recording']:
+                events["end_recording"] = False
+                break
+            if not events['start']:
+                continue
+
+            events['start'] = False
+
+            eval_episode(
+                robot=robot,
+                policy=policy,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+                dataset_features=dataset.meta.features,
+                events=events,
+                fps=FPS,
+                max_episode_duration=EPISODE_MAX_TIME_SEC,
+                display_data=True
+            )
+
+            print("Episode Complete. Waiting...")
+
+        print("Eval process stopping.")
+        robot.send_session_status(common.LerobotSessionStatus(status=common.LerobotStatus.EVAL_ALL_COMPLETE))
+        time.sleep(0.03)
+
+    except Exception:
+        robot.send_session_status(common.LerobotSessionStatus(
+            status=common.LerobotStatus.ERROR,
+            error=f'Lerobot session failed.\n\n{traceback.format_exc()}'
+        ))
+        raise
+
+    finally:
+        robot.disconnect()
 
 if __name__ == "__main__":
     """
