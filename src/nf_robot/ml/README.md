@@ -37,6 +37,82 @@ Recording against the local telemetry stack (mediamtx streams) and building data
 from a recipe are documented in [useful_commands.md](useful_commands.md) — they haven't
 changed.
 
+### Recording across two LAN machines (no cloud relay)
+
+Recording quality suffers if the CPU is fully loaded. You can split that load across two machines on the same
+LAN: run `stringman-headless` on one (the robot host) and `stringman_lerobot record` on
+another, with **no cloud relay** in between.
+
+By default `stringman-headless` binds both its telemetry websocket (port 4245) and all of
+its local mjpeg video streams to `127.0.0.1`, so they're only reachable on the robot host.
+Pass `--bind_address` to expose them to the LAN.
+
+On the **robot host**, start headless bound to its LAN IP (find it with `ip addr` / `hostname -I`):
+
+```bash
+python -m nf_robot.host.observer --bind_address=192.168.1.50
+# or bind all interfaces with --bind_address=0.0.0.0
+```
+
+On the **record machine**, point `--server_address` at that IP:
+
+```bash
+python -m nf_robot.ml.stringman_lerobot record \
+  --robot_id=lan \
+  --server_address=ws://192.168.1.50:4245 \
+  --repo_id=naavox/grasping_dataset_c
+```
+
+The observer advertises each video feed's URL using the same `--bind_address`, so the
+record machine automatically pulls the mjpeg streams from the robot host — no extra
+configuration needed. `eval` works the same way.
+
+> ⚠️ **Security:** the local control channel is **unauthenticated** — its only protection
+> is the default loopback bind. Setting `--bind_address` to a LAN IP or `0.0.0.0` lets
+> anyone on the network drive the robot and view its cameras. Only do this on a trusted
+> network. The authenticated alternative is the token-gated telemetry stack described
+> next.
+
+### Recording through the telemetry relay (token-gated, production)
+
+You can also run a session from a remote machine with the `nf-robot` package installed,
+connecting to your robot over the network through the telemetry relay at neufangled.com.
+This is the authenticated path — access is gated by a single-use **stream ticket**.
+
+Requirements:
+
+- The robot must be **bound to an account** on neufangled.com using the **Bind** action in
+  the run menu.
+- The robot must be running with **`--telemetry_env=production`** — this path works only
+  through the relay at neufangled.com.
+- You'll need your **robot id** and a **remote stream token (ticket)**:
+  - The robot id comes from the config file, or from the URL when viewing the control panel.
+  - The stream ticket comes from the run menu: **Calibration and Maintenance → Get Stream
+    Ticket**. Tickets are single-use — generate a fresh one for each session.
+
+To record a dataset:
+
+```bash
+python -m nf_robot.ml.stringman_lerobot record \
+  --robot_id=YOUR_ROBOT_ID \
+  --server_address=wss://neufangled.com \
+  --remote_stream_token=YOUR_STREAM_TICKET \
+  --repo_id=naavox/grasping_dataset
+```
+
+To evaluate a trained policy, use `eval` and pass the policy's repo id with `--policy_id`:
+
+```bash
+python -m nf_robot.ml.stringman_lerobot eval \
+  --robot_id=YOUR_ROBOT_ID \
+  --server_address=wss://neufangled.com \
+  --remote_stream_token=YOUR_STREAM_TICKET \
+  --policy_id=naavox/grasping_act_policy
+```
+
+Running the same client from a Docker container (e.g. the cloud record image) works
+identically — see the container commands in [useful_commands.md](useful_commands.md).
+
 ## Training
 
 All training uses `lerobot-train`. Below is one example per policy type. Run them
@@ -347,7 +423,7 @@ interrupted, or you want a mid-training step.
    hf upload naavox/dit-move ./dit-move-030000/pretrained_model/config.json config.json --repo-type=model
    ```
 
-## Evaluation locally as a seperat
+## Evaluation locally as a seperate process
 
 ```bash
 python -m nf_robot.ml.stringman_lerobot eval \

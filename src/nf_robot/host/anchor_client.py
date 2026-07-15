@@ -273,6 +273,7 @@ class ComponentClient:
             width=final_shape[0], height=final_shape[1], fps=final_fps,
             mjpeg_port=mjpegport, stream_path=path,
             telemetry_env=self.telemetry_env, on_ready=on_ready,
+            bind_address=getattr(self.ob, 'bind_address', '127.0.0.1'),
         )
         vs.start()
         logger.info(f'Streaming video locally at {vs.local_uri} with res {final_shape}')

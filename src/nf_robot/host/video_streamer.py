@@ -94,10 +94,11 @@ class MjpegStreamer:
     Intended for low-latency local LAN streaming directly to browsers.
     Does NOT use FFmpeg. Browser must display the stream with an Img tag.
     """
-    def __init__(self, width, height, port=8000):
+    def __init__(self, width, height, port=8000, bind_address="127.0.0.1"):
         self.width = width
         self.height = height
         self.port = port
+        self.bind_address = bind_address
         self.http_server = None
         self.latest_frame = None
         self.frame_condition = threading.Condition()
@@ -106,7 +107,7 @@ class MjpegStreamer:
         atexit.register(self.stop)
 
     def start(self):
-        self.http_server = ThreadingHTTPServer(('0.0.0.0', self.port), StreamingHandler)
+        self.http_server = ThreadingHTTPServer((self.bind_address, self.port), StreamingHandler)
         # Inject self into server so handler can access frame buffer
         self.http_server.streamer = self
         
@@ -247,14 +248,21 @@ class NfVideoStreamer:
     Calls on_ready(local_uri, stream_path) once after a warmup frame count
     (2 frames when local-only, 20 when streaming to RTMP).
     """
-    def __init__(self, width, height, fps, mjpeg_port, stream_path, telemetry_env, on_ready=None):
-        self._local_uri = f'http://{get_local_ip() or "localhost"}:{mjpeg_port}/stream.mjpeg'
+    def __init__(self, width, height, fps, mjpeg_port, stream_path, telemetry_env, on_ready=None, bind_address="127.0.0.1"):
+        # The advertised host must match what the bind actually accepts: when bound to a
+        # specific address, advertise that address; when bound to all interfaces, advertise
+        # this host's LAN IP so off-machine clients can reach it.
+        if bind_address in ("0.0.0.0", "::", ""):
+            advertised_host = get_local_ip() or "localhost"
+        else:
+            advertised_host = bind_address
+        self._local_uri = f'http://{advertised_host}:{mjpeg_port}/stream.mjpeg'
         self._stream_path = stream_path
         self._on_ready = on_ready
         self._ready_sent = False
         self._frames_sent = 0
 
-        self._local = MjpegStreamer(width=width, height=height, port=mjpeg_port)
+        self._local = MjpegStreamer(width=width, height=height, port=mjpeg_port, bind_address=bind_address)
 
         rtmp = None
         if telemetry_env == 'local':

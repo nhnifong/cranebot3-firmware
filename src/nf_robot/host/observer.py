@@ -171,8 +171,12 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1") -> None:
         self.port = port
+        # Interface the local telemetry websocket and all local mjpeg video streams bind to.
+        # Defaults to loopback (single-machine use). Set to a LAN IP or 0.0.0.0 to let a
+        # record/eval client on another machine connect. See src/nf_robot/ml/README.md.
+        self.bind_address = bind_address
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
@@ -3173,7 +3177,7 @@ class AsyncObserver:
             self.perception_task = asyncio.create_task(self.run_perception())
 
             # start a websocket server to accept incoming connections from either a local UI or local Lerobot session
-            async with websockets.serve(self.handle_local_client, "127.0.0.1", self.port):
+            async with websockets.serve(self.handle_local_client, self.bind_address, self.port):
                 # await something that will end when the program closes to keep serving and
                 # keep zeroconf alive and discovering services.
                 try:
@@ -3752,6 +3756,7 @@ class AsyncObserver:
                 stream_path=f'stringman/{self.config.robot_id}/3',
                 telemetry_env=self.telemetry_env,
                 on_ready=_make_on_ready(3),
+                bind_address=self.bind_address,
             )
             ortho_floor_vs.start()
             self.ortho_streamers = [(ortho_floor_vs, 3)]
@@ -3762,6 +3767,7 @@ class AsyncObserver:
                     stream_path=f'stringman/{self.config.robot_id}/4',
                     telemetry_env=self.telemetry_env,
                     on_ready=_make_on_ready(4),
+                    bind_address=self.bind_address,
                 )
                 heatmap_floor_vs.start()
                 self.ortho_streamers.append((heatmap_floor_vs, 4))
@@ -4399,6 +4405,15 @@ def main():
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
+    parser.add_argument(
+        "--bind_address",
+        type=str,
+        default="127.0.0.1",
+        help="Interface for the local telemetry websocket (port 4245) and all local mjpeg video "
+             "streams. Defaults to 127.0.0.1 (loopback only). Set to this host's LAN IP (or 0.0.0.0) "
+             "to let a record/eval client on another LAN machine connect. WARNING: the local control "
+             "channel is unauthenticated, so this exposes robot control to everyone on the network."
+    )
     args = parser.parse_args()
 
     if args.debug:
@@ -4414,7 +4429,8 @@ def main():
             stream_heatmap=args.stream_heatmap,
             auto_start=args.auto_start,
             local_models=args.local_models,
-            debug=args.debug
+            debug=args.debug,
+            bind_address=args.bind_address,
         )
 
         # Idempotent stop trigger. Runs as a signal-handler callback on the event
