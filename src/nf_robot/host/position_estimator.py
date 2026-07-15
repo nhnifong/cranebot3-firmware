@@ -368,13 +368,82 @@ class Positioner2:
         anchor_2d = self.anchor_points[:, 0:2]
         centroid = np.mean(anchor_2d, axis=0)
         angles = np.arctan2(anchor_2d[:, 1] - centroid[1], anchor_2d[:, 0] - centroid[0])
-        self.work_area = anchor_2d[np.argsort(angles)].astype(np.float32)
+        # shape (N, 1, 2) float32 is the contour form expected by cv2.pointPolygonTest
+        self.work_area = anchor_2d[np.argsort(angles)].astype(np.float32).reshape(-1, 1, 2)
+        # the gantry cannot be raised above the lowest anchor. cached for state clamping.
+        self.ceiling_z = float(np.min(self.anchor_points[:, 2]))
 
     def point_inside_work_area_2d(self, point):
-        return True 
+        """True if the horizontal point (x, y) lies within the anchor polygon."""
+        if self.work_area is None:
+            return True
+        # pointPolygonTest returns +1 inside, 0 on the edge, -1 outside.
+        return cv2.pointPolygonTest(self.work_area, (float(point[0]), float(point[1])), False) >= 0
 
     def point_inside_work_area(self, point):
-        return True 
+        """True if the point lies within the anchor polygon horizontally and within
+        the vertical bounds: z between the floor (0) and the lowest anchor's height."""
+        if point[2] < 0 or point[2] > self.ceiling_z:
+            return False
+        return self.point_inside_work_area_2d(point[:2])
+
+    def _nearest_point_in_work_area(self, point):
+        """Closest point on the anchor polygon boundary to a 2D point that lies outside it."""
+        poly = self.work_area.reshape(-1, 2)
+        p = np.asarray(point, dtype=float)
+        best = p
+        best_d2 = np.inf
+        n = len(poly)
+        for i in range(n):
+            a = poly[i]
+            ab = poly[(i + 1) % n] - a
+            denom = np.dot(ab, ab)
+            # parameter of the projection onto this edge, clamped to the segment
+            t = 0.0 if denom < 1e-12 else np.clip(np.dot(p - a, ab) / denom, 0.0, 1.0)
+            proj = a + t * ab
+            d2 = np.dot(p - proj, p - proj)
+            if d2 < best_d2:
+                best_d2 = d2
+                best = proj
+        return best
+
+    def clamp_state_to_work_area(self):
+        """Project the Kalman filter's position state back into the reachable work area,
+        cancelling any velocity component that points further out of bounds.
+
+        The commanded-velocity boundary check in the observer only gates the velocity
+        *input*. Position and velocity are filter *states* with their own momentum, and
+        a persistent offset can also be absorbed into the per-sensor biases, so the
+        estimate can drift outside the reachable volume (e.g. above the ceiling) and be
+        held there even while the hang point reports a valid in-bounds position. Clamping
+        the state makes leaving the reachable volume physically impossible."""
+        if self.work_area is None:
+            return
+
+        pos = self.kf.state_estimate[:3]  # views into the state vector; edits write through
+        vel = self.kf.state_estimate[3:6]
+
+        # vertical bounds: floor (0) below, lowest anchor above
+        if pos[2] > self.ceiling_z:
+            pos[2] = self.ceiling_z
+            if vel[2] > 0:
+                vel[2] = 0.0
+        elif pos[2] < 0:
+            pos[2] = 0.0
+            if vel[2] < 0:
+                vel[2] = 0.0
+
+        # horizontal bounds: anchor polygon
+        if not self.point_inside_work_area_2d(pos[:2]):
+            nearest = self._nearest_point_in_work_area(pos[:2])
+            outward = pos[:2] - nearest
+            dist = sqrt(np.dot(outward, outward))
+            if dist > 1e-9:
+                outward /= dist
+                v_out = np.dot(vel[:2], outward)
+                if v_out > 0:  # only remove the component still pushing outward
+                    vel[:2] -= v_out * outward
+            pos[:2] = nearest
 
     async def check_and_recal(self):
         """
@@ -406,6 +475,8 @@ class Positioner2:
             
             # advance the prediction to the current time.
             self.kf.predict_present()
+            # keep the estimate physically inside the reachable work area
+            self.clamp_state_to_work_area()
             self.gant_pos = self.kf.state_estimate[:3].copy()
             self.gant_vel = self.kf.state_estimate[3:6].copy()
             self.predict_time_taken = time.time()-start_time
