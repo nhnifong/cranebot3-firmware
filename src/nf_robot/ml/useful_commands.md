@@ -1,3 +1,7 @@
+> **Looking for a curated guide?** See [README.md](README.md) for a proper, organized
+> walkthrough (lerobot training/Modal/eval, plus the targeting & centering models). This
+> file is the raw scratch dump kept for reference.
+
 Currently this torch version seems to work with nvidia driver 580 and the RTX 5090
 pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 torchcodec==0.6.0 --index-url https://download.pytorch.org/whl/cu129
 
@@ -174,7 +178,8 @@ python src/nf_robot/ml/lerobot_train_modal.py \
   --batch_size=400 \
   --tolerance_s=0.001 \
   --save_freq=5000 \
-  --num_workers=10
+  --num_workers=10 \
+  --lerobot_ref public
 
 arguments for experimental dino encoder
 

@@ -14,9 +14,9 @@ Modal-specific flags
   --detach        When true, submit as a background job and return immediately (default: true)
   --num_workers   DataLoader num_workers; injected into training args when not already set (default: 10)
   --hf_secret     Name of the Modal secret that holds HUGGING_FACE_HUB_TOKEN (default: huggingface)
-  --lerobot_ref   Which lerobot to install in the image. A git ref (commit/branch/tag) of the
-                  nhnifong/lerobot fork installs that fork (default: a pinned fork commit); the
-                  literal "public" installs the published lerobot from PyPI instead. The ref must
+  --lerobot_ref   Which lerobot to install in the image. The literal "public" installs the
+                  published lerobot from PyPI (default). A git ref (commit/branch/tag) of the
+                  nhnifong/lerobot fork installs that fork instead. The ref must
                   already be pushed to GitHub for Modal to fetch it. Pin a commit (not a branch):
                   Modal caches the image layer by the pip spec string, so a branch name would keep
                   reusing a stale build, whereas a new commit hash forces a rebuild.
@@ -34,11 +34,12 @@ import sys
 
 import modal
 
-# Default git ref of the nhnifong/lerobot fork to install in the Modal image.
-# Bump this to a newly-pushed commit hash after changing the fork (pin a commit,
-# not a branch, so Modal rebuilds the cached image layer). Use --lerobot_ref to override,
-# or --lerobot_ref public to install the published lerobot from PyPI instead.
-_DEFAULT_LEROBOT_REF = "022fe150"
+# Which lerobot to install in the Modal image. Defaults to the published PyPI lerobot
+# so checkpoints are loadable by anyone on the public release. To use the nhnifong/lerobot
+# fork (dinov3 encoder + visual cross-attention), pass --lerobot_ref <commit>; pin a commit
+# hash (not a branch) so Modal rebuilds the cached image layer. A known-good fork commit is
+# 022fe150.
+_DEFAULT_LEROBOT_REF = "public"
 
 # ---------------------------------------------------------------------------
 # Parse Modal-specific flags at import time so they can be baked into the
