@@ -60,12 +60,9 @@ One-time setup, on any machine you'll publish from:
 
     npm login          # opens a browser to authenticate; needs an npmjs.com account
 
-The package does not ship built code, only source which consumers typecheck themselves.
-To typecheck before releasing a version using the sibling repo (requires
-`nf-main-site` checked out next to this repo, per "Developing this package
-alongside nf-main-site" above):
+Before releasing a version:
 
-    npm run verify-against-nf-viz
+    npm run verify-against-nf-viz:selftest
 
 If it's all good, then bump the version and publish.
 
