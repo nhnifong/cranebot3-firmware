@@ -476,10 +476,25 @@ default_message_pool.register_message(
 @dataclass(eq=False, repr=False)
 class Popup(betterproto2.Message):
     """
-    A connected UI should immediately display this message in a popup with an OK button.
+    A connected UI should immediately display this message in a popup
     """
 
     message: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    id: "int | None" = betterproto2.field(2, betterproto2.TYPE_UINT32, optional=True)
+    """
+    A unique identifier for this message
+    should be supplied when using buttons.
+    UI will respond with a PopupAck containing the id and the index of the button clicked
+    """
+
+    buttons: "list[str]" = betterproto2.field(
+        3, betterproto2.TYPE_STRING, repeated=True
+    )
+    """
+    A list of buttons to show below the message.
+    if empty, "OK" is shown
+    """
 
 
 default_message_pool.register_message("nf.telemetry", "Popup", Popup)

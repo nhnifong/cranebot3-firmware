@@ -237,6 +237,14 @@ message SetTargetModel {
   TargetModelAction action = 1;
 }
 
+// Acknowledgement of a popup message
+message PopupAck {
+  // Id of the message being acknowledged
+  uint32 id = 1;
+  // Index of the button that was clicked
+  uint32 button = 2;
+}
+
 // A single kind of update that a UI, ursina or web, is providing to Observer
 // Typically to control the robot
 message ControlItem {
@@ -256,6 +264,7 @@ message ControlItem {
     MoveGripperTo move_gripper_to = 14;
     SetPoint set_point = 15;
     SetTargetModel set_target_model = 16;
+    PopupAck popup_ack = 17;
   }
 }
 

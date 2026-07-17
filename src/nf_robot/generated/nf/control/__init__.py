@@ -18,6 +18,7 @@ __all__ = (
     "LerobotSessionAction",
     "ManageLerobotSession",
     "MoveGripperTo",
+    "PopupAck",
     "ScaleRoom",
     "SetPoint",
     "SetSwingCancellation",
@@ -516,6 +517,10 @@ class ControlItem(betterproto2.Message):
         16, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    popup_ack: "PopupAck | None" = betterproto2.field(
+        17, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
@@ -643,6 +648,26 @@ class MoveGripperTo(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.control", "MoveGripperTo", MoveGripperTo)
+
+
+@dataclass(eq=False, repr=False)
+class PopupAck(betterproto2.Message):
+    """
+    Acknowledgement of a popup message
+    """
+
+    id: "int" = betterproto2.field(1, betterproto2.TYPE_UINT32)
+    """
+    Id of the message being acknowledged
+    """
+
+    button: "int" = betterproto2.field(2, betterproto2.TYPE_UINT32)
+    """
+    Index of the button that was clicked
+    """
+
+
+default_message_pool.register_message("nf.control", "PopupAck", PopupAck)
 
 
 @dataclass(eq=False, repr=False)

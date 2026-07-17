@@ -124,9 +124,18 @@ message CommandedGrip {
   float finger_speed = 2;
 }
 
-// A connected UI should immediately display this message in a popup with an OK button.
+// A connected UI should immediately display this message in a popup
 message Popup {
   string message = 1;
+
+  // A unique identifier for this message
+  // should be supplied when using buttons.
+  // UI will respond with a PopupAck containing the id and the index of the button clicked
+  optional uint32 id = 2;
+
+  // A list of buttons to show below the message.
+  // if empty, "OK" is shown
+  repeated string buttons = 3;
 }
 
 // Latest state of sensors in the gripper
