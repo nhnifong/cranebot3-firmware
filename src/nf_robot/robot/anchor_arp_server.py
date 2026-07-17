@@ -21,6 +21,12 @@ A double anchor containing two damiao hub motors and a custom hat that provides 
 default_anchor_conf = {
     # speed to reel in when the 'tighten' command is received. Meters of line per second
     'TIGHTENING_SPEED': -0.12,
+
+    # rpicam-vid framerate for the anchor camera stream. Lower this if the pi is running hot
+    # (rpi zero 2w's throttle/shut down around 60C). A running stream is automatically
+    # restarted to pick up changes. Broadcasting this var only affects anchors, not grippers,
+    # which have their own GRIPPER_STREAM_FRAMERATE var.
+    'ANCHOR_STREAM_FRAMERATE': 20,
 }
 
 
@@ -28,6 +34,7 @@ class AnchorArpServer(RobotComponentServer):
     def __init__(self, power):
         super().__init__()
         self.conf.update(default_anchor_conf)
+        self.stream_framerate_conf_key = 'ANCHOR_STREAM_FRAMERATE'
 
         self.has_power_line = power
 

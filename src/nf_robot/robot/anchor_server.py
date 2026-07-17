@@ -31,6 +31,8 @@ from nf_robot.common.util import get_local_ip
 # using libav makes it possible to send a containerized stream with pts
 # hardware h264 encoding is still used as long as resolution is below 1080
 # this requires rpicam-apps (not present in lite OS image)
+# the --framerate value here is just the default; build_stream_command() rewrites it
+# from self.stream_framerate_conf_key's config var each time rpicam-vid is (re)launched.
 stream_command = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
     "--width=1920", "--height=1080",
@@ -68,6 +70,14 @@ class RobotComponentServer:
         self.update = {}
         self.ws_delay = self.conf['RUNNING_WS_DELAY']
         self.rpicam_process = None
+        # Name of the conf var that controls this server's rpicam-vid --framerate, or None if
+        # this server's stream_command doesn't expose one / shouldn't be runtime-adjustable.
+        # Subclasses opt in so different component types (anchor vs gripper) can be broadcast
+        # framerate changes independently instead of sharing one var.
+        self.stream_framerate_conf_key = None
+        # framerate value baked into the currently running rpicam_process, if any.
+        # compared against self.conf to decide whether a config change needs a restart.
+        self.running_framerate = None
         # the currently running stream_video task, so it can be stopped before a firmware update
         self.stream_video_task = None
         self.zc = None # zerconf instance.
@@ -142,6 +152,24 @@ class RobotComponentServer:
                         return
                     return await self.rpicam_process.wait()
 
+    def _framerate_arg_index(self):
+        """Index of the '--framerate=...' entry in self.stream_command, or None if this
+        particular stream_command doesn't expose one (e.g. RaspiGripperServer's)."""
+        for i, arg in enumerate(self.stream_command):
+            if arg.startswith('--framerate'):
+                return i
+        return None
+
+    def build_stream_command(self):
+        """self.stream_command with --framerate rewritten from self.stream_framerate_conf_key,
+        if this server has opted into a live-configurable framerate."""
+        idx = self._framerate_arg_index()
+        if idx is None or self.stream_framerate_conf_key is None:
+            return self.stream_command
+        cmd = list(self.stream_command)
+        cmd[idx] = f"--framerate={self.conf[self.stream_framerate_conf_key]}"
+        return cmd
+
     async def run_rpicam_vid(self):
         """
         Start the rpicam-vid stream process
@@ -150,8 +178,11 @@ class RobotComponentServer:
         the client uses that to compute wall times from PTS times.
         it prints one more line after that then stops printing stuff until a few lines when the client disconnects.
         """
+        command = self.build_stream_command()
+        if self.stream_framerate_conf_key is not None:
+            self.running_framerate = self.conf[self.stream_framerate_conf_key]
         self.rpicam_process = await asyncio.create_subprocess_exec(
-            self.stream_command[0], *self.stream_command[1:], stdout=PIPE, stderr=STDOUT)
+            command[0], *command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
         while True:
             # during normal streaming, it is normal for this to block a long time because rpicam-vid isn't writing lines
@@ -204,6 +235,19 @@ class RobotComponentServer:
         async for line in stream:
             logger_func(line.decode('utf-8').rstrip())
 
+    def restart_stream_if_framerate_changed(self):
+        """Kill the running rpicam-vid process so stream_video's loop relaunches it with the
+        newly configured framerate. A no-op if this server hasn't opted into a live framerate
+        var, no stream is running, or the framerate didn't actually change."""
+        if self.stream_framerate_conf_key is None or self._framerate_arg_index() is None:
+            return
+        if self.rpicam_process is None or self.conf[self.stream_framerate_conf_key] == self.running_framerate:
+            return
+        try:
+            self.rpicam_process.kill()
+        except (ProcessLookupError, AttributeError):
+            pass
+
     async def stop_camera_stream(self):
         """Stop the camera stream and kill rpicam-vid. Cancelling stream_video makes
         it kill the subprocess and return without restarting it (it swallows the
@@ -255,6 +299,8 @@ class RobotComponentServer:
 
             if 'set_config_vars' in update:
                 self.conf.update(update['set_config_vars'])
+                if self.stream_framerate_conf_key in update['set_config_vars']:
+                    self.restart_stream_if_framerate_changed()
             if 'host_time' in update:
                 logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
             if 'run_update' in update:
@@ -408,8 +454,10 @@ default_anchor_conf = {
     # if set, the switch is disabled and the line is always assumed to be tight
     'disable_switch': False,
 
-    # Number of buffers to use when streaming mjpeg. Use as many as possible for high framerate without running out of ram
-    'buffers': 3
+    # rpicam-vid framerate for the anchor camera stream. Lower this if the pi is running hot
+    # (rpi zero 2w's throttle/shut down around 60C). A running stream is automatically
+    # restarted to pick up changes.
+    'ANCHOR_STREAM_FRAMERATE': 20,
 }
 
 try:
@@ -425,6 +473,7 @@ class RaspiAnchorServer(RobotComponentServer):
     def __init__(self, power_anchor=False, mock_motor=None):
         super().__init__()
         self.conf.update(default_anchor_conf)
+        self.stream_framerate_conf_key = 'ANCHOR_STREAM_FRAMERATE'
         ratio = 20/51 # 20 drive gear teeth, 51 spool teeth.
         if mock_motor is not None:
             self.motor = mock_motor

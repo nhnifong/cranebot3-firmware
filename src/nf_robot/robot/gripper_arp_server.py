@@ -58,6 +58,11 @@ default_gripper_conf = {
     # (dimensionless, 0-1) The proportional weight of the pad pressure in the composite force calculation.
     # the weight allocated to the motor load reading is 1-this value
     'PRESSURE_WEIGHT': 0.7,
+
+    # rpicam-vid framerate for the gripper camera stream. Separate from anchors'
+    # ANCHOR_STREAM_FRAMERATE so broadcasting one doesn't change the other. A running stream
+    # is automatically restarted to pick up changes.
+    'GRIPPER_STREAM_FRAMERATE': 60,
 }
 
 
@@ -65,6 +70,7 @@ class GripperArpServer(RobotComponentServer):
     def __init__(self):
         super().__init__()
         self.conf.update(default_gripper_conf)
+        self.stream_framerate_conf_key = 'GRIPPER_STREAM_FRAMERATE'
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'
 
