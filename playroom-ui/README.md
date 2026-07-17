@@ -50,14 +50,52 @@ you.
 
 A `file:` dependency only resolves on a machine with both repos checked out
 side by side, though — it won't resolve in CI or a Docker build. Those need
-a real published version:
+a real published version — see Publishing below.
 
-    npm version patch   # or minor/major
-    npm run proto
+## Publishing
+
+This package is published on the public npm registry as `stringman-ui`.
+
+One-time setup, on any machine you'll publish from:
+
+    npm login          # opens a browser to authenticate; needs an npmjs.com account
+    npm view stringman-ui   # sanity check — confirms the name resolves to us
+
+Before every publish, check what will actually be uploaded — it's easy to
+add a new file to `src/` or `public/` and forget it isn't covered by the
+`files` field in `package.json` (v0.1.0 shipped without `public/assets` for
+exactly this reason — the models/icons were missing entirely until v0.1.1):
+
+    npm pack --dry-run
+
+`npm pack --dry-run` only shows the file list, though — it won't catch a
+missing **dependency**. This package ships TypeScript source that
+consumers type-check directly, which means any package its code imports
+types from (e.g. `@types/three`) has to be a real `dependencies` entry, not
+`devDependencies` — npm never installs a dependency's own `devDependencies`
+for whoever installs *it* (v0.1.1 shipped with `@types/three` misfiled as a
+devDependency for exactly this reason; nf-viz's Docker build failed with
+"Could not find a declaration file for module 'three'" until v0.1.2). A
+`file:` link during local dev won't catch this either, since it may resolve
+into a checkout that happens to have its own `node_modules` already
+populated by `npm install`/`npm run dev` here. The reliable local check is
+installing from an actual tarball, which has neither shortcut available:
+
+    npm pack
+    cd ../../nf-main-site/nf-viz && npm install ../../cranebot3-firmware/playroom-ui/stringman-ui-*.tgz && npm run build
+
+Then bump the version and publish. `npm publish` runs `prepublishOnly`
+(`npm run proto && npm run typecheck`) automatically first, so a broken
+build or a proto out of sync with `../src/nf_robot/protos` blocks the
+publish rather than shipping:
+
+    npm version patch   # or minor/major — bumps package.json + creates a git tag
     npm publish
 
-Then switch nf-viz's `package.json` from the `file:` path to that version
-range (e.g. `"^0.1.0"`).
+If your npm account has 2FA enabled (recommended), `npm publish` prompts for
+a one-time code. Once it's live, bump the version range in nf-viz's
+`package.json` (`"stringman-ui": "^0.1.1"` or whatever you just published) —
+`npm install` there then pulls the real package instead of a `file:` link.
 
 ## Architecture
 
