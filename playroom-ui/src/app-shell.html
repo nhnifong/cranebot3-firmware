@@ -201,7 +201,7 @@
       <!-- Right Panel: Video Feeds -->
       <aside id="panel-right" class="panel">
         <div class="video-feed feed-16-9" id="firstOverhead">
-          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/waiting_for_video.webp" onended="this.load()"></video>
+          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/playroom/waiting_for_video.webp" onended="this.load()"></video>
           <img src="" class="mjpeg-feed hidden" /><!-- Tag used for LAN mjpeg stream -->
           <canvas class="feed-canvas"></canvas>
           <div class="feed-label">ANCHOR 0</div>
@@ -210,7 +210,7 @@
           <button class="feed-drive-btn mobile-only" title="Drive from this view">Drive</button>
         </div>
         <div class="video-feed feed-16-9" id="secondOverhead">
-          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/waiting_for_video.webp" onended="this.load()"></video>
+          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/playroom/waiting_for_video.webp" onended="this.load()"></video>
           <img src="" class="mjpeg-feed hidden" />
           <canvas class="feed-canvas"></canvas>
           <div class="feed-label">ANCHOR 1</div>
@@ -219,7 +219,7 @@
           <button class="feed-drive-btn mobile-only" title="Drive from this view">Drive</button>
         </div>
         <div class="video-feed feed-16-9" id="gripper">
-          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/waiting_for_video.webp" onended="this.load()"></video>
+          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/playroom/waiting_for_video.webp" onended="this.load()"></video>
           <img src="" class="mjpeg-feed hidden" />
           <canvas class="feed-canvas"></canvas>
           <div class="feed-label">GRIPPER</div>
@@ -303,11 +303,11 @@
         <div class="perspective-container">
           <div class="perspective-label">Motion<br>Perspective</div>
           <div class="perspective-grid">
-            <button id="btn-viewport" class="perspective-button" title="Control the robot relative to your current 3D viewport camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/orbit_icon.webp" class="orbit-image"/>Viewport</button>
-            <button id="btn-top" class="perspective-button" title="Control the robot relative to Anchor 0's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/orbit_icon.webp" class="orbit-image"/>Anchor 0</button>
-            <button id="btn-person" class="perspective-button perspective-button-selected" title="Control orbits the seat/gamepad tag position in the room."><img src="%VITE_ASSET_BUCKET_URL%/assets/orbit_icon.webp" class="orbit-image"/>Seat Tag</button>
-            <button id="btn-bottom" class="perspective-button" title="Control the robot relative to Anchor 1's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/orbit_icon.webp" class="orbit-image"/>Anchor 1</button>
-            <button id="btn-gripper" class="perspective-button" title="Control the robot relative to the gripper's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/orbit_icon.webp" class="orbit-image"/>Gripper</button>
+            <button id="btn-viewport" class="perspective-button" title="Control the robot relative to your current 3D viewport camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Viewport</button>
+            <button id="btn-top" class="perspective-button" title="Control the robot relative to Anchor 0's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Anchor 0</button>
+            <button id="btn-person" class="perspective-button perspective-button-selected" title="Control orbits the seat/gamepad tag position in the room."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Seat Tag</button>
+            <button id="btn-bottom" class="perspective-button" title="Control the robot relative to Anchor 1's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Anchor 1</button>
+            <button id="btn-gripper" class="perspective-button" title="Control the robot relative to the gripper's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Gripper</button>
           </div>
         </div>
 
@@ -453,7 +453,7 @@
         </div>
 
         <div class="controls-gamepad-section">
-          <img src="%VITE_ASSET_BUCKET_URL%/assets/gamepad.webp" alt="Gamepad Controls">
+          <img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/gamepad.webp" alt="Gamepad Controls">
         </div>
       </div>
     </div>
@@ -611,7 +611,7 @@
             <p class="fullcal-body">Provide the angles of the installed tilt adapters on this robot's anchors.
               <span class="help-hint" tabindex="0">
                 <span class="help-hint-icon">?</span>
-                <img class="help-hint-img" src="%VITE_ASSET_BUCKET_URL%/assets/tilt_adapter.webp" alt="Tilt adapters" />
+                <img class="help-hint-img" src="%VITE_ASSET_BUCKET_URL%/assets/playroom/tilt_adapter.webp" alt="Tilt adapters" />
               </span>
             </p>
             <div style="display:flex; gap:16px;">

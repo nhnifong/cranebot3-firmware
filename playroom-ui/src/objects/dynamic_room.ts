@@ -69,7 +69,7 @@ export class DynamicRoom {
   private async loadSharedModel() {
       if (!DynamicRoom.modelPromise) {
           const loader = new GLTFLoader();
-          DynamicRoom.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/models/decor.glb');
+          DynamicRoom.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/playroom/models/decor.glb');
       }
       
       try {

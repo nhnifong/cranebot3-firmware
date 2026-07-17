@@ -75,12 +75,12 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     id: 'carabiners',
     highlightId: 'action-disable-torque',
     openMenuId: 'maintenance-menu',
-    message: `With the gripper in the center of the room, Attach all four lines with carabiners so no lines cross. In order to be able to pull out the lines while the robot is turned on, disable the torque.<br><br><img src="${import.meta.env.VITE_ASSET_BUCKET_URL}/assets/simplified_box.webp">`,
+    message: `With the gripper in the center of the room, Attach all four lines with carabiners so no lines cross. In order to be able to pull out the lines while the robot is turned on, disable the torque.<br><br><img src="${import.meta.env.VITE_ASSET_BUCKET_URL}/assets/playroom/simplified_box.webp">`,
   },
 
   { // Place markers on the floor
     id: 'markers',
-    message: `Place the four large marker cards on the floor.<br<br>"origin" goes in the center<br><br><img src="${import.meta.env.VITE_ASSET_BUCKET_URL}/assets/cards_on_floor.webp">`,
+    message: `Place the four large marker cards on the floor.<br<br>"origin" goes in the center<br><br><img src="${import.meta.env.VITE_ASSET_BUCKET_URL}/assets/playroom/cards_on_floor.webp">`,
   },
 
   { // run calibration

@@ -42,7 +42,7 @@ export class ArpAnchor {
         // if this is the first anchor, download the asset
         if (!ArpAnchor.modelPromise) {
             const loader = new GLTFLoader();
-            ArpAnchor.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/models/arp-anchor.glb');
+            ArpAnchor.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/playroom/models/arp-anchor.glb');
         }
         
         try {

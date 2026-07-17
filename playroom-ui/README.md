@@ -168,14 +168,17 @@ instead, which gives the ordering the app actually needs.
 
 **3D models and icons are checked in here, not left as website content.**
 `main.ts`/`objects/*.ts` index named meshes inside the `.glb` files in
-`public/assets/models/` — a model and the code that reaches into it by name
-are one unit, the same reasoning as the app shell above, so they live next
-to the TypeScript instead of in nf-main-site alongside marketing photos and
-product videos (see `public/README.md`). They're expected to be reachable at
-`<VITE_ASSET_BUCKET_URL>/assets/...`. Standalone (this package's own `npm
-run dev`), that's just `public/` served directly with no bucket configured.
-nf-viz instead copies this directory into its own `public/` at build time
-(`sync-playroom-assets.sh`), so the files ride along through nf-main-site's
-existing asset pipeline — its own `public/` gets synced to a GCS bucket on
+`public/assets/playroom/models/` — a model and the code that reaches into it
+by name are one unit, the same reasoning as the app shell above, so they
+live next to the TypeScript instead of in nf-main-site alongside marketing
+photos and product videos (see `public/README.md`, which also explains why
+everything's namespaced under one `playroom/` folder rather than loose in
+`assets/`). They're expected to be reachable at
+`<VITE_ASSET_BUCKET_URL>/assets/playroom/...`. Standalone (this package's
+own `npm run dev`), that's just `public/` served directly with no bucket
+configured. nf-viz instead copies this directory into its own `public/` at
+build time (`sync-playroom-assets.sh`), so the files ride along through
+nf-main-site's existing asset pipeline — its own `public/` gets synced to a
+GCS bucket on
 deploy — rather than this package needing to know anything about buckets or
 blue-green deploys at all.

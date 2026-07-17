@@ -32,7 +32,7 @@ export class Eyelet {
     private async loadSharedModel() {
         if (!Eyelet.modelPromise) {
             const loader = new GLTFLoader();
-            Eyelet.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/models/eyelet.glb');
+            Eyelet.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/playroom/models/eyelet.glb');
         }
         
         try {

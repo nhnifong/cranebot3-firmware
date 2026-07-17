@@ -39,7 +39,7 @@ export class Anchor {
         // if this is the first anchor, download the asset
         if (!Anchor.modelPromise) {
             const loader = new GLTFLoader();
-            Anchor.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/models/anchor.glb');
+            Anchor.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/playroom/models/anchor.glb');
         }
         
         try {
