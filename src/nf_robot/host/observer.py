@@ -208,6 +208,9 @@ class AsyncObserver:
         # calibration. Swing latency cal polls it to back off and retry the current trial;
         # any other calibration step is aborted (passive_safety cancels the task).
         self.tension_over_limit = False
+        # onboard tension regulation (floor + soft mute) on/off state, mirrored to the UI
+        # via tension_regulation_state whenever it changes.
+        self.tension_reg_enabled = False
         # true while swing latency cal is running, so passive_safety recovers instead of
         # aborting on a tension trip during that step.
         self.swing_cal_in_progress = False
@@ -265,6 +268,9 @@ class AsyncObserver:
         # through the telemetry relay) reports a status. Used to detect whether a session is
         # actually listening after we broadcast an eval-start.
         self.lerobot_session_status_event = asyncio.Event()
+        # futures awaiting a PopupAck, keyed by the Popup.id they were sent with
+        self.pending_popup_acks: dict[int, asyncio.Future] = {}
+        self._next_popup_id = 1
         self.grip_angle = 0
         # source and destination for pick and place. self.config is the source of truth;
         # these are kept in sync with self.config.last_route_source/last_route_destination.
@@ -331,6 +337,8 @@ class AsyncObserver:
             route_source=self.pnp_src, route_destination=self.pnp_dst,
         ))
         self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=('swingc' in self.active_set), present='.'))
+        self.send_ui(tension_regulation_state=telemetry.TensionRegulationState(enabled=self.tension_reg_enabled, present=True))
+        self.send_ui(auto_targeting_state=telemetry.AutoTargetingState(enabled=self.target_model is not None, present=True))
         r = await self.flush_tele_buffer()
 
     async def handle_local_client(self, websocket):
@@ -442,6 +450,9 @@ class AsyncObserver:
 
         elif item.set_target_model is not None:
             asyncio.create_task(self._handle_set_target_model(item.set_target_model))
+
+        elif item.popup_ack is not None:
+            self._handle_popup_ack(item.popup_ack)
 
     async def _handle_set_point(self, item: control.SetPoint):
         logger.debug(f'_handle_set_point {item}')
@@ -917,6 +928,9 @@ class AsyncObserver:
             for anchor in self.anchors.values()
             for spool_no in (0, 1)
         ])
+        if enabled != self.tension_reg_enabled:
+            self.tension_reg_enabled = enabled
+            self.send_ui(tension_regulation_state=telemetry.TensionRegulationState(enabled=enabled, present=True))
 
     async def sync_timezone_to_bots(self):
         tz = self._get_local_timezone_name()
@@ -3071,6 +3085,32 @@ class AsyncObserver:
                 logger.warning('Connection to control plane ended due to invalid message')
             await asyncio.sleep(2)
 
+    def _handle_popup_ack(self, item: control.PopupAck):
+        fut = self.pending_popup_acks.pop(item.id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(item.button)
+
+    async def send_popup_and_await_answer(self, message: str, buttons: list[str] | None = None, timeout: float | None = None) -> int | None:
+        """
+        Send a popup message to the UI and wait for the first PopupAck that answers it.
+        Returns the index of the button clicked, or None if no UI answers within timeout.
+        """
+        popup_id = self._next_popup_id
+        self._next_popup_id += 1
+        fut = asyncio.get_running_loop().create_future()
+        self.pending_popup_acks[popup_id] = fut
+        self.send_ui(pop_message=telemetry.Popup(
+            message=message,
+            id=popup_id,
+            buttons=buttons or [],
+        ))
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            self.pending_popup_acks.pop(popup_id, None)
+
     def send_ui(self, **kwargs):
         """
         Ensure that the given telemetry item is sent to every connected UI
@@ -3098,6 +3138,10 @@ class AsyncObserver:
             item.retain_key = f'lerobot_status'
         if key == 'swing_cancellation_state':
             item.retain_key = 'swing_cancellation_state'
+        if key == 'tension_regulation_state':
+            item.retain_key = 'tension_regulation_state'
+        if key == 'auto_targeting_state':
+            item.retain_key = 'auto_targeting_state'
         if key == 'task_status':
             item.retain_key = 'task_status'
 
@@ -3849,8 +3893,26 @@ class AsyncObserver:
         LOOP_DELAY = ppc.loop_delay
         END_LOOP_TIMEOUT = ppc.end_loop_timeout
 
-        # TODO if no lerobot session is connected with an appropriate model or --arp_grasp is false, this cannot work.
-        # check prereqs and warn user with popup message or just start necessary model.
+        if not await self.check_lerobot_session_connected():
+            import torch
+            has_acceleration = torch.cuda.is_available() or torch.backends.mps.is_available()
+            if not has_acceleration:
+                await self.send_popup_and_await_answer(
+                    "No hardware acceleration (CUDA or MPS) detected; grasping will use "
+                    "manual targets and hardcoded behaviors."
+                )
+            else:
+                answer = await self.send_popup_and_await_answer(
+                    "Start a subprocess of stringman-headless to run grasping model?",
+                    buttons=["Yes", "No"],
+                )
+                if answer == 0:
+                    self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(
+                        control.ManageLerobotSession(
+                            action=control.LerobotSessionAction.START_EVAL,
+                            repo_id="naavox/dit-grasp-3",
+                        )
+                    ))
 
         drop_point = np.zeros(3)
         target_seen_t = time.time()
@@ -4276,6 +4338,14 @@ class AsyncObserver:
 
         self.centering_model = await asyncio.to_thread(load_sync)
 
+    def _set_target_model(self, model):
+        """Set self.target_model, notifying the UI via auto_targeting_state whenever
+        whether a model is loaded (not the model itself) changes."""
+        was_loaded = self.target_model is not None
+        self.target_model = model
+        if (model is not None) != was_loaded:
+            self.send_ui(auto_targeting_state=telemetry.AutoTargetingState(enabled=model is not None, present=True))
+
     async def _load_target_model(self):
         import torch
         from huggingface_hub import hf_hub_download
@@ -4286,7 +4356,7 @@ class AsyncObserver:
 
         if DEVICE == "cpu":
             logger.warning("Refusing to load targeting model on CPU; hardware acceleration required.")
-            self.target_model = None
+            self._set_target_model(None)
             self.send_ui(pop_message=telemetry.Popup(
                 message="Automatic target identification (targeting model) cannot be used without "
                         "some kind of hardware acceleration. Loading was aborted because the torch "
@@ -4305,16 +4375,30 @@ class AsyncObserver:
             t_model.eval()
             return t_model
 
-        self.target_model = await asyncio.to_thread(load_sync)
+        self._set_target_model(await asyncio.to_thread(load_sync))
 
     async def _handle_set_target_model(self, item: control.SetTargetModel):
         if item.action == control.TargetModelAction.TARGET_MODEL_DISABLE:
-            self.target_model = None
+            self._set_target_model(None)
             logger.info('Target model disabled')
         elif item.action == control.TargetModelAction.TARGET_MODEL_ENABLE_DEFAULT:
             logger.info('Loading default target model...')
             await self._load_target_model()
             logger.info('Target model ready')
+
+    async def check_lerobot_session_connected(self, timeout=2) -> bool:
+        """
+        Broadcast a ping and see whether any lerobot session (local subprocess or one
+        connected remotely through the relay) answers with a status within `timeout` seconds.
+        """
+        self.lerobot_session_status_event.clear()
+        self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.PING))
+        try:
+            await asyncio.wait_for(self.lerobot_session_status_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            logger.debug(f'No lerobot session answered the ping within {timeout}s; no session active.')
+            return False
 
     async def lerobot_grasp(self):
         """
@@ -4323,25 +4407,19 @@ class AsyncObserver:
         A grasp condition is a certain amount of force being exerted by the fingers while being at a certain altitude off the floor.
 
         Returns True/False for grasp success once a session takes over, or None if no session
-        answered the eval-start (so the caller can fall back to the centering model).
+        answered the ping (so the caller can fall back to the centering model).
 
         A seperate process must be connected to the telemetry stream to manage the act policy at this time. It can be started with
 
         python -m nf_robot.ml.stringman_lerobot eval   --robot_id=lan   --server_address=ws://localhost:4245   --policy_id=outputs/train/grasp_remote_act_eggs_2/checkpoints/last/pretrained_model/   --dataset_id=naavox/grasping_dataset_eggs_fix
         """
-        SESSION_PING_TIMEOUT_S = 10  # how long to wait for any session to answer the eval-start
-
         self.pe.finger_pressure_rising.clear()
-        self.lerobot_session_status_event.clear()
         try:
-            # Broadcast the eval-start: any listening lerobot session (local subprocess or one
-            # connected remotely through the relay) starts controlling and answers with a status.
-            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_START))
-            try:
-                await asyncio.wait_for(self.lerobot_session_status_event.wait(), timeout=SESSION_PING_TIMEOUT_S)
-            except asyncio.TimeoutError:
-                logger.debug(f'No lerobot session answered the eval-start within {SESSION_PING_TIMEOUT_S}s; no session active.')
+            if not await self.check_lerobot_session_connected():
                 return None
+
+            # A session is listening; tell it to start controlling.
+            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_START))
 
             timeout = time.time() + 30
             lifted = False

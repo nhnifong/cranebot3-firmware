@@ -23,6 +23,9 @@ enum EpCommand {
   EPCOMMAND_START_OR_COMPLETE = 3; // DEPRECATED. send EVAL_START or EVAL_STOP for both recording or eval
   EPCOMMAND_EVAL_START = 4;
   EPCOMMAND_EVAL_STOP = 5;
+  // Ask any listening lerobot session to answer with its current status, without
+  // changing its mode. Used to detect whether a session is connected at all.
+  EPCOMMAND_PING = 6;
 }
 
 enum LerobotStatus {

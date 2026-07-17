@@ -218,6 +218,7 @@ class StringmanLeRobot(Robot):
         self.last_hang_pos = np.zeros(3, dtype=float)
 
         self.last_task_description = TASK_DESCRIPTION
+        self.last_status = common.LerobotStatus.NA
 
         self.last_spin = 0.0
 
@@ -503,6 +504,8 @@ class StringmanLeRobot(Robot):
             self.events['start'] = True
         if item.command == common.EpCommand.EVAL_STOP:
             self.events['stop'] = True
+        if item.command == common.EpCommand.PING:
+            self.send_session_status(common.LerobotSessionStatus(status=self.last_status))
         if item.prompt is not None:
             self.last_task_description = item.prompt
 
@@ -643,6 +646,8 @@ class StringmanLeRobot(Robot):
         return action
 
     def send_session_status(self, status: common.LerobotSessionStatus):
+        if status.status is not None:
+            self.last_status = status.status
         batch = control.ControlBatchUpdate(
             robot_id="0",
             updates=[control.ControlItem(episode_control=common.EpisodeControl(

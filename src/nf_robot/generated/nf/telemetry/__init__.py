@@ -5,6 +5,7 @@
 
 __all__ = (
     "AnchorPoses",
+    "AutoTargetingState",
     "CommandedGrip",
     "CommandedVelocity",
     "ComponentConnStatus",
@@ -27,6 +28,7 @@ __all__ = (
     "TaskStatus",
     "TelemetryBatchUpdate",
     "TelemetryItem",
+    "TensionRegulationState",
     "UplinkStatus",
     "VidStats",
     "VideoReady",
@@ -173,6 +175,21 @@ class AnchorPoses(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.telemetry", "AnchorPoses", AnchorPoses)
+
+
+@dataclass(eq=False, repr=False)
+class AutoTargetingState(betterproto2.Message):
+    enabled: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+
+    present: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+    """
+    something must be present other than a boolean with a false value for the message to even exist.
+    """
+
+
+default_message_pool.register_message(
+    "nf.telemetry", "AutoTargetingState", AutoTargetingState
+)
 
 
 @dataclass(eq=False, repr=False)
@@ -764,6 +781,14 @@ class TelemetryItem(betterproto2.Message):
         23, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    tension_regulation_state: "TensionRegulationState | None" = betterproto2.field(
+        24, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
+    auto_targeting_state: "AutoTargetingState | None" = betterproto2.field(
+        25, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
     retain_key: "str | None" = betterproto2.field(
         14, betterproto2.TYPE_STRING, optional=True
     )
@@ -775,6 +800,21 @@ class TelemetryItem(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.telemetry", "TelemetryItem", TelemetryItem)
+
+
+@dataclass(eq=False, repr=False)
+class TensionRegulationState(betterproto2.Message):
+    enabled: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+
+    present: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+    """
+    something must be present other than a boolean with a false value for the message to even exist.
+    """
+
+
+default_message_pool.register_message(
+    "nf.telemetry", "TensionRegulationState", TensionRegulationState
+)
 
 
 @dataclass(eq=False, repr=False)

@@ -246,6 +246,16 @@ message SwingCancellationState {
   string present = 2; // something must be present other than a boolean with a false value for the message to even exist.
 }
 
+message TensionRegulationState {
+  bool enabled = 1;
+  bool present = 2; // something must be present other than a boolean with a false value for the message to even exist.
+}
+
+message AutoTargetingState {
+  bool enabled = 1;
+  bool present = 2; // something must be present other than a boolean with a false value for the message to even exist.
+}
+
 // Lists of anchors which can see specific tags.
 // For now, only sent during first stage of calibration and only when something changes.
 message VisibilityStates {
@@ -293,6 +303,8 @@ message TelemetryItem {
     VisibilityStates visibility_states = 20;
     TaskStatus task_status = 22;
     Logs logs = 23;
+    TensionRegulationState tension_regulation_state = 24;
+    AutoTargetingState auto_targeting_state = 25;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

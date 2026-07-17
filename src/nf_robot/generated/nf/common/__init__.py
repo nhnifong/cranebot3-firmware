@@ -77,6 +77,12 @@ class EpCommand(betterproto2.Enum):
 
     EVAL_STOP = 5
 
+    PING = 6
+    """
+    Ask any listening lerobot session to answer with its current status, without
+    changing its mode. Used to detect whether a session is connected at all.
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -86,6 +92,7 @@ class EpCommand(betterproto2.Enum):
             3: "EPCOMMAND_START_OR_COMPLETE",
             4: "EPCOMMAND_EVAL_START",
             5: "EPCOMMAND_EVAL_STOP",
+            6: "EPCOMMAND_PING",
         }
 
     @classmethod
@@ -97,6 +104,7 @@ class EpCommand(betterproto2.Enum):
             "EPCOMMAND_START_OR_COMPLETE": 3,
             "EPCOMMAND_EVAL_START": 4,
             "EPCOMMAND_EVAL_STOP": 5,
+            "EPCOMMAND_PING": 6,
         }
 
 
