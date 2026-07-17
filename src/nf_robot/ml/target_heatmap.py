@@ -5,6 +5,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import cv2
 import os
+import re
 import json
 import numpy as np
 import argparse
@@ -12,6 +13,11 @@ import random
 import uuid
 import shutil
 import subprocess
+import threading
+import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+from urllib.parse import urlparse, unquote
 from importlib.resources import files
 
 # ==========================================
@@ -24,12 +30,15 @@ HEATMAP_UNPROCESSED_DIR = "target_heatmap_data_unlabeled"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Network Input Resolution
-# 960x544 is divisible by 32 (standard for CNNs), ensuring perfect alignment 
+# 960x544 is divisible by 32 (standard for CNNs), ensuring perfect alignment
 # through pooling and upsampling layers without rounding errors.
-HM_IMAGE_RES = (960, 544) 
+HM_IMAGE_RES = (960, 544)
 
-# Labeling Source Resolution
-SOURCE_RES = (1920, 1080)
+# How many frames before/after a labeled frame to also extract from the source
+# lerobot video and tag with the same points (see extract_from_lerobot / label_mode).
+LABEL_FRAME_OFFSET = 5
+LABEL_SERVER_PORT = 8770
+PREVIEW_SERVER_PORT = 8771
 
 MINIMUM_CONFIDENCE = 0.95 # during eval
 
@@ -222,8 +231,23 @@ def train(args):
     print(f"Model saved to {args.model_path}")
 
 # ==========================================
-# EVALUATION TOOL
+# PREVIEW TOOL (browser-based)
 # ==========================================
+# Qualitative check of a trained model against a live video source or a
+# dataset's eval split. No opencv GUI (headless-only in this repo): frames are
+# pushed to the browser over an MJPEG stream, same approach as MjpegStreamer in
+# nf_robot.host.video_streamer.
+
+def _send_bytes(handler, body, content_type, status=200):
+    """Shared by PreviewHandler and LabelHandler's non-streaming responses."""
+    handler.send_response(status)
+    handler.send_header('Content-Type', content_type)
+    handler.send_header('Content-Length', str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+def _send_json(handler, obj, status=200):
+    _send_bytes(handler, json.dumps(obj).encode('utf-8'), 'application/json', status)
 
 def run_inference(model, img_bgr):
     """
@@ -259,271 +283,654 @@ def run_inference(model, img_bgr):
         
     return overlay
 
-def eval_mode(args):
-    from huggingface_hub import snapshot_download
-    print(f"Loading model from {args.model_path}...")
-    model = TargetHeatmapNet().to(DEVICE)
-    model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
-    model.eval()
+class _MjpegBroadcaster:
+    """Holds the latest JPEG-encoded frame and wakes any browser clients blocked
+    in /stream.mjpeg when a new one arrives."""
+    def __init__(self):
+        self.latest_frame = None
+        self.condition = threading.Condition()
 
-    window_name = "Target Heatmap"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    
-    # Mode 1: Video Stream
-    if args.uri:
-        source = args.uri
-        # Convert to int if user passed a webcam index (e.g. "0")
-        if source.isdigit():
-            source = int(source)
-            
+    def push(self, bgr_frame):
+        ok, buf = cv2.imencode('.jpg', bgr_frame)
+        if not ok:
+            return
+        with self.condition:
+            self.latest_frame = buf.tobytes()
+            self.condition.notify_all()
+
+class PreviewSession:
+    """
+    Drives the browser preview in one of two modes:
+      - 'video': a background thread continuously reads args.uri, runs inference,
+        and pushes overlays to the stream (optionally recording to args.record).
+      - 'dataset': random samples from a dataset's eval split are pushed to the
+        stream on demand, one per '/next' click.
+    """
+    def __init__(self, model, args):
+        self.args = args
+        self.model = model
+        self.broadcaster = _MjpegBroadcaster()
+        self.done = threading.Event()
+        self.stop_source = threading.Event()
+        self.mode = 'video' if args.uri else 'dataset'
+
+        self.samples = []
+        self.data_dir = None
+        if self.mode == 'dataset':
+            self._load_eval_samples()
+
+    def _load_eval_samples(self):
+        from huggingface_hub import snapshot_download
+        print(f"Downloading dataset {self.args.dataset_id} for samples...")
+        dataset_path = snapshot_download(repo_id=self.args.dataset_id, repo_type="dataset")
+        self.data_dir = os.path.join(dataset_path, "eval")
+        metadata_path = os.path.join(self.data_dir, "metadata.jsonl")
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"No eval metadata found at {metadata_path}. Did you run 'split' on the dataset?")
+        with open(metadata_path, 'r') as f:
+            self.samples = [json.loads(line) for line in f if line.strip()]
+        print(f"Loaded {len(self.samples)} evaluation samples.")
+
+    def show_next_sample(self):
+        if not self.samples:
+            return None
+        sample = random.choice(self.samples)
+        img = cv2.imread(os.path.join(self.data_dir, sample["file_name"]))
+        if img is None:
+            return None
+        self.broadcaster.push(run_inference(self.model, img))
+        return sample["file_name"]
+
+    def start_video_stream(self):
+        source = int(self.args.uri) if self.args.uri.isdigit() else self.args.uri
         print(f"Opening video source: {source}")
         cap = cv2.VideoCapture(source)
-        
         if not cap.isOpened():
-            print(f"Error: Could not open video source {source}")
-            return
+            raise RuntimeError(f"Could not open video source {source}")
 
         fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps is None or fps <= 0 or np.isnan(fps):
+        if not fps or fps <= 0 or np.isnan(fps):
             fps = 30.0
         print(f"Stream FPS: {fps}")
 
-        cv2.resizeWindow(window_name, HM_IMAGE_RES[0], HM_IMAGE_RES[1])
-        print("Controls: [Q] Quit")
-
-        # FFMPEG Recording Setup
         recorder = None
-        if args.record:
+        if self.args.record:
             # We are writing raw BGR24 frames to stdin
             command = [
-                'ffmpeg',
-                '-y',                    # Overwrite output
-                '-f', 'rawvideo',        # Input format
-                '-vcodec', 'rawvideo',
-                '-s', f'{HM_IMAGE_RES[0]}x{HM_IMAGE_RES[1]}', # Size
-                '-pix_fmt', 'bgr24',     # OpenCV uses BGR
-                '-r', str(fps),          # Input framerate
-                '-i', '-',               # Read from stdin
-                '-c:v', 'libx264',       # Output codec
-                '-pix_fmt', 'yuv420p',   # Pixel format for compatibility
-                '-preset', 'fast',       # Encoding speed
-                args.record              # Output filename
+                'ffmpeg', '-y',
+                '-f', 'rawvideo', '-vcodec', 'rawvideo',
+                '-s', f'{HM_IMAGE_RES[0]}x{HM_IMAGE_RES[1]}',
+                '-pix_fmt', 'bgr24', '-r', str(fps),
+                '-i', '-',
+                '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'fast',
+                self.args.record,
             ]
             print(f"Starting recording: {' '.join(command)}")
             try:
                 recorder = subprocess.Popen(command, stdin=subprocess.PIPE)
             except FileNotFoundError:
                 print("Error: ffmpeg not found. Please install ffmpeg to record.")
+
+        def _reader():
+            try:
+                while not self.stop_source.is_set():
+                    ret, frame = cap.read()
+                    if not ret:
+                        print("End of stream.")
+                        break
+
+                    frame_resized = cv2.resize(frame, HM_IMAGE_RES)
+                    overlay = run_inference(self.model, frame_resized)
+
+                    if recorder:
+                        try:
+                            recorder.stdin.write(overlay.tobytes())
+                        except BrokenPipeError:
+                            print("FFmpeg recording stopped unexpectedly.")
+
+                    self.broadcaster.push(overlay)
+            finally:
+                cap.release()
+                if recorder:
+                    recorder.stdin.close()
+                    recorder.wait()
+                    print(f"Saved recording to {self.args.record}")
+                self.done.set()
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+    def request_quit(self):
+        self.stop_source.set()
+        if self.mode == 'dataset':
+            self.done.set()
+
+_PREVIEW_PAGE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Target Heatmap Preview</title>
+<style>
+  body { background:#111; color:#eee; font-family: sans-serif; margin:0; padding:20px; }
+  img { max-width: 90vw; border:2px solid #444; display:block; }
+  .controls { margin-top: 14px; }
+  button { font-size: 16px; padding: 8px 16px; margin-right: 8px; cursor:pointer; }
+  #status { margin-top: 10px; font-size: 14px; color: #9c9; }
+</style>
+</head>
+<body>
+<h2>Target Heatmap Preview (__MODE__ mode)</h2>
+<img id="stream" src="/stream.mjpeg" />
+<div class="controls">
+  __NEXT_BUTTON__
+  <button id="quit">Quit</button>
+</div>
+<div id="status"></div>
+<script>
+const status = document.getElementById('status');
+
+const nextBtn = document.getElementById('next');
+if (nextBtn) {
+  nextBtn.onclick = async () => {
+    const res = await fetch('/next', {method: 'POST'});
+    const data = await res.json();
+    status.textContent = data.filename ? ('Showing: ' + data.filename) : 'No samples available';
+  };
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+    if (e.code === 'Space') { e.preventDefault(); nextBtn.click(); }
+  });
+}
+
+document.getElementById('quit').onclick = async () => {
+  await fetch('/quit', {method: 'POST'});
+  document.body.innerHTML = '<h2>Preview stopped. You can close this tab.</h2>';
+};
+</script>
+</body>
+</html>
+"""
+
+class PreviewHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass # suppress internal logging
+
+    def do_GET(self):
+        session = self.server.session
+        path = urlparse(self.path).path
+
+        if path == '/':
+            next_button = '<button id="next">Next Sample (Space)</button>' if session.mode == 'dataset' else ''
+            page = _PREVIEW_PAGE.replace('__MODE__', session.mode).replace('__NEXT_BUTTON__', next_button)
+            _send_bytes(self, page.encode('utf-8'), 'text/html')
+        elif path == '/stream.mjpeg':
+            self.send_response(200)
+            self.send_header('Age', '0')
+            self.send_header('Cache-Control', 'no-cache, private')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+            self.end_headers()
+            broadcaster = session.broadcaster
+            last_sent = None
+            try:
+                while True:
+                    with broadcaster.condition:
+                        # In dataset mode pushes are sparse (one per click), so a client
+                        # connecting after a push already happened must get that frame
+                        # immediately rather than blocking for the next one.
+                        while broadcaster.latest_frame is last_sent:
+                            broadcaster.condition.wait()
+                        frame = broadcaster.latest_frame
+                    last_sent = frame
+                    if frame:
+                        self.wfile.write(b'--frame\r\n')
+                        self.send_header('Content-Type', 'image/jpeg')
+                        self.send_header('Content-Length', str(len(frame)))
+                        self.end_headers()
+                        self.wfile.write(frame)
+                        self.wfile.write(b'\r\n')
+            except Exception:
+                pass # client disconnected
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        session = self.server.session
+        path = urlparse(self.path).path
+
+        if path == '/next':
+            if session.mode != 'dataset':
+                self.send_error(400)
                 return
+            _send_json(self, {'filename': session.show_next_sample()})
+        elif path == '/quit':
+            _send_json(self, {'status': 'ok'})
+            session.request_quit()
+        else:
+            self.send_error(404)
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("End of stream.")
-                break
-            
-            # Ensure frame matches network input size
-            frame_resized = cv2.resize(frame, HM_IMAGE_RES)
-            
-            overlay = run_inference(model, frame_resized)
-            
-            # Write to ffmpeg stdin
-            if recorder:
-                try:
-                    recorder.stdin.write(overlay.tobytes())
-                except BrokenPipeError:
-                    print("FFmpeg recording stopped unexpectedly.")
-                    recorder = None
+class PreviewHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
-            cv2.imshow(window_name, overlay)
-            
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-        
-        cap.release()
-        if recorder:
-            recorder.stdin.close()
-            recorder.wait()
-            print(f"Saved recording to {args.record}")
-        
-    # Mode 2: Dataset Evaluation
+def _resolve_model_path(args):
+    """--model_repo_id takes precedence over --model_path, downloading the model
+    from the hub for machines that don't have it locally (mirrors the
+    hf_hub_download pattern observer.py uses for TARGETING_MODEL_REPOID)."""
+    if args.model_repo_id:
+        from huggingface_hub import hf_hub_download
+        print(f"Downloading model from {args.model_repo_id}...")
+        return hf_hub_download(repo_id=args.model_repo_id, filename="target_heatmap.pth")
+    return args.model_path
+
+def preview_mode(args):
+    model_path = _resolve_model_path(args)
+    print(f"Loading model from {model_path}...")
+    model = TargetHeatmapNet().to(DEVICE)
+    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+    model.eval()
+
+    session = PreviewSession(model, args)
+    if session.mode == 'dataset':
+        session.show_next_sample()
     else:
-        print(f"Downloading dataset {args.dataset_id} for samples...")
-        dataset_path = snapshot_download(repo_id=args.dataset_id, repo_type="dataset")
-        
-        data_dir = os.path.join(dataset_path, "eval")
-        metadata_path = os.path.join(data_dir, "metadata.jsonl")
-        
-        if not os.path.exists(metadata_path):
-            print(f"No eval metadata found at {metadata_path}. Did you run 'split' on the dataset?")
-            return
+        session.start_video_stream()
 
-        samples = []
-        with open(metadata_path, 'r') as f:
-            for line in f:
-                if line.strip(): samples.append(json.loads(line))
-                
-        print(f"Loaded {len(samples)} evaluation samples.")
-        print("Controls: [SPACE] Next, [Q] Quit")
-        
-        cv2.resizeWindow(window_name, HM_IMAGE_RES[0] * 2, HM_IMAGE_RES[1] * 2)
+    server = PreviewHTTPServer((args.bind, args.port), PreviewHandler)
+    server.session = session
 
-        while True:
-            sample = random.choice(samples)
-            img_path = os.path.join(data_dir, sample["file_name"])
-            img_input = cv2.imread(img_path)
-            
-            if img_input is None: 
-                continue
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
 
-            overlay = run_inference(model, img_input)
-            
-            cv2.imshow(window_name, overlay)
-            if cv2.waitKey(0) & 0xFF == ord('q'):
-                break
-                
-    cv2.destroyAllWindows()
+    display_host = 'localhost' if args.bind in ('0.0.0.0', '::', '') else args.bind
+    print(f"Preview running at http://{display_host}:{args.port}/")
+    print("Open that URL in a browser. Quit from the page when done.")
+
+    session.done.wait()
+    server.shutdown()
+    server.server_close()
 
 # ==========================================
-# LABELING TOOL
+# LEROBOT FRAME EXTRACTION
 # ==========================================
 
-# State
-current_clicks = []
-current_image = None
-current_image_path = None
+ANCHOR_CAMERA_SUBSTR = "anchor_camera"
 
-def mouse_callback(event, x, y, flags, param):
-    global current_clicks
-    if event == cv2.EVENT_LBUTTONDOWN:
-        current_clicks.append((x, y))
-        print(f"Added Point (Source Res): {x}, {y}")
-        draw_interface()
-    elif event == cv2.EVENT_RBUTTONDOWN:
-        if current_clicks:
-            removed = current_clicks.pop()
-            print(f"Removed Point: {removed}")
-            draw_interface()
+def extract_from_lerobot(args):
+    """
+    Pulls random frames from a lerobot dataset's anchor camera videos into
+    HEATMAP_UNPROCESSED_DIR for labeling.
 
-def draw_interface():
-    global current_image, current_clicks
-    if current_image is None:
+    For each sampled (episode, camera, frame) it also grabs the frames
+    `args.offset` steps before and after it (clamped to the episode), so a single
+    labeling pass can tag a triplet with the same points via the filename
+    convention `{group}__off{N}.jpg` (see label_mode / _sibling_files below).
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    print(f"Loading lerobot dataset {args.source_dataset_id}...")
+    dataset = LeRobotDataset(repo_id=args.source_dataset_id, root=args.root)
+
+    anchor_keys = [k for k in dataset.meta.video_keys if ANCHOR_CAMERA_SUBSTR in k]
+    if not anchor_keys:
+        print(f"No anchor camera keys found in dataset (video_keys={dataset.meta.video_keys})")
         return
+    print(f"Anchor camera keys: {anchor_keys}")
 
-    display = current_image.copy()
+    os.makedirs(HEATMAP_UNPROCESSED_DIR, exist_ok=True)
 
-    for pt in current_clicks:
-        cv2.circle(display, pt, 5, (0, 255, 0), -1)
+    n_episodes = dataset.meta.total_episodes
+    saved_groups = 0
+    for i in range(args.count):
+        ep_idx = random.randrange(n_episodes)
+        ep = dataset.meta.episodes[ep_idx]
+        ep_from = ep["dataset_from_index"]
+        ep_to = ep["dataset_to_index"]
+        if ep_to <= ep_from:
+            continue
 
-    status_text = f"Points: {len(current_clicks)} | Res: {SOURCE_RES}"
-    cv2.putText(display, status_text, (10, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        center = random.randrange(ep_from, ep_to)
+        cam_key = random.choice(anchor_keys)
+        group_id = uuid.uuid4()
 
-    cv2.imshow("Labeler", display)
+        for off in sorted({-args.offset, 0, args.offset}):
+            idx = min(max(center + off, ep_from), ep_to - 1)
+            item = dataset[idx]
+            rgb = (item[cam_key].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            fn = f"{group_id}__off{off}.jpg"
+            cv2.imwrite(os.path.join(HEATMAP_UNPROCESSED_DIR, fn), bgr)
+
+        saved_groups += 1
+        print(f"[{i + 1}/{args.count}] episode {ep_idx}, cam {cam_key}, frame {center}")
+
+    print(f"Saved {saved_groups} frame group(s) to {HEATMAP_UNPROCESSED_DIR}")
+
+# ==========================================
+# LABELING TOOL (browser-based)
+# ==========================================
+# No opencv GUI (headless-only in this repo): the labeler runs a local HTTP
+# server and is driven from a browser tab instead of a cv2 window.
+
+_OFFSET_RE = re.compile(r'^(?P<base>.+)__off(?P<off>-?\d+)\.jpg$')
+
+def _sibling_files(unprocessed_dir, fn):
+    """Other frames extracted alongside `fn` (see extract_from_lerobot) that should
+    receive the same label points. Files with no __off marker (e.g. legacy live
+    snapshots from observer.py) have no siblings."""
+    m = _OFFSET_RE.match(fn)
+    if not m:
+        return [fn]
+    prefix = f"{m.group('base')}__off"
+    return sorted(f for f in os.listdir(unprocessed_dir) if f.startswith(prefix) and f.endswith('.jpg'))
+
+def _list_candidates(unprocessed_dir):
+    """Files the labeler should offer up: __off0 frames (one per group) plus any
+    frames with no offset marker at all."""
+    candidates = []
+    for fn in os.listdir(unprocessed_dir):
+        if not fn.endswith('.jpg'):
+            continue
+        m = _OFFSET_RE.match(fn)
+        if m:
+            if int(m.group('off')) == 0:
+                candidates.append(fn)
+        else:
+            candidates.append(fn)
+    return candidates
+
+def _format_duration(seconds):
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    return f"{seconds / 60:.0f} min"
+
+class LabelSession:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.done = threading.Event()
+
+        # Pace tracking for the "N remain, finishing in ~M at this rate" estimate.
+        # Timed from the first save rather than session start, so time spent
+        # reading instructions/loading the page isn't counted against the rate.
+        self._first_save_time = None
+        self._groups_saved = 0
+
+        self.train_dir = os.path.join(LOCAL_DATASET_ROOT, "train")
+        self.metadata_path = os.path.join(self.train_dir, "metadata.jsonl")
+        os.makedirs(self.train_dir, exist_ok=True)
+
+        readme_path = os.path.join(LOCAL_DATASET_ROOT, "README.md")
+        if not os.path.exists(readme_path):
+            with open(readme_path, "w") as f:
+                f.write("---\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: train/metadata.jsonl\n---\n")
+
+    def pick_next(self):
+        if not os.path.exists(HEATMAP_UNPROCESSED_DIR):
+            return None
+        candidates = _list_candidates(HEATMAP_UNPROCESSED_DIR)
+        return random.choice(candidates) if candidates else None
+
+    def remaining_count(self):
+        if not os.path.exists(HEATMAP_UNPROCESSED_DIR):
+            return 0
+        return len(_list_candidates(HEATMAP_UNPROCESSED_DIR))
+
+    def image_path(self, fn):
+        return os.path.join(HEATMAP_UNPROCESSED_DIR, os.path.basename(fn))
+
+    def save(self, fn, points):
+        """Applies `points` (in the clicked image's own pixel space) to fn and all
+        of its offset siblings, resizing each to HM_IMAGE_RES and moving it into
+        the training set. Returns (images_saved, groups_remaining, eta_seconds)."""
+        safe = os.path.basename(fn)
+        src_path = self.image_path(safe)
+        if not os.path.exists(src_path):
+            raise FileNotFoundError(safe)
+
+        siblings = _sibling_files(HEATMAP_UNPROCESSED_DIR, safe)
+        saved = 0
+        with self.lock:
+            for sib in siblings:
+                sib_path = self.image_path(sib)
+                img = cv2.imread(sib_path)
+                if img is None:
+                    continue
+
+                h, w = img.shape[:2]
+                scale_x = HM_IMAGE_RES[0] / w
+                scale_y = HM_IMAGE_RES[1] / h
+                scaled_points = [(int(px * scale_x), int(py * scale_y)) for px, py in points]
+
+                resized = cv2.resize(img, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)
+                new_fn = f"{uuid.uuid4()}.jpg"
+                cv2.imwrite(os.path.join(self.train_dir, new_fn), resized)
+
+                with open(self.metadata_path, 'a') as f:
+                    f.write(json.dumps({"file_name": new_fn, "points": scaled_points}) + "\n")
+
+                os.remove(sib_path)
+                saved += 1
+
+            now = time.time()
+            if self._first_save_time is None:
+                self._first_save_time = now
+            self._groups_saved += 1
+            elapsed = now - self._first_save_time
+            rate = self._groups_saved / elapsed if elapsed > 0 else None
+
+        remaining = self.remaining_count()
+        if remaining == 0:
+            eta_seconds = 0.0
+        elif rate:
+            eta_seconds = remaining / rate
+        else:
+            eta_seconds = None
+        return saved, remaining, eta_seconds
+
+_LABEL_PAGE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Target Heatmap Labeler</title>
+<style>
+  body { background:#111; color:#eee; font-family: sans-serif; margin:0; padding:20px; }
+  #stage { position:relative; display:inline-block; border:2px solid #444; line-height:0; }
+  #stage img { display:block; max-width: 90vw; height:auto; cursor: crosshair; }
+  #dots { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+  .controls { margin-top: 14px; }
+  button { font-size: 16px; padding: 8px 16px; margin-right: 8px; cursor:pointer; }
+  #status { margin-top: 10px; font-size: 14px; color: #9c9; }
+  #empty { font-size: 20px; margin-top: 40px; }
+</style>
+</head>
+<body>
+<h2>Target Heatmap Labeler</h2>
+<div id="app">
+  <div id="stage">
+    <img id="img" src="" />
+    <svg id="dots"></svg>
+  </div>
+  <div class="controls">
+    <button id="undo">Undo Last Point</button>
+    <button id="save">Save &amp; Next (Space)</button>
+    <button id="skip">Skip (N)</button>
+    <button id="quit">Quit</button>
+  </div>
+  <div id="status">Points: 0</div>
+  <div id="stats"></div>
+</div>
+<div id="empty" style="display:none">No more files to label.</div>
+
+<script>
+let points = [];
+let current = null;
+const img = document.getElementById('img');
+const dots = document.getElementById('dots');
+const status = document.getElementById('status');
+const stats = document.getElementById('stats');
+
+function formatDuration(seconds) {
+  if (seconds < 60) return Math.round(seconds) + 's';
+  return Math.round(seconds / 60) + ' min';
+}
+
+function renderStats(remaining, etaSeconds) {
+  if (remaining === undefined || remaining === null) { stats.textContent = ''; return; }
+  let text = remaining + ' remain';
+  if (etaSeconds) text += ', finishing in ~' + formatDuration(etaSeconds) + ' at this rate';
+  stats.textContent = text;
+}
+
+function render() {
+  dots.innerHTML = '';
+  for (const [x, y] of points) {
+    const cx = (x / img.naturalWidth) * 100;
+    const cy = (y / img.naturalHeight) * 100;
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c.setAttribute('cx', cx + '%');
+    c.setAttribute('cy', cy + '%');
+    c.setAttribute('r', 6);
+    c.setAttribute('fill', '#0f0');
+    c.setAttribute('stroke', '#000');
+    dots.appendChild(c);
+  }
+  status.textContent = 'Points: ' + points.length + (current ? (' | ' + current) : '');
+}
+
+img.addEventListener('click', (e) => {
+  const rect = img.getBoundingClientRect();
+  const x = Math.round((e.clientX - rect.left) / rect.width * img.naturalWidth);
+  const y = Math.round((e.clientY - rect.top) / rect.height * img.naturalHeight);
+  points.push([x, y]);
+  render();
+});
+
+document.getElementById('undo').onclick = () => { points.pop(); render(); };
+
+function showFinished() {
+  document.getElementById('app').style.display = 'none';
+  const empty = document.getElementById('empty');
+  empty.textContent = 'All frames labeled. Finalizing the dataset in the terminal...';
+  empty.style.display = 'block';
+  current = null;
+}
+
+async function loadNext() {
+  points = [];
+  const res = await fetch('/next');
+  const data = await res.json();
+  renderStats(data.remaining, null);
+  if (!data.filename) {
+    showFinished();
+    return;
+  }
+  current = data.filename;
+  img.src = '/image/' + encodeURIComponent(data.filename) + '?t=' + Date.now();
+  render();
+}
+
+document.getElementById('skip').onclick = loadNext;
+
+document.getElementById('save').onclick = async () => {
+  if (!current) return;
+  const res = await fetch('/save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({filename: current, points: points})
+  });
+  const data = await res.json();
+  renderStats(data.remaining, data.eta_seconds);
+  if (data.remaining === 0) {
+    // The server auto-shuts-down once nothing is left to label; don't race it with another /next.
+    showFinished();
+  } else {
+    loadNext();
+  }
+};
+
+document.getElementById('quit').onclick = async () => {
+  await fetch('/quit', {method: 'POST'});
+  document.body.innerHTML = '<h2>Labeler stopped. You can close this tab.</h2>';
+};
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'BUTTON') return;
+  if (e.code === 'Space') { e.preventDefault(); document.getElementById('save').click(); }
+  else if (e.key === 'n') { document.getElementById('skip').click(); }
+});
+
+loadNext();
+</script>
+</body>
+</html>
+"""
+
+class LabelHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass # suppress internal logging
+
+    def do_GET(self):
+        session = self.server.session
+        path = urlparse(self.path).path
+
+        if path == '/':
+            _send_bytes(self, _LABEL_PAGE.encode('utf-8'), 'text/html')
+        elif path == '/next':
+            _send_json(self, {'filename': session.pick_next(), 'remaining': session.remaining_count()})
+        elif path.startswith('/image/'):
+            fn = unquote(path[len('/image/'):])
+            img_path = session.image_path(fn)
+            if not os.path.exists(img_path):
+                self.send_error(404)
+                return
+            with open(img_path, 'rb') as f:
+                _send_bytes(self, f.read(), 'image/jpeg')
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        session = self.server.session
+        path = urlparse(self.path).path
+        length = int(self.headers.get('Content-Length', 0))
+        payload = json.loads(self.rfile.read(length)) if length else {}
+
+        if path == '/save':
+            try:
+                saved, remaining, eta_seconds = session.save(payload['filename'], payload['points'])
+                eta_text = f" (finishing in ~{_format_duration(eta_seconds)} at this rate)" if eta_seconds else ""
+                print(f"Saved {saved} image(s) from group '{payload['filename']}'. {remaining} group(s) remaining{eta_text}.")
+                _send_json(self, {'status': 'ok', 'saved': saved, 'remaining': remaining, 'eta_seconds': eta_seconds})
+                if remaining == 0:
+                    print("All frames labeled.")
+                    session.done.set()
+            except FileNotFoundError:
+                _send_json(self, {'status': 'error', 'message': 'file not found'}, status=404)
+        elif path == '/quit':
+            _send_json(self, {'status': 'ok'})
+            session.done.set()
+        else:
+            self.send_error(404)
+
+class LabelHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 def label_mode(args):
-    global current_clicks, current_image, current_image_path
+    session = LabelSession()
+    server = LabelHTTPServer((args.bind, args.port), LabelHandler)
+    server.session = session
 
-    TRAIN_DIR = os.path.join(LOCAL_DATASET_ROOT, "train")
-    METADATA_PATH = os.path.join(TRAIN_DIR, "metadata.jsonl")
-    
-    if not os.path.exists(TRAIN_DIR): os.makedirs(TRAIN_DIR)
-    
-    readme_path = os.path.join(LOCAL_DATASET_ROOT, "README.md")
-    if not os.path.exists(readme_path):
-        with open(readme_path, "w") as f:
-            f.write("---\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: train/metadata.jsonl\n---\n")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
 
-    cv2.namedWindow("Labeler", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Labeler", SOURCE_RES[0], SOURCE_RES[1])
-    cv2.setMouseCallback("Labeler", mouse_callback)
-    
-    print("Labeler Started.")
+    display_host = 'localhost' if args.bind in ('0.0.0.0', '::', '') else args.bind
+    print(f"Labeler running at http://{display_host}:{args.port}/")
+    print("Open that URL in a browser. Click to mark points, Save & Next to store, Quit when done.")
     print("Files are loaded from:", HEATMAP_UNPROCESSED_DIR)
-    print(f"Expected Input Res: {SOURCE_RES}")
-    print(f"Saved Target Res:   {HM_IMAGE_RES}")
-    print("\n--- Instructions ---")
-    print("1. Left-Click:   Mark a spot.")
-    print("2. Right-Click:  Undo last mark.")
-    print("3. SPACE:        Save (resizes img & points) and Next.")
-    print("4. 'n':          Skip to next random frame.")
-    print("5. 'q':          Quit and ask to upload to Hugging Face.")
+    print(f"Saved Target Res: {HM_IMAGE_RES}")
 
-    while True:
-        if not os.path.exists(HEATMAP_UNPROCESSED_DIR):
-            print(f"No unprocessed directory: {HEATMAP_UNPROCESSED_DIR}")
-            break
-            
-        files = [f for f in os.listdir(HEATMAP_UNPROCESSED_DIR) if f.endswith('.jpg')]
-        if not files:
-            print("No more files to process.")
-            upload_prompt(args)
-            break
-            
-        fn = random.choice(files)
-        current_image_path = os.path.join(HEATMAP_UNPROCESSED_DIR, fn)
-    
-        current_image = cv2.imread(current_image_path)
-        if current_image is None:
-            continue
-            
-        # Ensure we are working with expected source resolution or warn/resize
-        h, w = current_image.shape[:2]
-        if (w, h) != SOURCE_RES:
-            print(f"Warning: Image {fn} is {w}x{h}, expected {SOURCE_RES}. Visuals might be skewed.")
+    session.done.wait()
+    server.shutdown()
+    server.server_close()
 
-        current_clicks = [] 
-        
-        draw_interface()
-
-        save_it = False
-        while True:
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord('q'):
-                cv2.destroyAllWindows()
-                upload_prompt(args)
-                return
-                
-            elif key == ord('n'):
-                print("Skipped frame.")
-                break 
-                
-            elif key == ord(' '):
-                save_it = True
-                break
-
-        if save_it:
-            # Transform points from SOURCE_RES to HM_IMAGE_RES
-            scale_x = HM_IMAGE_RES[0] / SOURCE_RES[0]
-            scale_y = HM_IMAGE_RES[1] / SOURCE_RES[1]
-            
-            scaled_points = []
-            for px, py in current_clicks:
-                scaled_points.append((int(px * scale_x), int(py * scale_y)))
-
-            # Resize image
-            resized_img = cv2.resize(current_image, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)
-
-            # Generate filename and save
-            new_id = str(uuid.uuid4())
-            new_fn = f"{new_id}.jpg"
-            new_path = os.path.join(TRAIN_DIR, new_fn)
-            
-            cv2.imwrite(new_path, resized_img)
-            
-            # Remove original from unprocessed
-            os.remove(current_image_path)
-            
-            # Write Metadata
-            entry = {
-                "file_name": new_fn,
-                "points": scaled_points
-            }
-            with open(METADATA_PATH, 'a') as f:
-                f.write(json.dumps(entry) + "\n")
-            
-            print(f"Saved {len(scaled_points)} points -> {new_fn} (Resized to {HM_IMAGE_RES})")
+    upload_prompt(args)
 
 def upload_prompt(args):
     from huggingface_hub import HfApi, create_repo
@@ -623,17 +1030,28 @@ if __name__ == "__main__":
     train_parser.add_argument("--batch_size", type=int, default=10)
     train_parser.add_argument("--lr", type=float, default=1e-4)
 
-    # Eval Command
-    eval_parser = subparsers.add_parser("eval")
-    eval_parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
-    eval_parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
-    eval_parser.add_argument("--uri", type=str, default=None, help="Video file path or camera index")
-    eval_parser.add_argument("--record", type=str, default=None, help="Path to save MP4 recording (only works with --uri)")
+    # Preview Command (qualitative check: live video or a dataset's eval split, in a browser)
+    preview_parser = subparsers.add_parser("preview")
+    preview_parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
+    preview_parser.add_argument("--model_path", type=str, default=DEFAULT_MODEL_PATH)
+    preview_parser.add_argument("--model_repo_id", type=str, default=None, help="Download the model from this HF hub repo (filename target_heatmap.pth) instead of using --model_path")
+    preview_parser.add_argument("--uri", type=str, default=None, help="Video file path or camera index")
+    preview_parser.add_argument("--record", type=str, default=None, help="Path to save MP4 recording (only works with --uri)")
+    preview_parser.add_argument("--port", type=int, default=PREVIEW_SERVER_PORT)
+    preview_parser.add_argument("--bind", type=str, default="127.0.0.1", help="Address to bind the preview tool's local web server to")
 
+    # Extract Command (pull labeling candidates from a lerobot dataset's anchor cameras)
+    extract_parser = subparsers.add_parser("extract")
+    extract_parser.add_argument("--source_dataset_id", type=str, required=True, help="repo_id of the lerobot dataset to pull anchor camera frames from")
+    extract_parser.add_argument("--root", type=str, default=None, help="Local root of the lerobot dataset (defaults to the HF cache, downloading if needed)")
+    extract_parser.add_argument("--count", type=int, default=30, help="Number of frame groups (center + offsets) to extract")
+    extract_parser.add_argument("--offset", type=int, default=LABEL_FRAME_OFFSET, help="Frame offset (each direction) to also extract for dataset variety")
 
     # Label Command
     label_parser = subparsers.add_parser("label")
     label_parser.add_argument("--dataset_id", type=str, default=DEFAULT_REPO_ID)
+    label_parser.add_argument("--port", type=int, default=LABEL_SERVER_PORT)
+    label_parser.add_argument("--bind", type=str, default="127.0.0.1", help="Address to bind the labeler's local web server to")
 
     # Split Command
     split_parser = subparsers.add_parser("split")
@@ -643,8 +1061,10 @@ if __name__ == "__main__":
 
     if args.command == "train":
         train(args)
-    elif args.command == "eval":
-        eval_mode(args)
+    elif args.command == "preview":
+        preview_mode(args)
+    elif args.command == "extract":
+        extract_from_lerobot(args)
     elif args.command == "label":
         label_mode(args)
     elif args.command == "split":

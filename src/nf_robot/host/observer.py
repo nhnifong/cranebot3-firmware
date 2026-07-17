@@ -4400,6 +4400,7 @@ def main():
             default=None,
             help="The cloud telemetry server to connect to (choices: local, staging, production) Used in development only. The default is None, which allows local connections on port 4245 only"
         )
+    parser.add_argument("--prod", action="store_true", help="Shorthand for --telemetry_env=production")
     parser.add_argument("--no_ortho", action="store_true", help="Disable orthographic floor projection and its video streams")
     parser.add_argument("--stream_heatmap", action="store_true", help="Generate and stream the target heatmap video feed (off by default)")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
@@ -4415,6 +4416,11 @@ def main():
              "channel is unauthenticated, so this exposes robot control to everyone on the network."
     )
     args = parser.parse_args()
+
+    if args.prod:
+        if args.telemetry_env not in (None, 'production'):
+            parser.error("--prod conflicts with --telemetry_env=%s" % args.telemetry_env)
+        args.telemetry_env = 'production'
 
     if args.debug:
         logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(name)s %(message)s')
