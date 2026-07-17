@@ -1,0 +1,536 @@
+/* ============================================================
+   MOBILE LAYOUT — activated by `body.mobile`
+   ============================================================ */
+
+/* Hidden by default; shown only on mobile. */
+.mobile-only { display: none; }
+body.mobile .mobile-only { display: flex; }
+
+/* Activate the mobile shell.
+   On mobile we pin the document to the visible viewport so it never scrolls.
+   Without this, the Three.js canvas (appended to body, sized to
+   window.innerWidth/innerHeight) can push the body taller than the visible
+   area on phones — and the fixed tab bar ends up off-screen. */
+html.mobile-locked {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+body.mobile {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  margin: 0;
+}
+
+/* The 3D canvas is a direct body child with no explicit positioning.
+   On mobile, pin it so it doesn't contribute to body flow. */
+body.mobile > canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw !important;
+  height: 100dvh !important;
+  z-index: 0;
+}
+
+body.mobile #ui-layer {
+  display: block;
+  padding: 0;
+  pointer-events: none;
+  width: 100vw;
+  height: 100dvh;
+}
+
+/* Hide desktop chrome on mobile — replaced by mobile topbar / tabbar. */
+body.mobile #panel-header { display: none; }
+
+/* While the landing screen is up (robot selection), the mobile chrome
+   doesn't apply — hide topbar and tabbar so the user only sees the
+   landing UI. */
+body.mobile:has(#landing-layer:not(.hidden)) #mobile-topbar,
+body.mobile:has(#landing-layer:not(.hidden)) #mobile-tabbar {
+  display: none;
+}
+
+/* Floating 3D labels only make sense on the 3D tab. */
+body.mobile:not(.tab-3d) #floating-labels-container { display: none; }
+
+/* ============================================================
+   TOP BAR — persistent across all tabs
+   ============================================================ */
+body.mobile #mobile-topbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 30;
+  background: rgba(40, 40, 40, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 8px 12px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: auto;
+  color: var(--text-bright);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.85rem;
+}
+
+#mobile-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+#mobile-status-text { font-weight: 600; }
+
+#mobile-op-progress {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+#mobile-op-progress.hidden { display: none !important; }
+
+#mobile-op-progress .op-info {
+  font-size: 0.7rem;
+  color: var(--text-light);
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+#mobile-op-progress .op-bar-bg {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#mobile-op-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.2s ease-out;
+}
+
+#mobile-stop-btn {
+  margin-left: auto;
+  padding: 6px 18px;
+  font-size: 0.85rem;
+  letter-spacing: 1px;
+}
+
+/* ============================================================
+   BOTTOM TAB BAR
+   ============================================================ */
+body.mobile #mobile-tabbar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 30;
+  background: rgba(40, 40, 40, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 4px;
+  padding-bottom: calc(4px + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: space-around;
+  pointer-events: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tabbar-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-light);
+  padding: 10px 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px;
+  letter-spacing: 0.5px;
+  transition: background 0.15s, color 0.15s;
+}
+.tabbar-btn.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-bright);
+}
+.tabbar-btn:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* ============================================================
+   TAB CONTENT — each non-3D tab is a fullscreen panel between
+   topbar and tabbar.
+   ============================================================ */
+body.mobile #panel-left,
+body.mobile #panel-right,
+body.mobile #panel-drive,
+body.mobile #panel-footer {
+  position: fixed;
+  top: var(--mobile-topbar-h, 56px);
+  bottom: var(--mobile-tabbar-h, 56px);
+  left: 0;
+  right: 0;
+  z-index: 15;
+  border-radius: 0;
+  margin: 0;
+  background: rgba(40, 40, 40, 0.96);
+  backdrop-filter: blur(10px);
+  border: none;
+  pointer-events: auto;
+  display: none;
+  overflow-y: auto;
+  box-sizing: border-box;
+  color: var(--text-bright);
+}
+
+/* Show only the active tab's panel. */
+body.mobile.tab-targets #panel-left,
+body.mobile.tab-cams    #panel-right,
+body.mobile.tab-drive   #panel-drive,
+body.mobile.tab-system  #panel-footer {
+  display: flex;
+  flex-direction: column;
+}
+
+/* TARGETS tab tweaks */
+body.mobile #panel-left { padding: 16px; gap: 8px; }
+body.mobile #panel-left h2 { color: var(--text-bright); border-bottom-color: var(--border-dark); }
+body.mobile #panel-left .task-item { background: rgba(255, 255, 255, 0.08); color: var(--text-bright); }
+
+/* CAMERAS tab tweaks — stacked, full width */
+body.mobile #panel-right {
+  padding: 12px;
+  gap: 12px;
+  background: var(--surface-dark);
+}
+body.mobile .feed-1-1 { width: 100%; aspect-ratio: 1/1; align-self: stretch; }
+body.mobile .video-feed { box-shadow: none; }
+
+/* SYSTEM tab — reformat the desktop footer as a vertical stack. */
+body.mobile #panel-footer {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  padding: 16px;
+  background: var(--surface);
+}
+body.mobile #panel-footer .footer-divider,
+body.mobile #panel-footer .footer-spacer { display: none; }
+body.mobile #panel-footer .stop-button { display: none; } /* moved to topbar */
+
+body.mobile #panel-footer .footer-stats-group {
+  background: rgba(255, 255, 255, 0.04);
+  padding: 12px;
+  border-radius: 10px;
+}
+body.mobile #panel-footer .label-muted,
+body.mobile #panel-footer .swing-label { color: var(--text-light); }
+body.mobile #panel-footer .swing-latency-label,
+body.mobile #panel-footer .swing-latency-value { color: var(--text-muted); }
+
+body.mobile .perspective-container {
+  flex-direction: column;
+  align-items: stretch;
+  margin: 0;
+}
+body.mobile .perspective-label { text-align: left; max-width: none; color: var(--text-light); margin-bottom: 8px; }
+body.mobile .perspective-grid {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto;
+  gap: 8px;
+}
+body.mobile .perspective-button {
+  min-width: 0;
+  padding: 12px 8px;
+  font-size: 0.9rem;
+}
+
+body.mobile #panel-footer .swing-latency-slider { width: 100%; flex: 1; }
+
+/* RUN button — make it a full-width primary action on system tab. */
+body.mobile #panel-footer .run-menu-container {
+  display: flex;
+  flex-direction: column;
+}
+body.mobile #run-btn {
+  width: 100%;
+  padding: 16px;
+  font-size: 1.1rem;
+  justify-content: center;
+}
+
+/* RUN menu becomes a bottom sheet on mobile. */
+body.mobile .run-menu-content {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: auto;
+  width: 100vw;
+  max-width: 100vw;
+  border-radius: 16px 16px 0 0;
+  max-height: 80vh;
+  overflow-y: auto;
+  z-index: 200;
+  margin: 0;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+
+/* ============================================================
+   DRIVE TAB
+   ============================================================ */
+#panel-drive {
+  padding: 0 !important;
+  background: var(--surface-dark) !important;
+  flex-direction: column;
+}
+
+#drive-feed-host {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: #000;
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+/* When a feed is hosted in the drive tab, fill the host. */
+#drive-feed-host > .video-feed {
+  position: absolute !important;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0;
+  border: none;
+  margin: 0;
+  aspect-ratio: unset !important;
+  align-self: stretch !important;
+}
+#drive-feed-host > .video-feed .feed-expand-btn,
+#drive-feed-host > .video-feed .feed-collapse-btn { display: none; }
+
+#drive-controls {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 16px;
+  gap: 14px;
+  pointer-events: auto;
+}
+
+.drive-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.touch-stick {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+}
+.touch-stick-knob {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--accent);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  transition: background 0.15s;
+}
+.touch-stick.active .touch-stick-knob { background: var(--accent-hover); }
+
+.drive-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+
+.drive-btn {
+  background: var(--surface-light);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  padding: 16px 20px;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.1s;
+}
+.drive-btn.pressed,
+.drive-btn:active { background: var(--accent); }
+
+.touch-strip {
+  flex: 1;
+  height: 56px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.touch-strip-knob {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 56px;
+  border-radius: 8px;
+  background: var(--accent);
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  transition: background 0.15s;
+}
+.touch-strip.active .touch-strip-knob { background: var(--accent-hover); }
+
+.drive-strip-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.7rem;
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+/* Vertical touch strip variant — used for the finger open/close slider. */
+.touch-strip-vertical {
+  width: 60px;
+  height: 160px;
+  flex: 0 0 auto;
+}
+.touch-strip-vertical .touch-strip-knob {
+  /* Override the horizontal knob layout */
+  top: 50%;
+  bottom: auto;
+  left: 4px;
+  right: 4px;
+  width: auto;
+  height: 56px;
+  border-radius: 8px;
+  transform: translateY(-50%);
+}
+.drive-strip-label-top,
+.drive-strip-label-bottom {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: auto;
+}
+.drive-strip-label-top    { top: 6px; }
+.drive-strip-label-bottom { bottom: 6px; top: auto; }
+
+.drive-secondary { gap: 8px; }
+.drive-btn-secondary {
+  flex: 1;
+  background: var(--surface);
+  font-size: 0.8rem;
+  padding: 10px 12px;
+}
+.drive-btn-stop-all { background: var(--red-hover); }
+.drive-btn-stop-all:active { background: var(--red); }
+
+/* ============================================================
+   3D tab — disable orbit gestures by setting camera DOM hint.
+   The actual disable happens in JS (controls.enabled = false).
+   We also hide all tap/cursor styling on the canvas.
+   ============================================================ */
+body.mobile.tab-3d canvas {
+  cursor: default !important;
+}
+
+/* When NOT on the 3D tab, the canvas is still rendering behind
+   panels — that's OK and intentional (so panels remain translucent
+   if desired). */
+
+/* ============================================================
+   CAMERAS-tab feed: tappable "Drive" button overlay.
+   ============================================================ */
+.feed-drive-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 5;
+  background: var(--green);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-weight: bold;
+  font-size: 0.85rem;
+  pointer-events: auto;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  display: none;
+}
+body.mobile .feed-drive-btn { display: inline-block; }
+/* Hide the desktop expand button on mobile; tapping the Drive button
+   is the mobile entry point to single-feed mode. */
+body.mobile .feed-expand-btn { display: none; }
+
+/* ============================================================
+   MODAL / OVERLAY adjustments for mobile — make them fullscreen.
+   ============================================================ */
+body.mobile .overlay .component-details-box,
+body.mobile .overlay .popup-box {
+  width: 100vw;
+  max-width: 100vw;
+  min-width: 0;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 24px 16px;
+  padding-top: calc(24px + env(safe-area-inset-top));
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+}
+body.mobile .overlay .popup-box {
+  height: auto;
+  max-height: 90dvh;
+  width: 90vw;
+  max-width: 90vw;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+body.mobile .landing-panel {
+  width: 90vw;
+  max-width: 90vw;
+  padding: 24px;
+}
+
+/* Goto popup — bigger hit target on touch. */
+body.mobile .goto-popup-btn {
+  padding: 14px 24px;
+  font-size: 1rem;
+}

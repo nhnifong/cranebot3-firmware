@@ -1,0 +1,1533 @@
+/* ============================================================
+   CSS CUSTOM PROPERTIES
+   Central place for the color palette
+   ============================================================ */
+:root {
+  /* Brand / action colors */
+  --green:        #4CAF50;
+  --green-hover:  #43a047;
+  --blue:         #2196F3;
+  --blue-hover:   #1976D2;
+  --red:          #f44336;
+  --red-hover:    #d32f2f;
+  --accent:       #007fff;
+  --accent-hover: #0066cc;
+
+  /* Surface shades (dark UI) */
+  --surface-dark:  #2a2a2a;
+  --surface:       #333;
+  --surface-mid:   #444;
+  --surface-light: #555;
+
+  /* Text shades */
+  --text-bright: #eee;
+  --text-light:  #ccc;
+  --text-muted:  #aaa;
+  --text-dim:    #888;
+  --text-green:  #32b626;
+
+  /* Border shades */
+  --border-dark: #444;
+  --border:      #555;
+}
+
+/* ============================================================
+   BASE
+   ============================================================ */
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.hidden { display: none !important; }
+
+/* ============================================================
+   CANVAS LAYERS
+   z-index overview:
+     0    – Three.js canvas (appended by main.ts)
+     9    – Floating labels
+     10   – UI panels
+     20   – Landing screen
+     1000 – Panel overlays (component details, controls, etc.)
+     9999 – Modal overlays (popups, sign-in)
+   ============================================================ */
+
+/* Pointer events disabled by default; individual children re-enable them. */
+#ui-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Shrink the UI (text, buttons, panels) to 85% */
+  zoom: 0.85;
+  width: calc(100vw / 0.85);
+  height: calc(100vh / 0.85);
+  z-index: 10;
+  padding: 20px;
+  box-sizing: border-box;
+  pointer-events: none;
+
+  display: grid;
+  grid-template-columns: 312px 1fr 520px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "header header header"
+    "left   center right"
+    "footer footer footer";
+  gap: 20px;
+}
+
+/* Anchor labels and gripper force gauge — passes all clicks through to the canvas. */
+#floating-labels-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 9;
+}
+
+/* ============================================================
+   LANDING SCREEN
+   Full-screen panel shown before connecting to a robot.
+   ============================================================ */
+#landing-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(40, 40, 40, 0.95);
+  backdrop-filter: blur(15px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: white;
+}
+
+.landing-panel {
+  position: relative; /* context for .panel-back-btn */
+  background: var(--surface);
+  padding: 40px;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--surface-light);
+  text-align: center;
+  max-width: 500px;
+  width: 100%;
+}
+
+.landing-title {
+  font-size: 1.8rem;
+  margin-bottom: 30px;
+  color: var(--text-bright);
+}
+
+.landing-btn {
+  display: block;
+  width: 100%;
+  padding: 16px;
+  margin-bottom: 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  cursor: pointer;
+  font-weight: bold;
+  transition: transform 0.1s, box-shadow 0.2s;
+}
+
+.btn-lan   { background-color: var(--surface-light); color: var(--text-bright); border: 1px solid #777; }
+.btn-lan:hover   { background-color: #666; }
+.btn-sim   { background-color: var(--blue);  color: white; }
+.btn-sim:hover   { background-color: var(--blue-hover); }
+.btn-cloud { background-color: var(--green); color: white; }
+.btn-cloud:hover { background-color: var(--green-hover); }
+
+.landing-hint { font-size: 0.85rem; color: var(--text-muted); margin-top: 10px; }
+.landing-hint a { color: var(--text-muted); }
+
+.robot-list {
+  margin-top: 20px;
+  text-align: left;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Placeholder shown while the robot list is loading. */
+.robot-list-empty { color: var(--text-dim); padding: 20px; }
+
+.robot-list-item {
+  background: var(--surface-mid);
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid transparent;
+}
+.robot-list-item:hover { background: #505050; border-color: #666; }
+
+.robot-name { font-weight: bold; font-size: 1.1em; }
+.robot-id   { font-size: 0.8em; color: var(--text-dim); font-family: monospace; }
+
+.status-badge  { font-size: 0.8em; padding: 4px 8px; border-radius: 4px; background: #666; color: var(--text-light); }
+.status-online { background: #1b5e20; color: #a5d6a7; }
+
+.btn-unbind {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 8px;
+  margin-left: 10px;
+  font-size: 1.2em;
+  transition: color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-unbind:hover { color: var(--red); }
+
+/* Back arrow at the top-left of landing sub-panels. */
+.panel-back-btn {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 2.5rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.2s;
+}
+.panel-back-btn:hover { color: white; }
+
+/* Shared text input (bind nickname, debug cmd, session repo IDs, etc.). */
+.input-text {
+  width: 100%;
+  padding: 12px;
+  margin: 15px 0;
+  background: #222;
+  border: 1px solid var(--border-dark);
+  color: white;
+  border-radius: 6px;
+  font-size: 1rem;
+  box-sizing: border-box;
+}
+.input-text:focus { border-color: var(--green); outline: none; }
+
+/* Inputs nested inside .session-input-group don't need vertical margin. */
+.session-input-group .input-text { margin: 0; }
+
+/* Descriptive paragraph inside panels (bind panel, lerobot description, etc.). */
+#bind-robot-panel p,
+.panel-desc {
+  color: var(--text-light);
+  margin-bottom: 20px;
+}
+
+/* ============================================================
+   MAIN UI PANELS
+   cards rendered over the 3D canvas.
+   ============================================================ */
+.panel {
+  background: rgba(155, 155, 145, 0.85);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: 100%;
+  /* Hide scrollbars across all browsers */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.panel::-webkit-scrollbar { display: none; }
+
+/* ============================================================
+   HEADER PANEL
+   ============================================================ */
+#panel-header {
+  grid-area: header;
+  height: auto;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 20px;
+}
+
+.header-left  { display: flex; align-items: center; gap: 20px; }
+.header-right { display: flex; align-items: center; }
+
+.header-title {
+  margin: 0;
+  padding: 0;
+  border: none;
+  font-size: 1.1rem;
+  color: #000;
+  font-weight: 700;
+}
+
+.header-link {
+  color: #000;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-left: 20px;
+  transition: color 0.2s;
+}
+.header-link:hover { color: white; }
+
+.header-back-btn {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text-bright);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+  text-shadow: 0px 1px 3px rgba(0, 0, 0, 0.8);
+}
+.header-back-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Operation progress bar (calibration, firmware update, etc.) */
+#op-progress-container {
+  flex-grow: 1;
+  max-width: 900px;
+  margin: 0 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+
+.op-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: #ddd;
+  line-height: 1.2;
+}
+#op-name   { font-weight: bold; color: black; }
+#op-action { font-family: monospace; color: black; }
+
+.op-bar-bg {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+  overflow: hidden;
+}
+#op-bar-fill {
+  height: 100%;
+  background-color: var(--accent);
+  width: 0%;
+  transition: width 0.2s ease-out;
+  box-shadow: 0 0 10px rgba(0, 127, 255, 0.5);
+}
+
+/* ============================================================
+   LEFT PANEL: TARGET LIST
+   ============================================================ */
+#panel-left {
+  grid-area: left;
+  overflow: visible; /* lets the source/destination pop-up menus escape the panel; #target-list scrolls internally */
+}
+
+#target-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+#target-route-info {
+  flex: 0 0 auto;
+  max-height: 110px;
+  overflow: visible; /* lets the source/destination pop-up menus escape this box */
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 2px solid #ddd;
+}
+
+.route-info-row {
+  font-size: 0.9rem;
+  color: #444;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.route-info-label {
+  font-weight: 600;
+  color: black;
+}
+
+/* Source/Destination value pickers — pop-up menu of selectable named locations. */
+.route-select-container { position: relative; display: inline-block; }
+
+.route-select-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.route-select-caret { font-size: 0.7em; }
+
+.route-select-menu {
+  min-width: 160px;
+}
+
+h2 {
+  margin-top: 0;
+  font-size: 1.2rem;
+  color: #444;
+  border-bottom: 2px solid #ddd;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.panel-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 2px solid #ddd;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.panel-header-row h2 {
+  flex: 1 1 auto;
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.auto-target-btn {
+  margin-bottom: 12px;
+  padding: 4px 12px;
+}
+
+.auto-target-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.auto-target-btn.active:hover {
+  background: var(--accent-hover);
+}
+
+.task-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.3);
+  padding: 0;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  border-left: 4px solid white;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.8rem;
+  color: #000;
+  cursor: pointer;
+}
+.task-item.active {
+  border-left-color: var(--green);
+  background: rgba(255, 255, 255, 0.9);
+  font-weight: bold;
+}
+.task-item:hover:not(.target-mouse-selected),
+.target-mouse-hovered:not(.target-mouse-selected) {
+  background: rgba(0, 255, 255, 0.3);
+}
+
+.task-delete {
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 4px;
+  margin: 2px;
+  font-weight: bold;
+  font-size: 1em;
+  color: #555;
+  border: none;
+  background: transparent;
+  display: none; /* revealed by JS on hover */
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: background-color 0.2s, color 0.2s;
+}
+.task-delete:hover { background-color: rgba(200, 50, 50, 0.15); color: #d00; }
+
+.task-text-span { margin: 8px 10px; }
+
+/* Target status — color shown via the left accent border. */
+.status-seen      { border-left-color: white; }
+.status-selected  { border-left-color: var(--accent); }
+.status-picked-up { border-left-color: #ffd700; }
+.target-mouse-selected { background: rgba(255, 165, 0, 0.8); }
+
+/* ============================================================
+   RIGHT PANEL: VIDEO FEEDS
+   ============================================================ */
+#panel-right {
+  grid-area: right;
+  gap: 15px;
+  /* Video panel is transparent — feeds fill it directly. */
+  background: transparent;
+  box-shadow: none;
+  border: none;
+  backdrop-filter: none;
+  padding: 0;
+  overflow-y: auto;
+}
+#panel-right.panel-right-expanded {
+  grid-column: 2 / 4;
+  grid-row: 2;
+}
+
+.video-feed {
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  border: 2px solid var(--surface-mid);
+  flex-shrink: 0;
+}
+
+.video-feed video,
+.video-feed img.mjpeg-feed {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.video-feed canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.feed-16-9 { width: 100%; aspect-ratio: 16 / 9; }
+.feed-1-1  { width: 66%; aspect-ratio: 1 / 1; align-self: flex-end; }
+
+/* Expand / collapse corner buttons */
+.feed-expand-btn,
+.feed-collapse-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 4;
+  background: rgba(0, 0, 0, 0.55);
+  border: none;
+  color: #fff;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  line-height: 1;
+  transition: background 0.15s;
+  pointer-events: auto;
+}
+.feed-expand-btn:hover,
+.feed-collapse-btn:hover { background: rgba(0, 0, 0, 0.85); }
+
+
+.feed-label {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* ============================================================
+   FOOTER PANEL
+   ============================================================ */
+#panel-footer {
+  grid-area: footer;
+  height: auto;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
+  overflow: visible; /* run-menu must pop above the footer bounds */
+  padding: 10px 20px;
+}
+
+.footer-divider {
+  width: 1px;
+  height: 40px;
+  background-color: rgba(0, 0, 0, 0.15);
+  margin: 0 20px;
+}
+
+.footer-spacer { flex-grow: 1; }
+
+/* ============================================================
+   LOG PANEL
+   A grid row below the footer bar that pushes the footer up
+   when shown. Toggled from the Calibration & Maintenance menu
+   via the .logs-open class on #ui-layer.
+   ============================================================ */
+#ui-layer.logs-open {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "header header header"
+    "left   center right"
+    "footer footer footer"
+    "logs   logs   logs";
+}
+
+#log-panel {
+  grid-area: logs;
+  background: #2b2b2b;
+  color: #ffffff;
+  font-family: 'Consolas', 'Courier New', monospace;
+  border: 1px solid #444;
+  border-radius: 8px;
+  overflow: hidden;
+  pointer-events: auto;
+  display: none; /* shown only when #ui-layer has .logs-open */
+}
+
+#ui-layer.logs-open #log-panel {
+  display: block;
+}
+
+#log-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 10px;
+  background: #1e1e1e;
+  color: #bbb;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#log-panel-close {
+  background: none;
+  border: none;
+  color: #bbb;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+#log-panel-close:hover { color: #fff; }
+
+#log-panel-content {
+  height: 7.5em; /* ~5 lines at the line-height below */
+  overflow-y: auto;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* Vertical stack of stat lines (robot ID, video stats, etc.). */
+.footer-stats-group {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+/* Modifier: inline row used for the swing-cancellation toggle. */
+.footer-toggle-section {
+  align-items: center;
+  gap: 8px;
+}
+
+.stat-line { display: flex; align-items: center; gap: 10px; }
+
+.status-dot {
+  height: 10px;
+  width: 10px;
+  background-color: var(--green);
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 5px var(--green);
+}
+.status-dot.status-offline {
+  background-color: var(--red);
+  box-shadow: 0 0 5px var(--red);
+}
+
+.label-muted {
+  color: #444;
+  margin-right: 4px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.swing-label { font-size: 0.9rem; color: #333; }
+
+.swing-section { gap: 6px; }
+
+.swing-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.swing-latency-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swing-latency-label {
+  font-size: 0.75rem;
+  color: #666;
+  min-width: 38px;
+}
+
+.swing-latency-slider {
+  width: 90px;
+  height: 4px;
+  cursor: pointer;
+  accent-color: #555;
+}
+
+.swing-latency-value {
+  font-size: 0.75rem;
+  font-family: monospace;
+  color: #333;
+  min-width: 36px;
+}
+
+/* ============================================================
+   RUN MENU
+   Primary action button with an animated pop-up menu above it.
+   ============================================================ */
+.run-menu-container { position: relative; display: inline-block; }
+
+.run-button {
+  background-color: var(--green);
+  color: white;
+  padding: 12px 28px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 1rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: background-color 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+}
+.run-button.disabled,
+.run-button:disabled            { color: var(--text-muted); cursor: default; }
+.run-button:hover:not(.disabled):not(:disabled)  { background-color: var(--green-hover); }
+.run-button:active:not(.disabled):not(:disabled) { transform: translateY(1px); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }
+
+/* Full-width variant used inside overlay panels. */
+.run-button.btn-full { width: 100%; justify-content: center; }
+
+/* Color modifiers */
+.run-button.btn-gray  { background-color: var(--surface-light); }
+.run-button.btn-gray:hover:not(.disabled):not(:disabled)  { background-color: #666; }
+.run-button.btn-blue  { background-color: var(--blue); }
+.run-button.btn-blue:hover:not(.disabled):not(:disabled)  { background-color: var(--blue-hover); }
+.run-button.btn-red   { background-color: var(--red); }
+.run-button.btn-red:hover:not(.disabled):not(:disabled)   { background-color: var(--red-hover); }
+.run-button.btn-green { background-color: var(--green); }
+.run-button.btn-green:hover:not(.disabled):not(:disabled) { background-color: var(--green-hover); }
+
+/* Disabled overrides all color modifiers */
+.run-button.btn-gray.disabled,  .run-button.btn-gray:disabled,
+.run-button.btn-blue.disabled,  .run-button.btn-blue:disabled,
+.run-button.btn-red.disabled,   .run-button.btn-red:disabled,
+.run-button.btn-green.disabled, .run-button.btn-green:disabled { background-color: var(--surface-mid); }
+
+/* The small chevron icon inside the RUN button. */
+#run-btn span:last-child { font-size: 0.8em; }
+
+.run-menu-content {
+  display: none;
+  position: absolute;
+  bottom: 120%;
+  left: 0;
+  background-color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  min-width: 240px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  border-radius: 12px;
+  padding: 8px 0;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  transform-origin: bottom left;
+  animation: popUp 0.1s ease-out;
+}
+.run-menu-content.show { display: block; }
+
+@keyframes popUp {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+
+.menu-item {
+  color: #333;
+  padding: 12px 20px;
+  display: block;
+  cursor: pointer;
+  font-size: 0.95rem;
+  transition: background-color 0.1s;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+.menu-item:last-child { border-bottom: none; }
+.menu-item:hover:not(.disabled) { background-color: #e8f5e9; color: #2e7d32; }
+.menu-item.disabled    { color: var(--text-muted); cursor: default; }
+
+/* Non-clickable section divider inside the menu. */
+.menu-item.menu-section-header {
+  border-top: 1px solid #ccc;
+  font-weight: bold;
+  cursor: default;
+}
+.menu-item.menu-section-header:hover { background: none; color: #333; }
+
+/* Back-arrow item at the top of sub-menus. */
+.menu-item.menu-back { font-weight: bold; color: #555; }
+
+/* Thin separator rule between menu groups. */
+.menu-separator { border: none; border-bottom: 1px solid #ddd; margin-bottom: 5px; }
+
+/* Debug command row: a non-clickable item containing an input + send button. */
+.menu-item-debug { cursor: default; }
+.menu-item-debug:hover { background: none; color: inherit; }
+.menu-item-debug .input-label { margin-bottom: 4px; }
+
+.debug-input-row { display: flex; gap: 8px; margin-top: 4px; }
+
+#debug-input { padding: 4px; margin: 0; font-size: 0.9rem; flex: 1; }
+#action-debug-send { padding: 4px 10px; font-size: 0.8rem; }
+
+/* ============================================================
+   COMPONENT STATUS MENU
+   Drop-up pop-up showing connection state of all components.
+   ============================================================ */
+.component-menu-container { position: relative; }
+
+.component-status-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  padding: 4px 6px;
+  margin: -4px -6px; /* offsets padding to keep label aligned */
+  transition: background 0.2s, border-color 0.2s;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.component-status-btn:hover { background: rgba(255, 255, 255, 0.4); border-color: rgba(0, 0, 0, 0.1); }
+
+/* Component list is built on .run-menu-content with these overrides. */
+.component-list-popup { min-width: 320px; padding: 0; overflow: hidden; }
+
+.comp-row {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.comp-row:last-child { border-bottom: none; }
+
+.comp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+  font-size: 0.95rem;
+  color: #333;
+}
+
+.comp-details {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.8rem;
+  color: #666;
+  display: flex;
+  justify-content: space-between;
+}
+
+.comp-status-good { color: #2e7d32; font-weight: bold; }
+.comp-status-bad  { color: var(--red-hover); font-weight: bold; }
+
+/* ============================================================
+   PERSPECTIVE BUTTONS
+   Grid of viewpoint selectors in the footer.
+   ============================================================ */
+.perspective-container {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin-left: 15px;
+}
+
+.perspective-label {
+  font-weight: bold;
+  font-size: 0.85rem;
+  color: #333;
+  text-align: right;
+  line-height: 1.1;
+  max-width: 90px;
+}
+
+.perspective-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 6px;
+}
+
+.perspective-button {
+  background-color: var(--surface-light);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-weight: bold;
+  font-size: 0.8rem;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  min-width: 100px;
+}
+.perspective-button:hover:not(.perspective-button-selected) { background-color: #333; }
+.perspective-button:active { transform: translateY(1px); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }
+.perspective-button-selected { background-color: #005; }
+
+/* Decorative icon inside each perspective button. */
+.orbit-image {
+  display: inline-block;
+  height: 1em;
+  width: auto;
+  padding-right: 10px;
+  vertical-align: middle;
+}
+
+/* ============================================================
+   STOP BUTTON
+   ============================================================ */
+.stop-button {
+  background-color: var(--red-hover);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 24px;
+  font-weight: bold;
+  font-size: 0.9rem;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  margin-left: 20px;
+}
+.stop-button:hover  { background-color: #b71c1c; }
+.stop-button:active { transform: translateY(1px); box-shadow: 1px 2px rgba(0, 0, 0, 0.2); }
+
+/* ============================================================
+   SWING CANCELLATION TOGGLE
+   ============================================================ */
+.toggle-track {
+  width: 46px;
+  height: 24px;
+  background-color: #d1d1d1;
+  border-radius: 24px;
+  position: relative;
+  cursor: pointer;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: background-color 0.2s;
+}
+.toggle-track.perspective-button-selected { background-color: #c8e6c9; }
+
+.toggle-knob {
+  position: absolute;
+  height: 20px;
+  width: 20px;
+  left: 2px;
+  bottom: 2px;
+  background-color: var(--green);
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.2s;
+  transform: translateX(22px);
+}
+/* Off state: gray knob slid to the left. */
+.toggle-knob.status-offline { background-color: #888; transform: translateX(0); }
+
+/* ============================================================
+   MODAL OVERLAYS (shared base)
+   All overlays: fixed, full-screen, dark dim, flex-centered.
+
+   Two variants:
+     .overlay             — z 9999, 70% dim (alerts, sign-in)
+     .overlay.overlay-panel — z 1000, 60% dim (detail panels)
+   ============================================================ */
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 9999;
+}
+
+.overlay.overlay-panel {
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+}
+
+/* Invisible div behind the box; clicking it closes the panel. */
+.bg-catcher { position: absolute; inset: 0; }
+
+/* H3 title at the top of every overlay box. */
+.overlay-title { margin-top: 0; margin-bottom: 15px; color: white; }
+
+/* ============================================================
+   POPUP & CONFIRM OVERLAYS
+   Simple message boxes with an ok/cancel action.
+   ============================================================ */
+.popup-box {
+  position: relative; /* for .cd-close-btn */
+  background: var(--surface-dark);
+  border: 1px solid var(--border-dark);
+  padding: 20px 30px;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  min-width: 300px;
+}
+
+#popup-message,
+#confirm-message {
+  color: #fff;
+  font-size: 1.1em;
+  margin-bottom: 20px;
+  white-space: pre-wrap;
+}
+
+#popup-ok {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 8px 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1em;
+  transition: background 0.2s;
+}
+#popup-ok:hover { background: var(--accent-hover); }
+
+.confirm-buttons { display: flex; justify-content: center; gap: 10px; }
+
+/* ============================================================
+   PANEL OVERLAYS (component details, controls, lerobot, share)
+   Dark-themed boxes containing robot controls and status.
+   ============================================================ */
+.component-details-box {
+  position: relative;
+  min-width: 320px;
+  background: rgba(30, 30, 30, 0.95);
+  border: 1px solid var(--border);
+  padding: 24px;
+  z-index: 1001; /* sits above .bg-catcher */
+  pointer-events: auto;
+}
+
+/* X button in the top-right corner. */
+.cd-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.cd-close-btn:hover { color: white; }
+
+/* Key-value pairs (IP, status, temperature, etc.) inside component details. */
+.info-grid { color: var(--text-light); font-size: 0.95rem; margin-bottom: 20px; }
+.info-row  { display: flex; justify-content: space-between; margin-bottom: 8px; }
+
+.cd-ip-copyable { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.cd-ip-copyable:hover { color: var(--text-bright); }
+.comp-details .cd-ip-copyable:hover { color: #111; }
+.copy-icon { width: 13px; height: 13px; opacity: 0.5; flex-shrink: 0; transition: opacity 0.15s; }
+.cd-ip-copyable:hover .copy-icon { opacity: 1; }
+.copy-icon.copied { opacity: 1; color: var(--green); }
+
+/* Vertical column of action buttons inside a panel. */
+.panel-actions { display: flex; flex-direction: column; gap: 10px; }
+
+/* Inline row for the cam-angle float input + button. */
+.cam-angle-row { display: flex; gap: 8px; align-items: center; }
+
+#cd-anchor-actions { margin-top: 10px; }
+
+#cd-cam-angle-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-bright);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+#btn-cd-set-cam-angle { flex: 2; }
+
+/* Controls overlay: slightly wider to fit the gamepad diagram. */
+#controls-overlay .component-details-box { max-width: 500px; }
+
+/* Full calibration overlay */
+#fullcal-overlay .component-details-box { max-width: 720px; }
+.fullcal-section-heading {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--text-bright);
+  margin-bottom: 8px;
+}
+.fullcal-body {
+  font-size: 0.9rem;
+  color: var(--text-light);
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+/* Inline help icon ("?" in a circle) that reveals an image on hover/focus. */
+.help-hint {
+  position: relative;
+  display: inline-flex;
+  margin-left: 6px;
+  vertical-align: middle;
+  cursor: help;
+}
+.help-hint-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface-light);
+  color: var(--text-bright);
+  border: 1px solid #777;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.help-hint-img {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  max-width: 260px;
+  width: max-content;
+  padding: 4px;
+  background: #2b2b2b;
+  border: 1px solid #444;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  z-index: 10003;
+  pointer-events: none;
+}
+.help-hint:hover .help-hint-img,
+.help-hint:focus .help-hint-img,
+.help-hint:focus-within .help-hint-img {
+  display: block;
+}
+
+.controls-list div    { margin-bottom: 5px; color: var(--text-light); font-size: 0.95rem; }
+.controls-list strong { display: inline-block; width: 120px; color: white; }
+
+/* Section at the bottom of the controls panel containing the gamepad image. */
+.controls-gamepad-section {
+  text-align: center;
+  border-top: 1px solid var(--border);
+  padding-top: 15px;
+  margin-top: 15px;
+}
+.controls-gamepad-section img { max-width: 100%; border-radius: 8px; }
+
+/* LeRobot overlay: wider to fit session controls comfortably. */
+#lerobot-overlay .component-details-box { min-width: 420px; }
+
+/* Share overlay. */
+#share-overlay .component-details-box { min-width: 400px; }
+
+/* ============================================================
+   LEROBOT SESSION PANEL
+   ============================================================ */
+.session-section {
+  border-top: 1px solid var(--border);
+  padding-top: 15px;
+  padding-bottom: 15px;
+  margin-top: 15px;
+}
+.session-section:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+
+.session-input-group { margin-bottom: 10px; }
+
+/* Small uppercase label above an input (Dataset Repo ID, Policy Repo ID, etc.). */
+.input-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.timer-display {
+  font-family: 'Space Mono', monospace;
+  font-size: 1.1rem;
+  color: var(--accent);
+  margin-bottom: 15px;
+}
+
+.error-display {
+  background: rgba(244, 67, 54, 0.15);
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  margin-bottom: 15px;
+}
+
+/* Stat lines showing episode / dataset counts. */
+.panel-stat { color: var(--text-light); font-size: 0.95rem; margin-bottom: 10px; }
+
+/* Monospace repo-ID display line. */
+.lerobot-repo-line {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 20px;
+  font-family: monospace;
+}
+#lerobot-repo-id { color: var(--text-bright); }
+
+/* Shown after a session finishes successfully. */
+.completion-section { text-align: center; margin-bottom: 20px; }
+.session-complete-text { color: var(--green); font-weight: bold; }
+
+#btn-lerobot-finalize { margin-top: 15px; }
+
+/* ============================================================
+   SPINNER & PENDING STATE
+   Shown while a LeRobot session is starting up.
+   ============================================================ */
+.pending-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 0;
+  gap: 15px;
+}
+
+.spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: spin 1s ease-in-out infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.starting-text { color: white; font-weight: bold; font-size: 0.9rem; }
+
+/* HuggingFace dataset link shown after a recording session. */
+.hf-link {
+  display: inline-block;
+  background-color: #ffcc00;
+  color: #000;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-weight: bold;
+  text-decoration: none;
+  margin-top: 15px;
+  transition: transform 0.1s;
+}
+.hf-link:hover { transform: scale(1.05); }
+
+/* ============================================================
+   SHARE ACCESS PANEL
+   ============================================================ */
+.share-list {
+  margin: 15px 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+}
+
+/* Muted descriptive text beneath a panel title. */
+.panel-meta { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 10px; }
+
+.share-user-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.share-user-row:last-child { border-bottom: none; }
+
+.share-email { color: var(--text-bright); font-size: 0.9rem; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; }
+
+.btn-revoke {
+  background: transparent;
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 70px;
+}
+.btn-revoke.confirming { background: var(--red); color: white; font-weight: bold; }
+
+/* ============================================================
+   FLOATING 3D LABELS & GAUGES
+   Positioned over the Three.js canvas by main.ts.
+   ============================================================ */
+.floating-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 600;
+  pointer-events: none;
+  white-space: nowrap;
+  transform-origin: bottom left;
+  text-shadow:
+    -1px -1px 0 #000,
+     1px -1px 0 #000,
+    -1px  1px 0 #000,
+     1px  1px 0 #000,
+     0px  2px 4px rgba(0, 0, 0, 0.8);
+}
+
+.floating-gauge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50px;
+  height: 12px;
+  border: 2px solid white;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.8), 0 0 0 1px black;
+  background: rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  transform-origin: center left;
+}
+.gauge-fill {
+  height: 100%;
+  background-color: var(--green);
+  border-radius: 4px;
+  width: 0%;
+  transition: width 0.1s linear;
+}
+.gauge-target {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background-color: white;
+  box-shadow: 1px 1px 2px black;
+  z-index: 2;
+}
+
+/* ============================================================
+   GOTO TARGET POPUP BUTTON
+   Shown near the cursor when right-clicking a target in a video feed.
+   ============================================================ */
+.goto-popup-btn {
+  position: fixed;
+  z-index: 2000;
+  background-color: var(--green);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: bold;
+  font-size: 0.9rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+  transform: translate(-50%, -130%);
+  animation: popUpSmall 0.15s ease-out;
+  white-space: nowrap;
+}
+.goto-popup-btn:hover  { background-color: var(--green-hover); }
+.goto-popup-btn:active { transform: translate(-50%, -130%) scale(0.95); }
+
+@keyframes popUpSmall {
+  from { opacity: 0; transform: translate(-50%, -100%) scale(0.8); }
+  to   { opacity: 1; transform: translate(-50%, -130%) scale(1); }
+}
+
+/* ============================================================
+   TUTORIAL OVERLAY
+   Floating explanation panels and element highlighting used by
+   the /tutorial alias. Sits above every other layer.
+   ============================================================ */
+
+/* Glowing emphasis applied to whichever element a step points at. */
+.tutorial-highlight {
+  position: relative;
+  z-index: 10001;
+  border-radius: 6px;
+  outline: 2px solid #87ceeb; /* light sky blue */
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px rgba(135, 206, 235, 0.40), 0 0 18px 4px rgba(135, 206, 235, 0.60);
+  animation: tutorialPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes tutorialPulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(135, 206, 235, 0.35), 0 0 14px 3px rgba(135, 206, 235, 0.50); }
+  50%      { box-shadow: 0 0 0 5px rgba(135, 206, 235, 0.55), 0 0 24px 7px rgba(135, 206, 235, 0.80); }
+}
+
+/* The floating explanation panel — positioned in JS, floats over everything. */
+.tutorial-panel {
+  position: fixed;
+  z-index: 10002;
+  max-width: 340px;
+  background: #ffffff;
+  border: 1px solid #87ceeb;
+  border-top: 4px solid #87ceeb;
+  border-radius: 10px;
+  padding: 16px 18px 16px 16px;
+  color: #111111;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  animation: tutorialFade 0.18s ease-out;
+}
+
+@keyframes tutorialFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.tutorial-panel-message {
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: #111111;
+  padding-right: 18px;
+}
+.tutorial-panel-message strong { color: #000000; }
+.tutorial-panel-message img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+.tutorial-panel-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #888888;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tutorial-panel-dismiss:hover { background: #eaf6fc; color: #111111; }
+
+.tutorial-copy-block {
+  position: relative;
+  margin-top: 12px;
+  background: #f3f8fb;
+  border: 1px solid #cfe6f2;
+  border-radius: 6px;
+}
+.tutorial-copy-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #111111;
+  white-space: pre;
+  overflow-x: auto;
+}
+.tutorial-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: #87ceeb;
+  border: 1px solid #6fbfe0;
+  color: #06384d;
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tutorial-copy-btn:hover { background: #6fbfe0; color: #04222f; border-color: #5bb0e8; }
+
+/* The "End Tutorial" button keeps the default .header-back-btn styling so it
+   matches the other top-bar buttons — no color override needed. */
