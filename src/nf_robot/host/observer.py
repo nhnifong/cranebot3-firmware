@@ -4312,7 +4312,7 @@ class AsyncObserver:
         import torch
         from huggingface_hub import hf_hub_download
         from nf_robot.ml.centering import CenteringNet
-        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
+        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
         self._device = DEVICE
         CENTERING_MODEL_REPOID = "naavox/centering"
 
@@ -4350,7 +4350,7 @@ class AsyncObserver:
         import torch
         from huggingface_hub import hf_hub_download
         from nf_robot.ml.target_heatmap import TargetHeatmapNet
-        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
+        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
         self._device = DEVICE
         TARGETING_MODEL_REPOID = "naavox/targeting"
 

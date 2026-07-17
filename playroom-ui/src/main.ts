@@ -40,8 +40,8 @@ const urlParams: URLSearchParams = new URLSearchParams(window.location.search);
 let currentRobotId: string | null = urlParams.get('robotid'); 
 let detectedRobotId: string | null = null; // Stored from incoming telemetry
 let swingCancellationEnabled = false;
-// TODO: once telemetry reports auto target-finding state, drive this from that message instead of local toggle state.
 let autoTargetEnabled = false;
+let tensionRegEnabled = true;
 let userRobots: RobotInfo[] = [];
 
 // Calibration tracking variables
@@ -758,6 +758,8 @@ function connect(wsUrl: string) {
         else if (update.gripCamPreditions) gripperVideo.setGripperPredictions(update.gripCamPreditions);
         else if (update.operationProgress) handleOperationProgress(update.operationProgress);
         else if (update.swingCancellationState) handleSwingCancellationState(update.swingCancellationState);
+        else if (update.tensionRegulationState) handleTensionRegulationState(update.tensionRegulationState);
+        else if (update.autoTargetingState) handleAutoTargetingState(update.autoTargetingState);
         else if (update.taskStatus) handleTaskStatus(update.taskStatus);
         else if (update.visibilityStates) handleVisibilityStates(update.visibilityStates);
         else if (update.logs) handleLogs(update.logs);
@@ -1565,6 +1567,20 @@ function handleSwingCancellationState(data: nf.telemetry.ISwingCancellationState
   }
 }
 
+function handleTensionRegulationState(data: nf.telemetry.ITensionRegulationState) {
+  tensionRegEnabled = data.enabled ?? false;
+  const tensionRegEl = document.getElementById('action-toggle-tension-reg');
+  if (tensionRegEl) {
+    tensionRegEl.textContent = tensionRegEnabled ? 'Disable tension reg' : 'Enable tension reg';
+  }
+}
+
+function handleAutoTargetingState(data: nf.telemetry.IAutoTargetingState) {
+  autoTargetEnabled = data.enabled ?? false;
+  const btn = document.getElementById('btn-auto-target');
+  btn?.classList.toggle('active', autoTargetEnabled);
+}
+
 function updateOnlineStatus(online: boolean) {
   const statusDot = document.getElementById('status-dot-el');
   const statusText = document.getElementById('status-text');
@@ -1851,22 +1867,13 @@ function initRunMenu() {
   bindCommand('action-disable-torque', Command.COMMAND_DISABLE_TORQUE);
   bindCommand('action-enable-torque', Command.COMMAND_ENABLE_TORQUE);
 
-  // Tension regulation toggle. We assume it is enabled on connect, so the first
-  // press disables it. The label reflects the action the next press will take.
-  let tensionRegEnabled = true;
+  // Tension regulation toggle. The label reflects the action the next press will take;
+  // actual state comes from tension_regulation_state telemetry (see handleTensionRegulationState).
   const tensionRegEl = document.getElementById('action-toggle-tension-reg');
   if (tensionRegEl) {
     tensionRegEl.addEventListener('click', () => {
       if (tensionRegEl.classList.contains('disabled')) return;
-      if (tensionRegEnabled) {
-        simpleCommand(Command.COMMAND_DISABLE_TENSION_REG);
-        tensionRegEnabled = false;
-        tensionRegEl.textContent = 'Enable tension reg';
-      } else {
-        simpleCommand(Command.COMMAND_ENABLE_TENSION_REG);
-        tensionRegEnabled = true;
-        tensionRegEl.textContent = 'Disable tension reg';
-      }
+      simpleCommand(tensionRegEnabled ? Command.COMMAND_DISABLE_TENSION_REG : Command.COMMAND_ENABLE_TENSION_REG);
       runMenu?.classList.remove('show');
       maintMenu?.classList.remove('show');
     });
@@ -2607,14 +2614,11 @@ function toggleSwingCancellation() {
 }
 
 function toggleAutoTarget() {
-  autoTargetEnabled = !autoTargetEnabled;
-  const btn = document.getElementById('btn-auto-target');
-  btn?.classList.toggle('active', autoTargetEnabled);
   sendControl([nf.control.ControlItem.create({
     setTargetModel: {
       action: autoTargetEnabled
-        ? nf.control.TargetModelAction.TARGET_MODEL_ENABLE_DEFAULT
-        : nf.control.TargetModelAction.TARGET_MODEL_DISABLE
+        ? nf.control.TargetModelAction.TARGET_MODEL_DISABLE
+        : nf.control.TargetModelAction.TARGET_MODEL_ENABLE_DEFAULT
     }
   })]);
 }
