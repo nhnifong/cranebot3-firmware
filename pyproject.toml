@@ -39,7 +39,7 @@ dev = [
     "pytest-cov",
     "grpcio-tools",
     "betterproto2_compiler==0.9.0",
-    "lerobot[multi_task_dit,transformers_dep,vla_jepa]==0.6.0", # these guys can't be trusted not to break things
+    "lerobot[dataset,multi_task_dit,transformers_dep,vla_jepa]==0.6.0", # these guys can't be trusted not to break things
     "build",
     "twine",
 ]
