@@ -1,0 +1,651 @@
+    <!-- The 3D Canvas will be appended here by main.ts (z-index auto/0) -->
+
+    <!-- Mobile Top Bar (visible only when body.mobile) -->
+    <div id="mobile-topbar" class="mobile-only">
+      <button id="mobile-change-robot-btn" class="header-back-btn" title="Return to the robot selection screen.">Change</button>
+      <div id="mobile-status">
+        <span id="mobile-status-dot" class="status-dot status-offline"></span>
+        <span id="mobile-status-text">Offline</span>
+      </div>
+      <div id="mobile-op-progress" class="hidden">
+        <div class="op-info">
+          <span id="mobile-op-name">Operation</span>
+          <span id="mobile-op-action"></span>
+        </div>
+        <div class="op-bar-bg">
+          <div id="mobile-op-bar-fill"></div>
+        </div>
+      </div>
+      <button id="mobile-stop-btn" class="stop-button">STOP</button>
+    </div>
+
+    <!-- Mobile Bottom Tab Bar -->
+    <nav id="mobile-tabbar" class="mobile-only">
+      <button class="tabbar-btn" data-tab="3d">3D</button>
+      <button class="tabbar-btn" data-tab="cams">Cams</button>
+      <button class="tabbar-btn" data-tab="targets">Targets</button>
+      <button class="tabbar-btn tabbar-btn-drive" data-tab="drive" disabled>Drive</button>
+      <button class="tabbar-btn" data-tab="system">System</button>
+    </nav>
+
+    <!-- Mobile Drive Panel (Drive tab content) -->
+    <aside id="panel-drive" class="panel mobile-only">
+      <div id="drive-feed-host">
+        <!-- Selected video feed is moved into here when entering Drive mode -->
+      </div>
+      <div id="drive-controls">
+        <div class="drive-row">
+          <div id="drive-stick" class="touch-stick">
+            <div class="touch-stick-knob"></div>
+          </div>
+          <div class="drive-vertical">
+            <button class="drive-btn" id="drive-btn-up" data-press="up">▲ up</button>
+            <button class="drive-btn" id="drive-btn-down" data-press="down">▼ down</button>
+          </div>
+          <div id="drive-fingers" class="touch-strip touch-strip-vertical">
+            <div class="touch-strip-knob"></div>
+            <span class="drive-strip-label drive-strip-label-top">open</span>
+            <span class="drive-strip-label drive-strip-label-bottom">close</span>
+          </div>
+        </div>
+        <div class="drive-row">
+          <div id="drive-wrist" class="touch-strip">
+            <div class="touch-strip-knob"></div>
+            <span class="drive-strip-label">wrist</span>
+          </div>
+        </div>
+        <div class="drive-row drive-secondary">
+          <button class="drive-btn drive-btn-secondary" id="drive-btn-winch-in" data-press="winch-in">winch ↑</button>
+          <button class="drive-btn drive-btn-secondary" id="drive-btn-winch-out" data-press="winch-out">winch ↓</button>
+          <button class="drive-btn drive-btn-secondary drive-btn-stop-all" id="drive-btn-stop-all">stop all</button>
+        </div>
+      </div>
+    </aside>
+
+
+    <!-- Landing Layer (Login / LAN selection) -->
+    <div id="landing-layer" class="hidden">
+      <div class="landing-panel" id="landing-options">
+        <div class="landing-title">Select Connection Mode</div>
+
+        <button id="btn-lan-mode" class="landing-btn btn-lan">
+          LAN only mode
+          <div class="landing-hint">Connect to robot controller on localhost</div>
+        </button>
+
+        <button id="btn-sim-mode" class="landing-btn btn-sim">
+          Explore simulated robot
+          <div class="landing-hint">Interact with a virtual Stringman (pilot version)</div>
+        </button>
+
+        <button id="btn-cloud-mode" class="landing-btn btn-cloud">
+          Log in
+          <div class="landing-hint">Manage your cloud-connected robots</div>
+        </button>
+
+        <div class="landing-hint">
+          <a href="/docs/lan_only_guide/">Learn more about Stringman data privacy</a>
+        </div>
+      </div>
+
+      <div class="landing-panel hidden" id="robot-list-panel">
+        <button id="btn-robot-list-back" class="panel-back-btn" title="Back">‹</button>
+        <div class="landing-title">Select a Robot</div>
+        <div id="robot-list-container" class="robot-list">
+          <!-- Robot items will be injected here -->
+          <div class="robot-list-empty">Loading robots...</div>
+        </div>
+      </div>
+
+      <div class="landing-panel hidden" id="bind-robot-panel">
+        <div class="landing-title">Bind Robot</div>
+
+        <p>Give this robot a nickname to identify it in your cloud dashboard. (e.g. "bedroom")</p>
+
+        <input type="text" id="bind-nickname" class="input-text" placeholder="e.g. Living Room Bot" value="Stringman">
+
+        <button id="btn-confirm-bind" class="landing-btn btn-cloud">
+          Bind to my account
+          <div class="landing-hint">This robot will become accessible in cloud mode.</div>
+        </button>
+
+        <button id="btn-cancel-bind" class="landing-btn btn-lan">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Floating 3D Labels Container -->
+    <div id="floating-labels-container">
+      <div id="label-anchor-0" class="floating-label hidden">Anchor 0</div>
+      <div id="label-anchor-1" class="floating-label hidden">Anchor 1</div>
+      <div id="label-anchor-2" class="floating-label hidden">Anchor 2</div>
+      <div id="label-anchor-3" class="floating-label hidden">Anchor 3</div>
+
+      <!-- Floating Gripper Force Gauge -->
+      <div id="label-gripper-force" class="floating-gauge hidden">
+        <div class="gauge-fill" id="gripper-force-fill"></div>
+        <div class="gauge-target hidden" id="gripper-force-target"></div>
+      </div>
+    </div>
+
+    <!-- UI Overlay Layer (z-index 10) -->
+    <div id="ui-layer">
+
+      <!-- HEADER -->
+      <header id="panel-header" class="panel">
+        <div class="header-left">
+          <h2 class="header-title">Stringman Control Panel</h2>
+          <button id="btn-header-back" class="header-back-btn" title="Return to the robot selection screen.">Change Robot</button>
+          <button id="btn-header-controls" class="header-back-btn">Controls</button>
+          <button id="btn-header-lerobot" class="header-back-btn" title="Record datasets or run trained policies.">Connect Lerobot</button>
+        </div>
+        <div id="op-progress-container" class="hidden">
+          <div class="op-info">
+            <span id="op-name">Operation</span>
+            <span id="op-action">Initializing...</span>
+          </div>
+          <div class="op-bar-bg">
+            <div id="op-bar-fill"></div>
+          </div>
+        </div>
+        <div class="header-right">
+          <a href="/" class="header-link">HOME</a>
+          <a href="/my-robots" id="header-link-my-robots" class="header-link">MY ROBOTS</a>
+          <a href="/docs/usage_guide/" class="header-link">GUIDE</a>
+        </div>
+      </header>
+
+      <!-- Left Panel: Task & Targets -->
+      <aside id="panel-left" class="panel">
+        <div class="panel-header-row">
+          <h2>Targets</h2>
+          <button id="btn-auto-target" class="header-back-btn auto-target-btn" title="Toggle automatic target finding.">Auto</button>
+        </div>
+        <div id="target-list">
+          <div class="task-item status-selected">
+            <span class="task-text-span">Moving to (-0.5, 0.2)</span>
+            <button class="task-delete">✗</button>
+          </div>
+          <div class="task-item status-picked-up">
+            <span class="task-text-span">Moving to (-0.5, 0.2)</span>
+            <button class="task-delete">✗</button>
+          </div>
+          <div class="task-item status-seen">
+            <span class="task-text-span">Moving to (-0.5, 0.2)</span>
+            <button class="task-delete">✗</button>
+          </div>
+        </div>
+        <div id="target-route-info">
+          <div class="route-info-row">
+            <span class="route-info-label">From:</span>
+            <div class="route-select-container">
+              <button id="route-source-btn" class="header-back-btn route-select-btn">
+                <span class="route-select-label">All targets</span>
+                <span class="route-select-caret">▾</span>
+              </button>
+              <div id="route-source-menu" class="run-menu-content route-select-menu"></div>
+            </div>
+          </div>
+          <div class="route-info-row">
+            <span class="route-info-label">To:</span>
+            <div class="route-select-container">
+              <button id="route-destination-btn" class="header-back-btn route-select-btn">
+                <span class="route-select-label">Hamper</span>
+                <span class="route-select-caret">▾</span>
+              </button>
+              <div id="route-destination-menu" class="run-menu-content route-select-menu"></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Right Panel: Video Feeds -->
+      <aside id="panel-right" class="panel">
+        <div class="video-feed feed-16-9" id="firstOverhead">
+          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/playroom/waiting_for_video.webp" onended="this.load()"></video>
+          <img src="" class="mjpeg-feed hidden" /><!-- Tag used for LAN mjpeg stream -->
+          <canvas class="feed-canvas"></canvas>
+          <div class="feed-label">ANCHOR 0</div>
+          <button class="feed-expand-btn" title="Expand feed"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M0 0h4v1.5H1.5V4H0V0zm8 0h4v4h-1.5V1.5H8V0zM0 8h1.5v2.5H4V12H0V8zm10.5 2.5V8H12v4H8v-1.5h2.5z"/></svg></button>
+          <button class="feed-collapse-btn hidden" title="Exit expanded view">✕</button>
+          <button class="feed-drive-btn mobile-only" title="Drive from this view">Drive</button>
+        </div>
+        <div class="video-feed feed-16-9" id="secondOverhead">
+          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/playroom/waiting_for_video.webp" onended="this.load()"></video>
+          <img src="" class="mjpeg-feed hidden" />
+          <canvas class="feed-canvas"></canvas>
+          <div class="feed-label">ANCHOR 1</div>
+          <button class="feed-expand-btn" title="Expand feed"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M0 0h4v1.5H1.5V4H0V0zm8 0h4v4h-1.5V1.5H8V0zM0 8h1.5v2.5H4V12H0V8zm10.5 2.5V8H12v4H8v-1.5h2.5z"/></svg></button>
+          <button class="feed-collapse-btn hidden" title="Exit expanded view">✕</button>
+          <button class="feed-drive-btn mobile-only" title="Drive from this view">Drive</button>
+        </div>
+        <div class="video-feed feed-16-9" id="gripper">
+          <video class="feed-video" autoplay muted playsinline poster="%VITE_ASSET_BUCKET_URL%/assets/playroom/waiting_for_video.webp" onended="this.load()"></video>
+          <img src="" class="mjpeg-feed hidden" />
+          <canvas class="feed-canvas"></canvas>
+          <div class="feed-label">GRIPPER</div>
+          <button class="feed-expand-btn" title="Expand feed"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M0 0h4v1.5H1.5V4H0V0zm8 0h4v4h-1.5V1.5H8V0zM0 8h1.5v2.5H4V12H0V8zm10.5 2.5V8H12v4H8v-1.5h2.5z"/></svg></button>
+          <button class="feed-collapse-btn hidden" title="Exit expanded view">✕</button>
+          <button class="feed-drive-btn mobile-only" title="Drive from this view">Drive</button>
+        </div>
+      </aside>
+
+      <!-- Footer Panel -->
+      <footer id="panel-footer" class="panel">
+
+        <!-- Run Menu -->
+        <div class="run-menu-container">
+          <button id="run-btn" class="run-button disabled">
+            <span>RUN</span>
+            <span>▲</span>
+          </button>
+          <div id="run-menu" class="run-menu-content">
+            <!-- Menu Items hooked up in main.ts -->
+            <div id="action-pick-drop" class="menu-item" title="Command the robot to automatically pick up and drop each target in the list in order.">Pick and drop targets</div>
+            <div id="action-half-cal" class="menu-item" title="Tighten all lines and reset encoder bias. Use whenever indicated position appears inaccurate.">Tension lines (D-left)</div>
+            <div id="action-record-park" class="menu-item" title="Save the robot's current position as the parking location it will return to when parked.">Set Parking Location</div>
+            <div id="action-grasp" class="menu-item" title="Grasp the most prominent object in the gripper's view using the configured model.">Auto Grasp Here (D-right)</div>
+            <div id="action-maintenance" class="menu-item menu-section-header">Calibration and Maintenance</div>
+            <div id="action-robot-auth" class="menu-item">Bind to account</div> <!-- Text updated by main.ts -->
+          </div>
+
+          <!-- Maintenance Sub-Menu -->
+          <div id="maintenance-menu" class="run-menu-content">
+            <div id="action-maint-back" class="menu-item menu-back">&larr; Back</div>
+            <div class="menu-separator"></div>
+
+            <div id="action-full-cal" class="menu-item" title="Run full calibration using the origin cards.">Full Calibration</div>
+            <div id="action-dataset" class="menu-item">Add targets to dataset</div>
+            <div id="action-collect-images" class="menu-item">Collect Gripper Images</div>
+            <div id="action-update-firmware" class="menu-item" title="Run pip install --upgrade nf_robot[pi] on all connected robot components.">Update Firmware on Components</div>
+            <div id="action-disable-torque" class="menu-item" title="Stop actively holding position, switch to damped fall mode.">Disable torque</div>
+            <div id="action-enable-torque" class="menu-item" title="Resume active position holding on all motors.">Enable torque</div>
+            <div id="action-toggle-tension-reg" class="menu-item" title="Toggle onboard tension regulation (floor + soft mute) on both spools of every anchor.">Disable tension reg</div>
+            <div id="action-get-ticket" class="menu-item" title="Request a temporary auth ticket for accessing the robot's video streams directly.">Get Stream Ticket</div>
+            <div id="action-toggle-logs" class="menu-item" title="Show or hide the log panel at the bottom of the screen.">Toggle Log Panel</div>
+
+            <div class="menu-item menu-item-debug">
+              <div class="input-label">Debug Command</div>
+              <div class="debug-input-row">
+                <input type="text" id="debug-input" class="input-text" placeholder="cmd">
+                <button id="action-debug-send" class="run-button">Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-divider"></div>
+
+        <!-- System Status -->
+        <div id="system-status" class="footer-stats-group">
+          <div class="stat-line">
+            <span id="status-dot-el" class="status-dot status-offline"></span>
+            <strong id="status-text">Offline</strong>
+          </div>
+          <div class="stat-line">
+            <span class="label-muted">Robot ID</span>
+            <strong id="ui-robot-id">Unknown</strong>
+          </div>
+          <!-- Component Status -->
+          <div id="component-status" class="component-menu-container">
+            <button id="component-status-btn" class="component-status-btn">
+              <strong id="component-status-text">Anchors (0/0)</strong>
+            </button>
+            <div id="component-menu" class="run-menu-content component-list-popup">
+              <!-- Populated by JS -->
+              <div class="menu-item disabled">Waiting for telemetry...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-divider"></div>
+
+        <!-- Perspective Grid -->
+        <div class="perspective-container">
+          <div class="perspective-label">Motion<br>Perspective</div>
+          <div class="perspective-grid">
+            <button id="btn-viewport" class="perspective-button" title="Control the robot relative to your current 3D viewport camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Viewport</button>
+            <button id="btn-top" class="perspective-button" title="Control the robot relative to Anchor 0's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Anchor 0</button>
+            <button id="btn-person" class="perspective-button perspective-button-selected" title="Control orbits the seat/gamepad tag position in the room."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Seat Tag</button>
+            <button id="btn-bottom" class="perspective-button" title="Control the robot relative to Anchor 1's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Anchor 1</button>
+            <button id="btn-gripper" class="perspective-button" title="Control the robot relative to the gripper's camera angle."><img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/orbit_icon.webp" class="orbit-image"/>Gripper</button>
+          </div>
+        </div>
+
+        <div class="footer-divider"></div>
+
+        <!-- Swing Cancellation Toggle -->
+        <div class="footer-stats-group swing-section">
+          <div class="swing-toggle-row">
+            <span class="swing-label" title="Enable or disable active swing cancellation. (click left stick to toggle)">swing cancellation</span>
+            <div id="btn-swing-cancel" class="toggle-track">
+              <div id="swing-cancel-indicator" class="toggle-knob status-offline"></div>
+            </div>
+          </div>
+          <div class="swing-latency-row">
+            <span class="swing-latency-label">latency</span>
+            <input type="range" id="swing-latency-slider" class="swing-latency-slider" min="-0.2" max="0.8" step="0.01" value="0.2" title="Adjust the timing offset for swing calculations. Try changing by small increments until stillness is achieved.">
+            <span id="swing-latency-value" class="swing-latency-value">0.20s</span>
+          </div>
+        </div>
+
+        <!-- Spacer pushes next items to the right -->
+        <div class="footer-spacer"></div>
+
+        <!-- How-to messages -->
+        <div class="footer-stats-group">
+          <div class="stat-line">
+            <strong id="how-to"></strong>
+          </div>
+        </div>
+
+        <!-- Spacer -->
+        <div class="footer-spacer"></div>
+
+        <!-- Diagnostics -->
+        <div class="footer-stats-group">
+          <div class="stat-line">
+            <span class="label-muted">Detections/sec</span>
+            <span id='detectionRate'>101.2</span>
+          </div>
+          <div class="videoLatency">
+            <span class="label-muted">Video latency</span>
+            <span id="videoLatency">0.22 s</span>
+          </div>
+          <div class="avgFramerate">
+            <span class="label-muted">Avg framerate</span>
+            <span id="videoFramerate">29.2 fps</span>
+          </div>
+        </div>
+
+        <div class="footer-divider"></div>
+
+        <button id="stop-btn" class="stop-button" title="Stop any running motion task and hold position. Also flushes python exceptions.">STOP</button>
+      </footer>
+
+      <!-- Log Panel (toggled from the Calibration & Maintenance menu) -->
+      <div id="log-panel">
+        <div id="log-panel-header">
+          <span>Logs</span>
+          <button id="log-panel-close" title="Hide log panel">✕</button>
+        </div>
+        <div id="log-panel-content"></div>
+      </div>
+
+    </div>
+
+    </div>
+
+    <div id="popup-overlay" class="overlay hidden">
+      <div class="popup-box">
+        <p id="popup-message">Default Message</p>
+        <button id="popup-ok">OK</button>
+      </div>
+    </div>
+
+    <!-- Sign-In Overlay -->
+    <div id="signin-overlay" class="overlay hidden">
+      <div class="popup-box">
+        <button id="btn-signin-back" class="cd-close-btn">&times;</button>
+        <h3 class="overlay-title">Sign In</h3>
+        <div id="firebaseui-auth-container"></div>
+      </div>
+    </div>
+
+    <!-- Confirmation Overlay -->
+    <div id="confirm-overlay" class="overlay hidden">
+      <div class="popup-box">
+        <p id="confirm-message">Are you sure?</p>
+        <div class="confirm-buttons">
+          <button id="confirm-yes" class="run-button">Yes</button>
+          <button id="confirm-no" class="run-button btn-gray">No</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Component Details Overlay -->
+    <div id="component-details-overlay" class="overlay overlay-panel hidden">
+      <div class="bg-catcher" id="cd-bg-catcher"></div>
+      <div class="panel component-details-box">
+        <button id="close-component-panel" class="cd-close-btn">&times;</button>
+        <h3 id="cd-title" class="overlay-title">Component Details</h3>
+
+        <div class="info-grid">
+          <div class="info-row"><span>IP Address:</span>   <strong id="cd-ip-row" class="cd-ip-copyable" title="Copy IP address"><span id="cd-ip">192.168.1.x</span><svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6z"/><path d="M2 5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1H8v1H2V6h1V5H2z"/></svg></strong></div>
+          <div class="info-row"><span>Status:</span>       <strong id="cd-status">Connected</strong></div>
+          <div class="info-row"><span>Temperature:</span>  <strong id="cd-temp">—</strong></div>
+          <div class="info-row"><span>Motor Torque:</span> <strong id="cd-motor-torque">—</strong></div>
+          <div class="info-row"><span>Sensors:</span>      <strong id="cd-sensors">sensors nominal</strong></div>
+        </div>
+
+        <div class="panel-actions">
+          <button id="btn-cd-identify" class="run-button btn-gray btn-full" title="Buzz the motor on this component.">Identify Component</button>
+          <div id="cd-anchor-actions" class="panel-actions">
+            <button id="btn-cd-tighten" class="run-button btn-blue btn-full" title="Reel line in until no longer slack.">Tighten Line</button>
+            <button id="btn-cd-relax"   class="run-button btn-red  btn-full" title="Let out line until it becomes slack. Continue pulling if you need more.">Relax Line</button>
+            <div class="cam-angle-row">
+              <input id="cd-cam-angle-input" type="number" step="0.1" value="26.0" title="Angle of the tilt adapter installed on this anchor. Set this to the value printed on the adapter. Incorrect values will negatively affect calibration, and if this changes, calibration must be rerun." />
+              <button id="btn-cd-set-cam-angle" class="run-button btn-gray" title="Angle of the tilt adapter installed on this anchor. Set this to the value printed on the adapter. Incorrect values will negatively affect calibration, and if this changes, calibration must be rerun.">Set Cam Angle</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls Overlay -->
+    <div id="controls-overlay" class="overlay overlay-panel hidden">
+      <div class="bg-catcher" id="controls-bg-catcher"></div>
+      <div class="panel component-details-box">
+        <button id="close-controls-panel" class="cd-close-btn">&times;</button>
+        <h3 class="overlay-title">Controls</h3>
+
+        <div class="controls-list">
+          <div><strong>WASD</strong> Move laterally</div>
+          <div><strong>QE</strong> Move vertically</div>
+          <div><strong>Arrow keys ↔</strong> Rotate wrist (Arpeggio)</div>
+          <div><strong>Arrow keys ↕</strong> Winch (Pilot)</div>
+          <div><strong>Z</strong> Set prompt using mic</div>
+          <div><strong>Space</strong> Close gripper</div>
+          <div><strong>L-Shift</strong> Open gripper</div>
+          <div><strong>1</strong> Tension all lines</div>
+          <div><strong>2</strong> Quick calibration</div>
+          <div><strong>3</strong> Auto grasp here</div>
+          <div><strong>5</strong> Toggle swing cancellation</div>
+        </div>
+
+        <div class="controls-gamepad-section">
+          <img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/gamepad.webp" alt="Gamepad Controls">
+        </div>
+      </div>
+    </div>
+
+    <!-- LeRobot Recording Overlay -->
+    <div id="lerobot-overlay" class="overlay overlay-panel hidden">
+      <div class="bg-catcher" id="lerobot-bg-catcher"></div>
+      <div class="panel component-details-box">
+        <button id="close-lerobot-panel" class="cd-close-btn">&times;</button>
+        <h3 id="lerobot-title" class="overlay-title">LeRobot Session</h3>
+
+        <div id="lerobot-panel-inactive">
+          <div id="lerobot-pending-overlay" class="pending-container hidden">
+            <div class="spinner"></div>
+            <div class="starting-text">Starting session...</div>
+          </div>
+
+          <div id="lerobot-unavailable" class="hidden" style="text-align:center; padding:24px 12px;">
+            <div style="font-size:1.4rem; font-weight:700; margin-bottom:8px; color:var(--text-bright);">Unavailable</div>
+            <div style="font-size:0.9rem; color:var(--text-light);">All robot components must be fully connected to record a dataset or run a policy.</div>
+          </div>
+
+          <div id="lerobot-inactive-content">
+            <!-- Start error (shown if a session fails to start) -->
+            <div id="lerobot-start-error" class="hidden" style="margin-bottom:12px; padding:8px 10px; background:#3a1a1a; border:1px solid #7a2a2a; border-radius:6px; color:#e07070; font-size:0.8rem; line-height:1.4;"></div>
+
+            <!-- Session Location -->
+            <div class="session-section">
+              <div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:var(--text-light); margin-bottom:12px;">Session Location</div>
+
+              <div id="lerobot-location-lan" class="hidden" style="font-size:0.85rem; color:var(--text-light);">local — subprocess of stringman-headless</div>
+            </div>
+
+            <!-- Recording Mode -->
+            <div class="session-section">
+              <div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:var(--text-light); margin-bottom:12px;">Recording Mode</div>
+              <div id="lerobot-rec-linked-inputs">
+                <div class="session-input-group">
+                  <div class="input-label">Dataset Name</div>
+                  <div style="display:flex; align-items:center; gap:6px;">
+                    <strong id="lerobot-hf-username" style="color:var(--text-bright); white-space:nowrap;">username</strong>
+                    <span id="lerobot-dataset-slash" style="color:var(--text-dim);">/</span>
+                    <input type="text" id="lerobot-input-dataset-name" class="input-text" placeholder="username/my-dataset" style="margin:0; flex:1;" title="Huggingface repo id. Supply the whole repo-id. Your username must match the logged in huggingface session in the environment where stringman-headless is running.">
+                  </div>
+                </div>
+                <button id="btn-lerobot-start-rec-linked" class="run-button btn-green btn-full" title="Begin a LeRobot recording session. Each time you press Start Episode and Stop Episode, one episode is saved to the dataset.">Start recording session</button>
+              </div>
+
+              <!-- LAN mode: specify full repo ID -->
+              <div id="lerobot-rec-lan" class="hidden">
+                <div class="session-input-group">
+                  <div class="input-label">Dataset Repo ID</div>
+                  <input type="text" id="lerobot-input-dataset" class="input-text" value="username/my-dataset">
+                </div>
+                <button id="btn-lerobot-start-rec-lan" class="run-button btn-green btn-full">Start recording session</button>
+              </div>
+            </div>
+
+            <!-- Policy Eval Mode -->
+            <div class="session-section">
+              <div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:var(--text-light); margin-bottom:12px;">Evaluation Mode</div>
+              <div class="session-input-group">
+                <div class="input-label">Policy Repo ID</div>
+                <input type="text" id="lerobot-input-policy" class="input-text" value="naavox/multitask-dit-7" title="Huggingface Repo ID of a trained policy for stringman. you may run other users policies so long as you have read access. Note that Pi0.5 policies require as much as 32GB of system memory during startup, you might have to close other applications.">
+              </div>
+              <button id="btn-lerobot-start-eval" class="run-button btn-blue btn-full" title="Run a trained policy on the robot. The robot will not move until Start Episode is pressed to activate the policy. Note that starting the first episode may take 30 seconds to load content.">Start policy evaluation</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="lerobot-panel-active" class="hidden">
+          <div id="lerobot-timer" class="timer-display hidden">0.0s</div>
+          <div id="lerobot-error-box" class="error-display hidden"></div>
+
+          <!-- Successful Completion Section -->
+          <div id="lerobot-completion-link" class="completion-section hidden">
+            <p class="session-complete-text">Session Complete</p>
+            <a id="hf-vis-btn" href="#" target="_blank" class="hf-link">View Dataset</a>
+          </div>
+
+          <p class="panel-stat">Episodes this session: <strong id="lerobot-session-eps">0</strong></p>
+          <p class="panel-stat">Total in dataset: <strong id="lerobot-total-eps">0</strong></p>
+          <p class="panel-stat hidden" id="lerobot-checkpoint-line" title="Episodes remaining until the dataset is automatically uploaded to HuggingFace as a checkpoint.">Until checkpoint: <strong id="lerobot-eps-checkpoint"></strong></p>
+
+          <p class="lerobot-repo-line">
+            <span id="lerobot-repo-label">Dataset</span>: <span id="lerobot-repo-id">username/dataset</span>
+          </p>
+
+          <div id="lerobot-action-buttons">
+            <!-- Contextual buttons injected here via main.ts -->
+          </div>
+
+          <div id="lerobot-prompt-section" class="hidden" style="margin-top:10px; margin-bottom:10px;">
+            <div style="display:flex; gap:6px; margin-bottom:10px;">
+              <input type="text" id="lerobot-prompt-input" class="input-text" placeholder="describe the task..." style="flex:1; margin:0;">
+              <button id="btn-lerobot-send-prompt" class="run-button btn-green" style="white-space:nowrap;">Send</button>
+            </div>
+            <div style="display:flex; gap:6px; margin-bottom:10px;">
+              <button id="btn-lerobot-set-prompt" class="run-button btn-full" style="flex:1; justify-content:center; font-size:0.8rem;">🎤 Set Prompt</button>
+            </div>
+            <div id="lerobot-last-prompt" style="font-size:0.75rem; color:var(--text-dim); min-height:1em;"></div>
+          </div>
+
+          <button id="btn-lerobot-finalize" class="run-button btn-blue btn-full" title="Stop the recording session and finalize the dataset.">End Session</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Share Access Overlay -->
+    <div id="share-overlay" class="overlay overlay-panel hidden">
+      <div class="bg-catcher" id="share-bg-catcher"></div>
+      <div class="panel component-details-box">
+        <button id="close-share-panel" class="cd-close-btn">&times;</button>
+        <h3 class="overlay-title">Share Access</h3>
+        <p class="panel-meta">frens with access to this robot:</p>
+        <div id="share-list-container" class="share-list">
+          <!-- Populated dynamically -->
+        </div>
+        <div class="session-section">
+          <div class="session-input-group">
+            <div class="input-label">Grant access to (Email)</div>
+            <input type="email" id="share-input-email" class="input-text" placeholder="user@example.com">
+          </div>
+          <div class="session-input-group">
+            <div class="input-label">Access level</div>
+            <select id="share-input-level" class="input-text" title="Full: everything you can do. Limited driver: move and grasp only, no calibration/maintenance. Spectator: watch only.">
+              <option value="full">Full access</option>
+              <option value="limited_driver">Limited driver (move &amp; grasp)</option>
+              <option value="spectator">Spectator (watch only)</option>
+            </select>
+          </div>
+          <button id="btn-share-submit" class="run-button btn-blue btn-full" title="Grant this email address access to this robot in cloud mode at the selected level.">Share Access</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Full Calibration Overlay -->
+    <div id="fullcal-overlay" class="overlay overlay-panel hidden">
+      <div class="bg-catcher" id="fullcal-bg-catcher"></div>
+      <div class="panel component-details-box">
+        <button id="close-fullcal-panel" class="cd-close-btn">&times;</button>
+        <h3 class="overlay-title">Full Calibration</h3>
+
+        <!-- Unavailable state -->
+        <div id="fullcal-unavailable" class="hidden" style="text-align:center; padding:24px 12px;">
+          <div style="font-size:1.4rem; font-weight:700; margin-bottom:8px; color:var(--text-bright);">Unavailable</div>
+          <div style="font-size:0.9rem; color:var(--text-light);">All robot components must be fully connected to run calibration.</div>
+        </div>
+
+        <div id="fullcal-content">
+
+          <!-- Section: Tilt Adapters -->
+          <div class="session-section">
+            <div class="fullcal-section-heading">Confirm Tilt Adapters</div>
+            <p class="fullcal-body">Provide the angles of the installed tilt adapters on this robot's anchors.
+              <span class="help-hint" tabindex="0">
+                <span class="help-hint-icon">?</span>
+                <img class="help-hint-img" src="%VITE_ASSET_BUCKET_URL%/assets/playroom/tilt_adapter.webp" alt="Tilt adapters" />
+              </span>
+            </p>
+            <div style="display:flex; gap:16px;">
+              <div class="session-input-group" style="flex:1; margin-bottom:0;">
+                <div class="input-label">Anchor 0 tilt angle</div>
+                <input type="number" id="fullcal-angle-0" class="input-text" step="0.1" value="26.0" style="width:100%; box-sizing:border-box;" title="Angle of the tilt adapter installed on Anchor 0. Set this to the value printed on the adapter.">
+              </div>
+              <div class="session-input-group" style="flex:1; margin-bottom:0;">
+                <div class="input-label">Anchor 1 tilt angle</div>
+                <input type="number" id="fullcal-angle-1" class="input-text" step="0.1" value="26.0" style="width:100%; box-sizing:border-box;" title="Angle of the tilt adapter installed on Anchor 1. Set this to the value printed on the adapter.">
+              </div>
+            </div>
+          </div>
+
+          <!-- Section: Robot Position -->
+          <div class="session-section">
+            <div class="fullcal-section-heading">Confirm Safe Robot Position</div>
+            <p class="fullcal-body">The ideal starting position for calibration is in the center of the room with the gripper touching the floor. If necessary, close this dialog and reposition it — disable torque to move it by hand. It will be re-enabled when calibration starts.</p>
+          </div>
+
+          <!-- Section: Origin Markers -->
+          <div class="session-section">
+            <div class="fullcal-section-heading">Place Origin Markers</div>
+            <p class="fullcal-body">Place the origin marker in the center of the room — it must be visible to every camera and must be on the floor. Place the calibration assist markers around it, spread as far apart as possible while keeping as many as possible visible in both cameras. Assist markers do not need to be on the floor.</p>
+          </div>
+
+          <!-- Section: Run Calibration -->
+          <div class="session-section">
+            <div class="fullcal-section-heading">Calibrate</div>
+            <p class="fullcal-body">Calibration takes about one minute. Some lines may go slack during movement — this is intentional. It is harmless to steady any swing with your hand, but try not to obstruct the cameras' view of the markers.</p>
+            <button id="btn-fullcal-start" class="run-button btn-green btn-full">Start Calibration</button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
