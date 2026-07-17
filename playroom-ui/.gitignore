@@ -1,6 +1,7 @@
 node_modules
 dist
 src/generated
+*.tgz
 
 # The repo root .gitignore has a blanket `models/` rule (for python training
 # checkpoints elsewhere in this repo) that would otherwise also catch our

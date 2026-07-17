@@ -4,7 +4,7 @@ Browser UI for controlling a Stringman robot: 3D telemetry
 visualization (three.js), live camera feeds, gamepad/touch drive controls,
 and LeRobot-assisted recording. This is the same UI served at `/playroom` on
 neufangled.com, extracted here so it ships as part of the open-source robot
-software rather than the private website repo — and it's a fully standalone,
+software rather than the private website repo, and it's a fully standalone,
 runnable app on its own, with no account/cloud system required.
 
 ## Running it standalone
@@ -21,7 +21,7 @@ How to open the UI pointed at a robot on your local network.
       nvm install 20
       nvm use 20
 
-- or your system package manager — macOS: `brew install node`; Linux
+- or your system package manager, macOS: `brew install node`; Linux
   (Debian/Ubuntu): `sudo apt install nodejs npm`; other distros' equivalents.
 
 **Setup and run**, from this directory (`playroom-ui/`),
@@ -30,7 +30,7 @@ How to open the UI pointed at a robot on your local network.
     npm run dev
 
 Then open the URL Vite prints (`http://localhost:5173` by default). You'll
-land on the connection-mode screen — pick **LAN only mode** to connect
+land on the connection-mode screen, pick **LAN only mode** to connect
 straight to a robot running with `stringman-headless`.
 
 ## Developing this package alongside nf-main-site
@@ -43,14 +43,14 @@ those changes without publishing, check out both repos as siblings (e.g.
     "stringman-ui": "file:../../cranebot3-firmware/playroom-ui"
 
 `npm install` in `nf-viz` symlinks it into `node_modules`, so edits here are
-picked up immediately by `npm run dev`/`npm run build` over there — no
+picked up immediately by `npm run dev`/`npm run build` over there, no
 publish step needed. Re-run `npm run proto` in this directory whenever
 `../src/nf_robot/protos/*.proto` changes; nf-viz doesn't know to do that for
 you.
 
 A `file:` dependency only resolves on a machine with both repos checked out
-side by side, though — it won't resolve in CI or a Docker build. Those need
-a real published version — see Publishing below.
+side by side, though, it won't resolve in CI or a Docker build. Those need
+a real published version, see Publishing below.
 
 ## Publishing
 
@@ -59,43 +59,18 @@ This package is published on the public npm registry as `stringman-ui`.
 One-time setup, on any machine you'll publish from:
 
     npm login          # opens a browser to authenticate; needs an npmjs.com account
-    npm view stringman-ui   # sanity check — confirms the name resolves to us
 
-Before every publish, check what will actually be uploaded — it's easy to
-add a new file to `src/` or `public/` and forget it isn't covered by the
-`files` field in `package.json` (v0.1.0 shipped without `public/assets` for
-exactly this reason — the models/icons were missing entirely until v0.1.1):
+The package does not ship built code, only source which consumers typecheck themselves.
+To typecheck before releasing a version using the sibling repo (requires
+`nf-main-site` checked out next to this repo, per "Developing this package
+alongside nf-main-site" above):
 
-    npm pack --dry-run
+    npm run verify-against-nf-viz
 
-`npm pack --dry-run` only shows the file list, though — it won't catch a
-missing **dependency**. This package ships TypeScript source that
-consumers type-check directly, which means any package its code imports
-types from (e.g. `@types/three`) has to be a real `dependencies` entry, not
-`devDependencies` — npm never installs a dependency's own `devDependencies`
-for whoever installs *it* (v0.1.1 shipped with `@types/three` misfiled as a
-devDependency for exactly this reason; nf-viz's Docker build failed with
-"Could not find a declaration file for module 'three'" until v0.1.2). A
-`file:` link during local dev won't catch this either, since it may resolve
-into a checkout that happens to have its own `node_modules` already
-populated by `npm install`/`npm run dev` here. The reliable local check is
-installing from an actual tarball, which has neither shortcut available:
+If it's all good, then bump the version and publish.
 
-    npm pack
-    cd ../../nf-main-site/nf-viz && npm install ../../cranebot3-firmware/playroom-ui/stringman-ui-*.tgz && npm run build
-
-Then bump the version and publish. `npm publish` runs `prepublishOnly`
-(`npm run proto && npm run typecheck`) automatically first, so a broken
-build or a proto out of sync with `../src/nf_robot/protos` blocks the
-publish rather than shipping:
-
-    npm version patch   # or minor/major — bumps package.json + creates a git tag
+    npm version patch   # or minor/major
     npm publish
-
-If your npm account has 2FA enabled (recommended), `npm publish` prompts for
-a one-time code. Once it's live, bump the version range in nf-viz's
-`package.json` (`"stringman-ui": "^0.1.1"` or whatever you just published) —
-`npm install` there then pulls the real package instead of a `file:` link.
 
 ## Architecture
 
@@ -103,33 +78,33 @@ A few decisions here aren't obvious from the code alone, so: why this is
 shaped the way it is.
 
 **It ships source, not a build.** `package.json` points straight at
-`src/*.ts` — there's no compile step producing a `dist/` for consumers.
+`src/*.ts`, there's no compile step producing a `dist/` for consumers.
 Whatever bundles this (nf-viz's Vite config, or your own) compiles it as
 part of its own build. That's a deliberate trade: it means
-`import.meta.env.VITE_ASSET_BUCKET_URL` — used throughout for model/image
-URLs — resolves against *the host's* build-time environment, not this
+`import.meta.env.VITE_ASSET_BUCKET_URL`, used throughout for model/image
+URLs, resolves against *the host's* build-time environment, not this
 package's. A prebuilt bundle would have baked in whichever bucket URL
 happened to be set when *this* package was published, which is wrong for
 every host except the one that built it.
 
-**It's not a mountable component — it owns the page.** `main.ts` looks up
+**It's not a mountable component, it owns the page.** `main.ts` looks up
 around 200 DOM ids directly and appends a full-viewport `<canvas>`; there's
 no props/slots API. The markup those ids live in is `src/app-shell.html`, a
 raw HTML fragment (not a Vite entry page) that any host injects into its own
-`<body>` — see `dev/bridge.ts` for the reference implementation, using
+`<body>`, see `dev/bridge.ts` for the reference implementation, using
 Vite's `?raw` import. The fragment and `main.ts` are really one artifact
 split across two files for editor convenience; they aren't meant to vary
 independently, which is also why the shell lives in this package instead of
 being left for each host to maintain its own copy.
 
 **There's an auth bridge because account/cloud logic isn't robot software.**
-nf-main-site layers a whole SaaS system on top of this UI — Firebase login,
+nf-main-site layers a whole SaaS system on top of this UI, Firebase login,
 a multi-tenant robot registry, sharing robots with other accounts, HTTP
 routes like `/listrobots` and `/bind` that only exist on nf-main-site's own
 backend. None of that is meaningful to someone who clones this repo and
 points the UI at a robot on their LAN; baking it in would mean the "open
 source robot software" also drags along a private company's account system.
-So `main.ts` never talks to auth/account logic directly — it calls a
+So `main.ts` never talks to auth/account logic directly, it calls a
 `PlayroomAuthBridge` (defined in `src/auth-bridge.ts`) that the host installs
 at `window.__playroomAuthBridge` before the app boots. nf-main-site's
 implementation wraps its real Firebase/API calls; `dev/stub-bridge.ts` (used
@@ -160,7 +135,7 @@ import 'stringman-ui/app';
 ```
 
 They have to be separate files, not one file with the assignment sandwiched
-between two `import` statements — all of a module's own imports evaluate
+between two `import` statements, all of a module's own imports evaluate
 before any of its top-level statements run, so the assignment wouldn't
 happen in time if `./app` were imported from the same file as the bridge
 setup. Separate `<script type="module">` tags execute in document order
@@ -168,7 +143,7 @@ instead, which gives the ordering the app actually needs.
 
 **3D models and icons are checked in here, not left as website content.**
 `main.ts`/`objects/*.ts` index named meshes inside the `.glb` files in
-`public/assets/playroom/models/` — a model and the code that reaches into it
+`public/assets/playroom/models/`, a model and the code that reaches into it
 by name are one unit, the same reasoning as the app shell above, so they
 live next to the TypeScript instead of in nf-main-site alongside marketing
 photos and product videos (see `public/README.md`, which also explains why
@@ -178,7 +153,7 @@ everything's namespaced under one `playroom/` folder rather than loose in
 own `npm run dev`), that's just `public/` served directly with no bucket
 configured. nf-viz instead copies this directory into its own `public/` at
 build time (`sync-playroom-assets.sh`), so the files ride along through
-nf-main-site's existing asset pipeline — its own `public/` gets synced to a
+nf-main-site's existing asset pipeline, its own `public/` gets synced to a
 GCS bucket on
-deploy — rather than this package needing to know anything about buckets or
+deploy, rather than this package needing to know anything about buckets or
 blue-green deploys at all.
