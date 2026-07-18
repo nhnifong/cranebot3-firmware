@@ -15,13 +15,11 @@ import os
 from collections import defaultdict, deque
 from websockets.exceptions import ConnectionClosedError, InvalidURI, InvalidHandshake, ConnectionClosedOK
 import copy
-from scipy.spatial.transform import Rotation
 
 from nf_robot.common.cv_common import *
 from nf_robot.common.pose_functions  import *
 from nf_robot.common.util import *
-import nf_robot.common.definitions as model_constants
-from nf_robot.generated.nf import telemetry, common
+from nf_robot.generated.nf import telemetry
 from nf_robot.host.video_streamer import NfVideoStreamer
 
 logger = logging.getLogger(__name__)
@@ -512,110 +510,3 @@ class ComponentClient:
             except asyncio.exceptions.CancelledError:
                 return
 
-class RaspiAnchorClient(ComponentClient):
-    def __init__(self, address, port, anchor_num, datastore, ob, pool, stat, telemetry_env):
-        super().__init__(address, port, datastore, ob, pool, stat, telemetry_env)
-        self.anchor_num = anchor_num # which anchor are we connected to
-        self.conn_status = telemetry.ComponentConnStatus(
-            is_gripper=False,
-            anchor_num=self.anchor_num,
-            websocket_status=telemetry.ConnStatus.NOT_DETECTED,
-            video_status=telemetry.ConnStatus.NOT_DETECTED,
-            gripper_model=telemetry.GripperModel.PILOT,
-        )
-        self.last_raw_encoder = None
-        self.extratilt = 0
-        self.raw_gant_poses = deque(maxlen=12)
-        self.updatePose(poseProtoToTuple(self.config.anchors[anchor_num].pose))
-        self.gantry_pos_sightings = deque(maxlen=100)
-        self.gantry_pos_sightings_lock = threading.RLock()
-
-    def updatePose(self, pose):
-        self.anchor_pose = pose
-        self.camera_pose = np.array(compose_poses([
-            self.anchor_pose,
-            model_constants.anchor_camera,
-            (np.array([0,0,self.extratilt/180*np.pi], dtype=float), np.zeros(3, dtype=float)),
-        ]))
-
-    async def handle_update_from_ws(self, update):
-        if 'line_record' in update:
-            self.datastore.anchor_line_record[self.anchor_num].insertList(np.array(update['line_record']))
-
-            # this is the event that is set when *any* anchor sends a line record.
-            # used by the position estimator to immedately recalculate the hang point
-            self.datastore.anchor_line_record_event.set()
-
-        if 'last_raw_encoder' in update:
-            self.last_raw_encoder = update['last_raw_encoder']
-
-        if len(self.gantry_pos_sightings) > 0:
-            with self.gantry_pos_sightings_lock:
-                self.ob.send_ui(gantry_sightings=telemetry.GantrySightings(
-                    sightings=[common.Vec3(*position) for position in self.gantry_pos_sightings]
-                ))
-                self.gantry_pos_sightings.clear()
-
-    def handle_detections(self, detections, timestamp):
-        """
-        handle a list of apriltag detections from the pool
-        """
-        self.stat.pending_frames_in_pool -= 1
-        self.stat.detection_count += len(detections)
-
-        for detection in detections:
-            name = detection['n']
-            self.last_known_centers[name] = detection['center']
-
-            if name in CAL_MARKERS:
-                # save all the detections of the origin for later analysis
-                self.origin_poses[detection['n']].append(detection['p'])
-                # if detection['n'] == "origin":
-                #     print(detection)
-
-            if name == 'gantry':
-                # rotate and translate to where that object's origin would be
-                # given the position and rotation of the camera that made this observation (relative to the origin)
-                # store the time and that position in the appropriate measurement array in observer.
-                # you have the pose of gantry_front relative to a particular anchor camera
-                # convert it to a pose relative to the origin
-                pose = np.array(compose_poses([
-                    self.anchor_pose, # obtained from calibration
-                    model_constants.anchor_camera, # constant
-                    detection['p'], # the pose obtained just now
-                    gantry_april_inv, # constant
-                ]))
-                position = pose.reshape(6)[3:]
-                self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position])) # take only the position
-                # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
-                self.datastore.gantry_pos_event.set()
-
-                self.last_gantry_frame_coords = detection['p'][1] # second item in pose tuple is position
-                with self.gantry_pos_sightings_lock:
-                    self.gantry_pos_sightings.append(position)
-
-                if self.save_raw:
-                    self.raw_gant_poses.append(detection['p'])
-
-            if name in OTHER_MARKERS:
-                offset = model_constants.basket_offset_inv if name.endswith('back') else model_constants.basket_offset
-                pose = np.array(compose_poses([
-                    self.anchor_pose,
-                    model_constants.anchor_camera, # constant
-                    detection['p'], # the pose obtained just now
-                    offset, # the named location is out in front of the tag.
-                ]))
-                position = pose.reshape(6)[3:]
-                # save the position of this object for use in various planning tasks.
-                self.ob.update_avg_named_pos(detection['n'], position)
-
-    async def send_config(self):
-        anchor_config_vars = {
-            "MAX_ACCEL": self.config.max_accel,
-            "RUNNING_WS_DELAY": self.config.running_ws_delay,
-        }
-        if len(anchor_config_vars) > 0:
-            await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
-
-    def process_frame(self, frame_to_encode):
-        return frame_to_encode

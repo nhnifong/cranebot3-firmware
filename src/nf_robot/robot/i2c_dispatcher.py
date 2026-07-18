@@ -1,0 +1,81 @@
+import sys
+import logging
+import time
+import board
+import busio
+
+from nf_robot.robot.connect_wifi import ensure_connection
+
+# todo maybe there is a better solution to this but systemctl starts us too early and some zeroconf things dont work
+time.sleep(3)
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='cranebot.log'
+)
+
+handler = logging.StreamHandler(stream=sys.stdout)
+logger.addHandler(handler)
+
+def handle_exception(exc_type, exc_value, exc_traceback):
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = handle_exception
+
+import asyncio
+
+async def asyncmain():
+    new_connection_configured = await ensure_connection()
+
+    # determine component type
+    # TODO: first boot of a new image has been observed to not have a valid I2C bus. if the image cannot be
+    # fixed, then detect that problem here and reboot, because it seems to work the second time.
+    try:
+        i2c = busio.I2C(board.SCL, board.SDA)
+        addrs = set(i2c.scan())
+    except ValueError:
+        addrs = set([])
+
+    if set([0x48, 0x29, 0x68]).issubset(addrs): # arpeggio_gripper
+        from nf_robot.robot.gripper_arp_server import GripperArpServer
+        gs = GripperArpServer()
+        if new_connection_configured:
+            gs.identify()
+        r = await gs.main()
+
+    elif len(addrs) == 0:
+        # to differentiate power anchor, look for file written by server.conf
+        component_type = 'arpeggio anchor'
+        try:
+            with open('server.conf', 'r') as file:
+                for line in file:
+                    line = line.strip()  # Remove leading/trailing whitespace
+                    if not line.startswith('#') and line:  # Check if line is not a comment and is not empty
+                        component_type = line
+        except FileNotFoundError:
+            component_type = 'arpeggio anchor'
+
+        component_type = component_type.replace('_', ' ')
+
+        if component_type == 'arpeggio anchor':
+            from nf_robot.robot.anchor_arp_server import AnchorArpServer
+            ras = AnchorArpServer(False)
+
+        elif component_type == 'arpeggio power anchor':
+            from nf_robot.robot.anchor_arp_server import AnchorArpServer
+            ras = AnchorArpServer(True)
+
+        else:
+            raise ValueError(f'Invalid type in server.conf "{component_type}"')
+
+        if new_connection_configured:
+            ras.identify()
+        r = await ras.main()
+
+def main():
+    asyncio.run(asyncmain())
+
+if __name__ == "__main__":
+    main()

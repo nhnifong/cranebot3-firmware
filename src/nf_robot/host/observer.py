@@ -46,10 +46,8 @@ import nf_robot.generated.nf.config as nf_config
 from nf_robot.host.data_store import DataStore
 from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
-from nf_robot.host.calibration import optimize_anchor_poses
 from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
-from nf_robot.host.anchor_client import RaspiAnchorClient, max_origin_detections
-from nf_robot.host.gripper_client import RaspiGripperClient
+from nf_robot.host.component_client import max_origin_detections
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector, OMEGA
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
@@ -57,16 +55,10 @@ from nf_robot.host.position_estimator import Positioner2
 logger = logging.getLogger(__name__)
 
 # Define the service names for network discovery
-anchor_service_name = 'cranebot-anchor-service'
-anchor_power_service_name = 'cranebot-anchor-power-service'
-gripper_service_name = 'cranebot-gripper-service'
 arp_gripper_service_name = 'cranebot-gripper-arpeggio-service'
 arp_anchor_service_name = 'cranebot-anchor-arpeggio-service'
 
-N_ANCHORS = {
-    common.AnchorType.PILOT: 4,
-    common.AnchorType.ARPEGGIO: 2,
-}
+N_ANCHORS = 2
 N_LINES = 4
 INPUT_VELOCITY_TTL_S = 2.0 # a commanded velocity keyed by a source expires this long after its last update
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
@@ -79,13 +71,6 @@ METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
 
 # threshold of non slack tension in newtons for arp anchors
 TENSION_THRESH = 1.38
-
-CRANEBOT_SERVICE_TYPES = [
-    "_cranebot-gripper-arpeggio-service._tcp.local.",
-    "_cranebot-gripper-service._tcp.local.",
-    "_cranebot-anchor-power-service._tcp.local.",
-    "_cranebot-anchor-service._tcp.local.",
-]
 
 # finger positions
 OPEN = -30
@@ -527,9 +512,9 @@ class AsyncObserver:
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
         logger.info(f'Swing cancellation set {item.enabled}')
         if item.enabled:
-            if not isinstance(self.gripper_client, ArpeggioGripperClient):
+            if self.gripper_client is None:
                 self.send_ui(pop_message=telemetry.Popup(
-                    message=f'Swing cancellation only supported on Arpeggio Gripper'
+                    message=f'Swing cancellation requires a connected gripper'
                 ))
                 return
         self.set_swing_cancellation(item.enabled)
@@ -714,8 +699,8 @@ class AsyncObserver:
         TENSION_BACKOFF_S = 1.1      # wait this long after a tension trip before retrying a trial
         MAX_TENSION_RETRIES = 3      # give up (and abort) if a single trial keeps tripping tension
 
-        if not isinstance(self.gripper_client, ArpeggioGripperClient):
-            logger.warning('Swing latency calibration is only supported on the Arpeggio gripper')
+        if self.gripper_client is None:
+            logger.warning('Swing latency calibration requires a connected gripper')
             return None
 
         original_latency = self.config.swing_latency
@@ -1167,8 +1152,6 @@ class AsyncObserver:
                 r = await self.stop_all()
             case control.Command.TIGHTEN_LINES:
                 r = await self.tension_lines()
-            case control.Command.ZERO_WINCH:
-                asyncio.create_task(self._handle_zero_winch_line())
             case control.Command.HALF_CAL:
                 r = await self.invoke_motion_task(self.half_auto_calibration())
             case control.Command.FULL_CAL:
@@ -1306,10 +1289,6 @@ class AsyncObserver:
                 if client.anchor_num == stop_data.get('id'):
                     r = await client.slow_stop_spool()
 
-    async def _handle_zero_winch_line(self):
-        if self.gripper_client is not None and isinstance(self.gripper_client, RaspiGripperClient):
-            await self.gripper_client.zero_winch()
-
     async def _handle_movement(self, move: control.CombinedMove):
         winch = None
         wrist = None
@@ -1325,7 +1304,7 @@ class AsyncObserver:
         if move.direction:
             direction = tonp(move.direction)
 
-            if self.gripper_client is not None and isinstance(self.gripper_client, ArpeggioGripperClient):
+            if self.gripper_client is not None:
                 if move.direction_is_in_gripper_frame:
                     if move.speed is not None:
                         velocity = direction * move.speed # make sure the network receives information on speed as well
@@ -1423,11 +1402,8 @@ class AsyncObserver:
         """Request all anchors to reel in all lines until tight."""
         sends = []
         for client in self.anchors.values():
-            if isinstance(client, RaspiAnchorClient):
-                sends.append(client.send_commands({'tighten': None}))
-            elif isinstance(client, ArpeggioAnchorClient):
-                sends.append(client.send_commands({'tighten': 0}))
-                sends.append(client.send_commands({'tighten': 1}))
+            sends.append(client.send_commands({'tighten': 0}))
+            sends.append(client.send_commands({'tighten': 1}))
         # Awaiting only delivers the command; it does not wait for confirmation that every
         # anchor has finished tightening, as that would just hold up the processing of the ob_q.
         # this is similar to sending a manual move command. it can be overridden by any subsequent command.
@@ -1439,11 +1415,8 @@ class AsyncObserver:
         await self.set_tension_reg(False)
         sends = []
         for client in self.anchors.values():
-            if isinstance(client, RaspiAnchorClient):
-                sends.append(client.send_commands({'stow': None}))
-            elif isinstance(client, ArpeggioAnchorClient):
-                sends.append(client.send_commands({'stow': 0}))
-                sends.append(client.send_commands({'stow': 1}))
+            sends.append(client.send_commands({'stow': 0}))
+            sends.append(client.send_commands({'stow': 1}))
         await asyncio.gather(*sends)
 
     async def wait_for_tension(self):
@@ -1475,23 +1448,11 @@ class AsyncObserver:
         if len(lengths) != N_LINES:
             logger.warning(f'Cannot send {len(lengths)} ref lengths to anchors')
             return
-        if self.config.anchor_type == common.AnchorType.PILOT:
-            # any anchor that receives this and is slack would ignore it
-            # If only some anchors are connected, this would still send reference lengths to those
-            for client in self.anchors.values():
-                asyncio.create_task(client.send_commands({'reference_length': lengths[client.anchor_num]}))
-        elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
-            for client in self.anchors.values():
-                # which two lines is this anchor responsible for?
-                asyncio.create_task(client.send_commands({
-                    'two_reference_lengths': (lengths[client.anchor_num*2], lengths[client.anchor_num*2+1])
-                }))
-
-        # use swing to estimate winch line length in pilot gripper
-        if self.gripper_client is not None and isinstance(self.gripper_client, RaspiGripperClient):
-            winch_length = self.pe.get_pendulum_length()
-            if winch_length is not None:
-                asyncio.create_task(self.gripper_client.send_commands({'reference_length': winch_length}))
+        for client in self.anchors.values():
+            # which two lines is this anchor responsible for?
+            asyncio.create_task(client.send_commands({
+                'two_reference_lengths': (lengths[client.anchor_num*2], lengths[client.anchor_num*2+1])
+            }))
 
         # reset biases on kalman filter
         data = self.datastore.gantry_pos.deepCopy()
@@ -1555,7 +1516,7 @@ class AsyncObserver:
         'marker_name': array(n_anchors, n_observations, 2, 3)
         """
         markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3', 'gantry']
-        raw_obs = defaultdict(lambda: [[]]*N_ANCHORS[self.config.anchor_type])
+        raw_obs = defaultdict(lambda: [[]]*N_ANCHORS)
         for client in self.anchors.values():
             # copy each list of detections, but leave them in the camera's reference frame.
             for marker in markers:
@@ -1820,8 +1781,8 @@ class AsyncObserver:
         MEASURE_TIMEOUT_S = 6.0       # give up on a card if the gripper never sees it
         SEEK_TIMEOUT_S = 20.0         # cap the move to each hover altitude
 
-        if not isinstance(self.gripper_client, ArpeggioGripperClient):
-            logger.warning('collect_gripper_card_observations only supports the Arpeggio gripper')
+        if self.gripper_client is None:
+            logger.warning('collect_gripper_card_observations requires a connected gripper')
             return {}
 
         # keep the gripper vertical and the lines taut throughout the survey
@@ -1999,7 +1960,7 @@ class AsyncObserver:
         OPTIMIZER_TIMEOUT_S = 60  # seconds
         
         try:
-            if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
+            if len(self.anchors) < N_ANCHORS:
                 logger.warning('Cannot run half calibration until all anchors are connected')
                 return
 
@@ -2072,15 +2033,15 @@ class AsyncObserver:
         FLOOR_CLEARANCE_M = 0.2 # how far above the floor to hold the gripper fingertips at the diamond's bottom point
         self.tension_over_limit = False  # clear any stale trip from a previous run
         try:
-            if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
+            if len(self.anchors) < N_ANCHORS:
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=100.0,
                     name="Calibration",
                     current_action='Cannot run full calibration until all anchors are connected',
                 ))
                 return
-            elif len(self.anchors) > N_ANCHORS[self.config.anchor_type]:
-                logger.warning(f'Too many anchors found for type {self.config.anchor_type} \n{self.anchors}')
+            elif len(self.anchors) > N_ANCHORS:
+                logger.warning(f'Too many anchors found \n{self.anchors}')
             await self._handle_enable_torque()
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
@@ -2126,95 +2087,69 @@ class AsyncObserver:
             ))
             r = await self.flush_tele_buffer()
 
-            if self.config.anchor_type == common.AnchorType.ARPEGGIO:
-                tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
-                # determine position of two anchors visually and guess at external eyelets.
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, None, None, None, tilts))
-                anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=30)
-                logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+            tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
+            # determine position of two anchors visually and guess at external eyelets.
+            async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, None, None, None, tilts))
+            anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=30)
+            logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
-                self.save_poses_arp(anchor_poses, eyelet_positions)
-                self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=1.0,
-                    name="Calibration",
-                    current_action="Moving to safe position",
-                ))
+            self.save_poses_arp(anchor_poses, eyelet_positions)
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=1.0,
+                name="Calibration",
+                current_action="Moving to safe position",
+            ))
 
-                # Tighten lines
-                await self.half_auto_calibration()
-                
-                # This might be the first time the lines are tightened after connecting the carabiners, and the gripper pole could be horizontal.
-                # even if predictable motion is not yet possible do some basic checks to ensure the gripper is veritcal and in the middle of the room
-                await self.ensure_pole_upright()
+            # Tighten lines
+            await self.half_auto_calibration()
 
-                await self.move_direction_speed([0, 0, 1], 0.1, downward_bias=0)
-                await asyncio.sleep(0.5)
-                self.slow_stop_all_spools()
+            # This might be the first time the lines are tightened after connecting the carabiners, and the gripper pole could be horizontal.
+            # even if predictable motion is not yet possible do some basic checks to ensure the gripper is veritcal and in the middle of the room
+            await self.ensure_pole_upright()
 
-                # top of work area
-                upper_z = np.mean(self.pe.anchor_points[:, 2])
+            await self.move_direction_speed([0, 0, 1], 0.1, downward_bias=0)
+            await asyncio.sleep(0.5)
+            self.slow_stop_all_spools()
 
-                # even without full calibration we should be able to make crude movements. go to the center
-                # of the room just above the floor. This is the diamond's bottom point, so place the gantry
-                # such that the gripper fingertips (POLE[2] + GRIPPER_FINGER_LEN_M below the gantry) sit
-                # FLOOR_CLEARANCE_M above the floor.
-                gant_z = min(
-                    upper_z-0.1, # stay at least 0.1 under the top of the work area
-                    POLE[2] + GRIPPER_FINGER_LEN_M + FLOOR_CLEARANCE_M - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
-                )
-                self.gantry_goal_pos = np.array([0, 0, gant_z])
-                await self.seek_gantry_goal()
+            # top of work area
+            upper_z = np.mean(self.pe.anchor_points[:, 2])
 
-                # measure finger contact and reset wrist while doing the diamond pattern to save time.
-                async def wait_then_finger():
-                    await asyncio.sleep(10)
-                    await self.calibrate_finger_servo()
-                    await self.gripper_client.send_commands({'reset_wrist': None})
-                finger_task = asyncio.create_task(wait_then_finger())
+            # even without full calibration we should be able to make crude movements. go to the center
+            # of the room just above the floor. This is the diamond's bottom point, so place the gantry
+            # such that the gripper fingertips (POLE[2] + GRIPPER_FINGER_LEN_M below the gantry) sit
+            # FLOOR_CLEARANCE_M above the floor.
+            gant_z = min(
+                upper_z-0.1, # stay at least 0.1 under the top of the work area
+                POLE[2] + GRIPPER_FINGER_LEN_M + FLOOR_CLEARANCE_M - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
+            )
+            self.gantry_goal_pos = np.array([0, 0, gant_z])
+            await self.seek_gantry_goal()
 
-                # collect length_change_data data to estimate eyelets better
-                diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data(anchor_poses, upper_z)
-                # stop saving raw poses
-                for a in self.anchors.values():
-                    a.save_raw = False
+            # measure finger contact and reset wrist while doing the diamond pattern to save time.
+            async def wait_then_finger():
+                await asyncio.sleep(10)
+                await self.calibrate_finger_servo()
+                await self.gripper_client.send_commands({'reset_wrist': None})
+            finger_task = asyncio.create_task(wait_then_finger())
 
-                self.send_ui(operation_progress=telemetry.OperationProgress(
-                    percent_complete=22.0,
-                    name="Calibration",
-                    current_action="Running 2nd optimization pass",
-                ))
-                r = await self.flush_tele_buffer()
+            # collect length_change_data data to estimate eyelets better
+            diamond_data, line_deltas = await self.collect_arp_anchor_eyelet_experiment_data(anchor_poses, upper_z)
+            # stop saving raw poses
+            for a in self.anchors.values():
+                a.save_raw = False
 
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None, line_deltas, tilts))
-                anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=60)
-                logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=22.0,
+                name="Calibration",
+                current_action="Running 2nd optimization pass",
+            ))
+            r = await self.flush_tele_buffer()
 
-                self.save_poses_arp(anchor_poses, eyelet_positions)
+            async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None, line_deltas, tilts))
+            anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=60)
+            logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
-            else:
-                # Pilot anchors path
-                for a in self.anchors.values():
-                    a.save_raw = False
-
-                # run optimization in pool
-                async_result = self.pool.apply_async(optimize_anchor_poses, (raw_obs,))
-                anchor_poses = async_result.get(timeout=30)
-                logger.info(f'Obtained result from find_cal_params anchor_poses=\n{anchor_poses}')
-                anchor_poses = np.array(anchor_poses)
-
-                # Use the optimization output to update anchor poses and spool params
-                for client in self.anchors.values():
-                    self.config.anchors[client.anchor_num].pose = poseTupleToProto(anchor_poses[client.anchor_num])
-                    client.updatePose(anchor_poses[client.anchor_num])
-                save_config(self.config, self.config_path)
-                # inform UI
-                self.send_ui(new_anchor_poses=telemetry.AnchorPoses(poses=[
-                    poseTupleToProto(p)
-                    for p in anchor_poses
-                ]))
-                # inform position estimator
-                anchor_points = np.array([compose_poses([pose, model_constants.anchor_grommet])[1] for pose in anchor_poses])
-                self.pe.set_anchor_points(anchor_points)
+            self.save_poses_arp(anchor_poses, eyelet_positions)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=24.0,
@@ -2251,8 +2186,8 @@ class AsyncObserver:
             await self.calibrate_spin(reset_wrist_first=False) # already did that during diamond to save time
 
             # Tune swing_latency by inducing swings and finding the value that damps
-            # them best. Only the Arpeggio gripper has the IMU-driven swing model.
-            if isinstance(self.gripper_client, ArpeggioGripperClient):
+            # them best. Requires a connected gripper (IMU-driven swing model).
+            if self.gripper_client is not None:
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=34.0,
                     name="Calibration",
@@ -2270,7 +2205,7 @@ class AsyncObserver:
             # keep all four lines taut while hovering, so the measured (gantry, line-length)
             # pairs are a strong constraint on the anchors and eyelets.
             if (self.config.anchor_type == common.AnchorType.ARPEGGIO
-                    and isinstance(self.gripper_client, ArpeggioGripperClient)
+                    and self.gripper_client is not None
                     and self.feature_supported("gripper_card_survey")):
                 self.send_ui(operation_progress=telemetry.OperationProgress(
                     percent_complete=61.0,
@@ -2395,7 +2330,7 @@ class AsyncObserver:
         # when the stabilization is done without any existing z rotation term
         self.gripper_client.calibrating_room_spin = True
 
-        if isinstance(self.gripper_client, ArpeggioGripperClient):
+        if self.gripper_client is not None:
             # measurement must be taken at the wrist's zero point
             center_angle = 540
             if reset_wrist_first:
@@ -2667,10 +2602,6 @@ class AsyncObserver:
         HOMING_SPEED_MPS = 0.02
         HOMING_LOOP_DELAY = 0.1
 
-        if isinstance(self.gripper_client, RaspiGripperClient):
-            logger.warning("Self park unsupported in pilot gripper")
-            return
-
         try:
             # TODO check if holding something, if so warn user and do not proceed.
 
@@ -2793,37 +2724,25 @@ class AsyncObserver:
         address = socket.inet_ntoa(info.addresses[0])
         logger.debug(f'Service discovered: {namesplit}')
 
-        is_power_anchor = kind == anchor_power_service_name
-        is_standard_anchor = kind == anchor_service_name
-        is_standard_gripper = kind == gripper_service_name
         is_arp_gripper = kind == arp_gripper_service_name
         is_arp_anchor = kind == arp_anchor_service_name
 
-        # -- BEFORE --
-        # the number of anchors is decided ahead of time (in main.py)
-        # but they are assigned numbers as we find them on the network
-        # and the chosen numbers are persisted in configuration.json
-
-        # -- AFTER --
         # the number of lines is always four.
-        # the number of anchors may be four pilot anchors controlling one line each,
-        # or two arpeggio anchors controlling two lines each.
-        # they cannot be mixed. As soon as one type is discovered, this config will be locked to that type.
-        # when the anchor type is arpeggio, anchor_num is 0 or 1.
-        # refrerences to anchor num that referred to a service, a camera or its pose can still reference anchor num.
-        # references to anchor num that were referring to grommet positions or line lengths and speeds,
-        # must now refer line numbers 0-3. sending a command to jog a spool or set a line speed must be abstracted through
-        # a class that will send the message to the connected server that manages that line.
+        # there are two arpeggio anchors, each controlling two lines.
+        # anchor_num is 0 or 1. refrerences to anchor num that referred to a service, a camera or its pose
+        # can still reference anchor num. references to anchor num that were referring to grommet positions
+        # or line lengths and speeds, must now refer line numbers 0-3. sending a command to jog a spool or
+        # set a line speed must be abstracted through a class that will send the message to the connected
+        # server that manages that line.
 
-        if is_power_anchor or is_standard_anchor or is_arp_anchor:
-            found_type = common.AnchorType.ARPEGGIO if is_arp_anchor else common.AnchorType.PILOT
-            
+        if is_arp_anchor:
+            found_type = common.AnchorType.ARPEGGIO
+
             if self.config.anchor_type == common.AnchorType.UNSPECIFIED:
                 # the first discovered anchor locks the config to an anchor type
                 self.config.anchor_type = found_type
-                if is_arp_anchor:
-                    # replace the four default pilot anchors in the config with two default arp anchors having unset addresses and service names
-                    self.config.anchors = default_arp_anchors() # imported from config_loader
+                # replace the default anchors in the config with two default arp anchors having unset addresses and service names
+                self.config.anchors = default_arp_anchors() # imported from config_loader
 
             elif self.config.anchor_type != found_type:
                 logger.warning(f'Ignored {found_type} anchor at {address} because config is locked to {self.config.anchor_type}')
@@ -2835,11 +2754,11 @@ class AsyncObserver:
                 anchor_num = anchor_num_map[key]
             else:
                 anchor_num = len(anchor_num_map)
-                if anchor_num >= N_ANCHORS[self.config.anchor_type]:
+                if anchor_num >= N_ANCHORS:
                     # Discovering more that four anchors could be a sign that another robot in the same network is turned on.
                     # We need a way to know that, but for now, you'll have to make sure only one is one at a time while discovering.
                     # After discovery, it should be ok to have more than one on at a time.
-                    logger.warning(f"Discovered another {found_type} server on the network, but we already know of {N_ANCHORS[self.config.anchor_type]} {key} {address}")
+                    logger.warning(f"Discovered another {found_type} server on the network, but we already know of {N_ANCHORS} {key} {address}")
                     return None
             if self.config.anchors[anchor_num].address != address or self.config.anchors[anchor_num].port != info.port:
                 self.config.anchors[anchor_num].num = anchor_num
@@ -2848,7 +2767,7 @@ class AsyncObserver:
                 self.config.anchors[anchor_num].port = info.port
                 save_config(self.config, self.config_path)
 
-        elif is_standard_gripper or is_arp_gripper:
+        elif is_arp_gripper:
             # a gripper has been discovered, assume it is ours only if we have never seen one before
             if self.config.gripper.service_name is None or self.config.gripper.service_name == "":
                 self.config.gripper.service_name = key
@@ -2876,9 +2795,9 @@ class AsyncObserver:
             # await self._handle_set_swing_cancellation(item=control.SetSwingCancellation(enabled=False, present='.'))
             client = self.bot_clients[key]
             await client.shutdown()
-            if kind == anchor_service_name or kind == anchor_power_service_name or kind == arp_anchor_service_name:
+            if kind == arp_anchor_service_name:
                 del self.anchors[client.anchor_num]
-            elif kind == gripper_service_name or kind == arp_gripper_service_name:
+            elif kind == arp_gripper_service_name:
                 self.gripper_client = None
                 # persist the last observed named positions so they survive losing the gripper
                 self.config.last_gantry_pos = fromnp(self.pe.gant_pos)
@@ -2914,8 +2833,8 @@ class AsyncObserver:
             s_task = asyncio.create_task(self.startup_action(ready))
 
         while self.run_command_loop:
-            # is everything up the way we want it to be?
-            if len([b for b in self.bot_clients.values() if b.connected])==5:
+            # is everything up the way we want it to be? (N_ANCHORS anchors + 1 gripper)
+            if len([b for b in self.bot_clients.values() if b.connected]) == N_ANCHORS + 1:
                 ready.set()
                 await asyncio.sleep(0.5)
                 continue # All websocket connections are up.
@@ -2950,31 +2869,14 @@ class AsyncObserver:
             logger.warning(f'Invalid service name "{service_name}"')
             return
 
-        is_power_anchor = name_component == anchor_power_service_name
-        is_standard_anchor = name_component == anchor_service_name
-        is_standard_gripper = name_component == gripper_service_name
         is_arp_gripper = name_component == arp_gripper_service_name
         is_arp_anchor = name_component == arp_anchor_service_name
 
-        if is_standard_gripper:
-            client = RaspiGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.telemetry_env)
-            self.gripper_client_connected.clear()
-            client.connection_established_event = self.gripper_client_connected
-            self.gripper_client = client
-            self.pe.set_gripper_type('pilot')
         if is_arp_gripper:
             client = ArpeggioGripperClient(self.config.gripper.address, self.config.gripper.port, self.datastore, self, self.pool, self.stat, self.pe, self.telemetry_env)
             self.gripper_client_connected.clear()
             client.connection_established_event = self.gripper_client_connected
             self.gripper_client = client
-            self.pe.set_gripper_type('arp')
-        elif is_power_anchor or is_standard_anchor:
-            for a in self.config.anchors:
-                if a.service_name != service_name:
-                    continue
-                client = RaspiAnchorClient(a.address, a.port, a.num, self.datastore, self, self.pool, self.stat, self.telemetry_env)
-                client.connection_established_event = self.any_anchor_connected
-                self.anchors[a.num] = client
         elif is_arp_anchor:
             for a in self.config.anchors:
                 if a.service_name != service_name:
@@ -2990,9 +2892,9 @@ class AsyncObserver:
             # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
             abnormal_close = await client.startup()
             # build a friendly name and capture the address before the client is torn down
-            if is_power_anchor or is_standard_anchor or is_arp_anchor:
+            if is_arp_anchor:
                 display_name = f'Anchor {client.anchor_num}'
-            elif is_standard_gripper or is_arp_gripper:
+            elif is_arp_gripper:
                 display_name = 'Gripper'
             else:
                 display_name = name_component
@@ -3415,9 +3317,7 @@ class AsyncObserver:
         wrist speed is in real degrees per second."""
         update = {}
 
-        if isinstance(self.gripper_client, ArpeggioGripperClient):
-
-            # arpeggio gripper. Update finger and wrist speed
+        if self.gripper_client is not None:
             cg = telemetry.CommandedGrip()
             if finger_speed is not None:
                 finger_speed = clamp(finger_speed, -90, 90)
@@ -3429,15 +3329,6 @@ class AsyncObserver:
                 cg.wrist_speed = wrist_speed
             self.send_ui(last_commanded_grip=cg)
             r = await self.flush_tele_buffer()
-
-        elif isinstance(self.gripper_client, RaspiGripperClient):
-
-            # pilot gripper, update winch speed and finger angle
-            if line_speed is not None:
-                update['aim_speed'] = line_speed # winch
-            if finger_speed is not None and abs(finger_speed) > 1.0:
-                finger_speed = clamp(finger_speed, -90, 90)
-                await self.gripper_client.set_finger_speed(finger_speed)
 
         if update:
             asyncio.create_task(self.gripper_client.send_commands(update))
@@ -3559,19 +3450,15 @@ class AsyncObserver:
         # send the line speed to the client that controls that line
         # when jog==True, speed is interpreted as a length in meters by which to lengthen the line
         command = 'jog' if jog else 'aim_speed'
-        if self.config.anchor_type == common.AnchorType.PILOT:
-            if line_no in self.anchors:
-                r = await self.anchors[line_no].send_commands({command: speed})
-        elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
-            if line_no//2 in self.anchors:
-                spool_no = line_no%2
-                # we consider the lower line number to be the direct line
-                r = await self.anchors[line_no//2].send_commands({command: (speed, spool_no)})
+        if line_no//2 in self.anchors:
+            spool_no = line_no%2
+            # we consider the lower line number to be the direct line
+            r = await self.anchors[line_no//2].send_commands({command: (speed, spool_no)})
 
     async def set_line_tension_target(self, line_no, value):
         """Set (or clear, with None) the onboard two-sided tension hold target in newtons
         for one arpeggio line. The onboard loop then holds that line at the target."""
-        if self.config.anchor_type == common.AnchorType.ARPEGGIO and line_no//2 in self.anchors:
+        if line_no//2 in self.anchors:
             spool_no = line_no % 2
             await self.anchors[line_no//2].send_commands({'set_tension_target': (value, spool_no)})
 
@@ -3634,20 +3521,8 @@ class AsyncObserver:
 
         # enforce a model dependent speed limit
         speed_limit = 0.35
-        if self.config.anchor_type == common.AnchorType.PILOT:
-
-            # On pilot stringman, also enforce a height dependent speed limit on the total combined velocity.
-            # the reason being that as gantry height approaches anchor height, the line tension increases exponentially,
-            # and a slower speed is need to maintain enough torque from the stepper motors.
-            # The speed limit is proportional to how far the gantry hangs below a level 10cm below the average anchor.
-            # This makes the behavior consistent across installations of different heights.
-            hang_distance = np.mean(self.pe.anchor_points[:, 2]) - starting_pos[2]
-            speed_limit = clamp(0.28 * (hang_distance - 0.1), 0.01, 0.25)
-            # If the combined total speed exceeds the limit, scale the vector down
-        elif self.config.anchor_type == common.AnchorType.ARPEGGIO:
-            speed_limit = 0.35
-            if self.feature_supported("speed_0.45"):
-                speed_limit = 0.45
+        if self.feature_supported("speed_0.45"):
+            speed_limit = 0.45
 
         if speed > speed_limit:
             total_velocity = total_velocity * (speed_limit / speed)
@@ -4033,130 +3908,16 @@ class AsyncObserver:
 
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
-        if isinstance(self.gripper_client, ArpeggioGripperClient):
-            # A lerobot session may be driving from our own subprocess or connected remotely
-            # through the prod telemetry relay, so we can't tell locally if one is present.
-            # lerobot_grasp broadcasts the eval-start and returns None if no session answers,
-            # in which case we fall back to the older centering model.
-            result = await self.lerobot_grasp()
-            if result is not None:
-                return result
-            if self.centering_model is None:
-                await self._load_centering_model()
-            return await self.arp_execute_grasp()
-        else:
-            return await self.pilot_execute_grasp()
-
-    async def pilot_execute_grasp(self):
-        FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
-        DOWNWARD_SPEED = -0.06
-        VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
-        COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
-        LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 5.00 # final adjustment to lateral speed
-        LOOP_DELAY = 0.1
-        PRESSURE_SENSE_WAIT = 2.0
-
-        smooth_grip_angle = self.grip_angle
-
-        try:
-            asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-            attempts = 3
-            while not self.pe.holding and attempts > 0 and self.run_command_loop:
-                attempts -= 1
-                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-
-                # move laterally until target is centered
-                # at the same time, move downward until tip is detected.
-
-                nothing_seen_countdown = 15
-                self.pe.tip_over.clear()
-                while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set()):
-                    distance_to_floor = self.datastore.range_record.getLast()[1]
-                    if distance_to_floor < FINGER_LENGTH:
-                        logger.debug(f'Stop going down, distance to floor is {distance_to_floor}')
-                        break
-
-                    if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and distance_to_floor > COMMIT_HEIGHT:
-                        nothing_seen_countdown -= 1
-                        if nothing_seen_countdown == 0:
-                            logger.debug('Nothing seen during centering loop')
-                            break
-                    else:
-                        nothing_seen_countdown = 15
-
-                    # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
-                    lat_travel_seconds = (distance_to_floor-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
-                    lateral_vector = np.zeros(3)
-                    if lat_travel_seconds > 0:
-                        # determine which direction we'd have to move laterally to center the object
-                        # you get a normalized u,v coordinate in the [-1,1] range
-                        # for now assume that the up direction in the gripper image is -Y in world space 
-                        # stabilize_frame produced this direction and I think it depends on the compass.
-                        # the direction in world space depends on how the user placed the origin card on the ground
-                        # we need to capture a number during calibration to relate these two.
-                        # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
-                        pred_vector = self.predicted_lateral_vector
-                        pred_vector[1] *= -1
-                        # lateral distance to object
-                        lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * distance_to_floor
-                        # lateral distance in meters
-                        lateral_distance = np.linalg.norm(lateral_vector)
-                        # speed to travel that lateral distance in lat_travel_seconds
-                        lateral_speed = lateral_distance / lat_travel_seconds * LAT_SPEED_ADJUSTMENT
-                    else:
-                        # once we get too close, go straight down, stop relying on the camera
-                        lateral_speed = 0
-                    lateral_vector *= lateral_speed
-
-                    logger.debug(f'Moving {[lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED]}')
-                    await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
-
-                    try:
-                        # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
-                        # we want to stop immediately.
-                        await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
-                        logger.debug('Detected tip over, must be floor')
-                        break
-                    except TimeoutError:
-                        pass
-
-                self.slow_stop_all_spools()
-                self.pe.tip_over.clear()
-
-                if nothing_seen_countdown == 0:
-                    logger.debug('Nothing seen')
-                    continue # find new target?
-
-                logger.info('Close gripper')
-                await self.gripper_client.send_commands({'set_finger_angle': CLOSED})
-                logger.debug(f'Wait up to {PRESSURE_SENSE_WAIT} seconds for pad to sense object.')
-                try:
-                    await asyncio.wait_for(self.pe.finger_pressure_rising.wait(), PRESSURE_SENSE_WAIT)
-                    self.pe.finger_pressure_rising.clear()
-                except TimeoutError:
-                    pressure = self.datastore.finger.getLast()[2]
-                    logger.debug(f'Did not detect a successful hold. pressure=({pressure}) open and go back up high enough to get a view of the object')
-                    # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
-                    await self.move_direction_speed([0,0,0.06])
-                    await asyncio.sleep(1.0)
-                    # now move up a little faster in a slightly random direction
-                    direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
-                    await self.move_direction_speed(direction)
-                    asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-                    await asyncio.sleep(2.0)
-                    self.slow_stop_all_spools()
-                    continue
-                logger.info('Successful grasp')
-                return True
-            logger.info(f'Gave up on grasp after {attempts} attempts. self.pe.holding={self.pe.holding}')
-            return False
-
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self.slow_stop_all_spools()
+        # A lerobot session may be driving from our own subprocess or connected remotely
+        # through the prod telemetry relay, so we can't tell locally if one is present.
+        # lerobot_grasp broadcasts the eval-start and returns None if no session answers,
+        # in which case we fall back to the older centering model.
+        result = await self.lerobot_grasp()
+        if result is not None:
+            return result
+        if self.centering_model is None:
+            await self._load_centering_model()
+        return await self.arp_execute_grasp()
 
     async def arp_execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""

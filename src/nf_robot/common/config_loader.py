@@ -47,18 +47,7 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config.has_been_calibrated = False
     config.connect_cloud_telemetry = False
 
-    for num, pos, rot in anchor_defs:
-        anchor = nf_config.Anchor()
-        anchor.num = num
-        # leaving service_name None is a indicator that this anchor config is a placeholder
-        # and no such service has been disovered yet and assigned this anchor number
-        
-        # Construct Pose using common.Vec3 for rvec (rotation) and tvec (translation)
-        anchor.pose = common.Pose(
-            rotation=common.Vec3(x=rot[0], y=rot[1], z=rot[2]),
-            position=common.Vec3(x=pos[0], y=pos[1], z=pos[2]),
-        )
-        config.anchors.append(anchor)
+    config.anchors = default_arp_anchors()
 
     # Camera Calibration Standard
     config.camera_cal = nf_config.CameraCalibration()
@@ -166,10 +155,6 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
             c.camera_cal_wide = create_default_config().camera_cal_wide
             if c.park_data is None:
                 c.park_data = nf_config.ParkData()
-
-            # any existing config which had anchors must have had pilot anchors
-            if c.anchor_type is None and len(c.anchors) > 0:
-                c.anchor_type = common.AnchorType.PILOT
 
             # Set camera tilt on configs that existed before the field was added
             if c.anchor_type == common.AnchorType.ARPEGGIO:

@@ -3,7 +3,7 @@ import numpy as np
 from collections import deque
 import threading
 
-from nf_robot.host.anchor_client import ComponentClient
+from nf_robot.host.component_client import ComponentClient
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, common

@@ -41,7 +41,6 @@ def invert_pose(pose):
 
 # --- Precompute some inverted poses ---
 gantry_april_inv = invert_pose(model_constants.gantry_april)
-anchor_cam_inv = invert_pose(model_constants.anchor_camera)
 gripper_imu_inv = invert_pose(model_constants.gripper_imu)
 
 def compose_poses(poses):

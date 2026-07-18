@@ -30,16 +30,6 @@ gripper_cog = (np.array([0,0,0], dtype=float), np.array([0,0.055,0.011], dtype=f
 # z offset of the gripper laser rangefinder from the origin of the gantry when the winch is zeroed.
 laser_offset = 0.14 # meters
 
-# rotation and translation of the anchor camera (the frame of reference used in marker detection) in the reference frame of the anchor
-# tilt = 28 # camera look tilt downward from horizontal in degrees.
-# anchor_camera = compose_poses([
-# 	(np.array([0,pi,0], dtype=float), np.array([0.054, -0.038, 0.017], dtype=float)), # the camera is mounted upside down
-#     (np.array([(90-tilt)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float)),
-# ])
-# anchor_camera = (np.array([ 0.        ,  2.57344204, -1.80194352], dtype=float), np.array([ 0.054, -0.038,  0.017], dtype=float)) # 20
-anchor_camera = (np.array([0, 2.6928, -1.6180], dtype=float), np.array([0.054, -0.038,  0.017], dtype=float)) # 28
-# anchor_camera = (np.array([ 0.        ,  2.79917955, -1.42625322], dtype=float), np.array([ 0.054, -0.038,  0.017], dtype=float)) # 36
-
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
 
@@ -57,12 +47,7 @@ gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float)
 basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.10], dtype=float))
 basket_offset_inv = (np.array([0,0,0], dtype=float), np.array([0,0,-0.10], dtype=float))
 
-# pilot spool parameters
-empty_spool_diameter = 22.9
-
 assumed_full_line_length = 7.5 # meters
-full_spool_diameter_fishing_line = 27.5
-full_spool_diameter_power_line = 43.7
 
 # damiao spool
 damiao_empty_spool_diameter = 72.0
@@ -75,7 +60,6 @@ arp_anchor_left_eyelet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033
 # compose_poses([(np.array([0,pi,0], dtype=float), np.array([0.001, -0.039, 0.074], dtype=float)), (np.array([(90-22)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float))])
 arp_anchor_camera = (np.array([0.0, 2.60449835, -1.75675632]), np.array([ 0.001, -0.039,  0.074]))
 
-rpi_cam_3_fov = np.array([66, 41])
 rpi_cam_3_wide_fov = np.array([102, 67])
 
 # Arp gripper pole length (m)

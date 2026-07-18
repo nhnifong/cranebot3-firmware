@@ -1,18 +1,14 @@
 import cv2
 import numpy as np
-import scipy.optimize as optimize
 import time
 import glob
-from itertools import combinations
 import argparse
 import logging
 
 from nf_robot.robot.spools import SpiralCalculator
 from nf_robot.common.pose_functions import *
-import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
 from nf_robot.common.config_loader import *
-from nf_robot.host.position_estimator import find_hang_point
 from nf_robot.generated.nf import config
 
 logger = logging.getLogger(__name__)
@@ -227,137 +223,6 @@ def calibrate_from_stream(address, config_file):
         i+=1
     ce.calibrate()
     ce.save()
-
-### the following functions pertain to calibration of the entire assembled robot, not just one camera ###
-
-W_ORIGIN = 0.1 # increase this to to make origin errors more expensive
-W_PLANAR = 1 # increase this to make anchor height deviations from the average plane more expensive
-
-def multi_card_residuals(x, averages):
-    """
-    Computes the vector of residuals (differences) for least_squares.
-    
-    Returns:
-        1D numpy array of floats. The optimizer minimizes sum(residuals**2).
-        We return raw differences (meters), not squared errors.
-    """
-    anchor_poses = x.reshape((4, 2, 3))
-    residuals = []
-    
-    # Iterate over every marker (Origin and Cal Assists)
-    for marker_name, sightings in averages.items():
-
-        # Calculate world positions for all cameras that saw this marker
-        valid_sightings = []
-        
-        for anchor_idx, marker_pose_cams in enumerate(sightings):
-            for marker_pose_cam in marker_pose_cams:
-                if marker_pose_cam is None:
-                    continue
-                
-                # Chain: Anchor -> Camera -> Marker
-                pose_list = [
-                    anchor_poses[anchor_idx],
-                    model_constants.anchor_camera,
-                    marker_pose_cam
-                ]
-                if marker_name == 'gantry':
-                    pose_list.append(gantry_april_inv)
-                pose_in_room = compose_poses(pose_list)
-                
-                # Extract translation (tvec is index 1)
-                valid_sightings.append(pose_in_room[1])
-
-        if not valid_sightings:
-            continue
-            
-        projected_positions = np.array(valid_sightings)
-        
-        # Calculate Residuals based on marker type
-        if marker_name == 'origin':
-            # constraint 1: Origin must be at [0,0,0]
-            # Residual = Position_Calculated - [0,0,0]
-            # We add 3 residuals (dx, dy, dz) per sighting
-            
-            current_residuals = (projected_positions - np.zeros(3)) * W_ORIGIN
-            residuals.extend(current_residuals.flatten())
-            
-        elif len(projected_positions) > 1:
-            # constraint 2: Consistency
-            # Residual = Position_Calculated - Average_Position
-
-            # It is important that only the positions of markers are considered, not the entire pose,
-            # since the gantry displays the same tag four times symmetrically around a box, and every camera is likely seeing a different side.
-            
-            # Calculate the centroid of where the anchors currently "think" the marker is
-            centroid = np.mean(projected_positions, axis=0)
-            
-            # The error is the distance of each sighting from that shared centroid
-            current_residuals = projected_positions - centroid
-            residuals.extend(current_residuals.flatten())
-
-
-        # constrain anchors to a flat plane in the z axis.
-        if True:
-            # Extract Z coordinates from all 4 anchors
-            anchor_zs = anchor_poses[:, 1, 2]
-            
-            # Calculate the average Z plane
-            avg_z = np.mean(anchor_zs)
-            
-            # Penalize deviation from the average plane
-            z_residuals = (anchor_zs - avg_z) * W_PLANAR
-            residuals.extend(z_residuals)
-
-    return np.array(residuals)
-
-def optimize_anchor_poses(averages):
-    """Finds optimal anchor poses
-    Args:
-        averages: dict keyed by marker names. each value is a list of four lists of poses corresponding to the four anchors.
-            poses represent the pose of the marker in the camera's referene frame.
-    """
-
-    # the detection of the origin marker alone is not sufficient to constrain anchor poses with enough accuracy.
-    # using the average pose of each marker from each camera,
-    # minimize the error between the room position of markers from different perspectives.
-    # while also minimizing the error between the origin marker room positions and [0,0,0]
-
-    initial_guesses = []
-    # We rely on 'origin' being fully populated to seed the initial guess.
-    origin_sightings = averages['origin']
-    
-    for i in range(4):
-        origin_marker_pose = origin_sightings[i][0]
-        
-        # Calculate anchor pose relative to room by inverting the chain from origin
-        # Anchor = Inverse(Origin_in_Cam + Room_relative_to_Origin + Cam_offset)
-        guess = invert_pose(compose_poses([
-            model_constants.anchor_camera,
-            origin_marker_pose,
-        ]))
-        
-        initial_guesses.append(guess)
-    logger.debug(f'initial_guesses = {initial_guesses}')
-
-    # 'lm' (Levenberg-Marquardt) is standard for unconstrained least squares
-    logger.info('Running least squares optimization')
-    result = optimize.least_squares(
-        multi_card_residuals,
-        np.array(initial_guesses).flatten(),
-        args=(averages,),
-        method='lm', 
-        # max_nfev=1000,
-        verbose=0
-    )
-
-    if not result.success:
-        logging.error(f"Optimization failed. Status: {result.status}, Msg: {result.message}")
-        return None
-
-    # Reshape back to (4 anchors, 2 vectors, 3 coords)
-    poses = result.x.reshape((4, 2, 3))
-    return poses
 
 def main():
     parser = argparse.ArgumentParser(description='Run robot calibration functions. Use --help for more details on each command.')

@@ -16,7 +16,7 @@ from nf_robot.common.config_loader import create_default_config, config_has_any_
 from nf_robot.host.observer import AsyncObserver
 from nf_robot.common.pose_functions import invert_pose, compose_poses
 from nf_robot.host.position_estimator import Positioner2
-from nf_robot.host.anchor_client import RaspiAnchorClient
+from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
 
 # Todo, automate the following tests
@@ -25,7 +25,7 @@ from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
 
 # start observer, turn on bot (mock clients change from refusing connections to accepting them), wait for all good, close observer
 # start observer, turn on bot, before all connections succeed, close observer.
-# start observer, wait for it to fail to connect to known bots at least once, then turn the bot on, and let it connect. assert self.anchors is only four clients. close observer
+# start observer, wait for it to fail to connect to known bots at least once, then turn the bot on, and let it connect. assert self.anchors is only two clients. close observer
 # turn on bot first (mock clients connect ok), start observer, wait for all good, close observer
 # turn on bot first, start observer, wait for all good, kill bot, close observer
 # start observer, turn on bot, wait for all good, kill bot, power up bot, wait for all good, close observer.
@@ -42,7 +42,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         ], dtype=float)
 
         self.patchers = []
-        self.watchable_startup_events = [asyncio.Event() for i in range(5)] # index=4 is gripper
+        self.watchable_startup_events = [asyncio.Event() for i in range(3)] # index=2 is gripper
         self.watchable_shutdown_event = asyncio.Event()
 
         self.mock_pe_class = Mock(spec=Positioner2)
@@ -61,7 +61,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
         self.mock_gripper_client_class = Mock(spec=ArpeggioGripperClient)
         self.mock_gripper_client = self.mock_gripper_client_class.return_value
-        self.mock_gripper_client.startup = partial(self.event_startup, 4)
+        self.mock_gripper_client.startup = partial(self.event_startup, 2)
         self.mock_gripper_client.shutdown = self.event_shutdown
         self.mock_gripper_client.slow_stop_spool = self.instant_nothing
         self.mock_gripper_client.connection_established_event = asyncio.Event()
@@ -71,8 +71,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
         self.patchers.append(patch('nf_robot.host.observer.ArpeggioGripperClient', self.mock_gripper_client_class))
 
-        # Create four mock anchor clients
-        self.mock_anchor_clients = [Mock(spec=RaspiAnchorClient) for _ in range(4)]
+        # Create two mock anchor clients
+        self.mock_anchor_clients = [Mock(spec=ArpeggioAnchorClient) for _ in range(2)]
         for i, client in enumerate(self.mock_anchor_clients):
             client.startup = partial(self.event_startup, i)
             client.shutdown = self.event_shutdown
@@ -94,7 +94,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_zc_types_find.return_value = [] # Return empty list immediately
 
         # The side_effect makes it so that the correct mock anchor client is returned
-        self.patchers.append(patch('nf_robot.host.observer.RaspiAnchorClient', side_effect=lambda a, b, num, d, e, f, g, h, : self.mock_anchor_clients[num]))
+        self.patchers.append(patch('nf_robot.host.observer.ArpeggioAnchorClient', side_effect=lambda a, b, num, d, e, f, g, h, : self.mock_anchor_clients[num]))
 
         self.mock_pool = MagicMock()
         self.mock_pool.__enter__.return_value = self.mock_pool
@@ -140,9 +140,9 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         print(f'client {i} startup called')
         if self.clients_refuse_connections:
             return
-        if i<4:
+        if i<2:
             self.mock_anchor_clients[i].connected = True
-        elif i==4:
+        elif i==2:
             self.mock_gripper_client.connected = True
         # the event the observer is watching
         self.mock_gripper_client.connection_established_event.set()
@@ -240,7 +240,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(8765, self.ob.config.gripper.port)
 
         # After half second, keep_robot_connected should wake up and start a client to connect to the gripper
-        await asyncio.wait_for(self.watchable_startup_events[4].wait(), 2.0)
+        await asyncio.wait_for(self.watchable_startup_events[2].wait(), 2.0)
         self.assertTrue(self.ob.gripper_client is not None)
         self.assertEqual(1, len(self.ob.connection_tasks))
         # assert the client task is running.
@@ -249,7 +249,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
     async def test_discover_anchor(self):
         # advertise a service that matches an anchor.
         await self.start_observer()
-        name = "123.cranebot-anchor-service.test"
+        name = "123.cranebot-anchor-arpeggio-service.test"
         await self.advertise_service(name)
         # since we are immediately calling the observer's add_service callback, it should add this to the config immediately
         self.assertTrue(config_has_any_address(self.ob.config))
@@ -270,7 +270,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         Confirm that if observer is started with a non_blank configuration, it will connect to an anchor in that config
         In this test, the connection immediately succeeds
         """
-        name = "123.cranebot-anchor-service.test"
+        name = "123.cranebot-anchor-arpeggio-service.test"
         # name, address, and port must be set for observer to attempt a connection
         print(f'overriding config with test values')
         self.ob.config.anchors[0].service_name = name
@@ -294,7 +294,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         """
         self.clients_refuse_connections = True
 
-        name = "123.cranebot-anchor-service.test"
+        name = "123.cranebot-anchor-arpeggio-service.test"
         # name, address, and port must be set for observer to attempt a connection
         self.ob.config.anchors[0].service_name = name
         self.ob.config.anchors[0].address = '127.0.0.1'
@@ -334,8 +334,8 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         """
         self.clients_refuse_connections = False
         names = []
-        for i in range(4):
-            name = f"123.cranebot-anchor-service.{i}"
+        for i in range(2):
+            name = f"123.cranebot-anchor-arpeggio-service.{i}"
             names.append(name)
             self.ob.config.anchors[i].service_name = name
             self.ob.config.anchors[i].address = '127.0.0.1'
@@ -351,10 +351,10 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         # After half second, keep_robot_connected should wake up and start a client to connect to all these components.
         # all mock components are pointing a the same startup event, and we're not going to both distinguishing between them.
         await asyncio.wait_for(asyncio.gather(*[e.wait() for e in self.watchable_startup_events]), 0.55)
-        for i in range(4):
+        for i in range(2):
             self.assertTrue(self.ob.anchors[i] is not None)
         self.assertTrue(self.ob.gripper_client is not None)
-        self.assertEqual(5, len(self.ob.connection_tasks))
+        self.assertEqual(3, len(self.ob.connection_tasks))
         # assert the client task is running.
         for name in names:
             self.assertFalse(self.ob.connection_tasks[name].done())
