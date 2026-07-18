@@ -24,6 +24,7 @@ import sys
 import json
 import traceback
 import importlib.metadata
+import inspect
 
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
@@ -767,7 +768,27 @@ def ensure_hf_auth():
     print(f"HuggingFace auth OK (logged in as {user['name']}).")
 
 
-def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None, camera_mode="all", action_space=DEFAULT_ACTION_SPACE):
+def _filter_supported_kwargs(func, kwargs):
+    """Drop any kwarg not present in func's signature, warning about each one dropped.
+
+    Lets us pass newer LeRobotDataset options (e.g. vcodec, added in lerobot 0.6.0) without
+    hard-crashing on older installed lerobot versions that don't recognize them yet.
+    None-valued kwargs are also dropped, since they mean "not requested".
+    """
+    accepted = inspect.signature(func).parameters
+    filtered = {}
+    for key, value in kwargs.items():
+        if value is None:
+            continue
+        if key in accepted:
+            filtered[key] = value
+        else:
+            qualname = getattr(func, '__qualname__', getattr(func, '__name__', repr(func)))
+            print(f"Installed lerobot's {qualname} does not accept '{key}'; ignoring (upgrade lerobot to use it).")
+    return filtered
+
+
+def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_stream_token=None, camera_mode="all", action_space=DEFAULT_ACTION_SPACE, vcodec=None):
     class GracefulExit(Exception):
         pass
 
@@ -824,16 +845,18 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
         if repo_exists(hf_repo_id, repo_type="dataset"):
             print(f"Found existing dataset {hf_repo_id}. Resuming...")
             # resume requires a seperate root direc
-            dataset = LeRobotDataset.resume(
+            resume_kwargs = _filter_supported_kwargs(LeRobotDataset.resume, dict(
                 repo_id=hf_repo_id,
                 root=root,
                 # image_writer_threads=8,
                 streaming_encoding=True,
-            )
+                vcodec=vcodec,
+            ))
+            dataset = LeRobotDataset.resume(**resume_kwargs)
             # dataset.start_image_writer(num_threads=8)
         else:
             print(f"Creating new dataset {hf_repo_id}...")
-            create_kwargs = dict(
+            create_kwargs = _filter_supported_kwargs(LeRobotDataset.create, dict(
                 repo_id=hf_repo_id,
                 root=root,
                 # private=True, # coming soon?
@@ -843,7 +866,8 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
                 use_videos=True,
                 # image_writer_threads=8,
                 streaming_encoding=True,
-            )
+                vcodec=vcodec,
+            ))
             try:
                 dataset = LeRobotDataset.create(**create_kwargs)
             except FileExistsError:
@@ -1169,6 +1193,7 @@ if __name__ == "__main__":
     record_parser.add_argument("--upload", default=True, help="upload data to huggingface when complete")
     record_parser.add_argument("--camera_mode", default="all", choices=camera_mode_choices, help="which cameras to record")
     record_parser.add_argument("--action_space", default=DEFAULT_ACTION_SPACE, choices=action_space_choices, help="action space to record (ignored when resuming an existing dataset)")
+    record_parser.add_argument("--vcodec", default=None, help="Video codec passed to LeRobotDataset (e.g. 'auto' for hardware encoding, 'libsvtav1', 'h264'). Requires lerobot>=0.6.0; ignored with a warning on older installs that predate this option.")
 
     eval_parser = subparsers.add_parser('eval', parents=[parent_parser], help="Evaluate existing policy")
     eval_parser.add_argument("--policy_id", default="naavox/grasping_act_policy", help="repo id of policy to load")
@@ -1183,4 +1208,4 @@ if __name__ == "__main__":
     if args.command == 'eval':
         eval_until_disconnected(uri, args.policy_id, args.robot_id, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode)
     else:
-        record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode, action_space=args.action_space)
+        record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode, action_space=args.action_space, vcodec=args.vcodec)
