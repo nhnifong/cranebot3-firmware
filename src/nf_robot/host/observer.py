@@ -25,6 +25,7 @@ from random import random
 import traceback
 import cv2
 import pickle
+import inspect
 from collections import deque, defaultdict
 import uuid
 import websockets
@@ -171,7 +172,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1") -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False) -> None:
         self.port = port
         # Interface the local telemetry websocket and all local mjpeg video streams bind to.
         # Defaults to loopback (single-machine use). Set to a LAN IP or 0.0.0.0 to let a
@@ -196,6 +197,10 @@ class AsyncObserver:
         self.telemetry_env = telemetry_env
         self.debug = debug
         self.loop_monitor = None  # only created in main() when --debug is passed
+        # when set, full_auto_calibration pickles the args of every optimize_arp_anchors call
+        # (Arpeggio hardware only) to calibration_diagnostics.pkl for offline analysis.
+        self.rec_diagnostics = rec_diagnostics
+        self._calibration_diagnostics = []
         self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -2059,6 +2064,33 @@ class AsyncObserver:
             await asyncio.sleep(0.25)
         self.slow_stop_all_spools()
 
+    def _record_calibration_diagnostics(self, pass_name, func, args):
+        """Append one optimize_arp_anchors call's bound arguments to the running
+        calibration diagnostics list and flush the whole list to a single pickle file.
+
+        Writing on every call (rather than only at the end) means a hang or crash
+        partway through calibration still leaves everything recorded so far on disk.
+        Bind args to the function's actual parameter names so the pickle is readable
+        offline without cross-referencing the call site.
+        """
+        bound = inspect.signature(func).bind(*args)
+        bound.apply_defaults()
+        self._calibration_diagnostics.append({
+            'pass': pass_name,
+            'timestamp': time.time(),
+            'args': dict(bound.arguments),
+        })
+        # Write to a temp file and rename over the target so a crash or hard kill mid-write
+        # can never corrupt/truncate the previously-flushed passes still sitting in the file.
+        tmp_path = 'calibration_diagnostics.pkl.tmp'
+        with open(tmp_path, 'wb') as f:
+            pickle.dump(self._calibration_diagnostics, f)
+        os.replace(tmp_path, 'calibration_diagnostics.pkl')
+        logger.info(
+            f'Saved calibration diagnostics for {pass_name} '
+            f'({len(self._calibration_diagnostics)} pass(es) so far) to calibration_diagnostics.pkl'
+        )
+
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
         This is a motion task"""
@@ -2071,6 +2103,8 @@ class AsyncObserver:
         DETECTION_WAIT_S = 1.0 # seconds
         FLOOR_CLEARANCE_M = 0.2 # how far above the floor to hold the gripper fingertips at the diamond's bottom point
         self.tension_over_limit = False  # clear any stale trip from a previous run
+        if self.rec_diagnostics:
+            self._calibration_diagnostics = []  # clear any stale data from a previous run
         try:
             if len(self.anchors) < N_ANCHORS[self.config.anchor_type]:
                 self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -2129,7 +2163,10 @@ class AsyncObserver:
             if self.config.anchor_type == common.AnchorType.ARPEGGIO:
                 tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
                 # determine position of two anchors visually and guess at external eyelets.
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, None, None, None, tilts))
+                pass1_args = (raw_obs, None, None, None, None, tilts)
+                if self.rec_diagnostics:
+                    self._record_calibration_diagnostics('anchors_pass1', optimize_arp_anchors, pass1_args)
+                async_result = self.pool.apply_async(optimize_arp_anchors, pass1_args)
                 anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=30)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
@@ -2185,7 +2222,10 @@ class AsyncObserver:
                 ))
                 r = await self.flush_tele_buffer()
 
-                async_result = self.pool.apply_async(optimize_arp_anchors, (raw_obs, diamond_data, None, None, line_deltas, tilts))
+                pass2_args = (raw_obs, diamond_data, None, None, line_deltas, tilts)
+                if self.rec_diagnostics:
+                    self._record_calibration_diagnostics('anchors_pass2', optimize_arp_anchors, pass2_args)
+                async_result = self.pool.apply_async(optimize_arp_anchors, pass2_args)
                 anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=60)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
@@ -2311,6 +2351,8 @@ class AsyncObserver:
                     # anchors pins the room frame; the well-determined anchors don't need this
                     # refinement anyway, while the weakly-constrained eyelets still get it.
                     args = (raw_obs, diamond_data, eyelet_positions, anchor_poses, line_deltas, tilts, gripper_obs)
+                    if self.rec_diagnostics:
+                        self._record_calibration_diagnostics('anchors_pass3', optimize_arp_anchors, args)
                     async_result = self.pool.apply_async(optimize_arp_anchors, args)
                     refined_anchors, refined_eyelets, refined_floor_z = async_result.get(timeout=60)
                     if refined_anchors is not None:
@@ -4485,6 +4527,12 @@ def main():
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     parser.add_argument(
+        "--rec_diagnostics",
+        action="store_true",
+        help="Record the arguments of every optimize_arp_anchors call during full_auto_calibration "
+             "to calibration_diagnostics.pkl, for offline analysis. Arpeggio hardware only."
+    )
+    parser.add_argument(
         "--bind_address",
         type=str,
         default="127.0.0.1",
@@ -4515,6 +4563,7 @@ def main():
             local_models=args.local_models,
             debug=args.debug,
             bind_address=args.bind_address,
+            rec_diagnostics=args.rec_diagnostics,
         )
 
         # Idempotent stop trigger. Runs as a signal-handler callback on the event
