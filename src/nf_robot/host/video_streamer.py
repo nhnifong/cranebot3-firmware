@@ -142,23 +142,38 @@ class MjpegStreamer:
 
 class RTMPStreamer:
     """
-    Streams video to an RTMP server (e.g., MediaMTX) using FFmpeg.
+    Forwards video to an RTMP server (e.g., MediaMTX) using FFmpeg.
     Ideal for cloud streaming or when a centralized media server is used.
+
+    Two modes, chosen once at construction:
+    - passthrough=True: pure stream-copy remux of already-compressed H264 Annex-B bytes fed
+      via send_packet() (see anchor_client.py's receive_video(), which demuxes the incoming
+      rpicam-vid stream and hands us bytes(packet) per packet). No decode, no re-encode --
+      the component's camera already hardware-encoded this content once, so decoding it on
+      the host just to re-encode it again in software was a pure loss of quality and CPU for
+      no benefit.
+    - passthrough=False (default): the original behavior. Encodes raw decoded/synthesized
+      frames fed via send_frame() with software libx264. Required for streams with no
+      pre-existing compressed representation -- e.g. the orthographic floor projection,
+      which is computed fresh from multiple camera views (generate_orthographic_floor_maps)
+      and was never itself hardware-encoded, so there are no original bytes to pass through.
     """
-    def __init__(self, width, height, fps=30, rtmp_url=None):
+    def __init__(self, width, height, fps=30, rtmp_url=None, passthrough=False):
         if not rtmp_url:
             raise ValueError("RTMPStreamer requires an rtmp_url")
-            
+
         self.rtmp_url = rtmp_url
         self.width = width
         self.height = height
-        self.fps = fps 
+        self.fps = fps
+        self.passthrough = passthrough
         self.process = None
         self.connection_status = 'ok'
         atexit.register(self.stop)
 
     def _calculate_bitrate(self):
-        # Bitrate estimation based on a 0.5 bits-per-pixel heuristic.
+        # Bitrate estimation based on a 0.5 bits-per-pixel heuristic. Only used in encode
+        # mode; passthrough mode forwards whatever bitrate the source was already encoded at.
         raw_bitrate = int(self.width * self.height * self.fps * 0.5)
         target_bitrate = max(200000, min(raw_bitrate, 2500000))
         return f"{target_bitrate // 1000}k"
@@ -167,38 +182,48 @@ class RTMPStreamer:
         if self.process:
             return
 
-        gop_size = max(1, int(self.fps * 2))
-        bitrate = self._calculate_bitrate()
+        if self.passthrough:
+            command = [
+                'ffmpeg',
+                '-y',
+                '-use_wallclock_as_timestamps', '1',
+                '-f', 'h264',
+                '-i', '-',
+                '-c:v', 'copy',
+                '-f', 'flv', self.rtmp_url
+            ]
+        else:
+            gop_size = max(1, int(self.fps * 2))
+            bitrate = self._calculate_bitrate()
+            command = [
+                'ffmpeg',
+                '-y',
+                '-use_wallclock_as_timestamps', '1',
+                '-f', 'rawvideo',
+                '-vcodec', 'rawvideo',
+                '-pix_fmt', 'bgr24', # Standard OpenCV format
+                '-s', f'{self.width}x{self.height}',
+                '-i', '-',
+                '-c:v', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-preset', 'ultrafast',
+                '-tune', 'zerolatency',
+                '-g', str(gop_size),
+                '-b:v', bitrate,
+                '-f', 'flv', self.rtmp_url
+            ]
 
-        command = [
-            'ffmpeg',
-            '-y',
-            '-use_wallclock_as_timestamps', '1',
-            '-f', 'rawvideo',
-            '-vcodec', 'rawvideo',
-            '-pix_fmt', 'bgr24', # Standard OpenCV format
-            '-s', f'{self.width}x{self.height}',
-            '-i', '-',
-            '-c:v', 'libx264',
-            '-pix_fmt', 'yuv420p',
-            '-preset', 'ultrafast',
-            '-tune', 'zerolatency',
-            '-g', str(gop_size),
-            '-b:v', bitrate,
-            '-f', 'flv', self.rtmp_url
-        ]
-            
         # stderr must be piped to monitor for connection losses.
         self.process = subprocess.Popen(
-            command, 
+            command,
             stdin=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=10**7 
+            bufsize=10**7
         )
 
         self.monitor_thread = threading.Thread(target=self._monitor_stderr, daemon=True)
         self.monitor_thread.start()
-        logger.info(f"FFmpeg streamer started to {self.rtmp_url}")
+        logger.info(f"FFmpeg streamer started to {self.rtmp_url} (passthrough={self.passthrough})")
 
     def _monitor_stderr(self):
         if not self.process or not self.process.stderr:
@@ -208,7 +233,7 @@ class RTMPStreamer:
             line = line_bytes.decode('utf-8', errors='ignore').strip()
             if "Error" in line or "failed" in line:
                 logger.error(f"FFmpeg: {line}")
-            
+
             # Check for disconnects
             if "Broken pipe" in line or "Connection reset" in line:
                 logger.warning("Media server disconnected.")
@@ -217,11 +242,24 @@ class RTMPStreamer:
                 break
 
     def send_frame(self, frame):
+        """Encode and send one raw decoded/synthesized frame. Only meaningful when passthrough=False."""
         if not self.process:
             return
 
         try:
             self.process.stdin.write(frame.tobytes())
+            self.process.stdin.flush()
+        except (BrokenPipeError, OSError) as e:
+            self._handle_crash(e)
+
+    def send_packet(self, data):
+        """Forward one packet of already-compressed bytes (bytes(av.Packet)) as-is. Only
+        meaningful when passthrough=True."""
+        if not self.process:
+            return
+
+        try:
+            self.process.stdin.write(data)
             self.process.stdin.flush()
         except (BrokenPipeError, OSError) as e:
             self._handle_crash(e)
@@ -247,8 +285,14 @@ class NfVideoStreamer:
     Combines a local MjpegStreamer with an optional RTMP RTMPStreamer.
     Calls on_ready(local_uri, stream_path) once after a warmup frame count
     (2 frames when local-only, 20 when streaming to RTMP).
+
+    passthrough=True feeds the RTMP remote (if any) via send_packet() with already-compressed
+    bytes instead of send_frame() with raw frames -- see RTMPStreamer for why. Only camera-
+    sourced streams (backed by a component's hardware encoder) can use this; anything that
+    synthesizes its own frames (e.g. the orthographic floor projection) must stick with the
+    default passthrough=False and feed send_frame().
     """
-    def __init__(self, width, height, fps, mjpeg_port, stream_path, telemetry_env, on_ready=None, bind_address="127.0.0.1"):
+    def __init__(self, width, height, fps, mjpeg_port, stream_path, telemetry_env, on_ready=None, bind_address="127.0.0.1", passthrough=False):
         # The advertised host must match what the bind actually accepts: when bound to a
         # specific address, advertise that address; when bound to all interfaces, advertise
         # this host's LAN IP so off-machine clients can reach it.
@@ -261,6 +305,7 @@ class NfVideoStreamer:
         self._on_ready = on_ready
         self._ready_sent = False
         self._frames_sent = 0
+        self._passthrough = passthrough
 
         self._local = MjpegStreamer(width=width, height=height, port=mjpeg_port, bind_address=bind_address)
 
@@ -272,7 +317,7 @@ class NfVideoStreamer:
         elif telemetry_env is not None:
             raise ValueError(f"unusable value for telemetry_env {telemetry_env}")
 
-        self._remote = RTMPStreamer(width=width, height=height, fps=fps, rtmp_url=rtmp) if rtmp else None
+        self._remote = RTMPStreamer(width=width, height=height, fps=fps, rtmp_url=rtmp, passthrough=passthrough) if rtmp else None
         self._frames_before_ready = 2 if rtmp is None else 20
 
     @property
@@ -290,14 +335,25 @@ class NfVideoStreamer:
         logger.info(f'Streaming locally at {self._local_uri}')
 
     def send_frame(self, frame):
+        """Send one decoded/synthesized (and possibly resized) frame to the local MJPEG
+        stream, and to the RTMP remote too if this stream is not in passthrough mode."""
         self._local.send_frame(frame)
-        if self._remote:
+        if self._remote and not self._passthrough:
             self._remote.send_frame(frame)
         self._frames_sent += 1
         if not self._ready_sent and self._frames_sent >= self._frames_before_ready:
             self._ready_sent = True
             if self._on_ready:
                 self._on_ready(self._local_uri, self._stream_path)
+
+    def send_packet(self, data):
+        """Forward one packet of the original compressed bytes straight to the RTMP
+        remote (a stream-copy remux, no decode/re-encode). No-op unless this stream was
+        constructed with passthrough=True and has a remote configured. Independent of
+        send_frame(): the local MJPEG path always needs decoded/resized RGB frames, fed
+        separately from wherever the raw packets come from upstream."""
+        if self._remote and self._passthrough:
+            self._remote.send_packet(data)
 
     def stop(self):
         self._local.stop()

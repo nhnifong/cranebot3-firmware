@@ -74,6 +74,9 @@ class ComponentClient:
         self.local_video_uri = None
         self.feed_number = None
         self.remote_stream_path = None
+        # the active NfVideoStreamer, set by frame_resizer_loop while it's running (None
+        # otherwise); receive_video()'s demux loop forwards raw packet bytes through it.
+        self.video_streamer = None
 
         # things used by jpeg/resizing thread
         self.frame_lock = threading.Lock()
@@ -143,76 +146,95 @@ class ComponentClient:
             def error_callback_func(error):
                 logger.error(f"Error in pool worker: {error}")
 
-            for av_frame in container.decode(stream):
+            # Demux (not decode) so we can grab each packet's original compressed bytes
+            # before decoding it. bytes(packet) is the same H264 NAL data the component's
+            # hardware encoder already produced -- forwarding it untouched to any RTMP
+            # remote (see frame_resizer_loop/NfVideoStreamer.send_packet) avoids decoding
+            # it here just to re-encode it again in software for that path. The CV/UI/
+            # lerobot paths below are unaffected: they still get decoded frames exactly as
+            # before, from the same packets.
+            for packet in container.demux(stream):
                 if not self.connected:
                     break
-                # determine the wall time when the frame was captured
-                timestamp = self.stream_start_ts + av_frame.time
-                self.last_frame_cap_time = timestamp
+                if packet.dts is None:
+                    continue  # flush packet at stream end, not real data
 
-                fr = av_frame.to_ndarray(format='rgb24')
-                with self.new_frame_condition:
-                    self.frame = fr
-                    self.new_frame_condition.notify()
+                if self.video_streamer is not None:
+                    self.video_streamer.send_packet(bytes(packet))
 
-                # save information about stream latency and framerate
-                now = time.time()
-                self.stat.latency.append(now - timestamp)
-                fr = 1/(now - last_time)
-                self.stat.framerate.append(fr)
-                last_time = now
+                pool_stopped = False
+                for av_frame in packet.decode():
+                    # determine the wall time when the frame was captured
+                    timestamp = self.stream_start_ts + av_frame.time
+                    self.last_frame_cap_time = timestamp
 
-                # send frame to apriltag detector
-                try:
-                    if self.stat.pending_frames_in_pool < 60:
+                    fr = av_frame.to_ndarray(format='rgb24')
+                    with self.new_frame_condition:
+                        self.frame = fr
+                        self.new_frame_condition.notify()
 
-                        # perform a full scan 1/s
-                        if time.time() > next_full_scan:
-                            next_full_scan = time.time() + 1
-                            self.stat.pending_frames_in_pool += 1
-                            
-                            self.pool.apply_async(
-                                locate_markers,
-                                (self.frame, camera_cal, None),
-                                callback=partial(self.handle_detections, timestamp=timestamp),
-                                error_callback=error_callback_func
-                            )
+                    # save information about stream latency and framerate
+                    now = time.time()
+                    self.stat.latency.append(now - timestamp)
+                    fr = 1/(now - last_time)
+                    self.stat.framerate.append(fr)
+                    last_time = now
+
+                    # send frame to apriltag detector
+                    try:
+                        if self.stat.pending_frames_in_pool < 60:
+
+                            # perform a full scan 1/s
+                            if time.time() > next_full_scan:
+                                next_full_scan = time.time() + 1
+                                self.stat.pending_frames_in_pool += 1
+
+                                self.pool.apply_async(
+                                    locate_markers,
+                                    (self.frame, camera_cal, None),
+                                    callback=partial(self.handle_detections, timestamp=timestamp),
+                                    error_callback=error_callback_func
+                                )
+                            else:
+                                # otherwise, send only small cropped areas to the pool for detection
+                                crops_data = []
+                                for tag_name, (cx, cy) in self.last_known_centers.items():
+                                    x1 = max(0, int(cx - 64))
+                                    y1 = max(0, int(cy - 64))
+                                    x2 = min(self.frame.shape[1], int(cx + 64))
+                                    y2 = min(self.frame.shape[0], int(cy + 64))
+
+                                    # Calling .copy() severs the slice from the base array memory,
+                                    # guaranteeing that pickle only sends the few kilobytes of the crop over IPC.
+                                    crops_data.append({
+                                        'crop': self.frame[y1:y2, x1:x2].copy(),
+                                        'x1': x1,
+                                        'y1': y1,
+                                        'name': tag_name
+                                    })
+
+                                self.stat.pending_frames_in_pool += 1
+                                self.pool.apply_async(
+                                    locate_markers,
+                                    (None, camera_cal, crops_data),
+                                    callback=partial(self.handle_detections, timestamp=timestamp),
+                                    error_callback=error_callback_func
+                                )
+
                         else:
-                            # otherwise, send only small cropped areas to the pool for detection
-                            crops_data = []
-                            for tag_name, (cx, cy) in self.last_known_centers.items():
-                                x1 = max(0, int(cx - 64))
-                                y1 = max(0, int(cy - 64))
-                                x2 = min(self.frame.shape[1], int(cx + 64))
-                                y2 = min(self.frame.shape[0], int(cy + 64))
-                                
-                                # Calling .copy() severs the slice from the base array memory, 
-                                # guaranteeing that pickle only sends the few kilobytes of the crop over IPC.
-                                crops_data.append({
-                                    'crop': self.frame[y1:y2, x1:x2].copy(),
-                                    'x1': x1,
-                                    'y1': y1,
-                                    'name': tag_name
-                                })
-                                
-                            self.stat.pending_frames_in_pool += 1
-                            self.pool.apply_async(
-                                locate_markers,
-                                (None, camera_cal, crops_data),
-                                callback=partial(self.handle_detections, timestamp=timestamp),
-                                error_callback=error_callback_func
-                            )
+                            pass
+                            # print(f'Dropping frame because there are already too many pending.')
+                            # TODO record fraction of frames which are dropped in stat collector
+                    except ValueError:
+                        pool_stopped = True
+                        break # the pool is not running
 
-                    else:
-                        pass
-                        # print(f'Dropping frame because there are already too many pending.')
-                        # TODO record fraction of frames which are dropped in stat collector
-                except ValueError:
-                    break # the pool is not running
+                    # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
+                    # handle_detections runs in this process, but in a thread managed by the pool.
+                    time.sleep(0.005)
 
-                # sleep is mandatory or this thread could prevent self.handle_detections from running and fill up the pool with work.
-                # handle_detections runs in this process, but in a thread managed by the pool.
-                time.sleep(0.005)
+                if pool_stopped:
+                    break
 
             if encoder_thread is not None:
                 encoder_thread.join()
@@ -250,7 +272,7 @@ class ComponentClient:
             final_fps = 60
         else:   
             final_shape = (1920, 1080)  # don't resize
-            final_fps = 10
+            final_fps = 20
 
         path = f'stringman/{self.config.robot_id}/{feed_number}'
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
@@ -274,8 +296,16 @@ class ComponentClient:
             mjpeg_port=mjpegport, stream_path=path,
             telemetry_env=self.telemetry_env, on_ready=on_ready,
             bind_address=getattr(self.ob, 'bind_address', '127.0.0.1'),
+            # This stream is backed by the component's own hardware H264 encoder (see
+            # receive_video()'s demux loop), so the RTMP remote can be fed the original
+            # compressed bytes directly instead of decoding and re-encoding them.
+            passthrough=True,
         )
         vs.start()
+        # Exposed so receive_video()'s demux loop can forward each packet's original
+        # compressed bytes straight to vs.send_packet() (RTMP passthrough) without
+        # waiting on this thread.
+        self.video_streamer = vs
         logger.info(f'Streaming video locally at {vs.local_uri} with res {final_shape}')
         self.streaming_active = True
 
@@ -305,6 +335,7 @@ class ComponentClient:
 
         self.remote_stream_path = None
         self.local_video_uri = None
+        self.video_streamer = None
         vs.stop()
 
     def process_frame(self, frame_to_encode):
