@@ -332,6 +332,22 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             residuals.extend(tilt_res)
             cost_anchor_tilt += np.sum(tilt_res**2)
 
+    # Always compute the named cost breakdown (not just under debug) so callers can use it
+    # as a fitness score for this parameter vector, e.g. to detect a regression between
+    # calibration attempts. Kept as raw sum-of-squares per category, matching what debug
+    # printing has always reported.
+    costs = {
+        'origin_consistency': cost_origin,
+        'diamond_planarity': cost_diamond_planar,
+        'diamond_distances': cost_diamond_dist,
+        'gripper_cards': cost_gripper,
+        'shape_match': cost_shape_match,
+        'eyelet_reg': cost_eyelet_reg,
+    }
+    if fixed_anchor_poses is None:
+        costs['anchor_planarity'] = cost_planar
+        costs['anchor_tilt'] = cost_anchor_tilt
+
     if debug:
         lines = [
             "--- Residual Costs ---",
@@ -350,7 +366,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         ]
         logger.info("\n".join(lines))
 
-    return np.array(residuals)
+    return np.array(residuals), costs
 
 def floor_align_origin(anchor_poses, eyelet_positions, raw_obs, cam_tilts=(22, 22)):
     """
@@ -455,7 +471,11 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
         fixed_anchor_poses: (2, 2, 3) numpy array. If provided, anchor poses are frozen and only eyelets are optimized.
     
     Returns:
-        tuple: (optimized_anchor_poses, optimized_eyelet_positions)
+        tuple: (optimized_anchor_poses, optimized_eyelet_positions, floor_z, fit_info)
+        fit_info: {'total_cost': float, 'costs': {category: float, ...}, 'converged': bool, 'nfev': int|None}.
+            total_cost is the same weighted sum-of-squares the optimizer minimized (lower is
+            better), computed identically every call, so it's directly comparable across
+            calibration attempts to catch a regression.
     """
     if diamond_observations is None:
         diamond_observations = {}
@@ -515,7 +535,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     best = {'x': np.array(x0, dtype=float), 'cost': np.inf}
 
     def residuals_with_deadline(x, *resid_args):
-        r = multi_card_residuals(x, *resid_args)
+        r, _ = multi_card_residuals(x, *resid_args)
         cost = float(np.dot(r, r))
         if cost < best['cost']:
             best['cost'] = cost
@@ -524,6 +544,8 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
             raise _OptTimeout()
         return r
 
+    converged = False
+    nfev = None
     try:
         result = optimize.least_squares(
             residuals_with_deadline,
@@ -534,15 +556,25 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
             max_nfev=500,
         )
         result_x = result.x
+        converged = bool(result.success)
+        nfev = result.nfev
         if not result.success:
             logger.warning(f"Optimization did not converge (status {result.status}: {result.message}); using best point found.")
     except _OptTimeout:
         logger.warning(f"Optimization exceeded {time_budget_s:.0f}s budget; using best point found (cost={best['cost']:.4f}).")
         result_x = best['x']
 
-    # Run one final time with debug=True to print the cost distribution
+    # Run one final time with debug=True to print the cost distribution, and keep the named
+    # cost breakdown as this pass's fitness score (lower is better; same formula every call,
+    # so it's directly comparable across calibration attempts).
     logger.info("Final Optimization Costs:")
-    multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs)
+    _, costs = multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs)
+    fit_info = {
+        'total_cost': float(sum(costs.values())),
+        'costs': costs,
+        'converged': converged,
+        'nfev': nfev,
+    }
 
     # Reshape back to distinct structures based on the freeze flag
     if fixed_anchor_poses is not None:
@@ -561,7 +593,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     )
     logger.debug(f'Floor Z = {floor_z}') # negative meaning that the actual floor is below the origin card.
 
-    return optimized_anchors, optimized_eyelets, floor_z
+    return optimized_anchors, optimized_eyelets, floor_z, fit_info
 
 
 def analyze_diamond_data(diamond_observations, anchor_poses, cam_tilts=(22, 22)):

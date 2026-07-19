@@ -39,8 +39,9 @@ changed.
 
 ### Recording across two LAN machines (no cloud relay)
 
-Recording quality suffers if the CPU is fully loaded. You can split that load across two machines on the same
-LAN: run `stringman-headless` on one (the robot host) and `stringman_lerobot record` on
+Recording quality suffers if the CPU is fully loaded. You can split that load across two machines on the same LAN, but they must have about a 0.3Gbps link between them. In other words, wired ethernet. Wifi has proven to be insuficient in average conditions.
+
+run `stringman-headless` on one (the robot host) and `stringman_lerobot record` on
 another, with **no cloud relay** in between.
 
 By default `stringman-headless` binds both its telemetry websocket (port 4245) and all of

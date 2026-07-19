@@ -2064,6 +2064,24 @@ class AsyncObserver:
             await asyncio.sleep(0.25)
         self.slow_stop_all_spools()
 
+    # A pass's fitness is its optimize_arp_anchors fit_info['total_cost']: the same weighted
+    # sum-of-squares residual cost the optimizer itself minimizes (see multi_card_residuals in
+    # eyelet_calibration.py), computed identically every call so it's directly comparable across
+    # attempts. Lower is better. Warn if a pass costs more than this fraction above the best
+    # (lowest) cost ever recorded for that pass name.
+    CALIBRATION_FITNESS_REGRESSION_TOLERANCE = 0.15
+
+    def _flush_calibration_diagnostics(self):
+        """Write self._calibration_diagnostics to calibration_diagnostics.pkl.
+
+        Writes to a temp file and renames over the target so a crash or hard kill mid-write
+        can never corrupt/truncate the previously-flushed passes still sitting in the file.
+        """
+        tmp_path = 'calibration_diagnostics.pkl.tmp'
+        with open(tmp_path, 'wb') as f:
+            pickle.dump(self._calibration_diagnostics, f)
+        os.replace(tmp_path, 'calibration_diagnostics.pkl')
+
     def _record_calibration_diagnostics(self, pass_name, func, args):
         """Append one optimize_arp_anchors call's bound arguments to the running
         calibration diagnostics list and flush the whole list to a single pickle file.
@@ -2080,16 +2098,59 @@ class AsyncObserver:
             'timestamp': time.time(),
             'args': dict(bound.arguments),
         })
-        # Write to a temp file and rename over the target so a crash or hard kill mid-write
-        # can never corrupt/truncate the previously-flushed passes still sitting in the file.
-        tmp_path = 'calibration_diagnostics.pkl.tmp'
-        with open(tmp_path, 'wb') as f:
-            pickle.dump(self._calibration_diagnostics, f)
-        os.replace(tmp_path, 'calibration_diagnostics.pkl')
+        self._flush_calibration_diagnostics()
         logger.info(
             f'Saved calibration diagnostics for {pass_name} '
             f'({len(self._calibration_diagnostics)} pass(es) so far) to calibration_diagnostics.pkl'
         )
+
+    def _record_calibration_fitness(self, pass_name, fit_info):
+        """Attach fit_info to this pass's diagnostics record, and compare its total_cost
+        against the best (lowest) cost ever recorded for this pass name, so a regression is
+        flagged live instead of only being visible from an offline pickle analysis.
+
+        History of the best/last cost per pass persists across runs in
+        calibration_fitness_history.json (survives process restarts, unlike
+        self._calibration_diagnostics which is cleared at the start of every run).
+        """
+        for record in reversed(self._calibration_diagnostics):
+            if record['pass'] == pass_name:
+                record['fit_info'] = fit_info
+                break
+        self._flush_calibration_diagnostics()
+
+        history_path = 'calibration_fitness_history.json'
+        try:
+            with open(history_path, 'r') as f:
+                history = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            history = {}
+
+        cost = fit_info['total_cost']
+        now = time.time()
+        entry = history.get(pass_name)
+
+        if entry is not None and cost > entry['best_cost'] * (1 + self.CALIBRATION_FITNESS_REGRESSION_TOLERANCE):
+            msg = (
+                f"Calibration {pass_name} fitness regressed: cost={cost:.4f} vs best-known "
+                f"{entry['best_cost']:.4f} (recorded {time.ctime(entry['best_timestamp'])})"
+            )
+            logger.warning(msg)
+            self.send_ui(pop_message=telemetry.Popup(message=msg))
+        else:
+            best_desc = f"best-known {entry['best_cost']:.4f}" if entry else "first recorded attempt"
+            logger.info(f'Calibration {pass_name} fitness: cost={cost:.4f} ({best_desc})')
+
+        if entry is None or cost < entry['best_cost']:
+            entry = {**(entry or {}), 'best_cost': cost, 'best_timestamp': now}
+        entry['last_cost'] = cost
+        entry['last_timestamp'] = now
+        history[pass_name] = entry
+
+        tmp_path = history_path + '.tmp'
+        with open(tmp_path, 'w') as f:
+            json.dump(history, f, indent=2)
+        os.replace(tmp_path, history_path)
 
     async def full_auto_calibration(self):
         """Automatically determine anchor poses and zero angles
@@ -2167,7 +2228,9 @@ class AsyncObserver:
                 if self.rec_diagnostics:
                     self._record_calibration_diagnostics('anchors_pass1', optimize_arp_anchors, pass1_args)
                 async_result = self.pool.apply_async(optimize_arp_anchors, pass1_args)
-                anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=30)
+                anchor_poses, eyelet_positions, floor_z, fit_info = async_result.get(timeout=30)
+                if self.rec_diagnostics:
+                    self._record_calibration_fitness('anchors_pass1', fit_info)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
                 self.save_poses_arp(anchor_poses, eyelet_positions)
@@ -2226,7 +2289,9 @@ class AsyncObserver:
                 if self.rec_diagnostics:
                     self._record_calibration_diagnostics('anchors_pass2', optimize_arp_anchors, pass2_args)
                 async_result = self.pool.apply_async(optimize_arp_anchors, pass2_args)
-                anchor_poses, eyelet_positions, floor_z = async_result.get(timeout=60)
+                anchor_poses, eyelet_positions, floor_z, fit_info = async_result.get(timeout=60)
+                if self.rec_diagnostics:
+                    self._record_calibration_fitness('anchors_pass2', fit_info)
                 logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
                 self.save_poses_arp(anchor_poses, eyelet_positions)
@@ -2354,7 +2419,9 @@ class AsyncObserver:
                     if self.rec_diagnostics:
                         self._record_calibration_diagnostics('anchors_pass3', optimize_arp_anchors, args)
                     async_result = self.pool.apply_async(optimize_arp_anchors, args)
-                    refined_anchors, refined_eyelets, refined_floor_z = async_result.get(timeout=60)
+                    refined_anchors, refined_eyelets, refined_floor_z, fit_info = async_result.get(timeout=60)
+                    if self.rec_diagnostics:
+                        self._record_calibration_fitness('anchors_pass3', fit_info)
                     if refined_anchors is not None:
                         anchor_poses, eyelet_positions, floor_z = refined_anchors, refined_eyelets, refined_floor_z
                         logger.info(f'Refined with gripper card views:\nanchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
