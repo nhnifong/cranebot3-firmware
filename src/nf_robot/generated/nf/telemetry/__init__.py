@@ -865,6 +865,17 @@ class VideoReady(betterproto2.Message):
     0: gripper, 1: first preferred anchor, 2: 2nd preferred anchor, 3: reprojected floor image
     """
 
+    compressed_uri: "str | None" = betterproto2.field(
+        6, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    tcp://host:port of the raw compressed-passthrough broadcast (see CompressedStreamer),
+    for LAN/same-machine consumers (e.g. a lerobot recording process) that want the
+    original video quality without a JPEG re-encode. Only set when stringman-headless was
+    started with a non-default --bind_address, since that's the only time this streamer
+    runs. UIs should keep using local_uri; this is for non-browser consumers.
+    """
+
 
 default_message_pool.register_message("nf.telemetry", "VideoReady", VideoReady)
 

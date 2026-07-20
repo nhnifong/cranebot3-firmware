@@ -18,7 +18,7 @@ def generate_orthographic_floor_maps(
     to a top-down orthographic floor space projection using analytical homography.
     
     Args:
-        valid_anchor_clients: List of camera clients containing .last_frame_resized and .camera_pose
+        valid_anchor_clients: List of camera clients containing .last_output_frame and .camera_pose
         heatmaps_np: List/array of numpy heatmaps corresponding to the clients, or
             None to skip the heatmap channel entirely (returns combined_heatmap=None).
         camera_cal: Camera calibration data to pass into projection
@@ -46,7 +46,7 @@ def generate_orthographic_floor_maps(
     orig_h = camera_cal.resolution.height
     
     for i, client in enumerate(valid_anchor_clients):
-        bgr_image = client.last_frame_resized
+        bgr_image = client.last_output_frame
 
         h, w = bgr_image.shape[:2]
         

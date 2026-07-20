@@ -2496,7 +2496,7 @@ class AsyncObserver:
         """Calibration of the relationship between the wrist and the room frame of reference.
         Must be done over the origin card.
         """
-        if self.gripper_client.last_frame_resized is None:
+        if self.gripper_client.last_output_frame is None:
             logger.warning('Cannot calibrate the relationship between gripper zero angle and camera if gripper camera is offline!')
             return None
 
@@ -2533,7 +2533,7 @@ class AsyncObserver:
             while origin_card_pose[0] is None and time.time() < end_time:
                 async_result = self.pool.apply_async(
                     locate_markers_gripper,
-                    (self.gripper_client.last_frame_resized, self.config.camera_cal_wide),
+                    (self.gripper_client.last_output_frame, self.config.camera_cal_wide),
                     callback=partial(special_handle_det, time.time()))
                 detections = async_result.get(timeout=5)
         except Exception as e:
@@ -3819,7 +3819,7 @@ class AsyncObserver:
 
     def _ortho_worker(self, ortho_floor_vs, heatmap_floor_vs):
         """
-        Sync thread driven by self.ortho_event, which anchor frame_resizer_loops set on every
+        Sync thread driven by self.ortho_event, which anchor stream_video_loops set on every
         new processed frame.  Projects all anchor views onto the floor and stores the result so
         the AI task can read it without re-running the projection.
         """
@@ -3832,7 +3832,7 @@ class AsyncObserver:
             try:
                 valid_clients = [
                     c for c in list(self.anchors.values())
-                    if c.last_frame_resized is not None and c.anchor_num in self.config.preferred_cameras
+                    if c.last_output_frame is not None and c.anchor_num in self.config.preferred_cameras
                 ]
                 if not valid_clients:
                     continue
@@ -3876,9 +3876,9 @@ class AsyncObserver:
         while True:
             await asyncio.sleep(1)
             have_frames = (
-                (self.gripper_client is not None and self.gripper_client.last_frame_resized is not None)
+                (self.gripper_client is not None and self.gripper_client.last_output_frame is not None)
                 or any(
-                    anum in self.config.preferred_cameras and c.last_frame_resized is not None
+                    anum in self.config.preferred_cameras and c.last_output_frame is not None
                     for anum, c in self.anchors.items()
                 )
             )
@@ -3949,13 +3949,13 @@ class AsyncObserver:
 
             valid_anchor_clients = [
                 c for c in self.anchors.values()
-                if c.last_frame_resized is not None and c.anchor_num in self.config.preferred_cameras
+                if c.last_output_frame is not None and c.anchor_num in self.config.preferred_cameras
             ]
             if not valid_anchor_clients:
                 continue
 
             img_tensors = [
-                torch.from_numpy(cv2.resize(c.last_frame_resized, HM_IMAGE_RES, interpolation=cv2.INTER_AREA))
+                torch.from_numpy(cv2.resize(c.last_output_frame, HM_IMAGE_RES, interpolation=cv2.INTER_AREA))
                      .permute(2, 0, 1).float() / 255.0
                 for c in valid_anchor_clients
             ]
@@ -4559,9 +4559,9 @@ class AsyncObserver:
     async def collect_images(self):
         """Collects data for the centering network"""
         while self.run_command_loop and self.run_collect_images:
-            if self.gripper_client.last_frame_resized is not None:
-                logger.debug(f'Gripper frame shape: {self.gripper_client.last_frame_resized.shape}')
-                rgb_image = cv2.cvtColor(self.gripper_client.last_frame_resized, cv2.COLOR_BGR2RGB)
+            if self.gripper_client.last_output_frame is not None:
+                logger.debug(f'Gripper frame shape: {self.gripper_client.last_output_frame.shape}')
+                rgb_image = cv2.cvtColor(self.gripper_client.last_output_frame, cv2.COLOR_BGR2RGB)
                 capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
             else:
                 logger.debug('No resized frame available from gripper')

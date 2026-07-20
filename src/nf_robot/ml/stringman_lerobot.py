@@ -426,6 +426,14 @@ class StringmanLeRobot(Robot):
             else:
                 host = 'media.neufangled.com:8554'
             url = f"rtsp://{host}/{item.stream_path}?ticket={self.remote_stream_token}{staging}"
+        elif item.compressed_uri:
+            # The original compressed bytes, broadcast raw over TCP (see CompressedStreamer) --
+            # only advertised when the host was started with a non-default --bind_address, i.e.
+            # reachable from this machine. Prefer it over local_uri: same video, no JPEG
+            # re-encode generation loss, far less bandwidth. UIs still use local_uri (MJPEG) for
+            # its low latency in the browser; this path is for non-browser consumers like this
+            # recorder, which just need decoded frames and don't care which wire format got them there.
+            url = item.compressed_uri
         elif item.local_uri is not None:
             url = item.local_uri
 

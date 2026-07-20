@@ -65,7 +65,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         self.mock_gripper_client.shutdown = self.event_shutdown
         self.mock_gripper_client.slow_stop_spool = self.instant_nothing
         self.mock_gripper_client.connection_established_event = asyncio.Event()
-        self.mock_gripper_client.last_frame_resized = None
+        self.mock_gripper_client.last_output_frame = None
         self.mock_gripper_client.connected = False
         self.mock_gripper_client.address = '127.0.0.1'
 
@@ -79,7 +79,7 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
             client.slow_stop_spool = self.instant_nothing
             client.anchor_num = i
             client.address = '127.0.0.1'
-            client.last_frame_resized = None
+            client.last_output_frame = None
             client.connected = False
 
         self.async_service_browser_mock = MagicMock()

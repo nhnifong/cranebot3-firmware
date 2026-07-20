@@ -74,15 +74,15 @@ class ComponentClient:
         self.local_video_uri = None
         self.feed_number = None
         self.remote_stream_path = None
-        # the active NfVideoStreamer, set by frame_resizer_loop while it's running (None
+        # the active NfVideoStreamer, set by stream_video_loop while it's running (None
         # otherwise); receive_video()'s demux loop forwards raw packet bytes through it.
         self.video_streamer = None
 
-        # things used by jpeg/resizing thread
+        # things used by the video streaming thread
         self.frame_lock = threading.Lock()
         # This condition variable signals the worker when a new frame is ready
         self.new_frame_condition = threading.Condition(self.frame_lock)
-        self.last_frame_resized = None
+        self.last_output_frame = None
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
@@ -129,12 +129,12 @@ class ComponentClient:
             stream = next(s for s in container.streams if s.type == 'video')
             stream.thread_type = "SLICE"
 
-            # start thread for frame risize and forwarding
-            encoder_thread = None
+            # start thread for streaming and forwarding frames
+            streaming_thread = None
             components_to_stream = [None, *self.config.preferred_cameras]
             if self.anchor_num in components_to_stream:
-                encoder_thread = threading.Thread(target=self.frame_resizer_loop, kwargs={"feed_number": components_to_stream.index(self.anchor_num)}, daemon=True)
-                encoder_thread.start()
+                streaming_thread = threading.Thread(target=self.stream_video_loop, kwargs={"feed_number": components_to_stream.index(self.anchor_num)}, daemon=True)
+                streaming_thread.start()
 
             self.conn_status.video_status = telemetry.ConnStatus.CONNECTED
             self.notify_video = True
@@ -147,12 +147,10 @@ class ComponentClient:
                 logger.error(f"Error in pool worker: {error}")
 
             # Demux (not decode) so we can grab each packet's original compressed bytes
-            # before decoding it. bytes(packet) is the same H264 NAL data the component's
-            # hardware encoder already produced -- forwarding it untouched to any RTMP
-            # remote (see frame_resizer_loop/NfVideoStreamer.send_packet) avoids decoding
-            # it here just to re-encode it again in software for that path. The CV/UI/
-            # lerobot paths below are unaffected: they still get decoded frames exactly as
-            # before, from the same packets.
+            # before decoding it. bytes(packet) is the same H264 video that was hardware
+            # encoded on the pi. re-using it where possible saves resources and reduces latency.
+            # mjpeg streamer is still around for the UI, for which mjpeg is still the only low
+            # latency option.
             for packet in container.demux(stream):
                 if not self.connected:
                     break
@@ -160,7 +158,7 @@ class ComponentClient:
                     continue  # flush packet at stream end, not real data
 
                 if self.video_streamer is not None:
-                    self.video_streamer.send_packet(bytes(packet))
+                    self.video_streamer.send_packet(bytes(packet), packet.is_keyframe)
 
                 pool_stopped = False
                 for av_frame in packet.decode():
@@ -236,8 +234,8 @@ class ComponentClient:
                 if pool_stopped:
                     break
 
-            if encoder_thread is not None:
-                encoder_thread.join()
+            if streaming_thread is not None:
+                streaming_thread.join()
 
         except (av.error.TimeoutError, av.error.ConnectionRefusedError):
             logger.warning('No video stream available')
@@ -249,33 +247,34 @@ class ComponentClient:
             if 'container' in locals():
                 container.close()
 
-    def frame_resizer_loop(self, feed_number):
+    def stream_video_loop(self, feed_number):
         """
-        This runs in a dedicated thread. It waits for a signal that a new
-        frame is available, resizes it, and stabilizes it in the gripper case.
-        The the frame is written to an ffmpeg subprocess that is sending the video
-        to the ui over UDP or RTMP depending on where it is.
+        This runs in a dedicated thread. It waits for a signal that a new frame is
+        available, runs it through process_frame (a hardware-specific hook subclasses may
+        override, e.g. the gripper's IMU-based stabilization; most hardware just passes the
+        frame through untouched now that components capture video at exactly the resolution
+        each consumer needs), and forwards the result to the local MJPEG stream, the RTMP
+        remote, and the LAN compressed-passthrough broadcast, whichever are configured.
 
-        The purpose of this method is to have a frame ready to send as fast as possible,
-        As well as to present resized frames for inference networks to use.
-
-        For the sake of performance, the UIs are made to consume a resolution identcal to the models,
-        but if they needed to be different, we could just to two different resize ops.
-
-        Numpy functions such as those used by cv2.resize actually release the GIL
-        which is why this is a thread not a task (main loop can run faster this way)
+        Numpy/cv2 functions release the GIL, which is why this is a thread rather than a
+        task (the main loop can keep running while this one works).
 
         feed_number identifies which of the preferred cameras this is. 0 is the gripper, 1 and 2 are the two overhead cams.
         """
-        if self.anchor_num is None:
-            final_shape = SF_TARGET_SHAPE # resize for centering network input
-            final_fps = 60
-        else:   
-            final_shape = (1920, 1080)  # don't resize
-            final_fps = 20
-
         path = f'stringman/{self.config.robot_id}/{feed_number}'
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
+
+        bind_address = getattr(self.ob, 'bind_address', '127.0.0.1')
+        # The compressed-passthrough broadcast is only useful to consumers off this
+        # machine (e.g. a lerobot recorder elsewhere on the LAN); with the default loopback
+        # bind, nothing outside this machine could reach it anyway, so don't bother running
+        # it. --bind_address must be explicitly set to something else to opt in.
+        if bind_address != '127.0.0.1':
+            # A separate port range for the broadcast (see CompressedStreamer): same offset
+            # from mjpegport for every feed, so it's easy to find the pair for a given stream.
+            compressedport = mjpegport + 100
+        else:
+            compressedport = None
 
         def on_ready(local_uri, stream_path):
             self.local_video_uri = local_uri
@@ -287,26 +286,32 @@ class ComponentClient:
                 local_uri=local_uri,
                 stream_path=stream_path,
                 feed_number=feed_number,
+                compressed_uri=vs.compressed_uri,
             )
             logger.info(f'Sending video ready {t}')
             self.ob.send_ui(video_ready=t)
 
         vs = NfVideoStreamer(
-            width=final_shape[0], height=final_shape[1], fps=final_fps,
+            # width/height/fps only matter for NfVideoStreamer's non-passthrough (encode)
+            # mode; this stream is always passthrough=True, so they're unused here.
+            width=0, height=0, fps=0,
             mjpeg_port=mjpegport, stream_path=path,
             telemetry_env=self.telemetry_env, on_ready=on_ready,
-            bind_address=getattr(self.ob, 'bind_address', '127.0.0.1'),
+            bind_address=bind_address,
             # This stream is backed by the component's own hardware H264 encoder (see
-            # receive_video()'s demux loop), so the RTMP remote can be fed the original
-            # compressed bytes directly instead of decoding and re-encoding them.
+            # receive_video()'s demux loop), so the RTMP remote and the LAN compressed
+            # broadcast can both be fed the original compressed bytes directly instead of
+            # decoding and re-encoding them.
             passthrough=True,
+            compressed_port=compressedport,
         )
         vs.start()
         # Exposed so receive_video()'s demux loop can forward each packet's original
-        # compressed bytes straight to vs.send_packet() (RTMP passthrough) without
+        # compressed bytes straight to vs.send_packet() (RTMP + LAN passthrough) without
         # waiting on this thread.
         self.video_streamer = vs
-        logger.info(f'Streaming video locally at {vs.local_uri} with res {final_shape}')
+        logger.info(f'Streaming video locally at {vs.local_uri}, '
+                    f'compressed passthrough at {vs.compressed_uri}')
         self.streaming_active = True
 
         while self.connected:
@@ -326,11 +331,11 @@ class ComponentClient:
 
             # Do the actual work outside the lock
             # This lets the receive_video loop add the next frame without waiting for the encode.
-            self.last_frame_resized = self.process_frame(frame_to_encode)
+            self.last_output_frame = self.process_frame(frame_to_encode)
             ortho_event = getattr(self.ob, 'ortho_event', None)
             if ortho_event is not None:
                 ortho_event.set()
-            rgb = cv2.cvtColor(self.last_frame_resized, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(self.last_output_frame, cv2.COLOR_BGR2RGB)
             vs.send_frame(rgb)
 
         self.remote_stream_path = None
@@ -340,11 +345,14 @@ class ComponentClient:
 
     def process_frame(self, frame_to_encode):
         """
-        Subclasses should override this function to resize or stabilize frames based on specific hardware constants
-        the returned frame will be what is used for inference and sent to any teleoperation pipelines.
-        Runs in a seperate thread from the main client.
+        Identity by default: components now capture video at exactly the resolution each
+        consumer needs, so no generic resize belongs here. Subclasses may still override
+        this for genuine hardware-specific per-frame processing that isn't just resizing,
+        e.g. the gripper's IMU-based stabilization (see gripper_client.py). The returned
+        frame is what is used for inference and sent to any teleoperation pipelines.
+        Runs in a separate thread from the main client.
         """
-        return cv2.resize(frame_to_encode, (960, 544))
+        return frame_to_encode
 
     async def connect_websocket(self):
         # main client loop

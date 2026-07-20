@@ -45,9 +45,9 @@ def _make_events():
     }
 
 
-def _make_robot(camera_mode="all"):
+def _make_robot(camera_mode="all", remote_stream_token=None):
     """Instantiate StringmanLeRobot without connecting."""
-    cfg = StringmanConfig(uri="ws://localhost:4245", camera_mode=camera_mode)
+    cfg = StringmanConfig(uri="ws://localhost:4245", camera_mode=camera_mode, remote_stream_token=remote_stream_token)
     return StringmanLeRobot(cfg, _make_events())
 
 
@@ -353,11 +353,13 @@ class TestGetObservation(unittest.TestCase):
 
 class TestHandleVideoReady(unittest.TestCase):
 
-    def _video_ready_item(self, feed_num, local_uri="rtsp://localhost:8554/stream"):
+    def _video_ready_item(self, feed_num, local_uri="rtsp://localhost:8554/stream",
+                           compressed_uri=None, stream_path=None):
         item = Mock()
         item.feed_number = feed_num
         item.local_uri = local_uri
-        item.stream_path = None
+        item.compressed_uri = compressed_uri
+        item.stream_path = stream_path
         return item
 
     def test_unknown_feed_is_ignored(self):
@@ -400,6 +402,48 @@ class TestHandleVideoReady(unittest.TestCase):
                 item = self._video_ready_item(feed_num=feed)
                 robot._handle_video_ready(item)
         self.assertEqual(set(robot.video_threads.keys()), {0, 1, 2, 3})
+
+    def _connect_and_get_stream_url(self, robot, item):
+        """Runs _handle_video_ready and returns the stream_url its background thread was
+        started with, joining the thread first so the (mocked, near-instant) target has
+        actually run before we inspect its call args."""
+        with patch.object(robot, "_video_stream_loop") as mock_loop:
+            robot._handle_video_ready(item)
+            robot.video_threads[item.feed_number].join(timeout=2)
+        return mock_loop.call_args[0][0]
+
+    def test_prefers_compressed_uri_over_local_uri(self):
+        """compressed_uri (LAN raw-passthrough broadcast) should win over local_uri (MJPEG)
+        when both are present -- same video, no re-encode, far less bandwidth."""
+        robot = _make_robot("gripper_384")
+        item = self._video_ready_item(
+            feed_num=0, local_uri="http://host:4246/stream.mjpeg", compressed_uri="tcp://host:4346"
+        )
+        stream_url = self._connect_and_get_stream_url(robot, item)
+        self.assertEqual(stream_url, "tcp://host:4346")
+
+    def test_falls_back_to_local_uri_when_compressed_uri_absent(self):
+        """The common case: stringman-headless started with the default loopback
+        --bind_address, so compressed_uri is never set (see anchor_client.py)."""
+        robot = _make_robot("gripper_384")
+        item = self._video_ready_item(
+            feed_num=0, local_uri="http://host:4246/stream.mjpeg", compressed_uri=None
+        )
+        stream_url = self._connect_and_get_stream_url(robot, item)
+        self.assertEqual(stream_url, "http://host:4246/stream.mjpeg")
+
+    def test_remote_stream_token_takes_priority_over_compressed_uri(self):
+        """The cloud RTSP-via-relay path (remote_stream_token set) must win even if a
+        compressed_uri happens to also be present -- compressed_uri is only ever set for a
+        LAN-direct connection, never the cloud relay scenario, but the selection logic
+        should still prefer the token path first regardless."""
+        robot = _make_robot("gripper_384", remote_stream_token="tok")
+        item = self._video_ready_item(
+            feed_num=0, local_uri="http://host:4246/stream.mjpeg",
+            compressed_uri="tcp://host:4346", stream_path="stringman/lan/0",
+        )
+        stream_url = self._connect_and_get_stream_url(robot, item)
+        self.assertTrue(stream_url.startswith("rtsp://"), stream_url)
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,8 @@ import time
 import logging
 import atexit
 import threading
+import socket
+import queue
 import numpy as np
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -139,6 +141,133 @@ class MjpegStreamer:
             h.shutdown()
             h.server_close()
             self.http_server = None
+
+class CompressedStreamer:
+    """
+    Broadcasts the original compressed video packets over a raw TCP socket to any number of
+    simultaneous LAN consumers (e.g. a lerobot recording process on the same machine or LAN),
+    without decoding or re-encoding them. Same broadcast intent as MjpegStreamer, but MJPEG
+    frames are each independently viewable so a new client can just start receiving whatever
+    frame comes next; compressed video packets depend on prior packets via GOP structure, so
+    a client that connects mid-stream needs to start at a keyframe. We keep the current GOP
+    (everything since, and including, the last keyframe) buffered and replay it to each newly
+    connected client before switching them over to the live broadcast.
+
+    Each client gets its own bounded queue and dedicated writer thread, so one slow or
+    stalled consumer can't block delivery to any other client, and can never block
+    send_packet() -- which is called from the hot receive_video() decode loop.
+
+    A client just needs to open this as a raw byte stream (e.g. PyAV's
+    av.open(f'tcp://{host}:{port}')); the bytes are the same Annex-B H264 the component's
+    hardware encoder produced, so standard format auto-detection recognizes it with no
+    special handling, the same way receive_video() already opens the component's own stream
+    without specifying a format.
+    """
+    QUEUE_MAXSIZE = 200  # packets; generous relative to one GOP so a brief stall doesn't drop a client
+
+    def __init__(self, port, bind_address="127.0.0.1"):
+        self.port = port
+        self.bind_address = bind_address
+        self.server_socket = None
+        self._accept_thread = None
+        self._running = False
+        # Guards _gop_buffer and _clients together: a client must be registered and given
+        # its GOP-backlog snapshot as one atomic step, or a packet sent by send_packet() in
+        # between could be silently missed (never in the backlog, never broadcast to it
+        # because it wasn't registered yet).
+        self._lock = threading.Lock()
+        self._gop_buffer = []  # packets since (and including) the last keyframe
+        self._clients = {}     # socket -> queue.Queue
+        atexit.register(self.stop)
+
+    def start(self):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind((self.bind_address, self.port))
+        self.server_socket.listen(8)
+        self.server_socket.settimeout(1.0)  # let _accept_loop notice self._running go False
+        self._running = True
+        self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self._accept_thread.start()
+
+    def _accept_loop(self):
+        while self._running:
+            try:
+                client_sock, _addr = self.server_socket.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break  # socket closed out from under us by stop()
+            client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            client_queue = queue.Queue(maxsize=self.QUEUE_MAXSIZE)
+            with self._lock:
+                for data in self._gop_buffer:
+                    client_queue.put_nowait(data)
+                self._clients[client_sock] = client_queue
+            writer_thread = threading.Thread(
+                target=self._client_writer, args=(client_sock, client_queue), daemon=True
+            )
+            writer_thread.start()
+
+    def _client_writer(self, client_sock, client_queue):
+        try:
+            while True:
+                data = client_queue.get()
+                if data is None:  # sentinel: stop() or a dropped client
+                    break
+                client_sock.sendall(data)
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            with self._lock:
+                self._clients.pop(client_sock, None)
+            try:
+                client_sock.close()
+            except OSError:
+                pass
+
+    def send_packet(self, data, is_keyframe):
+        """Broadcast one packet of already-compressed bytes to every connected client, and
+        fold it into the GOP backlog used to bootstrap the next client that connects."""
+        with self._lock:
+            if is_keyframe:
+                self._gop_buffer.clear()
+            self._gop_buffer.append(data)
+            queues = list(self._clients.values())
+
+        for client_queue in queues:
+            try:
+                client_queue.put_nowait(data)
+            except queue.Full:
+                # This client can't keep up. Ask its writer thread to stop rather than let
+                # the backlog grow unboundedly or block us; it can reconnect and resync at
+                # the next keyframe.
+                try:
+                    client_queue.put_nowait(None)
+                except queue.Full:
+                    pass
+
+    def stop(self):
+        self._running = False
+        if self.server_socket is not None:
+            try:
+                self.server_socket.close()
+            except OSError:
+                pass
+            self.server_socket = None
+        with self._lock:
+            clients = list(self._clients.items())
+            self._clients.clear()
+            self._gop_buffer.clear()
+        for client_sock, client_queue in clients:
+            try:
+                client_queue.put_nowait(None)
+            except queue.Full:
+                pass
+            try:
+                client_sock.close()
+            except OSError:
+                pass
 
 class RTMPStreamer:
     """
@@ -282,17 +411,25 @@ class RTMPStreamer:
 
 class NfVideoStreamer:
     """
-    Combines a local MjpegStreamer with an optional RTMP RTMPStreamer.
-    Calls on_ready(local_uri, stream_path) once after a warmup frame count
-    (2 frames when local-only, 20 when streaming to RTMP).
+    Combines a local MjpegStreamer with an optional RTMP RTMPStreamer and an optional
+    CompressedStreamer. Calls on_ready(local_uri, stream_path) once after a warmup frame
+    count (2 frames when local-only, 20 when streaming to RTMP).
 
-    passthrough=True feeds the RTMP remote (if any) via send_packet() with already-compressed
-    bytes instead of send_frame() with raw frames -- see RTMPStreamer for why. Only camera-
-    sourced streams (backed by a component's hardware encoder) can use this; anything that
-    synthesizes its own frames (e.g. the orthographic floor projection) must stick with the
-    default passthrough=False and feed send_frame().
+    passthrough=True feeds the RTMP remote (if any) and the CompressedStreamer (if any) via
+    send_packet() with already-compressed bytes instead of send_frame() with raw frames --
+    see RTMPStreamer/CompressedStreamer for why. Only camera-sourced streams (backed by a
+    component's hardware encoder) can use this; anything that synthesizes its own frames
+    (e.g. the orthographic floor projection) must stick with the default passthrough=False
+    and feed send_frame().
+
+    compressed_port, if given (only meaningful alongside passthrough=True), starts a
+    CompressedStreamer broadcasting the original compressed bytes over raw TCP -- for LAN/
+    same-machine consumers like a lerobot recording process, which need the original video
+    quality without the bandwidth and CPU cost of a JPEG re-encode. This is independent of
+    telemetry_env/RTMP: unlike the cloud relay, it needs no external media server, so it's
+    available in LAN mode too.
     """
-    def __init__(self, width, height, fps, mjpeg_port, stream_path, telemetry_env, on_ready=None, bind_address="127.0.0.1", passthrough=False):
+    def __init__(self, width, height, fps, mjpeg_port, stream_path, telemetry_env, on_ready=None, bind_address="127.0.0.1", passthrough=False, compressed_port=None):
         # The advertised host must match what the bind actually accepts: when bound to a
         # specific address, advertise that address; when bound to all interfaces, advertise
         # this host's LAN IP so off-machine clients can reach it.
@@ -301,6 +438,7 @@ class NfVideoStreamer:
         else:
             advertised_host = bind_address
         self._local_uri = f'http://{advertised_host}:{mjpeg_port}/stream.mjpeg'
+        self._compressed_uri = f'tcp://{advertised_host}:{compressed_port}' if compressed_port else None
         self._stream_path = stream_path
         self._on_ready = on_ready
         self._ready_sent = False
@@ -318,11 +456,16 @@ class NfVideoStreamer:
             raise ValueError(f"unusable value for telemetry_env {telemetry_env}")
 
         self._remote = RTMPStreamer(width=width, height=height, fps=fps, rtmp_url=rtmp, passthrough=passthrough) if rtmp else None
+        self._compressed = CompressedStreamer(port=compressed_port, bind_address=bind_address) if (passthrough and compressed_port) else None
         self._frames_before_ready = 2 if rtmp is None else 20
 
     @property
     def local_uri(self):
         return self._local_uri
+
+    @property
+    def compressed_uri(self):
+        return self._compressed_uri
 
     @property
     def stream_path(self):
@@ -332,6 +475,8 @@ class NfVideoStreamer:
         self._local.start()
         if self._remote:
             self._remote.start()
+        if self._compressed:
+            self._compressed.start()
         logger.info(f'Streaming locally at {self._local_uri}')
 
     def send_frame(self, frame):
@@ -346,19 +491,26 @@ class NfVideoStreamer:
             if self._on_ready:
                 self._on_ready(self._local_uri, self._stream_path)
 
-    def send_packet(self, data):
-        """Forward one packet of the original compressed bytes straight to the RTMP
-        remote (a stream-copy remux, no decode/re-encode). No-op unless this stream was
-        constructed with passthrough=True and has a remote configured. Independent of
-        send_frame(): the local MJPEG path always needs decoded/resized RGB frames, fed
-        separately from wherever the raw packets come from upstream."""
-        if self._remote and self._passthrough:
+    def send_packet(self, data, is_keyframe=False):
+        """Forward one packet of the original compressed bytes straight to the RTMP remote
+        (a stream-copy remux) and/or the CompressedStreamer (a raw TCP broadcast), whichever
+        are configured -- no decode/re-encode either way. No-op unless this stream was
+        constructed with passthrough=True. Independent of send_frame(): the local MJPEG
+        path always needs decoded/resized RGB frames, fed separately from wherever the raw
+        packets come from upstream."""
+        if not self._passthrough:
+            return
+        if self._remote:
             self._remote.send_packet(data)
+        if self._compressed:
+            self._compressed.send_packet(data, is_keyframe)
 
     def stop(self):
         self._local.stop()
         if self._remote:
             self._remote.stop()
+        if self._compressed:
+            self._compressed.stop()
 
 
 if __name__ == "__main__":

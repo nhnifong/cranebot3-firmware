@@ -173,3 +173,50 @@ class TestAnchorClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_abnormal_disconnect(self):
         """Confirm the client's startup() task would return True if the mock server disconnected with ConnectionClosedError"""
+
+
+class TestStreamVideoLoopCompressedPassthrough(unittest.TestCase):
+    """stream_video_loop should only stand up the CompressedStreamer (LAN raw-passthrough
+    broadcast) when stringman-headless was started with a non-default --bind_address --
+    with the default loopback bind, nothing off-machine could reach it anyway. Mocks
+    NfVideoStreamer so this runs without binding any real sockets or threads; sets
+    self.connected = False (ComponentClient's default) so stream_video_loop's `while
+    self.connected:` loop body never executes and the method returns right after
+    construction/start(), which is all this test needs to observe.
+    """
+
+    def _make_client(self, bind_address):
+        datastore = DataStore()
+        ob_mock = MagicMock()
+        ob_mock.config = create_default_config()
+        ob_mock.bind_address = bind_address
+        pool = Mock(spec=Pool).return_value
+        stat = StatCounter(ob_mock)
+        return RaspiAnchorClient("127.0.0.1", ws_port, 1, datastore, ob_mock, pool, stat, None), ob_mock
+
+    def test_default_bind_address_does_not_start_compressed_streamer(self):
+        client, ob_mock = self._make_client(bind_address="127.0.0.1")
+        with patch("nf_robot.host.anchor_client.NfVideoStreamer") as mock_nfvs:
+            client.stream_video_loop(feed_number=1)
+        self.assertIsNone(mock_nfvs.call_args.kwargs["compressed_port"])
+
+    def test_nondefault_bind_address_starts_compressed_streamer_on_expected_port(self):
+        client, ob_mock = self._make_client(bind_address="0.0.0.0")
+        with patch("nf_robot.host.anchor_client.NfVideoStreamer") as mock_nfvs:
+            client.stream_video_loop(feed_number=1)
+        # anchor_num=1 -> mjpegport = 4247 + 1 = 4248 -> compressedport = mjpegport + 100
+        self.assertEqual(mock_nfvs.call_args.kwargs["compressed_port"], 4348)
+
+    def test_video_ready_advertises_compressed_uri_from_the_streamer(self):
+        """on_ready builds the VideoReady message; its compressed_uri should reflect
+        whatever NfVideoStreamer actually ended up with, not be recomputed separately."""
+        client, ob_mock = self._make_client(bind_address="0.0.0.0")
+        with patch("nf_robot.host.anchor_client.NfVideoStreamer") as mock_nfvs:
+            mock_vs_instance = mock_nfvs.return_value
+            mock_vs_instance.compressed_uri = "tcp://192.168.1.50:4348"
+            client.stream_video_loop(feed_number=1)
+            on_ready = mock_nfvs.call_args.kwargs["on_ready"]
+            on_ready("http://192.168.1.50:4248/stream.mjpeg", "stringman/lan/1")
+
+        sent = ob_mock.send_ui.call_args.kwargs["video_ready"]
+        self.assertEqual(sent.compressed_uri, "tcp://192.168.1.50:4348")
