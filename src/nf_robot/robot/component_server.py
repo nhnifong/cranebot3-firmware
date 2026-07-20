@@ -225,8 +225,15 @@ class RobotComponentServer:
         pass
 
     async def log_subprocess_output(self, stream, logger_func):
+        """Logs each line as it streams in (as before), and also returns all of them, so a
+        caller that wants the full output after the fact (e.g. to report a failure back to
+        the host) doesn't have to re-read the local log file."""
+        lines = []
         async for line in stream:
-            logger_func(line.decode('utf-8').rstrip())
+            text = line.decode('utf-8').rstrip()
+            logger_func(text)
+            lines.append(text)
+        return lines
 
     def restart_stream_if_framerate_changed(self):
         """Kill the running rpicam-vid process so stream_video's loop relaunches it with the
@@ -259,8 +266,75 @@ class RobotComponentServer:
             except (ProcessLookupError, AttributeError):
                 pass
 
+    # TODO(remove ~2026-09): drop this and its call in run_update() once all fielded Pis
+    # have picked up the fix (a month or two after this ships).
+    CAN_SETUP_SERVICE_PATH = '/etc/systemd/system/can-setup.service'
+
+    async def _fix_can_setup_service_wantedby(self):
+        """One-off migration for Pis imaged before commit eca5db9 ("fix 90s boot delay on
+        gripper"). That commit changed stringman-pilot-rpi-image/can-setup.service's
+        WantedBy= from multi-user.target to sys-subsystem-net-devices-can0.device, so the
+        service is only queued when a can0 device actually appears (pulled in by udev) rather
+        than on every boot. Grippers have no MCP2515/can0 device, so with the old WantedBy=
+        they queued this service every boot and its BindsTo/After on can0.device forced a
+        full 90s DefaultDeviceTimeoutSec wait, which also delayed cranebot.service.
+
+        Nothing in the normal update process rewrites files outside the Python package (this
+        one lives in the rpi-image repo layout, not the pip package), so a Pi imaged before
+        that commit will keep the old unit file and the boot delay forever unless patched by
+        hand. This does that patch in-place, on whatever update cycle happens to run after
+        this method exists. Anchors have a real can0 device and are unaffected either way, so
+        this only actually changes anything on grippers, but it's harmless to run everywhere.
+        """
+        try:
+            with open(self.CAN_SETUP_SERVICE_PATH) as f:
+                content = f.read()
+        except FileNotFoundError:
+            return  # not a pilot anchor/gripper image, or already removed
+        except OSError as e:
+            logging.warning(f'Could not read {self.CAN_SETUP_SERVICE_PATH} to check for the can-setup.service fix: {e}')
+            return
+
+        if 'WantedBy=sys-subsystem-net-devices-can0.device' in content:
+            return  # fresh image, or already patched by a previous update cycle
+
+        fixed = content.replace('WantedBy=multi-user.target', 'WantedBy=sys-subsystem-net-devices-can0.device')
+        if fixed == content:
+            logging.warning(f'{self.CAN_SETUP_SERVICE_PATH} has an unexpected WantedBy= line; leaving it alone.')
+            return
+
+        logging.info('Patching can-setup.service WantedBy= to fix the 90s gripper boot delay (see commit eca5db9)')
+        tmp_path = '/tmp/can-setup.service'
+        try:
+            with open(tmp_path, 'w') as f:
+                f.write(fixed)
+            for command in (
+                ['sudo', 'install', '-m', '644', tmp_path, self.CAN_SETUP_SERVICE_PATH],
+                # disable removes any symlink to this unit regardless of what WantedBy= used
+                # to say; enable (run after the file is patched) creates the correct new one.
+                ['sudo', 'systemctl', 'disable', 'can-setup.service'],
+                ['sudo', 'systemctl', 'enable', 'can-setup.service'],
+                ['sudo', 'systemctl', 'daemon-reload'],
+            ):
+                proc = await asyncio.create_subprocess_exec(*command, stdout=PIPE, stderr=STDOUT)
+                output = (await proc.stdout.read()).decode('utf-8', errors='ignore')
+                if await proc.wait() != 0:
+                    logging.error(f"'{' '.join(command)}' failed: {output}")
+                    return
+            logging.info('can-setup.service patched successfully.')
+        except OSError as e:
+            logging.warning(f'Failed to patch {self.CAN_SETUP_SERVICE_PATH}: {e}')
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
     async def run_update(self):
         logging.info('Performing Update')
+        # Best-effort and unrelated to the pip upgrade below; must not block or fail it.
+        try:
+            await self._fix_can_setup_service_wantedby()
+        except Exception:
+            logging.exception('can-setup.service migration check failed; continuing with update anyway.')
         # Stop the camera first so rpicam-vid isn't holding the camera or burning CPU
         # while pip upgrades and we restart onto the new version.
         await self.stop_camera_stream()
@@ -272,10 +346,10 @@ class RobotComponentServer:
         stdout_task = asyncio.create_task(self.log_subprocess_output(pip_subprocess.stdout, logging.info))
         stderr_task = asyncio.create_task(self.log_subprocess_output(pip_subprocess.stderr, logging.error))
         returncode = await pip_subprocess.wait()
-        await stdout_task
-        await stderr_task
-        self.update['firmware_update_complete'] = {'returncode': returncode}
+        stdout_lines = await stdout_task
+        stderr_lines = await stderr_task
         if returncode == 0:
+            self.update['firmware_update_complete'] = {'returncode': returncode}
             logging.info('Self update complete. Restarting.')
             # give stream_measurements a chance to flush firmware_update_complete before we exit.
             await asyncio.sleep(0.2)
@@ -283,6 +357,9 @@ class RobotComponentServer:
             # Exit the whole process so systemd restarts us on the new one.
             os._exit(0)
         else:
+            # send pip output back so the host can put it
+            error_output = '\n'.join(stdout_lines + stderr_lines)
+            self.update['firmware_update_complete'] = {'returncode': returncode, 'error': error_output}
             logging.error(f'Self update failed with returncode {returncode}. Not restarting.')
 
     async def read_updates_from_client(self,websocket,tg):

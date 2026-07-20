@@ -404,6 +404,26 @@ class ComponentClient:
             await asyncio.sleep(0.5)
         return self.firmware_update_success
 
+    def _handle_firmware_update_complete(self, upd):
+        """Handle a 'firmware_update_complete' update from the component (see run_update()
+        on the server side). Called from receive_loop()."""
+        if type(upd) != dict:
+            return
+        if 'pending' in upd:
+            # this component supports updates
+            self.firmware_update_pending = True
+        if 'returncode' in upd:
+            logger.info(f'pip install result on {self.address} = {upd["returncode"] == 0}')
+            self.firmware_update_success = upd['returncode'] == 0
+            if self.firmware_update_success:
+                # the component will restart to apply the update, dropping
+                # the connection. treat that next drop as a normal shutdown.
+                self.expect_disconnect_from_update = True
+            elif 'error' in upd:
+                # pip's own output, so this shows up on the host's console
+                # immediately instead of only in the component's own log file.
+                logger.error(f'Self update failed on {self.address}:\n{upd["error"]}')
+
     async def receive_loop(self, websocket):
         self.conn_status.websocket_status = telemetry.ConnStatus.CONNECTED
         self.send_conn_status()
@@ -429,18 +449,7 @@ class ComponentClient:
                     vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
                     vid_thread.start()
                 if 'firmware_update_complete' in update:
-                    upd = update['firmware_update_complete']
-                    if type(upd) == dict:
-                        if 'pending' in upd:
-                            # this component supports updates
-                            self.firmware_update_pending = True
-                        if 'returncode' in upd:
-                            logger.info(f'pip install result on {self.address} = {upd["returncode"] == 0}')
-                            self.firmware_update_success = upd['returncode'] == 0
-                            if self.firmware_update_success:
-                                # the component will restart to apply the update, dropping
-                                # the connection. treat that next drop as a normal shutdown.
-                                self.expect_disconnect_from_update = True
+                    self._handle_firmware_update_complete(update['firmware_update_complete'])
                 if 'nf_robot_v' in update:
                     self.nf_robot_v = update['nf_robot_v']
                 if 'temp' in update:
