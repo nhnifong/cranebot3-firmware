@@ -39,7 +39,7 @@ class TestProjectionAndDetection(unittest.TestCase):
         anchor_pose = poseProtoToTuple(self.config.anchors[0].pose)
         anchor_camera_pose = np.array(compose_poses([
             anchor_pose,
-            model_constants.anchor_camera,
+            model_constants.arp_anchor_camera,
         ]))
 
         pixels = np.array([

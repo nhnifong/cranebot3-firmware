@@ -24,8 +24,8 @@ SLEEP_SCALE_THRESHOLD = 0.15
 _SLEEP_SCALED_MODULES = (
     "observer_connection_test.py",
     "observer_integration_test.py",
-    "_client_test.py",   # anchor_client_test.py, gripper_client_test.py
-    "_server_test.py",   # anchor_server_test.py, anchor_arp_server_test.py, gripper_server_test.py, gripper_arp_server_test.py
+    "_client_test.py",   # arp_anchor_client_test.py
+    "_server_test.py",   # anchor_arp_server_test.py, gripper_arp_server_test.py
 )
 
 # Individual tests opted out of sleep scaling: their timing is load-bearing at real-time

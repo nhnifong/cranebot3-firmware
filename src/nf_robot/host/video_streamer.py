@@ -276,7 +276,7 @@ class RTMPStreamer:
 
     Two modes, chosen once at construction:
     - passthrough=True: pure stream-copy remux of already-compressed H264 Annex-B bytes fed
-      via send_packet() (see anchor_client.py's receive_video(), which demuxes the incoming
+      via send_packet() (see component_client.py's receive_video(), which demuxes the incoming
       rpicam-vid stream and hands us bytes(packet) per packet). No decode, no re-encode --
       the component's camera already hardware-encoded this content once, so decoding it on
       the host just to re-encode it again in software was a pure loss of quality and CPU for

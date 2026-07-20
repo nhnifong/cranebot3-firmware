@@ -46,26 +46,21 @@ dev = [
 pi = [
     "pyserial",
     "getmac",
-    "inventorhatmini",
     "gpiodevice",
     "Adafruit-Blinka",
-    "adafruit-circuitpython-bno08x",
     "adafruit-circuitpython-vl53l1x",
     "adafruit-circuitpython-ads1x15",
     "adafruit-circuitpython-mpu6050",
-    "RPi.GPIO",
     "pyzbar",
     "damiao-motor",
 ]
 
-[project.scripts] 
+[project.scripts]
 # Main Applications
-component-server = "nf_robot.robot.component_server:main"
+component-server = "nf_robot.robot.i2c_dispatcher:main"
 stringman-headless = "nf_robot.host.observer:main"
 
 # QA Tools
-qa-anchor = "nf_robot.qa.anchor_eval:main"
-qa-gripper = "nf_robot.qa.gripper_eval:main"
 qa-gripper-arp = "nf_robot.qa.gripper_arp_eval:main"
 qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
 

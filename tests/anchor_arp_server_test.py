@@ -5,12 +5,18 @@ command dispatch, tighten/stow state machines, sensor polling, and shutdown beha
 
 Behaviour already covered by spool_dm_test.py (DamiaoSpoolController internals,
 tracking loop math, jog logic, etc.) is not repeated here.
+
+Now that the pilot anchor is gone, this is also the home of the shared
+RobotComponentServer base-class lifecycle tests (websocket connect/disconnect,
+rpicam-vid subprocess cleanup) that used to live in anchor_server_test.py, ported
+here against AnchorArpServer since the base class has no other test coverage.
 """
 import pytest
 pytestmark = pytest.mark.pi
 pytest.importorskip("gpiodevice")
 
 import sys
+import subprocess
 import unittest
 from unittest.mock import patch, Mock, MagicMock
 import asyncio
@@ -37,7 +43,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
             patch('nf_robot.robot.anchor_arp_server.DaMiaoController'),
             patch('nf_robot.robot.anchor_arp_server.get_mac_address', return_value='aa:bb:cc:dd:ee:ff'),
             patch('nf_robot.robot.anchor_arp_server.DamiaoSpoolController'),
-            patch('nf_robot.robot.anchor_server.stream_command', ['sleep', 'infinity']),
+            patch('nf_robot.robot.component_server.stream_command', ['sleep', 'infinity']),
         ]
         (self.mock_dm_class,
          _,
@@ -67,6 +73,14 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
         for p in self.patchers:
             p.stop()
 
+        # make sure we didn't leave any subprocesses running
+        command = 'ps aux | grep "sleep infinity" | grep -v grep'
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        self.assertTrue(
+            result.stdout.strip() == '',
+            f"Found orphaned processes running after test teardown: {repr(result.stdout)}"
+        )
+
     # ------------------------------------------------------------------ helpers
 
     async def send_command(self, command, sleep=0.1):
@@ -75,6 +89,78 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
             await ws.send(json.dumps(command))
             await asyncio.sleep(sleep)
             self.assertFalse(self.server_task.done(), "Server crashed after command")
+
+    # ------------------------------------------------------------------ RobotComponentServer base-class lifecycle
+    # (ported from the now-deleted pilot tests/anchor_server_test.py — AnchorArpServer inherits this
+    # behavior unchanged from RobotComponentServer, and it has no other test coverage)
+
+    async def test_connect(self):
+        """Assert that the server is still running after a client connects and disconnects."""
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
+            await ws.close()
+
+    async def test_abnormal(self):
+        """Assert that the server is still running after a client connects and then the client crashes and sends code 1011."""
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
+            await ws.close(code=1011, reason='Test client pretends to crash')
+
+    async def test_subprocess_cleanup(self):
+        """Assert that the rpicam-vid subprocess is killed when the client disconnects."""
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            await ws.close()
+
+        # in this test the server is on the same event loop and needs a chance to run
+        await asyncio.sleep(1)
+
+        self.assertIsNotNone(self.server.rpicam_process.returncode)
+        self.assertLess(self.server.rpicam_process.returncode, 0)  # Should have a negative return code if killed by signal
+
+    async def test_subprocess_cleanup_client_has_error(self):
+        """Assert that the rpicam-vid subprocess is killed when the client disconnects with an internal error."""
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            await ws.close(1011)
+        await asyncio.sleep(1)
+
+        self.assertIsNotNone(self.server.rpicam_process.returncode)
+        self.assertLess(self.server.rpicam_process.returncode, 0)
+
+    async def test_subprocess_cleanup_server_stopped(self):
+        """Assert that the rpicam-vid subprocess is killed when the server is stopped while a client is connected."""
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(0.1)
+            # crash spool tracking loops
+            self.run_loop = False
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
+
+        self.assertIsNotNone(self.server.rpicam_process.returncode)
+        self.assertLess(self.server.rpicam_process.returncode, 0)
+
+    async def test_subprocess_cleanup_line_timeout(self):
+        """
+        Assert that the rpicam-vid subprocess is killed when it has been allowed to time out at least once and be
+        restarted, before a normal client disconnect.
+
+        Note: this ports the pilot version of this test verbatim, including setting `line_timeout`, an attribute
+        RobotComponentServer no longer reads (no line-timeout/restart feature exists in the current code) — the
+        assignment is a harmless no-op kept for historical fidelity; this test is otherwise equivalent to
+        test_subprocess_cleanup.
+        """
+        self.server.line_timeout = 1
+        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+            await asyncio.sleep(6.1)
+            await ws.close()
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
+
+        self.assertIsNotNone(self.server.rpicam_process.returncode)
+        self.assertLess(self.server.rpicam_process.returncode, 0)
 
     # ------------------------------------------------------------------ startup
 

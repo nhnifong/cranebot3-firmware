@@ -9,7 +9,7 @@ import argparse
 from damiao_motor import DaMiaoController
 
 import nf_robot.common.definitions as model_constants
-from nf_robot.robot.anchor_server import RobotComponentServer
+from nf_robot.robot.component_server import RobotComponentServer
 from nf_robot.robot.spool_dm import DamiaoSpoolController
 
 """ Server for Arpeggio Anchor

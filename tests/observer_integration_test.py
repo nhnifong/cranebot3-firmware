@@ -2,6 +2,7 @@ import pytest
 pytestmark = pytest.mark.pi
 pytest.importorskip("gpiodevice")
 
+import sys
 import asyncio
 import time
 import unittest
@@ -16,9 +17,11 @@ from adafruit_mpu6050 import MPU6050
 from adafruit_ads1x15 import AnalogIn, ADS1015
 import websockets
 
-from nf_robot.robot.anchor_server import RaspiAnchorServer
+# damiao_motor is hardware-only; stub the whole module before local imports resolve it.
+sys.modules.setdefault('damiao_motor', MagicMock())
+
+from nf_robot.robot.anchor_arp_server import AnchorArpServer
 from nf_robot.robot.gripper_arp_server import GripperArpServer
-from nf_robot.robot.debug_motor import DebugMotor
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
 from nf_robot.host.observer import AsyncObserver, INPUT_VELOCITY_TTL_S
 from nf_robot.common.pose_functions import compose_poses
@@ -29,6 +32,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.patchers = []
         self.setup_gripper_mocks()
+        self.setup_anchor_mocks()
 
         # Mock computer vision specific functions that would require real cameras/calibration
         self.mock_project_pixels = MagicMock(return_value=[[1.5, 2.5, 0.0]])
@@ -43,28 +47,23 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         # before starting any service, set it's zeroconf instance to a special version that searches on localhost only
         self.zc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=["127.0.0.1"])
 
-        local_tight_var = {'tight': True}
-        def local_t():
-            return local_tight_var['tight']
-
-        # Make four of these on different ports
-        for i in range(4):
-            server = RaspiAnchorServer(power_anchor=(i==0), mock_motor=DebugMotor())
+        # Make two of these on different ports
+        for i in range(2):
+            server = AnchorArpServer(power=(i==0))
             server.zc = self.zc
-            server.tight_check = local_t
             self.anchor_servers.append(server)
-            self.server_tasks.append(asyncio.create_task(server.main(port=i+8765, name=f'cranebot-anchor-service.test_{i}')))
-            await asyncio.sleep(0.05)  
+            self.server_tasks.append(asyncio.create_task(server.main(port=i+8765, name=f'cranebot-anchor-arpeggio-service.test_{i}')))
+            await asyncio.sleep(0.05)
 
         self.gripper_server = GripperArpServer()
         self.gripper_server.zc = self.zc
         self.server_tasks.append(asyncio.create_task(self.gripper_server.main(port=8764, name=f'cranebot-gripper-arpeggio-service.test')))
-        await asyncio.sleep(0.05)  
+        await asyncio.sleep(0.05)
 
         # Start the observer
         self.ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=4249)
         self.ob.aiozc = self.zc
-        
+
         # Test utilities
         self.ws_out = None
         self.listen_task = None
@@ -73,6 +72,27 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
     async def start_observer(self):
         self.ob_task = asyncio.create_task(self.ob.main())
         await asyncio.wait_for(self.ob.startup_complete.wait(), 20)
+
+    def setup_anchor_mocks(self):
+        # mock the CAN bus controller and spool controllers so AnchorArpServer can run without real hardware.
+        self.mock_dm_class = MagicMock()
+        self.patchers.append(patch('nf_robot.robot.anchor_arp_server.DaMiaoController', self.mock_dm_class))
+        self.patchers.append(patch('nf_robot.robot.anchor_arp_server.get_mac_address', return_value='aa:bb:cc:dd:ee:ff'))
+
+        self.anchor_run_loop = True
+        def mock_tracking_loop():
+            while self.anchor_run_loop:
+                time.sleep(0.05)
+
+        def make_mock_spool(*args, **kwargs):
+            spool = Mock()
+            spool.trackingLoop = mock_tracking_loop
+            spool.popMeasurements.return_value = []
+            spool.last_tension = 0.0
+            return spool
+
+        self.mock_spool_class = MagicMock(side_effect=make_mock_spool)
+        self.patchers.append(patch('nf_robot.robot.anchor_arp_server.DamiaoSpoolController', self.mock_spool_class))
 
     def setup_gripper_mocks(self):
         # mock servos SimpleSTS3215
@@ -116,6 +136,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         if self.ws_out:
             await self.ws_out.close()
 
+        self.anchor_run_loop = False
         await self.ob.aiozc.async_unregister_all_services()
         for a in self.anchor_servers:
             a.shutdown()
@@ -133,7 +154,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         await self.start_observer()
         await asyncio.sleep(0.1)
 
-        self.ob.config.anchor_type = common.AnchorType.PILOT
+        self.ob.config.anchor_type = common.AnchorType.ARPEGGIO
 
         # Force addresses for gripper
         self.ob.config.gripper.service_name = "123.cranebot-gripper-arpeggio-service.test"
@@ -141,20 +162,20 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         self.ob.config.gripper.port = 8764
 
         # Force addresses for anchors
-        for i in range(4):
+        for i in range(2):
             if len(self.ob.config.anchors) <= i:
                 break
-            self.ob.config.anchors[i].service_name = f"123.cranebot-anchor-service.test_{i}"
+            self.ob.config.anchors[i].service_name = f"123.cranebot-anchor-arpeggio-service.test_{i}"
             self.ob.config.anchors[i].address = '127.0.0.1'
             self.ob.config.anchors[i].port = i + 8765
 
         # Wait for connections to establish
         await self.ob.gripper_client_connected.wait()
         await self.ob.any_anchor_connected.wait()
-        
-        # Give a moment for the keep_robot_connected loop to pick up all 5 clients
+
+        # Give a moment for the keep_robot_connected loop to pick up all 3 clients (2 anchors + gripper)
         timeout = 5.0
-        while len([b for b in self.ob.bot_clients.values() if b.connected]) < 5 and timeout > 0:
+        while len([b for b in self.ob.bot_clients.values() if b.connected]) < 3 and timeout > 0:
             await asyncio.sleep(0.1)
             timeout -= 0.1
 
@@ -360,10 +381,10 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         # Test Single Component Action
         await self._send_control(
             single_component_action=control.SingleComponentAction(
-                is_gripper=False, anchor_num=2, action=control.ComponentAction.IDENTIFY
+                is_gripper=False, anchor_num=1, action=control.ComponentAction.IDENTIFY
             )
         )
-        # TODO [SERVER VERIFICATION]: Verify that anchor 2 specifically received an {'identify': None} command payload.
+        # TODO [SERVER VERIFICATION]: Verify that anchor 1 specifically received an {'identify': None} command payload.
 
         # Test Swing Cancellation Toggle
         await self._send_control(set_swing_cancellation=control.SetSwingCancellation(enabled=True, present='.'))

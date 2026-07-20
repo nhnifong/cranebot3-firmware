@@ -424,7 +424,7 @@ class TestHandleVideoReady(unittest.TestCase):
 
     def test_falls_back_to_local_uri_when_compressed_uri_absent(self):
         """The common case: stringman-headless started with the default loopback
-        --bind_address, so compressed_uri is never set (see anchor_client.py)."""
+        --bind_address, so compressed_uri is never set (see component_client.py)."""
         robot = _make_robot("gripper_384")
         item = self._video_ready_item(
             feed_num=0, local_uri="http://host:4246/stream.mjpeg", compressed_uri=None

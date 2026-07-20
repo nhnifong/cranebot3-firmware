@@ -14,7 +14,6 @@ from scipy.spatial.transform import Rotation
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.kalman_filter import KalmanFilter
-from nf_robot.host.frequency_estimator import SwingFrequencyEstimator
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.util import *
 from nf_robot.common.pose_functions import compose_poses, gripper_imu_inv
@@ -263,16 +262,14 @@ class Positioner2:
             [ -2,-2, 2],
         ], dtype=float)
         
-        # read pull points from config
-        if self.config.anchor_type == common.AnchorType.ARPEGGIO:
-            anchor_points = np.array([
-                compose_poses([poseProtoToTuple(self.config.anchors[0].pose), model_constants.arp_anchor_right_eyelet])[1],
-                tonp(self.config.anchors[0].indirect_line.eyelet_pos),
-                compose_poses([poseProtoToTuple(self.config.anchors[1].pose), model_constants.arp_anchor_right_eyelet])[1],
-                tonp(self.config.anchors[1].indirect_line.eyelet_pos),
-            ])
-        else:
-            anchor_points = np.array([compose_poses([poseProtoToTuple(a.pose), model_constants.anchor_grommet])[1] for a in self.config.anchors])
+        # read pull points from config. each of the two anchors contributes two line endpoints:
+        # the direct line's eyelet and the indirect line's eyelet.
+        anchor_points = np.array([
+            compose_poses([poseProtoToTuple(self.config.anchors[0].pose), model_constants.arp_anchor_right_eyelet])[1],
+            tonp(self.config.anchors[0].indirect_line.eyelet_pos),
+            compose_poses([poseProtoToTuple(self.config.anchors[1].pose), model_constants.arp_anchor_right_eyelet])[1],
+            tonp(self.config.anchors[1].indirect_line.eyelet_pos),
+        ])
         self.set_anchor_points(anchor_points)
 
         self.data_ts = time.time()
@@ -342,21 +339,12 @@ class Positioner2:
         self.commanded_vel = np.zeros(3)
         self.commanded_vel_ts = time.time()
 
-        # gripper swing freqency estimator
-        self.swing_est = SwingFrequencyEstimator(hysteresis=0.04, smoothing_factor=0.15)
-        
-        # Gripper type (pilot or arp)
-        self.gripper_type = 'pilot'
-        
-        # Caching this rotation matrix upfront saves 60 string-parsing and evaluation 
+        # Caching this rotation matrix upfront saves 60 string-parsing and evaluation
         # operations every second in estimate_gripper
         self._imu_mount_rot = Rotation.from_euler('xyz', [-90, 0, 0], degrees=True)
 
         # last tension of each line in newtons
         self.tension = np.zeros(4)
-
-    def set_gripper_type(self, t):
-        self.gripper_type = t
 
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
@@ -565,48 +553,14 @@ class Positioner2:
             self.kf.update(self.commanded_vel, time.time(), self.vel_noise_covariance, 'velocity')
             await asyncio.sleep(1/30)
 
-    def get_pendulum_length(self):
-        return self.swing_est.get_pendulum_length()
-
     def estimate_gripper(self):
         """Estimate attributes of the gripper that depend on its IMU reading"""
-
-        if self.gripper_type == 'pilot':
-            last_imu = self.datastore.imu_quat.getLast()
-            ts = last_imu[0]
-            if not ts:
-                return
-                
-            rotation = Rotation.from_quat(last_imu[1:])
-            # back out mounting position of IMU
-            rotation = rotation * self._imu_mount_rot
-
-            # When distance to floor is less than 12cm, Detect Tipping
-            if self.datastore.range_record.getLast()[1] < 0.12:
-                THRESHOLD_DEGREES = 9
-                euler = rotation.as_euler('xyz', degrees=True)
-                if abs(euler[0]) > THRESHOLD_DEGREES or abs(euler[1]) > THRESHOLD_DEGREES:
-                    self.tip_over.set()
-
-            # feed angle to frequency estimator
-            rotvec = rotation.as_rotvec()
-            self.swing_est.add_rotation_vector(ts, rotvec)
-
-            # get the encoder based winch line length
-            _, length, speed = self.datastore.winch_line_record.getLast()
-
+        if self.ob.gripper_client is not None:
+            rotvec = self.ob.gripper_client.get_gripper_rvec()
             self.grip_pose = compose_poses([
                 (rotvec, self.gant_pos),
-                (_ZERO_3, np.array([0,0,-length], dtype=float)),
+                (_ZERO_3, np.array([0,0,-model_constants.arp_pole_length], dtype=float)),
             ])
-
-        elif self.gripper_type == 'arp':
-            if self.ob.gripper_client is not None:
-                rotvec = self.ob.gripper_client.get_gripper_rvec()
-                self.grip_pose = compose_poses([
-                    (rotvec, self.gant_pos),
-                    (_ZERO_3, np.array([0,0,-model_constants.arp_pole_length], dtype=float)),
-                ])
 
     def detect_grip(self):
         """

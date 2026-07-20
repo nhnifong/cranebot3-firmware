@@ -6,7 +6,7 @@ CompressedStreamer's raw TCP broadcast (LAN/same-machine path, e.g. a lerobot re
 process).
 
 These exercise the actual production classes and the actual ffmpeg binary, not mocks: a
-synthetic source is opened with PyAV using the exact same options anchor_client.py's
+synthetic source is opened with PyAV using the exact same options component_client.py's
 receive_video() uses, demuxed (not decoded) to grab each packet's raw compressed bytes.
 
 Also covers the routing regression this fix could easily have introduced: NfVideoStreamer's
@@ -33,7 +33,7 @@ COMPRESSED_PORT = 18898
 
 
 def _receive_options():
-    """The exact options anchor_client.py's receive_video() opens the component's video
+    """The exact options component_client.py's receive_video() opens the component's video
     stream with, so this test proves the fix works under the real low-latency config."""
     return {
         'rtsp_transport': 'tcp',

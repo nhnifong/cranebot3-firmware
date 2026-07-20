@@ -15,7 +15,7 @@ from adafruit_mpu6050 import MPU6050 # accelerometer
 from adafruit_vl53l1x import VL53L1X # rangefinder
 from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital converter for pressure
 
-from nf_robot.robot.anchor_server import RobotComponentServer
+from nf_robot.robot.component_server import RobotComponentServer
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
 from nf_robot.common.util import remap, clamp, PID
 
@@ -755,7 +755,7 @@ class GripperArpServer(RobotComponentServer):
             self.taps.append(time.time())
             # how many taps have occured in the past two seconds?
             tap_count = len(list(filter(lambda t: t>time.time()-2, self.taps)))
-            # trigger special behavior. event is watched in anchor_server.py
+            # trigger special behavior. event is watched in component_server.py
             if tap_count == 5:
                 self.reset_wifi_event.set()
         self.was_pressed = pressed
