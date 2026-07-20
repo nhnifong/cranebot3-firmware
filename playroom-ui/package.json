@@ -1,7 +1,7 @@
 {
   "name": "stringman-ui",
   "private": false,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Browser cockpit UI for controlling a cranebot3 robot: 3D telemetry visualization, live camera feeds, and manual/LeRobot-assisted control. Ships as TypeScript source for a host app's own bundler (e.g. Vite) to compile.",
   "license": "Apache-2.0",
