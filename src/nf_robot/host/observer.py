@@ -4377,7 +4377,7 @@ def main():
         args.telemetry_env = 'production'
 
     if args.debug:
-        logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(name)s %(message)s')
+        logging.basicConfig(level=logging.WARNING, format='%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s', datefmt='%H:%M:%S')
         logging.getLogger('nf_robot').setLevel(logging.DEBUG)
 
     async def run_async():

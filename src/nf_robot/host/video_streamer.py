@@ -155,10 +155,10 @@ class CompressedStreamer:
 
     Each client gets its own bounded queue and dedicated writer thread, so one slow or
     stalled consumer can't block delivery to any other client, and can never block
-    send_packet() -- which is called from the hot receive_video() decode loop.
+    send_packet() which is called from the hot receive_video() decode loop.
 
     A client just needs to open this as a raw byte stream (e.g. PyAV's
-    av.open(f'tcp://{host}:{port}')); the bytes are the same Annex-B H264 the component's
+    av.open(f'tcp://{host}:{port}')); the bytes are the same H264 the pi's
     hardware encoder produced, so standard format auto-detection recognizes it with no
     special handling, the same way receive_video() already opens the component's own stream
     without specifying a format.
@@ -360,15 +360,22 @@ class RTMPStreamer:
 
         for line_bytes in iter(self.process.stderr.readline, b''):
             line = line_bytes.decode('utf-8', errors='ignore').strip()
-            if "Error" in line or "failed" in line:
-                logger.error(f"FFmpeg: {line}")
+            if not line:
+                continue
 
-            # Check for disconnects
-            if "Broken pipe" in line or "Connection reset" in line:
-                logger.warning("Media server disconnected.")
+            # Only surface lines
+            # that look like an actual problem, and drop everything else silently. Tagged
+            # with rtmp_url since several of these can be running concurrently (one per
+            # camera feed).
+            lower = line.lower()
+            if "broken pipe" in lower or "connection reset" in lower or "connection refused" in lower:
+                logger.warning(f"FFmpeg [{self.rtmp_url}]: {line}")
+                logger.warning(f"Media server disconnected ({self.rtmp_url}).")
                 self.connection_status = 'error'
                 self.stop()
                 break
+            elif "error" in lower or "fail" in lower or "denied" in lower or "unauthorized" in lower:
+                logger.error(f"FFmpeg [{self.rtmp_url}]: {line}")
 
     def send_frame(self, frame):
         """Encode and send one raw decoded/synthesized frame. Only meaningful when passthrough=False."""
@@ -394,7 +401,7 @@ class RTMPStreamer:
             self._handle_crash(e)
 
     def _handle_crash(self, exception):
-        logger.error(f"FFmpeg pipe broken: {exception}")
+        logger.error(f"FFmpeg pipe broken ({self.rtmp_url}): {exception}")
         self.connection_status = 'error'
         self.stop()
 
