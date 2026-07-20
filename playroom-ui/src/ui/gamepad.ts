@@ -10,7 +10,6 @@ export class GamepadController {
     private readonly DEADZONE = 0.1; // 10% deadzone
     private readonly GAMEPAD_GRIP_SLOW = 40; // deg per second
     private readonly GAMEPAD_GRIP_FAST = 90; // deg per second
-    private readonly GAMEPAD_WINCH_METER_PER_SEC = 0.2;
     private readonly GAMEPAD_WRIST_DEG_PER_SEC = 150;
 
 
@@ -48,11 +47,10 @@ export class GamepadController {
     private keyStates: { [code: string]: boolean } = {};
     private arrowPressTimestamps: { [code: string]: number } = {};
 
-    // Change Detection (Store last "Action" vector: [vx, vy, vz, speed, winch, finger])
-    private lastAction = new Float32Array(7); 
+    // Change Detection (Store last "Action" vector: [vx, vy, vz, speed, finger, wrist])
+    private lastAction = new Float32Array(6);
 
     public targetListManager: TargetListManager | null = null;
-    public gripperModel: nf.telemetry.GripperModel = nf.telemetry.GripperModel.GRIPPERMODEL_PILOT;
 
     public toggleSwingC: () => void = () => {};
     public onSetPrompt: () => void = () => {};
@@ -94,7 +92,7 @@ export class GamepadController {
 
         const container = document.getElementById('how-to');
         if (container && !document.body.classList.contains('mobile')) {
-            container.textContent = "Use WASDQE to move or connect a gamepad. Space-LShift to grasp. Arrows for wrist/winch. Z to set prompt.";
+            container.textContent = "Use WASDQE to move or connect a gamepad. Space-LShift to grasp. Arrows for wrist/fingers. Z to set prompt.";
         }
     }
 
@@ -429,23 +427,13 @@ export class GamepadController {
         this.aWasHeld = input.buttons.a;
         this.bWasHeld = input.buttons.b;
 
-        // Arpeggio gripper: right stick Y also drives the fingers (up = open).
-        // The A/B ramp takes priority when a button is held.
-        if (fingerChange === 0 && this.gripperModel === nf.telemetry.GripperModel.GRIPPERMODEL_ARPEGGIO) {
+        // Right stick Y also drives the fingers (up = open) when A/B aren't held.
+        if (fingerChange === 0) {
             fingerChange = -input.rightStick.y * this.GAMEPAD_GRIP_FAST;
         }
 
-        // Winch Control (right stick Y) — pilot gripper only; up = negative
-        let lineSpeed = 0;
-        if (this.gripperModel === nf.telemetry.GripperModel.GRIPPERMODEL_PILOT) {
-            lineSpeed = -input.rightStick.y * this.GAMEPAD_WINCH_METER_PER_SEC;
-        }
-
-        // Wrist Control (right stick X) — arp gripper only
-        let wristChange = 0;
-        if (this.gripperModel !== nf.telemetry.GripperModel.GRIPPERMODEL_PILOT) {
-            wristChange = input.rightStick.x * this.GAMEPAD_WRIST_DEG_PER_SEC;
-        }
+        // Wrist Control (right stick X)
+        const wristChange = input.rightStick.x * this.GAMEPAD_WRIST_DEG_PER_SEC;
 
         // Rising Edge Detectors for Events
 
@@ -514,31 +502,30 @@ export class GamepadController {
         this.lclickWasHeld = input.buttons.lclick;
 
         // Movement Message (Throttled/Changed)
-        
-        // Construct current action array for comparison: [vx, vy, vz, speed, winch, finger]
+
+        // Construct current action array for comparison: [vx, vy, vz, speed, finger, wrist]
         // Note: We only care about direction if magnitude > 0
-        const currentAction = [vx, vy, vz, speed, lineSpeed, fingerChange, wristChange];
-        
+        const currentAction = [vx, vy, vz, speed, fingerChange, wristChange];
+
         const hasChanged = !this.arraysEqual(currentAction, this.lastAction);
-        const isMoving = mag > 1e-3 || Math.abs(wristChange) > 1.0 || Math.abs(fingerChange) > 1.0 || Math.abs(lineSpeed) > 1e-3;
+        const isMoving = mag > 1e-3 || Math.abs(wristChange) > 1.0 || Math.abs(fingerChange) > 1.0;
         const timeSinceSend = now - this.lastSendT;
 
         // Send a movement if: Data changed OR (we are moving AND it's been > 50ms)
         if (hasChanged || (timeSinceSend > 0.05 && isMoving)) {
-            
+
             messages.push(nf.control.ControlItem.create({
                 move: {
                     direction: { x: vx, y: vy, z: vz },
                     speed: speed,
                     fingerSpeed: fingerChange,
-                    winch: lineSpeed,
                     wristSpeed: wristChange,
                     directionIsInGripperFrame: !this.seatOrbitMode,
                 }
             }));
 
             // Update state
-            for(let i=0; i<7; i++) this.lastAction[i] = currentAction[i];
+            for(let i=0; i<6; i++) this.lastAction[i] = currentAction[i];
             this.lastSendT = now;
         }
 

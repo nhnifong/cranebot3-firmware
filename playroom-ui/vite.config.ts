@@ -13,4 +13,9 @@ export default defineConfig({
   // aren't dev-harness-only: they're what any consumer needs to serve at
   // /assets/... (see public/README.md and this package's top-level README).
   publicDir: resolve(__dirname, 'public'),
+  server: {
+    // Listen on 0.0.0.0 (all interfaces), not just localhost, so a phone or
+    // other device on the LAN can reach this dev server for testing.
+    host: true,
+  },
 });

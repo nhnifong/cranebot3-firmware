@@ -574,14 +574,6 @@ export class MobileShell {
   }
 
   private installSecondaryButtons() {
-    // Winch (pilot only). Y = winch in (line shorter), X = winch out.
-    this.bindHold('drive-btn-winch-in',
-      () => { this.state.buttons.y = true; },
-      () => { this.state.buttons.y = false; });
-    this.bindHold('drive-btn-winch-out',
-      () => { this.state.buttons.x = true; },
-      () => { this.state.buttons.x = false; });
-
     // Stop all → fires a single rising-edge `select` so the existing
     // gamepad code emits COMMAND_STOP_ALL.
     document.getElementById('drive-btn-stop-all')?.addEventListener('click', () => {

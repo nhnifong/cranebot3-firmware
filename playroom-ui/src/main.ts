@@ -3,7 +3,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 // Import the generated protobuf classes
 import { nf } from './generated/proto_bundle.js';
 import { Gripper } from './objects/gripper.ts';
-import { Anchor } from './objects/anchor.ts';
 import { ArpAnchor } from './objects/arp_anchor.ts';
 import { Eyelet } from './objects/eyelet.ts';
 import { Gantry } from './objects/gantry.ts';
@@ -135,9 +134,8 @@ const room = new DynamicRoom(scene);
 // Input handler
 const gamepad = new GamepadController();
 
-let anchorType: nf.common.AnchorType = nf.common.AnchorType.ANCHORTYPE_UNSPECIFIED;
-
-// Shared corners array (holds 4 instances of either Anchor or Eyelet)
+// Shared corners array: 2 anchors (indices 0-1) + 2 eyelets (indices 2-3), the fixed
+// Arpeggio topology.
 const acoords = [
   { x: 2.5,  y: -2.5, rotZ: -Math.PI / 4 },
   { x: 2.5,  y: 2.5,  rotZ: -3 * Math.PI / 4 },
@@ -145,13 +143,13 @@ const acoords = [
   { x: -2.5, y: -2.5, rotZ: Math.PI / 4 },
 ];
 
-const corners: (Anchor | Eyelet | ArpAnchor)[] = acoords.map((ac) => {
-  const anchor = new Anchor(scene, room);
-  anchor.setPose(nf.common.Pose.create({
+const corners: (ArpAnchor | Eyelet)[] = acoords.map((ac, i) => {
+  const corner: ArpAnchor | Eyelet = i < 2 ? new ArpAnchor(scene, room) : new Eyelet(scene, room);
+  corner.setPose(nf.common.Pose.create({
     position: { x: ac.x, y: ac.y, z: 3 },
     rotation: { x: 0, y: 0, z: ac.rotZ }
   }));
-  return anchor; 
+  return corner;
 });
 
 // Gantry
@@ -164,15 +162,11 @@ const gripper = new Gripper(scene);
 const cables: Cable[] = [0, 1, 2, 3].map((i) => {
   const cable = new Cable(scene);
   cable.update(corners[i].grommet_pos, gantry.position, 0.0)
-  return cable; 
+  return cable;
 });
 
 // Wall-Routing Cables for Arpeggio
 const wallCables: Cable[] = [];
-
-// Gantry-Gripper cable
-const winchCable = new Cable(scene);
-winchCable.update(gantry.position, gripper.grommet_pos, 0.0)
 
 // Visual gantry factor
 const gantryVisualCube = new THREE.Mesh(
@@ -453,10 +447,10 @@ function startSimFlow() {
   document.getElementById('landing-layer')?.classList.add('hidden');
   document.getElementById('btn-header-lerobot')?.classList.add('hidden');
   document.getElementById('lerobot-overlay')?.classList.add('hidden');
-  updateRobotIdUI("Simulated Pilot");
-  
+  updateRobotIdUI("Simulated Robot");
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/simulated/pilot`;
+  const wsUrl = `${protocol}//${window.location.host}/simulated/arp`;
   
   connect(wsUrl);
 }
@@ -1040,117 +1034,62 @@ window.addEventListener('resize', () => {
 
 //  ===== telemetry update handlers =====
 
-// Reposition anchors and determine anchor type
+// Reposition the anchors and eyelets. Corners are always [ArpAnchor, ArpAnchor, Eyelet,
+// Eyelet] -- created that way from the start (see corners init above) -- so this just
+// updates poses, no more figuring out which hardware generation is connected.
 function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
-  if (data.eyelets && data.eyelets.length > 0) {
-    anchorType = nf.common.AnchorType.ANCHORTYPE_ARPEGGIO;
-
-    for (let i = 0; i < 2; i++) {
-      if (!(corners[i] instanceof ArpAnchor)) {
-        (corners[i] as any).dispose();
-        const arpAnchor = new ArpAnchor(scene, room);
-        arpAnchor.setPose(nf.common.Pose.create({
-          position: { x: acoords[i].x, y: acoords[i].y, z: 3 },
-          rotation: { x: 0, y: 0, z: acoords[i].rotZ }
-        }));
-        corners[i] = arpAnchor;
-      }
-    }
-
-    for (let i = 2; i < 4; i++) {
-      if (!(corners[i] instanceof Eyelet)) {
-        (corners[i] as any).dispose();
-        const eyelet = new Eyelet(scene, room);
-        eyelet.setPose(nf.common.Pose.create({
-          position: { x: acoords[i].x, y: acoords[i].y, z: 3 },
-          rotation: { x: 0, y: 0, z: acoords[i].rotZ }
-        }));
-        corners[i] = eyelet;
-      }
-    }
-
-    if (wallCables.length === 0) {
-      wallCables.push(new Cable(scene));
-      wallCables.push(new Cable(scene));
-    }
-    if ((data as any).tilt) {
-      lastTiltAngles = (data as any).tilt;
-      for (let i = 0; i < 2 && i < lastTiltAngles.length; i++) {
-        const corner = corners[i];
-        if ((corner instanceof Anchor || corner instanceof ArpAnchor) && corner.camera) {
-          applyAnchorCamTilt(i, corner.camera, lastTiltAngles[i]);
-        }
-      }
-    }
-    if (data.swingLatency) {
-      const slider = document.getElementById('swing-latency-slider') as HTMLInputElement | null;
-      const valueDisplay = document.getElementById('swing-latency-value');
-      let val = data.swingLatency.toFixed(2);
-      slider!.value = val;
-      valueDisplay!.textContent = val + 's';
-    }
-
-    updateComponentStatusUI();
-
-    if (data.poses && data.poses.length >= 2) {
-      (corners[0] as ArpAnchor).setPose(data.poses[0]);
-      (corners[1] as ArpAnchor).setPose(data.poses[1]);
-    }
-    if (data.eyelets && data.eyelets.length >= 2) {
-      (corners[2] as Eyelet).setPosition(data.eyelets[0]);
-      (corners[3] as Eyelet).setPosition(data.eyelets[1]);
-    }
-
-      // Update wall cables (0 routes to 3, 1 routes to 2)
-    Promise.all([corners[0].ready, corners[2].ready]).then(() => {
-      wallCables[0].update((corners[0] as ArpAnchor).extra_grommet_pos, corners[2].grommet_pos, 0.0);
-      const cam0 = (corners[0] as ArpAnchor).camera!;
-      firstOverheadVideo.setVirtualCamera(cam0);
-      attachCameraHelper(0, cam0);
-    });
-    Promise.all([corners[1].ready, corners[3].ready]).then(() => {
-      wallCables[1].update((corners[1] as ArpAnchor).extra_grommet_pos, corners[3].grommet_pos, 0.0);
-      const cam1 = (corners[1] as ArpAnchor).camera!;
-      secondOverheadVideo.setVirtualCamera(cam1);
-      attachCameraHelper(1, cam1);
-    });
-
-  } else if (data.poses && data.poses.length === 4) {
-    if (anchorType !== nf.common.AnchorType.ANCHORTYPE_PILOT) {
-      anchorType = nf.common.AnchorType.ANCHORTYPE_PILOT;
-      for (let i = 2; i < 4; i++) {
-        if (corners[i] instanceof Eyelet) {
-          (corners[i] as Eyelet).dispose();
-          const anchor = new Anchor(scene, room);
-          anchor.setPose(nf.common.Pose.create({
-            position: { x: acoords[i].x, y: acoords[i].y, z: 3 },
-            rotation: { x: 0, y: 0, z: acoords[i].rotZ }
-          }));
-          corners[i] = anchor;
-        }
-      }
-
-      if (wallCables.length > 0) {
-        wallCables[0].update(gantry.position, gantry.position, 0.0);
-        wallCables[1].update(gantry.position, gantry.position, 0.0);
-      }
-
-      updateComponentStatusUI();
-    }
-
-    data.poses.forEach((apose, i) => {
-      if (corners[i] instanceof Anchor) {
-        (corners[i] as Anchor).setPose(apose);
-      }
-    });
+  if (wallCables.length === 0) {
+    wallCables.push(new Cable(scene));
+    wallCables.push(new Cable(scene));
   }
+  if ((data as any).tilt) {
+    lastTiltAngles = (data as any).tilt;
+    for (let i = 0; i < 2 && i < lastTiltAngles.length; i++) {
+      const camera = (corners[i] as ArpAnchor).camera;
+      if (camera) {
+        applyAnchorCamTilt(i, camera, lastTiltAngles[i]);
+      }
+    }
+  }
+  if (data.swingLatency) {
+    const slider = document.getElementById('swing-latency-slider') as HTMLInputElement | null;
+    const valueDisplay = document.getElementById('swing-latency-value');
+    let val = data.swingLatency.toFixed(2);
+    slider!.value = val;
+    valueDisplay!.textContent = val + 's';
+  }
+
+  updateComponentStatusUI();
+
+  if (data.poses && data.poses.length >= 2) {
+    (corners[0] as ArpAnchor).setPose(data.poses[0]);
+    (corners[1] as ArpAnchor).setPose(data.poses[1]);
+  }
+  if (data.eyelets && data.eyelets.length >= 2) {
+    (corners[2] as Eyelet).setPosition(data.eyelets[0]);
+    (corners[3] as Eyelet).setPosition(data.eyelets[1]);
+  }
+
+    // Update wall cables (0 routes to 3, 1 routes to 2)
+  Promise.all([corners[0].ready, corners[2].ready]).then(() => {
+    wallCables[0].update((corners[0] as ArpAnchor).extra_grommet_pos, corners[2].grommet_pos, 0.0);
+    const cam0 = (corners[0] as ArpAnchor).camera!;
+    firstOverheadVideo.setVirtualCamera(cam0);
+    attachCameraHelper(0, cam0);
+  });
+  Promise.all([corners[1].ready, corners[3].ready]).then(() => {
+    wallCables[1].update((corners[1] as ArpAnchor).extra_grommet_pos, corners[3].grommet_pos, 0.0);
+    const cam1 = (corners[1] as ArpAnchor).camera!;
+    secondOverheadVideo.setVirtualCamera(cam1);
+    attachCameraHelper(1, cam1);
+  });
+
   updateFloatingLabelsText();
 
   // redraw cables
   cables.forEach((cable, i) => {
     cable.update(corners[i].grommet_pos, gantry.position, 0.0);
   });
-  winchCable.update(gantry.position, gripper.grommet_pos, 0.0);
 }
 
 function handlePosEstimate(data: nf.telemetry.IPositionEstimate) {
@@ -1160,7 +1099,6 @@ function handlePosEstimate(data: nf.telemetry.IPositionEstimate) {
     cables.forEach((cable, i) => {
       cable.update(corners[i].grommet_pos, gantry.position, data.slack![i] ? 0.2 : 0.0);
     });
-    winchCable.update(gantry.position, gripper.grommet_pos, 0.0);
     // Inform input controller so it can calculate input orbits
     gamepad.setRobotPosition(data.gantryPosition.x!, data.gantryPosition.y!);
     [firstOverheadVideo, secondOverheadVideo, gripperVideo].forEach(f => f.setGantryPosition(data.gantryPosition!));
@@ -1219,7 +1157,7 @@ interface ComponentState {
 const componentStates = new Map<string, ComponentState>();
 
 export function isFullyConnected(): boolean {
-  const expectedAnchors = anchorType === nf.common.AnchorType.ANCHORTYPE_ARPEGGIO ? 2 : 4;
+  const expectedAnchors = 2;
   let anchorConnected = 0;
   let gripperConnected = 0;
 
@@ -1233,7 +1171,7 @@ export function isFullyConnected(): boolean {
 }
 
 function updateComponentStatusUI() {
-  let anchorCount = anchorType === nf.common.AnchorType.ANCHORTYPE_ARPEGGIO ? 2 : 4;
+  let anchorCount = 2;
   let anchorConnected = 0;
   let gripperCount = 1;
   let gripperConnected = 0;
@@ -1307,12 +1245,7 @@ function handleComponentConnStatus(data: nf.telemetry.IComponentConnStatus) {
 
   if (data.isGripper) {
     type = 'Gripper';
-    if (data.gripperModel === nf.telemetry.GripperModel.GRIPPERMODEL_ARPEGGIO) {
-      name = "Arpeggio Gripper";
-    } else {
-      name = "Pilot Gripper";
-    }
-    if (data.gripperModel != null) gamepad.gripperModel = data.gripperModel;
+    name = "Arpeggio Gripper";
   } else {
     type = 'Anchor';
     name = `Anchor ${data.anchorNum}`;
@@ -1492,14 +1425,13 @@ async function handleVideoReady(data: nf.telemetry.IVideoReady) {
     const anchorIndex = data.anchorNum;
     videoManager.assign(anchorIndex); // anchor num is here
     const corner = corners[anchorIndex];
-    if (corner instanceof Anchor || corner instanceof ArpAnchor) {
+    if (corner instanceof ArpAnchor) {
       // The anchor's GLTF model (and thus .camera) loads asynchronously and may
       // not be ready yet when this telemetry arrives — wait for it.
       await corner.ready;
-      // The corner may have been swapped (e.g. Anchor <-> ArpAnchor <-> Eyelet)
-      // while we were waiting, so re-fetch it before using it.
+      // Re-fetch after the await in case something else replaced this corner in the meantime.
       const loadedCorner = corners[anchorIndex];
-      if ((loadedCorner instanceof Anchor || loadedCorner instanceof ArpAnchor) && loadedCorner.camera) {
+      if (loadedCorner instanceof ArpAnchor && loadedCorner.camera) {
         const storedTilt = lastTiltAngles[anchorIndex];
         if (storedTilt != null) {
           applyAnchorCamTilt(anchorIndex, loadedCorner.camera, storedTilt);
@@ -2734,7 +2666,7 @@ window.addEventListener('pointermove', (event) => {
 
     for (let i = 0; i < corners.length; i++) {
       const corner = corners[i];
-      if ((corner instanceof Anchor || corner instanceof ArpAnchor)) {
+      if (corner instanceof ArpAnchor) {
         const anchorMesh = corner.getInteractableMesh();
         if (anchorMesh && isDescendant(obj, anchorMesh)) {
           foundType = 'Anchor';

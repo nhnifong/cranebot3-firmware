@@ -3,7 +3,7 @@ import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { nf } from '../generated/proto_bundle.js';
 import { mapRange } from '../utils.ts'
 
-const SM_PILOT_MAX_SP = 0.25;
+const GANTRY_MAX_SPEED_MPS = 0.25;
 
 export class Gantry {
     // single copy of the geometry
@@ -96,8 +96,8 @@ public setVelocity(velocity: nf.common.IVec3) {
         const dir = new THREE.Vector3(x, z, -y);
 
         // we are given the actual commanded velocity in meters per second.
-        // Normaize this based on the maximum movement speed of a Stringman Pilot.
-        const length = dir.length() / SM_PILOT_MAX_SP;
+        // Normalize this based on the gantry's maximum movement speed.
+        const length = dir.length() / GANTRY_MAX_SPEED_MPS;
 
         // Visibility Check
         if (length < 0.001) {
