@@ -63,7 +63,7 @@ def main():
         time.sleep(0.5)
         sts.torque_enable(mid, False)
 
-    input("Plug only the finger motor into the board and press Enter...")
+    input("If setting up for the first time, plug only the finger motor into the board, otherwise leave motors as is.\nWhen ready to scan for motors, press Enter...")
     # set id of this motor to 2. let the finger motor id remain 1, the factory setting.
 
     # Perform a full scan (0-253) to ensure we don't accidentally broadcast to multiple motors
