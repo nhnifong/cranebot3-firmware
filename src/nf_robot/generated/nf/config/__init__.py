@@ -384,6 +384,18 @@ class StringmanPilotConfig(betterproto2.Message):
     How thoroughly this robot has been calibrated. Replaces has_been_calibrated.
     """
 
+    relay_credentials: "dict[str, _common__.RelayCreds]" = betterproto2.field(
+        24,
+        betterproto2.TYPE_MAP,
+        map_meta=betterproto2.map_meta(
+            betterproto2.TYPE_STRING, betterproto2.TYPE_MESSAGE
+        ),
+    )
+    """
+    Credentials to publish telemetry at any cloud relay instance this robot has bound with.
+    Keyed by hostname (and port) such as "neufangled.com" or "localhost:8080"
+    """
+
 
 default_message_pool.register_message(
     "nf.config", "StringmanPilotConfig", StringmanPilotConfig

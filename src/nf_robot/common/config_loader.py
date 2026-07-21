@@ -1,6 +1,5 @@
 import numpy as np
 from pathlib import Path
-import uuid
 from nf_robot.generated.nf import common, config as nf_config
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / 'configuration.json'
@@ -41,9 +40,10 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     Creates a protobuf configuration object populated with reasonable defaults.
     """
     config = nf_config.StringmanPilotConfig()
-    # provision a random ID
-    # once the robot tells the backend what this ID is, it has to stick to it, or the owner may see it disappear from their dashboard
-    config.robot_id = str(uuid.uuid4())
+    # Anonymous LAN-mode robots have no id: it stays empty ("") until the robot is bound to a
+    # particular control plane instance, at which point that instance mints an id + key that
+    # are stored per-host in config.relay_credentials (see connect_cloud_telemetry).
+    config.robot_id = ""
     config.calibrated_status = common.CalibratedStatus.UNCALIBRATED
     config.connect_cloud_telemetry = False
 
@@ -191,7 +191,6 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
     except FileNotFoundError:
         print(f"No config found at {path}, creating default.")
         config = create_default_config()
-        print(f"New robot id chosen {config.robot_id}.")
         save_config(config, path)
         return config
 

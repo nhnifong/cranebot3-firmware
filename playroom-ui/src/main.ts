@@ -494,11 +494,8 @@ async function startCloudFlow(robotId: string) {
 // --- Binding Logic ---
 
 async function handleBindAction() {
-  // Ensure we have the robot ID from telemetry
-  if (!detectedRobotId) {
-    alert("Cannot bind: Robot ID not yet received from telemetry.");
-    return;
-  }
+  // A previously-anonymous robot has no id to detect: apiBindRobotV2 mints one on bind, so
+  // (unlike the old apiBindRobot flow) we no longer need a robot id from telemetry here.
 
   // Force Login (if not already)
   AuthManager.initAuth();
@@ -523,11 +520,12 @@ async function handleBindAction() {
 
 async function executeBind() {
   const nickname = (document.getElementById('bind-nickname') as HTMLInputElement)?.value || "Stringman";
-  if (!detectedRobotId) return;
   try {
     const token = await AuthManager.getAuthToken();
     await new Promise(r => setTimeout(r, 100));
-    await AuthManager.apiBindRobot(detectedRobotId, nickname, token);
+    // Binding a previously-anonymous robot needs no client-supplied id: the server mints an
+    // id + key, and the bridge implementation hands the key to the robot for storage.
+    await AuthManager.apiBindRobotV2(nickname, token);
     document.getElementById('landing-layer')?.classList.add('hidden');
     document.getElementById('bind-robot-panel')?.classList.add('hidden');
     showPopup({message: "Success! Robot bound to your account."});
@@ -542,11 +540,6 @@ function refreshRunMenuAuth() {
   if (!authMenuItem) return;
 
   if (!AuthManager.isCloudAvailable()) {
-    authMenuItem.classList.add('hidden');
-    return;
-  }
-
-  if (!detectedRobotId) {
     authMenuItem.classList.add('hidden');
     return;
   }

@@ -11,6 +11,7 @@ __all__ = (
     "LerobotSessionStatus",
     "LerobotStatus",
     "Pose",
+    "RelayCreds",
     "RoutePoint",
     "Vec3",
 )
@@ -381,6 +382,21 @@ class Pose(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.common", "Pose", Pose)
+
+
+@dataclass(eq=False, repr=False)
+class RelayCreds(betterproto2.Message):
+    """
+    Credentials needed to publish telemetry on a given instance of the
+    control plane such as neufangled.com
+    """
+
+    robot_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    key: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message("nf.common", "RelayCreds", RelayCreds)
 
 
 @dataclass(eq=False, repr=False)

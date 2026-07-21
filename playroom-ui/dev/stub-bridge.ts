@@ -20,6 +20,7 @@ export const stubAuthBridge: PlayroomAuthBridge = {
   getAuthToken: () => unimplemented('getAuthToken'),
   apiListRobots: () => unimplemented('apiListRobots'),
   apiBindRobot: () => unimplemented('apiBindRobot'),
+  apiBindRobotV2: () => unimplemented('apiBindRobotV2'),
   apiGetStreamTicket: () => unimplemented('apiGetStreamTicket'),
   apiUnbindRobot: () => unimplemented('apiUnbindRobot'),
   apiGetMyAccess: () => unimplemented('apiGetMyAccess'),

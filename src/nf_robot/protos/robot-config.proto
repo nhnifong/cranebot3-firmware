@@ -144,6 +144,10 @@ message StringmanPilotConfig {
 
   // How thoroughly this robot has been calibrated. Replaces has_been_calibrated.
   common.CalibratedStatus calibrated_status = 23;
+
+  // Credentials to publish telemetry at any cloud relay instance this robot has bound with.
+  // Keyed by the telemetry ws_protocol_and_host such as "wss://neufangled.com"
+  map<string, nf.common.RelayCreds> relay_credentials = 24;
 }
 
 // Tunable constants used by AsyncObserver.pick_and_place_loop

@@ -21,6 +21,15 @@ export interface GuestAccess {
   access_level: string;
 }
 
+// The identity issued by /bindv2 when a brand-new (previously anonymous) robot
+// is bound to an account: a freshly minted robot id and the secret key the robot
+// must present to publish authenticated telemetry. The key is returned exactly
+// once and must be handed to the robot for storage.
+export interface BindV2Result {
+  robotId: string;
+  key: string;
+}
+
 export interface PlayroomAuthBridge {
   // True for a real cloud-account implementation (nf-main-site's), false for
   // a stub like dev/stub-bridge.ts. main.ts uses this to hide cloud-only UI
@@ -32,6 +41,9 @@ export interface PlayroomAuthBridge {
   getAuthToken(): Promise<string>;
   apiListRobots(token: string): Promise<RobotInfo[]>;
   apiBindRobot(robotId: string, nickname: string, token: string): Promise<void>;
+  // Binds a brand-new (previously anonymous) robot: the server mints an id and
+  // key, and the implementation hands the key to the robot for storage.
+  apiBindRobotV2(nickname: string, token: string): Promise<BindV2Result>;
   apiGetStreamTicket(robotId: string, token: string): Promise<string>;
   apiUnbindRobot(robotId: string, token: string): Promise<void>;
   apiGetMyAccess(robotId: string, token: string): Promise<string>;

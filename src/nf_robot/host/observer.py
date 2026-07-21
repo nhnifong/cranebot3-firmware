@@ -451,6 +451,9 @@ class AsyncObserver:
         elif item.popup_ack is not None:
             self._handle_popup_ack(item.popup_ack)
 
+        elif item.add_relay_creds is not None:
+            self._handle_add_relay_creds(item.add_relay_creds)
+
     async def _handle_set_point(self, item: control.SetPoint):
         logger.debug(f'_handle_set_point {item}')
         if item.route_source:
@@ -3073,18 +3076,46 @@ class AsyncObserver:
                 return False
         return True
 
-    async def connect_cloud_telemetry(self):
-        ws_protocol_and_host = CONTROL_PLANE_LOCAL
+    def _control_plane_ws_host(self):
+        """The telemetry ws_protocol_and_host of the control plane this robot connects to,
+        derived from telemetry_env. This same string is the key into config.relay_credentials
+        (e.g. "wss://neufangled.com"), so binding and connecting agree on which creds to use."""
         if self.telemetry_env == 'staging':
-            ws_protocol_and_host = CONTROL_PLANE_STAGING
+            return CONTROL_PLANE_STAGING
         if self.telemetry_env == 'production':
-            ws_protocol_and_host = CONTROL_PLANE_PRODUCTION
+            return CONTROL_PLANE_PRODUCTION
+        return CONTROL_PLANE_LOCAL
+
+    def _handle_add_relay_creds(self, item: common.RelayCreds):
+        """Store the id + key minted when this robot is bound to a control plane instance.
+
+        Keyed by that instance's ws_protocol_and_host so connect_cloud_telemetry can look them
+        up. Delivered over a control message (from the account bridge) once, so we persist it."""
+        host = self._control_plane_ws_host()
+        logger.info(f'Storing relay credentials for {host} (robot id "{item.robot_id}")')
+        self.config.relay_credentials[host] = common.RelayCreds(robot_id=item.robot_id, key=item.key)
+        save_config(self.config, self.config_path)
+
+    async def connect_cloud_telemetry(self):
+        ws_protocol_and_host = self._control_plane_ws_host()
+
+        creds = self.config.relay_credentials.get(ws_protocol_and_host)
+        if creds is None or not creds.key:
+            logger.warning(
+                f'No relay credentials for {ws_protocol_and_host}; not connecting to the cloud '
+                f'telemetry relay. Bind this robot to an account to obtain a key.'
+            )
+            return
 
         while self.run_command_loop:
             try:
-                use_id = self.config.robot_id
-                ws_path = f"{ws_protocol_and_host}/telemetry/{use_id}"
-                async with websockets.connect(ws_path, max_size=None, open_timeout=10) as websocket:
+                ws_path = f"{ws_protocol_and_host}/telemetry_v2/{creds.robot_id}"
+                async with websockets.connect(
+                    ws_path,
+                    max_size=None,
+                    open_timeout=10,
+                    additional_headers={"Authorization": f"Bearer {creds.key}"},
+                ) as websocket:
                     self.cloud_telem_websocket = websocket
                     logger.info(f'Connected to control plane {ws_path}')
                     # send anything that it would need up-front
@@ -3108,7 +3139,7 @@ class AsyncObserver:
                 if e.response.status_code == 409:
                     logger.warning(
                         f'Control plane rejected connection (HTTP 409): another robot is '
-                        f'already connected with id "{self.config.robot_id}".'
+                        f'already connected with id "{creds.robot_id}".'
                     )
                 else:
                     logger.warning(
@@ -3274,7 +3305,9 @@ class AsyncObserver:
                 try:
                     self.startup_complete.set()
 
-                    # Show an appropriate banner for the user to open in thir browser
+                    # Show an appropriate banner for the user to open in thier browser.
+                    server_creds = self.config.relay_credentials.get(self._control_plane_ws_host())
+                    server_robotid = server_creds.robot_id if server_creds else ''
                     if self.webui_server is not None:
                         if self.bind_address in ("0.0.0.0", "::", ""):
                             advertised_host = get_local_ip() or "localhost"
@@ -3284,11 +3317,11 @@ class AsyncObserver:
                     elif self.telemetry_env == None:
                         message = f'To control visit https://neufangled.com/playroom?robotid=lan on this machine'
                     elif self.telemetry_env == 'local':
-                        message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
+                        message = f'To control visit http://localhost:5173/playroom?robotid={server_robotid}'
                     elif self.telemetry_env == 'production':
-                        message = f'To control visit https://neufangled.com/playroom?robotid={self.config.robot_id}'
+                        message = f'To control visit https://neufangled.com/playroom?robotid={server_robotid}'
                     elif self.telemetry_env == 'staging':
-                        message = f'To control visit https://nf-site-monolith-staging-690802609278.us-east1.run.app/playroom?robotid={self.config.robot_id}'
+                        message = f'To control visit https://nf-site-monolith-staging-690802609278.us-east1.run.app/playroom?robotid={server_robotid}'
                     else:
                         print(f'invalid telemetry_env {self.telemetry_env}')
 

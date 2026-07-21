@@ -265,6 +265,7 @@ message ControlItem {
     SetPoint set_point = 15;
     SetTargetModel set_target_model = 16;
     PopupAck popup_ack = 17;
+    nf.common.RelayCreds addRelayCreds = 18;
   }
 }
 

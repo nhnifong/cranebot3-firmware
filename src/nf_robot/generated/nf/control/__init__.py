@@ -521,6 +521,10 @@ class ControlItem(betterproto2.Message):
         17, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    add_relay_creds: "_common__.RelayCreds | None" = betterproto2.field(
+        18, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
 
 default_message_pool.register_message("nf.control", "ControlItem", ControlItem)
 
