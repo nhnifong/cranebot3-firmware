@@ -424,14 +424,21 @@ function startLanFlow() {
   // Show the Bind button since we are in LAN mode
   document.getElementById('action-bind')?.classList.remove('hidden');
   
-  // Connect directly to localhost. video will also come from localhost
-  // Even in "LAN" mode unfortunately the browser's not going to let you open the UI
-  // on a laptop but host the robot from a more powerful desktop machine on the network
-  // due to cross origin policy. The plan to ultimately get around this is to move the
-  // UI into cranebot3-firmware and include a method of hosting it.
-  // Neufangled.com would then import it from that repo when it is built.
-  // at that point nf-main-site may go private while cranebot3-firmware remains open.
-  connect("ws://localhost:4245");
+  // Where the control websocket lives depends on how this page itself was
+  // loaded. When neufangled.com hosts the page, "LAN mode" means the classic
+  // case of a browser and robot on the very same machine, so localhost is
+  // always right there. When this bundle is self-hosted by stringman-headless
+  // (--serve_ui) there's no cloud account bridge (isCloudAvailable() is
+  // false), and the page was fetched from the robot's own LAN address — so
+  // the robot is wherever this page came from, not necessarily localhost.
+  // Deriving the host from window.location also keeps this same-origin with
+  // the page, which avoids mixed-content blocking (an https:// neufangled.com
+  // page can't open ws:// to a non-loopback LAN host; a self-hosted http://
+  // page connecting back to its own origin has no such restriction).
+  const target = AuthManager.isCloudAvailable()
+    ? "ws://localhost:4245"
+    : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:4245`;
+  connect(target);
 }
 
 // Sim Mode Flow

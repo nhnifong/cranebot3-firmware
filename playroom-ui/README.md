@@ -33,6 +33,34 @@ Then open the URL Vite prints (`http://localhost:5173` by default). You'll
 land on the connection-mode screen, pick **LAN only mode** to connect
 straight to a robot running with `stringman-headless`.
 
+## Self-hosting from stringman-headless
+
+`stringman-headless` both runs the motion controller and serves the UI from
+the same machine (on by default; pass `--no_serve_ui` to turn it off), so a
+browser on any other device on the LAN can load it with no Vite dev server,
+no cloud account system, and no dependency on neufangled.com.
+
+This is how you run the robot on a headless Linux box and drive it
+from a laptop elsewhere on the network.
+
+Build the static bundle stringman-headless looks for:
+
+    npm run build
+
+This writes to `dist/`, reusing the same standalone harness as `npm run dev`
+(`dev/index.html`, the stub auth bridge — LAN mode auto-starts with no
+landing screen, same as the dev server). In a source checkout, that's the
+whole setup — stringman-headless looks for `playroom-ui/dist/` directly, no
+copy step needed. If it isn't there, stringman-headless logs a warning and
+falls back to the neufangled.com banner instead of failing to start.
+
+A `pip install`ed copy of `nf_robot` has no `playroom-ui/` directory at all,
+so it instead ships a prebuilt copy at `src/nf_robot/ui/assets/`, produced by
+`scripts/build_release.sh` at the repo root as part of cutting a release —
+see that script and the root README's "Rebuilding the python module"
+section. stringman-headless falls back to that path only when
+`playroom-ui/dist/` isn't present.
+
 ## Developing this package alongside nf-main-site
 
 If you're changing this package's code and want nf-main-site to pick up

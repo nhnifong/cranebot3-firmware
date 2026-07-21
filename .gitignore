@@ -17,6 +17,8 @@ user_targets_data/
 target_heatmap_data/
 target_heatmap_data_unlabeled/
 src/nf_robot.egg-info
+# built playroom-ui bundle, copied in by scripts/build_release.sh
+src/nf_robot/ui/assets/
 dataset_heatmap/
 build/
 angling_data/

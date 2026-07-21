@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "dev": "npm run proto && vite",
+    "build": "npm run proto && vite build",
     "proto": "pbjs -t static-module -w es6 -p ../src/nf_robot/protos -o src/generated/proto_bundle.js ../src/nf_robot/protos/*.proto && pbts -o src/generated/proto_bundle.d.ts src/generated/proto_bundle.js",
     "typecheck": "tsc --noEmit",
     "verify-against-nf-viz": "scripts/verify-against-nf-viz.sh",

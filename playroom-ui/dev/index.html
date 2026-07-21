@@ -4,10 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>stringman-ui (dev harness)</title>
+    <link rel="icon" type="image/png" href="./favicon.png" />
   </head>
   <body>
-    <!-- LAN mode connects straight to ws://localhost:4245, so point this at a
-         robot (or robot simulator) running on this machine. -->
+    <!-- LAN mode connects to ws://<this page's host>:4245, so either run a
+         robot (or robot simulator) on this machine, or load this dev server
+         itself from a LAN address that has one. -->
     <script type="module" src="./bridge.ts"></script>
     <script type="module" src="./app.ts"></script>
   </body>

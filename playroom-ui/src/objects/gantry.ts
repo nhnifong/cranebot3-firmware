@@ -42,7 +42,7 @@ export class Gantry {
     private async loadSharedModel() {
         if (!Gantry.modelPromise) {
             const loader = new GLTFLoader();
-            Gantry.modelPromise = loader.loadAsync(import.meta.env.VITE_ASSET_BUCKET_URL+'/assets/playroom/models/gantry.glb');
+            Gantry.modelPromise = loader.loadAsync((import.meta.env.VITE_ASSET_BUCKET_URL ?? '')+'/assets/playroom/models/gantry.glb');
         }
         
         try {

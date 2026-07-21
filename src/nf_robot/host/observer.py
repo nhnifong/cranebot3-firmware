@@ -53,6 +53,7 @@ from nf_robot.host.component_client import max_origin_detections
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector, OMEGA
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
+from nf_robot.host.webui_server import WebUiServer
 
 logger = logging.getLogger(__name__)
 
@@ -158,12 +159,14 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090) -> None:
         self.port = port
         # Interface the local telemetry websocket and all local mjpeg video streams bind to.
         # Defaults to loopback (single-machine use). Set to a LAN IP or 0.0.0.0 to let a
         # record/eval client on another machine connect. See src/nf_robot/ml/README.md.
         self.bind_address = bind_address
+        self.serve_ui = serve_ui
+        self.ui_port = ui_port
         self.terminate_with_ui = terminate_with_ui
         self.position_update_task = None
         self.aiobrowser: AsyncServiceBrowser | None = None
@@ -216,6 +219,7 @@ class AsyncObserver:
         self.centering_model = None
         self.predicted_lateral_vector = None
         self.perception_task = None
+        self.webui_server = None
         # targets
         self.target_queue = TargetQueue()
         self.last_snapshot_hash = None # to spare the UI from too many updates
@@ -3252,6 +3256,17 @@ class AsyncObserver:
             # perception model — always started; target inference activates via SetTargetModel at runtime
             self.perception_task = asyncio.create_task(self.run_perception())
 
+            # optionally self-host the playroom-ui frontend, so a browser elsewhere on the LAN
+            # can load the full cockpit UI from this machine with no dependency on
+            # neufangled.com — see webui_server.py and playroom-ui/README.md.
+            if self.serve_ui:
+                self.webui_server = WebUiServer(port=self.ui_port, bind_address=self.bind_address)
+                try:
+                    self.webui_server.start()
+                except RuntimeError as e:
+                    logger.error(str(e))
+                    self.webui_server = None
+
             # start a websocket server to accept incoming connections from either a local UI or local Lerobot session
             async with websockets.serve(self.handle_local_client, self.bind_address, self.port):
                 # await something that will end when the program closes to keep serving and
@@ -3259,7 +3274,14 @@ class AsyncObserver:
                 try:
                     self.startup_complete.set()
 
-                    if self.telemetry_env == None:
+                    # Show an appropriate banner for the user to open in thir browser
+                    if self.webui_server is not None:
+                        if self.bind_address in ("0.0.0.0", "::", ""):
+                            advertised_host = get_local_ip() or "localhost"
+                        else:
+                            advertised_host = self.bind_address
+                        message = f'To control visit http://{advertised_host}:{self.ui_port}/'
+                    elif self.telemetry_env == None:
                         message = f'To control visit https://neufangled.com/playroom?robotid=lan on this machine'
                     elif self.telemetry_env == 'local':
                         message = f'To control visit http://localhost:5173/playroom?robotid={self.config.robot_id}'
@@ -3326,6 +3348,8 @@ class AsyncObserver:
         if self.loop_monitor is not None:
             await self.loop_monitor.stop()
         result = await self.stop_all()
+        if self.webui_server is not None:
+            self.webui_server.stop()
         self.run_command_loop = False
         self.stat.run = False
         self.pe.run = False
@@ -4386,9 +4410,18 @@ def main():
         type=str,
         default="127.0.0.1",
         help="Interface for the local telemetry websocket (port 4245) and all local mjpeg video "
-             "streams. Defaults to 127.0.0.1 (loopback only). Set to this host's LAN IP (or 0.0.0.0) "
-             "to let a record/eval client on another LAN machine connect. WARNING: the local control "
-             "channel is unauthenticated, so this exposes robot control to everyone on the network."
+             "streams. Set to 0.0.0.0 to access from elsewhere on your network."
+    )
+    parser.add_argument(
+        "--no_serve_ui",
+        action="store_true",
+        help="Don't serve the playroom-ui frontend from this machine."
+    )
+    parser.add_argument(
+        "--ui_port",
+        type=int,
+        default=8090,
+        help="Port to serve the self-hosted UI on, unless --no_serve_ui is set. Defaults to 8090."
     )
     args = parser.parse_args()
 
@@ -4413,6 +4446,8 @@ def main():
             debug=args.debug,
             bind_address=args.bind_address,
             rec_diagnostics=args.rec_diagnostics,
+            serve_ui=(not args.no_serve_ui),
+            ui_port=args.ui_port,
         )
 
         # Idempotent stop trigger. Runs as a signal-handler callback on the event

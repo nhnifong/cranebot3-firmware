@@ -2,57 +2,87 @@
 
 Control code for the Stringman household robotic crane from Neufangled Robotics
 
+![](https://storage.googleapis.com/nf-site-assets-prod-b/assets/white_gripper.webp)
+
 ## [Build Guides and Documentation](https://neufangled.com/docs)
 
-Purchase assembled robots or kits at [neufangled.com](https://neufangled.com)
+Purchase assembled robots or kits at [neufangled.com](https://neufangled.com/store)
 
 ## Installation of stringman controller (Users)
 
-Linux (python 3.11 or later)
+#### Linux
 
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
     python3 -m virtualenv venv
     source venv/bin/activate
     pip install "nf_robot[host]"
 
-Mac (python 3.13 or later)
+#### Mac
 
     brew install ffmpeg python@3.13
     python3.13 -m venv venv
     source venv/bin/activate
     pip install "nf_robot[host]"
 
-Start headless robot controller in LAN-only mode.
-The particular robot details will be read from/saved to bedroom.json
+#### Windows
 
-    stringman-headless --config=bedroom.json
+Type "Microsft Store" in the start menu, Search for python, Install python 3.13, then open powershell
+
+    cd ~
+    python3.13.exe -m pip install "nf_robot[host]"
+
+## Start robot controller in LAN-only mode.
+
+    stringman-headless
 
 The stringman motion controller (stringman-headless) is the program which communicates with the robot components over wifi and acts as the central brain of a single robot. It must be running on the same network as the powered on anchors and gripper in order for the robot to be active and controllable. The main entrypoint is observer.py
 
-It listens on port 4245 for a connection from a UI or local AI policy. The UI can be opened at [neufangled.com/playroom](https://neufangled.com/playroom). Select LAN mode at first.
+It listens on port 4245 for a connection from a UI or local AI policy. By default the UI is also hosted locally and is accessed at [http://localhost:8090/?robotid=lan](http://localhost:8090/?robotid=lan)
+
+## Binding a robot to an account on neufangled.com
+
+The same UI can also be opened at [neufangled.com/playroom](https://neufangled.com/playroom) which offers a relay for remote teleoperation.
+
+Selecting LAN mode opens the robot in the same way, but a "Bind robot to account" option is available in the run menu. Choosing this asks you to log in with an identity provider such as google, and binds your robot to neufangled.com. It can then be controlled by you or users whom you share it with from anywhere, and managed at [neufangled.com/my-robots](https://neufangled.com/my-robots) whenever it is running with `--prod`.
+
+This extra service is free and completely optional. We understand that privacy and convenience exist in a tradoff and that decision is yours to make, not ours. Nevertheless, we do not collect or save any of your video even if you do use our relay.
 
 Refer to the [Usage Guide](https://neufangled.com/docs/usage_guide/) for more detailed instructions on setup and use.
+
+## Calibration and Use
+
+Before stringman can be used in a new room, it must be calibrated so the locations of the anchors and eyelets are known. This is done by selecting "Full Calibration" from the "Maintenence and Calibration" submenu.
+
+A more detailed guide on first time setup is available at [neufangled.com/docs/usage_guide](https://neufangled.com/docs/usage_guide)
 
 ### Arguments to stringman-headless
 
 options:
 
   --config              A json file where the robot's ID and calibration data are stored. You may use one for a bedroom and one for a playroom for example, even if it is the same hardware being taken
-                        down and put back up in another room 
+                        down and put back up in another room
+  --prod                Shorthand for --telemetry_env=production
   --telemetry_env {local,staging,production}
                         The cloud telemetry server to connect to (choices: local, staging, production) The default is None, which allows local connections on port 4245 only
-                        When production is used if you have already bound the robot to an account at neufangled.com. This is completely optional.
-  --auto_start          Automatically unpark and start cleaning when all components connect
+  --no_ortho            Disable orthographic floor projection and its video streams
+  --stream_heatmap      Generate and stream the target heatmap video feed (off by default)
+  --auto_start          Automatically unpark and start cleaning when all components connect (experimental)
   --local_models        Use local models from models/ for the targeting and centering models rather than downloading the production models from huggingface
   --debug               Enable DEBUG level logging
+  --rec_diagnostics     Record the arguments of every optimize_arp_anchors call during full_auto_calibration
+                        to calibration_diagnostics.pkl, for offline analysis. Arpeggio hardware only.
+  --bind_address        Interface for the local telemetry websocket (port 4245) and all local mjpeg video
+                        streams. Set to 0.0.0.0 to access from elsewhere on your network.
+  --no_serve_ui         Don't serve the playroom-ui frontend from this machine.
+  --ui_port             Port to serve the self-hosted UI on, unless --no_serve_ui is set. Defaults to 8090.
 
 ### Minimum system specs
 
 At least 8 cores and 8GB of ram.
 In order to perform local inference, some kind of pytorch accelertion is necessary.
-Mini PC's or laptops based on the Ryzen 7 7840HS are probably about the cheapest machines that can run stringman's motion controller since it has an NPU that can be used to accelerate pytorch. A mac mini is also a viable option.
+Mini PC's or laptops based on the Ryzen 7 7840HS are probably about the cheapest machines that can run stringman's motion controller since it has an NPU that can be used to accelerate pytorch. A mac mini is also a viable, though more expensive option.
 
-Otherwise, any gaming PC is usually more than enough.
+Otherwise, any gaming desktop is usually more than enough.
 
 ### Telemetry stream
 
@@ -61,7 +91,7 @@ Every message sent by stringman-headless is a serialized `TelemetryBatchUpdate` 
 
 Within the telemetry stream, there are `VideoReady` messages containing URIs for connecting to the robot's video streams.
 
-The UI at [neufangled.com/playroom](https://neufangled.com/playroom) sends controls and receives telemetry.
+The UI hosted locally or at [neufangled.com/playroom](https://neufangled.com/playroom) sends controls and receives telemetry.
 Any AI policy served by `src/nf_robot/ml/stringman_lerobot.py` also sends controls and receives telemetry.
 Agents wishing to write code to interface with a stringman robot may also follow this pattern.
 
@@ -69,15 +99,6 @@ The expected inputs are basically marker box velocity and finger and wrist speed
 Higher level control is achived by having a policy such as DIT or a VLA connected to the robot, and having another client sending `nf.common.EpisodeControl` commands with prompts.
 
 See [Imitation Learning](https://neufangled.com/docs/imitation_learning/) for a more detailed guide.
-
-## Cloud telemetry relay
-
-When stringman-headless is in LAN mode (done by omitting the --telemetry_env argument) it only accepts local telemetry connections and only streams video locally.
-
-If connected to a robot in lan mode from the UI at neufangled.com, you can click "Bind robot" in the run menu, log in with an identity profider, and that robot id (from the config.json file) will be marked as owned by you.
-It is then possible to run with `--telemetry_env=production` and stringman will also send telemetry and video to neufangled.com so that you can view and control the robot remotely over the internet. This is accessed from the "My Robots" option when opening neufangled.com/playroom.
-
-No video or telemetry is saved when you use the cloud relay. The only way video gets shared with us is if you record a public lerobot dataset and inform us of it.
 
 ## Installation (developers)
 
@@ -105,58 +126,6 @@ run all tests
 
     pytest tests
 
-### Setting up a component
-
-Robot components that boot from the [`stringman-zero2w.img`](https://storage.googleapis.com/stringman-models/stringman-zero2w.img) (1.6GB) image should begin looking for wifi share codes with their camera immediately. You can produce a code with [qifi.org](htts://qifi.org)
-
-Once the pi sees the code it will connect to the network and remember those settings. It should then be discoverable by the control panel via multicast DNS (Bonjour)
-
-## Starting from a base rpi image
-
-Alternatively the software can be set up from a fresh raspberry pi lite 64 bit image.
-After booting any raspberry pi from a fresh image, perform an update
-
-    sudo apt update -y && sudo apt full-upgrade -y -o Dpkg::Options::="--force-confold" && sudo apt install -y git python3-dev python3-virtualenv rpicam-apps i2c-tools
-
-Clone the [cranebot-firmware](https://github.com/nhnifong/cranebot3-firmware) repo
-
-    git clone https://github.com/nhnifong/cranebot3-firmware.git && cd cranebot3-firmware
-
-Set the component type by uncommenting the appropriate line in server.conf
-
-    nano server.conf
-
-Install stringman
-
-    chmod +x install.sh
-    sudo ./install.sh
-
-### Additional settings for anchors
-
-Setup for any raspberry pi that will be part of an anchor
-Enable uart serial harware interface interactively.
-
-    sudo raspi-config
-
-In interface optoins, select serial port. disable the login shell, but enable hardware serial.
-
-add the following lines lines to to `/boot/firmware/config.txt`  at the end this disables bluetooth, which would otherwise occupy the uart hardware.
-Then reboot after this change
-
-    enable_uart=1
-    dtoverlay=disable-bt
-
-### Additional settings for gripper
-
-Setup for the raspberry pi in the gripper with the inventor hat mini
-Enable i2c
-
-    sudo raspi-config nonint do_i2c 0
-
-Add this line to `/boot/firmware/config.txt` just under `dtparam=i2c_arm=on` and reboot
-
-    dtparam=i2c_baudrate=400000
-
 ## Rebuilding the python module
 
 within a venv install the build tools
@@ -164,21 +133,25 @@ within a venv install the build tools
     python3 -m pip install --upgrade build twine
 
 Bump the version number in pyproject.toml
-then at this repo's root, build the module. Artifacts will be in dist/
+then at this repo's root, run the release build script.
 
-    python3 -m build
+    scripts/build_release.sh
 
 Upload the particular version you just built to PyPi
 
     python3 -m twine upload dist/nf_robot-4.0.5*
 
-### QA scripts
+### Robot components
 
-Note that if you are proceeding to QA scripts right after doing the steps above you must reboot and then stop the service before running those scrips.
+Anchors and grippers contain raspberry pi's running an image defined and built in stringman-pilot-rpi-image. The latest release of this image can be downloaded at
 
-    sudo reboot now
+[Stringman Raspberry Pi Image](https://storage.googleapis.com/stringman-models/stringman-zero2w.img) (1.6 GB)
 
-log back in
+By default components have the user `pi` and password `Fo0bar!!`. Users can upload keys and disable password auth on thier robot components with
+
+    experiments/deploy_ssh_keys.py <robot conf.json file>
+
+When assembling components from scratch, a self test checkout script must be run on them, and since the cranebot service always starts at boot and may talk to the motors, it must be disabled first.
 
     sudo systemctl stop cranebot.service
 
@@ -187,24 +160,11 @@ Run QA scripts for the specific component type
     /opt/robot/env/bin/qa-gripper-arp
     /opt/robot/env/bin/qa-anchor-arp
 
-These scripts both check whether everything is connected as it should be and in the case of anchors, set whether it is a power anchor or not.
+These scripts both check whether everything is connected as it should be and interactively help wind the spools with the correct amount of wire.
 
 To update to the lastest nf_robot version in a component
 
     /opt/robot/env/bin/pip install --upgrade "nf_robot[pi]"
-
-## Training models
-
-
-## Windows
-
-A self contained windows installer can be generated. The exact installation of stringman that ends up in the installer depends on what was in the virtualenv these commands are run from, so make a new one.
-
-    python3 -m venv winvenv
-    source winvenv/bin/activate
-    pip install nf_robot[host]
-    pip install pyinstaller
-    pyinstaller --onefile --windowed --name "Stringman" win_main.py
 
 ## Support this project
 
