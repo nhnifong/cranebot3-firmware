@@ -49,7 +49,7 @@ default_gripper_conf = {
     # (normalized voltage drop, 0-1) Pressure threshold to switch from position to force mode
     'FORCE_TRIGGER_THRESHOLD': 0.025,
     # (force/deg) Scaling factor mapping commanded finger speed to desired force increments
-    'FORCE_RATE_MULTIPLIER': 1.0 / 200.0,
+    'FORCE_RATE_MULTIPLIER': 0.007,
     # (normalized force, 0-1) The target force immediately applied upon entering force mode
     'INITIAL_DESIRED_FORCE': 0.08,
     # (raw motor units, 0-1000) The maximum allowed motor load before capping the normalized load contribution (finger)

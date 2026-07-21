@@ -5,6 +5,7 @@
 
 __all__ = (
     "AnchorType",
+    "CalibratedStatus",
     "EpCommand",
     "EpisodeControl",
     "LerobotSessionStatus",
@@ -54,6 +55,34 @@ class AnchorType(betterproto2.Enum):
             "ANCHORTYPE_UNSPECIFIED": 0,
             "ANCHORTYPE_PILOT": 1,
             "ANCHORTYPE_ARPEGGIO": 2,
+        }
+
+
+class CalibratedStatus(betterproto2.Enum):
+    UNSET = 0
+
+    UNCALIBRATED = 1
+
+    POSES_ONLY = 2
+
+    FULLY_CALIBRATED = 3
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "CALIBRATEDSTATUS_UNSET",
+            1: "CALIBRATEDSTATUS_UNCALIBRATED",
+            2: "CALIBRATEDSTATUS_POSES_ONLY",
+            3: "CALIBRATEDSTATUS_FULLY_CALIBRATED",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "CALIBRATEDSTATUS_UNSET": 0,
+            "CALIBRATEDSTATUS_UNCALIBRATED": 1,
+            "CALIBRATEDSTATUS_POSES_ONLY": 2,
+            "CALIBRATEDSTATUS_FULLY_CALIBRATED": 3,
         }
 
 

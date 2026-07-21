@@ -173,6 +173,10 @@ class AnchorPoses(betterproto2.Message):
     used by UI to pre-set the saved value on the slider.
     """
 
+    calibrated: "_common__.CalibratedStatus" = betterproto2.field(
+        5, betterproto2.TYPE_ENUM, default_factory=lambda: _common__.CalibratedStatus(0)
+    )
+
 
 default_message_pool.register_message("nf.telemetry", "AnchorPoses", AnchorPoses)
 

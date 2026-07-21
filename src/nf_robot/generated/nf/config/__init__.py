@@ -295,6 +295,9 @@ class StringmanPilotConfig(betterproto2.Message):
     robot_id: "str" = betterproto2.field(8, betterproto2.TYPE_STRING)
 
     has_been_calibrated: "bool" = betterproto2.field(9, betterproto2.TYPE_BOOL)
+    """
+    DEPRECATED. Use calibrated_status instead.
+    """
 
     park_data: "ParkData | None" = betterproto2.field(
         11, betterproto2.TYPE_MESSAGE, optional=True
@@ -370,6 +373,15 @@ class StringmanPilotConfig(betterproto2.Message):
     )
     """
     Repo id last used for a local lerobot recording session.
+    """
+
+    calibrated_status: "_common__.CalibratedStatus" = betterproto2.field(
+        23,
+        betterproto2.TYPE_ENUM,
+        default_factory=lambda: _common__.CalibratedStatus(0),
+    )
+    """
+    How thoroughly this robot has been calibrated. Replaces has_been_calibrated.
     """
 
 

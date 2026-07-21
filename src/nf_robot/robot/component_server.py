@@ -10,6 +10,7 @@ from websockets.exceptions import (
 )
 import json
 import importlib.metadata
+from collections import deque
 import zeroconf
 from zeroconf.asyncio import (
     AsyncZeroconf,
@@ -54,6 +55,9 @@ default_conf = {
     # delay in seconds between updates sent on websocket during normal operation
     'RUNNING_WS_DELAY': 1/25,
 }
+
+log_path = '/opt/robot/cranebot.log'
+log_tail_lines = 2000
 
 class RobotComponentServer:
     def __init__(self):
@@ -362,6 +366,15 @@ class RobotComponentServer:
             self.update['firmware_update_complete'] = {'returncode': returncode, 'error': error_output}
             logging.error(f'Self update failed with returncode {returncode}. Not restarting.')
 
+    def read_recent_logs(self):
+        """Return the last log_tail_lines lines of this component's log file, for the
+        'pull_logs' debug command."""
+        try:
+            with open(log_path, 'r', errors='replace') as f:
+                return ''.join(deque(f, maxlen=log_tail_lines))
+        except FileNotFoundError:
+            return ''
+
     async def read_updates_from_client(self,websocket,tg):
         while True:
             message = await websocket.recv()
@@ -392,6 +405,9 @@ class RobotComponentServer:
                 tz = update['set_timezone']
                 subprocess.run(['sudo', 'timedatectl', 'set-timezone', tz], check=True)
                 logging.info(f'Timezone set to {tz}')
+
+            if 'get_logs' in update:
+                self.update['logs'] = self.read_recent_logs()
 
             # defer to specific server subclass
             result = await self.processOtherUpdates(update,tg)

@@ -46,6 +46,7 @@ let userRobots: RobotInfo[] = [];
 // Calibration tracking variables
 let isFullCalibrationActive = false;
 let anchorsSeeingOriginCard: number[] = [];
+let lastCalibratedStatus: nf.common.CalibratedStatus = nf.common.CalibratedStatus.CALIBRATEDSTATUS_UNSET;
 
 // Gripper Sensor State
 let currentGripperPressure = 0;
@@ -225,13 +226,6 @@ let isSimMode = false; // Track simulator mode
 // The caller's effective access level for the connected robot. 'owner' until
 // resolved (and always effectively owner in LAN/sim, which have no cloud auth).
 let currentAccessLevel: string = 'owner';
-const ACCESS_LEVELS = ['owner', 'full', 'limited_driver', 'spectator'];
-// TEMP (testing): ?force_access=<level> forces the UI and the backend (via the
-// /control query param) into a lower level. Remove once level testing is done.
-const forceAccess: string | null = urlParams.get('force_access');
-function forcedLevel(): string | null {
-  return forceAccess && ACCESS_LEVELS.includes(forceAccess) ? forceAccess : null;
-}
 // Spectators send nothing; everyone else may send (the backend filters
 // limited_driver, so the UI need only fully block spectators here).
 function canSendControl(): boolean {
@@ -475,7 +469,7 @@ async function startCloudFlow(robotId: string) {
     // Resolve our access level before connecting so the UI starts in the right
     // state. A force_access URL param overrides it for local testing.
     try {
-      currentAccessLevel = forcedLevel() ?? await AuthManager.apiGetMyAccess(robotId, token);
+      currentAccessLevel = await AuthManager.apiGetMyAccess(robotId, token);
     } catch (e) {
       console.warn('Could not resolve access level, assuming owner:', e);
       currentAccessLevel = 'owner';
@@ -486,8 +480,6 @@ async function startCloudFlow(robotId: string) {
     document.getElementById('landing-layer')?.classList.add('hidden');
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     let url = `${protocol}//${window.location.host}/control/${robotId}?ticket=${encodeURIComponent(ticket)}`;
-    const forced = forcedLevel();
-    if (forced) url += `&force_access=${encodeURIComponent(forced)}`;
     connect(url);
   } catch (error) { console.error("Cloud connection failed:", error); }
 }
@@ -1034,9 +1026,8 @@ window.addEventListener('resize', () => {
 
 //  ===== telemetry update handlers =====
 
-// Reposition the anchors and eyelets. Corners are always [ArpAnchor, ArpAnchor, Eyelet,
-// Eyelet] -- created that way from the start (see corners init above) -- so this just
-// updates poses, no more figuring out which hardware generation is connected.
+// Reposition the anchors and eyelets. Corners are always
+// [ArpAnchor, ArpAnchor, Eyelet, Eyelet]s
 function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
   if (wallCables.length === 0) {
     wallCables.push(new Cable(scene));
@@ -1057,6 +1048,10 @@ function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
     let val = data.swingLatency.toFixed(2);
     slider!.value = val;
     valueDisplay!.textContent = val + 's';
+  }
+
+  if (data.calibrated != null) {
+    lastCalibratedStatus = data.calibrated;
   }
 
   updateComponentStatusUI();
@@ -1170,7 +1165,13 @@ export function isFullyConnected(): boolean {
   return anchorConnected >= expectedAnchors && gripperConnected >= 1;
 }
 
+export function isFullyCalibrated(): boolean {
+  return lastCalibratedStatus === nf.common.CalibratedStatus.CALIBRATEDSTATUS_FULLY_CALIBRATED;
+}
+
 function updateComponentStatusUI() {
+  updateSwingToggleAvailability();
+
   let anchorCount = 2;
   let anchorConnected = 0;
   let gripperCount = 1;
@@ -1706,9 +1707,9 @@ function initRunMenu() {
       runMenu.classList.toggle('show');
 
       // Pick and drop / auto grasp require every anchor and gripper to be connected.
-      const fullyConnected = isFullyConnected();
-      document.getElementById('action-pick-drop')?.classList.toggle('disabled', !fullyConnected);
-      document.getElementById('action-grasp')?.classList.toggle('disabled', !fullyConnected);
+      const actionsAvailable = isFullyConnected() && isFullyCalibrated();
+      document.getElementById('action-pick-drop')?.classList.toggle('disabled', !actionsAvailable);
+      document.getElementById('action-grasp')?.classList.toggle('disabled', !actionsAvailable);
     });
   }
 
@@ -2540,9 +2541,22 @@ function initComponentMenu() {
 initComponentMenu();
 
 function toggleSwingCancellation() {
+  if (!isFullyConnected() || !isFullyCalibrated()) return;
   sendControl([nf.control.ControlItem.create({
     setSwingCancellation: { enabled: !swingCancellationEnabled, present: '.' }
   })]);
+}
+
+/** Swing cancellation requires every anchor/gripper connected and full calibration to be meaningful. */
+function updateSwingToggleAvailability() {
+  const available = isFullyConnected() && isFullyCalibrated();
+  const btn = document.getElementById('btn-swing-cancel');
+  btn?.classList.toggle('disabled', !available);
+  if (btn) {
+    btn.title = available
+      ? 'Actively cancel gripper swing. (left stick click)'
+      : 'Swing cancellation is only available after calibration';
+  }
 }
 
 function toggleAutoTarget() {
@@ -2572,6 +2586,8 @@ function initSwingControl() {
       debug: { action: `swinglatency ${val}` }
     })]);
   });
+
+  updateSwingToggleAvailability();
 }
 initSwingControl();
 

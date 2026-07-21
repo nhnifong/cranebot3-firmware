@@ -982,6 +982,7 @@ h2 {
   transition: background-color 0.2s;
 }
 .toggle-track.perspective-button-selected { background-color: #c8e6c9; }
+.toggle-track.disabled { cursor: default; opacity: 0.5; }
 
 .toggle-knob {
   position: absolute;

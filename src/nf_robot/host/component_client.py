@@ -67,6 +67,9 @@ class ComponentClient:
         # version of the nf_robot module running on the component server, reported by the
         # server right after connecting. None until reported (older firmware never sends it).
         self.nf_robot_v = None
+        # set by pull_logs() while waiting for a response, then holds the log text
+        # once received (see receive_loop()'s handling of the 'logs' key).
+        self.pulled_logs = None
 
         # saved for setup telemetry
         self.local_video_uri = None
@@ -404,6 +407,19 @@ class ComponentClient:
             await asyncio.sleep(0.5)
         return self.firmware_update_success
 
+    async def pull_logs(self, timeout=10):
+        """Request this component's recent log lines and wait for the response.
+        Returns the log text, or None if disconnected or the component didn't respond in time."""
+        self.pulled_logs = None
+        await self.send_commands({'get_logs': None})
+        started = time.time()
+        while self.pulled_logs is None and self.connected:
+            if time.time() - started > timeout:
+                logger.warning(f'Timed out waiting for logs from {self.address}')
+                return None
+            await asyncio.sleep(0.2)
+        return self.pulled_logs
+
     def _handle_firmware_update_complete(self, upd):
         """Handle a 'firmware_update_complete' update from the component (see run_update()
         on the server side). Called from receive_loop()."""
@@ -459,6 +475,8 @@ class ComponentClient:
                         self.conn_status.motor_enabled = telemetry.MotorTorque.ENABLED
                     else:
                         self.conn_status.motor_enabled = telemetry.MotorTorque.DISABLED
+                if 'logs' in update:
+                    self.pulled_logs = update['logs']
                 # this event is used to detect an un-responsive state.
                 self.heartbeat_receipt.set()
                 await self.handle_update_from_ws(update)

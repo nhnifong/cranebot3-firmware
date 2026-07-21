@@ -44,7 +44,7 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # provision a random ID
     # once the robot tells the backend what this ID is, it has to stick to it, or the owner may see it disappear from their dashboard
     config.robot_id = str(uuid.uuid4())
-    config.has_been_calibrated = False
+    config.calibrated_status = common.CalibratedStatus.UNCALIBRATED
     config.connect_cloud_telemetry = False
 
     config.anchors = default_arp_anchors()
@@ -175,6 +175,15 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
                 c.last_route_destination = default.last_route_destination
             if c.pick_and_place is None:
                 c.pick_and_place = default.pick_and_place
+
+            # Migrate the deprecated has_been_calibrated bool to calibrated_status.
+            # Older configs won't have calibrated_status set, so it will still be at its
+            # zero-value (UNSET) after loading.
+            if c.calibrated_status == common.CalibratedStatus.UNSET:
+                c.calibrated_status = (
+                    common.CalibratedStatus.FULLY_CALIBRATED if c.has_been_calibrated
+                    else common.CalibratedStatus.UNCALIBRATED
+                )
 
             return c
 

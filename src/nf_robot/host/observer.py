@@ -35,6 +35,7 @@ from pathlib import Path
 import json
 import re
 import subprocess
+import zipfile
 from packaging.version import parse as parse_version, InvalidVersion
 
 from nf_robot.common.pose_functions import compose_poses
@@ -275,10 +276,12 @@ class AsyncObserver:
                 eyelets=[a.indirect_line.eyelet_pos for a in self.config.anchors],
                 tilt=[a.indirect_line.cam_tilt for a in self.config.anchors],
                 swing_latency=self.config.swing_latency,
+                calibrated=self.config.calibrated_status,
             ))
         else:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
-                poses=[a.pose for a in self.config.anchors]
+                poses=[a.pose for a in self.config.anchors],
+                calibrated=self.config.calibrated_status,
             ))
         if self.config.park_data is not None:
             self.send_ui(named_position=telemetry.NamedObjectPosition(
@@ -865,6 +868,8 @@ class AsyncObserver:
             r = await self.invoke_motion_task(self.goalseek_diagnostic_task())
         if item.action == 'sync_timezone':
             await self.sync_timezone_to_bots()
+        if item.action == 'pull_logs':
+            asyncio.create_task(self.pull_logs_to_zip())
         if item.action.startswith('untwist'):
             parts = item.action.split()
             if len(parts)==2 and parts[0]=='untwist':
@@ -931,6 +936,20 @@ class AsyncObserver:
             client.send_commands({'set_timezone': tz})
             for client in self.bot_clients.values()
         ])
+
+    async def pull_logs_to_zip(self):
+        """Pull recent log lines from every connected component and bundle them into a
+        local zip file, one entry per component named after its IP address."""
+        clients = list(self.bot_clients.values())
+        logs = await asyncio.gather(*[client.pull_logs() for client in clients])
+        zip_path = f'pulled_logs_{int(time.time())}.zip'
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for client, log_text in zip(clients, logs):
+                if log_text is None:
+                    logger.warning(f'No logs received from {client.address}; skipping')
+                    continue
+                zf.writestr(f'{client.address}.log', log_text)
+        logger.info(f'Saved logs from {len(clients)} component(s) to {zip_path}')
 
     @staticmethod
     def _get_local_timezone_name():
@@ -1542,7 +1561,8 @@ class AsyncObserver:
         # inform UI
         self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
             poses=[poseTupleToProto(p) for p in anchor_poses],
-            eyelets=[fromnp(e) for e in eyelet_positions]
+            eyelets=[fromnp(e) for e in eyelet_positions],
+            calibrated=self.config.calibrated_status,
         ))
         # inform position estimator
         anchor_points = np.array([
@@ -2255,6 +2275,7 @@ class AsyncObserver:
             logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
             self.save_poses_arp(anchor_poses, eyelet_positions)
+            self.config.calibrated_status = common.CalibratedStatus.POSES_ONLY
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=24.0,
@@ -2481,7 +2502,7 @@ class AsyncObserver:
         logger.info(f'Euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
         roomspin = euler_rot[0]
         self.config.gripper.frame_room_spin = roomspin
-        self.config.has_been_calibrated = True
+        self.config.calibrated_status = common.CalibratedStatus.FULLY_CALIBRATED
         save_config(self.config, self.config_path)
         self.gripper_client.calibrating_room_spin = False
 
