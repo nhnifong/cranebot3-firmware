@@ -5,11 +5,13 @@
 
 __all__ = (
     "AnchorType",
+    "CalibratedStatus",
     "EpCommand",
     "EpisodeControl",
     "LerobotSessionStatus",
     "LerobotStatus",
     "Pose",
+    "RelayCreds",
     "RoutePoint",
     "Vec3",
 )
@@ -54,6 +56,34 @@ class AnchorType(betterproto2.Enum):
             "ANCHORTYPE_UNSPECIFIED": 0,
             "ANCHORTYPE_PILOT": 1,
             "ANCHORTYPE_ARPEGGIO": 2,
+        }
+
+
+class CalibratedStatus(betterproto2.Enum):
+    UNSET = 0
+
+    UNCALIBRATED = 1
+
+    POSES_ONLY = 2
+
+    FULLY_CALIBRATED = 3
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "CALIBRATEDSTATUS_UNSET",
+            1: "CALIBRATEDSTATUS_UNCALIBRATED",
+            2: "CALIBRATEDSTATUS_POSES_ONLY",
+            3: "CALIBRATEDSTATUS_FULLY_CALIBRATED",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "CALIBRATEDSTATUS_UNSET": 0,
+            "CALIBRATEDSTATUS_UNCALIBRATED": 1,
+            "CALIBRATEDSTATUS_POSES_ONLY": 2,
+            "CALIBRATEDSTATUS_FULLY_CALIBRATED": 3,
         }
 
 
@@ -352,6 +382,21 @@ class Pose(betterproto2.Message):
 
 
 default_message_pool.register_message("nf.common", "Pose", Pose)
+
+
+@dataclass(eq=False, repr=False)
+class RelayCreds(betterproto2.Message):
+    """
+    Credentials needed to publish telemetry on a given instance of the
+    control plane such as neufangled.com
+    """
+
+    robot_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    key: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message("nf.common", "RelayCreds", RelayCreds)
 
 
 @dataclass(eq=False, repr=False)
