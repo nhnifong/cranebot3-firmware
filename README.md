@@ -45,7 +45,7 @@ The same UI can also be opened at [neufangled.com/playroom](https://neufangled.c
 
 Selecting LAN mode opens the robot in the same way, but a "Bind robot to account" option is available in the run menu. Choosing this asks you to log in with an identity provider such as google, and binds your robot to neufangled.com. It can then be controlled by you or users whom you share it with from anywhere, and managed at [neufangled.com/my-robots](https://neufangled.com/my-robots) whenever it is running with `--prod`.
 
-This extra service is free and completely optional. We understand that privacy and convenience exist in a tradoff and that decision is yours to make, not ours. Nevertheless, we do not collect or save any of your video even if you do use our relay.
+This extra service is free and completely optional. We understand that privacy and convenience exist in a tradeoff and that decision is yours to make, not ours. Nevertheless, we do not collect or save any of your video even if you do use our relay.
 
 Refer to the [Usage Guide](https://neufangled.com/docs/usage_guide/) for more detailed instructions on setup and use.
 
@@ -59,22 +59,22 @@ A more detailed guide on first time setup is available at [neufangled.com/docs/u
 
 options:
 
-  --config              A json file where the robot's ID and calibration data are stored. You may use one for a bedroom and one for a playroom for example, even if it is the same hardware being taken
-                        down and put back up in another room
-  --prod                Shorthand for --telemetry_env=production
-  --telemetry_env {local,staging,production}
-                        The cloud telemetry server to connect to (choices: local, staging, production) The default is None, which allows local connections on port 4245 only
-  --no_ortho            Disable orthographic floor projection and its video streams
-  --stream_heatmap      Generate and stream the target heatmap video feed (off by default)
-  --auto_start          Automatically unpark and start cleaning when all components connect (experimental)
-  --local_models        Use local models from models/ for the targeting and centering models rather than downloading the production models from huggingface
-  --debug               Enable DEBUG level logging
-  --rec_diagnostics     Record the arguments of every optimize_arp_anchors call during full_auto_calibration
-                        to calibration_diagnostics.pkl, for offline analysis. Arpeggio hardware only.
-  --bind_address        Interface for the local telemetry websocket (port 4245) and all local mjpeg video
-                        streams. Set to 0.0.0.0 to access from elsewhere on your network.
-  --no_serve_ui         Don't serve the playroom-ui frontend from this machine.
-  --ui_port             Port to serve the self-hosted UI on, unless --no_serve_ui is set. Defaults to 8090.
+    --config              A json file where the robot's ID and calibration data are stored. You may use one for a bedroom and one for a playroom for example, even if it is the same hardware being taken
+                            down and put back up in another room
+    --prod                Shorthand for --telemetry_env=production
+    --telemetry_env {local,staging,production}
+                            The cloud telemetry server to connect to (choices: local, staging, production) The default is None, which allows local connections on port 4245 only
+    --no_ortho            Disable orthographic floor projection and its video streams
+    --stream_heatmap      Generate and stream the target heatmap video feed (off by default)
+    --auto_start          Automatically unpark and start cleaning when all components connect (experimental)
+    --local_models        Use local models from models/ for the targeting and centering models rather than downloading the production models from huggingface
+    --debug               Enable DEBUG level logging
+    --rec_diagnostics     Record the arguments of every optimize_arp_anchors call during full_auto_calibration
+                            to calibration_diagnostics.pkl, for offline analysis. Arpeggio hardware only.
+    --bind_address        Interface for the local telemetry websocket (port 4245) and all local mjpeg video
+                            streams. Set to 0.0.0.0 to access from elsewhere on your network.
+    --no_serve_ui         Don't serve the playroom-ui frontend from this machine.
+    --ui_port             Port to serve the self-hosted UI on, unless --no_serve_ui is set. Defaults to 8090.
 
 ### Minimum system specs
 
