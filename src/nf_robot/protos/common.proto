@@ -102,3 +102,17 @@ enum RoutePoint {
   ROUTEPOINT_GAMEPAD = 6;
   ROUTEPOINT_ORIGIN = 7;
 }
+
+enum CalibratedStatus {
+  CALIBRATEDSTATUS_UNSET = 0;
+  CALIBRATEDSTATUS_UNCALIBRATED = 1;
+  CALIBRATEDSTATUS_POSES_ONLY = 2;
+  CALIBRATEDSTATUS_FULLY_CALIBRATED = 3;
+}
+
+// Credentials needed to publish telemetry on a given instance of the
+// control plane such as neufangled.com
+message RelayCreds {
+  string robot_id = 1;
+  string key = 2;
+}

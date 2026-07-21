@@ -103,6 +103,8 @@ message StringmanPilotConfig {
   repeated int32 preferred_cameras = 7;
   
   string robot_id = 8;
+
+  // DEPRECATED. Use calibrated_status instead.
   bool has_been_calibrated = 9;
 
   ParkData park_data = 11;
@@ -139,6 +141,13 @@ message StringmanPilotConfig {
 
   // Repo id last used for a local lerobot recording session.
   string last_lerobot_dataset_repo_id = 22;
+
+  // How thoroughly this robot has been calibrated. Replaces has_been_calibrated.
+  common.CalibratedStatus calibrated_status = 23;
+
+  // Credentials to publish telemetry at any cloud relay instance this robot has bound with.
+  // Keyed by the telemetry ws_protocol_and_host such as "wss://neufangled.com"
+  map<string, nf.common.RelayCreds> relay_credentials = 24;
 }
 
 // Tunable constants used by AsyncObserver.pick_and_place_loop

@@ -53,6 +53,8 @@ message AnchorPoses {
   // Saved swing cancellation latency to use with this robot. Not a camera pose, but part of the setup data.
   // used by UI to pre-set the saved value on the slider.
   float swing_latency = 4;
+
+  nf.common.CalibratedStatus calibrated = 5;
 }
 
 enum ConnStatus {
@@ -222,6 +224,13 @@ message VideoReady {
   // feed number, distinct from anchor num.
   // 0: gripper, 1: first preferred anchor, 2: 2nd preferred anchor, 3: reprojected floor image
   uint32 feed_number = 5;
+
+  // tcp://host:port of the raw compressed-passthrough broadcast (see CompressedStreamer),
+  // for LAN/same-machine consumers (e.g. a lerobot recording process) that want the
+  // original video quality without a JPEG re-encode. Only set when stringman-headless was
+  // started with a non-default --bind_address, since that's the only time this streamer
+  // runs. UIs should keep using local_uri; this is for non-browser consumers.
+  optional string compressed_uri = 6;
 }
 
 message UplinkStatus {
