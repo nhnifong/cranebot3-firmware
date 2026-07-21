@@ -523,9 +523,14 @@ async function executeBind() {
   try {
     const token = await AuthManager.getAuthToken();
     await new Promise(r => setTimeout(r, 100));
-    // Binding a previously-anonymous robot needs no client-supplied id: the server mints an
-    // id + key, and the bridge implementation hands the key to the robot for storage.
-    await AuthManager.apiBindRobotV2(nickname, token);
+    // Binding a previously-anonymous robot needs no client-supplied id: the server
+    // mints an id + key and returns them. We then hand the key to the robot over
+    // its live (LAN) control link via a RelayCreds control message, so it can
+    // store the creds and reconnect to the cloud authenticated as its new id.
+    const { robotId, key } = await AuthManager.apiBindRobotV2(nickname, token);
+    sendControl([nf.control.ControlItem.create({
+      addRelayCreds: nf.common.RelayCreds.create({ robotId, key }),
+    })]);
     document.getElementById('landing-layer')?.classList.add('hidden');
     document.getElementById('bind-robot-panel')?.classList.add('hidden');
     showPopup({message: "Success! Robot bound to your account."});
