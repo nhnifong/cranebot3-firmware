@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import shutil
 import faulthandler
 import threading
 import time
@@ -4457,6 +4458,14 @@ def main():
         help="Port to serve the self-hosted UI on, unless --no_serve_ui is set. Defaults to 8090."
     )
     args = parser.parse_args()
+
+    if shutil.which("ffmpeg") is None:
+        if sys.platform == "darwin":
+            install_cmd = "brew install ffmpeg"
+        else:
+            install_cmd = "sudo apt install ffmpeg"
+        print(f"ffmpeg is required but was not found on your PATH. Install it with:\n\n    {install_cmd}\n", file=sys.stderr)
+        sys.exit(1)
 
     if args.prod:
         if args.telemetry_env not in (None, 'production'):
