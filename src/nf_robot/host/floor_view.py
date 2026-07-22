@@ -57,10 +57,10 @@ def generate_orthographic_floor_maps(
         K_scaled[0, :] *= sx
         K_scaled[1, :] *= sy
         
-        # 1. Undistort the incoming BGR image
+        # Undistort the incoming BGR image
         bgr_undistorted = cv2.undistort(bgr_image, K_scaled, D)
 
-        # 2. Resize and undistort the heatmap (skipped entirely when no heatmaps)
+        # Resize and undistort the heatmap (skipped entirely when no heatmaps)
         heatmap_undistorted = None
         if combined_heatmap is not None:
             heatmap = heatmaps_np[i]
@@ -70,7 +70,7 @@ def generate_orthographic_floor_maps(
                 heatmap_resized = heatmap
             heatmap_undistorted = cv2.undistort(heatmap_resized, K_scaled, D)
 
-        # 3. Compute Analytical Homography
+        # Compute Analytical Homography
         rvec = np.array(client.camera_pose[0], dtype=np.float64)
         tvec = np.array(client.camera_pose[1], dtype=np.float64).reshape(3, 1)
         
