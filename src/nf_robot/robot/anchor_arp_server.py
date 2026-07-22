@@ -26,7 +26,7 @@ default_anchor_conf = {
     # (rpi zero 2w's throttle/shut down around 60C). A running stream is automatically
     # restarted to pick up changes. Broadcasting this var only affects anchors, not grippers,
     # which have their own GRIPPER_STREAM_FRAMERATE var.
-    'ANCHOR_STREAM_FRAMERATE': 20,
+    'ANCHOR_STREAM_FRAMERATE': 10,
 }
 
 

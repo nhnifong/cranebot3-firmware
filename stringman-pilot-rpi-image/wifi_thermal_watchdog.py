@@ -18,18 +18,18 @@ default is the invoking user's home dir (e.g. /home/pi/wifi_thermal_watchdog.log
 resolved via SUDO_USER so it lands there even under sudo). Point --logfile at
 /boot/firmware/... instead if you want a copy you can read by pulling the card.
 
-Recovery escalates from least to most disruptive. A soft radio toggle often is
-NOT enough to revive a chip that has thermally shut down, so we escalate to
+Recovery escalates from least to most disruptive. A soft radio toggle is NOT
+enough to revive a chip that has thermally shut down, so we go straight to
 reloading the brcmfmac kernel module, which forces the chip firmware to be
 re-downloaded and the chip re-initialized -- the closest thing to a real power
-cycle without cutting its rail.
+cycle without cutting its rail. If even that fails, reboot the whole unit.
 
-  1. nmcli radio wifi off/on      (soft, works as the 'pi' user via polkit)
-  2. ip link set wlan0 down/up    (needs root)
-  3. modprobe -r brcmfmac brcmutil; modprobe brcmfmac   (needs root, real reset)
+  1. modprobe -r brcmfmac brcmutil; modprobe brcmfmac   (needs root, real reset)
+  2. sudo reboot now                                    (last resort, full cycle)
 
 Steps that need root are prefixed with sudo automatically when not running as
-root. Run as root (or a passwordless-sudo user) so the real power cycle works:
+root. On the Stringman image this ships as a systemd service that runs as root,
+so the module reload and reboot work directly. To run it by hand:
 
     sudo experiments/wifi_thermal_watchdog.py
 
@@ -49,7 +49,7 @@ import time
 from datetime import datetime, timezone
 
 # ---- Defaults (override via CLI) -------------------------------------------
-DEFAULT_INTERVAL = 600  # seconds between samples (10 minutes)
+DEFAULT_INTERVAL = 60  # seconds between samples
 DEFAULT_IFACE = "wlan0"
 
 
@@ -194,50 +194,50 @@ def is_online(iface, target):
 # ---- Recovery ---------------------------------------------------------------
 
 def recover(log, iface):
-    """Escalating attempts to power-cycle wifi. Returns True if back online."""
+    """Escalating attempts to restore wifi. Returns True if back online.
+
+    First reload the brcmfmac kernel module (forces the chip firmware to be
+    re-downloaded and the chip re-initialized -- the closest thing to a real
+    power cycle without cutting its rail). If that does not bring us back,
+    reboot the whole unit: a thermally wedged chip usually needs the full power
+    cycle, and an anchor that stays offline is useless anyway.
+    """
 
     def back_online():
         gw = default_gateway(iface)
         return is_online(iface, gw)
 
-    steps = [
-        ("nmcli radio toggle", [
-            sudo(["nmcli", "radio", "wifi", "off"]),
-            ["sleep", "2"],
-            sudo(["nmcli", "radio", "wifi", "on"]),
-        ]),
-        ("ip link bounce", [
-            sudo(["ip", "link", "set", iface, "down"]),
-            ["sleep", "2"],
-            sudo(["ip", "link", "set", iface, "up"]),
-        ]),
-        ("brcmfmac module reload (real power cycle)", [
-            sudo(["modprobe", "-r", "brcmfmac", "brcmutil"]),
-            ["sleep", "2"],
-            sudo(["modprobe", "brcmfmac"]),
-        ]),
+    name = "brcmfmac module reload (real power cycle)"
+    cmds = [
+        sudo(["modprobe", "-r", "brcmfmac", "brcmutil"]),
+        ["sleep", "2"],
+        sudo(["modprobe", "brcmfmac"]),
     ]
+    log.write("RECOVER", f"attempting: {name}")
+    for cmd in cmds:
+        if cmd[0] == "sleep":
+            time.sleep(int(cmd[1]))
+            continue
+        rc, out = run(cmd, timeout=30)
+        detail = f"  $ {' '.join(cmd)} -> rc={rc}"
+        if out:
+            detail += f" :: {out.splitlines()[0][:200]}"
+        log.write("RECOVER", detail)
+    # Give NetworkManager / DHCP time to re-associate and lease.
+    log.write("RECOVER", f"waiting {SETTLE_SECONDS}s for re-association...")
+    time.sleep(SETTLE_SECONDS)
+    if back_online():
+        log.write("RECOVER", f"SUCCESS via '{name}' -- back online")
+        return True
 
-    for name, cmds in steps:
-        log.write("RECOVER", f"attempting: {name}")
-        for cmd in cmds:
-            if cmd[0] == "sleep":
-                time.sleep(int(cmd[1]))
-                continue
-            rc, out = run(cmd, timeout=30)
-            detail = f"  $ {' '.join(cmd)} -> rc={rc}"
-            if out:
-                detail += f" :: {out.splitlines()[0][:200]}"
-            log.write("RECOVER", detail)
-        # Give NetworkManager / DHCP time to re-associate and lease.
-        log.write("RECOVER", f"waiting {SETTLE_SECONDS}s for re-association...")
-        time.sleep(SETTLE_SECONDS)
-        if back_online():
-            log.write("RECOVER", f"SUCCESS via '{name}' -- back online")
-            return True
-        log.write("RECOVER", f"still offline after '{name}', escalating")
-
-    log.write("RECOVER", "FAILED -- all recovery steps exhausted, still offline")
+    # Last resort: reboot the unit. reboot returns immediately and the box goes
+    # down, so there is nothing to check afterwards.
+    log.write("RECOVER", "still offline after module reload -- rebooting unit")
+    rc, out = run(sudo(["reboot", "now"]), timeout=30)
+    detail = f"  $ reboot now -> rc={rc}"
+    if out:
+        detail += f" :: {out.splitlines()[0][:200]}"
+    log.write("RECOVER", detail)
     return False
 
 

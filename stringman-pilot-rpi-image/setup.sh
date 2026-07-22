@@ -21,6 +21,15 @@ echo "Installing Wifi Config from preconfigured-wifi.nmconnection"
 # NetworkManager connections must be owned by root and have 600 permissions
 install -m 600 -o root -g root "preconfigured.nmconnection" "$ROOTFS_DIR/etc/NetworkManager/system-connections/preconfigured.nmconnection"
 
+# Disable Wi-Fi power save
+# (wifi.powersave = 2 => disabled) for all connections.
+echo "Disabling Wi-Fi power save..."
+mkdir -p "$ROOTFS_DIR/etc/NetworkManager/conf.d"
+cat <<EOF > "$ROOTFS_DIR/etc/NetworkManager/conf.d/wifi-powersave-off.conf"
+[connection]
+wifi.powersave = 2
+EOF
+
 # Create directory structure
 # (We use mkdir on the host, targeting the directory inside the rootfs)
 mkdir -p "$ROOTFS_DIR/opt/robot"
@@ -88,6 +97,12 @@ run_in_chroot "systemctl enable can-setup.service"
 # Main application service
 install -m 644 cranebot.service "$ROOTFS_DIR/etc/systemd/system/cranebot.service"
 run_in_chroot "systemctl enable cranebot.service"
+
+# Wi-Fi thermal watchdog: recovers anchors whose Wi-Fi chip thermally trips
+# offline by reloading the brcmfmac module, then rebooting if that fails.
+install -m 755 wifi_thermal_watchdog.py "$ROOTFS_DIR/usr/local/bin/wifi_thermal_watchdog.py"
+install -m 644 wifi-thermal-watchdog.service "$ROOTFS_DIR/etc/systemd/system/wifi-thermal-watchdog.service"
+run_in_chroot "systemctl enable wifi-thermal-watchdog.service"
 
 # Install a one time filesystem resize service on first boot to expand to fill the SD card
 install -m 755 resize-rootfs.sh "$ROOTFS_DIR/usr/local/sbin/resize-rootfs.sh"
