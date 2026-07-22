@@ -1123,8 +1123,8 @@ h2 {
 }
 #btn-cd-set-cam-angle { flex: 2; }
 
-/* Controls overlay: slightly wider to fit the gamepad diagram. */
-#controls-overlay .component-details-box { max-width: 500px; }
+/* Controls overlay: wide enough to fit the 600px-min gamepad diagram. */
+#controls-overlay .component-details-box { max-width: 680px; }
 
 /* Full calibration overlay */
 #fullcal-overlay .component-details-box { max-width: 720px; }
@@ -1198,6 +1198,34 @@ h2 {
   margin-top: 15px;
 }
 .controls-gamepad-section img { max-width: 100%; border-radius: 8px; }
+
+/* Inline gamepad diagram: DualShock artwork + code-drawn callouts. */
+.gamepad-diagram { width: 100%; min-width: 600px; height: auto; display: block; overflow: visible; }
+.gamepad-diagram .gp-line {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+}
+.gamepad-diagram .gp-label {
+  font-size: 19px;
+  fill: var(--text-light);
+}
+.gamepad-diagram .gp-key {
+  font-weight: 700;
+  fill: white;
+}
+/* Equivalent Xbox/Logitech-layout letter, e.g. "(Y)". */
+.gamepad-diagram .gp-alt {
+  fill: var(--text-dim);
+}
+.gamepad-diagram .gp-left  .gp-label { text-anchor: end; }
+.gamepad-diagram .gp-right .gp-label { text-anchor: start; }
+.gamepad-test-link {
+  display: block;
+  text-align: center;
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
 
 /* LeRobot overlay: wider to fit session controls comfortably. */
 #lerobot-overlay .component-details-box { min-width: 420px; }

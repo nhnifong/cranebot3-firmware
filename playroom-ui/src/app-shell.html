@@ -452,7 +452,92 @@
         </div>
 
         <div class="controls-gamepad-section">
-          <img src="%VITE_ASSET_BUCKET_URL%/assets/playroom/gamepad.webp" alt="Gamepad Controls">
+          <!--
+            Gamepad diagram. The controller artwork is the DualShock 4 layout SVG;
+            the leader lines + labels below are drawn in code so they can be edited
+            here. Coordinates are in the artwork's 600x400 space. Each labelled
+            control is one <g class="gp-callout"> with a <line> (gutter -> button)
+            and a <text> (bold key glyph + description). Left callouts anchor their
+            text to the left gutter, right callouts to the right gutter.
+          -->
+          <svg class="gamepad-diagram" viewBox="-235 -22 1105 448" role="img"
+               aria-label="Gamepad control layout">
+            <image href="%VITE_ASSET_BUCKET_URL%/assets/playroom/Dualshock_4_Layout.svg"
+                   x="0" y="0" width="600" height="400" />
+
+            <!-- Left-hand callouts (text anchored to the left gutter at x=-12) -->
+            <g class="gp-side gp-left">
+              <g class="gp-callout">
+                <line class="gp-line" x1="-8" y1="10" x2="120" y2="24" />
+                <text class="gp-label" x="-12" y="15"><tspan class="gp-key">L2 (Analog)</tspan><tspan dx="8">Move down</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="-8" y1="51" x2="129" y2="72" />
+                <text class="gp-label" x="-12" y="56"><tspan class="gp-key">D&#8593;</tspan><tspan dx="8">Tension lines</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="-8" y1="92" x2="200" y2="72" />
+                <text class="gp-label" x="-12" y="97"><tspan class="gp-key">Share</tspan><tspan class="gp-alt" dx="6">(Select)</tspan><tspan dx="8">Stop all</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="-8" y1="133" x2="80" y2="125" />
+                <text class="gp-label" x="-12" y="138"><tspan class="gp-key">D&#8592;</tspan><tspan dx="8">Quick cal</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="-8" y1="174" x2="179" y2="125" />
+                <text class="gp-label" x="-12" y="179"><tspan class="gp-key">D&#8594;</tspan><tspan dx="8">Auto grasp</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="-8" y1="215" x2="129" y2="177" />
+                <text class="gp-label" x="-12" y="220"><tspan class="gp-key">D&#8595;</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="-8" y1="255" x2="205" y2="200" />
+                <text class="gp-label" x="-12" y="260"><tspan class="gp-key">L-Stick</tspan><tspan dx="8">Move laterally</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="-8" y1="295" x2="216" y2="212" />
+                <text class="gp-label" x="-12" y="300"><tspan class="gp-key">L3 (Click)</tspan><tspan dx="8">Toggle swing</tspan></text>
+              </g>
+            </g>
+
+            <!-- Right-hand callouts (text anchored to the right gutter at x=612) -->
+            <g class="gp-side gp-right">
+              <g class="gp-callout">
+                <line class="gp-line" x1="608" y1="10" x2="480" y2="24" />
+                <text class="gp-label" x="612" y="15"><tspan class="gp-key">R2 (Analog)</tspan><tspan dx="8">Move up</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="608" y1="51" x2="400" y2="72" />
+                <text class="gp-label" x="612" y="56"><tspan class="gp-key">Options</tspan><tspan class="gp-alt" dx="6">(Start)</tspan><tspan dx="8">Ep start/stop</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="608" y1="92" x2="465" y2="85" />
+                <text class="gp-label" x="612" y="97"><tspan class="gp-key">&#9651;</tspan><tspan class="gp-alt" dx="6">(Y)</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="608" y1="133" x2="432" y2="127" />
+                <text class="gp-label" x="612" y="138"><tspan class="gp-key">&#9633;</tspan><tspan class="gp-alt" dx="6">(X)</tspan><tspan dx="8">Set prompt</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="608" y1="174" x2="515" y2="127" />
+                <text class="gp-label" x="612" y="179"><tspan class="gp-key">&#9675;</tspan><tspan class="gp-alt" dx="6">(B)</tspan><tspan dx="8">Open fingers</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="608" y1="215" x2="465" y2="168" />
+                <text class="gp-label" x="612" y="220"><tspan class="gp-key">&#10005;</tspan><tspan class="gp-alt" dx="6">(A)</tspan><tspan dx="8">Close fingers</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="608" y1="255" x2="390" y2="200" />
+                <text class="gp-label" x="612" y="260"><tspan class="gp-key">R-Stick</tspan><tspan dx="8">Wrist / fingers</tspan></text>
+              </g>
+              <g class="gp-callout">
+                <line class="gp-line" x1="608" y1="295" x2="379" y2="212" />
+                <text class="gp-label" x="612" y="300"><tspan class="gp-key">R3 (Click)</tspan></text>
+              </g>
+            </g>
+          </svg>
+          <a class="gamepad-test-link" href="https://hardwaretester.com/gamepad" target="_blank" rel="noopener noreferrer">Test gamepad connectivity</a>
         </div>
       </div>
     </div>
