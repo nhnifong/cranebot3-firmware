@@ -2031,6 +2031,7 @@ class AsyncObserver:
         VERTICAL_TOLERANCE_DEG = 10.0
         MAX_LIFT_M = 1.0
         MAX_LIFT_S = 10.0
+        MAX_LIFT_GRACE_S = 1.0  # ignore the distance limit briefly so an early gant_pos jump can't trip it
         vertical_start_pos = self.pe.gant_pos
         vertical_start_time = time.time()
         while True:
@@ -2042,8 +2043,10 @@ class AsyncObserver:
                 return
             if angle <= VERTICAL_TOLERANCE_DEG:
                 break
-            if (np.linalg.norm(self.pe.gant_pos - vertical_start_pos) >= MAX_LIFT_M
-                    or time.time() - vertical_start_time >= MAX_LIFT_S):
+            elapsed = time.time() - vertical_start_time
+            if ((elapsed >= MAX_LIFT_GRACE_S
+                    and np.linalg.norm(self.pe.gant_pos - vertical_start_pos) >= MAX_LIFT_M)
+                    or elapsed >= MAX_LIFT_S):
                 self.slow_stop_all_spools()
                 self.send_ui(pop_message=telemetry.Popup(
                     message='Could not achive a vertical pose to begin calibration. manually position the gripper in the center of the room hovering just over the floor and restart calibration.'
