@@ -1187,8 +1187,8 @@ h2 {
   display: block;
 }
 
-.controls-list div    { margin-bottom: 5px; color: var(--text-light); font-size: 0.95rem; }
-.controls-list strong { display: inline-block; width: 120px; color: white; }
+.controls-list div    { margin-bottom: 4px; color: var(--text-light); font-size: 0.8rem; }
+.controls-list strong { display: inline-block; width: 100px; color: white; }
 
 /* Section at the bottom of the controls panel containing the gamepad image. */
 .controls-gamepad-section {
