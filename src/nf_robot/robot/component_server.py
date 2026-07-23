@@ -367,11 +367,11 @@ class RobotComponentServer:
             self.update['firmware_update_complete'] = {'returncode': returncode, 'error': error_output}
             logging.error(f'Self update failed with returncode {returncode}. Not restarting.')
 
-    def read_recent_logs(self, path=log_path):
+    def read_recent_logs(self, path=None):
         """Return the last log_tail_lines lines of a log file, for the
         'pull_logs' debug command."""
         try:
-            with open(path, 'r', errors='replace') as f:
+            with open(path or log_path, 'r', errors='replace') as f:
                 return ''.join(deque(f, maxlen=log_tail_lines))
         except FileNotFoundError:
             return ''

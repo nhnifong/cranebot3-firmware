@@ -16,10 +16,12 @@ class TestPullLogsToZip(unittest.IsolatedAsyncioTestCase):
     async def test_pull_logs_to_zip_writes_one_entry_per_client(self):
         ob = self._make_observer()
         clients = {}
-        for ip, text in [('10.0.0.1', 'anchor0 log\n'), ('10.0.0.2', 'anchor1 log\n')]:
+        # one client with a thermal log, one without (e.g. older firmware)
+        for ip, logs in [('10.0.0.1', ('anchor0 log\n', 'thermal0 log\n')),
+                         ('10.0.0.2', ('anchor1 log\n', None))]:
             c = AsyncMock()
             c.address = ip
-            c.pull_logs = AsyncMock(return_value=text)
+            c.pull_logs = AsyncMock(return_value=logs)
             clients[ip] = c
         ob.bot_clients = clients
 
@@ -31,15 +33,17 @@ class TestPullLogsToZip(unittest.IsolatedAsyncioTestCase):
                 zips = [f for f in os.listdir(tmpdir) if f.startswith('pulled_logs_') and f.endswith('.zip')]
                 self.assertEqual(len(zips), 1)
                 with zipfile.ZipFile(zips[0]) as zf:
-                    self.assertEqual(set(zf.namelist()), {'10.0.0.1.log', '10.0.0.2.log'})
+                    self.assertEqual(set(zf.namelist()),
+                                     {'10.0.0.1.log', '10.0.0.1_thermal.log', '10.0.0.2.log'})
                     self.assertEqual(zf.read('10.0.0.1.log').decode(), 'anchor0 log\n')
+                    self.assertEqual(zf.read('10.0.0.1_thermal.log').decode(), 'thermal0 log\n')
             finally:
                 os.chdir(cwd)
 
     async def test_pull_logs_to_zip_skips_clients_that_didnt_respond(self):
         ob = self._make_observer()
-        c1 = AsyncMock(); c1.address = '10.0.0.1'; c1.pull_logs = AsyncMock(return_value='ok\n')
-        c2 = AsyncMock(); c2.address = '10.0.0.2'; c2.pull_logs = AsyncMock(return_value=None)
+        c1 = AsyncMock(); c1.address = '10.0.0.1'; c1.pull_logs = AsyncMock(return_value=('ok\n', None))
+        c2 = AsyncMock(); c2.address = '10.0.0.2'; c2.pull_logs = AsyncMock(return_value=(None, None))
         ob.bot_clients = {'a': c1, 'b': c2}
 
         cwd = os.getcwd()
@@ -60,6 +64,7 @@ class TestComponentClientPullLogs(unittest.IsolatedAsyncioTestCase):
         client.connected = True
         client.address = '10.0.0.5'
         client.pulled_logs = None
+        client.pulled_thermal = None
         return client
 
     async def test_pull_logs_returns_response(self):
@@ -68,10 +73,11 @@ class TestComponentClientPullLogs(unittest.IsolatedAsyncioTestCase):
         async def fake_send(update):
             self.assertEqual(update, {'get_logs': None})
             client.pulled_logs = 'line1\nline2\n'
+            client.pulled_thermal = 'thermal1\n'
         client.send_commands = AsyncMock(side_effect=fake_send)
 
         result = await client.pull_logs(timeout=2)
-        self.assertEqual(result, 'line1\nline2\n')
+        self.assertEqual(result, ('line1\nline2\n', 'thermal1\n'))
 
     async def test_pull_logs_returns_none_if_disconnected_before_response(self):
         client = self._make_client()
@@ -79,7 +85,7 @@ class TestComponentClientPullLogs(unittest.IsolatedAsyncioTestCase):
         client.send_commands = AsyncMock()
 
         result = await client.pull_logs(timeout=2)
-        self.assertIsNone(result)
+        self.assertEqual(result, (None, None))
 
 
 class TestServerReadRecentLogs(unittest.TestCase):
