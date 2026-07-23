@@ -276,6 +276,10 @@ class DamiaoSpoolController:
                 # accumulate these. parent class will send them on the websocket at it's own rate
                 row = (loop_start, self.last_length, current_line_speed, self.last_tension)
                 self.record.append(row)
+                # bound the buffer: nothing drains it while no client is connected
+                overflow = len(self.record) - self.conf['DATA_LEN']
+                if overflow > 0:
+                    del self.record[:overflow]
 
                 # slack indicator, kept current every loop because setReferenceLength() reads it
                 self.torque_err = smooth_torque - self.conf['TARGET_TORQUE'] # >0 means slack

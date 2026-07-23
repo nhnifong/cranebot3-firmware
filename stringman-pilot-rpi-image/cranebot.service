@@ -8,6 +8,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User=pi
+MemoryMax=300M
 AmbientCapabilities=CAP_SYS_RAWIO
 WorkingDirectory=/opt/robot
 ExecStart=/opt/robot/env/bin/component-server

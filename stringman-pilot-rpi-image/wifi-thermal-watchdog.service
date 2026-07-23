@@ -6,7 +6,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 # Runs as root so the brcmfmac module reload and reboot recovery work directly.
-ExecStart=/usr/bin/python3 /usr/local/bin/wifi_thermal_watchdog.py --logfile /home/pi/wifi_thermal_watchdog.log
+ExecStart=/usr/bin/python3 /usr/local/bin/wifi_thermal_watchdog.py
 Restart=always
 RestartSec=10
 

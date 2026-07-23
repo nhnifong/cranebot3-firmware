@@ -7,15 +7,16 @@ wlan0) thermally trips around ~60C, well before the BCM2710 SoC throttles or
 shuts down. This tool logs the evidence and tries to recover.
 
 Every INTERVAL seconds it:
-  1. Reads the SoC temperature and throttle flags (the Wi-Fi chip exposes no
-     temperature sensor of its own, so SoC temp is the available proxy).
+  1. Records diagnostics: uptime, load, MemAvailable, component-server RSS,
+     SoC temp (proxy for the Wi-Fi chip, which has no sensor of its own),
+     wlan operstate, Wi-Fi signal, ssh/:8765 listen counts, can0 state,
+     throttle flags, IP, gateway.
   2. Checks whether we are still reachable on the LAN (ping the default gateway).
   3. If we are offline, attempts to power-cycle the Wi-Fi chip and logs whether
      each recovery step brought us back.
 
-Everything is appended (with flush + fsync) to a log file on the SD card. The
-default is the invoking user's home dir (e.g. /home/pi/wifi_thermal_watchdog.log,
-resolved via SUDO_USER so it lands there even under sudo). Point --logfile at
+Everything is appended (with flush + fsync) to a log file on the SD card,
+/opt/robot/wifi_thermal_watchdog.log by default. Point --logfile at
 /boot/firmware/... instead if you want a copy you can read by pulling the card.
 
 Recovery escalates from least to most disruptive. A soft radio toggle is NOT
@@ -37,7 +38,7 @@ To leave it running across an ssh logout:
 
     sudo nohup experiments/wifi_thermal_watchdog.py >/dev/null 2>&1 &
 
-Then later read ~/wifi_thermal_watchdog.log (or scp it off the Pi).
+Then later read /opt/robot/wifi_thermal_watchdog.log (or scp it off the Pi).
 """
 
 import argparse
@@ -53,31 +54,15 @@ DEFAULT_INTERVAL = 60  # seconds between samples
 DEFAULT_IFACE = "wlan0"
 
 
-def _invoking_home():
-    """Home dir of the real user, even when launched via sudo.
-
-    Under `sudo` os.path.expanduser('~') resolves to /root, but we want the
-    log to land in the pi user's home so it is easy to find and read.
-    """
-    user = os.environ.get("SUDO_USER")
-    if user:
-        try:
-            import pwd
-            return pwd.getpwnam(user).pw_dir
-        except (KeyError, ImportError):
-            pass
-    return os.path.expanduser("~")
-
-
-DEFAULT_LOGFILE = os.path.join(_invoking_home(), "wifi_thermal_watchdog.log")
+DEFAULT_LOGFILE = "/opt/robot/wifi_thermal_watchdog.log"
 SETTLE_SECONDS = 8  # how long to wait for the link to come back after a step
 PING_COUNT = 2
 PING_TIMEOUT = 3  # seconds per ping
 
 
 def now_iso() -> str:
-    """Local time, ISO-ish, easy to read off the card."""
-    return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S%z")
+    """UTC, ISO-ish, easy to read off the card."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
 
 class Log:
@@ -157,6 +142,94 @@ def read_throttle():
     return "n/a"
 
 
+def read_uptime_s():
+    """System uptime in seconds, or None."""
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def read_loadavg():
+    """1/5/15-minute load averages as '0.12/0.30/0.25', or 'n/a'."""
+    try:
+        with open("/proc/loadavg") as f:
+            return "/".join(f.read().split()[:3])
+    except OSError:
+        return "n/a"
+
+
+def read_mem_available_mb():
+    """MemAvailable from /proc/meminfo in MB, or None."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def read_component_server_rss_mb():
+    """RSS of the component-server process in MB, or None if not running."""
+    try:
+        pids = os.listdir("/proc")
+    except OSError:
+        return None
+    for pid in pids:
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                if b"component-server" not in f.read():
+                    continue
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) // 1024
+        except (OSError, ValueError, IndexError):
+            continue
+    return None
+
+
+def read_operstate(dev):
+    """Kernel operstate of a network device ('up', 'down', ...), or 'none'."""
+    try:
+        with open(f"/sys/class/net/{dev}/operstate") as f:
+            return f.read().strip()
+    except OSError:
+        return "none"
+
+
+def read_wifi_signal_dbm(iface):
+    """Signal level from /proc/net/wireless in dBm, or None."""
+    try:
+        with open("/proc/net/wireless") as f:
+            for line in f:
+                if line.strip().startswith(iface + ":"):
+                    return int(float(line.split()[3]))
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def listen_counts():
+    """Count of LISTEN sockets on :22 (ssh) and :8765 (component server)."""
+    rc, out = run(["ss", "-tlnH"], timeout=5)
+    ssh = srv = 0
+    if rc == 0:
+        for line in out.splitlines():
+            parts = line.split()
+            addr = parts[3] if len(parts) > 3 else ""
+            if addr.endswith(":22"):
+                ssh += 1
+            elif addr.endswith(":8765"):
+                srv += 1
+    return ssh, srv
+
+
 def default_gateway(iface):
     """Default-route gateway IP for the wifi interface, or None."""
     rc, out = run(["ip", "route", "show", "default"], timeout=5)
@@ -174,16 +247,23 @@ def default_gateway(iface):
     return best
 
 
-def iface_has_ip(iface):
+def iface_ip(iface):
+    """IPv4 address on iface, or None."""
     rc, out = run(["ip", "-4", "addr", "show", "dev", iface], timeout=5)
-    return rc == 0 and "inet " in out
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        parts = line.split()
+        if parts and parts[0] == "inet":
+            return parts[1].split("/")[0]
+    return None
 
 
 def is_online(iface, target):
     """True if we can reach the LAN. Pings target (gateway) over iface."""
     if target is None:
         # No gateway known; treat presence of an IP as a weak online signal.
-        return iface_has_ip(iface)
+        return iface_ip(iface) is not None
     rc, _ = run(
         ["ping", "-I", iface, "-c", str(PING_COUNT), "-W", str(PING_TIMEOUT), target],
         timeout=PING_COUNT * PING_TIMEOUT + 5,
@@ -256,12 +336,25 @@ def sample(log, iface):
     throttle = read_throttle()
     gw = default_gateway(iface)
     online = is_online(iface, gw)
+    up = read_uptime_s()
+    mem = read_mem_available_mb()
+    rss = read_component_server_rss_mb()
+    signal_dbm = read_wifi_signal_dbm(iface)
+    ip = iface_ip(iface)
+    ssh_n, srv_n = listen_counts()
 
     temp_s = f"{temp:.1f}C" if temp is not None else "n/a"
+    up_s = f"{up:.0f}s" if up is not None else "n/a"
+    mem_s = f"{mem}MB" if mem is not None else "n/a"
+    rss_s = f"{rss}MB" if rss is not None else "n/a"
+    signal_s = f"{signal_dbm}dBm" if signal_dbm is not None else "n/a"
     log.write(
         "SAMPLE",
-        f"soc_temp={temp_s} throttled={throttle} iface={iface} "
-        f"gateway={gw or 'none'} online={'yes' if online else 'NO'}",
+        f"up={up_s} load={read_loadavg()} mem_avail={mem_s} rss={rss_s} "
+        f"soc_temp={temp_s} iface={iface} oper={read_operstate(iface)} "
+        f"signal={signal_s} listen_ssh={ssh_n} listen_8765={srv_n} "
+        f"can0={read_operstate('can0')} throttled={throttle} "
+        f"ip={ip or 'none'} gateway={gw or 'none'} online={'yes' if online else 'NO'}",
     )
 
     if not online:

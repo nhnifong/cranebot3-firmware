@@ -57,6 +57,7 @@ default_conf = {
 }
 
 log_path = '/opt/robot/cranebot.log'
+thermal_log_path = '/opt/robot/wifi_thermal_watchdog.log'
 log_tail_lines = 2000
 
 class RobotComponentServer:
@@ -366,11 +367,11 @@ class RobotComponentServer:
             self.update['firmware_update_complete'] = {'returncode': returncode, 'error': error_output}
             logging.error(f'Self update failed with returncode {returncode}. Not restarting.')
 
-    def read_recent_logs(self):
-        """Return the last log_tail_lines lines of this component's log file, for the
+    def read_recent_logs(self, path=log_path):
+        """Return the last log_tail_lines lines of a log file, for the
         'pull_logs' debug command."""
         try:
-            with open(log_path, 'r', errors='replace') as f:
+            with open(path, 'r', errors='replace') as f:
                 return ''.join(deque(f, maxlen=log_tail_lines))
         except FileNotFoundError:
             return ''
@@ -408,6 +409,7 @@ class RobotComponentServer:
 
             if 'get_logs' in update:
                 self.update['logs'] = self.read_recent_logs()
+                self.update['thermal'] = self.read_recent_logs(thermal_log_path)
 
             # defer to specific server subclass
             result = await self.processOtherUpdates(update,tg)

@@ -947,16 +947,19 @@ class AsyncObserver:
 
     async def pull_logs_to_zip(self):
         """Pull recent log lines from every connected component and bundle them into a
-        local zip file, one entry per component named after its IP address."""
+        local zip file, entries named after each component's IP address. Includes the
+        thermal watchdog log when the component sends one."""
         clients = list(self.bot_clients.values())
         logs = await asyncio.gather(*[client.pull_logs() for client in clients])
         zip_path = f'pulled_logs_{int(time.time())}.zip'
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for client, log_text in zip(clients, logs):
+            for client, (log_text, thermal_text) in zip(clients, logs):
                 if log_text is None:
                     logger.warning(f'No logs received from {client.address}; skipping')
                     continue
                 zf.writestr(f'{client.address}.log', log_text)
+                if thermal_text:
+                    zf.writestr(f'{client.address}_thermal.log', thermal_text)
         logger.info(f'Saved logs from {len(clients)} component(s) to {zip_path}')
 
     @staticmethod
