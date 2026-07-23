@@ -10,6 +10,7 @@ from adafruit_vl53l1x import VL53L1X # rangefinder
 from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital converter for pressure
 
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
+from nf_robot.qa.set_hostname import set_component_hostname
 
 FINGER_MOTOR_ID = 1
 WRIST_MOTOR_ID = 2
@@ -50,6 +51,10 @@ def verify_i2c_bus(i2c):
 
 
 def main():
+    # Give this Pi a hostname unique to its role so the gripper and the two
+    # anchors in a setup don't all share one hostname.
+    set_component_hostname("gripper")
+
     i2c = busio.I2C(board.SCL, board.SDA)
     verify_i2c_bus(i2c)
     sts = SimpleSTS3215()

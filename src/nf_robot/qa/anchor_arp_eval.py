@@ -9,6 +9,7 @@ from damiao_motor import DaMiaoController
 from math import pi, sqrt
 
 import nf_robot.common.definitions as model_constants
+from nf_robot.qa.set_hostname import set_component_hostname
 
 MOTOR_TYPE = "G6215"
 FEEDBACK_ID_REGISTER = 7  # MST_ID
@@ -313,14 +314,20 @@ def main():
     # Differentiate power anchors from regular anchors before winding line.
     if input("Does this anchor have a powerline spool? y/n").strip().lower() == 'y':
         anchor_type = "arpeggio power anchor"
+        component = "power-anchor"
         full_diameter = model_constants.damiao_full_spool_diameter_power_line
     else:
         anchor_type = "arpeggio anchor"
+        component = "anchor"
         full_diameter = model_constants.damiao_full_spool_diameter_fishing_line
 
     # Write the file that differentiates power anchors from regular anchors
     with open('/opt/robot/server.conf', 'w') as f:
         f.write(anchor_type + '\n')
+
+    # Give this Pi a hostname unique to its role so the two anchors and the
+    # gripper in a setup don't all share one hostname.
+    set_component_hostname(component)
 
     for motor, direction, name, length in motors:
         val = input(f"Do you need to wind the {name} motor? y/n")
