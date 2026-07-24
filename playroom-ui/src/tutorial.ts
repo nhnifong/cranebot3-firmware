@@ -80,7 +80,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
 
   { // Place markers on the floor
     id: 'markers',
-    message: `Place the four large marker cards on the floor.<br<br>"origin" goes in the center<br><br><img src="${import.meta.env.VITE_ASSET_BUCKET_URL ?? ''}/assets/playroom/cards_on_floor.webp">`,
+    message: `Place the four large marker cards on the floor.<ul><li>The origin card should be centered in the room</li><li>At least one card should be on the floor.</li><li>Cards should be spread out while still keeping as many as possible in view of both cameras as possible.</li></ul><img src="${import.meta.env.VITE_ASSET_BUCKET_URL ?? ''}/assets/playroom/cards_on_floor.webp">`,
   },
 
   { // run calibration

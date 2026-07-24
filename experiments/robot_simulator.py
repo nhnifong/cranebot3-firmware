@@ -20,6 +20,7 @@ To connect observer.py to the simulator you can either:
   - manually set the service addresses in the observer config.
 """
 
+import argparse
 import asyncio
 import logging
 import signal
@@ -95,7 +96,7 @@ GRIPPER_WS_PORT   = 9864
 GRIPPER_VID_PORT  = 9890
 
 
-async def main():
+async def main(no_video=False):
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)-8s %(message)s',
@@ -144,21 +145,25 @@ async def main():
     for i, (ws_port, vid_port) in enumerate(zip(ANCHOR_WS_PORTS, ANCHOR_VID_PORTS)):
         server = AnchorArpServer(power=(i == 0))
         server.zc = zc
-        server.mock_camera_port = vid_port
+        # leave mock_camera_port unset so the server never advertises a video stream
+        if not no_video:
+            server.mock_camera_port = vid_port
         anchors.append(server)
 
     gripper = GripperArpServer()
     gripper.zc = zc
-    gripper.mock_camera_port = GRIPPER_VID_PORT
+    if not no_video:
+        gripper.mock_camera_port = GRIPPER_VID_PORT
 
     # ── launch everything ──────────────────────────────────────────────────────
     tasks = []
 
-    # video streams — anchor: 1920×1080 @ 10 fps / 520 kbps (matches stream_command in anchor_server.py)
-    for vid_port in ANCHOR_VID_PORTS:
-        tasks.append(asyncio.create_task(_video_stream_loop(vid_port, 1920, 1080, 10, '520k')))
-    # gripper: 384×384 @ 60 fps / 1200 kbps (matches stream_command in gripper_arp_server.py)
-    tasks.append(asyncio.create_task(_video_stream_loop(GRIPPER_VID_PORT, 384, 384, 60, '1200k')))
+    if not no_video:
+        # video streams — anchor: 1920×1080 @ 10 fps / 520 kbps (matches stream_command in anchor_server.py)
+        for vid_port in ANCHOR_VID_PORTS:
+            tasks.append(asyncio.create_task(_video_stream_loop(vid_port, 1920, 1080, 10, '520k')))
+        # gripper: 384×384 @ 60 fps / 1200 kbps (matches stream_command in gripper_arp_server.py)
+        tasks.append(asyncio.create_task(_video_stream_loop(GRIPPER_VID_PORT, 384, 384, 60, '1200k')))
 
     for i, (server, ws_port) in enumerate(zip(anchors, ANCHOR_WS_PORTS)):
         tasks.append(asyncio.create_task(
@@ -168,11 +173,17 @@ async def main():
         gripper.main(port=GRIPPER_WS_PORT, name='cranebot-gripper-arpeggio-service.sim')
     ))
 
-    logging.info(
-        'Simulator ready. '
-        'Anchor WS ports: %s  video ports: %s | Gripper WS: %d  video: %d',
-        ANCHOR_WS_PORTS, ANCHOR_VID_PORTS, GRIPPER_WS_PORT, GRIPPER_VID_PORT,
-    )
+    if no_video:
+        logging.info(
+            'Simulator ready (no video). Anchor WS ports: %s | Gripper WS: %d',
+            ANCHOR_WS_PORTS, GRIPPER_WS_PORT,
+        )
+    else:
+        logging.info(
+            'Simulator ready. '
+            'Anchor WS ports: %s  video ports: %s | Gripper WS: %d  video: %d',
+            ANCHOR_WS_PORTS, ANCHOR_VID_PORTS, GRIPPER_WS_PORT, GRIPPER_VID_PORT,
+        )
 
     # ── run until SIGINT / SIGTERM ─────────────────────────────────────────────
     stop = asyncio.Event()
@@ -202,4 +213,8 @@ async def main():
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description='Local robot component simulator.')
+    parser.add_argument('--no-video', action='store_true',
+                        help='Run without the ffmpeg test-pattern video streams.')
+    args = parser.parse_args()
+    asyncio.run(main(no_video=args.no_video))
