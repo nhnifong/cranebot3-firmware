@@ -98,6 +98,18 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     dismissWhen: () => isSwingCancellationEnabled(),
   },
 
+  { // drive the gripper around
+    id: 'drive-motion',
+    highlightId: 'how-to',
+    message: `Use <strong>W A S D</strong> to move the gripper laterally across the room, and press <strong>E</strong> to raise it or <strong>Q</strong> to lower it.`,
+  },
+
+  { // grip and wrist controls
+    id: 'grip-and-wrist',
+    highlightId: 'label-gripper-force',
+    message: `Now try the gripper. Press <strong>Space</strong> to close the fingers and hold <strong>Shift</strong> to open them. The <strong>left/right arrow keys</strong> rotate the wrist.<br><br>This bar shows finger pressure. The <strong>green fill</strong> is the pressure actually felt; the <strong>white vertical bar</strong> is the target pressure.<br><br>Once closed on something, holding <strong>Space</strong> raises the target pressure (the white bar). To open, hold <strong>Shift</strong> until the target pressure drops to zero, and then the fingers open.`,
+  },
+
 ];
 
 export function isTutorialMode(): boolean {
