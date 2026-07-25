@@ -19,8 +19,10 @@ W_SHAPE_MATCH = 1.0 # weight to force distance between anchors to match distance
 W_ANCHOR_TILT = 10.0 # weight to penalize anchor pitch/roll changes (locks rotation to Z-axis only)
 W_GRIPPER_DIST = 1.0 # weight for close-range gripper-over-card line-length-delta constraints
 
-# half height and half width of diamond
-DIAMOND_SIZE = (0.1, 1.0)
+# half height, half width, and bottom-point floor clearance of the diamond, in meters.
+# floor clearance is how far above the floor the gripper fingertips sit at the diamond's
+# bottom (starting) point. Overridable at runtime with --diamond_size.
+DIAMOND_SIZE = (0.1, 1.0, 0.2)
 
 # =============================================================================
 # DIAMOND STRATEGY DATA STRUCTURE
@@ -39,7 +41,7 @@ DIAMOND_SIZE = (0.1, 1.0)
 # left   -> bottom: Eyelet 1 (Line 3) lengthens by 15cm (back to 'bottom' length)
 # =============================================================================
 
-def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None):
+def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, diamond_size=DIAMOND_SIZE):
     """
     Computes the vector of residuals (differences) for least_squares.
 
@@ -230,7 +232,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                 L1_lef_to_bot = -(L1_bot_to_rig + L1_rig_to_top + L1_top_to_lef)
                 L3_lef_to_bot = -(L3_bot_to_rig + L3_rig_to_top + L3_top_to_lef)
             else:
-                half_h, half_w = DIAMOND_SIZE
+                half_h, half_w, _ = diamond_size
                 # Commanded changes for Eyelet 0 (Line 1)
                 L1_bot_to_rig = -(half_w + half_h)
                 L1_rig_to_top = (half_w - half_h)
@@ -459,7 +461,7 @@ class _OptTimeout(Exception):
     pass
 
 
-def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, time_budget_s=12.0):
+def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, time_budget_s=12.0, diamond_size=DIAMOND_SIZE):
     """
     Finds optimal anchor poses AND external eyelet positions.
     
@@ -520,12 +522,12 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # Configure the state vector and args depending on whether we are freezing anchors
     if fixed_anchor_poses is not None:
         x0 = initial_eyelet_guesses.flatten()
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts, gripper_obs)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts, gripper_obs, diamond_size)
     else:
         initial_anchor_flat = anchor_poses_to_use.flatten()
         initial_eyelet_flat = initial_eyelet_guesses.flatten()
         x0 = np.concatenate([initial_anchor_flat, initial_eyelet_flat])
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts, gripper_obs)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts, gripper_obs, diamond_size)
 
     logger.info('Running least squares optimization...')
     # Bound the wall-clock time: least_squares can occasionally thrash for many iterations on a
@@ -568,7 +570,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # cost breakdown as this pass's fitness score (lower is better; same formula every call,
     # so it's directly comparable across calibration attempts).
     logger.info("Final Optimization Costs:")
-    _, costs = multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs)
+    _, costs = multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs, diamond_size=diamond_size)
     fit_info = {
         'total_cost': float(sum(costs.values())),
         'costs': costs,

@@ -160,8 +160,12 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE) -> None:
         self.port = port
+        # (half height, half width, floor clearance) of the calibration diamond, in meters.
+        # Overridable with --diamond_size. Consumed both by the physical diamond motion in
+        # collect_arp_anchor_eyelet_experiment_data and by optimize_arp_anchors.
+        self.diamond_size = diamond_size
         # Interface the local telemetry websocket and all local mjpeg video streams bind to.
         # Defaults to loopback (single-machine use). Set to a LAN IP or 0.0.0.0 to let a
         # record/eval client on another machine connect. See src/nf_robot/ml/README.md.
@@ -1627,7 +1631,7 @@ class AsyncObserver:
             # half_h (the diamond's vertical half-extent, as an eyelet line-length delta) is sized
             # automatically once the gantry has settled at the bottom point; see below. half_w (the
             # horizontal half-extent) keeps its configured value.
-            _, half_w = DIAMOND_SIZE
+            _, half_w, _ = self.diamond_size
             # how far below the top of the work area (upper_z) the gantry's top point should stay.
             TOP_MARGIN_M = 1.0
 
@@ -2077,7 +2081,7 @@ class AsyncObserver:
             pickle.dump(self._calibration_diagnostics, f)
         os.replace(tmp_path, 'calibration_diagnostics.pkl')
 
-    def _record_calibration_diagnostics(self, pass_name, func, args):
+    def _record_calibration_diagnostics(self, pass_name, func, args, kwargs=None):
         """Append one optimize_arp_anchors call's bound arguments to the running
         calibration diagnostics list and flush the whole list to a single pickle file.
 
@@ -2086,7 +2090,7 @@ class AsyncObserver:
         Bind args to the function's actual parameter names so the pickle is readable
         offline without cross-referencing the call site.
         """
-        bound = inspect.signature(func).bind(*args)
+        bound = inspect.signature(func).bind(*args, **(kwargs or {}))
         bound.apply_defaults()
         self._calibration_diagnostics.append({
             'pass': pass_name,
@@ -2157,7 +2161,8 @@ class AsyncObserver:
         ))
         finger_task = None
         DETECTION_WAIT_S = 1.0 # seconds
-        FLOOR_CLEARANCE_M = 0.2 # how far above the floor to hold the gripper fingertips at the diamond's bottom point
+        # how far above the floor to hold the gripper fingertips at the diamond's bottom point
+        floor_clearance_m = self.diamond_size[2]
         self.tension_over_limit = False  # clear any stale trip from a previous run
         if self.rec_diagnostics:
             self._calibration_diagnostics = []  # clear any stale data from a previous run
@@ -2220,8 +2225,8 @@ class AsyncObserver:
             # determine position of two anchors visually and guess at external eyelets.
             pass1_args = (raw_obs, None, None, None, None, tilts)
             if self.rec_diagnostics:
-                self._record_calibration_diagnostics('anchors_pass1', optimize_arp_anchors, pass1_args)
-            async_result = self.pool.apply_async(optimize_arp_anchors, pass1_args)
+                self._record_calibration_diagnostics('anchors_pass1', optimize_arp_anchors, pass1_args, {'diamond_size': self.diamond_size})
+            async_result = self.pool.apply_async(optimize_arp_anchors, pass1_args, {'diamond_size': self.diamond_size})
             anchor_poses, eyelet_positions, floor_z, fit_info = async_result.get(timeout=30)
             if self.rec_diagnostics:
                 self._record_calibration_fitness('anchors_pass1', fit_info)
@@ -2251,10 +2256,10 @@ class AsyncObserver:
             # even without full calibration we should be able to make crude movements. go to the center
             # of the room just above the floor. This is the diamond's bottom point, so place the gantry
             # such that the gripper fingertips (POLE[2] + GRIPPER_FINGER_LEN_M below the gantry) sit
-            # FLOOR_CLEARANCE_M above the floor.
+            # floor_clearance_m above the floor.
             gant_z = min(
                 upper_z-0.1, # stay at least 0.1 under the top of the work area
-                POLE[2] + GRIPPER_FINGER_LEN_M + FLOOR_CLEARANCE_M - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
+                POLE[2] + GRIPPER_FINGER_LEN_M + floor_clearance_m - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
             )
             self.gantry_goal_pos = np.array([0, 0, gant_z])
             await self.seek_gantry_goal()
@@ -2281,8 +2286,8 @@ class AsyncObserver:
 
             pass2_args = (raw_obs, diamond_data, None, None, line_deltas, tilts)
             if self.rec_diagnostics:
-                self._record_calibration_diagnostics('anchors_pass2', optimize_arp_anchors, pass2_args)
-            async_result = self.pool.apply_async(optimize_arp_anchors, pass2_args)
+                self._record_calibration_diagnostics('anchors_pass2', optimize_arp_anchors, pass2_args, {'diamond_size': self.diamond_size})
+            async_result = self.pool.apply_async(optimize_arp_anchors, pass2_args, {'diamond_size': self.diamond_size})
             anchor_poses, eyelet_positions, floor_z, fit_info = async_result.get(timeout=60)
             if self.rec_diagnostics:
                 self._record_calibration_fitness('anchors_pass2', fit_info)
@@ -2387,8 +2392,8 @@ class AsyncObserver:
                     # refinement anyway, while the weakly-constrained eyelets still get it.
                     args = (raw_obs, diamond_data, eyelet_positions, anchor_poses, line_deltas, tilts, gripper_obs)
                     if self.rec_diagnostics:
-                        self._record_calibration_diagnostics('anchors_pass3', optimize_arp_anchors, args)
-                    async_result = self.pool.apply_async(optimize_arp_anchors, args)
+                        self._record_calibration_diagnostics('anchors_pass3', optimize_arp_anchors, args, {'diamond_size': self.diamond_size})
+                    async_result = self.pool.apply_async(optimize_arp_anchors, args, {'diamond_size': self.diamond_size})
                     refined_anchors, refined_eyelets, refined_floor_z, fit_info = async_result.get(timeout=60)
                     if self.rec_diagnostics:
                         self._record_calibration_fitness('anchors_pass3', fit_info)
@@ -4463,6 +4468,15 @@ def main():
         default=8090,
         help="Port to serve the self-hosted UI on, unless --no_serve_ui is set. Defaults to 8090."
     )
+    parser.add_argument(
+        "--diamond_size",
+        type=float,
+        nargs=3,
+        metavar=("HALF_HEIGHT", "HALF_WIDTH", "FLOOR_CLEARANCE"),
+        default=list(DIAMOND_SIZE),
+        help="Calibration diamond geometry in meters: half-height, half-width, and the floor "
+             "clearance of the bottom (starting) point. Defaults to %s." % (tuple(DIAMOND_SIZE),)
+    )
     args = parser.parse_args()
 
     if shutil.which("ffmpeg") is None:
@@ -4496,6 +4510,7 @@ def main():
             rec_diagnostics=args.rec_diagnostics,
             serve_ui=(not args.no_serve_ui),
             ui_port=args.ui_port,
+            diamond_size=tuple(args.diamond_size),
         )
 
         # Idempotent stop trigger. Runs as a signal-handler callback on the event
