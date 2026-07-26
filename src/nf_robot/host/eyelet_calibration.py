@@ -18,6 +18,7 @@ W_EYELET_REG = 0.4 # weight to keep eyelets near their initial 5m guess
 W_SHAPE_MATCH = 1.0 # weight to force distance between anchors to match distance between eyelets
 W_ANCHOR_TILT = 10.0 # weight to penalize anchor pitch/roll changes (locks rotation to Z-axis only)
 W_GRIPPER_DIST = 1.0 # weight for close-range gripper-over-card line-length-delta constraints
+W_ROOM_YAW = 5.0 # weight to hold the room's yaw at a reference orientation (see room_yaw_offset)
 
 # half height, half width, and bottom-point floor clearance of the diamond, in meters.
 # floor clearance is how far above the floor the gripper fingertips sit at the diamond's
@@ -41,7 +42,27 @@ DIAMOND_SIZE = (0.1, 1.0, 0.2)
 # left   -> bottom: Eyelet 1 (Line 3) lengthens by 15cm (back to 'bottom' length)
 # =============================================================================
 
-def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, diamond_size=DIAMOND_SIZE):
+def room_yaw_offset(anchor_poses, yaw_reference):
+    """Angle about z between a reference pair of anchor poses and the current one.
+
+    Every other residual here is exactly invariant to rotating the whole solution about z
+    (they are all distances, z heights, or card positions measured relative to each other),
+    so the room's absolute yaw is a gauge freedom. The only thing that currently pins it is
+    eyelet_reg pulling the eyelets toward their initial 5m guess, and that guess's minimum
+    moves once the diamond terms enter, which spins the room between passes.
+
+    Taken as the argument of sum(conj(ref) * cur) over the two anchor xy positions, so
+    rotating the whole solution by d shifts this by exactly d. Penalizing it therefore
+    selects the gauge without constraining any other degree of freedom.
+    """
+    cur = np.asarray(anchor_poses)[:, 1, :2]
+    ref = np.asarray(yaw_reference)[:, 1, :2]
+    sin_term = np.sum(ref[:, 0] * cur[:, 1] - ref[:, 1] * cur[:, 0])
+    cos_term = np.sum(ref[:, 0] * cur[:, 0] + ref[:, 1] * cur[:, 1])
+    return np.arctan2(sin_term, cos_term)
+
+
+def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, diamond_size=DIAMOND_SIZE, yaw_reference=None):
     """
     Computes the vector of residuals (differences) for least_squares.
 
@@ -80,6 +101,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     cost_shape_match = 0.0
     cost_anchor_tilt = 0.0
     cost_gripper = 0.0
+    cost_room_yaw = 0.0
 
     # room position of each calibration card at the current parameters, so the gripper-camera
     # constraints below can anchor their measured gantry offsets to the same cards the anchor
@@ -334,6 +356,16 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             residuals.extend(tilt_res)
             cost_anchor_tilt += np.sum(tilt_res**2)
 
+    # ---------------------------------------------------------
+    # Room Yaw Gauge
+    # ---------------------------------------------------------
+    # Skipped when the anchors are frozen: they define the room frame, so a fixed_anchor_poses
+    # solve has no parameter left that could rotate the room and needs no gauge term.
+    if yaw_reference is not None and fixed_anchor_poses is None:
+        yaw_res = room_yaw_offset(anchor_poses, yaw_reference) * W_ROOM_YAW
+        residuals.append(yaw_res)
+        cost_room_yaw += yaw_res**2
+
     # Always compute the named cost breakdown (not just under debug) so callers can use it
     # as a fitness score for this parameter vector, e.g. to detect a regression between
     # calibration attempts. Kept as raw sum-of-squares per category, matching what debug
@@ -345,6 +377,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
         'gripper_cards': cost_gripper,
         'shape_match': cost_shape_match,
         'eyelet_reg': cost_eyelet_reg,
+        'room_yaw': cost_room_yaw,
     }
     if fixed_anchor_poses is None:
         costs['anchor_planarity'] = cost_planar
@@ -364,6 +397,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
             f"Gripper Cards:      {cost_gripper:.6f}",
             f"Shape Match (A~E):  {cost_shape_match:.6f}",
             f"Eyelet Reg (drift): {cost_eyelet_reg:.6f}",
+            f"Room Yaw Gauge:     {cost_room_yaw:.6f}",
             "----------------------",
         ]
         logger.info("\n".join(lines))
@@ -461,7 +495,7 @@ class _OptTimeout(Exception):
     pass
 
 
-def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, time_budget_s=12.0, diamond_size=DIAMOND_SIZE):
+def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, time_budget_s=12.0, diamond_size=DIAMOND_SIZE, yaw_reference=None, initial_anchor_guesses=None):
     """
     Finds optimal anchor poses AND external eyelet positions.
     
@@ -470,8 +504,17 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
         diamond_observations: dict with keys 'bottom', 'right', 'top', 'left' containing camera obs.
                               Pass None or {} for the first pass (finding anchors only).
         initial_eyelet_guesses: (2, 3) numpy array for initial [x,y,z] positions of the eyelets.
+                       Doubles as the eyelet_reg target, so it must be in the same frame the
+                       optimizer solves in (origin card at z=0), not the returned floor frame.
         fixed_anchor_poses: (2, 2, 3) numpy array. If provided, anchor poses are frozen and only eyelets are optimized.
-    
+        initial_anchor_guesses: (2, 2, 3) numpy array. Starting point for the anchors when they are
+                       NOT frozen, so a later pass can warm start from an earlier one instead of
+                       re-deriving from a single origin sighting. Same frame caveat as above.
+        yaw_reference: (2, 2, 3) anchor poses from an earlier pass. Holds the room's yaw at that
+                       pass's orientation, which is otherwise a gauge freedom that drifts between
+                       passes. Ignored when fixed_anchor_poses freezes the room frame anyway.
+                       Only the xy direction is used, so the floor shift does not matter here.
+
     Returns:
         tuple: (optimized_anchor_poses, optimized_eyelet_positions, floor_z, fit_info)
         fit_info: {'total_cost': float, 'costs': {category: float, ...}, 'converged': bool, 'nfev': int|None}.
@@ -487,10 +530,19 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
         extratilt = 22 - cam_tilts[i]
         tilt_nodes.append((np.array([extratilt / 180.0 * np.pi, 0, 0], dtype=float), np.zeros(3, dtype=float)))
 
-    if fixed_anchor_poses is None:
+    if fixed_anchor_poses is not None:
+        # Use the provided fixed anchors
+        anchor_poses_to_use = fixed_anchor_poses
+        logger.info('Using provided fixed_anchor_poses. Anchors will NOT be modified.')
+    elif initial_anchor_guesses is not None:
+        # Warm start: refine an earlier pass's anchors rather than restarting from the cold
+        # single-sighting guess below, which would throw away everything that pass established.
+        anchor_poses_to_use = np.array(initial_anchor_guesses, dtype=float)
+        logger.info('Warm starting anchors from provided initial_anchor_guesses.')
+    else:
         initial_guesses = []
         origin_sightings = raw_obs['origin']
-        
+
         # Initialize anchors from origin marker
         for i in range(2):
             origin_marker_pose = origin_sightings[i][0]
@@ -500,13 +552,9 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
                 origin_marker_pose,
             ]))
             initial_guesses.append(guess)
-        
+
         anchor_poses_to_use = np.array(initial_guesses)
         logger.debug(f'initial_anchor_guesses = {initial_guesses}')
-    else:
-        # Use the provided fixed anchors
-        anchor_poses_to_use = fixed_anchor_poses
-        logger.info('Using provided fixed_anchor_poses. Anchors will NOT be modified.')
     
     # A point on the wall on the anchor's right side at the same height, about five meters away.
     # this is a diagonal in the anchor's local frame of refernce.
@@ -522,12 +570,12 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # Configure the state vector and args depending on whether we are freezing anchors
     if fixed_anchor_poses is not None:
         x0 = initial_eyelet_guesses.flatten()
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts, gripper_obs, diamond_size)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts, gripper_obs, diamond_size, yaw_reference)
     else:
         initial_anchor_flat = anchor_poses_to_use.flatten()
         initial_eyelet_flat = initial_eyelet_guesses.flatten()
         x0 = np.concatenate([initial_anchor_flat, initial_eyelet_flat])
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts, gripper_obs, diamond_size)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts, gripper_obs, diamond_size, yaw_reference)
 
     logger.info('Running least squares optimization...')
     # Bound the wall-clock time: least_squares can occasionally thrash for many iterations on a
@@ -570,7 +618,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # cost breakdown as this pass's fitness score (lower is better; same formula every call,
     # so it's directly comparable across calibration attempts).
     logger.info("Final Optimization Costs:")
-    _, costs = multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs, diamond_size=diamond_size)
+    _, costs = multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs, diamond_size=diamond_size, yaw_reference=yaw_reference)
     fit_info = {
         'total_cost': float(sum(costs.values())),
         'costs': costs,

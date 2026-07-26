@@ -2232,6 +2232,11 @@ class AsyncObserver:
                 self._record_calibration_fitness('anchors_pass1', fit_info)
             logger.info(f'Obtained result from optimize_arp_anchors anchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
 
+            # The room's yaw is a gauge freedom of the residuals, so later passes are free to
+            # spin the whole solution about z and silently invalidate the room-spin constant and
+            # swing cancellation. Hold every later pass at the orientation pass 1 landed on.
+            yaw_reference = anchor_poses
+
             self.save_poses_arp(anchor_poses, eyelet_positions)
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=1.0,
@@ -2285,9 +2290,10 @@ class AsyncObserver:
             r = await self.flush_tele_buffer()
 
             pass2_args = (raw_obs, diamond_data, None, None, line_deltas, tilts)
+            pass2_kwargs = {'diamond_size': self.diamond_size, 'yaw_reference': yaw_reference}
             if self.rec_diagnostics:
-                self._record_calibration_diagnostics('anchors_pass2', optimize_arp_anchors, pass2_args, {'diamond_size': self.diamond_size})
-            async_result = self.pool.apply_async(optimize_arp_anchors, pass2_args, {'diamond_size': self.diamond_size})
+                self._record_calibration_diagnostics('anchors_pass2', optimize_arp_anchors, pass2_args, pass2_kwargs)
+            async_result = self.pool.apply_async(optimize_arp_anchors, pass2_args, pass2_kwargs)
             anchor_poses, eyelet_positions, floor_z, fit_info = async_result.get(timeout=60)
             if self.rec_diagnostics:
                 self._record_calibration_fitness('anchors_pass2', fit_info)
@@ -2376,24 +2382,38 @@ class AsyncObserver:
                 if len(gripper_obs) >= REQUIRED_GRIPPER_CARDS:
                     # Final safety measure: turn swing cancellation off before applying the refined
                     # geometry, and turn it back on afterwards only if it still damps. Even with the
-                    # anchors frozen (so the room frame cannot rotate), the new eyelets change the
-                    # velocity->line-speed mapping swing cancellation depends on, so a bad refinement
-                    # could make it pump and throw the gripper around.
+                    # room frame's yaw held, the new eyelets change the velocity->line-speed mapping
+                    # swing cancellation depends on, so a bad refinement could make it pump and
+                    # throw the gripper around.
                     self.set_swing_cancellation(False)
                     self.slow_stop_all_spools()
 
-                    # Freeze the anchors during the gripper refinement so it can only move the
-                    # eyelets. The room's absolute rotation about z is unobservable to the
-                    # distance-based constraints, so with anchors free the gripper term (whose
-                    # measured vectors live in the real room frame) can spin the whole solution
-                    # about z. That silently invalidates the room-spin constant from the spin
-                    # step and can flip swing cancellation from damping to pumping. Fixing the
-                    # anchors pins the room frame; the well-determined anchors don't need this
-                    # refinement anyway, while the weakly-constrained eyelets still get it.
-                    args = (raw_obs, diamond_data, eyelet_positions, anchor_poses, line_deltas, tilts, gripper_obs)
+                    # Anchors are free here so the gripper's close-range views can refine them
+                    # too. The room's absolute rotation about z is unobservable to the
+                    # distance-based constraints, so the gripper term (whose measured vectors
+                    # live in the real room frame) could otherwise spin the whole solution about
+                    # z, invalidating the room-spin constant from the spin step and flipping
+                    # swing cancellation from damping to pumping. yaw_reference holds that one
+                    # degree of freedom at the orientation pass 1 established.
+                    # optimize_arp_anchors returns poses shifted so z=0 is the floor, but it solves
+                    # in a frame with the origin card at z=0. Undo that shift on the way back in,
+                    # or the warm start (and the eyelet_reg target built from it) sits floor_z off
+                    # in z - which is the whole height of the origin card's perch, not a rounding
+                    # error, when the card is on a bed or table.
+                    warm_anchors = np.array(anchor_poses, dtype=float)
+                    warm_anchors[:, 1, 2] += floor_z
+                    warm_eyelets = np.array(eyelet_positions, dtype=float)
+                    warm_eyelets[:, 2] += floor_z
+
+                    args = (raw_obs, diamond_data, warm_eyelets, None, line_deltas, tilts, gripper_obs)
+                    pass3_kwargs = {
+                        'diamond_size': self.diamond_size,
+                        'yaw_reference': yaw_reference,
+                        'initial_anchor_guesses': warm_anchors,
+                    }
                     if self.rec_diagnostics:
-                        self._record_calibration_diagnostics('anchors_pass3', optimize_arp_anchors, args, {'diamond_size': self.diamond_size})
-                    async_result = self.pool.apply_async(optimize_arp_anchors, args, {'diamond_size': self.diamond_size})
+                        self._record_calibration_diagnostics('anchors_pass3', optimize_arp_anchors, args, pass3_kwargs)
+                    async_result = self.pool.apply_async(optimize_arp_anchors, args, pass3_kwargs)
                     refined_anchors, refined_eyelets, refined_floor_z, fit_info = async_result.get(timeout=60)
                     if self.rec_diagnostics:
                         self._record_calibration_fitness('anchors_pass3', fit_info)
