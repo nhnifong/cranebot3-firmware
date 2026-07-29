@@ -11,10 +11,13 @@ Tests cover:
 - disconnect() stop-event signaling
 - Video frame resize targeting per-feed resolution
 - record_until_disconnected / eval_until_disconnected camera_mode forwarding
+- load_training_metadata cache resolution and offline error
 """
 
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, call, patch
 
 import numpy as np
@@ -585,7 +588,7 @@ class TestCameraModeForwarding(unittest.TestCase):
 
         with patch.object(_hfh, "hf_hub_download", return_value="/tmp/fake.json"), \
              patch("builtins.open", unittest.mock.mock_open(read_data='{"dataset": {"repo_id": "naavox/ds"}}')), \
-             patch("nf_robot.ml.stringman_lerobot.LeRobotDataset"), \
+             patch("nf_robot.ml.stringman_lerobot.load_training_metadata"), \
              patch("nf_robot.ml.stringman_lerobot.action_space_from_features", return_value="gripper_vel"), \
              patch.object(_lcp, "PreTrainedConfig"), \
              patch.object(_lpf, "make_pre_post_processors", return_value=(Mock(), Mock())), \
@@ -602,6 +605,38 @@ class TestCameraModeForwarding(unittest.TestCase):
 
         _, kwargs = MockConfig.call_args
         self.assertEqual(kwargs.get("camera_mode"), "gripper_floor_224")
+
+
+class TestLoadTrainingMetadata(unittest.TestCase):
+    """Eval must read training metadata from the cache without touching the Hub."""
+
+    def test_cached_snapshot_is_passed_as_root(self):
+        from nf_robot.ml.stringman_lerobot import load_training_metadata
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp)
+            (snapshot / "meta").mkdir()
+            (snapshot / "meta" / "info.json").write_text("{}")
+
+            with patch("huggingface_hub.snapshot_download", return_value=str(snapshot)) as mock_dl, \
+                 patch("lerobot.datasets.lerobot_dataset.LeRobotDatasetMetadata") as MockMeta:
+                result = load_training_metadata("naavox/ds")
+
+        self.assertIs(result, MockMeta.return_value)
+        self.assertTrue(mock_dl.call_args.kwargs["local_files_only"])
+        self.assertEqual(MockMeta.call_args.kwargs["root"], snapshot)
+
+    def test_unreachable_hub_without_cache_raises_clear_error(self):
+        from nf_robot.ml.stringman_lerobot import load_training_metadata
+
+        with patch("huggingface_hub.snapshot_download", side_effect=OSError("not cached")), \
+             patch("lerobot.datasets.lerobot_dataset.LeRobotDatasetMetadata",
+                   side_effect=ConnectionError("no dns")):
+            with self.assertRaises(RuntimeError) as ctx:
+                load_training_metadata("naavox/ds")
+
+        self.assertIn("naavox/ds", str(ctx.exception))
+        self.assertIsInstance(ctx.exception.__cause__, ConnectionError)
 
 
 if __name__ == "__main__":
