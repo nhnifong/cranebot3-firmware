@@ -5,7 +5,10 @@ camera_mode: gripper_floor_384
 center_crop: false
 
 merge:
-  - naavox/move_clutter
+  # These two runs recorded near-duplicate frames throughout, so they teach the
+  # model nothing and skew the data toward one scene.
+  - repo_id: naavox/move_clutter
+    exclude_episodes: ["289-325", "448-481"]
   - naavox/move_clutter_2
   - naavox/move_clutter_hawes_1
   - naavox/move_clutter_chuck_1

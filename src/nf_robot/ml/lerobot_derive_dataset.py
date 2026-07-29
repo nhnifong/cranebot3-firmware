@@ -47,6 +47,33 @@ from nf_robot.ml.lerobot_resize_video_feature import resize_video
 from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, _FEED_NAMES
 
 
+def _drop_removed_feature_stats(root: Path, removed_keys: list[str]) -> None:
+    """Drop per-episode and global stats for features that were removed.
+
+    lerobot's modify_features deletes a removed feature from meta/info.json but
+    leaves its `stats/<key>/*` columns in meta/episodes. Tools that later
+    re-aggregate episode stats (delete_episodes) look each stats feature up in
+    info.json's features to learn its shape, and raise on the ones that are no
+    longer there.
+    """
+    import pyarrow.parquet as pq
+
+    prefixes = tuple(f"stats/{key}/" for key in removed_keys)
+    for path in sorted((root / "meta" / "episodes").glob("**/*.parquet")):
+        table = pq.read_table(path)
+        keep = [name for name in table.schema.names if not name.startswith(prefixes)]
+        if len(keep) != len(table.schema.names):
+            pq.write_table(table.select(keep), path)
+
+    stats_path = root / "meta" / "stats.json"
+    if stats_path.exists():
+        stats = json.loads(stats_path.read_text())
+        if any(key in stats for key in removed_keys):
+            for key in removed_keys:
+                stats.pop(key, None)
+            stats_path.write_text(json.dumps(stats, indent=4))
+
+
 def _write_info_json(info: dict, root: Path) -> None:
     """Write meta/info.json directly from a plain dict.
 
@@ -104,6 +131,7 @@ def derive_dataset(
             output_dir=output_dir,
             repo_id=repo_id,
         )
+        _drop_removed_feature_stats(output_dir, features_to_remove)
     else:
         logging.info("Target camera set matches source; copying dataset as-is")
         shutil.copytree(dataset.root, output_dir, dirs_exist_ok=True)

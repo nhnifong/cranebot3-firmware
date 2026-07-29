@@ -32,3 +32,5 @@ models/
 images/
 arp_gripper_state.json
 gripper_card_obs.pkl
+pregrasp_clusters/
+pregrasp_frames/

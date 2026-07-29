@@ -13,10 +13,11 @@ Pipeline (in order):
   2. Convert each source into the target camera_mode (drop/resize/crop cameras).
      This happens FIRST, before the merge, because it shrinks each source and the
      merge only needs matching feature sets.
-  3. Merge the converted datasets into one (fully offline via merge_datasets).
-  4. Optionally run contact-action labeling on the merged dataset.
-  5. Optionally recompute stats.
-  6. Optionally upload the final dataset to the Hub under output_repo_id.
+  3. Drop each source's excluded (bad) episodes, if the recipe lists any.
+  4. Merge the remaining datasets into one (fully offline via merge_datasets).
+  5. Optionally run contact-action labeling on the merged dataset.
+  6. Optionally recompute stats.
+  7. Optionally upload the final dataset to the Hub under output_repo_id.
 
 A validity check runs after every intermediate step; if any produced dataset is
 invalid the whole pipeline aborts before doing more work.
@@ -32,8 +33,9 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     center_crop: false                       # center-crop to target aspect instead of stretching (optional)
     pad_clamp: false                          # center + clamp-pad instead of stretching when target exceeds source (optional)
     merge:                                    # source datasets to merge (>= 1)
-      - naavox/test_dataset_3
-      - naavox/laptop_test_dataset
+      - naavox/test_dataset_3                 # plain repo id: use every episode
+      - repo_id: naavox/laptop_test_dataset   # or a mapping, to drop bad episodes
+        exclude_episodes: [3, "10-14", 27]    # ints and inclusive "first-last" ranges
     label_contact_actions:                    # optional; omit or set enabled: false to skip
       enabled: true
       pressure_threshold: 0.1
@@ -57,7 +59,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from lerobot.datasets.dataset_tools import merge_datasets, recompute_stats
+from lerobot.datasets.dataset_tools import delete_episodes, merge_datasets, recompute_stats
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from nf_robot.ml.lerobot_derive_dataset import derive_dataset
@@ -120,6 +122,69 @@ def normalize_video_info(converted: list[tuple[str, Path]]) -> None:
         path.write_text(json.dumps(info, indent=4))
 
 
+def parse_episode_list(spec) -> list[int]:
+    """Expand an episode spec into a sorted list of unique episode indices.
+
+    Accepts ints and inclusive "first-last" range strings, so long runs of bad
+    episodes stay readable in a recipe: [3, "10-14", 27] -> [3, 10, 11, 12, 13, 14, 27].
+    """
+    if spec is None:
+        return []
+    if not isinstance(spec, list):
+        raise ValueError(f"'exclude_episodes' must be a list, got {spec!r}")
+
+    out: set[int] = set()
+    for item in spec:
+        if isinstance(item, bool):
+            raise ValueError(f"Invalid episode spec {item!r}")
+        if isinstance(item, int):
+            out.add(item)
+            continue
+        if isinstance(item, str) and "-" in item.strip().lstrip("-"):
+            first, _, last = item.strip().partition("-")
+            try:
+                first, last = int(first), int(last)
+            except ValueError:
+                raise ValueError(f"Invalid episode range {item!r}; expected 'first-last'")
+            if last < first:
+                raise ValueError(f"Invalid episode range {item!r}; last < first")
+            out.update(range(first, last + 1))
+            continue
+        try:
+            out.add(int(item))
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid episode spec {item!r}; expected an int or 'first-last'")
+
+    if any(i < 0 for i in out):
+        raise ValueError(f"Episode indices must be non-negative: {sorted(i for i in out if i < 0)}")
+    return sorted(out)
+
+
+def normalize_sources(merge_spec: list) -> list[dict]:
+    """Normalize recipe 'merge' entries to {'repo_id': str, 'exclude_episodes': [int]}."""
+    sources = []
+    for entry in merge_spec:
+        if isinstance(entry, str):
+            sources.append({"repo_id": entry, "exclude_episodes": []})
+            continue
+        if not isinstance(entry, dict) or "repo_id" not in entry:
+            raise ValueError(
+                f"Each 'merge' entry must be a repo id string or a mapping with 'repo_id', got {entry!r}"
+            )
+        unknown = set(entry) - {"repo_id", "exclude_episodes"}
+        if unknown:
+            raise ValueError(f"Unknown keys in merge entry {entry['repo_id']}: {sorted(unknown)}")
+        sources.append({
+            "repo_id": entry["repo_id"],
+            "exclude_episodes": parse_episode_list(entry.get("exclude_episodes")),
+        })
+
+    duplicates = {s["repo_id"] for s in sources if [t["repo_id"] for t in sources].count(s["repo_id"]) > 1}
+    if duplicates:
+        raise ValueError(f"Repeated source repo ids in 'merge': {sorted(duplicates)}")
+    return sources
+
+
 def load_recipe(path: Path) -> dict:
     """Load and validate a build recipe from YAML or JSON."""
     text = path.read_text()
@@ -142,9 +207,10 @@ def load_recipe(path: Path) -> dict:
             f"Unknown camera_mode '{recipe['camera_mode']}'. Valid: {list(_CAMERA_MODES)}"
         )
 
-    sources = recipe["merge"]
-    if not isinstance(sources, list) or not sources:
+    if not isinstance(recipe["merge"], list) or not recipe["merge"]:
         raise ValueError("Recipe key 'merge' must be a non-empty list of repo ids")
+    # Store the normalized form so callers never deal with both entry shapes.
+    recipe["merge"] = normalize_sources(recipe["merge"])
 
     label = recipe.get("label_contact_actions")
     if label is not None and not isinstance(label, dict):
@@ -249,7 +315,7 @@ def build(
     camera_mode = recipe["camera_mode"]
     center_crop = bool(recipe.get("center_crop", False))
     pad_clamp = bool(recipe.get("pad_clamp", False))
-    source_repo_ids = list(recipe["merge"])
+    sources = normalize_sources(recipe["merge"])
     label_cfg = recipe.get("label_contact_actions") or {}
     do_label = bool(label_cfg.get("enabled", False))
     do_recompute = bool(recipe.get("recompute_stats", False))
@@ -263,7 +329,9 @@ def build(
 
     # Step 1 + 2: source each dataset and convert it to the target camera_mode.
     converted: list[tuple[str, Path]] = []
-    for repo_id in source_repo_ids:
+    for source_spec in sources:
+        repo_id = source_spec["repo_id"]
+        exclude = source_spec["exclude_episodes"]
         logging.info(f"[{repo_id}] sourcing from Hub cache and converting to '{camera_mode}'")
         source = LeRobotDataset(repo_id=repo_id, root=None)  # downloads/caches under HF_LEROBOT_HOME
 
@@ -281,9 +349,28 @@ def build(
             pad_clamp=pad_clamp,
         )
         validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode)
+
+        # Step 3: drop excluded episodes. Done after conversion so the re-encoding
+        # delete_episodes does on videos straddling kept/dropped episodes works on
+        # the small target-resolution videos rather than the full-size originals.
+        if exclude:
+            logging.info(f"[{repo_id}] excluding {len(exclude)} episode(s): {exclude}")
+            filtered_root = converted_root_base / f"{_short_name(repo_id)}_filtered"
+            if filtered_root.exists():
+                shutil.rmtree(filtered_root)
+            delete_episodes(
+                dataset=LeRobotDataset(repo_id=repo_id, root=converted_root),
+                episode_indices=exclude,
+                output_dir=filtered_root,
+                repo_id=repo_id,
+            )
+            validate_dataset(repo_id, filtered_root, expected_camera_mode=camera_mode)
+            shutil.rmtree(converted_root, ignore_errors=True)
+            converted_root = filtered_root
+
         converted.append((repo_id, converted_root))
 
-    # Step 3: merge the converted datasets into the final output location.
+    # Step 4: merge the converted datasets into the final output location.
     # First reconcile cosmetic video-metadata differences so the merge's strict
     # feature-equality check passes (raises if critical fields truly differ).
     if len(converted) > 1:
@@ -293,7 +380,7 @@ def build(
     merge_datasets(converted_datasets, output_repo_id=output_repo_id, output_dir=output_root)
     validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode)
 
-    # Step 4: optional contact-action labeling (rewrites the action column + its stats).
+    # Step 5: optional contact-action labeling (rewrites the action column + its stats).
     if do_label:
         logging.info(f"Labeling contact actions on '{output_repo_id}'")
         label_dataset(
@@ -305,7 +392,7 @@ def build(
         )
         validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode)
 
-    # Step 5: optional full stats recompute (merge already aggregates stats, and
+    # Step 6: optional full stats recompute (merge already aggregates stats, and
     # labeling recomputes the action stats, so this is off by default).
     if do_recompute:
         logging.info(f"Recomputing stats for '{output_repo_id}'")
@@ -320,7 +407,7 @@ def build(
 
     final = LeRobotDataset(repo_id=output_repo_id, root=output_root)
 
-    # Step 6: optional upload of the final dataset.
+    # Step 7: optional upload of the final dataset.
     if do_upload:
         logging.info(f"Pushing '{output_repo_id}' to the Hugging Face Hub")
         final.push_to_hub()

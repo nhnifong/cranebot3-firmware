@@ -1067,6 +1067,58 @@ def eval_episode(
         "finger_speed": 0.0
     })
 
+def load_training_metadata(dataset_repo_id):
+    """Metadata (features + stats) of the dataset a policy was trained on.
+
+    Eval only needs meta/, so this loads LeRobotDatasetMetadata rather than
+    LeRobotDataset, whose constructor also downloads every data parquet.
+
+    Given no root, lerobot looks for the dataset at HF_LEROBOT_HOME/<repo_id>,
+    which is never where it puts one: downloads land in the hub cache layout
+    under HF_LEROBOT_HOME/hub. It therefore always misses, and resolves the
+    revision against the Hub before reading anything - so eval needs the network
+    even when the dataset is fully cached. Resolving the cached snapshot here and
+    passing it as root skips that.
+    """
+    from pathlib import Path
+    from huggingface_hub import snapshot_download
+    from lerobot.datasets.dataset_metadata import CODEBASE_VERSION
+    from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+    from lerobot.utils.constants import HF_LEROBOT_HUB_CACHE
+
+    try:
+        cached_root = Path(snapshot_download(
+            dataset_repo_id,
+            repo_type="dataset",
+            revision=CODEBASE_VERSION,
+            cache_dir=HF_LEROBOT_HUB_CACHE,
+            allow_patterns="meta/",
+            local_files_only=True,
+        ))
+    except Exception:
+        cached_root = None
+
+    if cached_root is not None and (cached_root / "meta" / "info.json").exists():
+        print(f"Using cached metadata for {dataset_repo_id} at {cached_root}")
+        return LeRobotDatasetMetadata(repo_id=dataset_repo_id, root=cached_root)
+
+    print(f"Fetching metadata for {dataset_repo_id} from the Hub")
+    try:
+        import httpx
+        network_errors = (OSError, httpx.HTTPError)
+    except ImportError:
+        network_errors = (OSError,)
+
+    try:
+        return LeRobotDatasetMetadata(repo_id=dataset_repo_id)
+    except network_errors as e:
+        raise RuntimeError(
+            f"Cannot reach the Hugging Face Hub to fetch metadata for the training dataset "
+            f"'{dataset_repo_id}', and it is not in the cache at {HF_LEROBOT_HUB_CACHE}. "
+            f"Connect to the network once to cache it, then eval works offline."
+        ) from e
+
+
 def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=None, camera_mode=None):
     import torch
     import json
@@ -1087,15 +1139,11 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
     with open(_config_file) as _f:
         dataset_repo_id = json.load(_f)["dataset"]["repo_id"]
 
-    print("Fetching training dataset to acquire metadata")
-    dataset = LeRobotDataset(
-        repo_id=dataset_repo_id,
-        download_videos=False,
-    )
+    dataset_meta = load_training_metadata(dataset_repo_id)
 
     if camera_mode is None:
-        camera_mode = camera_mode_from_features(dataset.meta.features)
-    action_space = action_space_from_features(dataset.meta.features)
+        camera_mode = camera_mode_from_features(dataset_meta.features)
+    action_space = action_space_from_features(dataset_meta.features)
 
     # connect to the robot right away because it is our channel to send error messages back to the user.
     print(f"Connecting to robot...")
@@ -1115,7 +1163,7 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
         preprocessor, postprocessor = make_pre_post_processors(
             policy_cfg=cfg,
             pretrained_path=policy_repo_id,
-            dataset_stats=dataset.meta.stats,
+            dataset_stats=dataset_meta.stats,
             preprocessor_overrides={"device_processor": {"device": str(cfg.device)}},
             postprocessor_overrides={"device_processor": {"device": str(cfg.device)}}
         )
@@ -1128,7 +1176,7 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
 
         policy = make_policy(
             cfg=cfg,
-            ds_meta=dataset.meta,
+            ds_meta=dataset_meta,
             rename_map=rm
         )
         policy.eval()
@@ -1157,7 +1205,7 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
                 policy=policy,
                 preprocessor=preprocessor,
                 postprocessor=postprocessor,
-                dataset_features=dataset.meta.features,
+                dataset_features=dataset_meta.features,
                 events=events,
                 fps=FPS,
                 max_episode_duration=EPISODE_MAX_TIME_SEC,
