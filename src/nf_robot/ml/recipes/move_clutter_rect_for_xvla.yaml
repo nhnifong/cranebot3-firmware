@@ -1,5 +1,5 @@
 # Merge the move_clutter datasets with Justin's laundry/trash datasets, convert to
-# gripper_anchors_rect, trim observation.state to fit X-VLA's 32-wide proprio
+# gripper_anchors_rect, trim observation.state to fit X-VLA's 20-wide proprio
 # projection, canonicalize the speech-to-text task strings, label contact actions,
 # and produce naavox/move_clutter_rect_for_xvla.
 # This dataset contains the overhead cameras but not the warped floor composite.
@@ -30,12 +30,16 @@ merge:
   - justink04/trash-in-trashcan-7-23-26
   - justink04/trash-in-trashcan-7-24-26
 
-# 30 of the 44 recorded components, to stay under X-VLA's max_state_dim of 32.
+# 20 of the 44 recorded components. lerobot/xvla-base ships max_state_dim=20 (not
+# the config class default of 32) and X-VLA's from_pretrained does a strict load,
+# so anything wider means the proprio projection cannot load at all.
 # Dropped: gripper_rot_0..5 (orientation is still carried by spin and
 # wrist_angle), gantry_position_* (raw actuator space, redundant with
 # gripper_pos_*), swing_cancellation_on (a control-mode flag the policy does not
-# command), and the parking_location_*/gamepad_* bearings and distances (both are
-# teleop-rig landmarks, not task targets).
+# command), parking_location_*/gamepad_* bearings and distances (teleop-rig
+# landmarks, not task targets), tension_0..3 (cable dynamics the policy does not
+# command), and visual_pos_*/hang_pos_* (alternate estimates of a pose that
+# gripper_pos_* already carries).
 keep_state_features:
   - vel_x
   - vel_y
@@ -57,16 +61,6 @@ keep_state_features:
   - toybox_distance
   - trashcan_bearing
   - trashcan_distance
-  - tension_0
-  - tension_1
-  - tension_2
-  - tension_3
-  - visual_pos_x
-  - visual_pos_y
-  - visual_pos_z
-  - hang_pos_x
-  - hang_pos_y
-  - hang_pos_z
 
 normalize_tasks: move_clutter_rect_tasks.yaml
 
