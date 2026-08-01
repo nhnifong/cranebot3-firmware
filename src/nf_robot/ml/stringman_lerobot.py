@@ -28,6 +28,7 @@ import inspect
 
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
+from nf_robot.ml.frozen_camera_monitor import FrozenCameraMonitor
 
 from lerobot.robots import Robot, RobotConfig
 from lerobot.datasets.image_writer import safe_stop_image_writer
@@ -243,6 +244,10 @@ class StringmanLeRobot(Robot):
             for f, (w, h) in self.camera_specs.items()
         }
 
+        # Watches for a camera whose image stops changing, which otherwise ruins
+        # every episode from then on without anything else looking wrong.
+        self.frozen_monitor = FrozenCameraMonitor(names=_FEED_NAMES)
+
     @cached_property
     def _motors_ft(self) -> dict[str, type]:
         return {
@@ -443,6 +448,9 @@ class StringmanLeRobot(Robot):
             is_local = hostname in ["localhost", "127.0.0.1", "::1", "0.0.0.0"]
 
             print(f"Video ready (feed {feed_num}). Connecting to stream: {url} (Local: {is_local})")
+            # A reconnecting feed starts fresh: whatever it last showed before the
+            # stream dropped must not count towards a frozen run on the new one.
+            self.frozen_monitor.forget(feed_num)
             self.stop_video_events[feed_num].clear()
             self.video_threads[feed_num] = threading.Thread(
                 target=self._video_stream_loop, 
@@ -485,7 +493,9 @@ class StringmanLeRobot(Robot):
                 target_w, target_h = self.camera_specs[feed_num]
                 if frame.shape[0] != target_h or frame.shape[1] != target_w:
                     frame = cv2.resize(frame, (target_w, target_h))
-                    
+
+                self.frozen_monitor.note_frame(feed_num, frame)
+
                 with self.camera_locks[feed_num]:
                     self.last_images[feed_num] = frame
         except av.error.TimeoutError:
@@ -654,6 +664,31 @@ class StringmanLeRobot(Robot):
             self.websocket.send(to_send)
         return action
 
+    def report_frozen_cameras(self) -> str | None:
+        """Tell the operator about any camera whose image has stopped changing.
+
+        Cheap enough to call every tick: the per-frame comparison already happened
+        in the decode threads, this only reads timestamps. Returns the message
+        sent, or None if every feed is live.
+
+        The warning rides on the session status as `error` while leaving `status`
+        alone, so the session is not marked failed - recording keeps working, and
+        it stays the operator's call whether to restart and re-record.
+        """
+        alerts = self.frozen_monitor.new_alerts()
+        if not alerts:
+            return None
+
+        message = self.frozen_monitor.describe(alerts)
+        detail = ", ".join(f"{self.frozen_monitor.name(feed)} frozen for {seconds:.0f}s"
+                           for feed, seconds in alerts)
+        print(f"{message} ({detail})", flush=True)
+        self.send_session_status(common.LerobotSessionStatus(
+            status=self.last_status,
+            error=message,
+        ))
+        return message
+
     def send_session_status(self, status: common.LerobotSessionStatus):
         if status.status is not None:
             self.last_status = status.status
@@ -720,6 +755,8 @@ def record_episode(
         if events["episode_abandon"]: 
             print('ep abandon')
             break
+
+        robot.report_frozen_cameras()
 
         obs = robot.get_observation()
         observation_frame = build_dataset_frame(dataset.features, obs, prefix=OBS_STR)
@@ -898,7 +935,11 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
 
         while robot.is_connected and not events["end_recording"]:
             time.sleep(0.03)
-        
+
+            # Also checked while idle, so a stalled camera surfaces before the
+            # operator starts recording into it rather than after.
+            robot.report_frozen_cameras()
+
             if events['end_recording']:
                 events["end_recording"] = False
                 break

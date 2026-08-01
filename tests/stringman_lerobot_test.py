@@ -639,5 +639,81 @@ class TestLoadTrainingMetadata(unittest.TestCase):
         self.assertIsInstance(ctx.exception.__cause__, ConnectionError)
 
 
+# ---------------------------------------------------------------------------
+# Frozen camera reporting
+# ---------------------------------------------------------------------------
+
+class TestFrozenCameraReporting(unittest.TestCase):
+    """The decode loop feeds the monitor, and a stalled feed reaches the operator."""
+
+    def _stream_frames(self, robot, feed_num, frames):
+        mock_frames = []
+        for array in frames:
+            mock_frame = Mock()
+            mock_frame.to_ndarray.return_value = array
+            mock_frames.append(mock_frame)
+
+        mock_stream = Mock()
+        mock_stream.type = "video"
+        mock_container = Mock()
+        mock_container.streams.__iter__ = Mock(return_value=iter([mock_stream]))
+        mock_container.decode.return_value = iter(mock_frames)
+
+        with patch("av.open", return_value=mock_container):
+            robot._video_stream_loop("rtsp://localhost/stream", True, feed_num)
+
+    def test_repeated_frames_from_stream_are_reported(self):
+        robot = _make_robot("all")
+        w, h = _CAMERA_MODES["all"][0]
+        stuck = np.random.default_rng(0).integers(0, 256, (h, w, 3), dtype=np.uint8)
+
+        now = [100.0]
+        with patch("time.monotonic", side_effect=lambda: now[0]):
+            self._stream_frames(robot, 0, [stuck, stuck.copy()])
+            now[0] += 10.0
+            robot.send_session_status = Mock()
+            message = robot.report_frozen_cameras()
+
+        self.assertIsNotNone(message)
+        self.assertIn("gripper_camera", message)
+        robot.send_session_status.assert_called_once()
+        sent = robot.send_session_status.call_args[0][0]
+        self.assertIn("gripper_camera", sent.error)
+        # The session must not be marked failed; recording continues.
+        self.assertEqual(sent.status, robot.last_status)
+
+    def test_changing_frames_are_not_reported(self):
+        robot = _make_robot("all")
+        w, h = _CAMERA_MODES["all"][0]
+        rng = np.random.default_rng(1)
+        frames = [rng.integers(0, 256, (h, w, 3), dtype=np.uint8) for _ in range(3)]
+
+        now = [100.0]
+        with patch("time.monotonic", side_effect=lambda: now[0]):
+            self._stream_frames(robot, 0, frames)
+            now[0] += 1.0
+            robot.send_session_status = Mock()
+            self.assertIsNone(robot.report_frozen_cameras())
+
+        robot.send_session_status.assert_not_called()
+
+    def test_reconnecting_feed_clears_frozen_state(self):
+        robot = _make_robot("all")
+        w, h = _CAMERA_MODES["all"][0]
+        stuck = np.random.default_rng(2).integers(0, 256, (h, w, 3), dtype=np.uint8)
+
+        now = [100.0]
+        with patch("time.monotonic", side_effect=lambda: now[0]):
+            self._stream_frames(robot, 0, [stuck, stuck.copy()])
+            now[0] += 10.0
+            self.assertIn(0, robot.frozen_monitor.frozen_feeds())
+
+            # A VideoReady for a feed whose thread has exited restarts the stream.
+            with patch.object(threading, "Thread"):
+                robot._handle_video_ready(telemetry.VideoReady(
+                    feed_number=0, local_uri="http://localhost:8080/stream", is_gripper=True))
+            self.assertEqual(robot.frozen_monitor.frozen_feeds(), {})
+
+
 if __name__ == "__main__":
     unittest.main()

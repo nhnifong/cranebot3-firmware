@@ -38,6 +38,8 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
       - naavox/test_dataset_3                 # plain repo id: use every episode
       - repo_id: naavox/laptop_test_dataset   # or a mapping, to drop bad episodes
         exclude_episodes: [3, "10-14", 27]    # ints and inclusive "first-last" ranges
+                                              # See lerobot_find_frozen_video.py, which prints
+                                              # this block for episodes with a frozen camera.
     keep_state_features:                      # optional; trim observation.state to these
       - vel_x
       - vel_y

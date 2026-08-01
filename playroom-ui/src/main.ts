@@ -61,6 +61,9 @@ let datasetEpCount = 0;
 let hfRepoId = "username/my-lerobot-dataset";
 let policyRepoId = "username/my-policy";
 let lerobotError: string | null = null;
+// Last error already shown in a popup, so a status repeated every few seconds
+// (e.g. a camera that stays frozen) doesn't reopen the dialog under the operator.
+let poppedLerobotError: string | null = null;
 let episodeStartTime: number | null = null;
 let sentFinalizeCommand = false;
 let episodesUntilCheckpoint: number | null = null;
@@ -808,6 +811,19 @@ function handleEpisodeControl(data: nf.common.IEpisodeControl) {
     episodesUntilCheckpoint = status.episodesUntilCheckpoint ?? null;
     lerobotError = status.error ?? null;
 
+    // Errors also render in the LeRobot panel, but the operator is usually
+    // watching the video feeds with that panel closed, so anything that ruins
+    // the data being recorded (a frozen camera, a failed session) has to
+    // interrupt them. Only on a change, so a repeating status doesn't reopen it.
+    if (lerobotError !== poppedLerobotError) {
+      poppedLerobotError = lerobotError;
+      if (lerobotError) {
+        showPopup({ message: lerobotError });
+        // Tracebacks arrive here too; speak only the headline.
+        // Say(lerobotError.split('\n')[0].slice(0, 150));
+      }
+    }
+
     if (leRobotState === nf.common.LerobotStatus.LEROBOTSTATUS_RECORDING) {
       Say(`Starting episode ${numEpisodesRecorded}`);
     } else if (leRobotState === nf.common.LerobotStatus.LEROBOTSTATUS_REC_READY) {
@@ -1283,6 +1299,11 @@ function showPopup(data: nf.telemetry.IPopup) {
   const msgEl = document.getElementById('popup-message');
 
   if (overlay && msgEl && data.message) {
+    // handleGetTicket restyles this element for the ticket blob; undo that so a
+    // later popup isn't rendered in tiny monospace with words broken mid-letter.
+    msgEl.style.wordBreak = '';
+    msgEl.style.fontFamily = '';
+    msgEl.style.fontSize = '';
     msgEl.textContent = data.message;
     overlay.classList.remove('hidden');
   }
@@ -2046,7 +2067,8 @@ async function triggerSetPrompt() {
 //   except when leRobotState is ERROR (nothing to wait for - see handleLeRobotFinalize).
 // - lerobotError: latest error string from status.error, if any. Rendered in the active
 //   panel's error box when a session is active, or the inactive panel's start-error box
-//   otherwise.
+//   otherwise. handleEpisodeControl additionally pops it up in the popup overlay when it
+//   changes, since the panel is usually closed while the operator is recording.
 // - numEpisodesRecorded, datasetEpCount, hfRepoId, policyRepoId, episodesUntilCheckpoint:
 //   session/progress display fields, all populated from the status payload.
 function updateLeRobotUI() {
@@ -2242,6 +2264,7 @@ function updateLeRobotUI() {
 function handleLeRobotStart(type: 'recording' | 'eval', repoId: string) {
   isLeRobotStarting = true;
   lerobotError = null;
+  poppedLerobotError = null;
   sentFinalizeCommand = false;
   episodesUntilCheckpoint = null;
 
