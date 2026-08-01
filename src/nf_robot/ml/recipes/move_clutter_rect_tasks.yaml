@@ -1,0 +1,49 @@
+# Canonical task strings for the move_clutter datasets, collapsing the 20 raw
+# speech-to-text transcriptions down to 5 prompts. Covers every task string in
+# all ten sources merged by move_clutter_rect_justin.yaml, which references this
+# file from its `normalize_tasks:` key.
+#
+# Can also be applied to an existing dataset on its own:
+#   python src/nf_robot/ml/lerobot_normalize_tasks.py \
+#       --repo_id naavox/move_clutter_rect \
+#       --mapping src/nf_robot/ml/recipes/move_clutter_rect_tasks.yaml \
+#       --root /tmp/move_clutter_rect_tasks [--push]
+
+# Order here sets task_index 0..N-1 in the rewritten dataset.
+tasks:
+  - "put a toy in the toybox"
+  - "put laundry in the hamper"
+  - "put trash in the trash can"
+  - "fix the overhanging item"
+  - "put a ball in the ball pit"
+
+# Every raw string in the dataset must appear here, including the ones that are
+# already canonical - silence is not consent, an unmapped string is an error.
+map:
+  "put a toy in the toybox": "put a toy in the toybox"
+  "put a toy in the toy box": "put a toy in the toybox"
+  "put toys in the toy box": "put a toy in the toybox"
+  "put it away in the toy box": "put a toy in the toybox"
+  "put the rope in the toy box": "put a toy in the toybox"
+  # "green box" is assumed to be the toybox - the only landmarks the robot
+  # tracks are hamper/toybox/trashcan, and a domino is a toy.
+  "put a domino in the green box": "put a toy in the toybox"
+
+  "Put laundry in the hamper": "put laundry in the hamper"
+  "put laundry in the hamper": "put laundry in the hamper"
+  "put laundry in the laundry hamper": "put laundry in the hamper"
+  "put clothes in the hamper": "put laundry in the hamper"
+  # speech-to-text mishearing of "hamper"
+  "put laundry in the hamburger": "put laundry in the hamper"
+
+  "put trash in the trash can": "put trash in the trash can"
+  "put trash in trash can": "put trash in the trash can"
+  "put trash in the trashcan": "put trash in the trash can"
+  "put Easter egg halves in the trash": "put trash in the trash can"
+
+  "fix the overhanging item": "fix the overhanging item"
+
+  "put a ball in the ball pit": "put a ball in the ball pit"
+  "put a ball in a ball pit": "put a ball in the ball pit"
+  "put balls in the ball pit": "put a ball in the ball pit"
+  "pick up a ball and put it in the ball pit": "put a ball in the ball pit"

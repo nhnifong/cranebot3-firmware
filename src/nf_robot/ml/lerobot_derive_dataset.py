@@ -9,6 +9,16 @@ target resolution must be the same size or smaller than the source.
 
 Camera modes are defined in nf_robot.ml.stringman_lerobot._CAMERA_MODES.
 
+Two optional steps run after the camera work, both of which shape a dataset to
+fit a policy's expectations:
+
+  --keep_state_features  trims observation.state down to the named components,
+                         keeping their original order. Policies with a fixed
+                         proprioception width (X-VLA projects `max_state_dim`,
+                         32 by default) need this.
+  --normalize_tasks      collapses task strings onto a canonical set, see
+                         lerobot_normalize_tasks.py for the mapping format.
+
 Usage example:
 
 Derive a gripper_224 dataset from one recorded with camera_mode="all":
@@ -43,6 +53,7 @@ from lerobot.datasets.video_utils import get_video_info
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
+from nf_robot.ml.lerobot_normalize_tasks import load_mapping, normalize_tasks
 from nf_robot.ml.lerobot_resize_video_feature import resize_video
 from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, _FEED_NAMES
 
@@ -74,6 +85,84 @@ def _drop_removed_feature_stats(root: Path, removed_keys: list[str]) -> None:
             stats_path.write_text(json.dumps(stats, indent=4))
 
 
+def _select_list_column(table, name: str, indices: list[int]):
+    """Rebuild a list column keeping only `indices` of each row, preserving its type."""
+    import pyarrow as pa
+
+    col_idx = table.schema.get_field_index(name)
+    field = table.schema.field(col_idx)
+    rows = table.column(name).to_pylist()
+    new_rows = [None if row is None else [row[i] for i in indices] for row in rows]
+
+    if pa.types.is_fixed_size_list(field.type):
+        new_type = pa.list_(field.type.value_type, len(indices))
+        field = field.with_type(new_type)
+    else:
+        new_type = field.type
+    return table.set_column(col_idx, field, pa.array(new_rows, type=new_type))
+
+
+def select_state_features(root: Path, keep: list[str]) -> None:
+    """Trim observation.state to the named components, in their original order.
+
+    Rewrites the data parquets, meta/info.json, meta/stats.json and the
+    per-episode stats columns together - leaving any one of them at the old
+    width makes the dataset unloadable, since lerobot cross-checks the feature
+    shape against the stats it aggregates.
+    """
+    import pyarrow.parquet as pq
+
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    feature = info["features"]["observation.state"]
+    names = list(feature["names"])
+
+    unknown = [n for n in keep if n not in names]
+    if unknown:
+        raise ValueError(f"observation.state has no component(s) {unknown}. Available: {names}")
+    if len(set(keep)) != len(keep):
+        raise ValueError(f"Duplicate entries in keep_state_features: {keep}")
+
+    keep_set = set(keep)
+    indices = [i for i, n in enumerate(names) if n in keep_set]
+    new_names = [names[i] for i in indices]
+    if new_names == names:
+        logging.info("observation.state already matches keep_state_features; nothing to trim")
+        return
+
+    logging.info(f"Trimming observation.state from {len(names)} to {len(new_names)} components")
+
+    for f in sorted(root.glob("data/chunk-*/file-*.parquet")):
+        pq.write_table(_select_list_column(pq.read_table(f), "observation.state", indices), f)
+
+    for f in sorted((root / "meta" / "episodes").glob("**/*.parquet")):
+        table = pq.read_table(f)
+        # "count" is a per-feature frame count, not a per-component vector.
+        cols = [
+            n for n in table.schema.names
+            if n.startswith("stats/observation.state/") and not n.endswith("/count")
+        ]
+        for name in cols:
+            table = _select_list_column(table, name, indices)
+        if cols:
+            pq.write_table(table, f)
+
+    stats_path = root / "meta" / "stats.json"
+    if stats_path.exists():
+        stats = json.loads(stats_path.read_text())
+        state_stats = stats.get("observation.state")
+        if state_stats:
+            for stat, value in state_stats.items():
+                if stat != "count" and isinstance(value, list) and len(value) == len(names):
+                    state_stats[stat] = [value[i] for i in indices]
+            stats_path.write_text(json.dumps(stats, indent=4))
+
+    feature["names"] = new_names
+    feature["shape"] = [len(new_names)]
+    info_path.write_text(json.dumps(info, indent=4))
+    logging.info(f"observation.state is now {new_names}")
+
+
 def _write_info_json(info: dict, root: Path) -> None:
     """Write meta/info.json directly from a plain dict.
 
@@ -95,6 +184,8 @@ def derive_dataset(
     headroom: int = 0,
     center_crop: bool = False,
     pad_clamp: bool = False,
+    keep_state_features: list[str] | None = None,
+    normalize_tasks_spec: dict | None = None,
 ) -> LeRobotDataset:
     if camera_mode not in _CAMERA_MODES:
         raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
@@ -203,6 +294,13 @@ def derive_dataset(
         info["features"][key]["shape"] = [target_h, target_w, channels]
 
     _write_info_json(info, dataset.root)
+
+    if keep_state_features:
+        select_state_features(dataset.root, keep_state_features)
+
+    if normalize_tasks_spec:
+        normalize_tasks(dataset.root, normalize_tasks_spec["tasks"], normalize_tasks_spec["map"])
+
     logging.info(f"Done. Derived '{camera_mode}' dataset written to {dataset.root}")
     return LeRobotDataset(repo_id=repo_id, root=dataset.root)
 
@@ -240,6 +338,15 @@ def main() -> None:
              "source datasets have different native resolutions.",
     )
     parser.add_argument(
+        "--keep_state_features", nargs="+", default=None,
+        help="Trim observation.state to these components (original order is kept)",
+    )
+    parser.add_argument(
+        "--normalize_tasks", default=None,
+        help="YAML/JSON mapping file collapsing task strings onto a canonical set "
+             "(see lerobot_normalize_tasks.py)",
+    )
+    parser.add_argument(
         "--push_to_hub", action="store_true", help="Upload the derived dataset to the Hugging Face Hub"
     )
     args = parser.parse_args()
@@ -252,6 +359,11 @@ def main() -> None:
         raise ValueError("--new_root must differ from the source dataset root")
 
     dataset = LeRobotDataset(repo_id=args.repo_id, root=input_root)
+
+    normalize_tasks_spec = None
+    if args.normalize_tasks:
+        tasks, mapping = load_mapping(Path(args.normalize_tasks))
+        normalize_tasks_spec = {"tasks": tasks, "map": mapping}
 
     logging.info(f"Deriving camera_mode '{args.camera_mode}' from '{args.repo_id}'")
 
@@ -267,6 +379,8 @@ def main() -> None:
         headroom=args.headroom,
         center_crop=args.center_crop,
         pad_clamp=args.pad_clamp,
+        keep_state_features=args.keep_state_features,
+        normalize_tasks_spec=normalize_tasks_spec,
     )
 
     if args.push_to_hub:

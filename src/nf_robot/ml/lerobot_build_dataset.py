@@ -10,9 +10,11 @@ Pipeline (in order):
   1. Source each input dataset from the Hub (LeRobotDataset downloads into the
      standard HF cache, i.e. $HF_LEROBOT_HOME / $HF_HOME - point those at your
      external drive if space is tight; nothing is re-downloaded if already cached).
-  2. Convert each source into the target camera_mode (drop/resize/crop cameras).
-     This happens FIRST, before the merge, because it shrinks each source and the
-     merge only needs matching feature sets.
+  2. Convert each source into the target camera_mode (drop/resize/crop cameras),
+     optionally trimming observation.state and normalizing task strings at the
+     same time. This happens FIRST, before the merge, because it shrinks each
+     source and the merge only needs matching feature sets - and normalizing
+     tasks per source is what makes the merged task table canonical.
   3. Drop each source's excluded (bad) episodes, if the recipe lists any.
   4. Merge the remaining datasets into one (fully offline via merge_datasets).
   5. Optionally run contact-action labeling on the merged dataset.
@@ -36,6 +38,12 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
       - naavox/test_dataset_3                 # plain repo id: use every episode
       - repo_id: naavox/laptop_test_dataset   # or a mapping, to drop bad episodes
         exclude_episodes: [3, "10-14", 27]    # ints and inclusive "first-last" ranges
+    keep_state_features:                      # optional; trim observation.state to these
+      - vel_x
+      - vel_y
+    normalize_tasks: tasks.yaml               # optional; path (relative to the recipe) to a
+                                              # task mapping file, or the same {tasks:, map:}
+                                              # spec inline. See lerobot_normalize_tasks.py.
     label_contact_actions:                    # optional; omit or set enabled: false to skip
       enabled: true
       pressure_threshold: 0.1
@@ -64,6 +72,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from nf_robot.ml.lerobot_derive_dataset import derive_dataset
 from nf_robot.ml.lerobot_label_contact_actions import label_dataset
+from nf_robot.ml.lerobot_normalize_tasks import load_mapping
 from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, camera_mode_from_features
 
 
@@ -216,6 +225,25 @@ def load_recipe(path: Path) -> dict:
     if label is not None and not isinstance(label, dict):
         raise ValueError("'label_contact_actions' must be a mapping if present")
 
+    keep_state = recipe.get("keep_state_features")
+    if keep_state is not None and (
+        not isinstance(keep_state, list) or not all(isinstance(n, str) for n in keep_state)
+    ):
+        raise ValueError("'keep_state_features' must be a list of observation.state component names")
+
+    # A string is a mapping file, resolved relative to the recipe so a recipe and
+    # its task mapping travel together; anything else must be the inline spec.
+    tasks_spec = recipe.get("normalize_tasks")
+    if isinstance(tasks_spec, str):
+        mapping_path = Path(tasks_spec)
+        if not mapping_path.is_absolute() and not mapping_path.exists():
+            mapping_path = path.parent / mapping_path
+        tasks, mapping = load_mapping(mapping_path)
+        recipe["normalize_tasks"] = {"tasks": tasks, "map": mapping}
+    elif tasks_spec is not None:
+        if not isinstance(tasks_spec, dict) or "tasks" not in tasks_spec or "map" not in tasks_spec:
+            raise ValueError("'normalize_tasks' must be a mapping-file path or a {tasks:, map:} mapping")
+
     return recipe
 
 
@@ -316,6 +344,8 @@ def build(
     center_crop = bool(recipe.get("center_crop", False))
     pad_clamp = bool(recipe.get("pad_clamp", False))
     sources = normalize_sources(recipe["merge"])
+    keep_state_features = recipe.get("keep_state_features")
+    normalize_tasks_spec = recipe.get("normalize_tasks")
     label_cfg = recipe.get("label_contact_actions") or {}
     do_label = bool(label_cfg.get("enabled", False))
     do_recompute = bool(recipe.get("recompute_stats", False))
@@ -347,6 +377,8 @@ def build(
             headroom=headroom,
             center_crop=center_crop,
             pad_clamp=pad_clamp,
+            keep_state_features=keep_state_features,
+            normalize_tasks_spec=normalize_tasks_spec,
         )
         validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode)
 

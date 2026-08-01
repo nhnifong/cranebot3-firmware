@@ -1,0 +1,78 @@
+# Merge the move_clutter datasets with Justin's laundry/trash datasets, convert to
+# gripper_anchors_rect, trim observation.state to fit X-VLA's 32-wide proprio
+# projection, canonicalize the speech-to-text task strings, label contact actions,
+# and produce naavox/move_clutter_rect_for_xvla.
+# This dataset contains the overhead cameras but not the warped floor composite.
+# all frames have the same dimensions so they can be used with multitask dit
+# prefer resize to center crop
+
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/move_clutter_rect_for_xvla.yaml \
+#     --temp_dir /home/nick/data_scratch \
+#     --output_root /home/nick/data_scratch/move_clutter_rect_for_xvla \
+#     --upload
+
+output_repo_id: naavox/move_clutter_rect_for_xvla
+camera_mode: gripper_anchors_rect
+center_crop: false
+pad_clamp: true
+
+merge:
+  - repo_id: naavox/move_clutter
+    exclude_episodes: ["289-325", "448-481"]
+  - naavox/move_clutter_2
+  - naavox/move_clutter_hawes_1
+  - naavox/move_clutter_chuck_1
+  - naavox/move_clutter_79west4
+  - naavox/move_clutter_nick_2
+  - justink04/laundry-in-hamper-7-19-26
+  - justink04/laundry-in-hamper-7-23-26
+  - justink04/trash-in-trashcan-7-23-26
+  - justink04/trash-in-trashcan-7-24-26
+
+# 30 of the 44 recorded components, to stay under X-VLA's max_state_dim of 32.
+# Dropped: gripper_rot_0..5 (orientation is still carried by spin and
+# wrist_angle), gantry_position_* (raw actuator space, redundant with
+# gripper_pos_*), swing_cancellation_on (a control-mode flag the policy does not
+# command), and the parking_location_*/gamepad_* bearings and distances (both are
+# teleop-rig landmarks, not task targets).
+keep_state_features:
+  - vel_x
+  - vel_y
+  - vel_z
+  - wrist_speed
+  - finger_speed
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+  - hamper_bearing
+  - hamper_distance
+  - toybox_bearing
+  - toybox_distance
+  - trashcan_bearing
+  - trashcan_distance
+  - tension_0
+  - tension_1
+  - tension_2
+  - tension_3
+  - visual_pos_x
+  - visual_pos_y
+  - visual_pos_z
+  - hang_pos_x
+  - hang_pos_y
+  - hang_pos_z
+
+normalize_tasks: move_clutter_rect_tasks.yaml
+
+label_contact_actions:
+  enabled: true
+  pressure_threshold: 0.1
+  episode_end_seconds: 1.0
+  blend_seconds: 0.5
+  rotate_contact_vec: false
