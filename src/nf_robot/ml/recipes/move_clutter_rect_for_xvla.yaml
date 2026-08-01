@@ -29,6 +29,8 @@ merge:
   - justink04/laundry-in-hamper-7-23-26
   - justink04/trash-in-trashcan-7-23-26
   - justink04/trash-in-trashcan-7-24-26
+  - justink04/laundry-in-hamper-8-1-26
+  - justink04/laundry-in-hamper2-8-1-26
 
 # 20 of the 44 recorded components. lerobot/xvla-base ships max_state_dim=20 (not
 # the config class default of 32) and X-VLA's from_pretrained does a strict load,
