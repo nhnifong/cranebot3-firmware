@@ -13,7 +13,12 @@ Every INTERVAL seconds it:
      throttle flags, IP, gateway.
   2. Checks whether we are still reachable on the LAN (ping the default gateway).
   3. If we are offline, attempts to power-cycle the Wi-Fi chip and logs whether
-     each recovery step brought us back.
+     each recovery step brought us back. Recovery is skipped (and the reason
+     logged) within the first MIN_UPTIME_S seconds of boot, when Wi-Fi may simply
+     not have associated yet; while a wired link is up, since the unit is
+     reachable and a reboot would only interrupt it; and when no saved Wi-Fi
+     network exists, since a unit with nothing to associate with would otherwise
+     reboot forever.
 
 Everything is appended (with flush + fsync) to a log file on the SD card,
 /opt/robot/wifi_thermal_watchdog.log by default. Point --logfile at
@@ -58,6 +63,10 @@ DEFAULT_LOGFILE = "/opt/robot/wifi_thermal_watchdog.log"
 SETTLE_SECONDS = 8  # how long to wait for the link to come back after a step
 PING_COUNT = 2
 PING_TIMEOUT = 3  # seconds per ping
+MIN_UPTIME_S = 60  # don't call a link dead before it has had a chance to associate
+NM_CONNECTION_DIR = "/etc/NetworkManager/system-connections"
+SYS_NET_DIR = "/sys/class/net"
+ARPHRD_ETHER = "1"  # /sys/class/net/<dev>/type of a wired ethernet link (can0 is 280)
 
 
 def now_iso() -> str:
@@ -197,7 +206,7 @@ def read_component_server_rss_mb():
 def read_operstate(dev):
     """Kernel operstate of a network device ('up', 'down', ...), or 'none'."""
     try:
-        with open(f"/sys/class/net/{dev}/operstate") as f:
+        with open(os.path.join(SYS_NET_DIR, dev, "operstate")) as f:
             return f.read().strip()
     except OSError:
         return "none"
@@ -272,6 +281,76 @@ def is_online(iface, target):
 
 
 # ---- Recovery ---------------------------------------------------------------
+
+def ethernet_links_up():
+    """Names of wired ethernet interfaces that are up.
+
+    Filters on /sys/class/net/<dev>/type so can0 (280) and lo (772) don't count,
+    and on the absence of a `wireless` directory so wlan0 - which is also type 1 -
+    doesn't count itself.
+    """
+    try:
+        names = sorted(os.listdir(SYS_NET_DIR))
+    except OSError:
+        return []
+
+    up = []
+    for name in names:
+        path = os.path.join(SYS_NET_DIR, name)
+        if os.path.isdir(os.path.join(path, "wireless")):
+            continue
+        try:
+            with open(os.path.join(path, "type")) as f:
+                if f.read().strip() != ARPHRD_ETHER:
+                    continue
+        except OSError:
+            continue
+        if read_operstate(name) == "up":
+            up.append(name)
+    return up
+
+
+def saved_wifi_networks():
+    """Count of saved Wi-Fi connection profiles, or None if it can't be told.
+
+    nmcli is authoritative; the profile directory is the fallback for when nmcli
+    is missing or NetworkManager isn't answering yet.
+    """
+    rc, out = run(["nmcli", "-t", "-f", "TYPE", "connection", "show"], timeout=10)
+    if rc == 0:
+        return sum(1 for line in out.splitlines() if line.strip() == "802-11-wireless")
+
+    try:
+        return sum(1 for name in os.listdir(NM_CONNECTION_DIR) if name.endswith(".nmconnection"))
+    except OSError:
+        return None
+
+
+def recovery_blocked_reason(uptime_s):
+    """Why recovery should be skipped for this sample, or None to go ahead.
+
+    Cases where being offline is not something recovery can fix, and where
+    escalating to a reboot would just loop:
+      - too soon after boot, when Wi-Fi has simply not associated yet
+      - a wired link is up, so the unit is reachable and rebooting it would only
+        interrupt whatever is running over ethernet
+      - no saved Wi-Fi network, so the unit has nothing to associate with
+    Unknown uptime or an unreadable profile list is not treated as blocking; a
+    watchdog that disables itself on missing diagnostics is worse than one that
+    retries.
+    """
+    if uptime_s is not None and uptime_s < MIN_UPTIME_S:
+        return f"only {uptime_s:.0f}s since boot (< {MIN_UPTIME_S}s)"
+
+    wired = ethernet_links_up()
+    if wired:
+        return f"ethernet is up ({', '.join(wired)})"
+
+    saved = saved_wifi_networks()
+    if saved == 0:
+        return "no saved Wi-Fi networks to connect to"
+    return None
+
 
 def recover(log, iface):
     """Escalating attempts to restore wifi. Returns True if back online.
@@ -358,8 +437,12 @@ def sample(log, iface):
     )
 
     if not online:
-        log.write("OFFLINE", f"link down at soc_temp={temp_s} -- starting recovery")
-        recover(log, iface)
+        blocked = recovery_blocked_reason(up)
+        if blocked:
+            log.write("OFFLINE", f"link down at soc_temp={temp_s} -- skipping recovery: {blocked}")
+        else:
+            log.write("OFFLINE", f"link down at soc_temp={temp_s} -- starting recovery")
+            recover(log, iface)
 
 
 def main():
