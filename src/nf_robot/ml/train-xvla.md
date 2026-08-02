@@ -1,0 +1,28 @@
+python src/nf_robot/ml/lerobot_train_modal.py \
+  --lerobot_ref public \
+  --gpu_type H200 \
+  --timeout_hours 14 \
+  --detach true \
+  --output_dir /multitask_dit_data/xvla1 \
+  --dataset.repo_id=naavox/move_clutter_rect_for_xvla \
+  --dataset.image_transforms.enable=true \
+  --policy.path=lerobot/xvla-base \
+  --policy.action_mode=auto \
+  --policy.max_action_dim=20 \
+  --policy.dtype=bfloat16 \
+  --policy.normalization_mapping='{"STATE":"MEAN_STD","ACTION":"MEAN_STD","VISUAL":"IDENTITY"}' \
+  --policy.freeze_vision_encoder=false \
+  --policy.freeze_language_encoder=false \
+  --policy.train_policy_transformer=true \
+  --policy.train_soft_prompts=true \
+  --policy.repo_id=naavox/xvla-move-clutter \
+  --policy.push_to_hub=true \
+  --output_dir=./outputs/xvla_move_clutter \
+  --job_name=xvla_move_clutter \
+  --batch_size=84 \
+  --steps=30000 \
+  --save_freq=2000 \
+  --log_freq=25 \
+  --num_workers=12 \
+  --wandb.enable=false \
+  --rename_map='{"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera":  "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}'

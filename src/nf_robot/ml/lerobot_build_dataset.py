@@ -133,6 +133,43 @@ def normalize_video_info(converted: list[tuple[str, Path]]) -> None:
         path.write_text(json.dumps(info, indent=4))
 
 
+def resolve_source_revision(repo_id: str) -> str | None:
+    """Revision to load a source dataset at, or None for lerobot's default.
+
+    lerobot resolves a dataset to its codebase-version tag (v3.0). A dataset
+    published without that tag makes get_safe_version raise RevisionNotFoundError
+    - and with huggingface_hub >=1.0 that raise itself dies with "missing keyword
+    argument 'response'", burying the real cause. Fall back to main for untagged
+    repos; the format check in _load_metadata still rejects genuinely old data.
+    """
+    from lerobot.datasets.utils import get_repo_versions
+
+    if get_repo_versions(repo_id):
+        return None
+    logging.warning(
+        f"[{repo_id}] has no codebase-version tag on the Hub; loading from 'main'. "
+        f"Tag it with: HfApi().create_tag('{repo_id}', tag='v3.0', repo_type='dataset')"
+    )
+    return "main"
+
+
+def preflight_sources(sources: list[dict]) -> dict[str, str | None]:
+    """Resolve every source's revision before any conversion work starts.
+
+    Conversion takes hours; reaching a broken source at the end wastes all of it.
+    These are metadata-only Hub calls, so checking all of them up front is cheap.
+    """
+    revisions: dict[str, str | None] = {}
+    for spec in sources:
+        repo_id = spec["repo_id"]
+        try:
+            revisions[repo_id] = resolve_source_revision(repo_id)
+        except Exception as e:
+            raise RuntimeError(f"Source dataset '{repo_id}' is not usable: {type(e).__name__}: {e}") from e
+    logging.info(f"Preflight OK: {len(revisions)} source dataset(s) reachable")
+    return revisions
+
+
 def parse_episode_list(spec) -> list[int]:
     """Expand an episode spec into a sorted list of unique episode indices.
 
@@ -340,6 +377,7 @@ def build(
     upload: bool,
     headroom: int,
     keep_intermediate: bool,
+    resume: bool = False,
 ) -> LeRobotDataset:
     output_repo_id = recipe["output_repo_id"]
     camera_mode = recipe["camera_mode"]
@@ -359,15 +397,35 @@ def build(
     if output_root.exists():
         raise FileExistsError(f"--output_root {output_root} already exists; remove it or pick another path")
 
+    revisions = preflight_sources(sources)
+
     # Step 1 + 2: source each dataset and convert it to the target camera_mode.
     converted: list[tuple[str, Path]] = []
     for source_spec in sources:
         repo_id = source_spec["repo_id"]
         exclude = source_spec["exclude_episodes"]
-        logging.info(f"[{repo_id}] sourcing from Hub cache and converting to '{camera_mode}'")
-        source = LeRobotDataset(repo_id=repo_id, root=None)  # downloads/caches under HF_LEROBOT_HOME
 
         converted_root = converted_root_base / _short_name(repo_id)
+        filtered_root = converted_root_base / f"{_short_name(repo_id)}_filtered"
+        # What this source contributes to the merge: the filtered copy when it has
+        # exclusions, else the converted one.
+        final_root = filtered_root if exclude else converted_root
+
+        if resume and final_root.exists():
+            try:
+                validate_dataset(repo_id, final_root, expected_camera_mode=camera_mode)
+                logging.info(f"[{repo_id}] reusing existing conversion at {final_root}")
+                converted.append((repo_id, final_root))
+                continue
+            except Exception as e:
+                logging.warning(f"[{repo_id}] existing conversion at {final_root} is unusable ({e}); redoing it")
+                shutil.rmtree(final_root, ignore_errors=True)
+
+        logging.info(f"[{repo_id}] sourcing from Hub cache and converting to '{camera_mode}'")
+        source = LeRobotDataset(  # downloads/caches under HF_LEROBOT_HOME
+            repo_id=repo_id, root=None, revision=revisions[repo_id]
+        )
+
         if converted_root.exists():
             shutil.rmtree(converted_root)
 
@@ -389,7 +447,6 @@ def build(
         # the small target-resolution videos rather than the full-size originals.
         if exclude:
             logging.info(f"[{repo_id}] excluding {len(exclude)} episode(s): {exclude}")
-            filtered_root = converted_root_base / f"{_short_name(repo_id)}_filtered"
             if filtered_root.exists():
                 shutil.rmtree(filtered_root)
             delete_episodes(
@@ -451,7 +508,11 @@ def build(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # force=True: importing lerobot installs its own root handler, which would make
+    # a plain basicConfig a no-op and silence this pipeline's progress logging.
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True
+    )
 
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -473,6 +534,11 @@ def main() -> None:
         "--headroom", type=int, default=2,
         help="CPU cores to leave free during conversion; the rest run one single-threaded "
              "encode each (default: 0)",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Reuse per-source conversions already present under --temp_dir instead of redoing "
+             "them; each is re-validated first, and rebuilt if it does not pass",
     )
     parser.add_argument(
         "--keep_intermediate", action="store_true",
@@ -497,6 +563,7 @@ def main() -> None:
         upload=args.upload,
         headroom=args.headroom,
         keep_intermediate=args.keep_intermediate,
+        resume=args.resume,
     )
 
 
