@@ -100,6 +100,7 @@ class ArpeggioAnchorClient(ComponentClient):
         for detection in detections:
             name = detection['n']
             self.last_known_centers[name] = detection['center']
+            self.last_known_half_extents[name] = detection.get('half_extent')
 
             if name in CAL_MARKERS:
                 # save all the detections of the origin for later analysis

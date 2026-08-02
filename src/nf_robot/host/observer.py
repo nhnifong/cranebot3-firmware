@@ -1808,7 +1808,7 @@ class AsyncObserver:
 
         If progress_range=(start_pct, end_pct) is given, a Calibration operation_progress message
         is sent as each card is surveyed, spread across that percent range."""
-        HOVER_CAMERA_HEIGHTS_M = [1.4, 1.0, 0.4]  # camera heights over each card to sample. Visiting a
+        HOVER_CAMERA_HEIGHTS_M = [1.1, 0.7, 0.4]  # camera heights over each card to sample. Visiting a
                                                   # card from several altitudes gives the length-delta
                                                   # constraints a vertical baseline, which is what lets
                                                   # them begin to observe the far external eyelets (a
@@ -1845,22 +1845,30 @@ class AsyncObserver:
             # center the card in view so the measurement is taken on the camera's axis
             await self._center_card_in_view(name)
             await asyncio.sleep(1.5)
-            gantry_offsets = []
-            line_samples = []
-            deadline = time.time() + MEASURE_TIMEOUT_S
-            window_end = None
+            # let sightings accumulate in the gripper client's buffer, then take the
+            # whole window at once.
+            start = time.time()
+            deadline = start + MEASURE_TIMEOUT_S
             while time.time() < deadline:
-                pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
-                if pose_cam is not None:
-                    gantry_offsets.append(self.gripper_client.measure_gantry_minus_card(pose_cam))
-                    line_samples.append([self.datastore.anchor_line_record[i].getLast()[1] for i in range(N_LINES)])
-                    if window_end is None:
-                        window_end = time.time() + MEASURE_WINDOW_S
-                if window_end is not None and time.time() >= window_end:
+                samples = self.gripper_client.get_route_tag_samples(name, since=start)
+                if samples and time.time() - samples[0][0] >= MEASURE_WINDOW_S:
                     break
                 await asyncio.sleep(0.05)
-            if not gantry_offsets:
+
+            samples = self.gripper_client.get_route_tag_samples(name, since=start)
+            if not samples:
                 return None
+            # every quantity is evaluated at the frame's capture time, so the card pose,
+            # the body orientation it is rotated by, and the line lengths it is paired
+            # with all describe the same instant.
+            gantry_offsets = [
+                self.gripper_client.measure_gantry_minus_card(pose, timestamp=ts)
+                for ts, pose in samples
+            ]
+            line_samples = [
+                [self.datastore.anchor_line_record[i].getClosest(ts)[1] for i in range(N_LINES)]
+                for ts, _ in samples
+            ]
             return {
                 'gantry_minus_card': np.mean(gantry_offsets, axis=0),
                 'line_lengths': np.mean(line_samples, axis=0),
@@ -1894,7 +1902,7 @@ class AsyncObserver:
                 seek_task = asyncio.create_task(self.seek_gantry_goal(head_turn=False))
                 try:
                     while not seek_task.done():
-                        if self.gripper_client.route_tag_poses_relative_to_camera.get(name) is not None:
+                        if self.gripper_client.get_route_tag_pose(name) is not None:
                             logger.info(f'Gripper card survey: sighted {name} during approach; stopping to hold it in view')
                             break
                         await asyncio.sleep(0.03)
@@ -1952,7 +1960,7 @@ class AsyncObserver:
         dist = float(np.linalg.norm(delta_xy))
         if dist < 0.005:
             return
-        dist = min(dist, 0.15)  # cap a single nudge for safety
+        dist = min(dist, 0.35)  # cap a single nudge for safety
         uvec = np.array([delta_xy[0], delta_xy[1], 0.0])
         uvec = uvec / (np.linalg.norm(uvec) + 1e-9)
         await self.move_direction_speed(uvec * speed, None, self.pe.gant_pos)
@@ -1960,22 +1968,19 @@ class AsyncObserver:
         self.slow_stop_all_spools()
         await asyncio.sleep(0.5)  # let it settle before the next observation
 
-    async def _center_card_in_view(self, name, tol_m=0.05, gain=0.6, max_steps=6):
+    async def _center_card_in_view(self, name, tol_m=0.03, gain=0.6, max_steps=12):
         """Bounded visual-centering: nudge the gantry so the named card sits under the gripper
         camera. measure_gantry_minus_card gives the room offset from card to gantry; moving the
         gantry by the negative of its horizontal part drives that toward zero (gantry over card,
-        card centered). If a nudge grows the error (a wrong-sign heading convention) the nudge
-        direction is flipped once; if it still grows, centering gives up. Stops when centered,
-        when the card is lost, or after max_steps."""
-        prev = None
+        card centered). Stops when centered, when the card is lost, or after max_steps."""
         for step in range(max_steps):
-            pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
+            pose_cam = self.gripper_client.get_route_tag_pose(name)
             if pose_cam is None:
                 # brief reacquire attempt before giving up
                 deadline = time.time() + 1.0
                 while time.time() < deadline and pose_cam is None:
                     await asyncio.sleep(0.05)
-                    pose_cam = self.gripper_client.route_tag_poses_relative_to_camera.get(name)
+                    pose_cam = self.gripper_client.get_route_tag_pose(name)
                 if pose_cam is None:
                     logger.info(f'Centering {name}: lost from view at step {step}; measuring as-is')
                     return
@@ -1984,10 +1989,6 @@ class AsyncObserver:
             if err < tol_m:
                 logger.info(f'Centering {name}: within {err*100:.1f}cm after {step} steps')
                 return
-            if prev is not None and err > prev + 0.02:
-                logger.info(f'Centering {name}: error grew ({prev*100:.1f}->{err*100:.1f}cm); flipping nudge direction')
-                return
-            prev = err
             await self._nudge_gantry_xy(gain * err_xy)
         logger.info(f'Centering {name}: reached max steps')
 
@@ -2667,21 +2668,18 @@ class AsyncObserver:
 
         async def measure_tag_position(tag_name):
             """Average the tag position seen in the gripper camera over a short window."""
-            samples = []
-            deadline = time.time() + MEASURE_TIMEOUT_S
-            window_end = None
+            start = time.time()
+            deadline = start + MEASURE_TIMEOUT_S
             while time.time() < deadline:
-                pose = self.gripper_client.route_tag_poses_relative_to_camera.get(tag_name)
-                if pose is not None:
-                    samples.append(np.array(pose[1]))
-                    if window_end is None:
-                        window_end = time.time() + MEASURE_WINDOW_S
-                if window_end is not None and time.time() >= window_end:
+                samples = self.gripper_client.get_route_tag_samples(tag_name, since=start)
+                if samples and time.time() - samples[0][0] >= MEASURE_WINDOW_S:
                     break
                 await asyncio.sleep(0.1)
+
+            samples = self.gripper_client.get_route_tag_samples(tag_name, since=start)
             if not samples:
                 return None
-            return np.mean(samples, axis=0)
+            return np.mean([np.array(pose[1]) for _, pose in samples], axis=0)
 
         # the order of visits: each tag VISITS_PER_TAG times, cycling through the list
         visit_order = TAG_CYCLE * VISITS_PER_TAG

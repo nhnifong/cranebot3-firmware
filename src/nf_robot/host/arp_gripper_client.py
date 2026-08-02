@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections import defaultdict, deque
 import numpy as np
 from scipy.spatial.transform import Rotation
 import json
@@ -51,6 +52,14 @@ def rotate_vector(vec, rad):
         vec[0] * sin_a + vec[1] * cos_a
     ])
 
+# How long a route/cal tag sighting stays usable. Covers a full-scan interval plus
+# detection latency, so a run of frames that miss the tag doesn't blank its pose.
+ROUTE_TAG_MAX_AGE_S = 0.6
+# Per-tag sighting history. ~8s at a 30Hz detection rate, which covers the longest
+# averaging window any caller asks for.
+ROUTE_TAG_HISTORY = 240
+
+
 class ArpeggioGripperClient(ComponentClient):
     def __init__(self, address, port, datastore, ob, pool, stat, pe, local_telemetry):
         super().__init__(address, port, datastore, ob, pool, stat, local_telemetry)
@@ -63,9 +72,10 @@ class ArpeggioGripperClient(ComponentClient):
         self.anchor_num = None
         self.pe = pe
         self.park_pose_relative_to_camera = None
-        # latest (rotvec, position) pose of each route-point tag relative to the gripper
-        # camera, keyed by tag name. Reset every frame so a present entry means in-frame now.
-        self.route_tag_poses_relative_to_camera = {}
+        # tag name -> deque of (capture timestamp, (rotvec, position)) sightings of that
+        # route-point tag relative to the gripper camera, oldest first. Every detection is
+        # appended exactly once, so a window read out of here counts each sighting once.
+        self.route_tag_samples = defaultdict(lambda: deque(maxlen=ROUTE_TAG_HISTORY))
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
         self.finger_contact_calibration_complete = asyncio.Event()
@@ -205,11 +215,13 @@ class ArpeggioGripperClient(ComponentClient):
         self.stat.detection_count += len(detections)
         # setting to none every frame so we know whether it's in frame by looking at this variable
         self.park_pose_relative_to_camera = None
-        self.route_tag_poses_relative_to_camera = {}
+        # route tag sightings accumulate in route_tag_samples with their capture time;
+        # readers apply their own staleness bound.
 
         for detection in detections:
             name = detection['n']
             self.last_known_centers[name] = detection['center']
+            self.last_known_half_extents[name] = detection.get('half_extent')
 
             if name == 'park_target':
                 # pose of parking target relative to gripper camera
@@ -218,7 +230,36 @@ class ArpeggioGripperClient(ComponentClient):
                 # (rotvec, position) of a route-point or calibration card relative to the gripper
                 # camera, in the raw (unstabilized, tilted) camera optical frame. CAL_MARKERS are
                 # included for the gripper card survey (collect_gripper_card_observations).
-                self.route_tag_poses_relative_to_camera[name] = detection['p']
+                self.route_tag_samples[name].append((timestamp, detection['p']))
+
+    def get_route_tag_pose(self, name, max_age_s=ROUTE_TAG_MAX_AGE_S):
+        """Most recent (rotvec, position) of a route-point or calibration tag relative to
+        the gripper camera, or None if it has not been seen within max_age_s.
+
+        Ages are measured from the frame's capture time, so they cover streaming and
+        detection latency as well as the gap since the last sighting.
+        """
+        samples = self.route_tag_samples.get(name)
+        if not samples:
+            return None
+        seen_at, pose = samples[-1]
+        if time.time() - seen_at > max_age_s:
+            return None
+        return pose
+
+    def get_route_tag_samples(self, name, since=None, max_age_s=None):
+        """Snapshot of buffered (capture timestamp, pose) sightings of a tag, oldest first.
+
+        since / max_age_s bound how far back to look. Detections are appended from a pool
+        callback thread, so this snapshots the deque before filtering.
+        """
+        samples = list(self.route_tag_samples.get(name, ()))
+        if since is not None:
+            samples = [s for s in samples if s[0] >= since]
+        if max_age_s is not None:
+            cutoff = time.time() - max_age_s
+            samples = [s for s in samples if s[0] >= cutoff]
+        return samples
 
     async def send_config(self):
         pass
@@ -258,9 +299,15 @@ class ArpeggioGripperClient(ComponentClient):
             return 0.0
         return float(np.linalg.norm(sm) / OMEGA)
 
-    def get_spin(self, debug=False):
-        # return the rotation of the gripper camera relative to the room in radians
-        roomspin = self.datastore.winch_line_record.getLast()[1] / 180 * np.pi
+    def get_spin(self, debug=False, timestamp=None):
+        # return the rotation of the gripper camera relative to the room in radians.
+        # timestamp selects the winch reading nearest that capture time, for measurements
+        # computed after the fact from buffered samples.
+        if timestamp is None:
+            wrist = self.datastore.winch_line_record.getLast()[1]
+        else:
+            wrist = self.datastore.winch_line_record.getClosest(timestamp)[1]
+        roomspin = wrist / 180 * np.pi
         if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
             # undo the rotation that the room would appear to have at the wrist's 540 position
             extra = self.config.gripper.frame_room_spin - np.pi
@@ -269,17 +316,17 @@ class ArpeggioGripperClient(ComponentClient):
             roomspin = roomspin + extra
         return roomspin
 
-    def gripper_body_room_rotation(self):
+    def gripper_body_room_rotation(self, timestamp=None):
         """Rotation taking a vector in the z-up gripper body frame (pole down -z, x/y horizontal)
         to the room frame: the room heading from get_spin() composed with the swing tilt from
-        get_gripper_rvec()."""
-        R_heading = Rotation.from_rotvec([0.0, 0.0, self.get_spin()])
-        R_tilt = Rotation.from_rotvec(self.get_gripper_rvec())
+        get_gripper_rvec(). timestamp evaluates both at that moment instead of now."""
+        R_heading = Rotation.from_rotvec([0.0, 0.0, self.get_spin(timestamp=timestamp)])
+        R_tilt = Rotation.from_rotvec(self.get_gripper_rvec(timestamp))
         return R_heading * R_tilt
 
-    def measure_gantry_minus_card(self, pose_cam):
+    def measure_gantry_minus_card(self, pose_cam, timestamp=None):
         """Given a calibration card's pose in the raw gripper camera optical frame (rvec, tvec,
-        as stored in route_tag_poses_relative_to_camera), return the room-frame vector from the
+        as stored in route_tag_samples), return the room-frame vector from the
         card to the gantry point (gantry_position - card_position). The gantry's absolute room
         position cancels, so this depends only on the body orientation and the observed card
         pose; the caller adds the card's known room position to recover the gantry position.
@@ -290,6 +337,10 @@ class ArpeggioGripperClient(ComponentClient):
         * Rx(90 deg) re-expresses that in the z-up body frame the rest of the system uses.
         * the gantry sits arp_pole_length up the +z body axis from the gripper origin.
         * gripper_body_room_rotation() rotates the body frame into the room.
+
+        timestamp is the pose's capture time. Pass it when computing from a buffered
+        sample: the body orientation to combine with the card pose is the one from the
+        instant the frame was taken, not whatever the gripper is doing now.
         """
         # card position in the CAD y-up gripper frame
         card_in_gripper = compose_poses([model_constants.gripper_camera, pose_cam])[1]
@@ -297,7 +348,7 @@ class ArpeggioGripperClient(ComponentClient):
         y_up_to_z_up = Rotation.from_euler('x', 90, degrees=True)
         card_in_body = y_up_to_z_up.apply(card_in_gripper) - np.array([0.0, 0.0, model_constants.arp_pole_length])
         # rotate the card-relative-to-gantry vector into the room, then negate for gantry-card
-        card_minus_gantry_room = self.gripper_body_room_rotation().apply(card_in_body)
+        card_minus_gantry_room = self.gripper_body_room_rotation(timestamp).apply(card_in_body)
         return -card_minus_gantry_room
 
     def look_towards_vector(self, vec2):

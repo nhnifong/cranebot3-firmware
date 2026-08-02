@@ -92,6 +92,7 @@ class ComponentClient:
 
         self.conn_status = None # subclass needs to set this in init
         self.last_known_centers = {}
+        self.last_known_half_extents = {}  # tag name -> apparent half-size, sizes the search crop
 
     def send_conn_status(self):
         self.ob.send_ui(component_conn_status=copy.deepcopy(self.conn_status))
@@ -196,11 +197,14 @@ class ComponentClient:
                             else:
                                 # otherwise, send only small cropped areas to the pool for detection
                                 crops_data = []
-                                for tag_name, (cx, cy) in self.last_known_centers.items():
-                                    x1 = max(0, int(cx - 64))
-                                    y1 = max(0, int(cy - 64))
-                                    x2 = min(self.frame.shape[1], int(cx + 64))
-                                    y2 = min(self.frame.shape[0], int(cy + 64))
+                                for tag_name, center in self.last_known_centers.items():
+                                    # window scales with the tag's apparent size, so a tag that
+                                    # grows as the camera closes in stays inside its own crop
+                                    x1, y1, x2, y2 = crop_window(
+                                        center,
+                                        self.last_known_half_extents.get(tag_name),
+                                        self.frame.shape,
+                                    )
 
                                     # Calling .copy() severs the slice from the base array memory,
                                     # guaranteeing that pickle only sends the few kilobytes of the crop over IPC.
@@ -605,6 +609,7 @@ class RaspiAnchorClient(ComponentClient):
         for detection in detections:
             name = detection['n']
             self.last_known_centers[name] = detection['center']
+            self.last_known_half_extents[name] = detection.get('half_extent')
 
             if name in CAL_MARKERS:
                 # save all the detections of the origin for later analysis

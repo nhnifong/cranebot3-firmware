@@ -101,6 +101,38 @@ def gripper_stabilized_cal(camera_cal: nf_config.CameraCalibration):
 # increase quad_decimate to improve speed at the cost of distance
 detector = Detector(families="tag36h11", quad_decimate=1.0)
 
+MIN_CROP_HALF = 64   # smallest search window, and the fallback when apparent size is unknown
+CROP_MARGIN = 2.0    # window half-size as a multiple of the tag's apparent half-extent
+
+
+def tag_half_extent(corners):
+    """Half-width of the axis-aligned box around a tag's corners, in pixels."""
+    return float(np.abs(corners - corners.mean(axis=0)).max())
+
+
+def crop_window(center, half_extent, frame_shape):
+    """Bounds (x1, y1, x2, y2) of the search window around a previously seen tag.
+
+    The window scales with the tag's apparent size. A fixed window silently stops
+    working once the tag outgrows it - the detector needs the whole quad plus
+    surrounding background to find it - which is what happens as the camera closes
+    in on a card. CROP_MARGIN also leaves room for the tag to move between frames.
+    Clamped to the frame, so an approach that fills the view degrades into a
+    full-frame scan rather than a miss.
+    """
+    cx, cy = center
+    if half_extent:
+        half = max(MIN_CROP_HALF, int(CROP_MARGIN * half_extent))
+    else:
+        half = MIN_CROP_HALF
+    height, width = frame_shape[:2]
+    return (
+        max(0, int(cx - half)),
+        max(0, int(cy - half)),
+        min(width, int(cx + half)),
+        min(height, int(cy + half)),
+    )
+
 def _locate_markers(im, K, D):
     try:
         # AprilTag detection works on grayscale images.
@@ -135,7 +167,8 @@ def _locate_markers(im, K, D):
             results.append({
                 'n': name,
                 'p': (r.reshape((3,)), t.reshape((3,))), # pose tuple. numpy arrays. numpy supposedly has fast pickle hooks
-                'center': tuple(detection.corners.mean(axis=0)) 
+                'center': tuple(detection.corners.mean(axis=0)),
+                'half_extent': tag_half_extent(detection.corners),
             })
         return results
     except Exception as e:
@@ -178,7 +211,8 @@ def _locate_markers_in_crops(crops_data, K, D):
             results.append({
                 'n': name,
                 'p': (r.reshape((3,)), t.reshape((3,))),
-                'center': tuple(global_corners.mean(axis=0)) 
+                'center': tuple(global_corners.mean(axis=0)),
+                'half_extent': tag_half_extent(global_corners),
             })
 
     return results
