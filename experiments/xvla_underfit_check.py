@@ -32,6 +32,8 @@ import argparse
 import numpy as np
 import torch
 
+from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+
 # Dataset keys -> the slots the checkpoint was trained with. Same map as eval.
 RENAME_MAP = {
     "observation.images.anchor_camera_0": "observation.images.image",
@@ -59,6 +61,7 @@ def parse_episodes(spec):
 def load_policy(policy_repo_id, dataset, device):
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.factory import make_policy, make_pre_post_processors
+    # see main(): importing the factory is what registers "xvla" as a config choice
 
     cfg = PreTrainedConfig.from_pretrained(policy_repo_id)
     cfg.pretrained_path = policy_repo_id
@@ -121,15 +124,15 @@ def main():
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
 
+    # Importing the factory is what registers the policy types with PreTrainedConfig.
+    # Without it, from_pretrained cannot resolve "xvla" and reports it as an unknown choice.
+    import lerobot.policies.factory  # noqa: F401
+    from lerobot.configs.policies import PreTrainedConfig
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     episodes = parse_episodes(args.episodes)
-    meta_only = LeRobotDataset(repo_id=args.dataset, root=args.dataset_root, episodes=episodes)
-    fps = meta_only.meta.fps
-    chunk_size = 30  # read back from the policy config below; used to shape the GT window
-
-    from lerobot.configs.policies import PreTrainedConfig
     chunk_size = PreTrainedConfig.from_pretrained(args.policy).chunk_size
+    fps = LeRobotDatasetMetadata(repo_id=args.dataset, root=args.dataset_root).fps
 
     # delta_timestamps gives each frame the following chunk_size actions, which is
     # exactly what the policy predicts in one shot.
