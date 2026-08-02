@@ -1820,6 +1820,7 @@ class AsyncObserver:
         MEASURE_WINDOW_S = 3.0        # average camera + line readings over this window
         MEASURE_TIMEOUT_S = 6.0       # give up on a card if the gripper never sees it
         SEEK_TIMEOUT_S = 20.0         # cap the move to each hover altitude
+        TOP_MARGIN = 0.5              # meters under the top of the work area to keep gantry below
 
         if self.gripper_client is None:
             logger.warning('collect_gripper_card_observations requires a connected gripper')
@@ -1834,7 +1835,7 @@ class AsyncObserver:
             return {}
 
         # don't fly higher than just under the top of the work area
-        upper_z = np.mean(self.pe.anchor_points[:, 2])
+        upper_z = np.mean(self.pe.anchor_points[:, 2]) - TOP_MARGIN
 
         survey_names = [n for n in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'] if n in card_positions]
 
