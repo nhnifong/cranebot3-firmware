@@ -21,7 +21,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
   --job_name=xvla_move_clutter \
   --batch_size=84 \
   --steps=30000 \
-  --save_freq=2000 \
+  --save_freq=5000 \
   --log_freq=25 \
   --num_workers=12 \
   --wandb.enable=false \
