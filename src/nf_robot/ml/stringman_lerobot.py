@@ -1087,7 +1087,8 @@ def eval_episode(
         )
 
         action_vector = action_values.get('action', action_values) if isinstance(action_values, dict) else action_values
-        action_vector = action_vector.cpu().numpy() if torch.is_tensor(action_vector) else action_vector
+        # float() first: bf16 policies (xvla) return a dtype numpy has no equivalent for
+        action_vector = action_vector.float().cpu().numpy() if torch.is_tensor(action_vector) else action_vector
         action_vector = np.squeeze(action_vector)
 
         action_dict = dict(zip(dataset_features["action"]["names"], (float(v) for v in action_vector)))
@@ -1214,6 +1215,8 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
             rm={"observation.images.gripper_camera": "observation.images.camera1"}
         elif policy_repo_id.startswith("naavox/jepa"):
             rm={"observation.images.gripper_camera": "observation.images.image", "observation.images.overhead_camera": "observation.images.image2"}
+        elif policy_repo_id.startswith("naavox/xvla-move-clutter"):
+            rm={"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera":  "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}
 
         policy = make_policy(
             cfg=cfg,
