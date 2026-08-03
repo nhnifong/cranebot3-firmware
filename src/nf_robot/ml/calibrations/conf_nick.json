@@ -1,0 +1,149 @@
+{
+  "anchors": [
+    {
+      "serviceName": "123.cranebot-anchor-arpeggio-service.2ccf67d37b27",
+      "pose": {
+        "rotation": {
+          "x": 0.03947701437217016,
+          "y": 0.08205469556571882,
+          "z": 2.470613458851928
+        },
+        "position": {
+          "x": -2.047100337263703,
+          "y": -1.9824732909971727,
+          "z": 2.5733566548159525
+        }
+      },
+      "address": "192.168.1.190",
+      "port": 8765,
+      "indirectLine": {
+        "eyeletPos": {
+          "x": 0.9778376003115846,
+          "y": -1.4600192970881887,
+          "z": 2.7868485419317497
+        },
+        "camTilt": 26.0
+      }
+    },
+    {
+      "num": 1,
+      "serviceName": "123.cranebot-anchor-arpeggio-service.2ccf67d37aaa",
+      "pose": {
+        "rotation": {
+          "x": 0.06643955457890031,
+          "y": -0.018226461929976914,
+          "z": -0.6846133147754141
+        },
+        "position": {
+          "x": 1.245291696783219,
+          "y": 2.2176579139112507,
+          "z": 2.666596830731796
+        }
+      },
+      "address": "192.168.1.182",
+      "port": 8765,
+      "indirectLine": {
+        "eyeletPos": {
+          "x": -2.641435871283373,
+          "y": 2.1581769359979006,
+          "z": 2.7962386451818544
+        },
+        "camTilt": 26.0
+      }
+    }
+  ],
+  "cameraCal": {
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    },
+    "intrinsicMatrix": [
+      1424.0,
+      0.0,
+      960.0,
+      0.0,
+      1424.0,
+      540.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "distortionCoeff": [
+      0.0115842,
+      0.18723804,
+      -0.00126164,
+      0.00058383,
+      -0.38807272
+    ]
+  },
+  "cameraCalWide": {
+    "resolution": {
+      "width": 684,
+      "height": 384
+    },
+    "intrinsicMatrix": [
+      439.31834658631243,
+      0.0,
+      342.0,
+      0.0,
+      461.5621083718772,
+      192.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "distortionCoeff": [
+      -0.026228587204545444,
+      -0.012309725227594465,
+      -0.00033204923591180567,
+      0.0015432535264626682,
+      0.10759316594344916
+    ]
+  },
+  "maxAccel": 0.3,
+  "recMod": 1,
+  "runningWsDelay": 0.03,
+  "gripper": {
+    "serviceName": "123.cranebot-gripper-arpeggio-service.88a29e985dcc",
+    "address": "192.168.1.243",
+    "port": 8765,
+    "frameRoomSpin": 2.810881612275296
+  },
+  "preferredCameras": [
+    0,
+    1
+  ],
+  "parkData": {},
+  "anchorType": "ANCHORTYPE_ARPEGGIO",
+  "swingLatency": 0.2,
+  "maxSafeTension": 28.0,
+  "namedPositions": {
+    "gamepad": {
+      "x": -1.5142420077738534,
+      "y": -1.3101421598087315,
+      "z": 0.9461237433803522
+    }
+  },
+  "lastGantryPos": {
+    "x": -0.17156745188122818,
+    "y": -1.5065958256748082,
+    "z": 2.1604657456085414
+  },
+  "lastLerobotPolicy": "naavox/xvla-move-clutter",
+  "lastLerobotPrompt": "put laundry in the hamper",
+  "lastRouteSource": "ROUTEPOINT_ALL_TARGETS",
+  "lastRouteDestination": "ROUTEPOINT_HAMPER",
+  "pickAndPlace": {
+    "gantryHeightOverTarget": {
+      "z": 0.9
+    },
+    "gantryHeightOverDropoff": {
+      "z": 1.1
+    },
+    "relaxedOpen": -7.0,
+    "delayAfterDrop": 0.6,
+    "loopDelay": 0.4,
+    "endLoopTimeout": 10.0
+  },
+  "calibratedStatus": "CALIBRATEDSTATUS_FULLY_CALIBRATED"
+}

@@ -6,6 +6,8 @@ __pycache__
 cranebot.log
 gant_pos.npy
 conf*.json
+# except the ones a dataset recipe names, which have to travel with the repo
+!src/nf_robot/ml/calibrations/conf*.json
 *.pt
 dist/
 collected_cal_data.pickle

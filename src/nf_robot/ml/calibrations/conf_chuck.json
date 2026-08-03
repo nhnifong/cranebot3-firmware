@@ -1,0 +1,121 @@
+{
+  "anchors": [
+    {
+      "serviceName": "123.cranebot-anchor-service.2ccf67d37cc0",
+      "pose": {
+        "rotation": {
+          "z": -0.7853981633974483
+        },
+        "position": {
+          "x": 3.0,
+          "y": 3.0,
+          "z": 2.0
+        }
+      },
+      "address": "192.168.8.215",
+      "port": 8765
+    },
+    {
+      "num": 1,
+      "pose": {
+        "rotation": {
+          "z": -2.356194490192345
+        },
+        "position": {
+          "x": 3.0,
+          "y": -3.0,
+          "z": 2.0
+        }
+      }
+    },
+    {
+      "num": 2,
+      "pose": {
+        "rotation": {
+          "z": 0.7853981633974483
+        },
+        "position": {
+          "x": -3.0,
+          "y": 3.0,
+          "z": 2.0
+        }
+      }
+    },
+    {
+      "num": 3,
+      "pose": {
+        "rotation": {
+          "z": 2.356194490192345
+        },
+        "position": {
+          "x": -3.0,
+          "y": -3.0,
+          "z": 2.0
+        }
+      }
+    }
+  ],
+  "cameraCal": {
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    },
+    "intrinsicMatrix": [
+      1424.0,
+      0.0,
+      960.0,
+      0.0,
+      1424.0,
+      540.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "distortionCoeff": [
+      0.0115842,
+      0.18723804,
+      -0.00126164,
+      0.00058383,
+      -0.38807272
+    ]
+  },
+  "cameraCalWide": {
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    },
+    "intrinsicMatrix": [
+      791.15,
+      0.0,
+      960.0,
+      0.0,
+      791.57,
+      540.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "distortionCoeff": [
+      -0.06742619,
+      0.1546371,
+      -0.00232347,
+      0.00080991,
+      -0.13094542
+    ]
+  },
+  "maxAccel": 0.3,
+  "recMod": 1,
+  "runningWsDelay": 0.03,
+  "gripper": {
+    "serviceName": "123.cranebot-gripper-arpeggio-service.2ccf67cb388a",
+    "address": "192.168.8.189",
+    "port": 8765,
+    "frameRoomSpin": 0.8726646259971648
+  },
+  "preferredCameras": [
+    0,
+    3
+  ],
+  "robotId": "93a8c8c5-34b9-4d14-8e0b-4e2f50d441ad",
+  "anchorType": "ANCHORTYPE_PILOT"
+}

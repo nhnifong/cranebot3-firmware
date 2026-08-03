@@ -1,0 +1,186 @@
+{
+  "anchors": [
+    {
+      "serviceName": "123.cranebot-anchor-arpeggio-service.88a29e675948",
+      "pose": {
+        "rotation": {
+          "x": 0.007389176118354575,
+          "y": -0.0692973930464796,
+          "z": -2.528425155055536
+        },
+        "position": {
+          "x": 2.650339331354457,
+          "y": -3.0267938783197006,
+          "z": 2.5899545133783186
+        }
+      },
+      "address": "192.168.1.202",
+      "port": 8765,
+      "indirectLine": {
+        "eyeletPos": {
+          "x": 3.5373030805931696,
+          "y": 2.034063072177428,
+          "z": 2.6051121380174336
+        },
+        "camTilt": 26.0
+      }
+    },
+    {
+      "num": 1,
+      "serviceName": "123.cranebot-anchor-arpeggio-service.88a29e67595a",
+      "pose": {
+        "rotation": {
+          "x": 0.05701037841503556,
+          "y": 0.006232720864478483,
+          "z": 0.6341724149246162
+        },
+        "position": {
+          "x": -2.021167612526277,
+          "y": 3.3672270890816183,
+          "z": 2.5641860173799738
+        }
+      },
+      "address": "192.168.1.226",
+      "port": 8765,
+      "indirectLine": {
+        "eyeletPos": {
+          "x": -3.271363297175957,
+          "y": -1.9632903007508762,
+          "z": 2.6012151457120622
+        },
+        "camTilt": 25.0
+      }
+    }
+  ],
+  "cameraCal": {
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    },
+    "intrinsicMatrix": [
+      1424.0,
+      0.0,
+      960.0,
+      0.0,
+      1424.0,
+      540.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "distortionCoeff": [
+      0.0115842,
+      0.18723804,
+      -0.00126164,
+      0.00058383,
+      -0.38807272
+    ]
+  },
+  "cameraCalWide": {
+    "resolution": {
+      "width": 684,
+      "height": 384
+    },
+    "intrinsicMatrix": [
+      439.31834658631243,
+      0.0,
+      342.0,
+      0.0,
+      461.5621083718772,
+      192.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "distortionCoeff": [
+      -0.026228587204545444,
+      -0.012309725227594465,
+      -0.00033204923591180567,
+      0.0015432535264626682,
+      0.10759316594344916
+    ]
+  },
+  "maxAccel": 0.3,
+  "recMod": 1,
+  "runningWsDelay": 0.03,
+  "gripper": {
+    "serviceName": "123.cranebot-gripper-arpeggio-service.2ccf67a575ab",
+    "address": "192.168.1.155",
+    "port": 8765,
+    "frameRoomSpin": 1.900021736341666
+  },
+  "preferredCameras": [
+    0,
+    1
+  ],
+  "robotId": "b1c9999e-6202-4f1e-ad2d-6222fa5c8d64",
+  "hasBeenCalibrated": true,
+  "parkData": {},
+  "anchorType": "ANCHORTYPE_ARPEGGIO",
+  "swingLatency": 0.12,
+  "maxSafeTension": 28.0,
+  "namedPositions": {
+    "trash_back": {
+      "x": -1.0034632691255672,
+      "y": 2.5662308202264374,
+      "z": 0.8640941891363003
+    },
+    "trash": {
+      "x": -1.9098897540694284,
+      "y": 0.6857347097364832,
+      "z": 0.22793067692575153
+    },
+    "gamepad": {
+      "x": -1.1206771368634745,
+      "y": 2.4074581268948183,
+      "z": 1.5392927621429586
+    },
+    "hamper": {
+      "x": 0.6027652000878643,
+      "y": 2.3748404537066796,
+      "z": 0.7173262309499936
+    },
+    "hamper_back": {
+      "x": -0.8039325253204739,
+      "y": 0.5224869642893738,
+      "z": 0.7415126544663038
+    },
+    "toys": {
+      "x": -1.149659959451049,
+      "y": 1.3059348784887026,
+      "z": 0.20665633363510305
+    },
+    "toys_back": {
+      "x": -1.526752010006377,
+      "y": 0.9644136604723633,
+      "z": 0.05443179043237971
+    },
+    "gamepad_back": {
+      "x": -1.4399420846730466,
+      "y": -0.3671193714396738,
+      "z": 0.039359552127591416
+    }
+  },
+  "lastGantryPos": {
+    "x": -0.3566566292590231,
+    "y": -2.4815373780513448,
+    "z": 2.40640264418224
+  },
+  "lastLerobotPolicy": "naavox/jepa-1",
+  "lastLerobotPrompt": "put laundry in the hamper",
+  "lastRouteSource": "ROUTEPOINT_ALL_TARGETS",
+  "lastRouteDestination": "ROUTEPOINT_HAMPER",
+  "pickAndPlace": {
+    "gantryHeightOverTarget": {
+      "z": 0.9
+    },
+    "gantryHeightOverDropoff": {
+      "z": 1.2
+    },
+    "relaxedOpen": -7.0,
+    "delayAfterDrop": 0.6,
+    "loopDelay": 0.4,
+    "endLoopTimeout": 10.0
+  },
+  "lastLerobotDatasetRepoId": "naavox/lerobot06test"
+}
