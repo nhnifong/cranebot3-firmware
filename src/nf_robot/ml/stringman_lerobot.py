@@ -29,6 +29,7 @@ import inspect
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
 from nf_robot.ml.frozen_camera_monitor import FrozenCameraMonitor
+from nf_robot.ml import camera_goal
 
 from lerobot.robots import Robot, RobotConfig
 from lerobot.datasets.image_writer import safe_stop_image_writer
@@ -69,6 +70,10 @@ _CAMERA_MODES: dict[str, dict[int, tuple[int, int]]] = {
     "gripper_floor_224": {0: (224, 224), 3: (224, 224)},
     "gripper_floor_384": {0: (384, 384), 3: (384, 384)},
     "gripper_anchors_384": {0: (384, 384), 1: (384, 384), 2: (384, 384)},
+    # square 224 for encoders that take 224x224: the wide feeds are squished rather
+    # than letterboxed, so every pixel the encoder processes carries scene instead of
+    # blank padding, at the cost of a uniform horizontal squash.
+    "gripper_anchors_224": {0: (224, 224), 1: (224, 224), 2: (224, 224)},
     "gripper_anchors_rect": {0: (684, 384), 1: (684, 384), 2: (684, 384)},
     "all_square":        {0: (384, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
     "all":               {0: (684, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
@@ -96,6 +101,8 @@ _ACTION_SPACES: dict[str, list[str]] = {
         "contact_vec_x", "contact_vec_y", "contact_vec_z",
         "episode_end",
     ],
+    # goal positions in camera frames instead of velocities; see camera_goal.py
+    camera_goal.ACTION_SPACE_NAME: list(camera_goal.ACTION_NAMES),
 }
 DEFAULT_ACTION_SPACE = "dual_vel_contact"
 
@@ -223,6 +230,9 @@ class StringmanLeRobot(Robot):
         self.last_status = common.LerobotStatus.NA
 
         self.last_spin = 0.0
+        # anchor camera poses from the observer, needed to place camera_goal
+        # predictions back in the room. empty until the observer sends them.
+        self.anchor_poses = []
 
         self.events = events
 
@@ -362,6 +372,13 @@ class StringmanLeRobot(Robot):
             self._handle_named_position(item.named_position)
         if item.swing_cancellation_state is not None:
             self._handle_swing_cancellation(item.swing_cancellation_state)
+        if item.new_anchor_poses is not None:
+            self._handle_anchor_poses(item.new_anchor_poses)
+
+    def _handle_anchor_poses(self, item: telemetry.AnchorPoses):
+        self.anchor_poses = [
+            (tonp(p.rotation), tonp(p.position)) for p in item.poses
+        ]
 
     def _handle_pos_estimate(self, item: telemetry.PositionEstimate):
         self.last_observed_vel = tonp(item.gantry_velocity)
@@ -620,6 +637,34 @@ class StringmanLeRobot(Robot):
             **{_FEED_NAMES[f]: img for f, img in images.items()},
         }
 
+    def _send_camera_goal_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Drive toward a camera_goal prediction. See camera_goal.py for the action space."""
+        goal_room, spread = camera_goal.fuse_goal_to_room(
+            action, self.last_gripper_pos, self.last_gripper_rot_6d, self.anchor_poses
+        )
+        if goal_room is None:
+            print('camera_goal: no usable camera goal in the action; holding still')
+            velocity = np.zeros(3)
+        else:
+            velocity = camera_goal.goal_to_velocity(goal_room, self.last_gripper_pos)
+            self.last_goal_room = goal_room
+            self.last_goal_spread = spread
+
+        batch = control.ControlBatchUpdate(
+            robot_id="0",
+            updates=[control.ControlItem(move=control.CombinedMove(
+                direction=common.Vec3(x=velocity[0], y=velocity[1], z=velocity[2]),
+                finger_speed=action.get('finger_speed', 0.0),
+                wrist_speed=camera_goal.wrist_offset_to_speed(action.get('wrist_offset', 0.0)),
+                # goals are fused in the room frame, so the direction is too
+                direction_is_in_gripper_frame=False,
+            ))]
+        )
+        to_send = bytes(batch)
+        if self.websocket and to_send:
+            self.websocket.send(to_send)
+        return action
+
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
 
         # action['wrist_speed'] *= 30
@@ -633,6 +678,11 @@ class StringmanLeRobot(Robot):
         z = 0.0
         wrist_speed = 0.0
         finger_speed = 0.0
+
+        # camera_goal predicts where to go rather than how fast to move: fuse the
+        # per-camera goals into a room position and head toward it at a fixed speed.
+        if any(k in action for k in camera_goal.GOAL_SLOTS['gripper_camera']):
+            return self._send_camera_goal_action(action)
 
         if not IGNORE_GRIPPER_FRAME_VEL:
             gripper_xy += [action.get('vel_x', 0.0), action.get('vel_y', 0.0)]
@@ -764,7 +814,11 @@ def record_episode(
         action_sent = robot.get_last_action()
         action_frame = build_dataset_frame(dataset.features, action_sent, prefix=ACTION)
 
-        frame = {**observation_frame, **action_frame, "task": robot.last_task_description}
+        frame = {
+            **observation_frame, **action_frame,
+            camera_goal.ANCHOR_POSES_KEY: camera_goal.pack_anchor_poses(robot.anchor_poses),
+            "task": robot.last_task_description,
+        }
         dataset.add_frame(frame)
 
         # if display_data:
@@ -880,7 +934,9 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
 
         action_features = hw_to_dataset_features(robot.action_features, "action")
         obs_features = hw_to_dataset_features(robot.observation_features, "observation")
-        dataset_features = {**action_features, **obs_features}
+        # Recorded so a dataset carries the calibration it was made under; policies
+        # ignore it (it is not an observation.* key) and camera_goal consumes it.
+        dataset_features = {**action_features, **obs_features, **camera_goal.anchor_poses_feature()}
 
         dsname = hf_repo_id.split('/')[1]
         root = f"datasets/{dsname}"

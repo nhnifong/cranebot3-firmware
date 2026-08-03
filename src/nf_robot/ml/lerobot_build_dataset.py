@@ -36,14 +36,18 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     pad_clamp: false                          # center + clamp-pad instead of stretching when target exceeds source (optional)
     merge:                                    # source datasets to merge (>= 1)
       - naavox/test_dataset_3                 # plain repo id: use every episode
-      - repo_id: naavox/laptop_test_dataset   # or a mapping, to drop bad episodes
-        exclude_episodes: [3, "10-14", 27]    # ints and inclusive "first-last" ranges
+      - repo_id: naavox/laptop_test_dataset   # or a mapping, to select episodes
+        include_episodes: ["0-99"]            # optional; keep only these (default: all)
+        exclude_episodes: [3, "10-14", 27]    # dropped on top of include_episodes
+                                              # both take ints and inclusive "first-last" ranges.
                                               # See lerobot_find_frozen_video.py, which prints
                                               # this block for episodes with a frozen camera.
+                                              # A repo id may be listed more than once, to split
+                                              # a dataset recorded by two robots into runs.
     keep_state_features:                      # optional; trim observation.state to these
       - vel_x
       - vel_y
-    normalize_tasks: tasks.yaml               # optional; path (relative to the recipe) to a
+    normalize_tasks: tasks.yaml               # optional; path (as given, else relative to the recipe) to a
                                               # task mapping file, or the same {tasks:, map:}
                                               # spec inline. See lerobot_normalize_tasks.py.
     label_contact_actions:                    # optional; omit or set enabled: false to skip
@@ -74,6 +78,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from nf_robot.ml.lerobot_derive_dataset import derive_dataset
 from nf_robot.ml.lerobot_label_contact_actions import label_dataset
+from nf_robot.ml import camera_goal
 from nf_robot.ml.lerobot_normalize_tasks import load_mapping
 from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, camera_mode_from_features
 
@@ -209,28 +214,87 @@ def parse_episode_list(spec) -> list[int]:
 
 
 def normalize_sources(merge_spec: list) -> list[dict]:
-    """Normalize recipe 'merge' entries to {'repo_id': str, 'exclude_episodes': [int]}."""
+    """Normalize recipe 'merge' entries to a uniform dict per entry.
+
+    A repo id may appear more than once, so a dataset recorded by two robots can be
+    split into runs of episodes that each carry their own anchor_config. Repeats get
+    a suffixed 'name', which is what the intermediate directories are keyed on -
+    keying them on the repo id would make the second entry overwrite the first.
+    """
     sources = []
+    # Names of every entry, so a suffixed repeat cannot land on another source's name:
+    # a second naavox/move_clutter entry must not be called move_clutter_2 when
+    # naavox/move_clutter_2 is also being merged.
+    taken = {_short_name(e if isinstance(e, str) else e.get("repo_id", "")) for e in merge_spec}
+    sources = []
+    used_names: dict[str, int] = {}
     for entry in merge_spec:
         if isinstance(entry, str):
-            sources.append({"repo_id": entry, "exclude_episodes": []})
-            continue
+            entry = {"repo_id": entry}
         if not isinstance(entry, dict) or "repo_id" not in entry:
             raise ValueError(
                 f"Each 'merge' entry must be a repo id string or a mapping with 'repo_id', got {entry!r}"
             )
-        unknown = set(entry) - {"repo_id", "exclude_episodes"}
+        unknown = set(entry) - {"repo_id", "exclude_episodes", "include_episodes", "anchor_config"}
         if unknown:
             raise ValueError(f"Unknown keys in merge entry {entry['repo_id']}: {sorted(unknown)}")
+
+        base = _short_name(entry["repo_id"])
+        used_names[base] = used_names.get(base, 0) + 1
+        name = base
+        suffix = used_names[base]
+        while suffix > 1 or name in [s_["name"] for s_ in sources]:
+            name = f"{base}_part{suffix}"
+            if name not in taken and name not in [s_["name"] for s_ in sources]:
+                break
+            suffix += 1
+        taken.add(name)
+
+        include = parse_episode_list(entry.get("include_episodes"))
+        exclude = parse_episode_list(entry.get("exclude_episodes"))
+        overlap = sorted(set(include) & set(exclude))
+        if overlap and len(overlap) == len(include):
+            raise ValueError(
+                f"merge entry {entry['repo_id']} excludes every episode it includes"
+            )
         sources.append({
             "repo_id": entry["repo_id"],
-            "exclude_episodes": parse_episode_list(entry.get("exclude_episodes")),
+            "name": name,
+            # empty include means "all of them"; exclude applies on top either way
+            "include_episodes": include,
+            "exclude_episodes": exclude,
+            # config of the robot that recorded this source, for action spaces that
+            # need its anchor camera poses (camera_goal)
+            "anchor_config": entry.get("anchor_config"),
         })
-
-    duplicates = {s["repo_id"] for s in sources if [t["repo_id"] for t in sources].count(s["repo_id"]) > 1}
-    if duplicates:
-        raise ValueError(f"Repeated source repo ids in 'merge': {sorted(duplicates)}")
     return sources
+
+
+def episodes_to_drop(total_episodes: int, include: list[int], exclude: list[int]) -> list[int]:
+    """Episodes to delete from a source so only the wanted ones remain."""
+    out_of_range = [e for e in include + exclude if e >= total_episodes]
+    if out_of_range:
+        raise ValueError(
+            f"episodes {sorted(set(out_of_range))} are past the end of a source with "
+            f"{total_episodes} episodes"
+        )
+    keep = set(include) if include else set(range(total_episodes))
+    return sorted((set(range(total_episodes)) - keep) | set(exclude))
+
+
+def _resolve_recipe_path(value: str, recipe_path: Path, key: str) -> Path:
+    """Resolve a path named in a recipe, as given or relative to the recipe itself."""
+    candidate = Path(value)
+    tried = [candidate]
+    if not candidate.is_absolute() and not candidate.exists():
+        candidate = recipe_path.parent / candidate
+        tried.append(candidate)
+    if not candidate.exists():
+        raise FileNotFoundError(
+            f"Recipe key '{key}' points at {value!r}, which does not exist. Tried: "
+            + ", ".join(str(t.resolve()) for t in tried)
+        )
+    return candidate
 
 
 def load_recipe(path: Path) -> dict:
@@ -264,6 +328,26 @@ def load_recipe(path: Path) -> dict:
     if label is not None and not isinstance(label, dict):
         raise ValueError("'label_contact_actions' must be a mapping if present")
 
+    action_space = recipe.get("action_space")
+    if action_space is not None and action_space != camera_goal.ACTION_SPACE_NAME:
+        raise ValueError(
+            f"Unknown action_space '{action_space}'. Omit it to keep the recorded space, "
+            f"or use '{camera_goal.ACTION_SPACE_NAME}'"
+        )
+    if action_space == camera_goal.ACTION_SPACE_NAME:
+        missing = [s_["repo_id"] for s_ in recipe["merge"] if not s_.get("anchor_config")]
+        if missing:
+            raise ValueError(
+                f"action_space '{action_space}' needs an 'anchor_config' on every source "
+                f"(the config of the robot that recorded it); missing for {missing}"
+            )
+        # Resolved here, not at use time, so a wrong path fails before any conversion
+        # work. Tried as given first (so repo-root-relative paths work when run from
+        # the repo root), then relative to the recipe, so a recipe and its calibration
+        # files can travel together.
+        for source in recipe["merge"]:
+            source["anchor_config"] = _resolve_recipe_path(source["anchor_config"], path, "anchor_config")
+
     keep_state = recipe.get("keep_state_features")
     if keep_state is not None and (
         not isinstance(keep_state, list) or not all(isinstance(n, str) for n in keep_state)
@@ -274,10 +358,7 @@ def load_recipe(path: Path) -> dict:
     # its task mapping travel together; anything else must be the inline spec.
     tasks_spec = recipe.get("normalize_tasks")
     if isinstance(tasks_spec, str):
-        mapping_path = Path(tasks_spec)
-        if not mapping_path.is_absolute() and not mapping_path.exists():
-            mapping_path = path.parent / mapping_path
-        tasks, mapping = load_mapping(mapping_path)
+        tasks, mapping = load_mapping(_resolve_recipe_path(tasks_spec, path, "normalize_tasks"))
         recipe["normalize_tasks"] = {"tasks": tasks, "map": mapping}
     elif tasks_spec is not None:
         if not isinstance(tasks_spec, dict) or "tasks" not in tasks_spec or "map" not in tasks_spec:
@@ -384,6 +465,7 @@ def build(
     center_crop = bool(recipe.get("center_crop", False))
     pad_clamp = bool(recipe.get("pad_clamp", False))
     sources = normalize_sources(recipe["merge"])
+    action_space = recipe.get("action_space")
     keep_state_features = recipe.get("keep_state_features")
     normalize_tasks_spec = recipe.get("normalize_tasks")
     label_cfg = recipe.get("label_contact_actions") or {}
@@ -404,24 +486,26 @@ def build(
     for source_spec in sources:
         repo_id = source_spec["repo_id"]
         exclude = source_spec["exclude_episodes"]
+        include = source_spec["include_episodes"]
+        name = source_spec["name"]
 
-        converted_root = converted_root_base / _short_name(repo_id)
-        filtered_root = converted_root_base / f"{_short_name(repo_id)}_filtered"
-        # What this source contributes to the merge: the filtered copy when it has
-        # exclusions, else the converted one.
-        final_root = filtered_root if exclude else converted_root
+        converted_root = converted_root_base / name
+        filtered_root = converted_root_base / f"{name}_filtered"
+        # What this source contributes to the merge: the filtered copy when episodes
+        # are selected away, else the converted one.
+        final_root = filtered_root if (exclude or include) else converted_root
 
         if resume and final_root.exists():
             try:
                 validate_dataset(repo_id, final_root, expected_camera_mode=camera_mode)
-                logging.info(f"[{repo_id}] reusing existing conversion at {final_root}")
+                logging.info(f"[{name}] reusing existing conversion at {final_root}")
                 converted.append((repo_id, final_root))
                 continue
             except Exception as e:
-                logging.warning(f"[{repo_id}] existing conversion at {final_root} is unusable ({e}); redoing it")
+                logging.warning(f"[{name}] existing conversion at {final_root} is unusable ({e}); redoing it")
                 shutil.rmtree(final_root, ignore_errors=True)
 
-        logging.info(f"[{repo_id}] sourcing from Hub cache and converting to '{camera_mode}'")
+        logging.info(f"[{name}] sourcing from Hub cache and converting to '{camera_mode}'")
         source = LeRobotDataset(  # downloads/caches under HF_LEROBOT_HOME
             repo_id=repo_id, root=None, revision=revisions[repo_id]
         )
@@ -439,19 +523,28 @@ def build(
             pad_clamp=pad_clamp,
             keep_state_features=keep_state_features,
             normalize_tasks_spec=normalize_tasks_spec,
+            camera_goal_anchor_poses=(
+                camera_goal.load_anchor_poses(source_spec["anchor_config"])
+                if action_space == camera_goal.ACTION_SPACE_NAME else None
+            ),
+            camera_goal_label_cfg=label_cfg,
         )
         validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode)
 
         # Step 3: drop excluded episodes. Done after conversion so the re-encoding
         # delete_episodes does on videos straddling kept/dropped episodes works on
         # the small target-resolution videos rather than the full-size originals.
-        if exclude:
-            logging.info(f"[{repo_id}] excluding {len(exclude)} episode(s): {exclude}")
+        if exclude or include:
+            drop = episodes_to_drop(source.meta.total_episodes, include, exclude)
+            logging.info(
+                f"[{name}] keeping {source.meta.total_episodes - len(drop)} of "
+                f"{source.meta.total_episodes} episodes"
+            )
             if filtered_root.exists():
                 shutil.rmtree(filtered_root)
             delete_episodes(
                 dataset=LeRobotDataset(repo_id=repo_id, root=converted_root),
-                episode_indices=exclude,
+                episode_indices=drop,
                 output_dir=filtered_root,
                 repo_id=repo_id,
             )
@@ -472,7 +565,11 @@ def build(
     validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode)
 
     # Step 5: optional contact-action labeling (rewrites the action column + its stats).
-    if do_label:
+    # camera_goal labels per source (its conversion consumes contact_vec), so the
+    # merged dataset has nothing left to label.
+    if do_label and action_space == camera_goal.ACTION_SPACE_NAME:
+        logging.info("Skipping the post-merge labeling pass; camera_goal labels per source")
+    elif do_label:
         logging.info(f"Labeling contact actions on '{output_repo_id}'")
         label_dataset(
             root=output_root,

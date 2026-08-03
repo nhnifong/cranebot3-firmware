@@ -50,6 +50,26 @@ from nf_robot.ml.stringman_lerobot import _ACTION_SPACES, rotate_vector
 CONTACT_ACTION_NAMES = ["contact_vec_x", "contact_vec_y", "contact_vec_z", "episode_end"]
 
 
+def contact_blend_alphas(timestamps, pressures, pressure_threshold: float, blend_seconds: float):
+    """Per-frame blend from the contact target toward the episode-end target.
+
+    Returns (contact_index, alphas) with alpha 0 up to contact and ramping to 1 over
+    blend_seconds after it, or (None, None) when the episode never reaches the pressure
+    threshold. Callers apply the alphas to whatever they are blending - the gripper
+    position here, the wrist angle in camera_goal.py - so the two cannot disagree about
+    when contact happened.
+    """
+    contact_index = next((i for i, p in enumerate(pressures) if p > pressure_threshold), None)
+    if contact_index is None:
+        return None, None
+    contact_ts = timestamps[contact_index]
+    alphas = []
+    for ts in timestamps:
+        t_after = max(0.0, ts - contact_ts)
+        alphas.append(min(t_after / blend_seconds, 1.0) if blend_seconds > 0 else float(t_after > 0))
+    return contact_index, alphas
+
+
 def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: float, rotate_contact_vec: bool, blend_seconds: float = 0.5) -> None:
     info_path = root / "meta" / "info.json"
     info = json.loads(info_path.read_text())
@@ -112,23 +132,24 @@ def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: fl
     for ep, rows in episodes.items():
         rows.sort(key=lambda r: r["frame_index"])
 
-        contact_row = next((r for r in rows if r["pressure"] > pressure_threshold), None)
-        if contact_row is None:
+        contact_index, alphas = contact_blend_alphas(
+            [r["timestamp"] for r in rows], [r["pressure"] for r in rows],
+            pressure_threshold, blend_seconds,
+        )
+        if contact_index is None:
             episodes_without_contact += 1
-        contact_pos = contact_row["gripper_pos"] if contact_row is not None else None
-        contact_ts = contact_row["timestamp"] if contact_row is not None else None
+        contact_pos = rows[contact_index]["gripper_pos"] if contact_index is not None else None
         episode_end_pos = rows[-1]["gripper_pos"]
 
         episode_duration = rows[-1]["timestamp"]
-        for r in rows:
+        for i, r in enumerate(rows):
             if contact_pos is None:
                 contact_vec = np.zeros(3)
             else:
                 # Before contact: point toward contact position.
                 # After contact: blend toward the episode-end position over blend_seconds,
                 # so the model is guided through pick-up and to the final resting location.
-                t_after = max(0.0, r["timestamp"] - contact_ts)
-                alpha = min(t_after / blend_seconds, 1.0) if blend_seconds > 0 else float(t_after > 0)
+                alpha = alphas[i]
                 target_pos = (1.0 - alpha) * contact_pos + alpha * episode_end_pos
                 contact_vec = target_pos - r["gripper_pos"]
                 if rotate_contact_vec:

@@ -1,0 +1,111 @@
+# Same sources as move_clutter_rect_for_xvla.yaml, but the actions are converted to
+# the camera_goal space: the gripper's goal position expressed in each of the three
+# camera frames, instead of gamepad velocities. See src/nf_robot/ml/camera_goal.py.
+#
+# Every source needs an anchor_config: the config file of the robot that recorded it.
+# camera_goal labels contact actions per source and reads that robot's anchor camera
+# poses to place the goal in each anchor camera's frame, so a source whose calibration
+# is unknown cannot be converted.
+#
+# Contact labelling runs per source here rather than after the merge, since the
+# conversion consumes contact_vec.
+#
+# Images are stored at the 224x224 X-VLA feeds its encoder, squished rather than
+# letterboxed: resize_with_pad then early-returns, so no padding is added at train or
+# eval time and none of the encoder's pixels are blank. The live path resizes the same
+# way (a plain cv2.resize to the camera_mode size), so the geometry matches.
+
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/move_clutter_camera_goal.yaml \
+#     --temp_dir /home/nick/data_scratch \
+#     --output_root /home/nick/data_scratch/move_clutter_camera_goal \
+#     --upload
+
+output_repo_id: naavox/move_clutter_camera_goal
+camera_mode: gripper_anchors_224
+center_crop: false
+pad_clamp: false
+action_space: camera_goal
+
+# Sources are kept only where a calibration file's frameRoomSpin matches the value
+# recovered from the recording (see experiments/check_dataset_robots.py). A mismatch
+# means the origin card was moved and recalibrated since, which redefines the room
+# frame, so that config's anchor poses describe a different coordinate system than the
+# recorded gripper positions - and camera_goal would place every anchor-frame goal
+# wrong. Removed for now, restore each once its recording-time config turns up:
+#
+#   naavox/move_clutter          both rooms; recorded 1.911334 (playroom ranges) and
+#                                1.900022 (bedroom ranges), no config has either
+#   naavox/move_clutter_2        episodes 0-64, 73-105 (-1.910156) and 153-187 (+0.893890)
+#   naavox/move_clutter_chuck_1  +3.060428 vs conf_chuck's +0.872700
+#   naavox/move_clutter_nick_2   three sessions, none matching conf_nick
+#
+# conf_playroom/bedroom_move_clutter.json carry move_clutter's recovered spin but the
+# anchor poses of a later calibration, so they are not usable as-is; see the readme.
+merge:
+  # the only naavox episodes whose recorded spin matches a config exactly
+  - repo_id: naavox/move_clutter_2
+    include_episodes: ["71-72", "106-152"]
+    anchor_config: ../calibrations/conf_playroom.json
+
+  - repo_id: justink04/laundry-in-hamper-7-19-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper-7-23-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/trash-in-trashcan-7-23-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/trash-in-trashcan-7-24-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper-8-1-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper2-8-1-26
+    exclude_episodes: ["41-60"]
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper3-8-1-26
+    exclude_episodes: ['48-99']
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/cranebot-ethernet-test-02
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper4-8-1-26
+    anchor_config: ../calibrations/justin.json
+
+# 20 of the 44 recorded components, unchanged from the X-VLA recipe. The conversion
+# runs before this trim, so it still sees the gripper_rot_* it needs.
+keep_state_features:
+  - vel_x
+  - vel_y
+  - vel_z
+  - wrist_speed
+  - finger_speed
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+  - hamper_bearing
+  - hamper_distance
+  - toybox_bearing
+  - toybox_distance
+  - trashcan_bearing
+  - trashcan_distance
+
+normalize_tasks: move_clutter_rect_tasks.yaml
+
+label_contact_actions:
+  enabled: true
+  pressure_threshold: 0.1
+  episode_end_seconds: 1.0
+  blend_seconds: 0.5
+  rotate_contact_vec: false

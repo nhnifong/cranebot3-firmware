@@ -53,6 +53,8 @@ from lerobot.datasets.video_utils import get_video_info
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
+from nf_robot.ml import camera_goal
+from nf_robot.ml.lerobot_label_contact_actions import label_dataset
 from nf_robot.ml.lerobot_normalize_tasks import load_mapping, normalize_tasks
 from nf_robot.ml.lerobot_resize_video_feature import resize_video
 from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, _FEED_NAMES
@@ -186,6 +188,8 @@ def derive_dataset(
     pad_clamp: bool = False,
     keep_state_features: list[str] | None = None,
     normalize_tasks_spec: dict | None = None,
+    camera_goal_anchor_poses: list | None = None,
+    camera_goal_label_cfg: dict | None = None,
 ) -> LeRobotDataset:
     if camera_mode not in _CAMERA_MODES:
         raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
@@ -295,6 +299,27 @@ def derive_dataset(
 
     _write_info_json(info, dataset.root)
 
+    # before the state trim: the conversion reads gripper_rot_*, which the trim may drop
+    if camera_goal_anchor_poses is not None:
+        # the goal comes from contact_vec, so labelling runs here, per source, rather
+        # than after the merge - by then the sources are mixed and each one's anchor
+        # poses no longer apply.
+        cfg = camera_goal_label_cfg or {}
+        logging.info("Labelling contact actions before the action space conversion")
+        label_dataset(
+            root=dataset.root,
+            pressure_threshold=float(cfg.get("pressure_threshold", 0.1)),
+            episode_end_seconds=float(cfg.get("episode_end_seconds", 1.0)),
+            rotate_contact_vec=False,  # camera_goal needs contact_vec in the room frame
+            blend_seconds=float(cfg.get("blend_seconds", 0.5)),
+        )
+        logging.info(f"Converting actions to the '{camera_goal.ACTION_SPACE_NAME}' space")
+        camera_goal.derive_dataset_actions(
+            dataset.root, camera_goal_anchor_poses,
+            pressure_threshold=float(cfg.get("pressure_threshold", 0.1)),
+            blend_seconds=float(cfg.get("blend_seconds", 0.5)),
+        )
+
     if keep_state_features:
         select_state_features(dataset.root, keep_state_features)
 
@@ -347,6 +372,11 @@ def main() -> None:
              "(see lerobot_normalize_tasks.py)",
     )
     parser.add_argument(
+        "--camera_goal_anchors", default=None,
+        help="Robot config file (conf_*.json) whose anchor poses convert the actions to the "
+             "camera_goal space; see camera_goal.py",
+    )
+    parser.add_argument(
         "--push_to_hub", action="store_true", help="Upload the derived dataset to the Hugging Face Hub"
     )
     args = parser.parse_args()
@@ -381,6 +411,9 @@ def main() -> None:
         pad_clamp=args.pad_clamp,
         keep_state_features=args.keep_state_features,
         normalize_tasks_spec=normalize_tasks_spec,
+        camera_goal_anchor_poses=(
+            camera_goal.load_anchor_poses(args.camera_goal_anchors) if args.camera_goal_anchors else None
+        ),
     )
 
     if args.push_to_hub:
