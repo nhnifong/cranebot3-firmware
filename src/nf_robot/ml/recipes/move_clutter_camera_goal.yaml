@@ -36,17 +36,32 @@ action_space: camera_goal
 #
 #   naavox/move_clutter          both rooms; recorded 1.911334 (playroom ranges) and
 #                                1.900022 (bedroom ranges), no config has either
-#   naavox/move_clutter_2        episodes 0-64, 73-105 (-1.910156) and 153-187 (+0.893890)
+#   naavox/move_clutter_2        episodes 0-64, 73-105 (-1.910156), 65-70 (+1.911334)
 #   naavox/move_clutter_chuck_1  +3.060428 vs conf_chuck's +0.872700
-#   naavox/move_clutter_nick_2   three sessions, none matching conf_nick
+#   naavox/move_clutter_nick_2   episodes 0-18 (-1.792681) and 19-47 (+2.843350)
+#   naavox/move_clutter_hawes_1  +2.420316, nothing within 0.1 rad
+#   naavox/move_clutter_79west4  episode 0 (+1.689445)
 #
 # conf_playroom/bedroom_move_clutter.json carry move_clutter's recovered spin but the
 # anchor poses of a later calibration, so they are not usable as-is; see the readme.
 merge:
-  # the only naavox episodes whose recorded spin matches a config exactly
+  # naavox episodes whose recorded spin matches a config exactly, found with
+  # experiments/check_dataset_robots.py
   - repo_id: naavox/move_clutter_2
     include_episodes: ["71-72", "106-152"]
     anchor_config: ../calibrations/conf_playroom.json
+
+  - repo_id: naavox/move_clutter_2
+    include_episodes: ["153-187"]
+    anchor_config: ../calibrations/conf_bedroom_move_clutter_2.json
+
+  - repo_id: naavox/move_clutter_nick_2
+    include_episodes: ["48-56"]
+    anchor_config: ../calibrations/conf_nick_move_clutter_nick_2.json
+
+  - repo_id: naavox/move_clutter_79west4
+    include_episodes: ["1"]
+    anchor_config: ../calibrations/conf_demo_79west4.json
 
   - repo_id: justink04/laundry-in-hamper-7-19-26
     anchor_config: ../calibrations/justin.json
@@ -76,6 +91,8 @@ merge:
 
   - repo_id: justink04/laundry-in-hamper4-8-1-26
     anchor_config: ../calibrations/justin.json
+
+  - naavox/nick-clutter-aug3
 
 # 20 of the 44 recorded components, unchanged from the X-VLA recipe. The conversion
 # runs before this trim, so it still sees the gripper_rot_* it needs.

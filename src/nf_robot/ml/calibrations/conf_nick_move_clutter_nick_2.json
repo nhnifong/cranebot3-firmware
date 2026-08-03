@@ -1,0 +1,168 @@
+{
+  "anchors": [
+    {
+      "serviceName": "123.cranebot-anchor-arpeggio-service.2ccf67d37b27",
+      "pose": {
+        "rotation": {
+          "x": 0.012079514084540872,
+          "y": 0.004459001956372644,
+          "z": 1.0329396742479748
+        },
+        "position": {
+          "x": -2.321636585796904,
+          "y": 1.5097514825258984,
+          "z": 2.596234870233344
+        }
+      },
+      "address": "192.168.1.190",
+      "port": 8765,
+      "indirectLine": {
+        "eyeletPos": {
+          "x": -1.6984231286124336,
+          "y": -1.6090842261405705,
+          "z": 2.826468139469064
+        },
+        "camTilt": 30.0
+      }
+    },
+    {
+      "num": 1,
+      "serviceName": "123.cranebot-anchor-arpeggio-service.2ccf67d37aaa",
+      "pose": {
+        "rotation": {
+          "x": -0.0002945612098182906,
+          "y": -0.002833883510171812,
+          "z": -2.1125174927003143
+        },
+        "position": {
+          "x": 2.270060330971258,
+          "y": -1.1606114333946072,
+          "z": 2.680117626724601
+        }
+      },
+      "address": "192.168.1.182",
+      "port": 8765,
+      "indirectLine": {
+        "eyeletPos": {
+          "x": 1.1483555411349646,
+          "y": 2.3643643480998877,
+          "z": 2.843606357316213
+        },
+        "camTilt": 30.0
+      }
+    }
+  ],
+  "cameraCal": {
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    },
+    "intrinsicMatrix": [
+      1424.0,
+      0.0,
+      960.0,
+      0.0,
+      1424.0,
+      540.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "distortionCoeff": [
+      0.0115842,
+      0.18723804,
+      -0.00126164,
+      0.00058383,
+      -0.38807272
+    ]
+  },
+  "cameraCalWide": {
+    "resolution": {
+      "width": 684,
+      "height": 384
+    },
+    "intrinsicMatrix": [
+      439.31834658631243,
+      0.0,
+      342.0,
+      0.0,
+      461.5621083718772,
+      192.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "distortionCoeff": [
+      -0.026228587204545444,
+      -0.012309725227594465,
+      -0.00033204923591180567,
+      0.0015432535264626682,
+      0.10759316594344916
+    ]
+  },
+  "maxAccel": 0.3,
+  "recMod": 1,
+  "runningWsDelay": 0.03,
+  "gripper": {
+    "serviceName": "123.cranebot-gripper-arpeggio-service.88a29e985dcc",
+    "address": "192.168.1.243",
+    "port": 8765,
+    "frameRoomSpin": 1.2759729964954418
+  },
+  "preferredCameras": [
+    0,
+    1
+  ],
+  "robotId": "1a234e96-abc4-4a7a-bc67-561b6be07402",
+  "hasBeenCalibrated": true,
+  "parkData": {},
+  "anchorType": "ANCHORTYPE_ARPEGGIO",
+  "swingLatency": 0.175,
+  "maxSafeTension": 18.0,
+  "namedPositions": {
+    "gamepad": {
+      "x": 1.0925112175470681,
+      "y": -1.2305183737535415,
+      "z": 1.457427623239642
+    },
+    "toys": {
+      "x": -0.8114624349971171,
+      "y": -0.22654341410872855,
+      "z": 0.5137573785282091
+    },
+    "hamper": {
+      "x": 0.12386637787001006,
+      "y": -1.4966275492616479,
+      "z": 0.849967425038415
+    },
+    "toys_back": {
+      "x": -0.5693745396307835,
+      "y": -0.18803332734483466,
+      "z": 0.5351269484106436
+    },
+    "gamepad_back": {
+      "x": 0.9695996433842311,
+      "y": -1.2460396313806146,
+      "z": 1.4588164029265573
+    }
+  },
+  "lastGantryPos": {
+    "x": -0.16622520618577824,
+    "y": 0.18742272584162484,
+    "z": 1.3419257071653485
+  },
+  "lastRouteSource": "ROUTEPOINT_ALL_TARGETS",
+  "lastRouteDestination": "ROUTEPOINT_HAMPER",
+  "pickAndPlace": {
+    "gantryHeightOverTarget": {
+      "z": 0.9
+    },
+    "gantryHeightOverDropoff": {
+      "z": 1.1
+    },
+    "relaxedOpen": -7.0,
+    "delayAfterDrop": 0.6,
+    "loopDelay": 0.4,
+    "endLoopTimeout": 10.0
+  }
+}

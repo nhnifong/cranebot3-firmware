@@ -52,6 +52,9 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
                                               # spec inline. See lerobot_normalize_tasks.py.
     label_contact_actions:                    # optional; omit or set enabled: false to skip
       enabled: true
+      mode: contact                           # or "waypoints": target the next position the
+                                              # gantry actually stopped at, rather than the
+                                              # grasp blended into the episode end
       pressure_threshold: 0.1
       episode_end_seconds: 1.0
       blend_seconds: 0.5

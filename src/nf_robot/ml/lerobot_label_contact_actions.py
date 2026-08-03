@@ -70,7 +70,51 @@ def contact_blend_alphas(timestamps, pressures, pressure_threshold: float, blend
     return contact_index, alphas
 
 
-def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: float, rotate_contact_vec: bool, blend_seconds: float = 0.5) -> None:
+# A stop counts as a waypoint only if the gantry was slower than this for at least
+# this long: brief dips through zero while reversing are not places it went to.
+# Tuned against naavox/nick-aug3-2: operators slow down rather than fully stop, so a
+# threshold near zero finds almost nothing. 0.06 m/s sits on a plateau where 0.05-0.2s
+# of rest all recover the same six stops in that episode.
+REST_SPEED_MPS = 0.06
+MIN_REST_S = 0.1
+
+
+def motion_waypoints(timestamps, speeds, rest_speed_mps=REST_SPEED_MPS, min_rest_s=MIN_REST_S):
+    """Frame indices where the gantry left a rest, i.e. where it had been holding a position.
+
+    The operator drives to somewhere, pauses, then drives on; the position held during
+    each pause is a place they meant to reach. Those are the indices returned, which are
+    the frames a target should point at while the gantry is on its way there.
+    """
+    moving = [s > rest_speed_mps for s in speeds]
+    waypoints = []
+    for i in range(1, len(moving)):
+        if not (moving[i] and not moving[i - 1]):
+            continue
+        start = i - 1
+        while start > 0 and not moving[start - 1]:
+            start -= 1
+        if timestamps[i - 1] - timestamps[start] >= min_rest_s:
+            waypoints.append(i - 1)
+    return waypoints
+
+
+def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: float, rotate_contact_vec: bool,
+                  blend_seconds: float = 0.5, mode: str = "contact",
+                  rest_speed_mps: float = REST_SPEED_MPS, min_rest_s: float = MIN_REST_S) -> None:
+    """Fill in the contact_vec_*/episode_end action components.
+
+    mode="contact" points contact_vec at the grasp position, then blends to the episode's
+    final position over blend_seconds - two waypoints per episode.
+
+    mode="waypoints" points it at the next place the gantry actually stopped: every
+    position it held before setting off again, plus the grasp position and the episode's
+    final position. The target is piecewise constant and steps as each is reached, which
+    suits an action space that predicts where to go rather than how fast to move. No
+    blending is applied, since the steps are the signal.
+    """
+    if mode not in ("contact", "waypoints"):
+        raise ValueError(f"unknown labelling mode {mode!r}; expected 'contact' or 'waypoints'")
     info_path = root / "meta" / "info.json"
     info = json.loads(info_path.read_text())
 
@@ -88,6 +132,13 @@ def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: fl
     gripper_pos_idx = [obs_idx[f"gripper_pos_{a}"] for a in "xyz"]
     pressure_idx = obs_idx["finger_pressure"]
     spin_idx = obs_idx["spin"] if rotate_contact_vec else None
+    # the recorded gantry velocity, used by mode="waypoints" to find where it stopped
+    velocity_idx = (
+        [obs_idx[f"vel_{a}"] for a in "xyz"]
+        if all(f"vel_{a}" in obs_idx for a in "xyz") else None
+    )
+    if mode == "waypoints" and velocity_idx is None:
+        raise ValueError("mode='waypoints' needs vel_x/vel_y/vel_z in observation.state")
 
     if all(name in src_names for name in CONTACT_ACTION_NAMES):
         dst_names = src_names
@@ -124,11 +175,16 @@ def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: fl
                 "gripper_pos": np.array([state[i] for i in gripper_pos_idx], dtype=np.float64),
                 "spin": state[spin_idx] if spin_idx is not None else None,
                 "pressure": state[pressure_idx],
+                "speed": (
+                    float(np.linalg.norm([state[i] for i in velocity_idx]))
+                    if velocity_idx is not None else None
+                ),
             })
 
     # Pass 2: compute new action component values for every row.
     new_values: dict[tuple[Path, int], dict[str, float]] = {}
     episodes_without_contact = 0
+    waypoints_used: list[int] = []
     for ep, rows in episodes.items():
         rows.sort(key=lambda r: r["frame_index"])
 
@@ -141,16 +197,38 @@ def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: fl
         contact_pos = rows[contact_index]["gripper_pos"] if contact_index is not None else None
         episode_end_pos = rows[-1]["gripper_pos"]
 
+        targets = None
+        if mode == "waypoints":
+            # Every position the gantry held before setting off again, plus the grasp and
+            # the episode's last position. Sorted so each frame can look ahead to the next.
+            stops = motion_waypoints(
+                [r["timestamp"] for r in rows], [r["speed"] for r in rows],
+                rest_speed_mps, min_rest_s,
+            )
+            indices = sorted({*stops, *( [contact_index] if contact_index is not None else [] ), len(rows) - 1})
+            waypoints_used.append(len(indices))
+            targets = []
+            nxt = 0
+            for i in range(len(rows)):
+                while nxt < len(indices) - 1 and indices[nxt] < i:
+                    nxt += 1
+                targets.append(rows[indices[nxt]]["gripper_pos"])
+
         episode_duration = rows[-1]["timestamp"]
         for i, r in enumerate(rows):
-            if contact_pos is None:
+            if targets is not None:
+                target_pos = targets[i]
+            elif contact_pos is None:
                 contact_vec = np.zeros(3)
+                target_pos = None
             else:
                 # Before contact: point toward contact position.
                 # After contact: blend toward the episode-end position over blend_seconds,
                 # so the model is guided through pick-up and to the final resting location.
                 alpha = alphas[i]
                 target_pos = (1.0 - alpha) * contact_pos + alpha * episode_end_pos
+
+            if target_pos is not None:
                 contact_vec = target_pos - r["gripper_pos"]
                 if rotate_contact_vec:
                     contact_vec = contact_vec.copy()
@@ -165,6 +243,11 @@ def label_dataset(root: Path, pressure_threshold: float, episode_end_seconds: fl
                 "episode_end": episode_end,
             }
 
+    if waypoints_used:
+        logging.info(
+            f"mode='waypoints': {np.mean(waypoints_used):.1f} waypoints per episode "
+            f"(min {min(waypoints_used)}, max {max(waypoints_used)})"
+        )
     if episodes_without_contact:
         logging.warning(
             f"{episodes_without_contact}/{len(episodes)} episodes never exceeded "
@@ -226,6 +309,13 @@ def main() -> None:
     parser.add_argument("--new_root", help="local root for the labeled dataset (default datasets/<new name>)")
     parser.add_argument("--pressure_threshold", type=float, default=0.1, help="finger_pressure threshold marking contact")
     parser.add_argument("--episode_end_seconds", type=float, default=1.0, help="duration of the 'episode end' window")
+    parser.add_argument("--mode", default="contact", choices=["contact", "waypoints"],
+                        help="'contact' targets the grasp then the episode end; 'waypoints' targets "
+                             "the next position the gantry actually stopped at")
+    parser.add_argument("--rest_speed_mps", type=float, default=REST_SPEED_MPS,
+                        help="gantry speed below which it counts as stopped (mode='waypoints')")
+    parser.add_argument("--min_rest_s", type=float, default=MIN_REST_S,
+                        help="how long it must stay stopped to count as a waypoint (mode='waypoints')")
     parser.add_argument("--blend_seconds", type=float, default=0.5, help="seconds after contact over which contact_vec blends from pointing at contact position to pointing at episode-end position")
     parser.add_argument("--rotate_contact_vec", action="store_true", help="rotate contact_vec x/y into the gripper's frame using observation.state's spin (requires 'spin' to be present)")
     parser.add_argument("--push_to_hub", action="store_true", help="upload the labeled dataset to the Hugging Face Hub")
@@ -252,7 +342,9 @@ def main() -> None:
         new_repo_id = args.repo_id
         work_root = root
 
-    label_dataset(work_root, args.pressure_threshold, args.episode_end_seconds, args.rotate_contact_vec, args.blend_seconds)
+    label_dataset(work_root, args.pressure_threshold, args.episode_end_seconds, args.rotate_contact_vec,
+                  args.blend_seconds, mode=args.mode,
+                  rest_speed_mps=args.rest_speed_mps, min_rest_s=args.min_rest_s)
 
     if args.push_to_hub:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset

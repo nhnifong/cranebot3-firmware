@@ -1271,7 +1271,7 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
             rm={"observation.images.gripper_camera": "observation.images.camera1"}
         elif policy_repo_id.startswith("naavox/jepa"):
             rm={"observation.images.gripper_camera": "observation.images.image", "observation.images.overhead_camera": "observation.images.image2"}
-        elif policy_repo_id.startswith("naavox/xvla-move-clutter"):
+        elif policy_repo_id.startswith("naavox/xvla"):
             rm={"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera":  "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}
 
         policy = make_policy(

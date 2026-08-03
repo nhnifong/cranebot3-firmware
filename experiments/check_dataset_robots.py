@@ -70,13 +70,14 @@ def runs_of_same_value(per_episode, episodes):
 
 
 def load_configs(directory):
+    """frameRoomSpin of every config under a directory, searched recursively."""
     configs = {}
-    for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
+    for path in sorted(glob.glob(os.path.join(directory, "**", "*.json"), recursive=True)):
         try:
             value = json.loads(open(path).read())["gripper"]["frameRoomSpin"]
         except (KeyError, ValueError):
             continue
-        configs[os.path.basename(path)] = float(value)
+        configs[os.path.relpath(path, directory)] = float(value)
     return configs
 
 

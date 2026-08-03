@@ -54,6 +54,7 @@ from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
 from nf_robot.ml import camera_goal
+from nf_robot.ml import lerobot_label_contact_actions as label_contact
 from nf_robot.ml.lerobot_label_contact_actions import label_dataset
 from nf_robot.ml.lerobot_normalize_tasks import load_mapping, normalize_tasks
 from nf_robot.ml.lerobot_resize_video_feature import resize_video
@@ -312,6 +313,9 @@ def derive_dataset(
             episode_end_seconds=float(cfg.get("episode_end_seconds", 1.0)),
             rotate_contact_vec=False,  # camera_goal needs contact_vec in the room frame
             blend_seconds=float(cfg.get("blend_seconds", 0.5)),
+            mode=str(cfg.get("mode", "contact")),
+            rest_speed_mps=float(cfg.get("rest_speed_mps", label_contact.REST_SPEED_MPS)),
+            min_rest_s=float(cfg.get("min_rest_s", label_contact.MIN_REST_S)),
         )
         logging.info(f"Converting actions to the '{camera_goal.ACTION_SPACE_NAME}' space")
         camera_goal.derive_dataset_actions(

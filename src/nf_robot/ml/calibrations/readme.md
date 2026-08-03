@@ -17,15 +17,22 @@ computes `spin = radians(wrist_angle) + (frameRoomSpin - pi)` and both terms are
 `experiments/check_dataset_robots.py` recovers it per episode, which both confirms a
 config belongs to a dataset and finds where a dataset changes robots mid-way.
 
-## conf_playroom_move_clutter.json / conf_bedroom_move_clutter.json
+## Naming
 
-Not usable as they stand. They carry the `frameRoomSpin` recovered from
-naavox/move_clutter (1.911334 for its playroom ranges, 1.900022 for its bedroom
-ranges) but the anchor poses of a later calibration, copied from
-conf_playroom/conf_bedroom.json. Writing the old spin into a newer config does not
-move the anchor poses back into the old room frame.
+A file named for a room alone is the robot's current calibration. One named for a
+dataset as well is the calibration that was active while that dataset was recorded,
+kept because it no longer matches the robot's current one:
 
-They are kept as a record of the recovered values. To make either usable the anchor
-poses have to come from the calibration active during that recording - the archived
-config, or solved for as an origin transform between the two frames, which is possible
-because the anchors themselves did not move.
+    conf_playroom.json                    matches move_clutter_2 episodes 71-72, 106-152
+    conf_bedroom_move_clutter_2.json      matches move_clutter_2 episodes 153-187
+    conf_nick_move_clutter_nick_2.json    matches move_clutter_nick_2 episodes 48-56
+    conf_demo_79west4.json                matches move_clutter_79west4 episode 1
+    conf_nick.json                        matches naavox/nick-aug3
+
+Each was confirmed by recovering frameRoomSpin from the recording and finding it equal
+to the config's, then checking the recorded gantry positions fall inside that config's
+anchor footprint. Nothing else is kept: a config that matches no dataset cannot be used
+to convert one.
+
+Datasets recorded from August 2026 onward carry their own anchor poses in an
+`anchor_poses` feature and do not need a file here at all.
