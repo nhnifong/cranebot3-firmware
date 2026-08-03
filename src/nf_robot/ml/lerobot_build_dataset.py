@@ -235,7 +235,10 @@ def normalize_sources(merge_spec: list) -> list[dict]:
             raise ValueError(
                 f"Each 'merge' entry must be a repo id string or a mapping with 'repo_id', got {entry!r}"
             )
-        unknown = set(entry) - {"repo_id", "exclude_episodes", "include_episodes", "anchor_config"}
+        # "name" is produced below, and is accepted on the way back in so that
+        # normalizing an already-normalized list is a no-op: load_recipe stores its
+        # result in the recipe, and build normalizes again.
+        unknown = set(entry) - {"repo_id", "exclude_episodes", "include_episodes", "anchor_config", "name"}
         if unknown:
             raise ValueError(f"Unknown keys in merge entry {entry['repo_id']}: {sorted(unknown)}")
 
