@@ -55,6 +55,8 @@ Each camera's pose in the room is then needed to express that goal in its frame:
 
 import json
 import logging
+import os
+import pathlib
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -126,9 +128,13 @@ def goal_in_camera_frame(goal_room, camera_pose):
     return compose_poses([inv, (np.zeros(3), np.asarray(goal_room, dtype=float))])[1]
 
 
-def load_anchor_poses(path):
-    """Anchor camera poses as [(rotvec, position), ...] from a robot's config file."""
-    config = json.loads(open(path).read()) if isinstance(path, str) else path
+def load_anchor_poses(config):
+    """Anchor camera poses as [(rotvec, position), ...].
+
+    Takes a path to a robot config file (str or Path) or an already-parsed config.
+    """
+    if isinstance(config, (str, os.PathLike)):
+        config = json.loads(pathlib.Path(config).read_text())
     poses = []
     for anchor in config["anchors"]:
         r = anchor["pose"]["rotation"]
