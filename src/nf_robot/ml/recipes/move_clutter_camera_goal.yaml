@@ -59,10 +59,6 @@ merge:
     include_episodes: ["48-56"]
     anchor_config: ../calibrations/conf_nick_move_clutter_nick_2.json
 
-  - repo_id: naavox/move_clutter_79west4
-    include_episodes: ["1"]
-    anchor_config: ../calibrations/conf_demo_79west4.json
-
   - repo_id: justink04/laundry-in-hamper-7-19-26
     anchor_config: ../calibrations/justin.json
 
