@@ -37,6 +37,9 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     merge:                                    # source datasets to merge (>= 1)
       - naavox/test_dataset_3                 # plain repo id: use every episode
       - repo_id: naavox/laptop_test_dataset   # or a mapping, to select episodes
+        anchor_config: conf_robot.json        # only for action_space: camera_goal, and only
+                                              # for datasets recorded before they carried their
+                                              # own anchor_poses feature
         include_episodes: ["0-99"]            # optional; keep only these (default: all)
         exclude_episodes: [3, "10-14", 27]    # dropped on top of include_episodes
                                               # both take ints and inclusive "first-last" ranges.
@@ -161,20 +164,45 @@ def resolve_source_revision(repo_id: str) -> str | None:
     return "main"
 
 
-def preflight_sources(sources: list[dict]) -> dict[str, str | None]:
+def preflight_sources(sources: list[dict], action_space: str | None = None) -> dict[str, str | None]:
     """Resolve every source's revision before any conversion work starts.
 
     Conversion takes hours; reaching a broken source at the end wastes all of it.
     These are metadata-only Hub calls, so checking all of them up front is cheap.
+
+    For camera_goal this also settles where each source's anchor poses come from: the
+    dataset's own anchor_poses feature, or an anchor_config naming the calibration the
+    robot was running. A source with neither cannot be converted.
     """
+    from huggingface_hub import hf_hub_download
+
     revisions: dict[str, str | None] = {}
+    self_describing = []
     for spec in sources:
         repo_id = spec["repo_id"]
         try:
             revisions[repo_id] = resolve_source_revision(repo_id)
         except Exception as e:
             raise RuntimeError(f"Source dataset '{repo_id}' is not usable: {type(e).__name__}: {e}") from e
+
+        if action_space != camera_goal.ACTION_SPACE_NAME or spec.get("anchor_config"):
+            continue
+        info = json.loads(Path(hf_hub_download(
+            repo_id=repo_id, filename="meta/info.json", repo_type="dataset",
+            revision=revisions[repo_id],
+        )).read_text())
+        if camera_goal.ANCHOR_POSES_KEY not in info["features"]:
+            raise ValueError(
+                f"Source '{repo_id}' has no '{camera_goal.ANCHOR_POSES_KEY}' feature and no "
+                f"'anchor_config' in the recipe, so camera_goal has no anchor poses for it. "
+                f"Datasets recorded before that feature existed need the config of the robot "
+                f"that recorded them."
+            )
+        self_describing.append(repo_id)
+
     logging.info(f"Preflight OK: {len(revisions)} source dataset(s) reachable")
+    if self_describing:
+        logging.info(f"{len(self_describing)} source(s) carry their own anchor poses: {self_describing}")
     return revisions
 
 
@@ -341,18 +369,16 @@ def load_recipe(path: Path) -> dict:
             f"or use '{camera_goal.ACTION_SPACE_NAME}'"
         )
     if action_space == camera_goal.ACTION_SPACE_NAME:
-        missing = [s_["repo_id"] for s_ in recipe["merge"] if not s_.get("anchor_config")]
-        if missing:
-            raise ValueError(
-                f"action_space '{action_space}' needs an 'anchor_config' on every source "
-                f"(the config of the robot that recorded it); missing for {missing}"
-            )
+        # anchor_config is optional: a dataset recorded after the anchor_poses feature
+        # was added carries its own calibration, and preflight checks that every source
+        # has one source of poses or the other.
         # Resolved here, not at use time, so a wrong path fails before any conversion
         # work. Tried as given first (so repo-root-relative paths work when run from
         # the repo root), then relative to the recipe, so a recipe and its calibration
         # files can travel together.
         for source in recipe["merge"]:
-            source["anchor_config"] = _resolve_recipe_path(source["anchor_config"], path, "anchor_config")
+            if source.get("anchor_config"):
+                source["anchor_config"] = _resolve_recipe_path(source["anchor_config"], path, "anchor_config")
 
     keep_state = recipe.get("keep_state_features")
     if keep_state is not None and (
@@ -485,7 +511,7 @@ def build(
     if output_root.exists():
         raise FileExistsError(f"--output_root {output_root} already exists; remove it or pick another path")
 
-    revisions = preflight_sources(sources)
+    revisions = preflight_sources(sources, action_space)
 
     # Step 1 + 2: source each dataset and convert it to the target camera_mode.
     converted: list[tuple[str, Path]] = []
@@ -529,8 +555,11 @@ def build(
             pad_clamp=pad_clamp,
             keep_state_features=keep_state_features,
             normalize_tasks_spec=normalize_tasks_spec,
+            # empty tuple still triggers the conversion, and means "the dataset's own
+            # recorded poses are the only source"
             camera_goal_anchor_poses=(
-                camera_goal.load_anchor_poses(source_spec["anchor_config"])
+                (camera_goal.load_anchor_poses(source_spec["anchor_config"])
+                 if source_spec["anchor_config"] else ())
                 if action_space == camera_goal.ACTION_SPACE_NAME else None
             ),
             camera_goal_label_cfg=label_cfg,
