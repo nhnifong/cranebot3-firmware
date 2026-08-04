@@ -242,12 +242,11 @@ def derive_dataset(
     meta_info = dataset.meta.info
     info = meta_info.to_dict() if hasattr(meta_info, "to_dict") else dict(meta_info)
     fps = dataset.meta.fps
-    # All-file parallelism: one single-threaded encode per worker, one worker per
-    # available core. For many independent files this beats fewer multi-threaded
-    # encodes, because encoder-internal threading (esp. SVT-AV1) scales poorly
-    # while independent files scale nearly linearly. `headroom` cores are left free.
+    # Independent files parallelize better than encoder-internal threading, so the
+    # first choice is one encode per core, each single-threaded. `headroom` cores are
+    # left free. Thread counts are decided per camera key below, since a key with
+    # fewer files than cores would otherwise leave most of them idle.
     workers = max(1, (os.cpu_count() or 1) - headroom)
-    threads_per_worker = 1
 
     for key, (target_w, target_h) in target_keys.items():
         src_h, src_w = dataset.meta.features[key]["shape"][:2]
@@ -272,12 +271,18 @@ def derive_dataset(
                 continue
         sorted_files = sorted(video_files)
 
+        # Fewer files than cores: run one encode per file and give each the cores that
+        # would otherwise sit idle. SVT-AV1 scales worse per thread than per file, so
+        # this is the fallback rather than the default.
+        active_workers = max(1, min(workers, len(sorted_files)))
+        threads_per_worker = max(1, workers // max(1, len(sorted_files)))
+
         logging.info(
             f"Resizing '{key}' from {src_w}x{src_h} to {target_w}x{target_h} "
-            f"({len(sorted_files)} file(s)) with {workers} workers x "
-            f"{threads_per_worker} encoder thread(s)"
+            f"({len(sorted_files)} file(s)) with {active_workers} worker(s) x "
+            f"{threads_per_worker} encoder thread(s) of {workers} available core(s)"
         )
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        with ProcessPoolExecutor(max_workers=active_workers) as pool:
             futures = {}
             for rel_path in sorted_files:
                 path = dataset.root / rel_path

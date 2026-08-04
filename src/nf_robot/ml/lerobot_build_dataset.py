@@ -664,8 +664,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--headroom", type=int, default=2,
-        help="CPU cores to leave free during conversion; the rest run one single-threaded "
-             "encode each (default: 0)",
+        help="CPU cores to leave free during conversion; the rest are spread across the "
+             "encodes, one per file where there are enough files to go round",
     )
     parser.add_argument(
         "--resume", action="store_true",
