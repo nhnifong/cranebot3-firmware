@@ -30,9 +30,14 @@ const AuthManager = getAuthBridge();
 
 // --- GLOBAL VARIABLES ---
 const DEFAULT_CAM_TILT = 26.0; // degrees — matches the standard tilt adapter
+// Toothed tilt adapters are set by how many teeth are exposed; index = tooth count, value = degrees.
+const TILT_TEETH_ANGLES = [22.0, 26.0, 30.0, 34.0, 38.0, 42.0];
 
 // Debug toggle: show wireframe frustum helpers for the anchor cameras used in floor-projection raycasting
 const SHOW_ANCHOR_CAMERA_FRUSTUMS = false;
+
+// Debug toggle: report the robot as connected and calibrated regardless of telemetry
+const OVERRIDE_READINESS_GATES = true;
 
 const urlParams: URLSearchParams = new URLSearchParams(window.location.search);
 // If robotid is set in URL, we force cloud login. Otherwise we start the landing UI.
@@ -1173,6 +1178,7 @@ interface ComponentState {
 const componentStates = new Map<string, ComponentState>();
 
 export function isFullyConnected(): boolean {
+  if (OVERRIDE_READINESS_GATES) return true;
   const expectedAnchors = 2;
   let anchorConnected = 0;
   let gripperConnected = 0;
@@ -1187,6 +1193,7 @@ export function isFullyConnected(): boolean {
 }
 
 export function isFullyCalibrated(): boolean {
+  if (OVERRIDE_READINESS_GATES) return true;
   return lastCalibratedStatus === nf.common.CalibratedStatus.CALIBRATEDSTATUS_FULLY_CALIBRATED;
 }
 
@@ -2407,13 +2414,20 @@ function openFullCalOverlay() {
     unavailable?.classList.add('hidden');
     content?.classList.remove('hidden');
   }
-  if (lastTiltAngles[0] != null) {
-    (document.getElementById('fullcal-angle-0') as HTMLInputElement).value = lastTiltAngles[0].toString();
-  }
-  if (lastTiltAngles[1] != null) {
-    (document.getElementById('fullcal-angle-1') as HTMLInputElement).value = lastTiltAngles[1].toString();
+  // A stored angle off the adapter scale (hand-set via component details) has no matching
+  // option, so leave the selection alone rather than silently changing the angle.
+  for (let i = 0; i < 2; i++) {
+    const teeth = lastTiltAngles[i] == null ? -1 : TILT_TEETH_ANGLES.indexOf(lastTiltAngles[i]);
+    if (teeth >= 0) {
+      (document.getElementById(`fullcal-teeth-${i}`) as HTMLSelectElement).value = teeth.toString();
+    }
   }
   overlay.classList.remove('hidden');
+}
+
+function readFullCalTiltAngle(anchorNum: number): number {
+  const teeth = parseInt((document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement)?.value ?? '', 10);
+  return TILT_TEETH_ANGLES[teeth] ?? DEFAULT_CAM_TILT;
 }
 
 function initFullCalPanel() {
@@ -2422,22 +2436,19 @@ function initFullCalPanel() {
   document.getElementById('fullcal-bg-catcher')?.addEventListener('click', close);
 
   document.getElementById('btn-fullcal-start')?.addEventListener('click', () => {
-    const angle0 = parseFloat((document.getElementById('fullcal-angle-0') as HTMLInputElement)?.value ?? String(DEFAULT_CAM_TILT));
-    const angle1 = parseFloat((document.getElementById('fullcal-angle-1') as HTMLInputElement)?.value ?? String(DEFAULT_CAM_TILT));
-
     sendControl([
       nf.control.ControlItem.create({
         singleComponentAction: {
           isGripper: false, anchorNum: 0,
           action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
-          camAngle: isNaN(angle0) ? DEFAULT_CAM_TILT : angle0,
+          camAngle: readFullCalTiltAngle(0),
         }
       }),
       nf.control.ControlItem.create({
         singleComponentAction: {
           isGripper: false, anchorNum: 1,
           action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
-          camAngle: isNaN(angle1) ? DEFAULT_CAM_TILT : angle1,
+          camAngle: readFullCalTiltAngle(1),
         }
       }),
     ]);

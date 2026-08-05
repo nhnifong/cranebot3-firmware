@@ -421,8 +421,8 @@
             <button id="btn-cd-tighten" class="run-button btn-blue btn-full" title="Reel line in until no longer slack.">Tighten Line</button>
             <button id="btn-cd-relax"   class="run-button btn-red  btn-full" title="Let out line until it becomes slack. Continue pulling if you need more.">Relax Line</button>
             <div class="cam-angle-row">
-              <input id="cd-cam-angle-input" type="number" step="0.1" value="26.0" title="Angle of the tilt adapter installed on this anchor. Set this to the value printed on the adapter. Incorrect values will negatively affect calibration, and if this changes, calibration must be rerun." />
-              <button id="btn-cd-set-cam-angle" class="run-button btn-gray" title="Angle of the tilt adapter installed on this anchor. Set this to the value printed on the adapter. Incorrect values will negatively affect calibration, and if this changes, calibration must be rerun.">Set Cam Angle</button>
+              <input id="cd-cam-angle-input" type="number" step="0.1" value="26.0" title="Angle of the tilt adapter installed on this anchor. For a fixed adapter, set this to the value printed on the adapter. For a toothed adapter, use 22 degrees plus 4 per exposed tooth. Incorrect values will negatively affect calibration, and if this changes, calibration must be rerun." />
+              <button id="btn-cd-set-cam-angle" class="run-button btn-gray" title="Angle of the tilt adapter installed on this anchor. For a fixed adapter, set this to the value printed on the adapter. For a toothed adapter, use 22 degrees plus 4 per exposed tooth. Incorrect values will negatively affect calibration, and if this changes, calibration must be rerun.">Set Cam Angle</button>
             </div>
           </div>
         </div>
@@ -691,8 +691,14 @@
 
           <!-- Section: Tilt Adapters -->
           <div class="session-section">
-            <div class="fullcal-section-heading">Confirm Tilt Adapters</div>
-            <p class="fullcal-body">Provide the angles of the installed tilt adapters on this robot's anchors.
+            <div class="fullcal-section-heading">Confirm Camera Tilt</div>
+
+            <p class="fullcal-body">Identify the tilted camera mount on each anchor and determine it's tilt from horizontal.
+              Anchor cameras are mounted on tilt adapters under the anchor cover.
+              The camera tilt can be altered to match the room so the floor is centered in view.
+              For the adjustable type, count the exposed teeth.
+              For the older fixed type, read the angle printed on the adapter.
+              Stringman is shipped at 26° by default.
               <span class="help-hint" tabindex="0">
                 <span class="help-hint-icon">?</span>
                 <img class="help-hint-img" src="%VITE_ASSET_BUCKET_URL%/assets/playroom/tilt_adapter.webp" alt="Tilt adapters" />
@@ -700,32 +706,40 @@
             </p>
             <div style="display:flex; gap:16px;">
               <div class="session-input-group" style="flex:1; margin-bottom:0;">
-                <div class="input-label">Anchor 0 tilt angle</div>
-                <input type="number" id="fullcal-angle-0" class="input-text" step="0.1" value="26.0" style="width:100%; box-sizing:border-box;" title="Angle of the tilt adapter installed on Anchor 0. Set this to the value printed on the adapter.">
+                <div class="input-label">Anchor 0 tilt adapter</div>
+                <select id="fullcal-teeth-0" class="input-text" style="width:100%; box-sizing:border-box;" title="Tilt adapter installed on Anchor 0. Count the teeth exposed under the anchor cover, or use the angle printed on a fixed adapter.">
+                  <option value="0">0 teeth &mdash; 22&deg;</option>
+                  <option value="1" selected>1 tooth &mdash; 26&deg;</option>
+                  <option value="2">2 teeth &mdash; 30&deg;</option>
+                  <option value="3">3 teeth &mdash; 34&deg;</option>
+                  <option value="4">4 teeth &mdash; 38&deg;</option>
+                  <option value="5">5 teeth &mdash; 42&deg;</option>
+                </select>
               </div>
               <div class="session-input-group" style="flex:1; margin-bottom:0;">
-                <div class="input-label">Anchor 1 tilt angle</div>
-                <input type="number" id="fullcal-angle-1" class="input-text" step="0.1" value="26.0" style="width:100%; box-sizing:border-box;" title="Angle of the tilt adapter installed on Anchor 1. Set this to the value printed on the adapter.">
+                <div class="input-label">Anchor 1 tilt adapter</div>
+                <select id="fullcal-teeth-1" class="input-text" style="width:100%; box-sizing:border-box;" title="Tilt adapter installed on Anchor 1. Count the teeth exposed under the anchor cover, or use the angle printed on a fixed adapter.">
+                  <option value="0">0 teeth &mdash; 22&deg;</option>
+                  <option value="1" selected>1 tooth &mdash; 26&deg;</option>
+                  <option value="2">2 teeth &mdash; 30&deg;</option>
+                  <option value="3">3 teeth &mdash; 34&deg;</option>
+                  <option value="4">4 teeth &mdash; 38&deg;</option>
+                  <option value="5">5 teeth &mdash; 42&deg;</option>
+                </select>
               </div>
             </div>
-          </div>
-
-          <!-- Section: Robot Position -->
-          <div class="session-section">
-            <div class="fullcal-section-heading">Confirm Safe Robot Position</div>
-            <p class="fullcal-body">The ideal starting position for calibration is in the center of the room with the gripper touching the floor. If necessary, close this dialog and reposition it — disable torque to move it by hand. It will be re-enabled when calibration starts.</p>
           </div>
 
           <!-- Section: Origin Markers -->
           <div class="session-section">
             <div class="fullcal-section-heading">Place Origin Markers</div>
-            <p class="fullcal-body">Place the origin marker in the center of the room — it must be visible to every camera and must be on the floor. Place the calibration assist markers around it, spread as far apart as possible while keeping as many as possible visible in both cameras. Assist markers do not need to be on the floor.</p>
+            <p class="fullcal-body">Place the origin marker in the center of the room — it must be visible to every camera, but it does not have to be on the floore. Place the calibration assist markers around it, spread as far apart as possible while keeping as many as possible visible in both cameras. <b>At least one of the four cards should be on the floor</b></p>
           </div>
 
           <!-- Section: Run Calibration -->
           <div class="session-section">
             <div class="fullcal-section-heading">Calibrate</div>
-            <p class="fullcal-body">Calibration takes about one minute. Some lines may go slack during movement — this is intentional. It is harmless to steady any swing with your hand, but try not to obstruct the cameras' view of the markers.</p>
+            <p class="fullcal-body">Calibration takes about four minutes. Some lines may go slack during movement, this is intentional. Try not to obstruct the cameras' view of the markers. If any marker card moves, abort with the STOP button and retry.</p>
             <button id="btn-fullcal-start" class="run-button btn-green btn-full">Start Calibration</button>
           </div>
 
