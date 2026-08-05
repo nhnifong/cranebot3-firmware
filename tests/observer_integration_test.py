@@ -286,9 +286,9 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         goal = Vec3(x=0.5, y=0.5, z=1.0)
         await self._send_control(gantry_goal_pos=control.GantryGoalPos(pos=goal))
         
-        # The observer should kick off the seek_gantry_goal motion task
+        # The observer should kick off the seek_goal motion task
         self.assertIsNotNone(self.ob.motion_task)
-        self.assertEqual(self.ob.motion_task.get_name(), "seek_gantry_goal")
+        self.assertEqual(self.ob.motion_task.get_name(), "seek_goal")
         
         # Verify Telemetry published the goal marker
         marker_telem = self._get_latest_telemetry('named_position')
@@ -324,8 +324,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         await self._setup_fully_connected_system()
 
         # Start an actual motion task to verify STOP_ALL cancels it correctly
-        self.ob.gantry_goal_pos = np.array([5.0, 0.0, 1.0])
-        await self.ob.invoke_motion_task(self.ob.seek_gantry_goal())
+        await self.ob.invoke_motion_task(self.ob.seek_goal(np.array([5.0, 0.0, 1.0])))
         self.assertIsNotNone(self.ob.motion_task)
         self.assertFalse(self.ob.motion_task.done())
         copy_of_task = self.ob.motion_task

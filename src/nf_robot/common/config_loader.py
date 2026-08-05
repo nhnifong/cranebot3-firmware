@@ -43,7 +43,7 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     config = nf_config.StringmanPilotConfig()
     # Anonymous LAN-mode robots have no id: it stays empty ("") until the robot is bound to a
     # particular control plane instance, at which point that instance mints an id + key that
-    # are stored per-host in config.relay_credentials (see connect_cloud_telemetry).
+    # are stored per-host in config.relay_credentials (see TelemetryManager).
     config.robot_id = ""
     config.calibrated_status = common.CalibratedStatus.UNCALIBRATED
     config.connect_cloud_telemetry = False

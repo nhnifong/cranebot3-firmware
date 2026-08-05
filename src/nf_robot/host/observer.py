@@ -29,8 +29,6 @@ import pickle
 import inspect
 from collections import deque, defaultdict
 import uuid
-import websockets
-from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 from functools import partial
 from pathlib import Path
 import json
@@ -54,6 +52,7 @@ from nf_robot.host.component_client import max_origin_detections
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector, OMEGA
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
+from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL
 from nf_robot.host.webui_server import WebUiServer
 
 logger = logging.getLogger(__name__)
@@ -66,9 +65,6 @@ N_ANCHORS = 2
 N_LINES = 4
 INPUT_VELOCITY_TTL_S = 2.0 # a commanded velocity keyed by a source expires this long after its last update
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
-CONTROL_PLANE_PRODUCTION = "wss://neufangled.com"
-CONTROL_PLANE_STAGING = "wss://nf-site-monolith-staging-690802609278.us-east1.run.app"
-CONTROL_PLANE_LOCAL = "ws://localhost:8080"
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
@@ -148,9 +144,9 @@ class AsyncObserver:
     it starts keep_robot_connected to continually reconnect to all known components.
     It starts position_estimator to continually run kalman filters on the observed variables.
     It starts run_perception to continually run inference on the camera feeds.
-    It starts a websocket server to accept connections from local UIs 
+    It hands every telemetry item to the TelemetryManager, which owns the local websocket
+    server and the cloud relay link and hands inbound control messages back here.
 
-    It starts a websocket server to accept connections from local UIs 
     It reads from the config file to find any components it already knows about.
     It starts zeroconf to discover any components it doesn't know about and add them to the config.
     As soon as a component in the config has a known address, it starts keep_robot_connected to continually reconnect to all known components.
@@ -228,15 +224,21 @@ class AsyncObserver:
         # targets
         self.target_queue = TargetQueue()
         self.last_snapshot_hash = None # to spare the UI from too many updates
-        # websockets to locally connected UIs
-        self.connected_local_clients = set()
-        self.telemetry_buffer = deque(maxlen=100)
-        self.telemetry_buffer_lock = threading.RLock()
+        # owns every telemetry destination: the local websocket server and the cloud relay
+        # link. Constructed here rather than in main() so send_ui works before the sockets
+        # are up. Both transports also carry inbound control, hence the callbacks.
+        self.telemetry = TelemetryManager(
+            config=self.config,
+            telemetry_env=telemetry_env,
+            bind_address=bind_address,
+            port=port,
+            on_control_message=self.handle_command,
+            on_peer_connected=self._on_telemetry_peer_connected,
+            on_peer_disconnected=self._on_telemetry_peer_disconnected,
+        )
         self.startup_complete = asyncio.Event()
         self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
-        self.cloud_telem_websocket = None
         self.gip_task = None
-        self.cloud_telem = None
         self.passive_safety_task = None
         # last attempt to connect, keyed by service name
         self.connection_tasks: dict[str, asyncio.Task] = {}
@@ -343,29 +345,16 @@ class AsyncObserver:
         self.send_ui(auto_targeting_state=telemetry.AutoTargetingState(enabled=self.target_model is not None, present=True))
         r = await self.flush_tele_buffer()
 
-    async def handle_local_client(self, websocket):
-        # Called when Ursina connects to a websocket that is opened to accept control commands
-        self.connected_local_clients.add(websocket)
-        logger.info('Connection received from local UI process')
-
-        # send anything that it would need up-front
+    async def _on_telemetry_peer_connected(self, peer):
+        """A local UI/lerobot session or the cloud relay just connected. Bring it up to date
+        before it starts issuing commands."""
         r = await self.send_setup_telemetry()
-        try:
-            async for message in websocket:
-                r = await self.handle_command(message) # Handle 'ControlBatchUpdate'
-                # warning, any uncaught exception here will kill this websocket connection
-                # but the observer would go on running, possibly in a bad state.
-        except (ConnectionClosedError, ConnectionClosedOK) as e:
-            pass
-        # except Exception as e:
-        #     print(e)
-        #     traceback.print_exc()
-        finally:
-            self.connected_local_clients.remove(websocket)
-            self.zero_input_velocities()
-            if len(self.connected_local_clients) == 0 and self.terminate_with_ui:
-                # The only local UI has disconnected and we were asked to shutdown when it disconnects
-                self.run_command_loop = False
+
+    async def _on_telemetry_peer_disconnected(self, peer, local_remaining):
+        self.zero_input_velocities()
+        if peer == LOCAL and local_remaining == 0 and self.terminate_with_ui:
+            # The only local UI has disconnected and we were asked to shutdown when it disconnects
+            self.run_command_loop = False
 
     def zero_input_velocities(self):
         """ Reset all commanded velocities to zero.
@@ -485,8 +474,7 @@ class AsyncObserver:
 
         if goal_pos is None:
             return
-        self.gantry_goal_pos = goal_pos
-        r = await self.invoke_motion_task(self.seek_gantry_goal())
+        r = await self.invoke_motion_task(self.seek_goal(goal_pos))
 
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
         """Issue a special command to a single component"""
@@ -595,8 +583,7 @@ class AsyncObserver:
 
     async def _recenter_gantry(self, center_pos):
         """Drive the gantry back to center_pos and stop."""
-        self.gantry_goal_pos = np.array(center_pos, dtype=float)
-        await self.seek_gantry_goal(head_turn=False, auto_altitude=False)
+        await self.seek_goal(np.array(center_pos, dtype=float), head_turn=False, auto_altitude=False)
         self.slow_stop_all_spools()
 
     async def _recenter_gantry_if_drifted(self, center_pos, drift_limit_m):
@@ -999,9 +986,10 @@ class AsyncObserver:
                 if not name in self.config.named_positions:
                     continue
                 goal = tonp(self.config.named_positions[name]) + POLE
-                self.gantry_goal_pos = goal
                 if chase_task is None or chase_task.done():
-                    chase_task = asyncio.create_task(self.seek_gantry_goal())
+                    chase_task = asyncio.create_task(self.seek_goal(goal))
+                else:
+                    self.goal_pos = goal # retarget the seek already in flight
         except asyncio.CancelledError:
             if chase_task is not None:
                 chase_task.cancel()
@@ -1019,8 +1007,7 @@ class AsyncObserver:
                     await asyncio.sleep(0.5)
                 # go to position
                 goal = tonp(self.config.named_positions[source]) + POLE + GRIPPER_HEIGHT_OVER_TARGET
-                self.gantry_goal_pos = goal
-                await self.seek_gantry_goal()
+                await self.seek_goal(goal)
 
                 # auto grasp
                 # await self.gripper_client.send_commands({'set_finger_angle': 30})
@@ -1032,8 +1019,7 @@ class AsyncObserver:
                     await asyncio.sleep(0.5)
                 # go to position
                 goal = tonp(self.config.named_positions[dest]) + POLE + GRIPPER_HEIGHT_OVER_TARGET
-                self.gantry_goal_pos = goal
-                await self.seek_gantry_goal()
+                await self.seek_goal(goal)
 
                 # drop
                 await self.gripper_client.send_commands({'set_finger_angle': -30})
@@ -1315,9 +1301,8 @@ class AsyncObserver:
                 await self.send_line_speed(jog.anchor_num, jog.offset, jog=True)
 
     async def _handle_gantry_goal_pos(self, goal_pos: np.ndarray):
-        """Handles moving the gantry to a specific goal position."""
-        self.gantry_goal_pos = goal_pos
-        await self.invoke_motion_task(self.seek_gantry_goal())
+        """Handles moving the marker box to a specific goal position."""
+        await self.invoke_motion_task(self.seek_goal(goal_pos))
 
     async def _handle_slow_stop_one(self, stop_data: dict):
         """Handles stopping a single spool motor."""
@@ -1897,9 +1882,9 @@ class AsyncObserver:
                 # sees the card: its true spot can differ from the estimate, and continuing can carry it
                 # back out of the narrow gripper FOV.
                 approach_z = gant_zs[0]
-                self.gantry_goal_pos = np.array([cpos[0], cpos[1], approach_z])
-                logger.info(f'Gripper card survey: flying over {name} at goal {np.round(self.gantry_goal_pos, 3)} (card at {np.round(cpos, 3)})')
-                seek_task = asyncio.create_task(self.seek_gantry_goal(head_turn=False))
+                approach_goal = np.array([cpos[0], cpos[1], approach_z])
+                logger.info(f'Gripper card survey: flying over {name} at goal {np.round(approach_goal, 3)} (card at {np.round(cpos, 3)})')
+                seek_task = asyncio.create_task(self.seek_goal(approach_goal, head_turn=False))
                 try:
                     while not seek_task.done():
                         if self.gripper_client.get_route_tag_pose(name) is not None:
@@ -1919,10 +1904,10 @@ class AsyncObserver:
                 # it gives the length-delta constraints a vertical baseline to triangulate the eyelets.
                 samples = []
                 for gz in gant_zs:
-                    self.gantry_goal_pos = np.array([cpos[0], cpos[1], gz])
                     # hold the exact target altitude (auto_altitude would cruise at a fixed height and
                     # defeat the point of sampling several).
-                    seek_task = asyncio.create_task(self.seek_gantry_goal(head_turn=False, auto_altitude=False))
+                    seek_task = asyncio.create_task(self.seek_goal(
+                        np.array([cpos[0], cpos[1], gz]), head_turn=False, auto_altitude=False))
                     try:
                         await asyncio.wait_for(seek_task, timeout=SEEK_TIMEOUT_S)
                     except asyncio.TimeoutError:
@@ -2268,8 +2253,7 @@ class AsyncObserver:
                 upper_z-0.1, # stay at least 0.1 under the top of the work area
                 POLE[2] + GRIPPER_FINGER_LEN_M + floor_clearance_m - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
             )
-            self.gantry_goal_pos = np.array([0, 0, gant_z])
-            await self.seek_gantry_goal()
+            await self.seek_goal(np.array([0, 0, gant_z]))
 
             # measure finger contact and reset wrist while doing the diamond pattern to save time.
             async def wait_then_finger():
@@ -2323,8 +2307,7 @@ class AsyncObserver:
                 current_action="Moving gripper to origin",
             ))
             gant_z = min(upper_z-0.1, POLE[2] + 0.8 - floor_z)
-            self.gantry_goal_pos = np.array([0,0,gant_z])
-            await self.seek_gantry_goal(head_turn=False)
+            await self.seek_goal(np.array([0,0,gant_z]), head_turn=False)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=29.0,
@@ -2348,8 +2331,7 @@ class AsyncObserver:
                 ))
                 # Perform swing cancellation measurements lower than the spin-measurement
                 SWING_MEASURE_DROP_M = 0.4
-                self.gantry_goal_pos = np.array([0, 0, gant_z - SWING_MEASURE_DROP_M])
-                await self.seek_gantry_goal(head_turn=False)
+                await self.seek_goal(np.array([0, 0, gant_z - SWING_MEASURE_DROP_M]), head_turn=False)
                 await self.calibrate_swing_latency(fine_pass=True, progress_range=(30.0, 61.0))
 
             # Refine the pull-point geometry with close-range gripper-camera views of the
@@ -2374,8 +2356,7 @@ class AsyncObserver:
                 r = await self.flush_tele_buffer()
 
                 # move over the origin card
-                self.gantry_goal_pos = np.array([0,0,gant_z])
-                await self.seek_gantry_goal(head_turn=False)
+                await self.seek_goal(np.array([0,0,gant_z]), head_turn=False)
 
                 # Require a reading from all four cards (origin + 3 cal_assist). With fewer hovers the
                 # gripper term has too few length-delta pairs to pin the two far eyelets, and the
@@ -2591,16 +2572,14 @@ class AsyncObserver:
         point_b = np.array([dst_pos[0], dst_pos[1], TEST_ALTITUDE_M])
 
         # Fly directly to the route source with auto altitude, then pause before the test.
-        self.gantry_goal_pos = point_a
-        await self.seek_gantry_goal(auto_altitude=True)
+        await self.seek_goal(point_a, auto_altitude=True)
         await asyncio.sleep(2.0)
 
         # Traverse to the route destination, sampling the laser the whole way.
         # disable altitude cruise during test
         deviations = []
         aborted = None
-        self.gantry_goal_pos = point_b
-        move_task = asyncio.create_task(self.seek_gantry_goal(auto_altitude=False))
+        move_task = asyncio.create_task(self.seek_goal(point_b, auto_altitude=False))
         try:
             while not move_task.done():
                 await asyncio.sleep(SAMPLE_INTERVAL_S)
@@ -2643,7 +2622,7 @@ class AsyncObserver:
 
     async def goalseek_diagnostic_task(self):
         """
-        Measure how accurately seek_gantry_goal parks the gripper over a route-point tag.
+        Measure how accurately seek_goal parks the gripper over a route-point tag.
         Triggered by the debug command "goalseek". This is a motion task.
 
         Cycles through the four floor tags ("gamepad", "trash", "hamper", "toys"),
@@ -2695,8 +2674,7 @@ class AsyncObserver:
 
             # goal-seek to the tag's saved position
             goal_pos = tonp(self.config.named_positions[tag_name]) + np.array([0,0,GANTRY_HEIGHT_OVER_TARGET])
-            self.gantry_goal_pos = goal_pos
-            await self.seek_gantry_goal(auto_altitude=True)
+            await self.seek_goal(goal_pos, auto_altitude=True)
             await asyncio.sleep(SETTLE_S)
 
             observed = await measure_tag_position(tag_name)
@@ -2781,8 +2759,7 @@ class AsyncObserver:
             # move to position above and in front of saddle,
             parkpos = tonp(self.config.park_data.pos)
             away = get_inward_wall_normal(parkpos, self.pe.anchor_points) * STAGING_HOR_OFFSET_M
-            self.gantry_goal_pos = parkpos + np.array([away[0], away[1], STAGING_VER_OFFSET_M])
-            await self.seek_gantry_goal()
+            await self.seek_goal(parkpos + np.array([away[0], away[1], STAGING_VER_OFFSET_M]))
 
             # TODO rotate to face wall because camera is under nose and it lets us see a little further.
 
@@ -2837,7 +2814,7 @@ class AsyncObserver:
             raise
         finally:
             self.slow_stop_all_spools()
-            await self.clear_gantry_goal()
+            await self.clear_goal()
 
 
     async def unpark(self):
@@ -2854,17 +2831,16 @@ class AsyncObserver:
             await self.move_direction_speed(np.array([away[0], away[1], 0]), 0.15)
             await asyncio.sleep(2.0)
             # move towards center of room.
-            self.gantry_goal_pos = np.array([0,0,1])
-            task = asyncio.create_task(self.seek_gantry_goal())
+            task = asyncio.create_task(self.seek_goal(np.array([0,0,1])))
             # but don't go all the way, just stop after a bit
             await asyncio.sleep(5.0)
-            await self.clear_gantry_goal()
+            await self.clear_goal()
             await self.half_auto_calibration()
         except asyncio.CancelledError:
             raise
         finally:
             self.slow_stop_all_spools()
-            await self.clear_gantry_goal()
+            await self.clear_goal()
 
     def on_service_state_change(self, 
         zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
@@ -3107,81 +3083,17 @@ class AsyncObserver:
                 return False
         return True
 
-    def _control_plane_ws_host(self):
-        """The telemetry ws_protocol_and_host of the control plane this robot connects to,
-        derived from telemetry_env. This same string is the key into config.relay_credentials
-        (e.g. "wss://neufangled.com"), so binding and connecting agree on which creds to use."""
-        if self.telemetry_env == 'staging':
-            return CONTROL_PLANE_STAGING
-        if self.telemetry_env == 'production':
-            return CONTROL_PLANE_PRODUCTION
-        return CONTROL_PLANE_LOCAL
-
     def _handle_add_relay_creds(self, item: common.RelayCreds):
         """Store the id + key minted when this robot is bound to a control plane instance.
 
-        Keyed by that instance's ws_protocol_and_host so connect_cloud_telemetry can look them
-        up. Delivered over a control message (from the account bridge) once, so we persist it."""
-        host = self._control_plane_ws_host()
+        Keyed by that instance's ws_protocol_and_host so the telemetry manager can look them
+        up. Delivered over a control message (from the account bridge) once, so we persist it,
+        then tell the manager to (re)connect with them right away."""
+        host = self.telemetry.control_plane_host
         logger.info(f'Storing relay credentials for {host} (robot id "{item.robot_id}")')
         self.config.relay_credentials[host] = common.RelayCreds(robot_id=item.robot_id, key=item.key)
         save_config(self.config, self.config_path)
-
-    async def connect_cloud_telemetry(self):
-        ws_protocol_and_host = self._control_plane_ws_host()
-
-        creds = self.config.relay_credentials.get(ws_protocol_and_host)
-        if creds is None or not creds.key:
-            logger.warning(
-                f'No relay credentials for {ws_protocol_and_host}; not connecting to the cloud '
-                f'telemetry relay. Bind this robot to an account to obtain a key.'
-            )
-            return
-
-        while self.run_command_loop:
-            try:
-                ws_path = f"{ws_protocol_and_host}/telemetry_v2/{creds.robot_id}"
-                async with websockets.connect(
-                    ws_path,
-                    max_size=None,
-                    open_timeout=10,
-                    additional_headers={"Authorization": f"Bearer {creds.key}"},
-                ) as websocket:
-                    self.cloud_telem_websocket = websocket
-                    logger.info(f'Connected to control plane {ws_path}')
-                    # send anything that it would need up-front
-                    await self.send_setup_telemetry()
-                    try:
-                        async for message in websocket:
-                            r = await self.handle_command(message)
-                            if not self.run_command_loop:
-                                r = await websocket.close()
-                    except ConnectionClosedOK as e:
-                        logger.info(f'ConnectionClosedOK from {ws_path}')
-                    except ConnectionClosedError as e:
-                        logger.error(e)
-                    finally:
-                        logger.info(f'Disconnected from control plane {ws_path}')
-                        self.cloud_telem_websocket = None
-                        self.zero_input_velocities()
-            except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
-                pass # normal close
-            except websockets.exceptions.InvalidStatus as e:
-                if e.response.status_code == 409:
-                    logger.warning(
-                        f'Control plane rejected connection (HTTP 409): another robot is '
-                        f'already connected with id "{creds.robot_id}".'
-                    )
-                else:
-                    logger.warning(
-                        f'Control plane rejected connection: HTTP {e.response.status_code}'
-                    )
-                await asyncio.sleep(10) # still could be considered a transient error, but probably not.
-            except ConnectionRefusedError:
-                logger.warning(f'Connection to control plane refused')
-            except websockets.exceptions.InvalidMessage:
-                logger.warning('Connection to control plane ended due to invalid message')
-            await asyncio.sleep(2)
+        self.telemetry.credentials_updated()
 
     def _handle_popup_ack(self, item: control.PopupAck):
         fut = self.pending_popup_acks.pop(item.id, None)
@@ -3215,59 +3127,22 @@ class AsyncObserver:
         keyword args are passed directly to telemetry item, so you can construct one like this
 
         self.send_ui(pop_message=telemetry.Popup('hello'))
+
+        Thread safe. Nothing leaves the process until flush_tele_buffer.
         """
-        if len(kwargs.keys()) != 1:
-            raise ValueError
-        key, msg = list(kwargs.items())[0]
-
-        # mark certain messages with a retain key. the server will resend them to new UIs
-        item = telemetry.TelemetryItem(**kwargs)
-        if key == 'new_anchor_poses':
-            item.retain_key = 'new_anchor_poses'
-        if key == 'component_conn_status':
-            if msg.is_gripper:
-                item.retain_key = f'component_conn_status_g'
-            else:
-                item.retain_key = f'component_conn_status_{msg.anchor_num}'
-        if key == 'video_ready':
-            item.retain_key = f'video_ready_{msg.feed_number}'
-        if key == 'episode_control' and item.episode_control.status is not None:
-            self.last_ep_ctrl_status = item.episode_control.status
-            item.retain_key = f'lerobot_status'
-        if key == 'swing_cancellation_state':
-            item.retain_key = 'swing_cancellation_state'
-        if key == 'tension_regulation_state':
-            item.retain_key = 'tension_regulation_state'
-        if key == 'auto_targeting_state':
-            item.retain_key = 'auto_targeting_state'
-        if key == 'task_status':
-            item.retain_key = 'task_status'
-
-        # Add item to batch
-        with self.telemetry_buffer_lock:
-            self.telemetry_buffer.append(item)
+        # remember the latest lerobot status here; send_setup_telemetry replays it to peers
+        # that connect later, and the manager only handles transport.
+        status = getattr(kwargs.get('episode_control'), 'status', None)
+        if status is not None:
+            self.last_ep_ctrl_status = status
+        self.telemetry.send(**kwargs)
 
     async def flush_tele_buffer(self):
         """
         Flush the teloperation buffer. sending all data to all UI clients.
         Normally called within position estimator's 60hz loop
         """
-        with self.telemetry_buffer_lock:
-            batch = telemetry.TelemetryBatchUpdate(
-                robot_id=self.config.robot_id,
-                updates=list(self.telemetry_buffer)
-            )
-            self.telemetry_buffer.clear()
-        to_send = bytes(batch)
-        # copy list to prevent RuntimeError: Set changed size during iteration
-        connected_clients = self.connected_local_clients.copy()
-        if self.cloud_telem_websocket:
-            connected_clients.add(self.cloud_telem_websocket) # will only be connected when self.telemetry_env is not None
-        for ui_websocket in connected_clients:
-            try:
-                r = await ui_websocket.send(to_send)
-            except (ConnectionClosedOK, ConnectionClosedError) as e:
-                pass # stale connection
+        await self.telemetry.flush()
 
     async def start_pe_when_ready(self):
         await self.any_anchor_connected.wait()
@@ -3282,8 +3157,7 @@ class AsyncObserver:
 
         self.passive_safety_task = asyncio.create_task(self.passive_safety())
 
-        if self.telemetry_env is not None:
-            self.cloud_telem = asyncio.create_task(self.connect_cloud_telemetry())
+        self.telemetry.start_cloud_link()
 
         # statistic counter - measures things like average camera frame latency
         asyncio.create_task(self.stat.stat_main())
@@ -3330,15 +3204,14 @@ class AsyncObserver:
                     self.webui_server = None
 
             # start a websocket server to accept incoming connections from either a local UI or local Lerobot session
-            async with websockets.serve(self.handle_local_client, self.bind_address, self.port):
+            async with self.telemetry.serving():
                 # await something that will end when the program closes to keep serving and
                 # keep zeroconf alive and discovering services.
                 try:
                     self.startup_complete.set()
 
                     # Show an appropriate banner for the user to open in thier browser.
-                    server_creds = self.config.relay_credentials.get(self._control_plane_ws_host())
-                    server_robotid = server_creds.robot_id if server_creds else ''
+                    server_robotid = self.telemetry.cloud_robot_id
                     if self.webui_server is not None:
                         if self.bind_address in ("0.0.0.0", "::", ""):
                             advertised_host = get_local_ip() or "localhost"
@@ -3420,9 +3293,7 @@ class AsyncObserver:
         self.pe_task.cancel()
         tasks = [self.pe_task, self.keeper]
         tasks.extend([client.shutdown() for client in self.bot_clients.values()])
-        if self.cloud_telem:
-            self.cloud_telem.cancel()
-            tasks.append(self.cloud_telem)
+        tasks.append(self.telemetry.aclose())
         if self.aiobrowser is not None:
             tasks.append(self.aiobrowser.async_cancel())
         if self.aiozc is not None:
@@ -3566,16 +3437,23 @@ class AsyncObserver:
             asyncio.create_task(self.gripper_client.send_commands(update))
         return line_speed, finger_angle, wrist_angle
 
-    async def clear_gantry_goal(self):
-        self.gantry_goal_pos = None
+    async def clear_goal(self):
+        self.goal_pos = None
         self.send_ui(named_position=telemetry.NamedObjectPosition(name='gantry_goal_marker')) # not setting position causes it to be hidden
 
-    async def seek_gantry_goal(self, head_turn=False, auto_altitude=True):
+    async def seek_goal(self, goal_pos, head_turn=False, auto_altitude=True):
         """
-        Move towards a goal position, using the constantly updating gantry position provided by the position estimator
-        This is a motion task
+        Fly the marker box to goal_pos, using the constantly updating marker box position
+        provided by the position estimator.
+
+        goal_pos is where the MARKER BOX goes, not the gripper. The gripper hangs POLE below
+        the marker box, so a caller aiming the gripper at something must add POLE to the goal.
+
+        The goal is also published as self.goal_pos so it can be steered while in flight:
+        assigning self.goal_pos retargets a running seek, and clear_goal() ends it.
+        This is a motion task.
         when head_turn, turn gripper to face direction of motion.
-        when auto_altitude, room traversal is performed at an ideal gantry altitude
+        when auto_altitude, room traversal is performed at an ideal altitude
         """
         GOAL_PROXIMITY_M = 0.08
         MAX_SPEED = 0.3 # GANTRY_SPEED_MPS
@@ -3585,8 +3463,9 @@ class AsyncObserver:
         CLIMB_RATE = 0.15 # m/s, constant rate of altitude change for auto_altitude
         ALTITUDE_DEADBAND_M = 0.05 # meters, tolerance to avoid hunting around target altitude
 
-        if self.gantry_goal_pos is None:
+        if goal_pos is None:
             return
+        self.goal_pos = np.asarray(goal_pos, dtype=float)
 
         # Calculate the distance needed to stop from MAX_SPEED: d = v^2 / (2a)
         braking_distance = (MAX_SPEED**2) / (2 * ACCEL)
@@ -3595,10 +3474,10 @@ class AsyncObserver:
         final_approach = False # latches once True so the altitude target doesn't flip back to cruise
         
         try:
-            self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.gantry_goal_pos), name='gantry_goal_marker'))
+            self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.goal_pos), name='gantry_goal_marker'))
             dist_to_goal = 10
-            while self.gantry_goal_pos is not None:
-                vector = self.gantry_goal_pos - self.pe.gant_pos
+            while self.goal_pos is not None:
+                vector = self.goal_pos - self.pe.gant_pos
                 dist_to_goal = np.linalg.norm(vector)
                 dist_from_start = np.linalg.norm(self.pe.gant_pos - start_pos)
 
@@ -3634,7 +3513,7 @@ class AsyncObserver:
                     # at CLIMB_RATE, so short traversals may never reach cruise altitude.
                     horizontal_dist = np.linalg.norm(vector[:2])
                     current_altitude = self.pe.gant_pos[2]
-                    goal_altitude = self.gantry_goal_pos[2]
+                    goal_altitude = self.goal_pos[2]
                     altitude_error = goal_altitude - current_altitude
                     time_to_arrive = horizontal_dist / MAX_SPEED
                     time_to_descend = abs(altitude_error) / CLIMB_RATE
@@ -3656,13 +3535,13 @@ class AsyncObserver:
                     await self.move_direction_speed(vector / dist_to_goal, current_speed, self.pe.gant_pos)
                 await asyncio.sleep(LOOP_SLEEP_S)
 
-            logger.info(f'Goal reached {tuple(self.gantry_goal_pos)}')
+            logger.info(f'Goal reached {tuple(self.goal_pos)}')
         except asyncio.CancelledError:
             logger.debug('Goal move cancelled')
             raise
         finally:
             self.slow_stop_all_spools()
-            await self.clear_gantry_goal()
+            await self.clear_goal()
 
     async def send_line_speed(self, line_no, speed, jog=False):
         # send the line speed to the client that controls that line
@@ -4018,7 +3897,7 @@ class AsyncObserver:
                     if next_target is None:
                         if gtask is not None:
                             gtask.cancel()
-                        self.gantry_goal_pos = None
+                        self.goal_pos = None
                         if time.time() > target_seen_t + END_LOOP_TIMEOUT:
                             logger.info('Looks clean enough to me!')
                             return
@@ -4045,9 +3924,10 @@ class AsyncObserver:
                     next_target = None
                     goal_pos = GANTRY_HEIGHT_OVER_TARGET # over origin
 
-                self.gantry_goal_pos = goal_pos
                 if gtask is None or gtask.done():
-                    gtask = asyncio.create_task(self.seek_gantry_goal())
+                    gtask = asyncio.create_task(self.seek_goal(goal_pos))
+                else:
+                    self.goal_pos = goal_pos # retarget the seek already in flight onto the newly chosen target
                 done, pending = await asyncio.wait([gtask], timeout=1)
                 
                 if gtask in pending:
@@ -4101,8 +3981,7 @@ class AsyncObserver:
 
                 # fly to to drop point
                 logger.info(f'Flying to drop point {drop_point}')
-                self.gantry_goal_pos = drop_point + GANTRY_HEIGHT_OVER_DROPOFF
-                await self.seek_gantry_goal()
+                await self.seek_goal(drop_point + GANTRY_HEIGHT_OVER_DROPOFF)
                 # open gripper
                 current_finger_angle = self.datastore.finger.getLast()[1]
                 open_target = max(-90, min(RELAXED_OPEN, current_finger_angle - 10))
@@ -4122,7 +4001,7 @@ class AsyncObserver:
                 logger.info('Pick and place cancelled')
                 gtask.cancel()
             self.slow_stop_all_spools()
-            await self.clear_gantry_goal()
+            await self.clear_goal()
 
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
@@ -4537,10 +4416,7 @@ def main():
         # for later instead of time.sleep()-ing on the loop.
         def stop():
             runner.run_command_loop = False
-            def _abort_telem():
-                if runner.cloud_telem_websocket is not None:
-                    runner.cloud_telem_websocket.transport.abort()
-            asyncio.get_running_loop().call_later(0.5, _abort_telem)
+            asyncio.get_running_loop().call_later(0.5, runner.telemetry.abort_cloud_socket)
 
         # On Unix, register signal handler.
         # On Windows, catch keyboard interrupt
