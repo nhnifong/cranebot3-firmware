@@ -5,6 +5,7 @@ __pycache__
 */__pycache__
 cranebot.log
 gant_pos.npy
+tension_height_log.csv
 conf*.json
 # except the ones a dataset recipe names, which have to travel with the repo
 !src/nf_robot/ml/calibrations/conf*.json

@@ -14,6 +14,7 @@ from scipy.spatial.transform import Rotation
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.kalman_filter import KalmanFilter
+from nf_robot.host.tension_height import TensionHeightProbe, SLACK_TENSION_N
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.util import *
 from nf_robot.common.pose_functions import compose_poses, gripper_imu_inv
@@ -346,6 +347,9 @@ class Positioner2:
         # last tension of each line in newtons
         self.tension = np.zeros(4)
 
+        # experimental: height derived from tension alone, logged beside the fused estimate.
+        self.tension_probe = TensionHeightProbe()
+
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
         assert points.shape == (4, 3), f"points = {points}"
@@ -523,7 +527,14 @@ class Positioner2:
 
             # if any line is measured to be slack,
             # make its length effectively infinite so it won't play a part in the hang position
-            lengths[self.tension < 0.0275] = 100
+            lengths[self.tension < SLACK_TENSION_N] = 100
+
+            # experimental: what the tensions alone say the height is. purely observational,
+            # nothing downstream reads it yet. gant_pos supplies the horizontal position that
+            # tension cannot resolve, and doubles as the ground truth to compare against.
+            self.tension_probe.observe(
+                self.anchor_points, self.tension, self.gant_pos, self.gant_vel,
+                holding=self.holding, ts=data_ts)
 
             # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)
@@ -622,5 +633,7 @@ class Positioner2:
 
         except asyncio.exceptions.CancelledError:
             pass
-            
+        finally:
+            self.tension_probe.close()
+
         np.save('gant_pos.npy', self.gant_pos)
