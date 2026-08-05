@@ -1301,6 +1301,24 @@ function handleTargetList(data: nf.telemetry.ITargetList) {
   targetListManager.updateList(targets);
 }
 
+function hidePopup() {
+  document.getElementById('popup-overlay')?.classList.add('hidden');
+}
+
+// Fill the popup's button row. An empty list of labels means a single "OK".
+// onClick gets the index of the button that was clicked.
+function setPopupButtons(labels: string[], onClick: (index: number) => void) {
+  const container = document.getElementById('popup-buttons');
+  if (!container) return;
+  container.replaceChildren();
+  (labels.length ? labels : ['OK']).forEach((label, index) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.addEventListener('click', () => onClick(index));
+    container.appendChild(btn);
+  });
+}
+
 function showPopup(data: nf.telemetry.IPopup) {
   const overlay = document.getElementById('popup-overlay');
   const msgEl = document.getElementById('popup-message');
@@ -1312,6 +1330,17 @@ function showPopup(data: nf.telemetry.IPopup) {
     msgEl.style.fontFamily = '';
     msgEl.style.fontSize = '';
     msgEl.textContent = data.message;
+    // Whoever sent a popup with an id is waiting on a PopupAck to know which
+    // button the user picked.
+    const id = data.id;
+    setPopupButtons(data.buttons ?? [], (index) => {
+      hidePopup();
+      if (id != null) {
+        sendControl([nf.control.ControlItem.create({
+          popupAck: {id: id, button: index}
+        })]);
+      }
+    });
     overlay.classList.remove('hidden');
   }
 }
@@ -1662,20 +1691,6 @@ const mobileShell = new MobileShell({
 });
 gamepad.touchProvider = () => mobileShell.getTouchInputState();
 
-// One-time setup to bind the button in the popup window
-function initPopup() {
-  const overlay = document.getElementById('popup-overlay');
-  const btn = document.getElementById('popup-ok');
-
-  if (overlay && btn) {
-    btn.addEventListener('click', () => {
-      overlay.classList.add('hidden');
-    });
-  }
-}
-
-initPopup();
-
 // Send a list of ControlItems immediately
 function sendControl(items: Array<nf.control.ControlItem>) {
   // Spectators are view-only: never emit control messages. (The backend also
@@ -1952,6 +1967,7 @@ async function handleGetTicket() {
     } catch {
       msgEl.textContent = `Stream ticket:\n\n${ticket}`;
     }
+    setPopupButtons([], hidePopup);
     overlay.classList.remove('hidden');
   } catch (e) {
     showPopup({ message: "Failed to get ticket. Are you logged in?" });

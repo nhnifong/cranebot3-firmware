@@ -1051,7 +1051,14 @@ h2 {
   white-space: pre-wrap;
 }
 
-#popup-ok {
+#popup-buttons {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+#popup-buttons button {
   background: var(--accent);
   color: white;
   border: none;
@@ -1061,7 +1068,7 @@ h2 {
   font-size: 1em;
   transition: background 0.2s;
 }
-#popup-ok:hover { background: var(--accent-hover); }
+#popup-buttons button:hover { background: var(--accent-hover); }
 
 .confirm-buttons { display: flex; justify-content: center; gap: 10px; }
 
