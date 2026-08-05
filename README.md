@@ -10,10 +10,13 @@ Purchase assembled robots or kits at [neufangled.com](https://neufangled.com/sto
 
 ## Installation of stringman controller (Users)
 
+Cloing the repo is not required. Only installation from pip.
+Note that Pytorch and CUDA are dependencies which is around 5.5GB
+
 #### Linux
 
     sudo apt install python3-dev python3-virtualenv python3-pip ffmpeg
-    python3 -m virtualenv venv
+    python3.13 -m virtualenv venv
     source venv/bin/activate
     pip install "nf_robot[host]"
 
