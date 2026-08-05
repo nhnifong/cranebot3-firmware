@@ -92,6 +92,8 @@ merge:
 
   - naavox/playroom-clutter-aug4
 
+  - naavox/bedroom-laundry-aug5
+
 # 20 of the 44 recorded components, unchanged from the X-VLA recipe. The conversion
 # runs before this trim, so it still sees the gripper_rot_* it needs.
 keep_state_features:
