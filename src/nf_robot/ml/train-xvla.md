@@ -189,7 +189,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
   --output_dir=/multitask_dit_data/xvla_camera_goal_waypoints \
   --job_name=xvla_camera_goal_waypoints \
   --batch_size=84 \
-  --steps=40000 \
+  --steps=15000 \
   --save_freq=5000 \
   --log_freq=25 \
   --num_workers=12 \

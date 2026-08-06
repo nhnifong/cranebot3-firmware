@@ -49,7 +49,7 @@ from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
 from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
 from nf_robot.host.component_client import max_origin_detections
-from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector, OMEGA
+from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector, OMEGA, ROUTE_TAG_MAX_AGE_S
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL
@@ -65,6 +65,14 @@ N_ANCHORS = 2
 N_LINES = 4
 INPUT_VELOCITY_TTL_S = 2.0 # a commanded velocity keyed by a source expires this long after its last update
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
+# visual centering nudges. The move is open loop (commanded speed for a computed duration), so
+# the speed trades travel time against how much overshoot and swing each step leaves behind.
+NUDGE_SPEED_MPS = 0.12
+NUDGE_SETTLE_S = 0.3
+NUDGE_REFRESH_S = 0.5 # must stay under INPUT_VELOCITY_TTL_S or the nudge expires mid-move
+NUDGE_VELOCITY_KEY = 'centering'
+TRIM_SPEED_MPS = 0.08 # altitude trim moves slower than a lateral nudge; it is closing centimeters
+RANGE_MAX_AGE_S = 1.0 # a rangefinder reading older than this is not evidence of where we are now
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
@@ -1793,7 +1801,7 @@ class AsyncObserver:
 
         If progress_range=(start_pct, end_pct) is given, a Calibration operation_progress message
         is sent as each card is surveyed, spread across that percent range."""
-        HOVER_CAMERA_HEIGHTS_M = [1.1, 0.7, 0.4]  # camera heights over each card to sample. Visiting a
+        HOVER_CAMERA_HEIGHTS_M = [1.1, 0.7, 0.45]  # camera heights over each card to sample. Visiting a
                                                   # card from several altitudes gives the length-delta
                                                   # constraints a vertical baseline, which is what lets
                                                   # them begin to observe the far external eyelets (a
@@ -1824,11 +1832,15 @@ class AsyncObserver:
 
         survey_names = [n for n in ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'] if n in card_positions]
 
-        async def measure_hover(name):
-            """Center on the card and average the card-to-gantry offset and line lengths over a short
-            window. Returns a sample dict, or None if the gripper never sees the card here."""
-            # center the card in view so the measurement is taken on the camera's axis
+        async def measure_hover(name, target_range_m):
+            """Center on the card, settle onto the requested height, and average the card-to-gantry
+            offset and line lengths over a short window. Returns a sample dict, or None if the
+            gripper never sees the card here."""
+            # center the card in view so the measurement is taken on the camera's axis, and so the
+            # rangefinder is looking at the card rather than past it
             await self._center_card_in_view(name)
+            # the seek only gets the altitude approximately right; the rangefinder gets it exact
+            camera_height = await self._trim_altitude_to_range(target_range_m, ceiling_z=upper_z)
             await asyncio.sleep(1.5)
             # let sightings accumulate in the gripper client's buffer, then take the
             # whole window at once.
@@ -1858,6 +1870,9 @@ class AsyncObserver:
                 'gantry_minus_card': np.mean(gantry_offsets, axis=0),
                 'line_lengths': np.mean(line_samples, axis=0),
                 'n': len(gantry_offsets),
+                # measured, not requested: what the rangefinder read once the trim finished.
+                # Recorded for diagnostics; the optimizer reads only the two arrays above.
+                'camera_height': camera_height,
             }
 
         gripper_obs = {}
@@ -1903,25 +1918,41 @@ class AsyncObserver:
                 # Measure the card from each altitude in turn. The spread in height is the whole point:
                 # it gives the length-delta constraints a vertical baseline to triangulate the eyelets.
                 samples = []
-                for gz in gant_zs:
-                    # hold the exact target altitude (auto_altitude would cruise at a fixed height and
-                    # defeat the point of sampling several).
-                    seek_task = asyncio.create_task(self.seek_goal(
-                        np.array([cpos[0], cpos[1], gz]), head_turn=False, auto_altitude=False))
-                    try:
-                        await asyncio.wait_for(seek_task, timeout=SEEK_TIMEOUT_S)
-                    except asyncio.TimeoutError:
-                        logger.warning(f'Gripper card survey: did not reach z={gz:.2f} over {name} within {SEEK_TIMEOUT_S:.0f}s; measuring anyway')
+                for i, gz in enumerate(gant_zs):
+                    # the camera hangs POLE below the gantry, so this is the height the camera (and
+                    # the rangefinder beside it) should end up at. Derived from the clamped gz rather
+                    # than from h, so a height the ceiling cut short trims to what it can reach.
+                    target_range = gz - POLE[2] - cpos[2]
+                    if i == 0:
+                        # hold the exact target altitude (auto_altitude would cruise at a fixed height and
+                        # defeat the point of sampling several).
+                        seek_task = asyncio.create_task(self.seek_goal(
+                            np.array([cpos[0], cpos[1], gz]), head_turn=False, auto_altitude=False))
+                        try:
+                            await asyncio.wait_for(seek_task, timeout=SEEK_TIMEOUT_S)
+                        except asyncio.TimeoutError:
+                            logger.warning(f'Gripper card survey: did not reach z={gz:.2f} over {name} within {SEEK_TIMEOUT_S:.0f}s; measuring anyway')
+                    else:
+                        # The rest of the heights sit directly under the first one and centering has
+                        # already put the gripper over the card, so just drop to them. Another seek
+                        # would re-run its whole xy approach only to finish within GOAL_PROXIMITY_M;
+                        # the rangefinder trim in measure_hover is what actually lands the height.
+                        delta_z = gz - gant_zs[i - 1]
+                        logger.info(f'Gripper card survey: dropping {delta_z:+.2f}m to z={gz:.2f} over {name}')
+                        await self._nudge_gantry(np.array([0.0, 0.0, delta_z]), max_step=1.0)
                     self.slow_stop_all_spools()
                     await asyncio.sleep(SETTLE_S)
 
-                    sample = await measure_hover(name)
+                    sample = await measure_hover(name, target_range)
                     if sample is None:
                         logger.warning(f'Gripper card survey: never saw {name} at gantry z={gz:.2f}; skipping this height')
                         continue
                     samples.append(sample)
+                    measured = sample["camera_height"]
                     logger.info(
                         f'Gripper card survey: {name} z={gz:.2f} n={sample["n"]} '
+                        f'camera height wanted {target_range:.2f}m got '
+                        f'{"unknown" if measured is None else f"{measured:.2f}m"} '
                         f'gantry_minus_card={np.round(sample["gantry_minus_card"], 3)} '
                         f'lines={np.round(sample["line_lengths"], 3)}'
                     )
@@ -1938,43 +1969,116 @@ class AsyncObserver:
                     f'{ {k: len(v) for k, v in gripper_obs.items()} }')
         return gripper_obs
 
-    async def _nudge_gantry_xy(self, delta_xy, speed=0.04):
-        """Move the gantry a small horizontal step of (approximately) delta_xy meters, then stop.
-        Uses a bias-free velocity command (the onboard tension floor keeps lines taut), so the
-        move stays in the horizontal plane rather than drifting down like a normal biased move."""
-        dist = float(np.linalg.norm(delta_xy))
+    async def _nudge_gantry_xy(self, delta_xy, speed=NUDGE_SPEED_MPS):
+        """Move the gantry a small horizontal step of (approximately) delta_xy meters, then stop."""
+        return await self._nudge_gantry(np.array([delta_xy[0], delta_xy[1], 0.0]), speed=speed)
+
+    async def _nudge_gantry(self, delta, speed=NUDGE_SPEED_MPS, max_step=0.35):
+        """Move the gantry a small step of (approximately) delta meters, then stop.
+        Commands a velocity rather than a speed along a direction, so the step follows delta
+        apart from move_direction_speed's own downward bias. max_step caps how far one call
+        will travel; raise it for a deliberate transit rather than a correction.
+        Returns the time the spools were stopped, which bounds when a settled view can appear."""
+        dist = float(np.linalg.norm(delta))
         if dist < 0.005:
-            return
-        dist = min(dist, 0.35)  # cap a single nudge for safety
-        uvec = np.array([delta_xy[0], delta_xy[1], 0.0])
+            return time.time()
+        dist = min(dist, max_step)  # cap a single nudge for safety
+        uvec = np.asarray(delta, dtype=float)
         uvec = uvec / (np.linalg.norm(uvec) + 1e-9)
-        await self.move_direction_speed(uvec * speed, None, self.pe.gant_pos)
-        await asyncio.sleep(dist / speed)
+        # Hold the velocity on our own source key rather than 'default': a UI sending idle
+        # zero-velocity moves owns 'default' and would overwrite the nudge the instant it
+        # arrived. Sources sum, so an idle 'default' adds nothing to ours. Re-issue it while
+        # the nudge runs, both to stay inside INPUT_VELOCITY_TTL_S and to recompute the line
+        # speeds from where the gantry has actually got to.
+        end = time.monotonic() + dist / speed
+        while True:
+            await self.move_direction_speed(uvec * speed, None, self.pe.gant_pos, key=NUDGE_VELOCITY_KEY)
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(NUDGE_REFRESH_S, remaining))
+        await self.move_direction_speed(np.zeros(3), 0, key=NUDGE_VELOCITY_KEY)
         self.slow_stop_all_spools()
-        await asyncio.sleep(0.5)  # let it settle before the next observation
+        await asyncio.sleep(NUDGE_SETTLE_S)
+        return time.time()
+
+    async def _trim_altitude_to_range(self, target_range_m, tol_m=0.02, max_steps=4, ceiling_z=None):
+        """Close the gantry's altitude onto the height where the downward rangefinder reads
+        target_range_m, and report the range finally measured (None if it never got a reading).
+
+        The rangefinder is coplanar with the gripper camera, so its reading is the camera's
+        height above whatever is beneath it - the card, once centering has put the gripper over
+        it. Seeking to a computed gantry z only lands within GOAL_PROXIMITY_M and inherits any
+        bias in the position estimate, so the sampled hover heights are otherwise approximate.
+        Measuring the height directly makes them what was asked for.
+
+        Call this with the card already centered, or the beam may be reading the floor beside a
+        raised card rather than the card itself."""
+        laser_range = None
+        for step in range(max_steps):
+            ts, laser_range = self.datastore.range_record.getLast()
+            age = time.time() - ts
+            if age > RANGE_MAX_AGE_S:
+                logger.warning(f'Altitude trim: rangefinder reading is {age:.1f}s old; leaving altitude as-is')
+                return None
+            error = target_range_m - laser_range  # positive means we are too low and must rise
+            if abs(error) < tol_m:
+                logger.info(f'Altitude trim: range {laser_range:.3f}m within {tol_m*100:.0f}cm '
+                            f'of target {target_range_m:.3f}m after {step} steps')
+                return laser_range
+            delta_z = clamp(error, -0.35, 0.35)
+            if ceiling_z is not None:
+                delta_z = min(delta_z, ceiling_z - self.pe.gant_pos[2])
+            logger.info(f'Altitude trim: step {step} range {laser_range:.3f}m vs target '
+                        f'{target_range_m:.3f}m, moving z by {delta_z:+.3f}m')
+            await self._nudge_gantry(np.array([0.0, 0.0, delta_z]), speed=TRIM_SPEED_MPS)
+        logger.info(f'Altitude trim: reached max steps at range {laser_range:.3f}m '
+                    f'(target {target_range_m:.3f}m)')
+        return laser_range
+
+    async def _await_card_pose(self, name, after_ts, timeout=1.5):
+        """Newest sighting of the named card captured after after_ts, or None if none arrives
+        within timeout. Waiting on capture time rather than a fixed sleep means the next step
+        uses a view taken after the previous nudge finished, however long the stream lags."""
+        deadline = time.time() + timeout
+        while True:
+            samples = self.gripper_client.get_route_tag_samples(name, since=after_ts)
+            if samples:
+                return samples[-1][1]
+            if time.time() > deadline:
+                return None
+            await asyncio.sleep(0.02)
 
     async def _center_card_in_view(self, name, tol_m=0.03, gain=0.6, max_steps=12):
         """Bounded visual-centering: nudge the gantry so the named card sits under the gripper
         camera. measure_gantry_minus_card gives the room offset from card to gantry; moving the
         gantry by the negative of its horizontal part drives that toward zero (gantry over card,
-        card centered). Stops when centered, when the card is lost, or after max_steps."""
+        card centered). Stops when centered, when the card is lost, when a nudge grows the error
+        (the room heading the error is expressed in is only as good as the spin calibration, and
+        a bad one sends every nudge off in a fixed wrong direction), or after max_steps."""
+        prev = None
+        # the first look may use any sighting still inside the normal freshness bound
+        after_ts = time.time() - ROUTE_TAG_MAX_AGE_S
         for step in range(max_steps):
-            pose_cam = self.gripper_client.get_route_tag_pose(name)
+            pose_cam = await self._await_card_pose(name, after_ts)
             if pose_cam is None:
-                # brief reacquire attempt before giving up
-                deadline = time.time() + 1.0
-                while time.time() < deadline and pose_cam is None:
-                    await asyncio.sleep(0.05)
-                    pose_cam = self.gripper_client.get_route_tag_pose(name)
-                if pose_cam is None:
-                    logger.info(f'Centering {name}: lost from view at step {step}; measuring as-is')
-                    return
+                logger.info(f'Centering {name}: lost from view at step {step}; measuring as-is')
+                return
             err_xy = self.gripper_client.measure_gantry_minus_card(pose_cam)[:2]
             err = float(np.linalg.norm(err_xy))
             if err < tol_m:
                 logger.info(f'Centering {name}: within {err*100:.1f}cm after {step} steps')
                 return
-            await self._nudge_gantry_xy(gain * err_xy)
+            if prev is not None and err > prev + 0.02:
+                logger.warning(f'Centering {name}: error grew ({prev*100:.1f}->{err*100:.1f}cm); '
+                               f'stopping. Check the room spin calibration.')
+                return
+            prev = err
+            # err_xy points from the card to the gantry, so close it by moving the other way
+            nudge = -gain * err_xy
+            logger.info(f'Centering {name}: step {step} err {err*100:.1f}cm, '
+                        f'nudging {np.round(nudge, 3)} ({np.linalg.norm(nudge)/NUDGE_SPEED_MPS:.1f}s)')
+            after_ts = await self._nudge_gantry_xy(nudge)
         logger.info(f'Centering {name}: reached max steps')
 
     async def half_auto_calibration(self):
@@ -3456,7 +3560,7 @@ class AsyncObserver:
         when auto_altitude, room traversal is performed at an ideal altitude
         """
         GOAL_PROXIMITY_M = 0.08
-        MAX_SPEED = 0.3 # GANTRY_SPEED_MPS
+        MAX_SPEED = 0.4 # GANTRY_SPEED_MPS
         ACCEL = 0.15     # m/s^2
         LOOP_SLEEP_S = 0.1
         IDEAL_GANTRY_ALTITUDE = 1.3 # meters. ideal gantry height for room traversal
@@ -3469,7 +3573,6 @@ class AsyncObserver:
 
         # Calculate the distance needed to stop from MAX_SPEED: d = v^2 / (2a)
         braking_distance = (MAX_SPEED**2) / (2 * ACCEL)
-        start_pos = self.pe.gant_pos
         current_speed = 0.0
         final_approach = False # latches once True so the altitude target doesn't flip back to cruise
         
@@ -3479,20 +3582,16 @@ class AsyncObserver:
             while self.goal_pos is not None:
                 vector = self.goal_pos - self.pe.gant_pos
                 dist_to_goal = np.linalg.norm(vector)
-                dist_from_start = np.linalg.norm(self.pe.gant_pos - start_pos)
 
                 if dist_to_goal < GOAL_PROXIMITY_M:
                     break
 
-                # Calculate target speed based on distance from start (ramp up)
-                # and distance to goal (ramp down)
-                # v = sqrt(2 * a * d)
+                # Ramp down as the goal approaches: v = sqrt(2 * a * d).
                 ramp_dist_to_goal = np.linalg.norm(vector[:2]) if auto_altitude else dist_to_goal
-                speed_ramp_up = np.sqrt(2 * ACCEL * max(dist_from_start, 0.01))
                 speed_ramp_down = np.sqrt(2 * ACCEL * ramp_dist_to_goal)
 
-                # Target speed is the lowest of the ramps or the max allowable speed
-                target_speed = min(speed_ramp_up, speed_ramp_down, MAX_SPEED)
+                # Target speed is the ramp-down limit or the max allowable speed
+                target_speed = min(speed_ramp_down, MAX_SPEED)
 
                 # Smoothly interpolate current_speed toward target_speed to prevent
                 # instantaneous velocity jumps between loop iterations
