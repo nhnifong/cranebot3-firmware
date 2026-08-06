@@ -9,16 +9,30 @@ logger = logging.getLogger(__name__)
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.cv_common import *
 
-W_ORIGIN = 1.0 # increase this to to make origin errors more expensive
-W_CONSISTENCY = 2.0 # Cards should be in the same place when viewed from different perspectives
-W_PLANAR = 0.9 # increase this to make anchor height deviations from the average plane more expensive
-W_DIAMOND_DIST = 0.8 # weight for the distance changes in the diamond pattern
-W_DIAMOND_PLANAR = 0.2 # weight for forcing the gantry and eyelets into a single vertical plane
-W_EYELET_REG = 0.4 # weight to keep eyelets near their initial 5m guess
-W_SHAPE_MATCH = 1.0 # weight to force distance between anchors to match distance between eyelets
-W_ANCHOR_TILT = 10.0 # weight to penalize anchor pitch/roll changes (locks rotation to Z-axis only)
-W_GRIPPER_DIST = 1.0 # weight for close-range gripper-over-card line-length-delta constraints
-W_ROOM_YAW = 5.0 # weight to hold the room's yaw at a reference orientation (see room_yaw_offset)
+# Each weight scales one residual: the gap between two measurements of the same thing, which
+# the fit drives to zero. The comment names what should equal what.
+
+W_ORIGIN = 1.0 # where a camera projects the origin card == the room origin (0,0,0)
+W_CONSISTENCY = 5.0 # where one camera projects a card == where the other camera projects it.
+W_PLANAR = 1.2 # the height of each pull point (2 anchors, 2 eyelets) == the mean of those four
+W_DIAMOND_DIST = 0.8 # change in eyelet-to-gantry distance between two diamond corners == the
+                     # length that line paid out over the same move as measured by the motor encoder
+W_DIAMOND_PLANAR = 0.4 # sideways offset of an observed gantry position from the vertical plane
+                       # through both eyelets == zero
+W_EYELET_REG = 0.2 # where an eyelet ends up == the initial guess it started from
+W_SHAPE_MATCH = 0.2 # distance between the two anchors == distance between the two eyelets
+W_ANCHOR_TILT = 2.0 # each anchor's own z axis == the room's z axis (leaves only rotation about z)
+W_GRIPPER_DIST = 1.0 # change in pull-point-to-gantry distance between two gripper hovers == the
+                     # change that line's measured length reports (as W_DIAMOND_DIST, close range)
+W_ROOM_YAW = 5.0 # yaw of the anchor layout == yaw of the reference layout (see room_yaw_offset)
+
+# Proposed new terms:
+# W_GRIPPER_CARD = 1.0 # where gripper camera projects a card == where anchor cameras project it (assuming it is on the floor)
+# W_TENSION_CAMERA_HEIGHT = 1.0 # gantry height implied by tension == gantry height observed by anchor cameras at each marker stop
+# W_LASER_CAMERA_HEIGHT = 1.0 # gantry height implied by the laser rangefinder == gantry height observed by cameras at each marker stop
+                              # note that getting a height implied by the laser means knowing whether a card is on the floor or not.
+# W_TENSION_LASER_HEIGHT = 1.0 # gantry height implied by tension == gantry height by laser rangefinder at each marker stop
+
 
 # half height, half width, and bottom-point floor clearance of the diamond, in meters.
 # floor clearance is how far above the floor the gripper fingertips sit at the diamond's
@@ -162,18 +176,20 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
     # ---------------------------------------------------------
     # Anchor and Eyelet Z-Plane Constraint
     # ---------------------------------------------------------
-        # Extract Z coordinates from the 2 anchors and 2 eyelets
-        anchor_zs = anchor_poses[:, 1, 2]
-        eyelet_zs = eyelet_positions[:, 2]
-        all_zs = np.concatenate([anchor_zs, eyelet_zs])
-        
-        # Calculate the average Z plane
-        avg_z = np.mean(all_zs)
-        
-        # Penalize deviation from the average plane
-        z_residuals = (all_zs - avg_z) * W_PLANAR
-        residuals.extend(z_residuals)
-        cost_planar += np.sum(z_residuals**2)
+    # Independent of the sightings, so it sits outside the marker loop: inside it, the term
+    # would repeat per visible card and its strength would vary with how many were seen.
+    # Extract Z coordinates from the 2 anchors and 2 eyelets
+    anchor_zs = anchor_poses[:, 1, 2]
+    eyelet_zs = eyelet_positions[:, 2]
+    all_zs = np.concatenate([anchor_zs, eyelet_zs])
+
+    # Calculate the average Z plane
+    avg_z = np.mean(all_zs)
+
+    # Penalize deviation from the average plane
+    z_residuals = (all_zs - avg_z) * W_PLANAR
+    residuals.extend(z_residuals)
+    cost_planar += np.sum(z_residuals**2)
 
     # ---------------------------------------------------------
     # Diamond Kinematic & Distance Residuals
@@ -266,6 +282,16 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                 L3_top_to_lef = -(half_w - half_h)
                 L3_lef_to_bot = (half_w + half_h)
             
+            # One residual per (eyelet, diamond edge). Each compares two accounts of the same
+            # move, which must agree:
+            #   D0_rig - D0_bot   how much the eyelet-to-gantry distance changed, computed from
+            #                     the eyelet and anchor poses being solved for and the gantry
+            #                     centroids the anchor cameras saw at those two corners
+            #   L1_bot_to_rig     how much that line's length changed over the same move, from
+            #                     the spool encoders (or the commanded diamond geometry when no
+            #                     line_deltas were recorded)
+            # Both are signed, positive for lengthening. Only changes appear, never absolute
+            # lengths, so a constant offset in the line-length reference cancels out.
             d_res = [
                 # Eyelet 0 (Line 1) Constraints
                 (D0_rig - D0_bot - L1_bot_to_rig) * W_DIAMOND_DIST,

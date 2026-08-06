@@ -840,7 +840,8 @@ class AsyncObserver:
         if item.action == 'eyelets':
             # use the currently calibrated anchor poses from the config
             anchor_poses = [poseProtoToTuple(a.pose) for a in self.config.anchors]
-            upper_z = np.mean(self.pe.anchor_points[:, 2]) # top of work area
+            # top of work area, from the anchor-side pull points only, as full_auto_calibration does
+            upper_z = float(np.mean(self.pe.anchor_points[[0, 2], 2]))
             r = await self.invoke_motion_task(self.collect_arp_anchor_eyelet_experiment_data(anchor_poses, upper_z))
         if item.action == 'gripcards':
             # run the gripper card survey standalone and pickle the result for offline
@@ -1607,6 +1608,14 @@ class AsyncObserver:
         """
         # target tension in newtons to hold the direct (anchor) lines at during the diamond
         DIAMOND_DIRECT_TENSION_N = 0.65
+        # Stop a diamond move once an eyelet line is pulling this hard. The commanded jog comes
+        # from eyelet positions guessed from origin-card views alone, so it can ask for a length
+        # the geometry cannot reach and pull the lines up taut at the top of the work area. Well
+        # under config.max_safe_tension, so this stops the move instead of passive_safety
+        # aborting the whole procedure.
+        DIAMOND_MAX_EYELET_TENSION_N = 20.0
+        TENSION_RISE_N = 1.0   # a move must add at least this much to count as pulling taut
+        SPOOL_SPIN_UP_S = 2.0  # ignore the stopped test until the spools have had time to start
 
         tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
 
@@ -1636,29 +1645,53 @@ class AsyncObserver:
                 l3 = self.datastore.anchor_line_record[3].getLast()[1]
                 return l1, l3
 
-            async def wait_for_lines_to_stop(deadband=0.05, timeout=30):
-                await asyncio.sleep(2)
-                deadline = asyncio.get_event_loop().time() + timeout
+            def eyelet_tension():
+                """Highest tension on either eyelet (indirect) line, in newtons."""
+                return max(float(self.pe.tension[1]), float(self.pe.tension[3]))
+
+            async def wait_for_lines_to_stop(deadband=0.05, timeout=30, tension_limit=None):
+                """Wait for every line to stop moving. Returns 'settled', or 'tension' as soon as
+                an eyelet line passes tension_limit, or 'timeout'."""
+                start = asyncio.get_event_loop().time()
+                deadline = start + timeout
                 while asyncio.get_event_loop().time() < deadline:
-                    speeds = [abs(self.datastore.anchor_line_record[i].getLast()[2]) for i in range(N_LINES)]
-                    if all(s < deadband for s in speeds):
-                        await asyncio.sleep(2)
-                        return
+                    if tension_limit is not None and eyelet_tension() > tension_limit:
+                        return 'tension'
+                    # the spools take a moment to get going, so don't test for stopped until they have
+                    if asyncio.get_event_loop().time() - start > SPOOL_SPIN_UP_S:
+                        speeds = [abs(self.datastore.anchor_line_record[i].getLast()[2]) for i in range(N_LINES)]
+                        if all(s < deadband for s in speeds):
+                            await asyncio.sleep(2)
+                            return 'settled'
                     await asyncio.sleep(1/30)
                 logger.warning('wait_for_lines_to_stop timed out; proceeding with current line lengths')
+                return 'timeout'
 
             async def move_to_diamond_point(jog1=0.0, jog3=0.0):
                 """Reposition the gantry to a diamond point by jogging the two eyelet
                 (indirect) lines. The two anchor (direct) lines are held at
                 DIAMOND_DIRECT_TENSION_N by the onboard tension loop (set up below), so we
-                only have to wait until every line has stopped moving before measuring."""
+                only have to wait until every line has stopped moving before measuring.
+
+                Stops short if an eyelet line goes taut. Wherever it stops is still a usable
+                corner: each leg's length delta is measured after the move rather than assumed
+                from the jog, and the corner's position comes from the anchor cameras. Only a
+                rise counts, so a leg that pays line back out can start from an already-taut
+                corner without being cut short immediately."""
+                limit = max(DIAMOND_MAX_EYELET_TENSION_N, eyelet_tension() + TENSION_RISE_N)
                 if jog1:
                     await self.send_line_speed(1, jog1, jog=True)
                 if jog3:
                     await self.send_line_speed(3, jog3, jog=True)
-                await wait_for_lines_to_stop()
+                reason = await wait_for_lines_to_stop(tension_limit=limit)
                 await self.send_line_speed(1, 0)
                 await self.send_line_speed(3, 0)
+                if reason == 'tension':
+                    logger.warning(
+                        f'Diamond move stopped early: eyelet line reached {eyelet_tension():.1f}N '
+                        f'(limit {limit:.1f}N). Measuring the position it got to.'
+                    )
+                return reason
 
             # hand the direct lines to the onboard tension loop to hold at the target.
             # this runs at the component's loop rate with no wifi round trip, replacing the
@@ -2346,8 +2379,8 @@ class AsyncObserver:
             await asyncio.sleep(0.5)
             self.slow_stop_all_spools()
 
-            # top of work area
-            upper_z = np.mean(self.pe.anchor_points[:, 2])
+            # Top of work area, from the two anchor-side pull points (indices 0 and 2) only.
+            upper_z = float(np.mean(self.pe.anchor_points[[0, 2], 2]))
 
             # even without full calibration we should be able to make crude movements. go to the center
             # of the room just above the floor. This is the diamond's bottom point, so place the gantry

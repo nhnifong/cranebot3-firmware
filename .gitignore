@@ -37,3 +37,5 @@ gripper_card_obs.pkl
 pregrasp_clusters/
 pregrasp_frames/
 *.DS_Store
+calibration_diagnostics.pkl
+calibration_fitness_history.json
