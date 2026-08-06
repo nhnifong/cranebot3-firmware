@@ -27,9 +27,9 @@ import av
 
 from nf_robot.host.video_streamer import CompressedStreamer, NfVideoStreamer, RTMPStreamer
 
+from port_utils import free_ports
+
 FFMPEG_AVAILABLE = shutil.which('ffmpeg') is not None
-SOURCE_PORT = 18899  # distinct from mock_rpicam_vid.py's 8888-8891 range and the real 8888
-COMPRESSED_PORT = 18898
 
 
 def _receive_options():
@@ -49,9 +49,10 @@ class _SourceBackedTestCase(unittest.TestCase):
     for the Pi's hardware encoder -- what's under test is the host's demux/passthrough, not
     the source's own encoder."""
 
-    source_port = SOURCE_PORT
-
     def setUp(self):
+        # Free ports rather than fixed ones: the synthetic source and the CompressedStreamer
+        # under test both listen, and a fixed port may already be taken on this machine.
+        self.source_port, self.compressed_port = free_ports(2)
         self.tmpdir = tempfile.mkdtemp(prefix="video_streamer_test_")
         self.source_proc = subprocess.Popen(
             [
@@ -149,14 +150,12 @@ class TestCompressedStreamer(_SourceBackedTestCase):
     another already-connected one." Both are exercised with two concurrent real clients.
     """
 
-    source_port = COMPRESSED_PORT
-
     def test_concurrent_midstream_clients_bootstrap_from_gop_backlog(self):
         container = self._open_source()
         stream = next(s for s in container.streams if s.type == 'video')
         stream.thread_type = "SLICE"
 
-        streamer = CompressedStreamer(port=COMPRESSED_PORT + 1, bind_address='127.0.0.1')
+        streamer = CompressedStreamer(port=self.compressed_port, bind_address='127.0.0.1')
         streamer.start()
 
         fed = {'n': 0}
@@ -172,7 +171,7 @@ class TestCompressedStreamer(_SourceBackedTestCase):
                     return
 
         def client(results, key, target_frames):
-            c = av.open(f'tcp://127.0.0.1:{COMPRESSED_PORT + 1}', mode='r')
+            c = av.open(f'tcp://127.0.0.1:{self.compressed_port}', mode='r')
             try:
                 cstream = next(s for s in c.streams if s.type == 'video')
                 got = 0

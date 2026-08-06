@@ -26,7 +26,11 @@ from nf_robot.host.stats import StatCounter
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.config_loader import create_default_config
 
-ws_port = 8765
+from port_utils import free_port
+
+# The test server binds this, so pick one nothing else on the machine is holding rather
+# than the real anchor service's 8765.
+ws_port = free_port()
 
 class TestArpAnchorClient(unittest.IsolatedAsyncioTestCase):
 
@@ -53,7 +57,7 @@ class TestArpAnchorClient(unittest.IsolatedAsyncioTestCase):
             await self.server_task
 
     async def runTestServer(self):
-        async with websockets.serve(self.serverHandler, "127.0.0.1", 8765):
+        async with websockets.serve(self.serverHandler, "127.0.0.1", ws_port):
             result = await self.close_test_server.wait()
 
     async def serverHandler(self, ws):

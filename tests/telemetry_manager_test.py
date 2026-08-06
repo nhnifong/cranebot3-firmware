@@ -1,6 +1,6 @@
 import asyncio
-import socket
 import unittest
+from unittest.mock import patch
 
 import websockets
 
@@ -14,11 +14,7 @@ from nf_robot.host.telemetry_manager import (
     TelemetryManager,
 )
 
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+from port_utils import free_port
 
 
 class FakeConfig:
@@ -258,13 +254,23 @@ class TestControlPlaneSelection(TelemetryManagerTestBase):
 
 
 class TestCloudLink(TelemetryManagerTestBase):
-    """The relay link is driven against a stand-in control plane on localhost:8080,
-    the address telemetry_env='local' points at."""
+    """The relay link is driven against a stand-in control plane on localhost. That's the
+    address telemetry_env='local' points at, but on a free port rather than the real 8080,
+    so CONTROL_PLANE_LOCAL is patched to match for the duration of the test."""
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
         self.relay_paths = []
         self.relay_sockets = []
+
+        relay_port = free_port()
+        # The same string is both the connect target and the key into relay_credentials, so
+        # patch it in the module under test and use self.control_plane when binding creds.
+        self.control_plane = f'ws://localhost:{relay_port}'
+        self.control_plane_patcher = patch(
+            'nf_robot.host.telemetry_manager.CONTROL_PLANE_LOCAL', self.control_plane)
+        self.control_plane_patcher.start()
+        self.addCleanup(self.control_plane_patcher.stop)
 
         async def relay(websocket):
             self.relay_paths.append(websocket.request.path)
@@ -275,7 +281,7 @@ class TestCloudLink(TelemetryManagerTestBase):
             except websockets.exceptions.ConnectionClosed:
                 pass
 
-        self.relay_server = await websockets.serve(relay, 'localhost', 8080)
+        self.relay_server = await websockets.serve(relay, 'localhost', relay_port)
         self.tm = self.make_manager('local')
         self.addAsyncCleanup(self.stop)
 
@@ -285,7 +291,7 @@ class TestCloudLink(TelemetryManagerTestBase):
         await self.relay_server.wait_closed()
 
     def bind(self, robot_id='r1', key='k'):
-        self.config.relay_credentials[CONTROL_PLANE_LOCAL] = common.RelayCreds(robot_id=robot_id, key=key)
+        self.config.relay_credentials[self.control_plane] = common.RelayCreds(robot_id=robot_id, key=key)
 
     async def test_connects_with_the_bound_robot_id(self):
         self.bind(robot_id='r42')

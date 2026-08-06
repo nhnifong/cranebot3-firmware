@@ -29,6 +29,8 @@ sys.modules.setdefault('damiao_motor', MagicMock())
 
 from nf_robot.robot.anchor_arp_server import AnchorArpServer
 
+from port_utils import free_port
+
 
 class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
@@ -63,7 +65,10 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
             spool.last_tension = 0.0
 
         self.server = AnchorArpServer(power=False)
-        self.server_task = asyncio.create_task(self.server.main())
+        # An ephemeral port, not the default 8765, so a real anchor service (or another copy
+        # of this suite) already holding that port doesn't break the test.
+        self.port = free_port()
+        self.server_task = asyncio.create_task(self.server.main(port=self.port))
         await asyncio.sleep(0.1)  # let server start up
 
     async def asyncTearDown(self):
@@ -85,7 +90,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
     async def send_command(self, command, sleep=0.1):
         """Open a websocket, send one command dict, wait, close."""
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await ws.send(json.dumps(command))
             await asyncio.sleep(sleep)
             self.assertFalse(self.server_task.done(), "Server crashed after command")
@@ -96,21 +101,21 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_connect(self):
         """Assert that the server is still running after a client connects and disconnects."""
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(0.1)
             self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
             await ws.close()
 
     async def test_abnormal(self):
         """Assert that the server is still running after a client connects and then the client crashes and sends code 1011."""
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(0.1)
             self.assertFalse(self.server_task.done(), "Server should still be running after getting a connection")
             await ws.close(code=1011, reason='Test client pretends to crash')
 
     async def test_subprocess_cleanup(self):
         """Assert that the rpicam-vid subprocess is killed when the client disconnects."""
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(0.1)
             await ws.close()
 
@@ -122,7 +127,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_subprocess_cleanup_client_has_error(self):
         """Assert that the rpicam-vid subprocess is killed when the client disconnects with an internal error."""
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(0.1)
             await ws.close(1011)
         await asyncio.sleep(1)
@@ -132,7 +137,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_subprocess_cleanup_server_stopped(self):
         """Assert that the rpicam-vid subprocess is killed when the server is stopped while a client is connected."""
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(0.1)
             # crash spool tracking loops
             self.run_loop = False
@@ -153,7 +158,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
         test_subprocess_cleanup.
         """
         self.server.line_timeout = 1
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(6.1)
             await ws.close()
             await asyncio.sleep(0.1)
@@ -190,7 +195,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
         self.mock_spool_class.side_effect = spools2
 
         server2 = AnchorArpServer(power=True)
-        server2_task = asyncio.create_task(server2.main(port=8766))
+        server2_task = asyncio.create_task(server2.main(port=free_port()))
         await asyncio.sleep(0.1)
 
         # Extract the full_diameter keyword from the first call (spool 0 = power spool)
@@ -209,7 +214,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_process_imu_enables_motors_and_resumes_spools(self):
         """Every motor is enabled and every spool resumes when a client connects."""
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(0.1)
             for motor in self.server.motors:
                 motor.enable.assert_called()
@@ -300,7 +305,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
         spool = self.mock_spools[0]
         spool.last_tension = 0.0  # slack
 
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await ws.send(json.dumps({'tighten': 0}))
             await asyncio.sleep(0.1)
 
@@ -423,7 +428,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_identify_pauses_loop_jogs_motor_then_resumes(self):
         """identify() pauses the tracking loop, drives the motor, then resumes it."""
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await ws.send(json.dumps({'identify': None}))
             await asyncio.sleep(0.3)  # identify runs ~0.1 s of real time.sleep calls
 

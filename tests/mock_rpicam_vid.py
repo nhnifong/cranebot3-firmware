@@ -15,13 +15,14 @@ from math import pi
 
 from nf_robot.common.cv_common import SPECIAL_SIZES, DEFAULT_MARKER_SIZE
 
+from port_utils import free_ports
+
 def convert_pose(pose):
     # convert to X Y Z H P R
     # heading pitch and roll are euler angles in degrees
     hpr = Rotation.from_rotvec(pose[0]).as_euler('zyx', degrees=True)
     return (pose[1][0], pose[1][1], pose[1][2], hpr[0], hpr[1], hpr[2])
 
-starting_port = 8888
 ratio = 588/500 # marker occupies 500 px of the 588 px image width
 origin_scale = SPECIAL_SIZES['origin'] * ratio
 gantry_scale = DEFAULT_MARKER_SIZE * ratio
@@ -66,6 +67,9 @@ class RPiCamVidMock:
         self._frame_update_lock = asyncio.Lock() # Protects billboard pose/texture during updates
         self._frame_cb = None # user callback to run every time a frame is sent
         self._servers = []
+        # One free port per camera, chosen in start_server() once the camera count is known.
+        # Read this to learn where to connect; there is no longer a fixed 8888+i convention.
+        self.ports = []
         self._running: bool = False
 
     def set_camera_poses(self, camera_poses):
@@ -261,10 +265,11 @@ class RPiCamVidMock:
             self._setup_panda3d_scene()
 
             # start one server for each camera. the one you connect you determines the view you get.
+            self.ports = free_ports(len(self.camera_poses))
             for i in range(len(self.camera_poses)):
                 self._servers.append(await asyncio.start_server(
                     # this handler always renders from camera i
-                    partial(self._handle_client, i), '127.0.0.1', starting_port+i
+                    partial(self._handle_client, i), '127.0.0.1', self.ports[i]
                 ))
                 addr = self._servers[-1].sockets[0].getsockname()
                 print(f"RPiCamVidMock server listening on {addr} play with ffplay tcp://{addr[0]}:{addr[1]}")

@@ -15,6 +15,8 @@ import time
 
 from nf_robot.robot.gripper_arp_server import GripperArpServer
 
+from port_utils import free_port
+
 async def recv_until(ws, key, timeout=1.0, max_messages=20):
     """Receive websocket messages until one contains the given key, and return it.
     Tests must look for messages by key rather than assuming ordering, since the server
@@ -73,7 +75,10 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         self.file_patcher.start()
 
         self.server = GripperArpServer()
-        self.server_task = asyncio.create_task(self.server.main())
+        # An ephemeral port, not the default 8765, so a real gripper service (or another copy
+        # of this suite) already holding that port doesn't break the test.
+        self.port = free_port()
+        self.server_task = asyncio.create_task(self.server.main(port=self.port))
         
         # Yield execution momentarily to allow the server's internal asyncio loops to spin up
         await asyncio.sleep(0.1)
@@ -110,7 +115,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         Ensure the server does not fault when a client establishes and drops a connection.
         Exceptions are deliberately unhandled to surface native tracebacks on failure.
         """
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(0.1)
             self.assertFalse(self.server_task.done(), "Server halted after client connection")
 
@@ -119,7 +124,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         Validate the structure and types of the telemetry dictionary flushed to the websocket.
         Avoids hardcoded assertions to remain robust against tuning tweaks.
         """
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             data = await recv_until(ws, 'grip_sensors')
 
             self.assertIn('grip_sensors', data, "Telemetry missing critical root key")
@@ -135,7 +140,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         """
         Verify that a commanded motion safely expires and resets to zero after ACTION_TIMEOUT.
         """
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await ws.send(json.dumps({'set_wrist_speed': 50}))
             
             # Allow enough time for the message to queue and updateMotors to consume it
@@ -152,7 +157,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         """
         Simulate an object strike during closure to confirm the state machine jumps into force mode.
         """
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             # Command fingers to close (positive speed)
             await ws.send(json.dumps({'set_finger_speed': 20}))
             await asyncio.sleep(0.05)
@@ -172,7 +177,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         The one-revolution re-anchor performed during boot (see test_boot_health_no_state_file)
         must be reported to clients via the 'total_wrist_turns' update key.
         """
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             data = await recv_until(ws, 'total_wrist_turns')
             self.assertIn('total_wrist_turns', data)
             self.assertEqual(data['total_wrist_turns'], -1)
@@ -186,7 +191,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         self.server.total_wrist_turns = 1
         self.mock_save_state.reset_mock()
 
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await ws.send(json.dumps({'untwist': 1}))
 
             # Give the untwist task a moment to start and claim the busy flag.
@@ -222,7 +227,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         With total_wrist_turns already at 0, this should be a no-op that still confirms.
         """
         self.server.total_wrist_turns = 0
-        async with websockets.connect("ws://127.0.0.1:8765") as ws:
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await ws.send(json.dumps({'untwist': None}))
 
             completion = None

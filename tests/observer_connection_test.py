@@ -1,5 +1,4 @@
 import asyncio
-import socket
 import unittest
 from unittest.mock import patch, Mock, ANY, MagicMock, AsyncMock
 from multiprocessing import Pool, Queue
@@ -18,6 +17,8 @@ from nf_robot.common.pose_functions import invert_pose, compose_poses
 from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
+
+from port_utils import free_port
 
 # Todo, automate the following tests
 # with a blank config, start observer, allow it to discover the bots, assert it wrote the addresses in the config.
@@ -103,11 +104,9 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
         for p in self.patchers:
             p.start()
 
-        # Bind an ephemeral port instead of the default 4245, since a real
-        # observer/robot may already be running on this machine and holding it.
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('127.0.0.1', 0))
-            self.ui_port = s.getsockname()[1]
+        # An ephemeral port instead of the default 4245, since a real observer/robot may
+        # already be running on this machine and holding it.
+        self.ui_port = free_port()
 
         # Create observer with test default config (no components are known)
         self.ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=self.ui_port)

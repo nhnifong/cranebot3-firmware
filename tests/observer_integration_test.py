@@ -28,6 +28,8 @@ from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, control, common
 
+from port_utils import free_ports
+
 class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.patchers = []
@@ -44,6 +46,12 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         self.anchor_servers = []
         self.server_tasks = []
 
+        # Ephemeral ports instead of fixed ones (8765/8766 anchors, 8764 gripper, 4249 UI):
+        # a real robot service or observer on this machine may already hold those. All four
+        # come from one call so they're guaranteed distinct.
+        anchor_a, anchor_b, self.gripper_port, self.ui_port = free_ports(4)
+        self.anchor_ports = [anchor_a, anchor_b]
+
         # before starting any service, set it's zeroconf instance to a special version that searches on localhost only
         self.zc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=["127.0.0.1"])
 
@@ -52,16 +60,16 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
             server = AnchorArpServer(power=(i==0))
             server.zc = self.zc
             self.anchor_servers.append(server)
-            self.server_tasks.append(asyncio.create_task(server.main(port=i+8765, name=f'cranebot-anchor-arpeggio-service.test_{i}')))
+            self.server_tasks.append(asyncio.create_task(server.main(port=self.anchor_ports[i], name=f'cranebot-anchor-arpeggio-service.test_{i}')))
             await asyncio.sleep(0.05)
 
         self.gripper_server = GripperArpServer()
         self.gripper_server.zc = self.zc
-        self.server_tasks.append(asyncio.create_task(self.gripper_server.main(port=8764, name=f'cranebot-gripper-arpeggio-service.test')))
+        self.server_tasks.append(asyncio.create_task(self.gripper_server.main(port=self.gripper_port, name=f'cranebot-gripper-arpeggio-service.test')))
         await asyncio.sleep(0.05)
 
         # Start the observer
-        self.ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=4249)
+        self.ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=self.ui_port)
         self.ob.aiozc = self.zc
 
         # Test utilities
@@ -159,7 +167,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         # Force addresses for gripper
         self.ob.config.gripper.service_name = "123.cranebot-gripper-arpeggio-service.test"
         self.ob.config.gripper.address = '127.0.0.1'
-        self.ob.config.gripper.port = 8764
+        self.ob.config.gripper.port = self.gripper_port
 
         # Force addresses for anchors
         for i in range(2):
@@ -167,7 +175,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
                 break
             self.ob.config.anchors[i].service_name = f"123.cranebot-anchor-arpeggio-service.test_{i}"
             self.ob.config.anchors[i].address = '127.0.0.1'
-            self.ob.config.anchors[i].port = i + 8765
+            self.ob.config.anchors[i].port = self.anchor_ports[i]
 
         # Wait for connections to establish
         await self.ob.gripper_client_connected.wait()
@@ -181,7 +189,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Connect UI websocket
         async def listenTelemetry():
-            async with websockets.connect("ws://127.0.0.1:4249") as ws:
+            async with websockets.connect(f"ws://127.0.0.1:{self.ui_port}") as ws:
                 self.ws_out = ws
                 try:
                     async for message in ws:
@@ -223,7 +231,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         print('setting addresses for local gripper server')
         self.ob.config.gripper.service_name = "123.cranebot-gripper-arpeggio-service.test"
         self.ob.config.gripper.address = '127.0.0.1'
-        self.ob.config.gripper.port = 8764
+        self.ob.config.gripper.port = self.gripper_port
 
         await self.ob.gripper_client_connected.wait()
 
@@ -234,7 +242,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         self.last_commanded_grip_received = asyncio.Event()
 
         async def listenTelemetry():
-            async with websockets.connect("ws://127.0.0.1:4249") as ws:
+            async with websockets.connect(f"ws://127.0.0.1:{self.ui_port}") as ws:
                 self.ws_out = ws
                 try:
                     async for message in ws:
