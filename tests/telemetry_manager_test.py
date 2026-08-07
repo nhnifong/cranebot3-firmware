@@ -68,13 +68,42 @@ class TelemetryManagerTestBase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def wait_for(self, predicate, timeout=2.0):
-        """Poll until predicate() is true. Returns whether it became true."""
-        deadline = asyncio.get_running_loop().time() + timeout
-        while asyncio.get_running_loop().time() < deadline:
+        """Poll until predicate() is true. Returns whether it became true. How long that
+        took is left in self.waited, so a failure message can report it."""
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        deadline = started + timeout
+        while loop.time() < deadline:
             if predicate():
+                self.waited = loop.time() - started
                 return True
             await asyncio.sleep(0.01)
-        return predicate()
+        result = predicate()
+        self.waited = loop.time() - started
+        return result
+
+    def cloud_socket_state(self):
+        """The relay socket's protocol state (OPEN/CLOSING/CLOSED), for failure messages.
+        Distinguishes 'the close never happened' from 'it closed and the link didn't come
+        back', which the default repr doesn't."""
+        socket = self.tm.cloud_websocket
+        if socket is None:
+            return 'cloud socket: None'
+        state = getattr(socket, 'state', None)
+        return f'cloud socket: {getattr(state, "name", state)}'
+
+    def cloud_task_state(self):
+        """A description of the cloud link task, for failure messages. If the task died the
+        exception is what actually explains the failure, and nothing else surfaces it: the
+        task is never awaited, so its traceback stays buried until interpreter shutdown."""
+        task = self.tm._cloud_task
+        if task is None:
+            return 'cloud task: not started'
+        if not task.done():
+            return 'cloud task: still running'
+        if task.cancelled():
+            return 'cloud task: cancelled'
+        return f'cloud task: DIED with {task.exception()!r}'
 
 
 class TestBuffering(TelemetryManagerTestBase):
@@ -311,22 +340,44 @@ class TestCloudLink(TelemetryManagerTestBase):
                         'credentials_updated must not wait out a retry interval')
 
     async def test_rebinding_reconnects_with_the_new_credentials(self):
+        """Rebinding to different credentials drops the link and reconnects under the new
+        robot id.
+
+        Checked one step at a time -- connected, then dropped, then reconnected, then under
+        the right id -- because this is the test that fails on the Windows CI runner and
+        never on Linux or macOS, and a single combined assertTrue() only ever said 'False is
+        not true'. Each step names what it was waiting for, how long it waited, and the
+        state of the cloud task, so the CI log identifies the step that stalls.
+        """
+        r7, r8 = '/telemetry_v2/r7', '/telemetry_v2/r8'
+
         self.bind(robot_id='r7')
         self.tm.start_cloud_link()
-        self.assertTrue(await self.wait_for(lambda: self.relay_paths == ['/telemetry_v2/r7']))
+        self.assertTrue(
+            await self.wait_for(lambda: self.relay_paths == [r7]),
+            f'never connected with the original credentials after {self.waited:.2f}s: '
+            f'relay_paths={self.relay_paths}, {self.cloud_task_state()}')
 
         self.bind(robot_id='r8', key='k2')
         self.tm.credentials_updated()
-        # The budget has to be comfortably longer than _cloud_main's own 2s reconnect
-        # backoff, or a single failed reconnect attempt (which is a normal, transient thing
-        # -- the relay socket is still tearing down) makes this fail. At 2.0s it did exactly
-        # that on the Windows runner while passing on Linux and macOS. What this test is
-        # about is *which credentials* the reconnect uses; that it happens without waiting
-        # out the backoff is asserted by test_unbound_link_waits_and_connects_when_
-        # credentials_arrive, on a 1s budget.
+
+        # 1. the link running on the stale credentials has to go away
         self.assertTrue(
-            await self.wait_for(lambda: self.relay_paths == ['/telemetry_v2/r7', '/telemetry_v2/r8'], timeout=5.0))
-        self.assertTrue(await self.wait_for(lambda: self.disconnects == [(CLOUD, 0)]))
+            await self.wait_for(lambda: self.disconnects == [(CLOUD, 0)], timeout=5.0),
+            f'credentials_updated() did not drop the old link within {self.waited:.2f}s: '
+            f'disconnects={self.disconnects}, {self.cloud_socket_state()}, '
+            f'{self.cloud_task_state()}')
+
+        # 2. and the link has to come back. The budget must clear _cloud_main's own 2s
+        # reconnect backoff, which a failed first attempt makes it sit out.
+        self.assertTrue(
+            await self.wait_for(lambda: len(self.relay_paths) == 2, timeout=5.0),
+            f'never reconnected within {self.waited:.2f}s: relay_paths={self.relay_paths}, '
+            f'{self.cloud_task_state()}')
+
+        # 3. under the new robot id -- the actual point of the test
+        self.assertEqual(self.relay_paths, [r7, r8], f'reconnected under the wrong robot id')
+        self.assertEqual(self.disconnects, [(CLOUD, 0)])
 
     async def test_cloud_receives_batches_and_delivers_control(self):
         self.bind()
