@@ -317,8 +317,15 @@ class TestCloudLink(TelemetryManagerTestBase):
 
         self.bind(robot_id='r8', key='k2')
         self.tm.credentials_updated()
+        # The budget has to be comfortably longer than _cloud_main's own 2s reconnect
+        # backoff, or a single failed reconnect attempt (which is a normal, transient thing
+        # -- the relay socket is still tearing down) makes this fail. At 2.0s it did exactly
+        # that on the Windows runner while passing on Linux and macOS. What this test is
+        # about is *which credentials* the reconnect uses; that it happens without waiting
+        # out the backoff is asserted by test_unbound_link_waits_and_connects_when_
+        # credentials_arrive, on a 1s budget.
         self.assertTrue(
-            await self.wait_for(lambda: self.relay_paths == ['/telemetry_v2/r7', '/telemetry_v2/r8'], timeout=2.0))
+            await self.wait_for(lambda: self.relay_paths == ['/telemetry_v2/r7', '/telemetry_v2/r8'], timeout=5.0))
         self.assertTrue(await self.wait_for(lambda: self.disconnects == [(CLOUD, 0)]))
 
     async def test_cloud_receives_batches_and_delivers_control(self):
