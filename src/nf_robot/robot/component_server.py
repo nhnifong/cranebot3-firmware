@@ -83,6 +83,9 @@ class RobotComponentServer:
         self.extra_tasks = []
         self.stream_command = stream_command # subclasses may override
         self.have_client = False
+        # the currently connected client's websocket, if any. groundwork for closing the
+        # connection normally (code 1000) on shutdown; nothing consumes it yet.
+        self.client_websocket = None
         self.reset_wifi_event = asyncio.Event()
         self.wait_reset_task = None
 
@@ -426,6 +429,7 @@ class RobotComponentServer:
         # If the thrown exception is not one of the type caught here, the server stops.
         try:
             self.have_client = True
+            self.client_websocket = websocket
             # tell the client which version of nf_robot this component server is running
             await websocket.send(json.dumps({'nf_robot_v': importlib.metadata.version('nf_robot')}))
             async with asyncio.TaskGroup() as tg:
@@ -436,7 +440,9 @@ class RobotComponentServer:
                 temp = tg.create_task(self.read_temperature())
         except* (ConnectionClosedOK, ConnectionClosedError):
             logging.info("Client disconnected")
+        finally:
             self.have_client = False
+            self.client_websocket = None
         logging.info("All tasks in handler task group completed")
         # stop spool motors just in case some task left it running
         if self.spooler is not None:
