@@ -31,6 +31,7 @@ GEAR_RATIO = 10/45
 FINGER_TRAVEL_DEG = 59 
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 DT = 1/60
+GRAVITY = 9.81
 
 # values that can be overridden by the controller
 default_gripper_conf = {
@@ -58,11 +59,11 @@ default_gripper_conf = {
     # (dimensionless, 0-1) The proportional weight of the pad pressure in the composite force calculation.
     # the weight allocated to the motor load reading is 1-this value
     'PRESSURE_WEIGHT': 0.7,
-
-    # rpicam-vid framerate for the gripper camera stream. Separate from anchors'
-    # ANCHOR_STREAM_FRAMERATE so broadcasting one doesn't change the other. A running stream
-    # is automatically restarted to pick up changes.
+    # rpicam-vid framerate for the gripper camera stream.
+    # A running stream is automatically restarted to pick up changes.
     'GRIPPER_STREAM_FRAMERATE': 60,
+    # Effective pole length used for swing model
+    'POLE_LENGTH': 0.4526 # carbon pole effective length is 0.4350
 }
 
 
@@ -133,12 +134,10 @@ class GripperArpServer(RobotComponentServer):
         self.last_gyro = np.zeros(2)
         self.filtered_alpha = np.zeros(2)
 
-        # pendulum constants for 53cm pole
-        L = 0.4526 # 0.53
-        g = 9.81
         # omega is the constant angular frequency of the pendulum.
         # It represents the speed that the system progresses along it's cycle radians per second.
-        self.omega = np.sqrt(g / L)
+        # Recomputed when the client changes POLE_LENGTH (see config_updated).
+        self.omega = np.sqrt(GRAVITY / self.conf['POLE_LENGTH'])
         
         # The state matrix representing the sin curves being fitted to the gyro measurements.
         # Row 0: X-axis swing, Row 1: Y-axis swing.
@@ -579,6 +578,10 @@ class GripperArpServer(RobotComponentServer):
                 await asyncio.sleep(DT)
         except Exception as e:
             logging.exception("problem in motor tracking loop")
+
+    def config_updated(self, changed):
+        if 'POLE_LENGTH' in changed:
+            self.omega = np.sqrt(GRAVITY / self.conf['POLE_LENGTH'])
 
     async def process_imu(self, ws):
         """

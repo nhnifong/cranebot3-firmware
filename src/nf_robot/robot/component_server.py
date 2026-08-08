@@ -256,6 +256,12 @@ class RobotComponentServer:
         except (ProcessLookupError, AttributeError):
             pass
 
+    def config_updated(self, changed):
+        """Hook for subclasses that need to react to config vars set by the client.
+        `changed` is the dict of vars that was just merged into self.conf. Values come
+        straight off the wire, so implementations must tolerate junk."""
+        pass
+
     async def stop_camera_stream(self):
         """Stop the camera stream and kill rpicam-vid. Cancelling stream_video makes
         it kill the subprocess and return without restarting it (it swallows the
@@ -388,6 +394,7 @@ class RobotComponentServer:
                 self.conf.update(update['set_config_vars'])
                 if self.stream_framerate_conf_key in update['set_config_vars']:
                     self.restart_stream_if_framerate_changed()
+                self.config_updated(update['set_config_vars'])
             if 'host_time' in update:
                 logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
             if 'run_update' in update:
