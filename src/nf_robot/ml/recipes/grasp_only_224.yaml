@@ -1,0 +1,92 @@
+# Same sources as move_clutter_rect_for_xvla.yaml, but cut down to just the grasps:
+# the gripper camera only, at 224x224, the plain 5-dim gripper_vel action space, and
+# every episode trimmed to the segment that actually picks something up.
+#
+# The trim (see lerobot_trim_to_grasp.py) starts each episode where the robot arrived
+# near the spot it eventually grasps at - so the traverse across the room is dropped,
+# and episodes that never traversed just start at frame 0 - and ends once the gripper
+# has risen 10cm above the height it grasped at, which is the point the object is
+# unambiguously off the floor. Episodes with no detectable grasp are dropped.
+#
+# On naavox/move_clutter_2 this kept 97 of 106 episodes with a median segment of
+# 7.8s out of 18.6s, i.e. roughly 40% of the frames of the episodes it kept.
+#
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/grasp_only_224.yaml \
+#     --temp_dir /home/nick/data_scratch \
+#     --output_root /home/nick/data_scratch/grasp_only_224 \
+#     --upload
+
+output_repo_id: naavox/grasp_only_224
+camera_mode: gripper_224
+center_crop: false
+pad_clamp: true
+
+action_space: gripper_vel
+
+merge:
+  - repo_id: naavox/move_clutter
+    exclude_episodes: ["289-325", "448-481"]
+  - naavox/move_clutter_2
+  - naavox/move_clutter_hawes_1
+  - naavox/move_clutter_chuck_1
+  - naavox/move_clutter_79west4
+  - naavox/move_clutter_nick_2
+  - justink04/laundry-in-hamper-7-19-26
+  - justink04/laundry-in-hamper-7-23-26
+  - justink04/trash-in-trashcan-7-23-26
+  - justink04/trash-in-trashcan-7-24-26
+  - justink04/laundry-in-hamper-8-1-26
+  - repo_id: justink04/laundry-in-hamper2-8-1-26
+    exclude_episodes: ["41-60"]
+  - repo_id: justink04/laundry-in-hamper3-8-1-26
+    exclude_episodes: ['48-99']
+  - justink04/cranebot-ethernet-test-02
+  - justink04/laundry-in-hamper4-8-1-26
+  - naavox/nick-clutter-aug3
+  - naavox/playroom-clutter-aug4
+  - naavox/bedroom-laundry-aug5
+  - naavox/toys-79west
+  - naavox/playroom-aug6
+  - naavox/bedroom-laundry-aug7-2
+
+# Newer datasets carry their recorded anchor calibration and older ones don't; the
+# merge demands identical feature sets, and gripper_vel never reads it.
+drop_features:
+  - anchor_poses
+
+# gripper_pos_* and finger_pressure are what the grasp detector reads, so they have to
+# survive this trim - the state selection happens per source, before the grasp trim.
+keep_state_features:
+  - vel_x
+  - vel_y
+  - vel_z
+  - wrist_speed
+  - finger_speed
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+
+normalize_tasks: move_clutter_rect_tasks.yaml
+
+trim_to_grasp:
+  enabled: true
+  # finger_pressure at/above this, held this long, is a grasp rather than a bump
+  pressure_threshold: 0.1
+  min_grasp_seconds: 0.3
+  # how far above the grasp height counts as picked up
+  rise_m: 0.10
+  # how close (horizontally) to the eventual grasp point counts as "arrived"
+  near_radius_m: 0.3
+  # drop degenerate segments rather than keep near-empty episodes
+  min_segment_seconds: 1.0
+
+# no contact labelling: gripper_vel has no contact_vec/episode_end components
+label_contact_actions:
+  enabled: false

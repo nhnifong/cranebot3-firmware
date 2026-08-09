@@ -53,6 +53,20 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     normalize_tasks: tasks.yaml               # optional; path (as given, else relative to the recipe) to a
                                               # task mapping file, or the same {tasks:, map:}
                                               # spec inline. See lerobot_normalize_tasks.py.
+    drop_features:                            # optional; non-video features to drop from every
+      - anchor_poses                          # source, for extras that only some sources carry
+                                              # (the merge demands identical feature sets)
+    action_space: gripper_vel                 # optional; omit to keep the recorded space.
+                                              # camera_goal converts; any other named space is a
+                                              # subset of the recorded action components and is
+                                              # trimmed to. See stringman_lerobot._ACTION_SPACES.
+    trim_to_grasp:                            # optional; cut each episode to just its grasp
+      enabled: true                           # (see lerobot_trim_to_grasp.py). Runs on the merged
+      pressure_threshold: 0.1                 # dataset and re-encodes all video, so it is slow.
+      min_grasp_seconds: 0.3                  # Needs gripper_pos_*/finger_pressure in
+      rise_m: 0.10                            # keep_state_features.
+      near_radius_m: 0.3
+      min_segment_seconds: 1.0
     label_contact_actions:                    # optional; omit or set enabled: false to skip
       enabled: true
       mode: contact                           # or "waypoints": target the next position the
@@ -86,7 +100,8 @@ from nf_robot.ml.lerobot_derive_dataset import derive_dataset
 from nf_robot.ml.lerobot_label_contact_actions import label_dataset
 from nf_robot.ml import camera_goal
 from nf_robot.ml.lerobot_normalize_tasks import load_mapping
-from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, camera_mode_from_features
+from nf_robot.ml.stringman_lerobot import _ACTION_SPACES, _CAMERA_MODES, camera_mode_from_features
+from nf_robot.ml.lerobot_trim_to_grasp import trim_dataset_to_grasp
 
 
 def _short_name(repo_id: str) -> str:
@@ -363,10 +378,10 @@ def load_recipe(path: Path) -> dict:
         raise ValueError("'label_contact_actions' must be a mapping if present")
 
     action_space = recipe.get("action_space")
-    if action_space is not None and action_space != camera_goal.ACTION_SPACE_NAME:
+    if action_space is not None and action_space not in _ACTION_SPACES:
         raise ValueError(
             f"Unknown action_space '{action_space}'. Omit it to keep the recorded space, "
-            f"or use '{camera_goal.ACTION_SPACE_NAME}'"
+            f"or use one of {sorted(_ACTION_SPACES)}"
         )
     if action_space == camera_goal.ACTION_SPACE_NAME:
         # anchor_config is optional: a dataset recorded after the anchor_poses feature
@@ -501,6 +516,7 @@ def build(
     keep_state_features = recipe.get("keep_state_features")
     normalize_tasks_spec = recipe.get("normalize_tasks")
     drop_features = recipe.get("drop_features")
+    trim_cfg = recipe.get("trim_to_grasp") or {}
     label_cfg = recipe.get("label_contact_actions") or {}
     do_label = bool(label_cfg.get("enabled", False))
     do_recompute = bool(recipe.get("recompute_stats", False))
@@ -565,6 +581,12 @@ def build(
             ),
             camera_goal_label_cfg=label_cfg,
             drop_features=drop_features,
+            # camera_goal rewrites the action space itself; every other named space is
+            # a subset of the recorded components, so it's a trim.
+            keep_action_features=(
+                _ACTION_SPACES[action_space]
+                if action_space and action_space != camera_goal.ACTION_SPACE_NAME else None
+            ),
         )
         validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode)
 
@@ -600,6 +622,33 @@ def build(
     converted_datasets = [LeRobotDataset(repo_id=rid, root=root) for rid, root in converted]
     merge_datasets(converted_datasets, output_repo_id=output_repo_id, output_dir=output_root)
     validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode)
+
+    # Step 4b: optional trim of every episode down to its grasp segment. Runs on the
+    # merged dataset so the expensive decode/re-encode happens once rather than per
+    # source. Needs gripper_pos_*/finger_pressure, so keep_state_features must retain
+    # them; trim_to_grasp raises if they were dropped.
+    if trim_cfg.get("enabled"):
+        logging.info(f"Trimming '{output_repo_id}' to grasp segments")
+        staging_root = output_root.parent / f"{output_root.name}_untrimmed"
+        if staging_root.exists():
+            shutil.rmtree(staging_root)
+        # The trim writes a fresh dataset, so move the merged one aside and let the
+        # trimmed result take the output path.
+        shutil.move(str(output_root), str(staging_root))
+        try:
+            trim_dataset_to_grasp(
+                LeRobotDataset(repo_id=output_repo_id, root=staging_root),
+                output_dir=output_root,
+                repo_id=output_repo_id,
+                **{k: float(v) for k, v in trim_cfg.items() if k != "enabled"},
+            )
+        except BaseException:
+            # put the merged dataset back so a failed trim doesn't cost the whole merge
+            if not output_root.exists():
+                shutil.move(str(staging_root), str(output_root))
+            raise
+        shutil.rmtree(staging_root, ignore_errors=True)
+        validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode)
 
     # Step 5: optional contact-action labeling (rewrites the action column + its stats).
     # camera_goal labels per source (its conversion consumes contact_vec), so the

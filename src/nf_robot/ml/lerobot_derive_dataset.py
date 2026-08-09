@@ -105,45 +105,45 @@ def _select_list_column(table, name: str, indices: list[int]):
     return table.set_column(col_idx, field, pa.array(new_rows, type=new_type))
 
 
-def select_state_features(root: Path, keep: list[str]) -> None:
-    """Trim observation.state to the named components, in their original order.
+def select_vector_feature(root: Path, feature_key: str, keep: list[str]) -> None:
+    """Trim a flat vector feature to the named components, in their original order.
 
-    Rewrites the data parquets, meta/info.json, meta/stats.json and the
-    per-episode stats columns together - leaving any one of them at the old
-    width makes the dataset unloadable, since lerobot cross-checks the feature
-    shape against the stats it aggregates.
+    Used for both observation.state and action. Rewrites the data parquets,
+    meta/info.json, meta/stats.json and the per-episode stats columns together -
+    leaving any one of them at the old width makes the dataset unloadable, since
+    lerobot cross-checks the feature shape against the stats it aggregates.
     """
     import pyarrow.parquet as pq
 
     info_path = root / "meta" / "info.json"
     info = json.loads(info_path.read_text())
-    feature = info["features"]["observation.state"]
+    feature = info["features"][feature_key]
     names = list(feature["names"])
 
     unknown = [n for n in keep if n not in names]
     if unknown:
-        raise ValueError(f"observation.state has no component(s) {unknown}. Available: {names}")
+        raise ValueError(f"{feature_key} has no component(s) {unknown}. Available: {names}")
     if len(set(keep)) != len(keep):
-        raise ValueError(f"Duplicate entries in keep_state_features: {keep}")
+        raise ValueError(f"Duplicate entries in the {feature_key} keep list: {keep}")
 
     keep_set = set(keep)
     indices = [i for i, n in enumerate(names) if n in keep_set]
     new_names = [names[i] for i in indices]
     if new_names == names:
-        logging.info("observation.state already matches keep_state_features; nothing to trim")
+        logging.info(f"{feature_key} already matches the requested components; nothing to trim")
         return
 
-    logging.info(f"Trimming observation.state from {len(names)} to {len(new_names)} components")
+    logging.info(f"Trimming {feature_key} from {len(names)} to {len(new_names)} components")
 
     for f in sorted(root.glob("data/chunk-*/file-*.parquet")):
-        pq.write_table(_select_list_column(pq.read_table(f), "observation.state", indices), f)
+        pq.write_table(_select_list_column(pq.read_table(f), feature_key, indices), f)
 
     for f in sorted((root / "meta" / "episodes").glob("**/*.parquet")):
         table = pq.read_table(f)
         # "count" is a per-feature frame count, not a per-component vector.
         cols = [
             n for n in table.schema.names
-            if n.startswith("stats/observation.state/") and not n.endswith("/count")
+            if n.startswith(f"stats/{feature_key}/") and not n.endswith("/count")
         ]
         for name in cols:
             table = _select_list_column(table, name, indices)
@@ -153,17 +153,22 @@ def select_state_features(root: Path, keep: list[str]) -> None:
     stats_path = root / "meta" / "stats.json"
     if stats_path.exists():
         stats = json.loads(stats_path.read_text())
-        state_stats = stats.get("observation.state")
-        if state_stats:
-            for stat, value in state_stats.items():
+        feature_stats = stats.get(feature_key)
+        if feature_stats:
+            for stat, value in feature_stats.items():
                 if stat != "count" and isinstance(value, list) and len(value) == len(names):
-                    state_stats[stat] = [value[i] for i in indices]
+                    feature_stats[stat] = [value[i] for i in indices]
             stats_path.write_text(json.dumps(stats, indent=4))
 
     feature["names"] = new_names
     feature["shape"] = [len(new_names)]
     info_path.write_text(json.dumps(info, indent=4))
-    logging.info(f"observation.state is now {new_names}")
+    logging.info(f"{feature_key} is now {new_names}")
+
+
+def select_state_features(root: Path, keep: list[str]) -> None:
+    """Trim observation.state to the named components, in their original order."""
+    select_vector_feature(root, "observation.state", keep)
 
 
 def _write_info_json(info: dict, root: Path) -> None:
@@ -192,6 +197,7 @@ def derive_dataset(
     camera_goal_anchor_poses: list | None = None,
     camera_goal_label_cfg: dict | None = None,
     drop_features: list[str] | None = None,
+    keep_action_features: list[str] | None = None,
 ) -> LeRobotDataset:
     if camera_mode not in _CAMERA_MODES:
         raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
@@ -348,6 +354,10 @@ def derive_dataset(
 
     if keep_state_features:
         select_state_features(dataset.root, keep_state_features)
+
+    # after the camera_goal conversion, which rewrites the action space wholesale
+    if keep_action_features:
+        select_vector_feature(dataset.root, "action", keep_action_features)
 
     if normalize_tasks_spec:
         normalize_tasks(dataset.root, normalize_tasks_spec["tasks"], normalize_tasks_spec["map"])
