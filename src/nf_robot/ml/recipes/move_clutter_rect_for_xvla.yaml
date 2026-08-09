@@ -8,8 +8,8 @@
 
 # python src/nf_robot/ml/lerobot_build_dataset.py \
 #     --recipe src/nf_robot/ml/recipes/move_clutter_rect_for_xvla.yaml \
-#     --temp_dir /home/nick/data_scratch \
-#     --output_root /home/nick/data_scratch/move_clutter_rect_for_xvla \
+#     --temp_dir /home/nhn/data_scratch \
+#     --output_root /home/nhn/data_scratch/move_clutter_rect_for_xvla \
 #     --upload
 
 output_repo_id: naavox/move_clutter_rect_for_xvla

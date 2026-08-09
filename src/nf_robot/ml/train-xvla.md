@@ -158,20 +158,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
 
 # ---------------------------------------------------------------------------
 # camera_goal again, on the waypoint-mode rebuild of naavox/move_clutter_camera_goal,
-# warm-started from the model trained on the contact-mode labels.
-#
-# The action space is unchanged (same 12 components, same widths), so the weights load
-# strictly. What changed is what the goal channels MEAN: the target is now the next
-# position the gantry actually stopped at and steps as each is reached, instead of the
-# grasp position blended into the episode end. The model therefore has to relearn the
-# mapping, which is why this warms up to full LR again rather than resuming a decay.
-#
-# --policy.path loads weights only - no Adam state, no schedule position. Only flags
-# that differ from naavox/xvla-camera-goal's saved config are repeated; action_mode,
-# max_action_dim, dtype, normalization_mapping and the freeze flags are already in it.
-# --rename_map is a top-level arg, so it must be repeated, and passing it is also what
-# makes lerobot skip the camera-name validation.
-# ---------------------------------------------------------------------------
+# warm-started
 
 python src/nf_robot/ml/lerobot_train_modal.py \
   --lerobot_ref public \
@@ -180,18 +167,18 @@ python src/nf_robot/ml/lerobot_train_modal.py \
   --detach true \
   --dataset.repo_id=naavox/move_clutter_camera_goal \
   --dataset.image_transforms.enable=true \
-  --policy.path=naavox/xvla-camera-goal \
+  --policy.path=naavox/xvla-camera-goal-waypoints \
   --policy.n_action_steps=10 \
-  --policy.scheduler_warmup_steps=500 \
-  --policy.scheduler_decay_steps=40000 \
-  --policy.repo_id=naavox/xvla-camera-goal-waypoints \
+  --policy.repo_id=naavox/xvla-camera-goal-waypoints-2 \
   --policy.push_to_hub=true \
-  --output_dir=/multitask_dit_data/xvla_camera_goal_waypoints \
-  --job_name=xvla_camera_goal_waypoints \
-  --batch_size=84 \
+  --output_dir=/multitask_dit_data/xvla_camera_goal_waypoints_2 \
+  --job_name=xvla_camera_goal_waypoints_2 \
+  --rename_map='{"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera":  "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}' \
+  --policy.scheduler_warmup_steps=500 \
+  --policy.scheduler_decay_steps=15000 \
   --steps=15000 \
   --save_freq=5000 \
   --log_freq=25 \
   --num_workers=12 \
   --wandb.enable=false \
-  --rename_map='{"observation.images.anchor_camera_0": "observation.images.image", "observation.images.gripper_camera":  "observation.images.image2", "observation.images.anchor_camera_1": "observation.images.image3"}'
+  --batch_size=84

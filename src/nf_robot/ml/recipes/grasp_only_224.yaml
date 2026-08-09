@@ -13,8 +13,8 @@
 #
 # python src/nf_robot/ml/lerobot_build_dataset.py \
 #     --recipe src/nf_robot/ml/recipes/grasp_only_224.yaml \
-#     --temp_dir /home/nick/data_scratch \
-#     --output_root /home/nick/data_scratch/grasp_only_224 \
+#     --temp_dir /home/nhn/data_scratch \
+#     --output_root /home/nhn/data_scratch/grasp_only_224 \
 #     --upload
 
 output_repo_id: naavox/grasp_only_224

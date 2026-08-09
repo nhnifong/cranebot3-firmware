@@ -102,7 +102,7 @@ run_in_chroot "systemctl enable cranebot.service"
 # offline by reloading the brcmfmac module, then rebooting if that fails.
 install -m 755 wifi_thermal_watchdog.py "$ROOTFS_DIR/usr/local/bin/wifi_thermal_watchdog.py"
 install -m 644 wifi-thermal-watchdog.service "$ROOTFS_DIR/etc/systemd/system/wifi-thermal-watchdog.service"
-run_in_chroot "systemctl enable wifi-thermal-watchdog.service"
+#run_in_chroot "systemctl enable wifi-thermal-watchdog.service"
 
 # Install a one time filesystem resize service on first boot to expand to fill the SD card
 install -m 755 resize-rootfs.sh "$ROOTFS_DIR/usr/local/sbin/resize-rootfs.sh"
