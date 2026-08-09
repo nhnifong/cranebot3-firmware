@@ -85,7 +85,13 @@ merge:
   - repo_id: justink04/cranebot-ethernet-test-02
     anchor_config: ../calibrations/justin.json
 
+  # episode 13 is merged episode 436 of naavox/move_clutter_camera_goal, whose
+  # gripper_camera video is corrupt in the built dataset (5 undecodable AV1 packets at
+  # 348.33-349.03s of videos/observation.images.gripper_camera/chunk-000/file-005.mp4).
+  # The source video decodes clean over that span, so the damage came from our own
+  # re-encode, not the recording.
   - repo_id: justink04/laundry-in-hamper4-8-1-26
+    exclude_episodes: [13]
     anchor_config: ../calibrations/justin.json
 
   - naavox/nick-clutter-aug3

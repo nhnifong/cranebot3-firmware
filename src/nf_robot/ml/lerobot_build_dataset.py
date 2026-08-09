@@ -90,6 +90,7 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -414,13 +415,73 @@ def load_recipe(path: Path) -> dict:
     return recipe
 
 
-def validate_dataset(repo_id: str, root: Path, expected_camera_mode: str | None = None) -> LeRobotDataset:
+def _decode_whole_video(path_str: str) -> tuple[str, str | None]:
+    """Decode every packet of one video; return (path, first error description or None).
+
+    Module-level and picklable so it can run in a ProcessPoolExecutor.
+    """
+    import av
+
+    try:
+        with av.open(path_str) as container:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            time_base = stream.time_base
+            for packet in container.demux(stream):
+                try:
+                    for _ in packet.decode():
+                        pass
+                except Exception as e:  # noqa: BLE001 - any decode failure is a failure
+                    at = f"{float(packet.pts * time_base):.2f}s" if packet.pts is not None else "unknown offset"
+                    return path_str, f"{type(e).__name__} at {at}: {e}"
+    except Exception as e:  # noqa: BLE001 - container-level failure counts too
+        return path_str, f"{type(e).__name__}: {e}"
+    return path_str, None
+
+
+def verify_videos_decode(root: Path, repo_id: str, video_keys: list[str]) -> None:
+    """Fully decode every video file, raising on the first that fails.
+
+    The cheap frame-0 check in validate_dataset cannot see damage in the middle of a
+    file, and re-encoding is exactly what produces that kind of damage: a source that
+    decodes clean can come out of the AV1 encode with a handful of broken packets
+    somewhere in the middle. That survives the build, uploads, and then blows up
+    hundreds of steps into training when a sampler finally lands on those frames.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    files = sorted({p for key in video_keys for p in (root / "videos" / key).glob("**/*.mp4")})
+    if not files:
+        return
+
+    logging.info(f"Verifying {len(files)} video file(s) of '{repo_id}' decode end to end")
+    workers = max(1, min(os.cpu_count() or 1, len(files)))
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        for path_str, error in pool.map(_decode_whole_video, [str(p) for p in files]):
+            if error is not None:
+                raise ValueError(
+                    f"Dataset '{repo_id}' has undecodable video: "
+                    f"{Path(path_str).relative_to(root)} -> {error}"
+                )
+    logging.info(f"OK: all {len(files)} video file(s) of '{repo_id}' decode cleanly")
+
+
+def validate_dataset(
+    repo_id: str,
+    root: Path,
+    expected_camera_mode: str | None = None,
+    decode_videos: bool = False,
+) -> LeRobotDataset:
     """Load a dataset and assert integrity; raise if the pipeline produced junk.
 
     Checks structural consistency (meta constructs, parquet row counts sum to
     total_frames, action/state feature dims match their names), the expected
     camera mode, that every referenced video file exists and opens, and that a
     frame decodes end-to-end.
+
+    decode_videos additionally decodes every video file in full. That is the only
+    check that catches corruption in the middle of a re-encoded file, so it is worth
+    its cost after any step that re-encodes video.
 
     Note: this deliberately does not require each video's frame count to equal
     its episode length. Robot recordings routinely drop a few camera frames, and
@@ -491,6 +552,9 @@ def validate_dataset(repo_id: str, root: Path, expected_camera_mode: str | None 
         if key not in item:
             raise ValueError(f"Dataset '{repo_id}' frame 0 missing video key '{key}'")
 
+    if decode_videos:
+        verify_videos_decode(root, repo_id, list(ds.meta.video_keys))
+
     logging.info(
         f"OK: '{repo_id}' -> {ds.meta.total_episodes} episodes, {ds.meta.total_frames} frames, "
         f"cameras {list(ds.meta.video_keys)}"
@@ -506,6 +570,7 @@ def build(
     headroom: int,
     keep_intermediate: bool,
     resume: bool = False,
+    verify_decode: bool = True,
 ) -> LeRobotDataset:
     output_repo_id = recipe["output_repo_id"]
     camera_mode = recipe["camera_mode"]
@@ -546,7 +611,8 @@ def build(
 
         if resume and final_root.exists():
             try:
-                validate_dataset(repo_id, final_root, expected_camera_mode=camera_mode)
+                validate_dataset(repo_id, final_root, expected_camera_mode=camera_mode,
+                                 decode_videos=verify_decode)
                 logging.info(f"[{name}] reusing existing conversion at {final_root}")
                 converted.append((repo_id, final_root))
                 continue
@@ -588,7 +654,8 @@ def build(
                 if action_space and action_space != camera_goal.ACTION_SPACE_NAME else None
             ),
         )
-        validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode)
+        validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode,
+                         decode_videos=verify_decode)
 
         # Step 3: drop excluded episodes. Done after conversion so the re-encoding
         # delete_episodes does on videos straddling kept/dropped episodes works on
@@ -607,7 +674,8 @@ def build(
                 output_dir=filtered_root,
                 repo_id=repo_id,
             )
-            validate_dataset(repo_id, filtered_root, expected_camera_mode=camera_mode)
+            validate_dataset(repo_id, filtered_root, expected_camera_mode=camera_mode,
+                             decode_videos=verify_decode)
             shutil.rmtree(converted_root, ignore_errors=True)
             converted_root = filtered_root
 
@@ -621,7 +689,8 @@ def build(
     logging.info(f"Merging {len(converted)} datasets into '{output_repo_id}' at {output_root}")
     converted_datasets = [LeRobotDataset(repo_id=rid, root=root) for rid, root in converted]
     merge_datasets(converted_datasets, output_repo_id=output_repo_id, output_dir=output_root)
-    validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode)
+    validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode,
+                     decode_videos=verify_decode)
 
     # Step 4b: optional trim of every episode down to its grasp segment. Runs on the
     # merged dataset so the expensive decode/re-encode happens once rather than per
@@ -648,7 +717,8 @@ def build(
                 shutil.move(str(staging_root), str(output_root))
             raise
         shutil.rmtree(staging_root, ignore_errors=True)
-        validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode)
+        validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode,
+                         decode_videos=verify_decode)
 
     # Step 5: optional contact-action labeling (rewrites the action column + its stats).
     # camera_goal labels per source (its conversion consumes contact_vec), so the
@@ -727,6 +797,11 @@ def main() -> None:
         "--keep_intermediate", action="store_true",
         help="Keep the per-source converted datasets under temp_dir instead of deleting them",
     )
+    parser.add_argument(
+        "--no_verify_decode", action="store_true",
+        help="Skip fully decoding every re-encoded video. Faster, but silent mid-file "
+             "corruption from the AV1 encode then survives to training time",
+    )
     args = parser.parse_args()
 
     recipe_path = Path(args.recipe)
@@ -747,6 +822,7 @@ def main() -> None:
         headroom=args.headroom,
         keep_intermediate=args.keep_intermediate,
         resume=args.resume,
+        verify_decode=not args.no_verify_decode,
     )
 
 
