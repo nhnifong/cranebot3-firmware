@@ -15,10 +15,15 @@ Every INTERVAL seconds it:
   3. If we are offline, attempts to power-cycle the Wi-Fi chip and logs whether
      each recovery step brought us back. Recovery is skipped (and the reason
      logged) within the first MIN_UPTIME_S seconds of boot, when Wi-Fi may simply
-     not have associated yet; while a wired link is up, since the unit is
-     reachable and a reboot would only interrupt it; and when no saved Wi-Fi
-     network exists, since a unit with nothing to associate with would otherwise
-     reboot forever.
+     not have associated yet; on any unit with a wired ethernet link, which is
+     reachable regardless of what Wi-Fi is doing; and when no saved Wi-Fi network
+     exists, since a unit with nothing to associate with would otherwise reboot
+     forever.
+
+Wired units are diagnostic-only: Wi-Fi status is still sampled and logged, but
+nothing is ever reloaded or rebooted on their behalf. A gripper on a USB ethernet
+adapter has no Wi-Fi profile to associate with, so every recovery attempt would
+fail and escalate to a reboot, forever.
 
 Everything is appended (with flush + fsync) to a log file on the SD card,
 /opt/robot/wifi_thermal_watchdog.log by default. Point --logfile at
@@ -212,6 +217,19 @@ def read_operstate(dev):
         return "none"
 
 
+def read_carrier(dev):
+    """Kernel carrier flag of a network device ('1' when the link has carrier).
+
+    Returns 'none' when unreadable; reading carrier on a down interface raises
+    EINVAL, which is not an error worth distinguishing here.
+    """
+    try:
+        with open(os.path.join(SYS_NET_DIR, dev, "carrier")) as f:
+            return f.read().strip()
+    except OSError:
+        return "none"
+
+
 def read_wifi_signal_dbm(iface):
     """Signal level from /proc/net/wireless in dBm, or None."""
     try:
@@ -240,20 +258,25 @@ def listen_counts():
 
 
 def default_gateway(iface):
-    """Default-route gateway IP for the wifi interface, or None."""
+    """Default-route gateway IP reached *via* iface, or None.
+
+    Only routes whose `dev` is iface count. Falling back to some other
+    interface's gateway is worse than returning None: the caller pings it with
+    `-I <iface>`, so a wired gateway returned here is unreachable over an
+    unassociated wlan0 and reads as a Wi-Fi failure that recovery cannot fix.
+    """
     rc, out = run(["ip", "route", "show", "default"], timeout=5)
     if rc != 0:
         return None
     # Lines look like: "default via 192.168.1.1 dev wlan0 proto dhcp ..."
-    best = None
     for line in out.splitlines():
         parts = line.split()
-        if "via" in parts:
-            gw = parts[parts.index("via") + 1]
-            if iface in parts:
-                return gw  # prefer a route that is on our wifi iface
-            best = best or gw
-    return best
+        if "via" not in parts or "dev" not in parts:
+            continue
+        if parts[parts.index("dev") + 1] != iface:
+            continue
+        return parts[parts.index("via") + 1]
+    return None
 
 
 def iface_ip(iface):
@@ -282,12 +305,19 @@ def is_online(iface, target):
 
 # ---- Recovery ---------------------------------------------------------------
 
+# Latched once any wired link has been seen up. A USB ethernet adapter can read
+# as down for a sample or two while it re-enumerates, and a single such sample is
+# not a reason to start rebooting a unit that is plainly wired.
+_wired_ever_seen = False
+
+
 def ethernet_links_up():
     """Names of wired ethernet interfaces that are up.
 
     Filters on /sys/class/net/<dev>/type so can0 (280) and lo (772) don't count,
     and on the absence of a `wireless` directory so wlan0 - which is also type 1 -
-    doesn't count itself.
+    doesn't count itself. `carrier` counts as up alongside `operstate`, since some
+    USB ethernet drivers leave operstate at "unknown" while the link is live.
     """
     try:
         names = sorted(os.listdir(SYS_NET_DIR))
@@ -305,9 +335,25 @@ def ethernet_links_up():
                     continue
         except OSError:
             continue
-        if read_operstate(name) == "up":
+        if read_operstate(name) == "up" or read_carrier(name) == "1":
             up.append(name)
     return up
+
+
+def wired_link_present():
+    """(is_wired, description) - whether this unit is reachable over ethernet.
+
+    Latches: once a wired link has been seen up, this unit stays classified as
+    wired for the life of the process.
+    """
+    global _wired_ever_seen
+    up = ethernet_links_up()
+    if up:
+        _wired_ever_seen = True
+        return True, ", ".join(up)
+    if _wired_ever_seen:
+        return True, "seen earlier this boot"
+    return False, ""
 
 
 def saved_wifi_networks():
@@ -331,20 +377,21 @@ def recovery_blocked_reason(uptime_s):
 
     Cases where being offline is not something recovery can fix, and where
     escalating to a reboot would just loop:
+      - a wired link, so the unit is reachable no matter what Wi-Fi is doing.
+        Checked first and unconditionally: on a wired unit we only ever observe
+        and log Wi-Fi, never act on it.
       - too soon after boot, when Wi-Fi has simply not associated yet
-      - a wired link is up, so the unit is reachable and rebooting it would only
-        interrupt whatever is running over ethernet
       - no saved Wi-Fi network, so the unit has nothing to associate with
     Unknown uptime or an unreadable profile list is not treated as blocking; a
     watchdog that disables itself on missing diagnostics is worse than one that
     retries.
     """
+    wired, how = wired_link_present()
+    if wired:
+        return f"ethernet is up ({how}) -- wired units are observe-only"
+
     if uptime_s is not None and uptime_s < MIN_UPTIME_S:
         return f"only {uptime_s:.0f}s since boot (< {MIN_UPTIME_S}s)"
-
-    wired = ethernet_links_up()
-    if wired:
-        return f"ethernet is up ({', '.join(wired)})"
 
     saved = saved_wifi_networks()
     if saved == 0:
@@ -367,10 +414,20 @@ def recover(log, iface):
         return is_online(iface, gw)
 
     name = "brcmfmac module reload (real power cycle)"
+    # NetworkManager and wpa_supplicant hold wlan0 open, which pins the module:
+    # a bare `modprobe -r` fails with "Module brcmfmac is in use" every time and
+    # the reload silently degrades into an unconditional reboot. Turn the radio
+    # off first so NM tears the interface down and the supplicant lets go, then
+    # turn it back on afterwards so NM re-activates the saved profile.
     cmds = [
+        sudo(["nmcli", "radio", "wifi", "off"]),
+        ["sleep", "2"],
+        sudo(["ip", "link", "set", iface, "down"]),
         sudo(["modprobe", "-r", "brcmfmac", "brcmutil"]),
         ["sleep", "2"],
         sudo(["modprobe", "brcmfmac"]),
+        ["sleep", "2"],
+        sudo(["nmcli", "radio", "wifi", "on"]),
     ]
     log.write("RECOVER", f"attempting: {name}")
     for cmd in cmds:

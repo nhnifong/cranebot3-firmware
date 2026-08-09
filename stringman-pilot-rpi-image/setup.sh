@@ -16,10 +16,18 @@ run_in_chroot() {
     chroot "$ROOTFS_DIR" /bin/bash -c "$1"
 }
 
-# Install NetworkManager Wifi Connection
-echo "Installing Wifi Config from preconfigured-wifi.nmconnection"
-# NetworkManager connections must be owned by root and have 600 permissions
-install -m 600 -o root -g root "preconfigured.nmconnection" "$ROOTFS_DIR/etc/NetworkManager/system-connections/preconfigured.nmconnection"
+# Install NetworkManager Wifi Connection, but only if an SSID has actually been
+# filled in. NetworkManager rejects a profile with an empty ssid outright --
+# "802-11-wireless.ssid: SSID length is out of range <1-32> bytes" -- so shipping
+# a blank one gains nothing and leaves an unloadable file that makes the unit
+# look like it has a saved network when it has none.
+if grep -qE '^ssid=.+' "preconfigured.nmconnection"; then
+    echo "Installing Wifi Config from preconfigured.nmconnection"
+    # NetworkManager connections must be owned by root and have 600 permissions
+    install -m 600 -o root -g root "preconfigured.nmconnection" "$ROOTFS_DIR/etc/NetworkManager/system-connections/preconfigured.nmconnection"
+else
+    echo "preconfigured.nmconnection has no ssid set; skipping (unit will onboard via the QR code scanner)"
+fi
 
 # Disable Wi-Fi power save
 # (wifi.powersave = 2 => disabled) for all connections.
@@ -102,7 +110,7 @@ run_in_chroot "systemctl enable cranebot.service"
 # offline by reloading the brcmfmac module, then rebooting if that fails.
 install -m 755 wifi_thermal_watchdog.py "$ROOTFS_DIR/usr/local/bin/wifi_thermal_watchdog.py"
 install -m 644 wifi-thermal-watchdog.service "$ROOTFS_DIR/etc/systemd/system/wifi-thermal-watchdog.service"
-#run_in_chroot "systemctl enable wifi-thermal-watchdog.service"
+run_in_chroot "systemctl enable wifi-thermal-watchdog.service"
 
 # Install a one time filesystem resize service on first boot to expand to fill the SD card
 install -m 755 resize-rootfs.sh "$ROOTFS_DIR/usr/local/sbin/resize-rootfs.sh"
