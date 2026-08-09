@@ -500,6 +500,7 @@ def build(
     action_space = recipe.get("action_space")
     keep_state_features = recipe.get("keep_state_features")
     normalize_tasks_spec = recipe.get("normalize_tasks")
+    drop_features = recipe.get("drop_features")
     label_cfg = recipe.get("label_contact_actions") or {}
     do_label = bool(label_cfg.get("enabled", False))
     do_recompute = bool(recipe.get("recompute_stats", False))
@@ -563,6 +564,7 @@ def build(
                 if action_space == camera_goal.ACTION_SPACE_NAME else None
             ),
             camera_goal_label_cfg=label_cfg,
+            drop_features=drop_features,
         )
         validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode)
 

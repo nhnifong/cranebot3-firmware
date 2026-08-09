@@ -191,6 +191,7 @@ def derive_dataset(
     normalize_tasks_spec: dict | None = None,
     camera_goal_anchor_poses: list | None = None,
     camera_goal_label_cfg: dict | None = None,
+    drop_features: list[str] | None = None,
 ) -> LeRobotDataset:
     if camera_mode not in _CAMERA_MODES:
         raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
@@ -218,6 +219,18 @@ def derive_dataset(
             )
 
     features_to_remove = [key for key in dataset.meta.video_keys if key not in target_keys]
+
+    # Non-video features the recipe asks to drop. Sources recorded at different times
+    # vary in whether they carry extras like anchor_poses, and the merge insists every
+    # source have an identical feature set, so an extra on one source fails the whole
+    # build. Only dropped where present; naming a feature no source has is a no-op.
+    if drop_features:
+        if camera_goal_anchor_poses is not None and camera_goal.ANCHOR_POSES_KEY in drop_features:
+            raise ValueError(
+                f"cannot drop '{camera_goal.ANCHOR_POSES_KEY}': the "
+                f"'{camera_goal.ACTION_SPACE_NAME}' action space conversion reads it"
+            )
+        features_to_remove += [k for k in drop_features if k in dataset.meta.features]
 
     if features_to_remove:
         logging.info(f"Removing features: {features_to_remove}")

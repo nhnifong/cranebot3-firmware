@@ -75,6 +75,13 @@ keep_state_features:
   - trashcan_bearing
   - trashcan_distance
 
+# Datasets recorded after the anchor_poses feature was added carry their recorded
+# calibration; the older ones don't. This recipe keeps the recorded action space,
+# which never reads anchor_poses, so drop it everywhere rather than let the mismatch
+# fail the merge.
+drop_features:
+  - anchor_poses
+
 normalize_tasks: move_clutter_rect_tasks.yaml
 
 label_contact_actions:
