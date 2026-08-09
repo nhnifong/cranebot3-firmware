@@ -8,9 +8,13 @@
 mmdebstrap:
   packages:
     - build-essential
-    # lgpio publishes wheels only up to cp312, and trixie is on python 3.13, so
-    # pip falls back to its sdist -- which generates its C extension with SWIG.
-    - swig
+    # Adafruit-Blinka pulls in lgpio, which publishes wheels only up to cp312
+    # while trixie is on python 3.13. Pip therefore falls back to its sdist,
+    # which needs SWIG to generate the wrapper and liblgpio to link against --
+    # neither of which is in a minbase image. Installing Debian's build of the
+    # same version instead satisfies the requirement outright (the venv is
+    # created with --system-site-packages), so nothing has to be compiled.
+    - python3-lgpio
     - cloud-guest-utils
     - python3-dev
     - python3-venv
