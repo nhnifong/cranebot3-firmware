@@ -340,23 +340,35 @@ class TestCloudLink(TelemetryManagerTestBase):
                         'credentials_updated must not wait out a retry interval')
 
     async def test_rebinding_reconnects_with_the_new_credentials(self):
-        """Rebinding to different credentials drops the link and reconnects under the new
-        robot id.
+        """Rebinding a settled link to different credentials drops it and reconnects under
+        the new robot id -- the shape of a real rebind, which arrives from a human long
+        after the link came up.
 
         Checked one step at a time -- connected, then dropped, then reconnected, then under
-        the right id -- because this is the test that fails on the Windows CI runner and
-        never on Linux or macOS, and a single combined assertTrue() only ever said 'False is
-        not true'. Each step names what it was waiting for, how long it waited, and the
-        state of the cloud task, so the CI log identifies the step that stalls.
+        the right id -- because when this failed on the Windows CI runner (and never on
+        Linux or macOS) a single combined assertTrue() only ever said 'False is not true'.
+        Each step names what it was waiting for, how long it waited, and the state of the
+        cloud link, so a CI log identifies the step that stalls.
         """
         r7, r8 = '/telemetry_v2/r7', '/telemetry_v2/r8'
 
         self.bind(robot_id='r7')
         self.tm.start_cloud_link()
+        # Wait for the link to be *established*, not merely accepted: the relay appends the
+        # path when it accepts the handshake, a round trip before the client returns from
+        # connect() and the manager publishes cloud_websocket. on_peer_connected fires after
+        # that, so it's the signal that the link is fully up on both ends.
         self.assertTrue(
-            await self.wait_for(lambda: self.relay_paths == [r7]),
+            await self.wait_for(lambda: self.relay_paths == [r7] and self.connects == [CLOUD]),
             f'never connected with the original credentials after {self.waited:.2f}s: '
-            f'relay_paths={self.relay_paths}, {self.cloud_task_state()}')
+            f'relay_paths={self.relay_paths}, connects={self.connects}, '
+            f'{self.cloud_socket_state()}, {self.cloud_task_state()}')
+
+        # A real rebind arrives at human speed, long after the link has settled. Let it
+        # settle here too rather than rebinding the instant the handshake lands.
+        await asyncio.sleep(0.2)
+        self.assertEqual(self.relay_paths, [r7], 'link did not stay put before the rebind')
+        self.assertIsNotNone(self.tm.cloud_websocket)
 
         self.bind(robot_id='r8', key='k2')
         self.tm.credentials_updated()

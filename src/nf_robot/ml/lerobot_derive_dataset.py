@@ -294,7 +294,11 @@ def derive_dataset(
                     )
                 ] = (path, tmp_path)
             for future in tqdm(as_completed(futures), total=len(futures), desc=f"Resizing {key}"):
-                future.result()  # re-raises any encoding exception
+                try:
+                    future.result()  # re-raises any encoding exception
+                except Exception as e:
+                    # the worker's traceback has no idea which file it was handed
+                    raise RuntimeError(f"failed to resize {repo_id} {key} video {futures[future][0]}") from e
             for path, tmp_path in futures.values():
                 tmp_path.replace(path)
 

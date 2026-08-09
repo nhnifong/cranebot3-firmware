@@ -231,6 +231,17 @@ class TelemetryManager:
                     additional_headers={"Authorization": f"Bearer {creds.key}"},
                 ) as websocket:
                     self.cloud_websocket = websocket
+                    if self._creds_updated.is_set():
+                        # The credentials changed while this connection was being
+                        # established, so credentials_updated() ran while cloud_websocket
+                        # was still None and had nothing to close. Drop this link before
+                        # announcing it; the next iteration connects with the new
+                        # credentials. Without this the robot stays bound to the stale ones
+                        # until something else happens to drop the link, because the read
+                        # loop below never checks for new credentials.
+                        logger.info('Credentials changed while connecting; reconnecting')
+                        self.cloud_websocket = None
+                        continue
                     logger.info(f'Connected to control plane {ws_path}')
                     # send anything that it would need up-front
                     await self._on_peer_connected(CLOUD)
