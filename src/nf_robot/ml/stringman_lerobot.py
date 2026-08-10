@@ -176,6 +176,9 @@ class StringmanConfig(RobotConfig):
     remote_stream_token: str | None = None
     camera_mode: str = "all"
     action_space: str = DEFAULT_ACTION_SPACE
+    # eval-only: commit to one camera_goal destination instead of steering at every
+    # prediction. Off by default, and inert for every other action space.
+    stabilize_goals: bool = False
 
 def decode_image(jpeg_bytes):
     try:
@@ -233,6 +236,7 @@ class StringmanLeRobot(Robot):
         # anchor camera poses from the observer, needed to place camera_goal
         # predictions back in the room. empty until the observer sends them.
         self.anchor_poses = []
+        self.goal_stabilizer = camera_goal.GoalStabilizer() if config.stabilize_goals else None
 
         self.events = events
 
@@ -639,10 +643,25 @@ class StringmanLeRobot(Robot):
 
     def _send_camera_goal_action(self, action: dict[str, Any]) -> dict[str, Any]:
         """Drive toward a camera_goal prediction. See camera_goal.py for the action space."""
+        stabilizer = self.goal_stabilizer
         goal_room, spread = camera_goal.fuse_goal_to_room(
-            action, self.last_gripper_pos, self.last_gripper_rot_6d, self.anchor_poses
+            action, self.last_gripper_pos, self.last_gripper_rot_6d, self.anchor_poses,
+            robust=stabilizer is not None,
         )
-        if goal_room is None:
+        if stabilizer is not None:
+            # steer at a committed destination rather than at this frame's prediction
+            previous = stabilizer.reason
+            destination = stabilizer.update(
+                goal_room, spread, self.last_gripper_pos, time.time(),
+                hold=abs(float(action.get('finger_speed', 0.0))) > 1e-6,
+            )
+            if stabilizer.reason != previous:
+                shown = np.round(destination, 3) if destination is not None else None
+                print(f'camera_goal: {stabilizer.reason} -> {shown}')
+            velocity = stabilizer.velocity(self.last_gripper_pos)
+            self.last_goal_room = destination
+            self.last_goal_spread = spread
+        elif goal_room is None:
             print('camera_goal: no usable camera goal in the action; holding still')
             velocity = np.zeros(3)
         else:
@@ -1118,6 +1137,8 @@ def eval_episode(
     policy.reset()
     preprocessor.reset()
     postprocessor.reset()
+    if robot.goal_stabilizer is not None:
+        robot.goal_stabilizer.reset()
     policy_device = get_device_from_parameters(policy)
 
     while timestamp < max_episode_duration:
@@ -1217,7 +1238,8 @@ def load_training_metadata(dataset_repo_id):
         ) from e
 
 
-def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=None, camera_mode=None):
+def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=None, camera_mode=None,
+                            stabilize_goals=False):
     import torch
     import json
     from huggingface_hub import hf_hub_download
@@ -1245,7 +1267,8 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
 
     # connect to the robot right away because it is our channel to send error messages back to the user.
     print(f"Connecting to robot...")
-    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode, action_space=action_space), events)
+    robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode,
+                                             action_space=action_space, stabilize_goals=stabilize_goals), events)
     print(describe_session_spaces(camera_mode, action_space, robot.observation_features, robot.action_features))
     robot.connect()
 
@@ -1354,6 +1377,9 @@ if __name__ == "__main__":
     eval_parser = subparsers.add_parser('eval', parents=[parent_parser], help="Evaluate existing policy")
     eval_parser.add_argument("--policy_id", default="naavox/grasping_act_policy", help="repo id of policy to load")
     eval_parser.add_argument("--camera_mode", default=None, choices=camera_mode_choices, help="override the camera setup inferred from the policy's training dataset")
+    eval_parser.add_argument("--stabilize_goals", action="store_true",
+                             help="camera_goal policies only: commit to one destination and drive to it, "
+                                  "instead of steering at every prediction. Ignored by other action spaces.")
 
     args = parser.parse_args()
     uri = f'{args.server_address}/control/{args.robot_id}'
@@ -1362,6 +1388,7 @@ if __name__ == "__main__":
     print(f'Connecting to robot at {uri}')
 
     if args.command == 'eval':
-        eval_until_disconnected(uri, args.policy_id, args.robot_id, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode)
+        eval_until_disconnected(uri, args.policy_id, args.robot_id, remote_stream_token=args.remote_stream_token,
+                                camera_mode=args.camera_mode, stabilize_goals=args.stabilize_goals)
     else:
         record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode, action_space=args.action_space, vcodec=args.vcodec)

@@ -53,6 +53,7 @@ Each camera's pose in the room is then needed to express that goal in its frame:
     of the robot that recorded the dataset, which must be supplied per source
 """
 
+import collections
 import json
 import logging
 import os
@@ -547,7 +548,7 @@ def _wrist_offsets(wrist_angles_deg, timestamps, anticipate=True):
 # Runtime: camera_goal -> robot control
 # --------------------------------------------------------------------------
 
-def fuse_goal_to_room(action, gripper_pos, gripper_rot_6d, anchor_poses):
+def fuse_goal_to_room(action, gripper_pos, gripper_rot_6d, anchor_poses, robust=False):
     """Fuse the per-camera goal predictions into one room-frame goal.
 
     Returns (goal_room, spread) where spread is the mean distance of the
@@ -576,9 +577,138 @@ def fuse_goal_to_room(action, gripper_pos, gripper_rot_6d, anchor_poses):
 
     estimates = np.array(estimates)
     weights = np.array(weights, dtype=float)
-    goal = np.average(estimates, axis=0, weights=weights)
+    if robust and len(estimates) > 2:
+        # one head that has lost the target drags a mean but not a median
+        goal = np.median(estimates, axis=0)
+    else:
+        goal = np.average(estimates, axis=0, weights=weights)
     spread = float(np.mean(np.linalg.norm(estimates - goal, axis=1)))
     return goal, spread
+
+
+
+# --------------------------------------------------------------------------
+# Turning a stream of predictions into a destination (opt-in at eval time)
+# --------------------------------------------------------------------------
+
+# Measured on naavox/xvla-camera-goal over 40 consecutive frames of a training
+# episode: the 30 steps within one inference agree on the goal to 0.017m, but
+# successive inferences land 0.102m apart while the whole 1.3s window spans only
+# 0.122m. The signal is steady and the sampling is noisy, so a rolling median over
+# half a second cuts per-frame movement to 0.010m - below the arrival radius, i.e. a
+# destination that can actually be converged on. A 1s window measured no better.
+MEDIAN_WINDOW_FRAMES = 15
+ARRIVAL_RADIUS_M = 0.08
+# A new destination has to disagree with the latched one by this much, this long,
+# before it replaces it. Well above the 0.01m residual jitter, well below a real move.
+CHALLENGE_DISTANCE_M = 0.25
+CHALLENGE_SECONDS = 0.5
+# Escapes, so a latch onto something unreachable cannot hold forever.
+STALL_SECONDS = 4.0
+STALL_PROGRESS_M = 0.05
+# Cross-camera disagreement above which a prediction is not trusted to move the latch.
+# In-distribution it measures ~0.06m; on a room the policy had never seen, ~1.8m.
+SPREAD_GATE_M = 0.30
+APPROACH_GAIN = 1.0
+MIN_APPROACH_SPEED = 0.05
+
+
+class GoalStabilizer:
+    """Commit to one destination instead of steering at every prediction.
+
+    Without this, each inference sets a new setpoint: at 30Hz the robot is told to go
+    somewhere 0.1m from the last instruction while only travelling 8mm in between, so
+    it never arrives anywhere. This keeps a latched destination and replaces it only on
+    arrival, on a sustained disagreement, on a stall, or when the caller says the phase
+    changed - and drives to it with a proportional approach so it settles rather than
+    running at full speed until a deadband.
+
+    Everything here is eval-side; the labels and the policy are untouched.
+    """
+
+    def __init__(self, window=MEDIAN_WINDOW_FRAMES, arrival_radius=ARRIVAL_RADIUS_M,
+                 challenge_distance=CHALLENGE_DISTANCE_M, challenge_seconds=CHALLENGE_SECONDS,
+                 stall_seconds=STALL_SECONDS, spread_gate=SPREAD_GATE_M):
+        self.window = window
+        self.arrival_radius = arrival_radius
+        self.challenge_distance = challenge_distance
+        self.challenge_seconds = challenge_seconds
+        self.stall_seconds = stall_seconds
+        self.spread_gate = spread_gate
+
+        self._recent = collections.deque(maxlen=window)
+        self.destination = None
+        self.reason = "no destination yet"
+        self._challenger_since = None
+        self._best_distance = None
+        self._best_at = None
+
+    def reset(self):
+        self._recent.clear()
+        self.destination = None
+        self.reason = "reset"
+        self._challenger_since = None
+        self._best_distance = None
+        self._best_at = None
+
+    def _adopt(self, goal, now, reason):
+        self.destination = np.asarray(goal, dtype=float)
+        self.reason = reason
+        self._challenger_since = None
+        self._best_distance = None
+        self._best_at = now
+
+    def update(self, goal_room, spread, gripper_pos, now, hold=False):
+        """Feed one prediction; returns the destination to drive to, or None.
+
+        hold freezes the destination outright - used while the fingers are closing,
+        when a wandering setpoint does the most damage.
+        """
+        if goal_room is not None:
+            self._recent.append(np.asarray(goal_room, dtype=float))
+        if not self._recent:
+            return None
+
+        candidate = np.median(np.array(self._recent), axis=0)
+        trusted = spread is None or spread <= self.spread_gate
+
+        if self.destination is None:
+            if trusted and len(self._recent) >= max(2, self.window // 3):
+                self._adopt(candidate, now, "first destination")
+            return self.destination
+
+        if hold:
+            self.reason = "held (grasping)"
+            return self.destination
+
+        distance = float(np.linalg.norm(self.destination - np.asarray(gripper_pos, dtype=float)))
+        if self._best_distance is None or distance < self._best_distance - STALL_PROGRESS_M:
+            self._best_distance, self._best_at = distance, now
+
+        if distance <= self.arrival_radius:
+            self._adopt(candidate, now, "arrived, taking the next destination")
+        elif now - self._best_at > self.stall_seconds:
+            self._adopt(candidate, now, f"stalled {self.stall_seconds:.0f}s short of it")
+        elif trusted and float(np.linalg.norm(candidate - self.destination)) > self.challenge_distance:
+            if self._challenger_since is None:
+                self._challenger_since = now
+            elif now - self._challenger_since >= self.challenge_seconds:
+                self._adopt(candidate, now, "predictions moved and stayed moved")
+        else:
+            self._challenger_since = None
+
+        return self.destination
+
+    def velocity(self, gripper_pos, speed=APPROACH_SPEED, gain=APPROACH_GAIN,
+                 min_speed=MIN_APPROACH_SPEED):
+        """Proportional approach to the latched destination; zero once inside it."""
+        if self.destination is None:
+            return np.zeros(3)
+        delta = self.destination - np.asarray(gripper_pos, dtype=float)
+        distance = float(np.linalg.norm(delta))
+        if distance <= self.arrival_radius:
+            return np.zeros(3)
+        return delta / distance * float(np.clip(gain * distance, min_speed, speed))
 
 
 def wrist_offset_to_speed(offset_rad, gain=WRIST_GAIN, max_speed=WRIST_MAX_SPEED,
