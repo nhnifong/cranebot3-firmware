@@ -1635,7 +1635,7 @@ class AsyncObserver:
             # horizontal half-extent) keeps its configured value.
             _, half_w, _ = self.diamond_size
             # how far below the top of the work area (upper_z) the gantry's top point should stay.
-            TOP_MARGIN_M = 1.0
+            TOP_MARGIN_M = 1.15
 
             results = {}
             line_deltas = {}
