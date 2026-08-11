@@ -29,12 +29,14 @@ export class DynamicRoom {
     // Kick off loading (or attach to existing loading process)
     this.ready = this.loadSharedModel();
 
-    // Define Default State (4 Ceiling Corners)
+    // Default State, one per corner source and in the same slot order as the shared corners
+    // array in main.ts: 0-1 anchors, 2-3 eyelets. Overwritten by updateCeilingCorner as poses
+    // arrive; the placeholder layout only has to be a box.
     this.corners = [
-      new THREE.Vector3(2.5, 3, -2.5), // 0: Front Right
-      new THREE.Vector3(2.5, 3, 2.5),  // 1: Back Right
-      new THREE.Vector3(-2.5, 3, 2.5), // 2: Back Left
-      new THREE.Vector3(-2.5, 3, -2.5) // 3: Front Left
+      new THREE.Vector3(2.5, 3, 2.5),   // 0: anchor 0
+      new THREE.Vector3(2.5, 3, -2.5),  // 1: anchor 1
+      new THREE.Vector3(-2.5, 3, -2.5), // 2: eyelet 2
+      new THREE.Vector3(-2.5, 3, 2.5)   // 3: eyelet 3
     ];
 
     // Setup BufferGeometry
@@ -89,18 +91,11 @@ export class DynamicRoom {
       }
   }
 
-  updateCeilingCorner(x: number, y: number, z: number) {
-    let index = -1;
-
-    // Determine index based on Quadrants
-    if (x > 0) {
-      // If X is Positive: Z negative is index 0, Z positive is index 1
-      index = z < 0 ? 0 : 1;
-    } else {
-      // If X is Negative: Z positive is index 2, Z negative is index 3
-      index = z > 0 ? 2 : 3;
-    }
-
+  /**
+   * Move one corner of the room. index identifies which of the four pull points this is
+   * (0-1 anchors, 2-3 eyelets), matching the shared corners array in main.ts.
+   */
+  updateCeilingCorner(index: number, x: number, y: number, z: number) {
     if (this.corners[index]) {
       this.corners[index].set(x, y, z);
       this.updateGeometry();
@@ -141,7 +136,18 @@ export class DynamicRoom {
   private updateGeometry() {
     const positions = this.geometry.attributes.position;
 
-    this.corners.forEach((pt, i) => {
+    // The index buffer walks the ceiling vertices around the perimeter, but the corners arrive
+    // in topological order (2 anchors, then 2 eyelets) which is a bowtie: anchor 0 and anchor 1
+    // are diagonally opposite. Sorting by angle about the centroid recovers the perimeter for
+    // any convex quad at any room yaw. Ascending atan2 keeps the winding the index buffer
+    // expects, and the cyclic start point does not matter.
+    const cx = this.corners.reduce((s, p) => s + p.x, 0) / this.corners.length;
+    const cz = this.corners.reduce((s, p) => s + p.z, 0) / this.corners.length;
+    const ring = [...this.corners].sort(
+      (a, b) => Math.atan2(a.z - cz, a.x - cx) - Math.atan2(b.z - cz, b.x - cx)
+    );
+
+    ring.forEach((pt, i) => {
       // Set Ceiling Vertex (Indices 0-3)
       positions.setXYZ(i, pt.x, pt.y, pt.z);
       // Set Floor Vertex (Indices 4-7) -> Projected to Y=0

@@ -15,11 +15,13 @@ export class Eyelet {
     // properties used to update the room walls when eyelet pose changes.
     private room: DynamicRoom;
     private wallCorner: THREE.Object3D | undefined;
+    private cornerIndex: number;
     private grommet: THREE.Object3D | undefined;
 
-    constructor(scene: THREE.Scene, room: DynamicRoom) {
+    constructor(scene: THREE.Scene, room: DynamicRoom, cornerIndex: number) {
         this.scene = scene;
         this.room = room;
+        this.cornerIndex = cornerIndex;
 
         this.root = new THREE.Group();
         this.scene.add(this.root);
@@ -66,7 +68,7 @@ export class Eyelet {
         this.root.updateMatrixWorld(true);
         const pos = new THREE.Vector3();
         this.wallCorner.getWorldPosition(pos);
-        this.room.updateCeilingCorner(pos.x, pos.y, pos.z);
+        this.room.updateCeilingCorner(this.cornerIndex, pos.x, pos.y, pos.z);
     }
 
     /**

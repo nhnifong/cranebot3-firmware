@@ -153,7 +153,7 @@ const acoords = [
 ];
 
 const corners: (ArpAnchor | Eyelet)[] = acoords.map((ac, i) => {
-  const corner: ArpAnchor | Eyelet = i < 2 ? new ArpAnchor(scene, room) : new Eyelet(scene, room);
+  const corner: ArpAnchor | Eyelet = i < 2 ? new ArpAnchor(scene, room, i) : new Eyelet(scene, room, i);
   corner.setPose(nf.common.Pose.create({
     position: { x: ac.x, y: ac.y, z: 3 },
     rotation: { x: 0, y: 0, z: ac.rotZ }
