@@ -405,3 +405,27 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
             
         await self._send_control(set_swing_cancellation=control.SetSwingCancellation(enabled=False, present='.'))
         self.assertTrue(self.ob.swing_cancellation_task.done() or self.ob.swing_cancellation_task.cancelled())
+
+    async def test_swing_cancellation_survives_half_cal(self):
+        """Half calibration turns swing cancellation off for the duration and must turn it
+        back on afterwards, both as a running task and in what the UI is told."""
+        await self._setup_fully_connected_system()
+
+        await self._send_control(set_swing_cancellation=control.SetSwingCancellation(enabled=True, present='.'))
+        await asyncio.sleep(0.2)
+        self.assertFalse(self.ob.swing_cancellation_task.done(), 'precondition: swing cancellation is on')
+        self.assertIn('swingc', self.ob.active_set)
+
+        await self._send_control(command=control.CommonCommand(name=control.Command.HALF_CAL))
+        self.assertEqual(self.ob.motion_task.get_name(), 'half_auto_calibration')
+        done, pending = await asyncio.wait([self.ob.motion_task], timeout=30.0)
+        self.assertFalse(pending, 'half calibration did not finish')
+        await asyncio.sleep(0.3)  # let the restarted task reach its first loop iteration
+
+        self.assertFalse(
+            self.ob.swing_cancellation_task.done(),
+            'swing cancellation was on before half calibration and must be running after it',
+        )
+        self.assertIn('swingc', self.ob.active_set)
+        swing_telem = self._get_latest_telemetry('swing_cancellation_state')
+        self.assertTrue(swing_telem.enabled, 'UI was last told swing cancellation is off')
