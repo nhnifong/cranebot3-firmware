@@ -656,11 +656,8 @@ class LabelSession:
         self.train_dir = os.path.join(LOCAL_DATASET_ROOT, "train")
         self.metadata_path = os.path.join(self.train_dir, "metadata.jsonl")
         os.makedirs(self.train_dir, exist_ok=True)
-
-        readme_path = os.path.join(LOCAL_DATASET_ROOT, "README.md")
-        if not os.path.exists(readme_path):
-            with open(readme_path, "w") as f:
-                f.write("---\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: train/metadata.jsonl\n---\n")
+        open(self.metadata_path, "a").close()
+        _write_readme(LOCAL_DATASET_ROOT)
 
     def pick_next(self):
         if not os.path.exists(HEATMAP_UNPROCESSED_DIR):
@@ -932,27 +929,146 @@ def label_mode(args):
 
     upload_prompt(args)
 
+def _read_metadata(path):
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+def _write_metadata(path, entries):
+    with open(path, 'w') as f:
+        for entry in entries:
+            f.write(json.dumps(entry) + "\n")
+
+def _write_readme(root):
+    """Declares the splits that exist on disk; a config pointing at a missing
+    metadata.jsonl makes the dataset unloadable."""
+    splits = [("train", "train"), ("test", "eval")]
+    lines = ["---", "configs:", "- config_name: default", "  data_files:"]
+    for split_name, dirname in splits:
+        if os.path.exists(os.path.join(root, dirname, "metadata.jsonl")):
+            lines += [f"  - split: {split_name}", f"    path: {dirname}/metadata.jsonl"]
+    lines.append("---\n")
+    with open(os.path.join(root, "README.md"), "w") as f:
+        f.write("\n".join(lines))
+
+def merge_hub_into_local(args):
+    """Copies every hub sample missing locally into LOCAL_DATASET_ROOT, under its hub split.
+
+    upload_folder replaces metadata.jsonl wholesale, so any hub sample absent from the
+    local copy would survive only as an image with no label referencing it."""
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import RepositoryNotFoundError
+
+    try:
+        hub_path = snapshot_download(repo_id=args.dataset_id, repo_type="dataset")
+    except RepositoryNotFoundError:
+        print(f"{args.dataset_id} does not exist yet; uploading local data as the initial dataset.")
+        return
+
+    samples = {}  # file_name -> (points, split)
+    for split in ("train", "eval"):
+        for entry in _read_metadata(os.path.join(LOCAL_DATASET_ROOT, split, "metadata.jsonl")):
+            samples[entry["file_name"]] = (entry["points"], split)
+
+    added = 0
+    moved = 0
+    restored = 0
+    orphaned_labels = 0
+    for split in ("train", "eval"):
+        split_dir = os.path.join(LOCAL_DATASET_ROOT, split)
+        for entry in _read_metadata(os.path.join(hub_path, split, "metadata.jsonl")):
+            fname = entry["file_name"]
+            local = samples.get(fname)
+
+            if local is None:
+                src_path = os.path.join(hub_path, split, fname)
+                if not os.path.exists(src_path):
+                    orphaned_labels += 1
+                    continue
+                os.makedirs(split_dir, exist_ok=True)
+                shutil.copyfile(src_path, os.path.join(split_dir, fname))
+                samples[fname] = (entry["points"], split)
+                added += 1
+            elif local[1] != split:
+                # The hub's assignment wins, so a sample already used for evaluation is
+                # never pulled back into training by a later local session.
+                old_path = os.path.join(LOCAL_DATASET_ROOT, local[1], fname)
+                hub_img = os.path.join(hub_path, split, fname)
+                if not os.path.exists(old_path) and not os.path.exists(hub_img):
+                    del samples[fname]
+                    orphaned_labels += 1
+                    continue
+                os.makedirs(split_dir, exist_ok=True)
+                if os.path.exists(old_path):
+                    shutil.move(old_path, os.path.join(split_dir, fname))
+                else:
+                    shutil.copyfile(hub_img, os.path.join(split_dir, fname))
+                samples[fname] = (local[0], split)
+                moved += 1
+            elif not os.path.exists(os.path.join(split_dir, fname)):
+                hub_img = os.path.join(hub_path, split, fname)
+                if os.path.exists(hub_img):
+                    shutil.copyfile(hub_img, os.path.join(split_dir, fname))
+                    restored += 1
+
+    # Uploads prune hub images that are absent locally, so a label with no image on disk
+    # would end up pointing at a file the same commit deletes.
+    dangling = [name for name, (_, split) in samples.items()
+                if not os.path.exists(os.path.join(LOCAL_DATASET_ROOT, split, name))]
+    for name in dangling:
+        del samples[name]
+
+    for split in ("train", "eval"):
+        meta_path = os.path.join(LOCAL_DATASET_ROOT, split, "metadata.jsonl")
+        entries = [{"file_name": name, "points": points}
+                   for name, (points, s) in sorted(samples.items()) if s == split]
+        if entries or os.path.exists(meta_path):
+            _write_metadata(meta_path, entries)
+
+    print(f"Merged {added} sample(s) from {args.dataset_id}.")
+    if moved:
+        print(f"Moved {moved} sample(s) to match the hub's train/eval split.")
+    if restored:
+        print(f"Restored {restored} image(s) missing locally from the hub.")
+    if orphaned_labels + len(dangling):
+        print(f"Dropped {orphaned_labels + len(dangling)} label(s) with no image.")
+
 def upload_prompt(args):
     from huggingface_hub import HfApi, create_repo
     if not os.path.exists(LOCAL_DATASET_ROOT): return
-    
+
+    merge_hub_into_local(args)
+    _write_readme(LOCAL_DATASET_ROOT)
+
     print("\n" + "="*30)
     print(f"Data organized in '{LOCAL_DATASET_ROOT}'")
+    for split in ("train", "eval"):
+        count = len(_read_metadata(os.path.join(LOCAL_DATASET_ROOT, split, "metadata.jsonl")))
+        if count:
+            print(f"  {split}: {count} sample(s)")
     confirm = input(f"Upload to {args.dataset_id}? (y/n): ").strip().lower()
-    
+
     if confirm == 'y':
         api = HfApi()
         create_repo(args.dataset_id, repo_type="dataset", exist_ok=True)
         api.upload_folder(
             folder_path=LOCAL_DATASET_ROOT,
             repo_id=args.dataset_id,
-            repo_type="dataset"
+            repo_type="dataset",
+            # The local copy is a superset of the hub's labeled samples after the merge, so
+            # pruning removes images left behind by earlier uploads rather than live data.
+            delete_patterns=["*.jpg"],
         )
         print("Uploaded successfully.")
 
 def split_and_upload(args):
     print(f"Preparing to split dataset in {LOCAL_DATASET_ROOT}...")
-    
+
+    # Merge before splitting so the hub's samples take part in the shuffle instead of
+    # being appended afterwards with whatever split they already had.
+    merge_hub_into_local(args)
+
     train_dir = os.path.join(LOCAL_DATASET_ROOT, "train")
     eval_dir = os.path.join(LOCAL_DATASET_ROOT, "eval")
     train_meta = os.path.join(train_dir, "metadata.jsonl")
@@ -1007,10 +1123,6 @@ def split_and_upload(args):
 
     process_split(train_set, "train", train_dir, train_meta)
     process_split(eval_set, "eval", eval_dir, eval_meta)
-
-    readme_path = os.path.join(LOCAL_DATASET_ROOT, "README.md")
-    with open(readme_path, "w") as f:
-        f.write("---\nconfigs:\n- config_name: default\n  data_files:\n  - split: train\n    path: train/metadata.jsonl\n  - split: test\n    path: eval/metadata.jsonl\n---\n")
 
     upload_prompt(args)
 

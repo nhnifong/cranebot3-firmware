@@ -17,6 +17,7 @@ square_centering_data_unlabeled/
 square_centering_data/
 user_targets_data/
 target_heatmap_data/
+target_heatmap_data_merged/
 target_heatmap_data_unlabeled/
 src/nf_robot.egg-info
 # built playroom-ui bundle, copied in by scripts/build_release.sh
