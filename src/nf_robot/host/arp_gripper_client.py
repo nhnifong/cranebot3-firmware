@@ -319,8 +319,10 @@ class ArpeggioGripperClient(ComponentClient):
     def gripper_body_room_rotation(self, timestamp=None):
         """Rotation taking a vector in the z-up gripper body frame (pole down -z, x/y horizontal)
         to the room frame: the room heading from get_spin() composed with the swing tilt from
-        get_gripper_rvec(). timestamp evaluates both at that moment instead of now."""
-        R_heading = Rotation.from_rotvec([0.0, 0.0, self.get_spin(timestamp=timestamp)])
+        get_gripper_rvec(). timestamp evaluates both at that moment instead of now.
+
+        get_spin() is a clockwise bearing, so gripper->room is a rotation by -spin."""
+        R_heading = Rotation.from_rotvec([0.0, 0.0, -self.get_spin(timestamp=timestamp)])
         R_tilt = Rotation.from_rotvec(self.get_gripper_rvec(timestamp))
         return R_heading * R_tilt
 

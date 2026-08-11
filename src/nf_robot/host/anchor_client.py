@@ -639,7 +639,8 @@ class RaspiAnchorClient(ComponentClient):
                     self.gantry_pos_sightings.append(position)
 
                 if self.save_raw:
-                    self.raw_gant_poses.append(detection['p'])
+                    # capture time included so a consumer can select a window of stillness
+                    self.raw_gant_poses.append((timestamp, detection['p']))
 
             if name in OTHER_MARKERS:
                 offset = model_constants.basket_offset_inv if name.endswith('back') else model_constants.basket_offset

@@ -107,6 +107,12 @@ VERSION_GATES = {
 def _ignore_sigint():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
+def _robust_spread(points):
+    """Median distance from the median position: how far apart a handful of position samples
+    are, unmoved by the one bad detection a standard deviation would let dominate."""
+    P = np.asarray(points, dtype=float)
+    return float(np.median(np.linalg.norm(P - np.median(P, axis=0), axis=1)))
+
 def capture_gripper_image(ndimage, gripper_occupied=False):
     """
     Saves an image to the unprocessed directory. 
@@ -697,15 +703,20 @@ class AsyncObserver:
         enough to the ideal that it damps (rather than pumps), so nothing gets
         thrown around.
 
-        The coarse pass deliberately spreads its candidates wide (0, 0.6, 0.3) rather
-        than sweeping a narrow range: the ideal latency depends on host event-loop
-        contention and can land as high as ~0.6s. A spread this wide means some
-        candidates pump hard rather than damp, but the safety amplitude cap stops those
-        early, and whichever candidate is nearest the ideal still yields a clean, low
-        residual to lock onto. Set fine_pass=True to add a second pass that refines
-        around the coarse best.
+        The coarse pass spreads its candidates wide (0.3, 0, 0.6) rather than sweeping a
+        narrow range: the ideal latency depends on host event-loop contention and can land
+        as high as ~0.6s. A spread this wide means the outer candidates can pump hard
+        rather than damp, but the safety amplitude cap stops those early, and whichever
+        candidate is nearest the ideal still yields a clean, low residual to lock onto.
+
+        0.3 is tried first because it is usually the answer, and a coarse trial that already
+        damps well is close enough to refine around directly. Stopping there skips the two
+        candidates most likely to pump. Set fine_pass=True to add a second pass that refines
+        around the coarse best; the early stop only applies then, since the fine pass is what
+        supplies the trials MIN_TRIALS wants.
         """
-        COARSE_CANDS = (0.0, 0.6, 0.3)  # seconds; spread wide enough to bracket the ideal even under heavy loop contention
+        COARSE_CANDS = (0.3, 0.0, 0.6)  # seconds; spread wide enough to bracket the ideal even under heavy loop contention
+        COARSE_GOOD_ENOUGH_RAD = 0.15   # a coarse trial damped this well is worth refining around immediately
         FINE_HALF_WIDTH = 0.15       # fine pass spans +/- this around the coarse best (covers the gap between coarse samples)
         FINE_COUNT = 7
         FINE_CLIP = (0.0, 0.75)      # keep refined candidates within a sane latency range
@@ -722,7 +733,7 @@ class AsyncObserver:
         center_pos = np.array(self.pe.gant_pos, dtype=float)
         all_results = []      # (latency, residual) from every reliable trial
 
-        async def sweep(cands):
+        async def sweep(cands, stop_below=None):
             out = []
             for idx,lat in enumerate(cands):
                 if progress_range is not None:
@@ -760,6 +771,10 @@ class AsyncObserver:
                     out.append((lat, residual))
                     all_results.append((lat, residual))
                     logger.info(f'swing_latency {lat:.3f}s -> residual {residual*1000:.0f} mrad ({np.degrees(residual):.1f} deg){tag}')
+                    if stop_below is not None and residual < stop_below:
+                        logger.info(f'swing_latency {lat:.3f}s already damps below {stop_below*1000:.0f} mrad; '
+                                    f'skipping the remaining coarse candidates and refining around it')
+                        return out
                 else:
                     logger.info(f'swing_latency {lat:.3f}s -> unreliable, excluded{tag}')
                 await asyncio.sleep(0.3)
@@ -768,7 +783,7 @@ class AsyncObserver:
         self.tension_over_limit = False  # clear any stale trip so the first trial isn't cut short
         self.swing_cal_in_progress = True  # let passive_safety recover (not abort) on a tension trip here
         try:
-            coarse = await sweep(COARSE_CANDS)
+            coarse = await sweep(COARSE_CANDS, stop_below=COARSE_GOOD_ENOUGH_RAD if fine_pass else None)
             if coarse and fine_pass:
                 best_coarse = min(coarse, key=lambda r: r[1])[0]
                 # Recenter before the fine pass so the trials we care about start with
@@ -1538,7 +1553,7 @@ class AsyncObserver:
         # next time anything (e.g. swing cancellation) triggers a combined move.
         self.input_velocities['default'] = (np.zeros(3), time.monotonic())
 
-    def snapshot_tag_observations(self):
+    def snapshot_tag_observations(self, gantry_since=None):
         """Recent origin detections and cal_assist marker detections
 
         returns a dict of raw observations of various markers
@@ -1547,6 +1562,10 @@ class AsyncObserver:
         # for the arp anchor, the shape would be (2,12,2,3)
 
         'marker_name': array(n_anchors, n_observations, 2, 3)
+
+        gantry_since keeps only gantry sightings captured at or after that time.time() timestamp.
+        The consistency residual reads a marker's batch as repeated looks at one static point, so
+        restrict it to a window in which the gantry was standing still.
         """
         markers = ['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3', 'gantry']
         raw_obs = defaultdict(lambda: [[]]*N_ANCHORS)
@@ -1554,11 +1573,76 @@ class AsyncObserver:
             # copy each list of detections, but leave them in the camera's reference frame.
             for marker in markers:
                 if marker == 'gantry':
-                    raw_obs[marker][client.anchor_num] = list(client.raw_gant_poses)
+                    raw_obs[marker][client.anchor_num] = [
+                        pose for ts, pose in list(client.raw_gant_poses)
+                        if gantry_since is None or ts >= gantry_since
+                    ]
                 else:
                     raw_obs[marker][client.anchor_num] = list(client.origin_poses[marker])
                 # print(f'anchor {client.anchor_num} has {len(raw_obs[marker][client.anchor_num])} observations of {marker}')
         return dict(raw_obs)
+
+    async def snapshot_tag_observations_still(self, settle_s=3.0, min_dets=6,
+                                              max_spread_m=0.04, timeout_s=12.0):
+        """snapshot_tag_observations with the gantry sightings taken from a window in which the
+        gantry was standing still.
+
+        The gantry batch is the only one the consistency residual can be badly wrong about: the
+        cards do not move, but the gantry buffer keeps filling while the machine flies around, and
+        a batch spanning a move scatters far enough to dominate the whole cost function.
+
+        Stops the spools, settles, then collects a fresh batch and checks the batch itself is
+        tight - a clock alone is not enough, since min_dets can be met while the gantry is still
+        coasting. A settled batch reads about 1 cm by _robust_spread, so the default
+        max_spread_m leaves 4x headroom and still rejects drift above roughly 0.3 m/s over the
+        ~0.4s a six-frame window spans. A failed window is discarded and a new one opened,
+        starting that much later into the settle.
+
+        min_dets is required from one anchor rather than all: the gantry tag faces one way, so a
+        camera seeing none of it is a normal geometry, not a reason to wait. Falls back to the
+        unfiltered buffer on timeout, since a noisy estimate beats none."""
+        # Capture times come from the bot's clock, so start each window slightly in the future
+        # to keep skew from letting a frame from before the stop through.
+        VIDEO_LATENCY_MARGIN_S = 0.5
+
+        self.slow_stop_all_spools()
+        await asyncio.sleep(settle_s)
+        deadline = time.time() + timeout_s
+        window_start = time.time() + VIDEO_LATENCY_MARGIN_S
+
+        while True:
+            batches = {
+                client.anchor_num: [pose for ts, pose in list(client.raw_gant_poses) if ts >= window_start]
+                for client in self.anchors.values()
+            }
+            counts = {num: len(b) for num, b in batches.items()}
+            # Only an anchor with a full batch can be judged. A partial one needs no check of its
+            # own: its sightings fall inside the same window.
+            spreads = {num: _robust_spread([p[1] for p in b])
+                       for num, b in batches.items() if len(b) >= min_dets}
+            if spreads:
+                if max(spreads.values()) <= max_spread_m:
+                    logger.info(
+                        f'Settled gantry window: {counts} sightings per anchor, camera-frame '
+                        f'spread {({n: round(s * 100, 1) for n, s in spreads.items()})} cm'
+                    )
+                    return self.snapshot_tag_observations(gantry_since=window_start)
+                logger.info(
+                    f'Gantry still moving (camera-frame spread '
+                    f'{({n: round(s * 100, 1) for n, s in spreads.items()})} cm '
+                    f'> {max_spread_m * 100:.0f} cm); discarding this window, '
+                    f'{deadline - time.time():.0f}s left before giving up.'
+                )
+                window_start = time.time() + VIDEO_LATENCY_MARGIN_S
+
+            if time.time() >= deadline:
+                logger.warning(
+                    f'No settled gantry window within {timeout_s:.0f}s (last counts {counts}, '
+                    f'wanted {min_dets} from at least one anchor under {max_spread_m * 100:.0f} cm '
+                    f'spread); falling back to the unfiltered buffer.'
+                )
+                return self.snapshot_tag_observations()
+            await asyncio.sleep(0.25)
 
     def save_poses_arp(self, anchor_poses, eyelet_positions):
         # Use the optimization output to update anchor poses and spool params
@@ -2336,7 +2420,7 @@ class AsyncObserver:
                 [anum for anum, count in enumerate(num_o_dets) if count > 0] # only anchor nums which see the origin card
             )))
 
-            raw_obs = self.snapshot_tag_observations()
+            raw_obs = await self.snapshot_tag_observations_still()
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=1.0,
@@ -2495,19 +2579,19 @@ class AsyncObserver:
                 # move over the origin card
                 await self.seek_goal(np.array([0,0,gant_z]), head_turn=False)
 
+                # Come to a full stop before the refinement. Swing cancellation goes off first
+                # because it re-issues velocities on its own key and would drive the spools again
+                # right after the stop. It must also be off before the refined geometry is
+                # applied: the new eyelets change the velocity->line-speed mapping it depends on,
+                # so a bad refinement could make it pump. Turned back on below only if it damps.
+                sc_was_running = self.set_swing_cancellation(False)
+                self.slow_stop_all_spools()
+
                 # Require a reading from all four cards (origin + 3 cal_assist). With fewer hovers the
                 # gripper term has too few length-delta pairs to pin the two far eyelets, and the
                 # under-constrained refinement distorts a good rectangular layout into a diamond.
                 REQUIRED_GRIPPER_CARDS = 4
                 if len(gripper_obs) >= REQUIRED_GRIPPER_CARDS:
-                    # Final safety measure: turn swing cancellation off before applying the refined
-                    # geometry, and turn it back on afterwards only if it still damps. Even with the
-                    # room frame's yaw held, the new eyelets change the velocity->line-speed mapping
-                    # swing cancellation depends on, so a bad refinement could make it pump and
-                    # throw the gripper around.
-                    self.set_swing_cancellation(False)
-                    self.slow_stop_all_spools()
-
                     # Anchors are free here so the gripper's close-range views can refine them
                     # too. The room's absolute rotation about z is unobservable to the
                     # distance-based constraints, so the gripper term (whose measured vectors
@@ -2566,6 +2650,8 @@ class AsyncObserver:
                             message='Swing cancellation did not damp after calibration refinement and was left OFF. Re-check the calibration before running.'))
                 else:
                     logger.warning(f'Only {len(gripper_obs)} of {REQUIRED_GRIPPER_CARDS} gripper card observations; need all four to refine. Skipping 3rd pass.')
+                    # geometry is unchanged, so no damping re-test is needed to restore it
+                    self.set_swing_cancellation(sc_was_running)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,

@@ -23,7 +23,8 @@ W_EYELET_REG = 0.2 # where an eyelet ends up == the initial guess it started fro
 W_SHAPE_MATCH = 0.2 # distance between the two anchors == distance between the two eyelets
 W_ANCHOR_TILT = 2.0 # each anchor's own z axis == the room's z axis (leaves only rotation about z)
 W_GRIPPER_DIST = 1.0 # change in pull-point-to-gantry distance between two gripper hovers == the
-                     # change that line's measured length reports (as W_DIAMOND_DIST, close range)
+                     # change that line's measured length reports (as W_DIAMOND_DIST, close range).
+                     # Scaled down at use, so this is the weight of one independent delta, not one pair.
 W_ROOM_YAW = 5.0 # yaw of the anchor layout == yaw of the reference layout (see room_yaw_offset)
 
 # Proposed new terms:
@@ -333,6 +334,13 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                 gantry_room = card_centroids[name] + np.asarray(obs['gantry_minus_card'])
                 gantry_samples.append((name, gantry_room, np.asarray(obs['line_lengths'])))
 
+        # All-pairs is redundant: N hovers carry N-1 independent length deltas per line but make
+        # N(N-1)/2 pairs, so an unnormalized term's vote grows with the square of the survey size
+        # and drowns out the eight diamond residuals. This scaling makes it count as N-1.
+        n_samples = len(gantry_samples)
+        n_pairs = n_samples * (n_samples - 1) // 2
+        w_gripper = W_GRIPPER_DIST * np.sqrt((n_samples - 1) / n_pairs) if n_pairs else W_GRIPPER_DIST
+
         # For every pair of hovers and every line, the modelled change in distance from the pull
         # point to the gantry must match the measured change in line length.
         for a in range(len(gantry_samples)):
@@ -342,7 +350,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                 for k in range(4):
                     modelled = np.linalg.norm(g_b - pull_points[k]) - np.linalg.norm(g_a - pull_points[k])
                     measured = L_b[k] - L_a[k]
-                    res = (modelled - measured) * W_GRIPPER_DIST
+                    res = (modelled - measured) * w_gripper
                     residuals.append(res)
                     cost_gripper += res ** 2
                     if debug:

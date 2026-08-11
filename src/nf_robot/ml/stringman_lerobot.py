@@ -653,7 +653,7 @@ class StringmanLeRobot(Robot):
             previous = stabilizer.reason
             destination = stabilizer.update(
                 goal_room, spread, self.last_gripper_pos, time.time(),
-                hold=abs(float(action.get('finger_speed', 0.0))) > 1e-6,
+                hold=abs(float(action.get('finger_speed', 0.0))) > 1.0,
             )
             if stabilizer.reason != previous:
                 shown = np.round(destination, 3) if destination is not None else None
@@ -1245,6 +1245,8 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
     from huggingface_hub import hf_hub_download
     from lerobot.policies.factory import make_policy, make_pre_post_processors
     from lerobot.configs.policies import PreTrainedConfig
+
+    stabilize_goals = True
 
     events = {
         'episode_abandon': False,
