@@ -1761,8 +1761,17 @@ class AsyncObserver:
                 corner: each leg's length delta is measured after the move rather than assumed
                 from the jog, and the corner's position comes from the anchor cameras. Only a
                 rise counts, so a leg that pays line back out can start from an already-taut
-                corner without being cut short immediately."""
-                limit = max(DIAMOND_MAX_EYELET_TENSION_N, eyelet_tension() + TENSION_RISE_N)
+                corner without being cut short immediately.
+
+                A descending leg (the jogs lengthening on average) gets no tension check at all:
+                descending is the only way out of a corner reached at the limit, and any check
+                would trip on the tension already there. passive_safety still holds
+                config.max_safe_tension throughout."""
+                descending = (jog1 + jog3) > 0
+                limit = None if descending else max(DIAMOND_MAX_EYELET_TENSION_N,
+                                                    eyelet_tension() + TENSION_RISE_N)
+                if descending:
+                    logger.info('Diamond move descends; no tension check on this leg')
                 if jog1:
                     await self.send_line_speed(1, jog1, jog=True)
                 if jog3:
