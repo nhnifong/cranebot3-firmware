@@ -66,36 +66,10 @@ SPECIAL_OBJ_POINTS = {
     for name, size in SPECIAL_SIZES.items()
 }
 
-SF_INPUT_SHAPE = (960, 540)      # Size of the raw frame coming from gripper camera
 # Gripper stream is now 684x384 (full-sensor 16:9 FOV). Setting the target shape to match means
 # process_frame does not resize, so AprilTag detection and the UI get the whole wide field of
 # view. Downstream ML models resize their own inputs. (Was a square 384x384 center crop.)
 SF_TARGET_SHAPE = (684, 384)
-SF_SCALE_FACTOR = 1.4  # Zoom factor (values less than 1 zoom in)
-
-saved_matrices = {}
-
-def gripper_stabilized_cal(camera_cal: nf_config.CameraCalibration):
-    mtx = np.array(camera_cal.intrinsic_matrix).reshape((3,3))
-    distortion = np.array(camera_cal.distortion_coeff)
-    calibration_shape = (camera_cal.resolution.width, camera_cal.resolution.height) # (1920, 1080)
-    # Derive other constants needed for stabilize_frame
-    sf_image_ratio = SF_INPUT_SHAPE[0] / calibration_shape[0] # Ratio to scale intrinsics (approx 1/3)
-    starting_K = mtx.copy() # if we being using the wide angle camera for the gripper, then this would no long be a copy of the anchor cam cal
-    starting_K[0, 0] *= sf_image_ratio  # Scale fx
-    starting_K[1, 1] *= sf_image_ratio  # Scale fy
-    starting_K[0, 2] *= sf_image_ratio  # Scale cx
-    starting_K[1, 2] *= sf_image_ratio  # Scale cy
-
-    # Define Virtual Camera Intrinsics for stabilized gripper frame
-    # The optical center (cx, cy) is set to half of the target shape (384/2),
-    # not the input shape. This forces the center of the projection to be the center of the square.
-    K_new = np.array([
-        [starting_K[0, 0] / SF_SCALE_FACTOR, 0,                                  SF_TARGET_SHAPE[0] / 2.0], # cx = 192
-        [0,                                  starting_K[1, 1] / SF_SCALE_FACTOR, SF_TARGET_SHAPE[1] / 2.0], # cy = 192
-        [0,                                  0,                                  1                    ]
-    ])
-    return starting_K, K_new
 
 # Stringman tags are from the 'tag36h11' family.
 # increase quad_decimate to improve speed at the cost of distance
@@ -229,7 +203,7 @@ def locate_markers(im, camera_cal: nf_config.CameraCalibration, crops_data=None)
         A list of dictionaries, each containing the name, rotation vector (r),
         and translation vector (t) of a detected marker.
 
-    TODO: use a cropped search window that uses slices like im[y:y+h, x:x+w] based on where tags were seen on
+    Uses a cropped search window that uses slices like im[y:y+h, x:x+w] based on where tags were seen on
     previous frames. search the whole image only if the tag was not seen on the previous frame.
     """
 
@@ -241,18 +215,6 @@ def locate_markers(im, camera_cal: nf_config.CameraCalibration, crops_data=None)
         return _locate_markers_in_crops(crops_data, mtx, distortion)
     elif im is not None:
         return _locate_markers(im, mtx, distortion)
-    return []
-
-def locate_markers_gripper(im, camera_cal: nf_config.CameraCalibration, crops_data=None):
-    """
-    Locate markers in the stabilized gripper frame
-    """
-    if 'K_new' not in saved_matrices:
-        saved_matrices['starting_K'], saved_matrices['K_new'] = gripper_stabilized_cal(camera_cal)
-    if crops_data is not None:
-        return _locate_markers_in_crops(crops_data, saved_matrices['K_new'], np.array(camera_cal.distortion_coeff))
-    elif im is not None:
-        return _locate_markers(im, saved_matrices['K_new'], np.array(camera_cal.distortion_coeff))
     return []
 
 def project_pixels_to_floor(normalized_pixels, pose, camera_cal: nf_config.CameraCalibration):
@@ -320,198 +282,6 @@ def project_floor_to_pixels(floor_points, pose, camera_cal: nf_config.CameraCali
     normalized_pixels = image_points / image_shape
 
     return normalized_pixels
-
-def get_rotation_to_center_ray(K, u, v, image_shape):
-    """
-    Calculates the rotation matrix required to rotate the camera such that
-    the ray passing through pixel (u, v) becomes the optical axis (0, 0, 1).
-    """
-    fx = K[0, 0]
-    fy = K[1, 1]
-    cx = K[0, 2]
-    cy = K[1, 2]
-    
-    # Back-project pixel to normalized vector in Camera Frame
-    # UV coordinates (0..1) to Pixel coordinates
-    px = u * image_shape[0]
-    py = (1.0 - v) * image_shape[1] # Flip V to match OpenCV Y-down
-    
-    vec_x = (px - cx) / fx
-    vec_y = (py - cy) / fy
-    vec_z = 1.0
-    
-    # Create the Target Vector and Source Vector (Optical Axis)
-    target_vec = np.array([vec_x, vec_y, vec_z])
-    target_vec = target_vec / np.linalg.norm(target_vec) # Normalize
-    
-    source_vec = np.array([0, 0, 1]) # We want target_vec to end up here
-    
-    # Calculate Rotation (Axis-Angle)
-    # Rotation axis is perpendicular to both
-    rot_axis = np.cross(target_vec, source_vec)
-    axis_len = np.linalg.norm(rot_axis)
-    
-    if axis_len < 1e-6:
-        # Vectors are already aligned
-        return np.eye(3)
-        
-    rot_axis = rot_axis / axis_len
-    
-    # Angle is arccos(dot product)
-    angle = np.arccos(np.dot(target_vec, source_vec))
-    
-    # Create Matrix using Rodrigues
-    r_vec = rot_axis * angle
-    R_fix, _ = cv2.Rodrigues(r_vec)
-    return R_fix
-
-def stabilize_frame(frame, quat, camera_cal: nf_config.CameraCalibration, R_imu_to_cam, room_spin=0, range_dist=None, cam_offset_mm=(0, -38.9), cam_tilt_deg=0):
-    """
-    Warp a video frame to a stationary, centered perspective.
-    
-    Args:
-        frame: Input image
-        quat: BNO085 quaternion
-        camera_cal: camera calibration of 1920x1080 unstabilized "normal" image
-        room_spin: Z-axis offset for room alignment in radians
-        range_dist: Distance from camera to floor (meters).
-        cam_offset_mm: (x, y) Vector from Camera Lens to Rotation Axis Center in mm.
-        cam_tilt_deg: Camera Pitch angle in degrees.
-    """
-
-    if 'K_new' not in saved_matrices:
-        saved_matrices['starting_K'], saved_matrices['K_new'] = gripper_stabilized_cal(camera_cal)
-
-    h, w = frame.shape[:2]
-
-    R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
-
-    r_imu = Rotation.from_quat(quat)
-    R_world_to_imu = r_imu.as_matrix().T
-    
-    R_world_to_cam = R_imu_to_cam @ R_world_to_imu
-    # R_relative un-rotates the camera to align with World Frame
-    R_relative = R_room_spin @ R_world_to_cam.T
-    
-    # Axis Centering (Rotation Fix) ---
-    R_fix = np.eye(3)
-    
-    if range_dist is not None:
-        # Define Target Point in Camera Frame
-        # Convert Offset to meters
-        off_x = cam_offset_mm[0] / 1000.0
-        off_y = cam_offset_mm[1] / 1000.0
-        
-        # Point on floor relative to "Untilted" Camera:
-        # We assume the axis is at (off_x, off_y) relative to camera
-        # and the floor is at Z = range_dist
-        P_untilted = np.array([off_x, off_y, range_dist])
-        
-        # Apply Tilt Rotation
-        # If camera is tilted by 'cam_tilt_deg', we must rotate the point
-        # into the tilted camera frame.
-        # Pitch is rotation around X-axis.
-        r_tilt = Rotation.from_euler('x', cam_tilt_deg, degrees=True)
-        P_tilted = r_tilt.apply(P_untilted)
-        
-        # Project to Pixel Coordinates
-        K = saved_matrices['starting_K']
-        fx, fy = K[0, 0], K[1, 1]
-        cx, cy = K[0, 2], K[1, 2]
-        
-        # Standard Pinhole Projection: u = fx * (X/Z) + cx
-        target_u_px = fx * (P_tilted[0] / P_tilted[2]) + cx
-        target_v_px = fy * (P_tilted[1] / P_tilted[2]) + cy
-        
-        # Convert to UV (0..1) for the helper function
-        target_u = target_u_px / w
-        target_v = 1.0 - (target_v_px / h)
-
-        # Calculate the corrective rotation
-        # This rotation maps the Target Ray to the Optical Axis (Z)
-        R_fix = get_rotation_to_center_ray(K, target_u, target_v, (w, h))
-
-    # Final Homography ---
-    # Chain: K_new @ R_relative @ R_fix @ K_inv
-    # We apply R_fix FIRST (closest to K_inv) to align the target vector to Z-axis in Camera Frame.
-    # Then R_relative aligns that Z-axis (now containing the target) to World Down.
-    H = saved_matrices['K_new'] @ R_relative @ R_fix @ np.linalg.inv(saved_matrices['starting_K'])
-
-    return cv2.warpPerspective(frame, H, SF_TARGET_SHAPE, borderMode=cv2.BORDER_REPLICATE, borderValue=(0, 0, 0))
-
-def stabilize_frame_2(frame, r_tilt_vec, camera_cal, R_gripper_to_cam, room_spin=0, range_dist=None, cam_offset_mm=(0, -38.9), cam_tilt_deg=0):
-    """
-    Warp a video frame to a stationary, centered perspective using local tilt data.
-    
-    Args:
-        frame: Input image.
-        r_tilt_vec: Gripper tilt as a Rodriguez vector (3x1 or 1x3) representing 
-                    rotation from 'level' to current local orientation.
-        camera_cal: Camera calibration object.
-        R_gripper_to_cam: Matrix transforming coordinates from gripper frame to camera frame.
-        room_spin: Z-axis rotation in radians to align the stabilized image with the room.
-        range_dist: Distance from camera to floor (meters).
-        cam_offset_mm: (x, y) Vector from camera lens to rotation axis center in mm.
-        cam_tilt_deg: Static camera pitch angle relative to the gripper in degrees.
-    """
-
-    if 'K_new' not in saved_matrices:
-        saved_matrices['starting_K'], saved_matrices['K_new'] = gripper_stabilized_cal(camera_cal)
-
-    h, w = frame.shape[:2]
-
-    # Convert the Rodriguez vector to a rotation matrix representing the gripper's tilt.
-    # We invert it (.T) because we want the transformation that 'un-tilts' the gripper 
-    # back to the world/level frame.
-    R_gripper_tilt = Rotation.from_rotvec(r_tilt_vec.flatten()).as_matrix()
-    R_untilt_gripper = R_gripper_tilt.T
-
-    # Map the 'un-tilting' rotation into the camera's frame of reference.
-    # Logic: Camera -> Gripper -> Un-tilt Gripper -> Gripper -> Camera
-    R_untilt_cam = R_gripper_to_cam @ R_untilt_gripper @ R_gripper_to_cam.T
-
-    # Apply room_spin to align the level camera frame with the room's Z-axis.
-    R_room_spin = Rotation.from_euler('z', room_spin).as_matrix()
-    R_relative = R_room_spin @ R_untilt_cam
-
-    R_fix = np.eye(3)
-    
-    if range_dist is not None:
-        # Calculate the projection of the rotation center onto the floor to keep the 
-        # view centered on the ground contact point rather than the optical center.
-        off_x, off_y = np.array(cam_offset_mm) / 1000.0
-        
-        # Point on floor relative to an un-tilted camera.
-        P_untilted = np.array([off_x, off_y, range_dist])
-        
-        # Adjust the point based on the physical mounting pitch of the camera.
-        r_pitch = Rotation.from_euler('x', cam_tilt_deg, degrees=True)
-        P_tilted = r_pitch.apply(P_untilted)
-        
-        K = saved_matrices['starting_K']
-        # Project the physical offset into pixel space to find the 'target' center.
-        target_u_px = K[0, 0] * (P_tilted[0] / P_tilted[2]) + K[0, 2]
-        target_v_px = K[1, 1] * (P_tilted[1] / P_tilted[2]) + K[1, 2]
-        
-        # Helper expects normalized UV coordinates where V is bottom-up (0 to 1).
-        R_fix = get_rotation_to_center_ray(
-            K, 
-            target_u_px / w, 
-            1.0 - (target_v_px / h), 
-            (w, h)
-        )
-
-    # Construct the final homography. 
-    # Order: K_inv (to rays) -> R_fix (re-center) -> R_relative (un-tilt/spin) -> K_new (re-project).
-    H = saved_matrices['K_new'] @ R_relative @ R_fix @ np.linalg.inv(saved_matrices['starting_K'])
-
-    return cv2.warpPerspective(
-        frame, 
-        H, 
-        SF_TARGET_SHAPE, 
-        borderMode=cv2.BORDER_REPLICATE
-    )
-
 
 def get_inward_wall_normal(p: np.ndarray, anchor_points: list[np.ndarray]) -> np.ndarray:
     """

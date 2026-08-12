@@ -2,6 +2,7 @@
 # Set motor IDs and wind up the correct length of line on each spool
 # test camera
 
+import argparse
 import time
 import socket
 import subprocess
@@ -291,6 +292,10 @@ def test_camera():
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--long', action='store_true',
+                        help="Wind extra line: 20 m on the lower spool, 12 m on the upper spool.")
+    args = parser.parse_args()
 
     # The cranebot service grabs the can bus and camera, so it must be stopped first.
     print('Stopping cranebot service...')
@@ -306,9 +311,13 @@ def main():
     upper_motor = controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type=MOTOR_TYPE)
     lower_motor.disable()
     upper_motor.disable()
+    # lower spool needs more line because it goes around the eyelet
+    lower_length, upper_length = (20.0, 12.0) if args.long else (15.0, 7.5)
+    if args.long:
+        print(f"--long: winding {lower_length} m on the lower spool and {upper_length} m on the upper spool.")
     motors = [
-        (lower_motor, -1, 'lower', 15.0), # lower spool needs more line because it goes around the eyelet
-        (upper_motor, 1, 'upper', 7.5),
+        (lower_motor, -1, 'lower', lower_length),
+        (upper_motor, 1, 'upper', upper_length),
     ]
 
     # Differentiate power anchors from regular anchors before winding line.

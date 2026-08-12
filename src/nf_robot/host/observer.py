@@ -2710,8 +2710,8 @@ class AsyncObserver:
             logger.warning('Cannot calibrate the relationship between gripper zero angle and camera if gripper camera is offline!')
             return None
 
-        # record the z rotation of the gantry card from the perspective of the gripper camera's stabilized frame
-        # when the stabilization is done without any existing z rotation term
+        # record the z rotation of the gantry card from the perspective of the gripper camera,
+        # with no existing z rotation term applied
         self.gripper_client.calibrating_room_spin = True
 
         if self.gripper_client is not None:
@@ -2736,13 +2736,13 @@ class AsyncObserver:
             def special_handle_det(timestamp, detections):
                 for d in detections:
                     if d['n'] == 'origin':
-                        # a pose of the origin card in the frame of reference of the stabilized gripper cam.
+                        # a pose of the origin card in the frame of reference of the gripper cam.
                         origin_card_pose[0] = d['p']
             end_time = time.time() + 10
             logger.info('Collecting observations of origin card from gripper cam')
             while origin_card_pose[0] is None and time.time() < end_time:
                 async_result = self.pool.apply_async(
-                    locate_markers_gripper,
+                    locate_markers,
                     (self.gripper_client.last_output_frame, self.config.camera_cal_wide),
                     callback=partial(special_handle_det, time.time()))
                 detections = async_result.get(timeout=5)
@@ -2753,7 +2753,7 @@ class AsyncObserver:
             raise RuntimeError("Gripper camera was unable to make any observations of the origin card.")
         
         euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
-        logger.info(f'Euler rotation of origin card relative to stabilized gripper camera {euler_rot}')
+        logger.info(f'Euler rotation of origin card relative to gripper camera {euler_rot}')
         roomspin = euler_rot[0]
         self.config.gripper.frame_room_spin = roomspin
         self.config.calibrated_status = common.CalibratedStatus.FULLY_CALIBRATED
@@ -3007,9 +3007,6 @@ class AsyncObserver:
                 try:
                     pos = self.gripper_client.park_pose_relative_to_camera[1]
                     direction = pos - over
-                    # since the gripper's camera is stabilized and rotated into the room frame of reference
-                    # a vector pointing from the desired position of the marker to the current position in image space
-                    # is the same direction we'd need to move the gantry in the room.
                     break
                 except TypeError:
                     continue
@@ -4248,7 +4245,9 @@ class AsyncObserver:
         FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
         FLOOR_GRIPPER_HEIGHT = 0.11 # distance above floor (gripper origin) when grasp should be started
         RANGE_ITEM = 0.04 # range to item below which grip should be started
-        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_wide_fov * SF_SCALE_FACTOR / 2 * (np.pi/180)
+        # the gripper stream is the raw full-sensor wide FOV; there is no longer a stabilization
+        # zoom factor applied on top of it.
+        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_wide_fov / 2 * (np.pi/180)
         DOWNWARD_SPEED = -0.07
         VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
         COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
@@ -4303,8 +4302,7 @@ class AsyncObserver:
                     if lat_travel_seconds > 0:
                         # determine which direction we'd have to move laterally to center the object
                         # you get a normalized u,v coordinate in the [-1,1] range
-                        # for now assume that the up direction in the gripper image is -Y in world space 
-                        # stabilize_frame produced this direction and I think it depends on the compass.
+                        # for now assume that the up direction in the gripper image is -Y in world space
                         # the direction in world space depends on how the user placed the origin card on the ground
                         # we need to capture a number during calibration to relate these two.
                         # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.

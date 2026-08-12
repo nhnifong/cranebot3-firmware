@@ -651,6 +651,7 @@ class StringmanLeRobot(Robot):
         if stabilizer is not None:
             # steer at a committed destination rather than at this frame's prediction
             previous = stabilizer.reason
+            logger.debug(f'fings {fings}')
             destination = stabilizer.update(
                 goal_room, spread, self.last_gripper_pos, time.time(),
                 hold=abs(float(action.get('finger_speed', 0.0))) > 1.0,
@@ -1186,6 +1187,29 @@ def eval_episode(
         "finger_speed": 0.0
     })
 
+def register_legacy_processor_aliases():
+    """Make checkpoints trained before lerobot's relative-action rename loadable.
+
+    The preprocessor step that subtracts state from actions used to be registered
+    as 'delta_actions_processor'; it is now 'relative_actions_processor'. The name
+    is baked into policy_preprocessor.json at training time, so older checkpoints
+    (e.g. naavox/pi-move-1) fail to deserialize against the installed lerobot.
+    Registering a subclass under the old name keeps the canonical class's own
+    registry name intact, and isinstance-based wiring of the paired
+    AbsoluteActionsProcessorStep still finds it.
+    """
+    from lerobot.processor.pipeline import ProcessorStepRegistry
+    from lerobot.processor.relative_action_processor import RelativeActionsProcessorStep
+
+    if "delta_actions_processor" in ProcessorStepRegistry.list():
+        return
+
+    @ProcessorStepRegistry.register("delta_actions_processor")
+    @dataclass
+    class LegacyDeltaActionsProcessorStep(RelativeActionsProcessorStep):
+        pass
+
+
 def load_training_metadata(dataset_repo_id):
     """Metadata (features + stats) of the dataset a policy was trained on.
 
@@ -1238,14 +1262,15 @@ def load_training_metadata(dataset_repo_id):
         ) from e
 
 
-def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=None, camera_mode=None,
-                            stabilize_goals=False):
+def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=None, camera_mode=None):
     import torch
     import json
     from huggingface_hub import hf_hub_download
     from lerobot.policies.factory import make_policy, make_pre_post_processors
     from lerobot.configs.policies import PreTrainedConfig
 
+    # camera_goal policies only: commit to one destination and drive to it, instead of
+    # steering at every prediction. Ignored by other action spaces. Edit here to toggle.
     stabilize_goals = True
 
     events = {
@@ -1283,6 +1308,7 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
         cfg.temporal_ensemble_coeff = 0.001
 
         print("Instantiating processors and policy...")
+        register_legacy_processor_aliases()
         preprocessor, postprocessor = make_pre_post_processors(
             policy_cfg=cfg,
             pretrained_path=policy_repo_id,
@@ -1379,9 +1405,6 @@ if __name__ == "__main__":
     eval_parser = subparsers.add_parser('eval', parents=[parent_parser], help="Evaluate existing policy")
     eval_parser.add_argument("--policy_id", default="naavox/grasping_act_policy", help="repo id of policy to load")
     eval_parser.add_argument("--camera_mode", default=None, choices=camera_mode_choices, help="override the camera setup inferred from the policy's training dataset")
-    eval_parser.add_argument("--stabilize_goals", action="store_true",
-                             help="camera_goal policies only: commit to one destination and drive to it, "
-                                  "instead of steering at every prediction. Ignored by other action spaces.")
 
     args = parser.parse_args()
     uri = f'{args.server_address}/control/{args.robot_id}'
@@ -1391,6 +1414,6 @@ if __name__ == "__main__":
 
     if args.command == 'eval':
         eval_until_disconnected(uri, args.policy_id, args.robot_id, remote_stream_token=args.remote_stream_token,
-                                camera_mode=args.camera_mode, stabilize_goals=args.stabilize_goals)
+                                camera_mode=args.camera_mode)
     else:
         record_until_disconnected(uri, args.repo_id, args.robot_id, args.upload, remote_stream_token=args.remote_stream_token, camera_mode=args.camera_mode, action_space=args.action_space, vcodec=args.vcodec)

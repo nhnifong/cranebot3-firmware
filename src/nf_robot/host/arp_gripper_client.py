@@ -13,7 +13,7 @@ from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, common
-from nf_robot.common.cv_common import SF_TARGET_SHAPE, stabilize_frame_2, OTHER_MARKERS, CAL_MARKERS
+from nf_robot.common.cv_common import SF_TARGET_SHAPE, OTHER_MARKERS, CAL_MARKERS
 
 logger = logging.getLogger(__name__)
 

@@ -169,14 +169,14 @@ class ParkData(betterproto2.Message):
         2, betterproto2.TYPE_MESSAGE, optional=True
     )
     """
-    pose of parking marker relative to room-stabilized gripper camera while resting on parking hook
+    pose of parking marker relative to gripper camera while resting on parking hook
     """
 
     marker_over: "_common__.Pose | None" = betterproto2.field(
         3, betterproto2.TYPE_MESSAGE, optional=True
     )
     """
-    pose of parking marker relative to room-stabilized gripper camera while hanging 10cm over parking hook
+    pose of parking marker relative to gripper camera while hanging 10cm over parking hook
     """
 
 

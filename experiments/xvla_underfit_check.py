@@ -21,7 +21,7 @@ Three questions, three answers:
 
 Usage (on the training box, where the dataset is already local):
     python experiments/xvla_underfit_check.py \
-        --dataset_root /home/nick/data_scratch/move_clutter_rect_for_xvla \
+        --dataset_root /home/nhn/data_scratch/move_clutter_rect_for_xvla \
         --device cuda
 
 Without --dataset_root the dataset is pulled from the Hub, which is a large download.

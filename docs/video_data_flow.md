@@ -14,14 +14,14 @@ summary of anchor video pipline:
  3. send to dobby, take heatmap from dobby, also send that to UI
 
 target resolution and framerate for gripper camera
- - before stabilization 960x540 30fps
- - after stabilization, teleoperation: 384x384 30fps
- - after stabilization, inference: 384x384 5fps
- - after stabilization, UI local and remote: 384x384 5fps
+ - as captured: 960x540 30fps
+ - teleoperation: 384x384 30fps
+ - inference: 384x384 5fps
+ - UI local and remote: 384x384 5fps
 
 summary of gripper video pipeline
  1. start with half res stream from raspi
- 2. every 6th frame, stabilize using IMU data, producing square 384x384 image at 5fps
+ 2. every 6th frame, resize to a square 384x384 image at 5fps
  3. send to both UI and centering model
 
 

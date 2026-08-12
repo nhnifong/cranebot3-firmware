@@ -257,9 +257,9 @@ class ComponentClient:
         """
         This runs in a dedicated thread. It waits for a signal that a new frame is
         available, runs it through process_frame (a hardware-specific hook subclasses may
-        override, e.g. the gripper's IMU-based stabilization; most hardware just passes the
-        frame through untouched now that components capture video at exactly the resolution
-        each consumer needs), and forwards the result to the local MJPEG stream, the RTMP
+        override; most hardware just passes the frame through untouched now that components
+        capture video at exactly the resolution each consumer needs), and forwards the
+        result to the local MJPEG stream, the RTMP
         remote, and the LAN compressed-passthrough broadcast, whichever are configured.
 
         Numpy/cv2 functions release the GIL, which is why this is a thread rather than a
@@ -353,9 +353,9 @@ class ComponentClient:
         """
         Identity by default: components now capture video at exactly the resolution each
         consumer needs, so no generic resize belongs here. Subclasses may still override
-        this for genuine hardware-specific per-frame processing that isn't just resizing,
-        e.g. the gripper's IMU-based stabilization (see gripper_client.py). The returned
-        frame is what is used for inference and sent to any teleoperation pipelines.
+        this for genuine hardware-specific per-frame processing that isn't just resizing.
+        The returned frame is what is used for inference and sent to any teleoperation
+        pipelines.
         Runs in a separate thread from the main client.
         """
         return frame_to_encode

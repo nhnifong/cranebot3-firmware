@@ -111,7 +111,7 @@ class TestProjectionAndDetection(unittest.TestCase):
 
     def test_detect_origin_card_in_image_gripper_wide(self):
         frame = cv2.imread('tests/gripper_cam.jpg')
-        result = locate_markers_gripper(frame, self.config.camera_cal_wide)
+        result = locate_markers(frame, self.config.camera_cal_wide)
         seen = set()
         for detection in result:
             seen.add(detection['n'])

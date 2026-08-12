@@ -71,10 +71,10 @@ message ParkData {
   // for the pilot gripper, assumes that the winch line is reeled in to 10cm.
   common.Vec3 pos = 1;
 
-  // pose of parking marker relative to room-stabilized gripper camera while resting on parking hook
+  // pose of parking marker relative to gripper camera while resting on parking hook
   common.Pose marker_resting = 2;
 
-  // pose of parking marker relative to room-stabilized gripper camera while hanging 10cm over parking hook
+  // pose of parking marker relative to gripper camera while hanging 10cm over parking hook
   common.Pose marker_over = 3;
 }
 
