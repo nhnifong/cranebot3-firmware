@@ -334,6 +334,28 @@ class ArpeggioGripperClient(ComponentClient):
             'GRIPPER_STREAM_FRAMERATE': framerate,
         }})
 
+    async def capture_raw_frame(self, after_ts, timeout=5.0):
+        """The newest camera frame captured after after_ts, as (timestamp, RGB array).
+
+        Reads self.frame rather than last_output_frame because process_frame resizes to
+        SF_TARGET_SHAPE, which would throw away exactly the pixels use_capture_stream
+        was switched on to get. Returns (None, None) if nothing arrives in time.
+
+        Waiting on capture time rather than sleeping a fixed interval means the caller
+        gets a frame taken after whatever motion it just commanded, however far the
+        stream is lagging - and after a resolution change the stream restarts, so the
+        first frame can be seconds away.
+        """
+        deadline = time.time() + timeout
+        while True:
+            with self.frame_lock:
+                timestamp, frame = self.last_frame_cap_time, self.frame
+                if frame is not None and timestamp is not None and timestamp > after_ts:
+                    return timestamp, frame.copy()
+            if time.time() > deadline:
+                return None, None
+            await asyncio.sleep(0.02)
+
     async def restore_default_stream(self):
         """Put the camera back to the control stream's resolution and framerate."""
         await self.send_commands({'set_config_vars': {

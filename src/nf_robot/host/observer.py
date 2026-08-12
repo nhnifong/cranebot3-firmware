@@ -73,6 +73,20 @@ NUDGE_REFRESH_S = 0.5 # must stay under INPUT_VELOCITY_TTL_S or the nudge expire
 NUDGE_VELOCITY_KEY = 'centering'
 TRIM_SPEED_MPS = 0.08 # altitude trim moves slower than a lateral nudge; it is closing centimeters
 RANGE_MAX_AGE_S = 1.0 # a rangefinder reading older than this is not evidence of where we are now
+
+# Capture runs for the synthetic visual servoing dataset; see ml/visual_servoing/readme.md.
+PLATE_OUTPUT_DIR = 'plates'
+# Finger sweep bounds. The server clamps finger angle to -90 (open) .. 90 (closed), and a
+# plate is wanted at every aperture the fingers are actually driven to during a grasp.
+FINGERPLATE_ANGLE_MIN = -90
+FINGERPLATE_ANGLE_MAX = 90
+FINGERPLATE_ANGLE_STEP = 15
+# Frames per wrist turn. The matte is a per-pixel variance across these, so it wants
+# enough of them that no background feature sits still through the whole set - and they
+# are cheap next to the finger moves between turns.
+FINGERPLATE_WRIST_STEPS = 24
+# (seconds) extra wait after the wrist reports arrival, for the pole to stop swinging.
+FINGERPLATE_SETTLE_S = 0.6
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
@@ -870,6 +884,10 @@ class AsyncObserver:
                     pickle.dump(gripper_obs, f)
                 logger.info(f'Saved gripper card survey to gripper_card_obs.pkl: {list(gripper_obs.keys())}')
             r = await self.invoke_motion_task(survey_and_save())
+        if item.action == 'fingerplates':
+            # Park the gripper over clear textured floor before running this; see the
+            # docstring for what an unlucky spot does to the matte.
+            r = await self.invoke_motion_task(self.collect_fingerplates())
         if item.action == 'stow':
             r = await self.stow_lines()
         if item.action == 'upright':
@@ -2209,6 +2227,114 @@ class AsyncObserver:
                         f'nudging {np.round(nudge, 3)} ({np.linalg.norm(nudge)/NUDGE_SPEED_MPS:.1f}s)')
             after_ts = await self._nudge_gantry_xy(nudge)
         logger.info(f'Centering {name}: reached max steps')
+
+    async def _settle_wrist(self, target, tol=2.0, timeout=6.0):
+        """Command the wrist to an absolute angle and wait until telemetry agrees."""
+        await self.gripper_client.send_commands({'set_wrist_angle': target})
+        deadline = time.time() + timeout
+        actual = None
+        while time.time() < deadline:
+            await asyncio.sleep(0.05)
+            actual = self.datastore.winch_line_record.getLast()[1]
+            if abs(actual - target) <= tol:
+                return actual
+        logger.warning(f'Wrist did not reach {target:.1f} within {timeout}s (at {actual})')
+        return actual
+
+    async def _settle_fingers(self, target, tol=2.0, timeout=6.0):
+        """Command the fingers to an absolute angle and wait until telemetry agrees."""
+        await self.gripper_client.send_commands({'set_finger_angle': target})
+        deadline = time.time() + timeout
+        actual = None
+        while time.time() < deadline:
+            await asyncio.sleep(0.05)
+            actual = self.datastore.finger.getLast()[1]
+            if abs(actual - target) <= tol:
+                return actual
+        logger.warning(f'Fingers did not reach {target:.1f} within {timeout}s (at {actual})')
+        return actual
+
+    async def collect_fingerplates(self, finger_angles=None, wrist_steps=FINGERPLATE_WRIST_STEPS,
+                                   output_dir=PLATE_OUTPUT_DIR, settle_s=FINGERPLATE_SETTLE_S):
+        """Capture the frames a finger matte is extracted from, one wrist turn per finger angle.
+
+        The gripper camera is in the palm and turns with the wrist, so spinning the wrist
+        leaves the fingers on exactly the same pixels and rotates the entire world behind
+        them. Across one turn the fingers are the only thing that does not move, which is
+        what lets an offline per-pixel variance test separate hardware from background with
+        no chroma key, no backdrop and no manual masking.
+
+        The operator has to park the gripper somewhere useful first: over textured floor,
+        with no strongly rotationally symmetric feature underneath. Anything that survives
+        the turn unchanged - the shadow directly below the lens, a circular rug motif - is
+        indistinguishable from hardware by that test and will end up in the matte.
+
+        Only the raw frames are written. Deciding what is finger is an offline judgement
+        with a threshold nobody has tuned, and it should be revisable without asking the
+        robot to do this again.
+        """
+        from nf_robot.ml.visual_servoing.plates import PlateWriter
+
+        if self.gripper_client is None:
+            logger.error('No gripper connected; cannot collect fingerplates')
+            return None
+        if finger_angles is None:
+            finger_angles = list(range(FINGERPLATE_ANGLE_MIN, FINGERPLATE_ANGLE_MAX + 1,
+                                       FINGERPLATE_ANGLE_STEP))
+
+        start_wrist = self.datastore.winch_line_record.getLast()[1]
+        # A full turn has to fit inside the wrist's 0-1080 range without winding the cable
+        # up against its limit, so start low enough that base + 360 still fits.
+        base_wrist = float(min(max(start_wrist, 0.0), 1080.0 - 360.0))
+        wrist_angles = [base_wrist + 360.0 * i / wrist_steps for i in range(wrist_steps)]
+
+        writer = PlateWriter(output_dir, 'fingerplates',
+                             notes='wrist turn per finger angle; matte offline by variance')
+        logger.info(f'Fingerplates: {len(finger_angles)} finger angles x {wrist_steps} wrist '
+                    f'steps = {len(finger_angles) * wrist_steps} frames, wrist {base_wrist:.0f}'
+                    f'-{base_wrist + 360:.0f}, writing to {output_dir}')
+
+        await self.gripper_client.use_capture_stream()
+        try:
+            # The stream restarts to change resolution, so the first frame is seconds out.
+            _, probe = await self.gripper_client.capture_raw_frame(time.time(), timeout=20.0)
+            if probe is None:
+                logger.error('Fingerplates: no frames after switching to the capture stream')
+                return None
+            logger.info(f'Fingerplates: capture stream up at {probe.shape[1]}x{probe.shape[0]}')
+
+            for finger_angle in finger_angles:
+                actual_finger = await self._settle_fingers(finger_angle)
+                for wrist_angle in wrist_angles:
+                    actual_wrist = await self._settle_wrist(wrist_angle)
+                    # Settle again after arrival: the motor stops before the pole does, and
+                    # a frame taken mid-wobble is motion blur in the middle of the matte.
+                    await asyncio.sleep(settle_s)
+                    after = time.time()
+                    timestamp, frame = await self.gripper_client.capture_raw_frame(after)
+                    if frame is None:
+                        logger.warning(f'Fingerplates: no frame at finger {finger_angle} '
+                                       f'wrist {wrist_angle:.0f}; skipping')
+                        continue
+                    range_ts, laser = self.datastore.range_record.getLast()
+                    writer.add(
+                        frame, captured_at=timestamp,
+                        finger_angle=actual_finger, wrist_angle=actual_wrist,
+                        laser_rangefinder=laser if time.time() - range_ts < RANGE_MAX_AGE_S else None,
+                        finger_pressure=self.datastore.finger.getLast()[2],
+                        commanded_finger_angle=finger_angle, commanded_wrist_angle=wrist_angle,
+                    )
+                logger.info(f'Fingerplates: finger {finger_angle} done ({len(writer)} frames)')
+        finally:
+            # Whatever happened, do not leave the robot on a 6fps 1080p stream - nothing
+            # else in the system expects one, and it is not obvious from the UI.
+            await self.gripper_client.restore_default_stream()
+            await self._settle_wrist(start_wrist)
+
+        return writer.close(
+            finger_angles=list(finger_angles), wrist_steps=wrist_steps,
+            base_wrist_angle=base_wrist,
+        )
 
     async def half_auto_calibration(self):
         """
