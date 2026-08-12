@@ -17,8 +17,12 @@ The segment is defined as:
          traversal" needs no special case.
 
   end    The first frame after the grasp at which the gripper has risen
-         `rise_m` above the height it grasped at. That is the point the object is
-         unambiguously picked up and off whatever it was resting on.
+         `rise_m` above the height it grasped at, plus `post_lift_seconds` of
+         follow-through. The rise is the point the object is unambiguously picked up
+         and off whatever it was resting on; the follow-through keeps a little of the
+         carry after it, since cutting exactly at the rise tends to end the episode
+         while the lift is still in progress. It is clipped to the end of the episode,
+         so an episode that stops right after the lift simply keeps what it has.
 
 The grasp itself is the first frame where finger_pressure holds at or above
 `pressure_threshold` for `min_grasp_seconds` - the hold requirement rejects the
@@ -60,6 +64,9 @@ import numpy as np
 NEAR_RADIUS_M = 0.3
 # (metres) how far the gripper must climb above the grasp height to call it lifted.
 RISE_M = 0.10
+# (seconds) how much of the carry to keep after the lift, so the episode doesn't end
+# the instant the object clears its resting place. Clipped to the episode's own end.
+POST_LIFT_SECONDS = 0.0
 # (normalized 0-1) finger_pressure at or above this counts as holding something.
 PRESSURE_THRESHOLD = 0.1
 # (seconds) how long pressure must hold before it counts as a grasp rather than a bump.
@@ -71,6 +78,30 @@ MIN_SEGMENT_SECONDS = 1.0
 REQUIRED_STATE = ("gripper_pos_x", "gripper_pos_y", "gripper_pos_z", "finger_pressure")
 
 
+def find_grasp(
+    pressure: np.ndarray,
+    fps: float,
+    pressure_threshold: float = PRESSURE_THRESHOLD,
+    min_grasp_seconds: float = MIN_GRASP_SECONDS,
+) -> int | None:
+    """Index of the first frame of the first real grasp, or None.
+
+    A grasp is `hold` consecutive frames at or above the threshold; the convolution
+    counts how many of each window's frames qualify, so == hold means all of them.
+    The hold requirement is what rejects the brief spikes from bumping the object.
+
+    Split out from grasp_window because other tools want the instant rather than the
+    segment around it, and two definitions of "a grasp" would eventually disagree.
+    """
+    hold = max(1, int(round(min_grasp_seconds * fps)))
+    if len(pressure) < hold:
+        return None
+    over = (pressure >= pressure_threshold).astype(np.int32)
+    held = np.convolve(over, np.ones(hold, dtype=np.int32), mode="valid") == hold
+    grasps = np.flatnonzero(held)
+    return int(grasps[0]) if grasps.size else None
+
+
 def grasp_window(
     pressure: np.ndarray,
     pos: np.ndarray,
@@ -80,6 +111,7 @@ def grasp_window(
     rise_m: float = RISE_M,
     near_radius_m: float = NEAR_RADIUS_M,
     min_segment_seconds: float = MIN_SEGMENT_SECONDS,
+    post_lift_seconds: float = POST_LIFT_SECONDS,
 ) -> tuple[tuple[int, int] | None, str]:
     """Find one episode's grasp segment.
 
@@ -87,24 +119,19 @@ def grasp_window(
     Returns ((start, end) inclusive, "ok") or (None, reason).
     """
     n = len(pressure)
-    hold = max(1, int(round(min_grasp_seconds * fps)))
-    if n < hold:
+    if n < max(1, int(round(min_grasp_seconds * fps))):
         return None, "too_short"
 
-    # A grasp is `hold` consecutive frames at or above the threshold; the convolution
-    # counts how many of each window's frames qualify, so == hold means all of them.
-    over = (pressure >= pressure_threshold).astype(np.int32)
-    held = np.convolve(over, np.ones(hold, dtype=np.int32), mode="valid") == hold
-    grasps = np.flatnonzero(held)
-    if grasps.size == 0:
+    grasp = find_grasp(pressure, fps, pressure_threshold, min_grasp_seconds)
+    if grasp is None:
         return None, "no_grasp"
-    grasp = int(grasps[0])
 
     grasp_pos = pos[grasp]
     risen = np.flatnonzero(pos[grasp:, 2] >= grasp_pos[2] + rise_m)
     if risen.size == 0:
         return None, "no_rise"
-    end = grasp + int(risen[0])
+    end = grasp + int(risen[0]) + max(0, int(round(post_lift_seconds * fps)))
+    end = min(end, n - 1)
 
     # Walk back from the grasp for as long as the gripper stayed in the neighbourhood.
     # Hitting frame 0 means the episode had no traversal to trim.
@@ -278,6 +305,8 @@ def main() -> None:
     parser.add_argument("--rise_m", type=float, default=RISE_M)
     parser.add_argument("--near_radius_m", type=float, default=NEAR_RADIUS_M)
     parser.add_argument("--min_segment_seconds", type=float, default=MIN_SEGMENT_SECONDS)
+    parser.add_argument("--post_lift_seconds", type=float, default=POST_LIFT_SECONDS,
+                        help="Seconds of carry to keep after the lift is detected")
     args = parser.parse_args()
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -293,6 +322,7 @@ def main() -> None:
         rise_m=args.rise_m,
         near_radius_m=args.near_radius_m,
         min_segment_seconds=args.min_segment_seconds,
+        post_lift_seconds=args.post_lift_seconds,
     )
 
 

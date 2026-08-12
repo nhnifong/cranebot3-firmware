@@ -5,8 +5,9 @@
 # The trim (see lerobot_trim_to_grasp.py) starts each episode where the robot arrived
 # near the spot it eventually grasps at - so the traverse across the room is dropped,
 # and episodes that never traversed just start at frame 0 - and ends once the gripper
-# has risen 10cm above the height it grasped at, which is the point the object is
-# unambiguously off the floor. Episodes with no detectable grasp are dropped.
+# has risen 10cm above the height it grasped at - the point the object is unambiguously
+# off the floor - plus a second of the carry after that, so the episode does not end
+# mid-lift. Episodes with no detectable grasp are dropped.
 #
 # On naavox/move_clutter_2 this kept 97 of 106 episodes with a median segment of
 # 7.8s out of 18.6s, i.e. roughly 40% of the frames of the episodes it kept.
@@ -86,6 +87,9 @@ trim_to_grasp:
   min_grasp_seconds: 0.3
   # how far above the grasp height counts as picked up
   rise_m: 0.10
+  # keep this much of the carry after the lift; cutting at the lift itself ends the
+  # episode while the pick is still in progress
+  post_lift_seconds: 1.0
   # how close (horizontally) to the eventual grasp point counts as "arrived"
   near_radius_m: 0.3
   # drop degenerate segments rather than keep near-empty episodes

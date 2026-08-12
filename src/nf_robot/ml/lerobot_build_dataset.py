@@ -67,6 +67,7 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
       rise_m: 0.10                            # keep_state_features.
       near_radius_m: 0.3
       min_segment_seconds: 1.0
+      post_lift_seconds: 1.0                  # carry kept after the lift
     label_contact_actions:                    # optional; omit or set enabled: false to skip
       enabled: true
       mode: contact                           # or "waypoints": target the next position the
