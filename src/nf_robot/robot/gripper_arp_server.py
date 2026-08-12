@@ -86,9 +86,7 @@ class GripperArpServer(RobotComponentServer):
         # calibrated against that field of view.
         self.stream_resolutions = {
             'wide': (684, 384, '1200kbps'),
-            # h264 hardware encoding runs out around 1080p, so this is the top of what
-            # the existing libav path can carry. Bitrate raised to match the pixels.
-            'full': (1920, 1080, '12000kbps'),
+            'full': (1920, 1080, '6000kbps'),
         }
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'
