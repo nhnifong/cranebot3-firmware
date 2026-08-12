@@ -75,6 +75,12 @@ _CAMERA_MODES: dict[str, dict[int, tuple[int, int]]] = {
     # blank padding, at the cost of a uniform horizontal squash.
     "gripper_anchors_224": {0: (224, 224), 1: (224, 224), 2: (224, 224)},
     "gripper_anchors_rect": {0: (684, 384), 1: (684, 384), 2: (684, 384)},
+    # The gripper alone at the visual servoing model's input size. A resize of the whole
+    # 684x384 field of view, never a crop: that model's labels are normalized image
+    # coordinates, which survive any resize (including this one's 1.8% horizontal
+    # squash) but not a crop, which would move the principal point and silently
+    # invalidate every label. See visual_servoing/mine_teleop.py.
+    "gripper_448x256":   {0: (448, 256)},
     "all_square":        {0: (384, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
     "all":               {0: (684, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
     # The warped floor composite on its own, at the resolution "all" records it at, so

@@ -1,0 +1,102 @@
+# The same sources as move_clutter_rect_for_xvla.yaml, cut down to the one camera and
+# the eight state components that visual_servoing/mine_teleop.py reads, at the visual
+# servoing model's input resolution.
+#
+# The point of this recipe is that the merge already knows how to source datasets, drop
+# the episodes that should never be used, reconcile feature sets that differ by when
+# they were recorded, and normalize the task strings. Doing all of that here means the
+# miner only has to do the thing only it can do - project the grasp point back through
+# the recorded gripper poses - against one dataset with one shape.
+#
+# Two settings are load-bearing rather than incidental:
+#
+#   center_crop: false   mine_teleop's labels are normalized image coordinates. Those
+#   pad_clamp:   false   survive a resize of the whole field of view, which is what
+#                        camera_mode gripper_448x256 does, but not a crop or a pad -
+#                        either moves the principal point away from the calibration the
+#                        projection uses, and every label comes out wrong in a way that
+#                        still looks plausible. A source whose gripper stream is smaller
+#                        than 448x256 should fail this build loudly rather than be
+#                        padded up to fit.
+#
+# No trim_to_grasp: the miner does its own windowing around each grasp, and needs the
+# frames leading up to it that a trim would throw away. No label_contact_actions either -
+# nothing here reads contact_vec.
+#
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/gripper_servo_source.yaml \
+#     --temp_dir /home/nhn/data_scratch \
+#     --output_root /home/nhn/data_scratch/gripper_servo_source \
+#     --upload
+
+output_repo_id: naavox/gripper_servo_source
+camera_mode: gripper_448x256
+center_crop: false
+pad_clamp: false
+
+# gripper_vel is the narrowest recorded action space that still carries finger_speed,
+# which is the miner's finger label.
+action_space: gripper_vel
+
+merge:
+  - repo_id: naavox/move_clutter
+    exclude_episodes: ["289-325", "448-481"]
+  - naavox/move_clutter_2
+  - naavox/move_clutter_hawes_1
+  - naavox/move_clutter_chuck_1
+  - naavox/move_clutter_79west4
+  - naavox/move_clutter_nick_2
+  - justink04/laundry-in-hamper-7-19-26
+  - justink04/laundry-in-hamper-7-23-26
+  - justink04/trash-in-trashcan-7-23-26
+  - justink04/trash-in-trashcan-7-24-26
+  - justink04/laundry-in-hamper-8-1-26
+  - repo_id: justink04/laundry-in-hamper2-8-1-26
+    exclude_episodes: ["41-60"]
+  - repo_id: justink04/laundry-in-hamper3-8-1-26
+    exclude_episodes: ['48-99']
+  - justink04/cranebot-ethernet-test-02
+  # excluded because this episode's re-encoded gripper video was corrupt in
+  # naavox/move_clutter_camera_goal; the source itself decodes clean, so this may be
+  # unnecessary here (see move_clutter_camera_goal.yaml)
+  - repo_id: justink04/laundry-in-hamper4-8-1-26
+    exclude_episodes: [13]
+  - naavox/nick-clutter-aug3
+  - naavox/playroom-clutter-aug4
+  - naavox/bedroom-laundry-aug5
+  - naavox/toys-79west
+  - naavox/playroom-aug6
+  - naavox/bedroom-laundry-aug7-2
+
+# Exactly mine_teleop.STATE_NEEDED, and nothing else.
+#   gripper_pos_*      where the gripper was, for the room-frame delta to the grasp
+#   spin               rotates that delta into the gripper frame
+#   finger_pressure    finds the grasp instant, and labels the holding head
+#   wrist_angle        the grasp axis label, as a delta to its value at the grasp
+#   finger_angle       a model input, and part of the close rule to be fitted
+#   laser_rangefinder  drops the anchor point to the object, and is a model input
+#   target_force       a model input; the commanded set point, not the measurement
+# Note that vel_* are deliberately absent: the model must not see the previous action,
+# which is the shortcut that teaches "keep doing what you were doing". They survive in
+# the action column, where the miner reads finger_speed.
+keep_state_features:
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+
+# Datasets recorded after the anchor_poses feature was added carry their recorded
+# calibration and the older ones don't; the merge demands identical feature sets, and
+# nothing here reads it.
+drop_features:
+  - anchor_poses
+
+# The miner ignores task strings entirely, but a merged dataset carrying every
+# speech-to-text spelling of "put laundry in the hamper" is unpleasant to inspect and
+# costs nothing to canonicalize.
+normalize_tasks: move_clutter_rect_tasks.yaml
