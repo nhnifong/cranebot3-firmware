@@ -24,6 +24,12 @@ from nf_robot.host.video_streamer import NfVideoStreamer
 
 logger = logging.getLogger(__name__)
 
+# Connecting to a component's video stream can be refused for a moment after it
+# announces itself, especially when rpicam-vid has just been relaunched at a new
+# resolution. Retry rather than losing video until the next video_ready.
+VIDEO_OPEN_ATTEMPTS = 5
+VIDEO_OPEN_RETRY_S = 1.5
+
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
 # number of origin detections to average
@@ -118,16 +124,23 @@ class ComponentClient:
         }
 
         try:
-
-            # attempt = 3 # sometimes it just takes longer than expected.
-            # while attempt>0:
-            #     try:
-            container = av.open(video_uri, options=options, mode='r')
-            # except av.error.ConnectionRefusedError:
-            #     attempt-=1
-            #     if attempt==0:
-            #         raise
-            #     time.sleep(1.5)
+            # The component announces video_ready when rpicam-vid prints its header line,
+            # but the listening socket is not always accepting by the time we get here -
+            # most visibly after a resolution change, where the process has just been
+            # killed and relaunched and has more to set up before it listens. A refusal
+            # here is not a dead camera, and giving up on the first one leaves the client
+            # with no video until something else happens to trigger another video_ready.
+            container = None
+            for attempt in range(VIDEO_OPEN_ATTEMPTS):
+                try:
+                    container = av.open(video_uri, options=options, mode='r')
+                    break
+                except (av.error.ConnectionRefusedError, av.error.TimeoutError):
+                    if attempt == VIDEO_OPEN_ATTEMPTS - 1:
+                        raise
+                    logger.info(f'Video stream at {video_uri} not accepting yet, retrying '
+                                f'({attempt + 1}/{VIDEO_OPEN_ATTEMPTS})')
+                    time.sleep(VIDEO_OPEN_RETRY_S)
 
             stream = next(s for s in container.streams if s.type == 'video')
             stream.thread_type = "SLICE"

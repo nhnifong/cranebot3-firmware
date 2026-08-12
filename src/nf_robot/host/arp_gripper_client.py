@@ -64,6 +64,10 @@ ROUTE_TAG_HISTORY = 240
 # itself - it pulls in the i2c and servo hardware libraries at import.
 DEFAULT_STREAM_RESOLUTION = 'wide'
 DEFAULT_STREAM_FRAMERATE = 60
+# (width, height) of each stream_resolutions entry, so a caller can tell whether the
+# frames it is getting are from the mode it asked for.
+STREAM_RESOLUTION_SIZES = {'wide': (684, 384), 'full': (1920, 1080)}
+CAPTURE_RESOLUTION_SIZE = STREAM_RESOLUTION_SIZES['full']
 # Framerate to pair with the 1080p capture mode. Low enough that the pi zero 2w in the
 # gripper is not asked to encode more than it can, which it answers by overheating.
 CAPTURE_FRAMERATE = 6
@@ -334,7 +338,7 @@ class ArpeggioGripperClient(ComponentClient):
             'GRIPPER_STREAM_FRAMERATE': framerate,
         }})
 
-    async def capture_raw_frame(self, after_ts, timeout=5.0):
+    async def capture_raw_frame(self, after_ts, timeout=5.0, expect_size=None):
         """The newest camera frame captured after after_ts, as (timestamp, RGB array).
 
         Reads self.frame rather than last_output_frame because process_frame resizes to
@@ -343,15 +347,20 @@ class ArpeggioGripperClient(ComponentClient):
 
         Waiting on capture time rather than sleeping a fixed interval means the caller
         gets a frame taken after whatever motion it just commanded, however far the
-        stream is lagging - and after a resolution change the stream restarts, so the
-        first frame can be seconds away.
+        stream is lagging.
+
+        expect_size is a (width, height) to hold out for, and is the only reliable way
+        to tell that a resolution change has actually landed: the old stream keeps
+        delivering frames for seconds after the new settings are sent, and those frames
+        are new enough to satisfy any timestamp test while being the wrong size.
         """
         deadline = time.time() + timeout
         while True:
             with self.frame_lock:
                 timestamp, frame = self.last_frame_cap_time, self.frame
                 if frame is not None and timestamp is not None and timestamp > after_ts:
-                    return timestamp, frame.copy()
+                    if expect_size is None or (frame.shape[1], frame.shape[0]) == tuple(expect_size):
+                        return timestamp, frame.copy()
             if time.time() > deadline:
                 return None, None
             await asyncio.sleep(0.02)

@@ -87,6 +87,12 @@ FINGERPLATE_ANGLE_STEP = 15
 FINGERPLATE_WRIST_STEPS = 24
 # (seconds) extra wait after the wrist reports arrival, for the pole to stop swinging.
 FINGERPLATE_SETTLE_S = 0.6
+# How long to wait for the camera to come back at the capture resolution. rpicam-vid is
+# killed and relaunched to change resolution, and the client retries the connection a few
+# times before giving up, so this has to cover all of that.
+CAPTURE_STREAM_TIMEOUT_S = 30.0
+# Consecutive missing frames that mean the stream has gone rather than lagged.
+FINGERPLATE_MAX_MISSES = 5
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
@@ -2274,6 +2280,7 @@ class AsyncObserver:
         robot to do this again.
         """
         from nf_robot.ml.visual_servoing.plates import PlateWriter
+        from nf_robot.host.arp_gripper_client import CAPTURE_RESOLUTION_SIZE
 
         if self.gripper_client is None:
             logger.error('No gripper connected; cannot collect fingerplates')
@@ -2294,15 +2301,24 @@ class AsyncObserver:
                     f'steps = {len(finger_angles) * wrist_steps} frames, wrist {base_wrist:.0f}'
                     f'-{base_wrist + 360:.0f}, writing to {output_dir}')
 
+        expect = CAPTURE_RESOLUTION_SIZE
         await self.gripper_client.use_capture_stream()
         try:
-            # The stream restarts to change resolution, so the first frame is seconds out.
-            _, probe = await self.gripper_client.capture_raw_frame(time.time(), timeout=20.0)
+            # Hold out for a frame at the capture resolution, not merely a recent one: the
+            # old stream keeps delivering for seconds after the new settings are sent, and
+            # accepting those would run the whole sweep at 684x384 while reporting success.
+            _, probe = await self.gripper_client.capture_raw_frame(
+                time.time(), timeout=CAPTURE_STREAM_TIMEOUT_S, expect_size=expect)
             if probe is None:
-                logger.error('Fingerplates: no frames after switching to the capture stream')
+                logger.error(
+                    f'Fingerplates: no {expect[0]}x{expect[1]} frames within '
+                    f'{CAPTURE_STREAM_TIMEOUT_S}s of switching to the capture stream. '
+                    f'Check the gripper log for rpicam-vid "ERROR: ***" lines - it may not '
+                    f'be able to start at this resolution.')
                 return None
             logger.info(f'Fingerplates: capture stream up at {probe.shape[1]}x{probe.shape[0]}')
 
+            missed = 0
             for finger_angle in finger_angles:
                 actual_finger = await self._settle_fingers(finger_angle)
                 for wrist_angle in wrist_angles:
@@ -2311,11 +2327,20 @@ class AsyncObserver:
                     # a frame taken mid-wobble is motion blur in the middle of the matte.
                     await asyncio.sleep(settle_s)
                     after = time.time()
-                    timestamp, frame = await self.gripper_client.capture_raw_frame(after)
+                    timestamp, frame = await self.gripper_client.capture_raw_frame(
+                        after, expect_size=expect)
                     if frame is None:
+                        missed += 1
                         logger.warning(f'Fingerplates: no frame at finger {finger_angle} '
-                                       f'wrist {wrist_angle:.0f}; skipping')
+                                       f'wrist {wrist_angle:.0f} ({missed} in a row)')
+                        if missed >= FINGERPLATE_MAX_MISSES:
+                            # The stream is gone, not merely late. Continuing means half an
+                            # hour of moving the wrist around for nothing.
+                            logger.error(f'Fingerplates: {missed} consecutive frames missing; '
+                                         f'abandoning the run with {len(writer)} captured')
+                            return None
                         continue
+                    missed = 0
                     range_ts, laser = self.datastore.range_record.getLast()
                     writer.add(
                         frame, captured_at=timestamp,
