@@ -393,7 +393,7 @@ class StringmanPilotConfig(betterproto2.Message):
     )
     """
     Credentials to publish telemetry at any cloud relay instance this robot has bound with.
-    Keyed by hostname (and port) such as "neufangled.com" or "localhost:8080"
+    Keyed by the telemetry ws_protocol_and_host such as "wss://neufangled.com"
     """
 
 

@@ -293,6 +293,13 @@ class TargetModelAction(betterproto2.Enum):
     TARGET_MODEL_DISABLE = 1
 
     TARGET_MODEL_ENABLE_DEFAULT = 2
+    """
+    default is ortho target
+    """
+
+    TARGET_MODEL_ENABLE_ORTHO = 3
+
+    TARGET_MODEL_ENABLE_HEATMAP = 4
 
 
 @dataclass(eq=False, repr=False)

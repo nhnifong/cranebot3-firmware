@@ -102,6 +102,13 @@ def room_to_ortho_px(x_m, y_m, width, height, extent_m=ORTHO_EXTENT_M):
     return u, v
 
 
+def ortho_px_to_room(u, v, width, height, extent_m=ORTHO_EXTENT_M):
+    """Ortho pixel coordinates -> room-frame metres; the inverse of room_to_ortho_px."""
+    x_m = (u - width / 2.0) * extent_m / width
+    y_m = -(v - height / 2.0) * extent_m / height
+    return x_m, y_m
+
+
 def frame_to_bgr(frame):
     """A LeRobot video frame (CHW float RGB, or HWC uint8) as an HWC uint8 BGR array."""
     arr = frame.numpy() if hasattr(frame, "numpy") else np.asarray(frame)
@@ -620,6 +627,43 @@ def predict(model, images, tta=False, top_k=1):
         # Offsets stay from the untransformed pass, being sub-cell either way.
         logits = (acc / 8).clamp_min(1e-12).log()
     return decode(logits, offsets, model.image_size, model.grid, top_k=top_k)
+
+
+# ==========================================
+# LIVE INFERENCE
+# ==========================================
+# The observer's ortho worker renders a larger map than the recordings stored, so the
+# only step between the live frame and the model is the same resize the training
+# loader applies. Room metres come back out analytically, no camera pose involved.
+
+TARGETING_MODEL_REPOID = "naavox/targeting"
+TARGETING_MODEL_FILENAME = "ortho_target.pth"
+
+
+def prepare_ortho_image(rgb, image_size, device):
+    """A live ortho frame as a one-image normalized batch, as the training loader made them.
+
+    The frame is RGB, not BGR: anchor clients decode to rgb24 and the floor projection
+    keeps that order, which is also the order that reached training - the recorded
+    videos are converted to BGR only on their way into the video streamer.
+    """
+    if rgb.shape[:2] != (image_size, image_size):
+        rgb = cv2.resize(rgb, (image_size, image_size), interpolation=cv2.INTER_AREA)
+    img = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1).float() / 255.0
+    img = (img - torch.tensor(IMAGENET_MEAN).view(3, 1, 1)) / torch.tensor(IMAGENET_STD).view(3, 1, 1)
+    return img[None].to(device)
+
+
+@torch.no_grad()
+def predict_room_targets(model, rgb, device, top_k=1, tta=False):
+    """Best target(s) for one ortho frame, as [(x_m, y_m, score)] in the room frame."""
+    batch = prepare_ortho_image(rgb, model.image_size, device)
+    uv, scores = predict(model, batch, tta=tta, top_k=top_k)
+    out = []
+    for (u, v), score in zip(uv[0].cpu().numpy(), scores[0].cpu().numpy()):
+        x_m, y_m = ortho_px_to_room(float(u), float(v), model.image_size, model.image_size)
+        out.append((x_m, y_m, float(score)))
+    return out
 
 
 # ==========================================

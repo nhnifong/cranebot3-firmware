@@ -229,7 +229,9 @@ message SetPoint {
 enum TargetModelAction {
   TARGET_MODEL_ACTION_UNUSED = 0;
   TARGET_MODEL_DISABLE = 1;
-  TARGET_MODEL_ENABLE_DEFAULT = 2;
+  TARGET_MODEL_ENABLE_DEFAULT = 2; // default is ortho target
+  TARGET_MODEL_ENABLE_ORTHO = 3;
+  TARGET_MODEL_ENABLE_HEATMAP = 4;
 }
 
 // Enable or disable the target-finding model at runtime

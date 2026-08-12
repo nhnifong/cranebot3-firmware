@@ -14,9 +14,12 @@ def generate_orthographic_floor_maps(
     map_extent_meters=10.0
 ):
     """
-    Reprojects BGR images and target heatmaps from multiple overhead cameras 
+    Reprojects camera images and target heatmaps from multiple overhead cameras
     to a top-down orthographic floor space projection using analytical homography.
-    
+
+    Channel order is whatever the clients decoded to (rgb24) and is passed through
+    untouched, so the result is RGB despite OpenCV's usual convention.
+
     Args:
         valid_anchor_clients: List of camera clients containing .last_output_frame and .camera_pose
         heatmaps_np: List/array of numpy heatmaps corresponding to the clients, or
@@ -28,7 +31,7 @@ def generate_orthographic_floor_maps(
     Returns:
         combined_heatmap: 1800x1800 np.ndarray representing the summed floor heatmaps,
             or None when heatmaps_np is None
-        combined_bgr: 1800x1800x3 np.ndarray representing the stitched floor images
+        combined_rgb: 1800x1800x3 np.ndarray representing the stitched floor images
     """
 
     # Initialize empty combined maps. combined_heatmap stays None when the caller
@@ -36,7 +39,7 @@ def generate_orthographic_floor_maps(
     combined_heatmap = None if heatmaps_np is None else np.zeros((map_size_px, map_size_px), dtype=np.float32)
     
     # Use float64 in [0,1] space for multiply blend
-    combined_bgr = np.ones((map_size_px, map_size_px, 3), dtype=np.float64)
+    combined_rgb = np.ones((map_size_px, map_size_px, 3), dtype=np.float64)
     touched = np.zeros((map_size_px, map_size_px, 1), dtype=bool)
 
     # Extract calibration matrices once
@@ -46,9 +49,9 @@ def generate_orthographic_floor_maps(
     orig_h = camera_cal.resolution.height
     
     for i, client in enumerate(valid_anchor_clients):
-        bgr_image = client.last_output_frame
+        rgb_image = client.last_output_frame
 
-        h, w = bgr_image.shape[:2]
+        h, w = rgb_image.shape[:2]
         
         # Scale the intrinsic matrix to match the current image resolution
         sx = w / float(orig_w)
@@ -57,8 +60,8 @@ def generate_orthographic_floor_maps(
         K_scaled[0, :] *= sx
         K_scaled[1, :] *= sy
         
-        # Undistort the incoming BGR image
-        bgr_undistorted = cv2.undistort(bgr_image, K_scaled, D)
+        # Undistort the incoming image
+        rgb_undistorted = cv2.undistort(rgb_image, K_scaled, D)
 
         # Resize and undistort the heatmap (skipped entirely when no heatmaps)
         heatmap_undistorted = None
@@ -102,23 +105,23 @@ def generate_orthographic_floor_maps(
             warped_heatmap = cv2.warpPerspective(heatmap_undistorted, H, (map_size_px, map_size_px))
             combined_heatmap += warped_heatmap
 
-        # Warp the BGR Image
-        warped_bgr = cv2.warpPerspective(bgr_undistorted, H, (map_size_px, map_size_px))
+        # Warp the image
+        warped_rgb = cv2.warpPerspective(rgb_undistorted, H, (map_size_px, map_size_px))
         
-        mask = (warped_bgr.sum(axis=-1, keepdims=True) > 0)
-        warped_norm = warped_bgr.astype(np.float64) / 255.0
+        mask = (warped_rgb.sum(axis=-1, keepdims=True) > 0)
+        warped_norm = warped_rgb.astype(np.float64) / 255.0
         # First camera to cover a pixel sets it; subsequent cameras multiply into it
-        combined_bgr = np.where(mask & ~touched, warped_norm, combined_bgr)
-        combined_bgr = np.where(mask & touched, combined_bgr * warped_norm, combined_bgr)
+        combined_rgb = np.where(mask & ~touched, warped_norm, combined_rgb)
+        combined_rgb = np.where(mask & touched, combined_rgb * warped_norm, combined_rgb)
         touched |= mask
 
     # Finalize Image Stacking
     # Zero out pixels never covered by any camera, then convert to uint8
-    combined_bgr_final = np.where(touched, combined_bgr * 255, 0).astype(np.uint8)
+    combined_rgb_final = np.where(touched, combined_rgb * 255, 0).astype(np.uint8)
 
     combined_heatmap_clipped = None if combined_heatmap is None else np.clip(combined_heatmap, 0, 1.0)
 
-    return combined_heatmap_clipped, combined_bgr_final
+    return combined_heatmap_clipped, combined_rgb_final
 
 # class responsible for combining camrea views and heatmaps into a single image on the floor of the room aligned with it's coordinate space.
 class FloorView:

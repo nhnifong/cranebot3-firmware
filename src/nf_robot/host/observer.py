@@ -231,6 +231,8 @@ class AsyncObserver:
         # last known positions of named tags/objects live in self.config.named_positions
         # (the single source of truth). It's written to disk on shutdown, in async_close.
         self.target_model = None
+        # which kind of target model is loaded, so run_perception knows how to drive it
+        self.target_model_kind = None
         self.centering_model = None
         self.predicted_lateral_vector = None
         self.perception_task = None
@@ -272,7 +274,8 @@ class AsyncObserver:
         self.local_models = local_models
         # ortho projection state - written by _ortho_worker thread, read by run_perception AI task
         self.ortho_event = threading.Event()
-        self.last_ortho_bgr = None
+        # rgb24, the order the anchor clients decode to; only converted to BGR for the streamer
+        self.last_ortho_rgb = None
         self.last_ortho_heatmap = None
         self.last_heatmaps_np = None
         # list of (NfVideoStreamer, feed_number) for ortho feeds, so send_setup_telemetry can replay them
@@ -3926,21 +3929,22 @@ class AsyncObserver:
 
                 # Pass heatmaps=None when the target model isn't producing them so
                 # generate_orthographic_floor_maps skips all heatmap warp work and
-                # only computes the ortho BGR floor projection.
+                # only computes the ortho floor projection.
                 heatmaps = self.last_heatmaps_np
                 if heatmaps is not None and len(heatmaps) != len(valid_clients):
                     heatmaps = None  # stale/mismatched batch; skip the heatmap channel
 
-                ortho_heatmap, ortho_bgr = generate_orthographic_floor_maps(
+                ortho_heatmap, ortho_rgb = generate_orthographic_floor_maps(
                     valid_clients, heatmaps, self.config.camera_cal,
                     map_size_px=1000, map_extent_meters=EXTENT,
                 )
-                self.last_ortho_bgr = ortho_bgr
+                self.last_ortho_rgb = ortho_rgb
                 if ortho_heatmap is not None:
                     self.last_ortho_heatmap = ortho_heatmap
 
                 if ortho_floor_vs is not None:
-                    ortho_floor_vs.send_frame(cv2.cvtColor(ortho_bgr, cv2.COLOR_BGR2RGB))
+                    # the streamer's encoders take BGR
+                    ortho_floor_vs.send_frame(cv2.cvtColor(ortho_rgb, cv2.COLOR_RGB2BGR))
                 if heatmap_floor_vs is not None and ortho_heatmap is not None:
                     heatmap_floor_vs.send_frame(
                         cv2.applyColorMap((ortho_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
@@ -3950,9 +3954,11 @@ class AsyncObserver:
 
     async def run_perception(self):
         """
-        Orthographic floor projection and target heatmap inference.
+        Orthographic floor projection and target inference.
         run_ortho and target model inference are independent; the target model is loaded at
-        runtime via SetTargetModel control messages.
+        runtime via SetTargetModel control messages, in one of two kinds: "ortho" reads the
+        floor projection and names a single target, "heatmap" infers per anchor camera and
+        relies on the ortho worker to warp those heatmaps onto the floor.
         """
         LOOP_DELAY = 0.1
         FIND_TARGETS_EVERY = 5
@@ -4029,46 +4035,15 @@ class AsyncObserver:
                 continue
             counter = 0
 
-            # Lazy imports: only reached once a target model is loaded, so torch
-            # stays off the startup path. Both are import-cached after first use.
-            import torch
-            from nf_robot.ml.target_heatmap import extract_targets_from_heatmap, HM_IMAGE_RES
-
-            valid_anchor_clients = [
-                c for c in self.anchors.values()
-                if c.last_output_frame is not None and c.anchor_num in self.config.preferred_cameras
-            ]
-            if not valid_anchor_clients:
-                continue
-
-            img_tensors = [
-                torch.from_numpy(cv2.resize(c.last_output_frame, HM_IMAGE_RES, interpolation=cv2.INTER_AREA))
-                     .permute(2, 0, 1).float() / 255.0
-                for c in valid_anchor_clients
-            ]
-            batch = torch.stack(img_tensors).to(self._device)
-
-            def infer_sync():
-                with torch.no_grad():
-                    return self.target_model(batch).squeeze(1).cpu().numpy()
-
-            heatmaps_np = await asyncio.to_thread(infer_sync)
-            self.last_heatmaps_np = heatmaps_np
-
-            ortho_heatmap = self.last_ortho_heatmap
-            if ortho_heatmap is None:
-                continue
-
-            results = extract_targets_from_heatmap(ortho_heatmap)
-            if len(results) > 0:
-                targets2d = (results[:, :2] + np.array([-0.5, -0.5])) * EXTENT
-                floor_targets = [
-                    {'position': np.array([p[0], p[1], 0]), 'dropoff': 'hamper'}
-                    for p in targets2d
-                    if self.pe.point_inside_work_area_2d(p)
-                ]
+            if self.target_model_kind == "ortho":
+                floor_targets = await self._find_targets_ortho()
             else:
-                floor_targets = []
+                floor_targets = await self._find_targets_heatmap(EXTENT)
+
+            # None means "no opinion this round" (no input frame yet), which must not be
+            # confused with the empty list, which retires every AI target in the queue.
+            if floor_targets is None:
+                continue
             self.target_queue.add_ai_targets(floor_targets)
             self.send_tq_to_ui()
 
@@ -4076,6 +4051,71 @@ class AsyncObserver:
             ortho_floor_vs.stop()
             if heatmap_floor_vs is not None:
                 heatmap_floor_vs.stop()
+
+    def _floor_target(self, x, y):
+        """A target dict for the queue, or None if it lies outside the work area."""
+        position = np.array([x, y, 0])
+        if not self.pe.point_inside_work_area_2d(position[:2]):
+            return None
+        return {'position': position, 'dropoff': 'hamper'}
+
+    async def _find_targets_ortho(self):
+        """One target from the ortho floor view, chosen by the ortho_target model.
+
+        The model reads the same projection the ortho worker already renders, so unlike
+        the heatmap path nothing per-camera is inferred and no warping is needed.
+        """
+        from nf_robot.ml import ortho_target
+
+        ortho_frame = self.last_ortho_rgb
+        if ortho_frame is None:
+            if not self.run_ortho:
+                logger.warning('ortho target model needs the floor projection, which run_ortho disables')
+            return None
+
+        predictions = await asyncio.to_thread(
+            ortho_target.predict_room_targets, self.target_model, ortho_frame, self._device
+        )
+        target = self._floor_target(predictions[0][0], predictions[0][1]) if predictions else None
+        return [target] if target is not None else []
+
+    async def _find_targets_heatmap(self, extent):
+        """Targets from per-anchor heatmaps warped onto the floor by the ortho worker."""
+        # Lazy imports: only reached once a target model is loaded, so torch stays off
+        # the startup path. Both are import-cached after first use.
+        import torch
+        from nf_robot.ml.target_heatmap import extract_targets_from_heatmap, HM_IMAGE_RES
+
+        valid_anchor_clients = [
+            c for c in self.anchors.values()
+            if c.last_output_frame is not None and c.anchor_num in self.config.preferred_cameras
+        ]
+        if not valid_anchor_clients:
+            return None
+
+        img_tensors = [
+            torch.from_numpy(cv2.resize(c.last_output_frame, HM_IMAGE_RES, interpolation=cv2.INTER_AREA))
+                 .permute(2, 0, 1).float() / 255.0
+            for c in valid_anchor_clients
+        ]
+        batch = torch.stack(img_tensors).to(self._device)
+
+        def infer_sync():
+            with torch.no_grad():
+                return self.target_model(batch).squeeze(1).cpu().numpy()
+
+        # the ortho worker picks these up and warps them onto the floor
+        self.last_heatmaps_np = await asyncio.to_thread(infer_sync)
+
+        ortho_heatmap = self.last_ortho_heatmap
+        if ortho_heatmap is None:
+            return None
+
+        results = extract_targets_from_heatmap(ortho_heatmap)
+        if len(results) == 0:
+            return []
+        targets2d = (results[:, :2] + np.array([-0.5, -0.5])) * extent
+        return [t for t in (self._floor_target(p[0], p[1]) for p in targets2d) if t is not None]
 
     async def pick_and_place_loop(self):
         """
@@ -4421,21 +4461,24 @@ class AsyncObserver:
 
         self.centering_model = await asyncio.to_thread(load_sync)
 
-    def _set_target_model(self, model):
+    def _set_target_model(self, model, kind=None):
         """Set self.target_model, notifying the UI via auto_targeting_state whenever
         whether a model is loaded (not the model itself) changes."""
         was_loaded = self.target_model is not None
         self.target_model = model
+        self.target_model_kind = kind if model is not None else None
+        if model is None:
+            # the ortho worker skips all heatmap warping while these are None
+            self.last_heatmaps_np = None
         if (model is not None) != was_loaded:
             self.send_ui(auto_targeting_state=telemetry.AutoTargetingState(enabled=model is not None, present=True))
 
-    async def _load_target_model(self):
+    async def _load_target_model(self, kind):
+        """Load the 'ortho' or 'heatmap' target model and make it the active one."""
         import torch
         from huggingface_hub import hf_hub_download
-        from nf_robot.ml.target_heatmap import TargetHeatmapNet
         DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
         self._device = DEVICE
-        TARGETING_MODEL_REPOID = "naavox/targeting"
 
         if DEVICE == "cpu":
             logger.warning("Refusing to load targeting model on CPU; hardware acceleration required.")
@@ -4447,27 +4490,43 @@ class AsyncObserver:
             ))
             return
 
-        def load_sync():
-            if self.local_models:
-                target_path = "models/target_heatmap.pth"
-            else:
-                target_path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename="target_heatmap.pth")
-            logger.info(f"Loading targeting model from {target_path}...")
+        def resolve(repo_id, filename):
+            return f"models/{filename}" if self.local_models else hf_hub_download(repo_id=repo_id, filename=filename)
+
+        def load_ortho():
+            from nf_robot.ml import ortho_target
+            path = resolve(ortho_target.TARGETING_MODEL_REPOID, ortho_target.TARGETING_MODEL_FILENAME)
+            logger.info(f"Loading ortho target model from {path}...")
+            model, _ = ortho_target.load_checkpoint(path, DEVICE)
+            return model
+
+        def load_heatmap():
+            from nf_robot.ml.target_heatmap import TargetHeatmapNet
+            path = resolve("naavox/targeting", "target_heatmap.pth")
+            logger.info(f"Loading heatmap target model from {path}...")
             t_model = TargetHeatmapNet().to(DEVICE)
-            t_model.load_state_dict(torch.load(target_path, map_location=DEVICE))
+            t_model.load_state_dict(torch.load(path, map_location=DEVICE))
             t_model.eval()
             return t_model
 
-        self._set_target_model(await asyncio.to_thread(load_sync))
+        load_sync = load_ortho if kind == "ortho" else load_heatmap
+        self._set_target_model(await asyncio.to_thread(load_sync), kind)
 
     async def _handle_set_target_model(self, item: control.SetTargetModel):
+        # DEFAULT is ortho; the heatmap model is only loaded when asked for by name.
+        kinds = {
+            control.TargetModelAction.TARGET_MODEL_ENABLE_DEFAULT: "ortho",
+            control.TargetModelAction.TARGET_MODEL_ENABLE_ORTHO: "ortho",
+            control.TargetModelAction.TARGET_MODEL_ENABLE_HEATMAP: "heatmap",
+        }
         if item.action == control.TargetModelAction.TARGET_MODEL_DISABLE:
             self._set_target_model(None)
             logger.info('Target model disabled')
-        elif item.action == control.TargetModelAction.TARGET_MODEL_ENABLE_DEFAULT:
-            logger.info('Loading default target model...')
-            await self._load_target_model()
-            logger.info('Target model ready')
+        elif item.action in kinds:
+            kind = kinds[item.action]
+            logger.info(f'Loading {kind} target model...')
+            await self._load_target_model(kind)
+            logger.info(f'{kind} target model ready')
 
     async def check_lerobot_session_connected(self, timeout=2) -> bool:
         """
