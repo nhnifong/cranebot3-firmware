@@ -602,7 +602,10 @@ def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # force=True: importing lerobot/transformers installs a root handler, which makes a
+    # later basicConfig a silent no-op and drops every info line this tool logs.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                        force=True)
 
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
