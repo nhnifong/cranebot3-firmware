@@ -62,6 +62,13 @@ default_gripper_conf = {
     # rpicam-vid framerate for the gripper camera stream.
     # A running stream is automatically restarted to pick up changes.
     'GRIPPER_STREAM_FRAMERATE': 60,
+    # Which entry of GripperArpServer.stream_resolutions the camera streams at. 'wide' is
+    # the normal 684x384 control stream; 'full' is for capturing synthetic-data
+    # ingredients, where the plates are only ever downscaled later so capture resolution
+    # sets the ceiling on how much real detail they can carry. Drop the framerate when
+    # selecting it - the pi zero 2w cannot encode 1080p at speed - and see
+    # arp_gripper_client.use_capture_stream, which sets both together.
+    'GRIPPER_STREAM_RESOLUTION': 'wide',
     # Effective pole length used for swing model
     'POLE_LENGTH': 0.4526 # carbon pole effective length is 0.4350
 }
@@ -72,6 +79,17 @@ class GripperArpServer(RobotComponentServer):
         super().__init__()
         self.conf.update(default_gripper_conf)
         self.stream_framerate_conf_key = 'GRIPPER_STREAM_FRAMERATE'
+        self.stream_resolution_conf_key = 'GRIPPER_STREAM_RESOLUTION'
+        # Both modes keep the 2304:1296 sensor mode set below, so they share one field of
+        # view: 'full' is more pixels of the same scene, not a different framing. That
+        # matters because the geometry of anything captured through this camera is
+        # calibrated against that field of view.
+        self.stream_resolutions = {
+            'wide': (684, 384, '1200kbps'),
+            # h264 hardware encoding runs out around 1080p, so this is the top of what
+            # the existing libav path can carry. Bitrate raised to match the pixels.
+            'full': (1920, 1080, '12000kbps'),
+        }
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'
 

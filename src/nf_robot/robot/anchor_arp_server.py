@@ -27,6 +27,13 @@ default_anchor_conf = {
     # restarted to pick up changes. Broadcasting this var only affects anchors, not grippers,
     # which have their own GRIPPER_STREAM_FRAMERATE var.
     'ANCHOR_STREAM_FRAMERATE': 10,
+
+    # Which entry of AnchorArpServer.stream_resolutions the camera streams at. Same
+    # mechanism as the gripper's, and the same reason for it: capturing stills for
+    # training data wants pixels and does not care about latency, while streaming for
+    # control wants the opposite. 'full' is the anchors' normal mode, so leaving this
+    # alone changes nothing.
+    'ANCHOR_STREAM_RESOLUTION': 'full',
 }
 
 
@@ -35,6 +42,13 @@ class AnchorArpServer(RobotComponentServer):
         super().__init__()
         self.conf.update(default_anchor_conf)
         self.stream_framerate_conf_key = 'ANCHOR_STREAM_FRAMERATE'
+        self.stream_resolution_conf_key = 'ANCHOR_STREAM_RESOLUTION'
+        # 'full' matches the width/height the shared stream_command already declares, so
+        # the default behaviour is unchanged by this table existing.
+        self.stream_resolutions = {
+            'wide': (684, 384, '1200kbps'),
+            'full': (1920, 1080, '1000kbps'),
+        }
 
         self.has_power_line = power
 

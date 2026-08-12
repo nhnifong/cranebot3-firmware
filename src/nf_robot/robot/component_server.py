@@ -25,8 +25,9 @@ from nf_robot.common.util import get_local_ip
 # using libav makes it possible to send a containerized stream with pts
 # hardware h264 encoding is still used as long as resolution is below 1080
 # this requires rpicam-apps (not present in lite OS image)
-# the --framerate value here is just the default; build_stream_command() rewrites it
-# from self.stream_framerate_conf_key's config var each time rpicam-vid is (re)launched.
+# the --framerate/--width/--height values here are just defaults; build_stream_command()
+# rewrites them from self.stream_framerate_conf_key and self.stream_resolution_conf_key
+# each time rpicam-vid is (re)launched.
 stream_command = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
     "--width=1920", "--height=1080",
@@ -38,7 +39,7 @@ stream_command = [
     "--autofocus-mode", "manual",
     "--lens-position", "0.1",
     "--low-latency",
-    "--bitrate", "800kbps"
+    "--bitrate", "1000kbps"
 ]
 
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
@@ -76,6 +77,17 @@ class RobotComponentServer:
         # framerate value baked into the currently running rpicam_process, if any.
         # compared against self.conf to decide whether a config change needs a restart.
         self.running_framerate = None
+        # Name of the conf var selecting an entry of self.stream_resolutions, or None if
+        # this server's resolution isn't runtime-adjustable. Named modes rather than raw
+        # numbers because these values arrive off the wire: a mode that isn't in the
+        # table is ignored, where a typo'd width would launch a stream nothing can decode.
+        self.stream_resolution_conf_key = None
+        # mode name -> (width, height, bitrate). Bitrate belongs here because it has to
+        # rise with resolution; the low-resolution streaming bitrate at 1080p looks like
+        # a compression artifact exhibit, which is no use for capturing training data.
+        self.stream_resolutions = {}
+        # resolution mode baked into the currently running rpicam_process, if any.
+        self.running_resolution = None
         # the currently running stream_video task, so it can be stopped before a firmware update
         self.stream_video_task = None
         self.zc = None # zerconf instance.
@@ -153,22 +165,59 @@ class RobotComponentServer:
                         return
                     return await self.rpicam_process.wait()
 
-    def _framerate_arg_index(self):
-        """Index of the '--framerate=...' entry in self.stream_command, or None if this
+    def _arg_index(self, prefix):
+        """Index of the first '<prefix>...' entry in self.stream_command, or None if this
         particular stream_command doesn't expose one."""
         for i, arg in enumerate(self.stream_command):
-            if arg.startswith('--framerate'):
+            if arg.startswith(prefix):
                 return i
         return None
 
+    def _framerate_arg_index(self):
+        return self._arg_index('--framerate')
+
+    def selected_resolution(self):
+        """The (width, height, bitrate) this server should be streaming, or None.
+
+        None whenever the resolution isn't runtime-adjustable or the configured mode
+        name isn't one we know, so an unrecognised value leaves the stream exactly as
+        the stream_command declares it rather than breaking it.
+        """
+        if self.stream_resolution_conf_key is None:
+            return None
+        mode = self.conf.get(self.stream_resolution_conf_key)
+        if mode not in self.stream_resolutions:
+            if mode is not None:
+                logging.warning(
+                    f'unknown {self.stream_resolution_conf_key} {mode!r}; '
+                    f'known modes are {sorted(self.stream_resolutions)}')
+            return None
+        return self.stream_resolutions[mode]
+
     def build_stream_command(self):
-        """self.stream_command with --framerate rewritten from self.stream_framerate_conf_key,
-        if this server has opted into a live-configurable framerate."""
-        idx = self._framerate_arg_index()
-        if idx is None or self.stream_framerate_conf_key is None:
-            return self.stream_command
+        """self.stream_command with the live-configurable arguments rewritten.
+
+        --framerate from self.stream_framerate_conf_key, and --width/--height/--bitrate
+        from the mode self.stream_resolution_conf_key names, for whichever of the two
+        this server has opted into.
+        """
         cmd = list(self.stream_command)
-        cmd[idx] = f"--framerate={self.conf[self.stream_framerate_conf_key]}"
+        idx = self._framerate_arg_index()
+        if idx is not None and self.stream_framerate_conf_key is not None:
+            cmd[idx] = f"--framerate={self.conf[self.stream_framerate_conf_key]}"
+
+        resolution = self.selected_resolution()
+        if resolution is not None:
+            width, height, bitrate = resolution
+            for prefix, value in (('--width', f'--width={width}'),
+                                  ('--height', f'--height={height}')):
+                i = self._arg_index(prefix)
+                if i is not None:
+                    cmd[i] = value
+            # --bitrate takes its value as the following argument, not after an '='
+            i = self._arg_index('--bitrate')
+            if i is not None and i + 1 < len(cmd):
+                cmd[i + 1] = bitrate
         return cmd
 
     async def run_rpicam_vid(self):
@@ -182,6 +231,8 @@ class RobotComponentServer:
         command = self.build_stream_command()
         if self.stream_framerate_conf_key is not None:
             self.running_framerate = self.conf[self.stream_framerate_conf_key]
+        if self.stream_resolution_conf_key is not None:
+            self.running_resolution = self.conf.get(self.stream_resolution_conf_key)
         self.rpicam_process = await asyncio.create_subprocess_exec(
             command[0], *command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
@@ -243,13 +294,23 @@ class RobotComponentServer:
             lines.append(text)
         return lines
 
-    def restart_stream_if_framerate_changed(self):
+    def restart_stream_if_capture_changed(self):
         """Kill the running rpicam-vid process so stream_video's loop relaunches it with the
-        newly configured framerate. A no-op if this server hasn't opted into a live framerate
-        var, no stream is running, or the framerate didn't actually change."""
-        if self.stream_framerate_conf_key is None or self._framerate_arg_index() is None:
+        newly configured framerate and resolution. A no-op if this server hasn't opted into
+        either live var, no stream is running, or neither setting actually changed."""
+        if self.rpicam_process is None:
             return
-        if self.rpicam_process is None or self.conf[self.stream_framerate_conf_key] == self.running_framerate:
+
+        changed = False
+        if self.stream_framerate_conf_key is not None and self._framerate_arg_index() is not None:
+            changed |= self.conf[self.stream_framerate_conf_key] != self.running_framerate
+        if self.stream_resolution_conf_key is not None:
+            # compare the mode name, not the resolution: an unknown name resolves to no
+            # change, and restarting on it would drop the stream on every typo
+            mode = self.conf.get(self.stream_resolution_conf_key)
+            changed |= mode in self.stream_resolutions and mode != self.running_resolution
+
+        if not changed:
             return
         try:
             self.rpicam_process.kill()
@@ -392,8 +453,9 @@ class RobotComponentServer:
 
             if 'set_config_vars' in update:
                 self.conf.update(update['set_config_vars'])
-                if self.stream_framerate_conf_key in update['set_config_vars']:
-                    self.restart_stream_if_framerate_changed()
+                if (self.stream_framerate_conf_key in update['set_config_vars']
+                        or self.stream_resolution_conf_key in update['set_config_vars']):
+                    self.restart_stream_if_capture_changed()
                 self.config_updated(update['set_config_vars'])
             if 'host_time' in update:
                 logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')

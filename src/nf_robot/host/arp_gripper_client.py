@@ -59,6 +59,15 @@ ROUTE_TAG_MAX_AGE_S = 0.6
 # averaging window any caller asks for.
 ROUTE_TAG_HISTORY = 240
 
+# Camera stream settings, mirroring default_gripper_conf in gripper_arp_server.py. Held
+# as constants here rather than imported because that module only loads on the gripper
+# itself - it pulls in the i2c and servo hardware libraries at import.
+DEFAULT_STREAM_RESOLUTION = 'wide'
+DEFAULT_STREAM_FRAMERATE = 60
+# Framerate to pair with the 1080p capture mode. Low enough that the pi zero 2w in the
+# gripper is not asked to encode more than it can, which it answers by overheating.
+CAPTURE_FRAMERATE = 6
+
 
 class ArpeggioGripperClient(ComponentClient):
     def __init__(self, address, port, datastore, ob, pool, stat, pe, local_telemetry):
@@ -298,6 +307,39 @@ class ArpeggioGripperClient(ComponentClient):
         if sm is None:
             return 0.0
         return float(np.linalg.norm(sm) / OMEGA)
+
+    async def use_capture_stream(self, framerate=CAPTURE_FRAMERATE):
+        """Switch the gripper camera to stills-capture settings: 1080p at a few fps.
+
+        For collecting the ingredients of the synthetic dataset - finger plates, bare
+        floor, objects on a board - which want pixels and do not care about latency,
+        the opposite of what the control stream wants. Those plates are only ever
+        downscaled later, so the capture resolution sets the ceiling on how much real
+        detail a synthetic frame can contain.
+
+        The framerate has to come down with the resolution: the gripper runs on a pi
+        zero 2w, which cannot encode 1080p at streaming rates and will overheat or
+        stall trying. These captures hold still at each stop anyway, so single-digit
+        fps costs nothing.
+
+        Both modes keep the same sensor mode, so this changes how many pixels the
+        field of view is sampled at and not the field of view itself - which is what
+        keeps captures geometrically comparable to the control stream.
+
+        The stream restarts to pick this up, so expect a gap of a second or two before
+        frames resume. Call restore_default_stream when finished.
+        """
+        await self.send_commands({'set_config_vars': {
+            'GRIPPER_STREAM_RESOLUTION': 'full',
+            'GRIPPER_STREAM_FRAMERATE': framerate,
+        }})
+
+    async def restore_default_stream(self):
+        """Put the camera back to the control stream's resolution and framerate."""
+        await self.send_commands({'set_config_vars': {
+            'GRIPPER_STREAM_RESOLUTION': DEFAULT_STREAM_RESOLUTION,
+            'GRIPPER_STREAM_FRAMERATE': DEFAULT_STREAM_FRAMERATE,
+        }})
 
     def get_spin(self, debug=False, timestamp=None):
         # return the rotation of the gripper camera relative to the room in radians.
