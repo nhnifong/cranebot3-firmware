@@ -1,10 +1,15 @@
-# Merge the same teleop sources as move_clutter_rect_for_xvla, but keep only the
-# warped floor composite (the ortho view) and label contact actions, producing
-# naavox/move_clutter_ortho.
+# Merge the teleop sources of move_clutter_rect_for_xvla except Nick's room, keeping
+# only the warped floor composite (the ortho view) and labelling contact actions, to
+# produce naavox/move_clutter_ortho.
 #
 # This dataset is not meant for policy training: it is the input to
 # ortho_target.py's `distill` step, which reduces it to one image + one contact
 # coordinate per episode. Everything here exists to serve that.
+#
+# Nick's room lives in ortho_target_nick.yaml and becomes the eval split. Holding out
+# whole rooms rather than random episodes is the point: consecutive episodes in a
+# session share a floor and most of an object layout, so a random split would score
+# near-duplicates of the training images.
 #
 # camera_mode ortho_512 matches the resolution every source already stores the
 # ortho feed at, so the conversion drops the other three cameras and copies the
@@ -27,7 +32,6 @@ merge:
   - naavox/move_clutter_hawes_1
   - naavox/move_clutter_chuck_1
   - naavox/move_clutter_79west4
-  - naavox/move_clutter_nick_2
   - justink04/laundry-in-hamper-7-19-26
   - justink04/laundry-in-hamper-7-23-26
   - justink04/trash-in-trashcan-7-23-26
@@ -40,7 +44,6 @@ merge:
   - justink04/cranebot-ethernet-test-02
   - repo_id: justink04/laundry-in-hamper4-8-1-26
     exclude_episodes: [13]
-  - naavox/nick-clutter-aug3
   - naavox/playroom-clutter-aug4
   - naavox/bedroom-laundry-aug5
   - naavox/toys-79west
