@@ -1,6 +1,6 @@
-# The same sources as move_clutter_rect_for_xvla.yaml, cut down to the one camera and
-# the eight state components that visual_servoing/mine_teleop.py reads, at the visual
-# servoing model's input resolution.
+# The sources of move_clutter_rect_for_xvla.yaml that recorded the gripper at the full
+# 684x384, cut down to that one camera and the nine state components that
+# visual_servoing/mine_teleop.py reads, at the visual servoing model's input resolution.
 #
 # The point of this recipe is that the merge already knows how to source datasets, drop
 # the episodes that should never be used, reconcile feature sets that differ by when
@@ -38,13 +38,18 @@ pad_clamp: false
 # which is the miner's finger label.
 action_space: gripper_vel
 
+# Only the sources whose gripper stream is the 684x384 full-sensor one. The five
+# oldest move_clutter datasets - move_clutter itself, _2, _hawes_1, _chuck_1 and
+# _79west4, 754 episodes between them - recorded the gripper as a 384x384 square and
+# are dropped here, leaving 806 episodes across the 16 below.
+#
+# Their geometry is not the problem: that square is the same full field of view
+# squashed, so normalized coordinates would still be valid. The problem is that 448 is
+# wider than 384, so reaching this resolution from them means upscaling, and the
+# deriver will not invent detail - it offers to pad instead, which moves the principal
+# point and breaks every label. Nothing here is recoverable by a flag; they would need
+# a model input no wider than 384.
 merge:
-  - repo_id: naavox/move_clutter
-    exclude_episodes: ["289-325", "448-481"]
-  - naavox/move_clutter_2
-  - naavox/move_clutter_hawes_1
-  - naavox/move_clutter_chuck_1
-  - naavox/move_clutter_79west4
   - naavox/move_clutter_nick_2
   - justink04/laundry-in-hamper-7-19-26
   - justink04/laundry-in-hamper-7-23-26
@@ -56,9 +61,6 @@ merge:
   - repo_id: justink04/laundry-in-hamper3-8-1-26
     exclude_episodes: ['48-99']
   - justink04/cranebot-ethernet-test-02
-  # excluded because this episode's re-encoded gripper video was corrupt in
-  # naavox/move_clutter_camera_goal; the source itself decodes clean, so this may be
-  # unnecessary here (see move_clutter_camera_goal.yaml)
   - repo_id: justink04/laundry-in-hamper4-8-1-26
     exclude_episodes: [13]
   - naavox/nick-clutter-aug3
@@ -69,16 +71,6 @@ merge:
   - naavox/bedroom-laundry-aug7-2
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
-#   gripper_pos_*      where the gripper was, for the room-frame delta to the grasp
-#   spin               rotates that delta into the gripper frame
-#   finger_pressure    finds the grasp instant, and labels the holding head
-#   wrist_angle        the grasp axis label, as a delta to its value at the grasp
-#   finger_angle       a model input, and part of the close rule to be fitted
-#   laser_rangefinder  drops the anchor point to the object, and is a model input
-#   target_force       a model input; the commanded set point, not the measurement
-# Note that vel_* are deliberately absent: the model must not see the previous action,
-# which is the shortcut that teaches "keep doing what you were doing". They survive in
-# the action column, where the miner reads finger_speed.
 keep_state_features:
   - gripper_pos_x
   - gripper_pos_y
@@ -90,9 +82,6 @@ keep_state_features:
   - wrist_angle
   - target_force
 
-# Datasets recorded after the anchor_poses feature was added carry their recorded
-# calibration and the older ones don't; the merge demands identical feature sets, and
-# nothing here reads it.
 drop_features:
   - anchor_poses
 
