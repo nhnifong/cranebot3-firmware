@@ -7,40 +7,71 @@ anchor camera frames. Here the labels come from teleop recordings instead: where
 an operator actually grasped something is by construction a place worth reaching
 for, so every episode donates one label for free.
 
-Three stages, because the intermediate is a LeRobot dataset and the result is not:
+Build, distill, train, then ship. The first two are separate because the intermediate
+is a LeRobot dataset and the result is not:
 
-  1. recipes/ortho_target.yaml merges the teleop datasets down to the ortho feed
-     alone and runs contact labelling:
+  1. The two recipes merge the teleop datasets down to the ortho feed alone and run
+     contact labelling. They are split so that a whole room can be held out; see the
+     note on the eval split below:
 
        python src/nf_robot/ml/lerobot_build_dataset.py \
            --recipe src/nf_robot/ml/recipes/ortho_target.yaml \
            --temp_dir /home/nhn/data_scratch \
            --output_root /home/nhn/data_scratch/move_clutter_ortho
 
-  2. `distill` reduces that to one sample per episode - the episode's first ortho
-     frame and the ortho pixel where contact eventually happened - then uploads the
-     result, which is a few hundred MB rather than a few hundred GB:
+       python src/nf_robot/ml/lerobot_build_dataset.py \
+           --recipe src/nf_robot/ml/recipes/ortho_target_nick.yaml \
+           --temp_dir /home/nhn/data_scratch \
+           --output_root /home/nhn/data_scratch/nick_ortho
+
+  2. `distill` reduces each to one sample per episode - the episode's first ortho
+     frame and the ortho pixel where contact eventually happened - which is a few
+     hundred MB rather than a few hundred GB. One run per split, and the upload
+     needs both present because it prunes hub files that are absent locally:
 
        python -m nf_robot.ml.ortho_target distill \
            --repo_id naavox/move_clutter_ortho \
-           --root /home/nhn/data_scratch/move_clutter_ortho \
-           --recipe src/nf_robot/ml/recipes/ortho_target.yaml \
-           --upload
+           --root /home/nhn/data_scratch/move_clutter_ortho --split train
 
-  3. `train` fits the model, and `evaluate` scores a checkpoint:
+       python -m nf_robot.ml.ortho_target distill \
+           --repo_id naavox/nick_ortho \
+           --root /home/nhn/data_scratch/nick_ortho --split eval --upload
+
+  3. `train` fits the model, saving the best checkpoint by recall@20cm to
+     models/ortho_target.pth:
 
        python -m nf_robot.ml.ortho_target train
+
+  4. `evaluate` scores that checkpoint against the held-out room, and --preview_dir
+     draws what it actually predicted: the label in green, the ranked candidates in
+     red. Numbers say whether it is right, the previews say whether it is right for
+     the right reason, which is the check worth doing before a model reaches a robot:
+
+       python -m nf_robot.ml.ortho_target evaluate --tta --preview_dir previews
+
+  5. Try it on a robot before publishing. --local_models makes the observer load
+     models/ortho_target.pth - where training just wrote it - instead of the hub
+     copy. Targeting is switched on from the UI, which asks for this model by
+     default (see TargetModelAction in protos/control.proto):
+
+       stringman-headless --local_models
+
+  6. Publish for stringman users, into the same hub repo the heatmap model lives in.
+     Until this is done, anyone without --local_models is still on the old model:
+
+       hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 
 The ortho view is an orthographic projection of the floor plane (host/floor_view.py),
 so room metres map to its pixels analytically - no camera pose is involved, unlike
 camera_goal.py's per-anchor projection.
 
-The eval split is whole held-out rooms, not a random sample of episodes. Consecutive
+The eval split is a whole held-out room, not a random sample of episodes. Consecutive
 episodes in one recording session share a floor and usually most of an object layout
 - the operator clearing one pile item by item - so a random split scores near
-duplicates and says nothing about a room the model has not seen. --recipe is what
-makes that possible: the merge renumbers episodes and discards which source each came
-from, and the recipe is what maps them back.
+duplicates and says nothing about a room the model has not seen. Splitting the sources
+across two recipes is what makes that possible: the merge renumbers episodes and
+discards which source each came from, so by the time a sample exists it is too late to
+separate the rooms.
 
 Caveats worth knowing before trusting the labels:
 
