@@ -231,6 +231,99 @@ def episode_starts(dataset) -> dict[int, dict]:
     return out
 
 
+def episode_tail_frames(dataset, episode, starts, count, spacing_s, min_coverage):
+    """Frames from the end of one episode, last one first, as (frame_offset, bgr).
+
+    Spaced rather than consecutive: at 30fps the final second is 30 near-identical
+    images of the same floor.
+    """
+    info = starts[episode]
+    step = max(1, int(round(spacing_s * dataset.meta.fps)))
+    out = []
+    for i in range(count):
+        offset = info["length"] - 1 - i * step
+        if offset < 0:
+            break
+        bgr = frame_to_bgr(dataset[info["start"] + offset][ORTHO_KEY])
+        if coverage_fraction(bgr) < min_coverage:
+            continue
+        out.append((offset, bgr))
+    return out
+
+
+def clean_candidates(args):
+    """Collect the tail of each session's last episode, as candidate clean-room images.
+
+    By the end of a session's final episode the operator has usually just cleared the
+    last item, so those frames are the only free negatives the teleop data contains -
+    every other episode ends with more clutter still on the floor. They are candidates,
+    not labels: some sessions ended early or mid-mess, so the folder is meant to be
+    looked through and thinned before anything is trained on it.
+
+    Read from the source datasets rather than the merged ones, which renumber episodes
+    and discard which session each came from. Nothing re-downloads if the builds
+    already pulled the sources into the HF cache.
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from nf_robot.ml.lerobot_build_dataset import episodes_to_drop, load_recipe
+
+    seen, sources = set(), []
+    for recipe_path in args.recipes:
+        for spec in load_recipe(Path(recipe_path))["merge"]:
+            if spec["repo_id"] not in seen:
+                seen.add(spec["repo_id"])
+                sources.append(spec)
+
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logging.info(f"Pulling episode tails from {len(sources)} source dataset(s) into {out_dir}")
+
+    manifest, failures = [], []
+    for spec in sources:
+        repo_id = spec["repo_id"]
+        try:
+            dataset = LeRobotDataset(repo_id=repo_id, root=None)
+            if ORTHO_KEY not in dataset.meta.video_keys:
+                raise ValueError(f"no '{ORTHO_KEY}' feature")
+
+            starts = episode_starts(dataset)
+            dropped = set(episodes_to_drop(
+                dataset.meta.total_episodes, spec["include_episodes"], spec["exclude_episodes"]
+            ))
+            kept = [e for e in sorted(starts) if e not in dropped]
+            if not kept:
+                raise ValueError("every episode is excluded by the recipe")
+            episode = kept[-1]
+
+            frames = episode_tail_frames(
+                dataset, episode, starts, args.frames, args.spacing_s, args.min_coverage
+            )
+            for offset, bgr in frames:
+                name = f"{repo_id.split('/')[-1]}_ep{episode:04d}_f{offset:05d}.jpg"
+                cv2.imwrite(str(out_dir / name), bgr)
+                manifest.append({
+                    "file_name": name,
+                    "source_repo_id": repo_id,
+                    "episode_index": episode,
+                    "frame_index": offset,
+                    "seconds_before_end": round((starts[episode]["length"] - 1 - offset) / dataset.meta.fps, 2),
+                    "task": starts[episode]["task"],
+                })
+            logging.info(f"[{repo_id}] episode {episode} of {dataset.meta.total_episodes}: {len(frames)} frame(s)")
+        except Exception as e:
+            failures.append((repo_id, f"{type(e).__name__}: {e}"))
+            logging.warning(f"[{repo_id}] skipped: {type(e).__name__}: {e}")
+
+    with open(out_dir / "manifest.jsonl", "w") as f:
+        for entry in manifest:
+            f.write(json.dumps(entry) + "\n")
+
+    logging.info(f"Wrote {len(manifest)} image(s) from {len(sources) - len(failures)} session(s) to {out_dir}")
+    if failures:
+        logging.warning(f"{len(failures)} source(s) produced nothing: {failures}")
+    logging.info("Look through them and delete any that still show clutter before using them.")
+
+
 def annotate(bgr, u, v):
     """Copy of the frame with the label drawn on it, for eyeballing the projection."""
     out = bgr.copy()
@@ -966,6 +1059,23 @@ def main():
                               help="also train the backbone, at --backbone_lr_scale of the head's rate")
     train_parser.add_argument("--backbone_lr_scale", type=float, default=0.05)
 
+    clean_parser = subparsers.add_parser(
+        "clean_candidates",
+        help="pull the tail of each session's last episode, as candidate clean-room images",
+    )
+    clean_parser.add_argument("--recipes", nargs="+", default=[
+        "src/nf_robot/ml/recipes/ortho_target.yaml",
+        "src/nf_robot/ml/recipes/ortho_target_nick.yaml",
+    ], help="recipes naming the source datasets and which of their episodes are usable")
+    clean_parser.add_argument("--output", default="ortho_clean_candidates",
+                              help="directory to write the candidate images into")
+    clean_parser.add_argument("--frames", type=int, default=3,
+                              help="frames to take from the end of each session's last episode")
+    clean_parser.add_argument("--spacing_s", type=float, default=1.0,
+                              help="seconds between those frames, counting back from the last one")
+    clean_parser.add_argument("--min_coverage", type=float, default=0.02,
+                              help="skip frames where less than this fraction of the ortho map was painted")
+
     eval_parser = subparsers.add_parser("evaluate", help="score a checkpoint on a held-out split")
     add_data_args(eval_parser)
     eval_parser.add_argument("--split", default="eval", choices=["train", "eval"])
@@ -977,6 +1087,8 @@ def main():
     args = parser.parse_args()
     if args.command == "distill":
         distill(args)
+    elif args.command == "clean_candidates":
+        clean_candidates(args)
     elif args.command == "train":
         train(args)
     elif args.command == "evaluate":
