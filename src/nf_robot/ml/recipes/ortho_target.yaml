@@ -1,0 +1,68 @@
+# Merge the same teleop sources as move_clutter_rect_for_xvla, but keep only the
+# warped floor composite (the ortho view) and label contact actions, producing
+# naavox/move_clutter_ortho.
+#
+# This dataset is not meant for policy training: it is the input to
+# ortho_target.py's `distill` step, which reduces it to one image + one contact
+# coordinate per episode. Everything here exists to serve that.
+#
+# camera_mode ortho_512 matches the resolution every source already stores the
+# ortho feed at, so the conversion drops the other three cameras and copies the
+# ortho video through without re-encoding.
+
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/ortho_target.yaml \
+#     --temp_dir /home/nhn/data_scratch \
+#     --output_root /home/nhn/data_scratch/move_clutter_ortho
+
+output_repo_id: naavox/move_clutter_ortho
+camera_mode: ortho_512
+center_crop: false
+pad_clamp: false
+
+merge:
+  - repo_id: naavox/move_clutter
+    exclude_episodes: ["289-325", "448-481"]
+  - naavox/move_clutter_2
+  - naavox/move_clutter_hawes_1
+  - naavox/move_clutter_chuck_1
+  - naavox/move_clutter_79west4
+  - naavox/move_clutter_nick_2
+  - justink04/laundry-in-hamper-7-19-26
+  - justink04/laundry-in-hamper-7-23-26
+  - justink04/trash-in-trashcan-7-23-26
+  - justink04/trash-in-trashcan-7-24-26
+  - justink04/laundry-in-hamper-8-1-26
+  - repo_id: justink04/laundry-in-hamper2-8-1-26
+    exclude_episodes: ["41-60"]
+  - repo_id: justink04/laundry-in-hamper3-8-1-26
+    exclude_episodes: ['48-99']
+  - justink04/cranebot-ethernet-test-02
+  - repo_id: justink04/laundry-in-hamper4-8-1-26
+    exclude_episodes: [13]
+  - naavox/nick-clutter-aug3
+  - naavox/playroom-clutter-aug4
+  - naavox/bedroom-laundry-aug5
+  - naavox/toys-79west
+  - naavox/playroom-aug6
+  - naavox/bedroom-laundry-aug7-2
+
+# observation.state is kept whole: the distill step reads gripper_pos_*/finger_pressure
+# out of it, and nothing downstream has a fixed proprio width to fit.
+
+# Six of the sources carry anchor_poses and the rest don't; the merge demands identical
+# feature sets, and no step here reads them.
+drop_features:
+  - anchor_poses
+
+normalize_tasks: move_clutter_rect_tasks.yaml
+
+# rotate_contact_vec must stay false: the ortho projection is defined in the room
+# frame, and rotating contact_vec into the gripper's frame would put the labels in a
+# space the floor view knows nothing about.
+label_contact_actions:
+  enabled: true
+  pressure_threshold: 0.1
+  episode_end_seconds: 1.0
+  blend_seconds: 0.5
+  rotate_contact_vec: false

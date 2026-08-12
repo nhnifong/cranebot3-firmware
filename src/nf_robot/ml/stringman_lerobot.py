@@ -77,6 +77,9 @@ _CAMERA_MODES: dict[str, dict[int, tuple[int, int]]] = {
     "gripper_anchors_rect": {0: (684, 384), 1: (684, 384), 2: (684, 384)},
     "all_square":        {0: (384, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
     "all":               {0: (684, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
+    # The warped floor composite on its own, at the resolution "all" records it at, so
+    # deriving it from an existing recording re-encodes nothing. See ortho_target.py.
+    "ortho_512":         {3: (512, 512)},
 }
 
 # action_space -> ordered list of action component names.
