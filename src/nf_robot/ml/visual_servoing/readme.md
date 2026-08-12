@@ -1,0 +1,414 @@
+Several Dit models have been trained on gripper only cams to perform only a grasp
+There is a grasping only dataset at naavox/grasp_only_224 that was used to train naavox/dit-grasp-4 for example. But the Lerobot dit model only uses the cls token from clip. spatial info is too weak.
+If I use the my dino patch token fork of lerobot I can train a dit model to use that, but the users have to install my fork
+
+there are two things I want to try to address this issue.
+1. A standalone model that contains a frozen facebook/dinov3-vitb16-pretrain-lvd1689m backbone and then predicts visual servoing and finger moves from the patch tokens without any lerobot dependency at all.
+2. Dataset augmentation in which pictures of the floor with objects are composed with various transforms and with various fingers positions, along with the gripper velocity appropriate to center them.
+
+The motion that should be predicted is that which would center the object under the gripper. where that is in the frame depends on the height of the gripper, which is simulated by the zoom level that we show the image at. At eval time we have a laser rangefinder input and we can simulate that as well in the synthetic training data.
+
+Some tooling can be created to collect the raw ingredients for this dataset. Something that sweeps the fingers and collects a frame at every position. Something that moves the fingers out of frame and takes pictures of bare floors. and something that takes pictures of objects on plain white boards.
+
+Additionally, since we have a lot of teleoperation data, something that tries to extract such things from teleop frames would be good too.
+
+the standalone model would take one gripper frame at the native resolution of the vision encoder, and produce a velocity in the frame of reference of the gripper
+
+the synthetic dataset could also contain finger and wrist data. either velocity or not.
+Objects captured on board should be oriented in the ideal grasping position so we will be able to know the wrist offset from how we rotate it in the synthetic image.
+
+Finger on stringman is commanded by speed which is interpreted by the gripper as either finger move or pressure change depending on contact. It's probably fine to continue predicting this combined finger change scalar from images, but some method of deciding what it should be for each synthetic frame needs to be created and populated using the teleoperation data.
+
+The layers after the patch tokens could be the following.
+
+# Architecture
+
+## What the model predicts
+
+It predicts *where the object is*, not how fast to move. The velocity is chosen
+downstream, from the predicted position and the range, the way the existing centering
+behaviors already do - observer.py's _center_card_in_view takes a pose in the camera
+frame and closes the error with a gain, which is exactly the consumer this head feeds.
+Two reasons for the split:
+
+- The synthetic labels for position are exact and free - we know where we pasted the
+  object, at what zoom, at what rotation. "The velocity a teleoperator would have
+  commanded" is an invented label with an arbitrary gain baked into it.
+- A geometric output is inspectable. When it misbehaves we can look at the heatmap and
+  see whether it mislocated the object or misjudged the distance.
+
+It also means the gain and the descent rate stay tunable at deploy time instead of
+being baked into weights.
+
+## Input
+
+The gripper feed is natively 684x384. The model takes **448x256** (28x16 = 448 patch
+tokens at /16), which is within 1.5% of the native aspect ratio. DINOv3 interpolates its
+position embeddings, so a non-square input is fine.
+
+Other inputs include the laser range, the grip pressure set point, and finger angle.
+Explicitly *not* vel_x/vel_y/vel_z: the previous action is the most reliable route to
+causal confusion there is, and the recorded 14-dim state vector leads with it.
+
+wrist angle is omitted intentionally since it's relative to the room origin.
+
+Measured grip pressure is also left out, while the set point stays in. The set point is
+a command we chose, so it carries no answer; the measurement is the answer to a question
+we want the network to answer visually (head 5 below), and feeding it in would turn that
+head into a pressure repeater instead of an independent estimate we can cross-check
+against the sensor.
+
+## Backbone and trunk
+
+Same skeleton as OrthoTargetNet in ortho_target.py, which already works in this repo:
+
+    frozen DINOv3 ViT-B/16, last 4 hidden states, patch tokens only
+      -> concat on channels                        (B, 3072, 16, 28)
+    Conv2d(3072 -> 256, 1x1), GroupNorm, GELU      (B,  256, 16, 28)
+    2-4 x self-attention blocks over 448 tokens    (B,  256, 16, 28)
+    [bilinear x2, Conv 3x3 -> 128, GN, GELU]       (B,  128, 32, 56)
+
+The self-attention blocks are the one real addition over OrthoTargetNet. A pure conv
+head has a bounded receptive field, but this task needs global reasoning: "this dark
+blob is cut off at the bottom edge, so the object continues past it" is exactly the
+inference dit-grasp-4 fails to make. At 448 tokens the attention costs almost nothing.
+
+[CLS] and the register tokens are kept aside as a separate global vector for the heads
+that describe the whole image rather than a location.
+
+State conditioning is by FiLM (a small MLP over the state producing per-channel scale
+and shift) applied to the 256-channel map. The state fed in is the other non camera sensors mentioned above.
+
+## Heads
+
+**1. Target position, 3D, in the gripper camera frame.**
+
+Decoded from a spatial softmax rather than regressed directly, so that several
+candidate objects produce several modes instead of an average that lands on the empty
+floor between them - the same argument as the ortho targeting model.
+
+The grid spans **1.5x the frame extent in each axis** (image coordinates -0.25 to 1.25),
+so an object just past the bottom edge has a real cell to live in and the softmax can
+answer "down there, off-screen" instead of being forced to pick a visible cell. This is
+the sock case, and it is the specific thing dit-grasp-4 cannot represent. At 32x56 cells
+over 1.5x extent each cell is about 12px of frame; a 2-channel sub-cell offset head
+(sigmoid, L1 loss, supervised only at the true cell) takes precision below that.
+
+The spatial softmax gives two of the three dimensions. The third - distance along the
+ray - is a per-cell regression channel in log metres, gathered at the winning cell along
+with the offsets. (u, v, distance) is then a 3D point by the pinhole model, using the
+gripper camera's calibrated intrinsic_matrix; cv_common.py already reads that out of the
+camera calibration. Per-cell rather than a single global scalar because with two objects
+at different heights in frame, one global distance has no correct value.
+
+Loss: cross-entropy over cells, L1 on the offset of the true cell, Huber on log
+distance.
+
+**2. Grasp axis, 2 channels, read from the winning cell.**
+
+Predicted per-cell and gathered at the argmax, like the offsets. Parametrised as
+(sin 2*theta, cos 2*theta) because a two-finger grasp axis is pi-periodic - regressing
+theta directly puts a wraparound discontinuity in the middle of the label space. Labels
+come free from how much the object was rotated when composited, given that board
+captures are photographed already in their ideal grasping orientation.
+
+**3. Finger speed, scalar in [-1, 1], from the global vector.**
+
+More grip is positive, less grip is negative; scaled to the robot's finger speed units
+downstream, which keeps it compatible with the existing gripper_vel action.
+
+Predicted from [CLS] rather than from any cell, because by the time the decision matters
+the object usually fills or blinds the frame. Whether to close is a property of the
+whole image, not of a location in it.
+
+Labels for synthetic frames are the open problem. Rather than hand-authoring a rule,
+author a *parametrised* one - close when the target is inside the jaw region and the
+range is below h_close - then fit its parameters against recorded teleop closes by
+maximising agreement. That gives a defensible label rule, and as a by-product a number
+saying how predictable human close-timing actually is. If agreement tops out at 70%,
+this head's ceiling is 70% and we should not chase it further.
+
+**4. Probability that any graspable target is present at all.**
+
+A single logit off the global vector. Needed because every other head is conditional on
+there being something to go to, and because "nothing here, ask the room-level targeter
+for a new destination" is a real and useful answer. The other heads' losses are masked
+on frames where this is false.
+
+**5. Probability that we are currently holding something.**
+
+Another logit off the global vector. Worth having as a purely visual estimate precisely
+so it can be compared against finger_pressure at eval time - the two disagreeing is
+informative (pressure without a visual grasp is a snagged carpet or a finger jammed on
+the floor; a visual grasp without pressure is a slipping towel).
+
+Labels for this are available after all, at least from teleop, and the trim-to-grasp
+machinery already computes them: finger_pressure at or above the grasp threshold, held
+long enough to not be a bump, is exactly "holding something". Every frame from the grasp
+onward is a positive and every frame before it in the same episode is a negative. Note
+that the post_lift_seconds extension added to lerobot_trim_to_grasp.py keeps a second of
+carry after the lift, which is the cleanest positive-label data in the whole set: object
+held, off the floor, still in frame.
+
+Synthetic frames mostly can't be labelled for this, so mask the loss there rather than
+guessing. Composites with an object pasted between the jaws could supply positives later
+if the head turns out to be data-starved.
+
+## Training notes
+
+**Freezing the backbone is load-bearing for the synthetic data**, not just a speed
+choice. Copy-paste composites have tell-tale edge statistics, and a trainable backbone
+will find them and key on them. A frozen DINOv3 cannot adapt to the artifact, so the
+head is forced to use object-shaped features. Still worth alpha matting the board
+captures and feathering the edges, and randomising exposure, white balance, motion blur
+and JPEG quality - motion blur especially, since live frames have it and board captures
+will not. (Cast shadows: skipped for now.)
+
+**Validation is real teleop only.** Synthetic validation accuracy will be high and
+meaningless. Hold out whole teleop episodes and score with distance error and hit-rate
+at radius, plus the constant-prediction baseline - ortho_target.py has both
+(evaluate_model and constant_baseline). For a centering task, "always predict the
+centre" is an embarrassingly strong baseline and we want to know when we actually beat
+it.
+
+**Keep a fixture set of hard frames as a regression test.** Twenty frames with
+hand-labelled directions, run against every checkpoint. Start with the frame that
+prompted this: a dark sock just past the bottom edge, fingers visible, correct answer
+"below the frame, not graspable yet". dit-grasp-4 answers that one by closing its
+fingers in place, and a fixture set would have caught it before deployment.
+
+**Symmetry augmentation is only partly valid.** Horizontal flip works if the target's u
+coordinate and the grasp axis angle are mirrored with it. Vertical flip does not - the fingers occupy specific
+edges and lighting is top-biased. 180 degree rotation is valid if the two fingers are
+symmetric. Do not reach for the full dihedral group the way ortho_target does; the ortho
+map has no canonical orientation, but the gripper frame very much does.
+
+**Inference budget**: ViT-B/16 over 448 tokens is a few milliseconds on the eval GPU,
+comfortable inside a 30Hz loop. The design is backbone-agnostic, so dropping to
+dinov3-vits16 for a weaker machine is a one-constant change.
+
+# Tooling
+
+Two independent producers write into one dataset: a synthetic pipeline that composites
+frames from separately captured ingredients, and a miner that recovers labels from
+teleop recordings we already have. They emit the same row format, so training reads one
+directory and the mix is a matter of how much of each we generate.
+
+Both write the image-folder-plus-metadata.jsonl layout that ortho_target.py already
+uses; write_split and upload_dataset there can be reused as they are. One row per frame:
+
+    {"file_name": ..., "split_source": "synth" | "teleop",
+     "target_uv": [u, v] | null,        # in 1.5x canvas coordinates, may be off-frame
+     "target_range_m": float | null,    # third dimension of the 3D target
+     "grasp_axis_rad": float | null,    # pi-periodic
+     "finger": float | null,            # -1..1
+     "target_present": 0 | 1,
+     "holding": 0 | 1 | null,           # null = unlabelled, loss masked
+     "state": {"laser_rangefinder": ..., "finger_angle": ..., "target_force": ...}}
+
+Every label is nullable and null means "mask this head's loss for this row" rather than
+"the answer is zero". The two producers can label different subsets of the heads without
+either of them having to lie.
+
+## Synthetic frames
+
+### Capturing the ingredients
+
+Three capture routines, written as **motion tasks in observer.py and triggered by debug
+commands**, in the same shape as the gripcards and eyelets actions: a coroutine run
+through invoke_motion_task that drives the hardware, collects frames off the gripper
+client and writes its output to a file for offline processing. They belong there rather
+than in a standalone script because they need the motion primitives, the position
+estimate and the exclusive-motion-task discipline that already live in the observer.
+
+All three exploit one fact about the mount: **the gripper camera is in the palm and
+rotates with the wrist.** Spinning the wrist therefore leaves the fingers exactly where
+they are in frame and rotates the entire world behind them. That is the lever the first
+tool is built on, and it also means the model's notion of "wrist angle" is a property of
+the background, never of the fingers.
+
+**fingerplates.** For each finger_angle stop, spin the wrist through a full turn and
+hold a frame at intervals. Across that set the fingers are pinned to the pixel and
+everything else rotates, so a per-pixel median plus variance separates them cleanly -
+low variance is gripper, high variance is world - with no chroma key, no special
+backdrop and no manual masking. Feather the alpha a pixel or two so the plate
+composites without a hard edge. Best done over textured floor with no strong
+rotationally symmetric feature under the gripper, since anything that survives the
+rotation unchanged will be mistaken for hardware.
+
+The output is one **RGBA plate per finger_angle**, and only per finger_angle: the
+fingers' apparent position and size in frame are fixed by the mount, independent of both
+wrist angle and height above the floor.
+
+**floorplates.** The operator flies the gripper somewhere clean and clear, and only then
+triggers the capture; the tool moves nothing but height and wrist. An autonomous room
+sweep would come back with a library of beds, furniture and feet, none of which is a
+floor plate. Fingers retracted out of frame first.
+
+At each operator-chosen spot, step through a range of heights and a full wrist turn at
+each height, one frame per stop, recording the laser range with each. The height stepping
+is what calibrates plate scale against range; the wrist turn is free rotational variety,
+and means the compositor can pick a plate already at the wrist angle it wants instead of
+rotating one and dealing with resampling and empty corners.
+
+Repeat across rooms, times of day and floor types - carpet, hardwood, tile - since these
+plates are the entire background distribution the model sees in synthetic training.
+
+**objectplates.** An object on a **green board**, gripper centred over it, stepping
+through several heights and a full wrist turn at each. Green for the usual reason a
+green screen is green: almost nothing we pick up off a floor is that colour, so a
+distance threshold in a chroma space is a complete segmentation, including holes,
+concavities and the gaps inside a crumpled towel that a largest-connected-component rule
+on a white board would fill in wrongly. Spill suppression on the alpha edge is a
+solved recipe.
+
+The setup instruction carries both labels, so the board needs no printed markings:
+
+- **The operator centres the intended grasp lump under the camera.** The grasp point is
+  then the principal point of the capture frame by construction. This is the part that
+  matters for towels - the right answer is a chunky lump somewhere off to one side, not
+  the centroid of a flat expanse, and it is the operator's judgement that puts the lump
+  under the lens.
+- **The operator orients the wrist to the ideal grasping angle before triggering.** The
+  grasp axis is then zero in the first frame, and every later frame's axis label is just
+  its commanded wrist angle minus the starting one. Recorded per frame anyway.
+- **The range is recorded with every capture**, since the cutout gets rescaled to the
+  simulated height at composite time and that needs to know what height it came from.
+
+Because the camera turns with the wrist, the object rotates through the capture while
+its grasp point stays at the principal point, so each frame of the turn is a differently
+oriented cutout with its axis label already correct. No separate rotation step and no
+resampling.
+
+### Capture settings
+
+All three captures should raise resolution and drop framerate, which is the opposite of
+what the live stream wants and is worth a dedicated gripper camera mode.
+
+The gripper streams 684x384 out of a 2304:1296 sensor mode today at 60fps (see
+gripper_arp_server.py). Hardware h264 holds up to about 1080p, so a capture mode can go
+to 1920x1080 within the existing libav path just by rewriting width/height and
+GRIPPER_STREAM_FRAMERATE. Going to the full 2304x1296 sensor readout means dropping the
+h264 encode entirely and taking whatever mjpeg or raw frames rpicam-vid will produce at
+a few fps.
+
+Either way the pi zero 2w in the gripper is the constraint, so the framerate has to come
+down far enough that it is not overloaded - single digit fps is fine here. These captures
+are a stepping motion holding still at each stop, not a video.
+
+The reason to bother: plates are only ever *downscaled* at composite time, so the
+capture resolution sets the ceiling on how much real detail a synthetic 448x256 frame
+can contain, and an object cutout shrunk to simulate a high gripper is exactly where
+that detail runs out first. Keying and alpha edges also come out cleaner at high
+resolution and survive the downsample well.
+
+Keep the **2304:1296 sensor mode** whatever the output resolution, so the field of view
+is identical to the live stream's. A different FOV would silently invalidate every
+geometric label in the synthetic set.
+
+### Generating frames
+
+**synth_frames.py**, offline, no robot. Per frame:
+
+1. Sample a simulated range `r` from the distribution of laser_rangefinder in real
+   teleop, so the synthetic height distribution matches the one at eval.
+2. Pick a floor plate. Prefer one captured near `r` and at whatever wrist angle is
+   wanted, since both were swept at capture time; rescale by `r0 / r` only to cover the
+   gaps between height steps, and crop or tile to the canvas. The frame's wrist angle
+   is a property of this choice - the fingers do not move with it.
+3. Pick 0-4 object cutouts. Scale each by its own capture range over `r`, rotate by a
+   random angle, and paste at a random position **in the 1.5x canvas, not the frame** -
+   so a good fraction land partly or wholly off the visible edge. This is the sock case
+   and it has to be common in training, not a rare corner. Carry each object's crosshair
+   point and axis line through the identical transform to get its label.
+4. Choose the winner: the candidate nearest the jaws in the image plane. Across many
+   random arrangements this teaches the softmax to put a mode on every candidate while
+   the cross-entropy target names one - the same argument as the ortho targeting model,
+   where several objects on the floor are all plausible and the operator picked one.
+5. Composite the finger plate for a sampled finger_angle **on top**, so fingers occlude
+   objects. Objects that end up behind a finger are realistic training signal, not a bug
+   to avoid - that occlusion is a large part of why the live frames are hard.
+6. Photometric randomisation: exposure, white balance, sensor noise, motion blur and
+   JPEG quality. Motion blur especially - live frames have it, board captures will not.
+
+Frames with no object in canvas at all are the negatives for the target-present head,
+and should be a deliberate fraction of the output rather than an accident of sampling.
+
+The distance label is the simulated range, ignoring the object's own height above the
+floor. That is a real approximation and it biases tall objects; if it shows up in eval,
+the fix is to record object height at capture time and subtract it.
+
+`--annotate_dir` should render the label onto each frame the way ortho_target.annotate
+does - crosshair at the target, a tick for the grasp axis, the finger value in the
+corner - because a sign error in a compositing transform is invisible in a loss curve
+and obvious after ten seconds of flipping through annotated frames.
+
+## Mining teleop
+
+Concretely, what we need out of a teleop recording is: **the last second or two before
+every successful grasp, at native resolution, with the eventual grasp point projected
+into each frame.**
+
+Unpacking that into requirements:
+
+**Source recordings must be native 684x384**, so mine the sources recorded under
+camera_mode "all", not the derived 224x224 sets - those are horizontally squashed and
+this model is entirely about geometry.
+
+**Only successful grasps.** The whole trick is that the grasp point is where the jaws
+ended up, so an episode where the jaws closed on nothing gives a confidently wrong
+label. lerobot_trim_to_grasp.py already finds the grasp instant by held pressure and
+already rejects episodes with no subsequent rise; that rejection is exactly the success
+filter, and its `no_rise` and `no_grasp` counts are the ones to watch.
+
+**Per-frame state from the parquets**: gripper_pos_x/y/z, spin, wrist_angle,
+finger_angle, laser_rangefinder, finger_pressure, timestamp. All of these are already
+columns; scan_episode_states in ortho_target.py is the pattern for pulling a few
+components for every frame without decoding video.
+
+**The camera pose chain**, which already exists and needs nothing new. The gripper
+camera's mount pose in the gripper frame is definitions.gripper_camera, camera_goal.py
+composes it with the recorded gripper position and 6D rotation in gripper_camera_pose,
+and goal_in_camera_frame expresses any room point in that camera's frame - the same
+chain the camera_goal action space and the waypoint labelling in
+lerobot_label_contact_actions already run on this data. The 684x384 intrinsic and
+distortion are config.camera_cal_wide. So the projection is assembled from parts that
+are already load-bearing elsewhere rather than from a new calibration.
+
+Then the labels fall out per head:
+
+- **target_uv, target_range_m**: for each frame t in the window, take the delta from
+  gripper_pos(t) to P, rotate into the gripper frame using spin/wrist_angle, and project
+  through the extrinsic and intrinsic. Frames where P lands outside the 1.5x canvas are
+  dropped rather than clipped.
+- **grasp_axis_rad**: wrist_angle at the grasp minus wrist_angle at frame t. A delta, so
+  it is frame-relative and matches the head living in the gripper frame - which is also
+  why wrist_angle is not an input.
+- **finger**: the recorded finger_speed at t, divided by 90. Direct, no rule fitting
+  needed; the parametrised close rule is only for synthetic frames, and teleop is what
+  it gets fitted against.
+- **target_present**: 1 throughout the mined window. Do not emit 0 for other frames -
+  we do not know that nothing graspable was visible, and the honest label is null.
+  Negatives come from synthetic bare-floor frames.
+- **holding**: 0 before the grasp instant, 1 from the grasp through the end of the
+  retained carry.
+
+Note that this labels the target as *where the jaws ended up*, which is not the object's
+visual centroid. That is a feature: it is the chunky-lump answer, learned from a human
+who picked the spot, and it is not obtainable from any object detector.
+
+A useful by-product: the mined windows relate laser_rangefinder to the apparent scale of
+the object in frame, on real data, which is an independent check on the range-to-scale
+relation the synthetic compositor assumes.
+
+The same `--annotate_dir` treatment applies and matters more here, since a wrong
+extrinsic, a bad spin calibration or a sign flip in the rotation all produce plausible
+looking numbers and obviously wrong crosshairs.
+
+# Open questions
+
+- 1.5x canvas extent is a guess. If misses are usually small, 1.25x is cheaper to learn;
+  if the gripper often ends up a body-length away, the canvas cannot cover it and a
+  direction-only fallback would be needed for those.
+- Whether the holding head has enough teleop positives on its own, given that synthetic
+  frames can't supply any.
