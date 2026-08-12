@@ -107,6 +107,32 @@ def generate_blob(x_grid, y_grid, cx, cy, sigma=15):
     """Generates a Gaussian blob at (cx, cy)."""
     return np.exp(-((x_grid - cx)**2 + (y_grid - cy)**2) / (2 * sigma**2))
 
+def load_labeled_sample(data_dir, item):
+    """Loads an image at HM_IMAGE_RES with its points in that same pixel space.
+
+    Not every stored image is HM_IMAGE_RES; the encoder pools by 16, so anything
+    else breaks the decoder's skip connections (and batching, when sizes differ)."""
+    img_path = os.path.join(data_dir, item["file_name"])
+    img = cv2.imread(img_path)
+    if img is None:
+        raise ValueError(f"Failed to load image: {img_path}")
+
+    points = []
+    for pt in item.get("points", []):
+        if isinstance(pt, (list, tuple)):
+            points.append((pt[0], pt[1]))
+        elif isinstance(pt, dict):
+            points.append((pt['x'], pt['y']))
+
+    h, w = img.shape[:2]
+    if (w, h) != HM_IMAGE_RES:
+        scale_x = HM_IMAGE_RES[0] / w
+        scale_y = HM_IMAGE_RES[1] / h
+        img = cv2.resize(img, HM_IMAGE_RES, interpolation=cv2.INTER_AREA)
+        points = [(px * scale_x, py * scale_y) for px, py in points]
+
+    return img, points
+
 class DobbyDataset(Dataset):
     def __init__(self, root_dir):
         self.data_dir = os.path.join(root_dir, "train")
@@ -125,31 +151,18 @@ class DobbyDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        item = self.samples[idx]
-        img_path = os.path.join(self.data_dir, item["file_name"])
-        
-        img = cv2.imread(img_path)
-        if img is None:
-            raise ValueError(f"Failed to load image: {img_path}")
-            
+        img, points = load_labeled_sample(self.data_dir, self.samples[idx])
+
         h, w = img.shape[:2]
         img_tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
 
         x_grid = np.arange(0, w, 1, float)
         y_grid = np.arange(0, h, 1, float)[:, np.newaxis]
-        
+
         combined_heatmap = np.zeros((h, w), dtype=np.float32)
-        
-        for pt in item.get("points", []):
-            if isinstance(pt, (list, tuple)):
-                cx, cy = pt[0], pt[1]
-            elif isinstance(pt, dict):
-                cx, cy = pt['x'], pt['y']
-            else:
-                continue
-                
+        for cx, cy in points:
             combined_heatmap = np.maximum(combined_heatmap, generate_blob(x_grid, y_grid, cx, cy))
-            
+
         return img_tensor, torch.from_numpy(combined_heatmap).float().unsqueeze(0)
 
 def extract_targets_from_heatmap(heatmap: np.ndarray, top_n: int = 10, threshold: float = 0.5):
@@ -335,9 +348,7 @@ class PreviewSession:
         if not self.samples:
             return None
         sample = random.choice(self.samples)
-        img = cv2.imread(os.path.join(self.data_dir, sample["file_name"]))
-        if img is None:
-            return None
+        img, _ = load_labeled_sample(self.data_dir, sample)
         self.broadcaster.push(run_inference(self.model, img))
         return sample["file_name"]
 
