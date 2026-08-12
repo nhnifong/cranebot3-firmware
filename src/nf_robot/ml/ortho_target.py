@@ -863,7 +863,7 @@ def main():
         sub.add_argument("--dataset_id", default=DEFAULT_DATASET_ID, help="distilled dataset on the hub")
         sub.add_argument("--data_root", default=None,
                          help="local distilled dataset directory (default: download --dataset_id)")
-        sub.add_argument("--batch_size", type=int, default=8)
+        sub.add_argument("--batch_size", type=int, default=32)
         sub.add_argument("--workers", type=int, default=4)
         sub.add_argument("--top_k", type=int, default=5,
                          help="candidates to decode; the top-k hit rate is the 'picked something "
@@ -880,7 +880,9 @@ def main():
     train_parser.add_argument("--fuse_layers", type=int, default=4,
                               help="how many of the backbone's last blocks to concatenate")
     train_parser.add_argument("--epochs", type=int, default=60)
-    train_parser.add_argument("--lr", type=float, default=3e-4)
+    # Paired with --batch_size: a batch four times larger takes a quarter as many steps,
+    # so the rate rises with it (sqrt of the ratio, the usual compromise for AdamW).
+    train_parser.add_argument("--lr", type=float, default=6e-4)
     train_parser.add_argument("--weight_decay", type=float, default=0.05)
     train_parser.add_argument("--offset_weight", type=float, default=1.0)
     train_parser.add_argument("--eval_every", type=int, default=2)
