@@ -476,9 +476,32 @@ axis and the other candidates, which is where a compositing sign error shows up.
 ## 5. Train
 
     python -m nf_robot.ml.visual_servoing.train \
-        --data_root datasets/visual_servoing --epochs 40 --batch_size 32
+        --data_root datasets/visual_servoing --epochs 40 --batch_size 400
 
-Eval episodes are held out from the teleop rows only; synthetic frames always train.
+The whole `train/` split trains. `eval/` is scored each epoch when it exists and the
+best checkpoint by `recall@25px` is kept; without it, the latest is saved instead.
+
+Build the eval split by mining the held-out room's own recipe into the same root:
+
+    python -m nf_robot.ml.visual_servoing.mine_teleop \
+        --repo_id naavox/combined_targets_eval \
+        --output_root datasets/visual_servoing --split eval
+
+## 6. Evaluate
+
+    python -m nf_robot.ml.visual_servoing.evaluate \
+        --data_root datasets/visual_servoing \
+        --model_path models/visual_servo.pth \
+        --preview_dir datasets/visual_servoing/eval_predictions
+
+Prints the metrics next to the constant-prediction baseline, which is the number that
+says whether the model has learned anything about the image at all: for a centering task
+"always predict the middle" scores well, and beating it is the bar.
+
+`--preview_dir` draws the label in green and the prediction in red on the frames that
+were scored, joined by a line. Numbers say whether it is right; the previews say whether
+it is right for the right reason, which is the check worth doing before a model reaches
+a robot.
 
 # Open questions
 
