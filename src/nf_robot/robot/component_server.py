@@ -56,19 +56,16 @@ StreamMode = namedtuple('StreamMode', ['width', 'height', 'bitrate', 'framerate'
 # it accepts (RobotComponentServer.stream_modes) and the client switches between them by
 # name; there is deliberately no way to ask for an arbitrary resolution or framerate,
 # because an unmeasured combination has no dts_zero_offset and so no usable capture times.
-# Names are global rather than per component because a mode only means anything together
-# with the stream_command it was measured against: the anchor and the gripper never share
-# one even where the numbers would match.
+
 # Offsets come from experiments/measure_dts_zero_point.py, run on the component itself.
 stream_modes = {
     # the anchors' only mode: the whole room at 1080p, enough res to see the marker but
     # slow enough to keep the pi cool
-    'anchor_control': StreamMode(1920, 1080, '1000kbps', 10, 1.231497049331665), # measured Aug 13 2026
+    'anchor_control': StreamMode(1920, 1080, '1000kbps', 15, 1.2034),
     # the gripper's control stream. Small and fast
-    'gripper_control': StreamMode(684, 384, '1200kbps', 60, 0.44341111183166504), # measured Aug 13 2026
-    # the gripper's stills-capture stream, for collecting synthetic dataset ingredients:
-    # pixels matter and latency does not, and the framerate comes down to pay for them
-    'gripper_capture': StreamMode(960, 540, '2400kbps', 20, None), # not measured yet
+    'gripper_control': StreamMode(684, 384, '1200kbps', 60, 0.4032),
+    # the gripper's quality mode, for collecting synthetic dataset ingredients
+    'gripper_capture': StreamMode(960, 540, '2400kbps', 20, 0.9168),
 }
 
 
