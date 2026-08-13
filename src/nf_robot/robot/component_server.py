@@ -42,17 +42,19 @@ stream_command = [
     "--bitrate", "1000kbps"
 ]
 
+# offset in seconds between the appearance of the ready line and the zero point of the DTS
+# times in the stream container. Belongs with the stream command above because it is a
+# property of that command: resolution and framerate move it. Determined experimentally by
+# running experiments/measure_dts_zero_point.py on the pi. Subclasses with their own
+# stream_command need their own measurement.
+dts_zero_offset = 1.231497049331665 # measured Aug 13 2026
+
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
 # the line we are looking for looks like this
 #Output #0, mpegts, to 'tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1':
 # the query string is matched loosely so that adding url options does not silently stop
 # the stream from ever being announced as ready.
 ready_line_re = re.compile(r"Output #0, mpegts, to 'tcp://([^:]+):(\d+)\?[^']*':")
-
-# offset in seconds between the appearance of the ready line and the zero point of the DTS times in the stream container.
-# determined experimentally by running experiments/measure_dts_zero_point.py on the rpi
-# dts_zero_offset = 0.719379
-dts_zero_offset = 0.810 # experiment re-ran Aug 13 2026
 
 # values that can be overridden by the controller
 default_conf = {
@@ -97,6 +99,8 @@ class RobotComponentServer:
         self.mock_camera_port = None
         self.extra_tasks = []
         self.stream_command = stream_command # subclasses may override
+        # must be overridden alongside stream_command, it is measured per command
+        self.dts_zero_offset = dts_zero_offset
         self.have_client = False
         # the currently connected client's websocket, if any. groundwork for closing the
         # connection normally (code 1000) on shutdown; nothing consumes it yet.
@@ -257,7 +261,7 @@ class RobotComponentServer:
                 await asyncio.sleep(1.5) # it's not ready quite yet
                 logging.info('rpicam-vid appears to be ready')
                 # tell the websocket client to connect to the video stream. it will do so in another thread.
-                self.update['video_ready'] = (8888, ready_wall_time + dts_zero_offset)
+                self.update['video_ready'] = (8888, ready_wall_time + self.dts_zero_offset)
             else:
                 # catch a few different kinds of errors that mean rpi-cam will have to be restarted
                 # some of these can only happen after we have asked the client to try connecting to video.

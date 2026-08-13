@@ -91,6 +91,10 @@ stream_command = [
     "--bitrate", "1200kbps"
 ]
 
+# see the comment on component_server.dts_zero_offset. Much smaller than the anchor's
+# because this command starts a far smaller stream.
+dts_zero_offset = 0.44341111183166504 # measured Aug 13 2026
+
 
 class GripperArpServer(RobotComponentServer):
     def __init__(self):
@@ -110,6 +114,7 @@ class GripperArpServer(RobotComponentServer):
         self.service_type = 'cranebot-gripper-arpeggio-service'
 
         self.stream_command = stream_command
+        self.dts_zero_offset = dts_zero_offset
 
         i2c = busio.I2C(board.SCL, board.SDA)
 

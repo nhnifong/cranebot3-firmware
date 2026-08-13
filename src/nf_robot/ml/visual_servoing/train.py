@@ -30,7 +30,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from nf_robot.ml.visual_servoing.dataset import VisualServoDataset, split_by_episode
+from nf_robot.ml.visual_servoing.dataset import VisualServoDataset
 from nf_robot.ml.visual_servoing.model import (
     DEFAULT_BACKBONE,
     DEFAULT_IMAGE_SIZE,
@@ -225,30 +225,46 @@ def upload_model(path, model_id, metrics=None):
     logging.info(f"uploaded {path.name} to {model_id}")
 
 
+def checkpoint_payload(model, args, metrics, epoch):
+    """What load_checkpoint needs to rebuild this model, plus how it scored."""
+    return {
+        "state_dict": model.state_dict(),
+        "backbone_id": args.backbone,
+        "image_size": tuple(args.image_size),
+        "fuse_layers": args.fuse_layers,
+        "attention_layers": args.attention_layers,
+        "metrics": metrics,
+        "epoch": epoch,
+    }
+
+
 def train(args):
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     torch.manual_seed(args.seed)
     data_root = resolve_data_root(args)
     logging.info(f"dataset at {data_root}")
 
-    if (data_root / "eval").exists():
-        train_set = VisualServoDataset(data_root, "train", augment=True)
-        eval_set = VisualServoDataset(data_root, "eval", augment=False)
-    else:
-        train_set, eval_set = split_by_episode(data_root, args.holdout, args.seed)
-    logging.info(f"train {len(train_set)} row(s) | eval {len(eval_set)} row(s)")
+    # The whole train split trains; eval is a separate split, mined from the held-out
+    # room's own recipe, and absent unless it has been built.
+    train_set = VisualServoDataset(data_root, "train", augment=True)
+    eval_set = (VisualServoDataset(data_root, "eval", augment=False)
+                if (data_root / "eval").exists() else None)
+    logging.info(f"train {len(train_set)} row(s) | "
+                 f"eval {len(eval_set) if eval_set else 'none built'}")
 
     image_size = tuple(args.image_size)
-    baseline = constant_baseline(train_set, eval_set, image_size)
-    if baseline:
-        logging.info(f"constant-prediction baseline: {_format(baseline)}")
+    if eval_set:
+        baseline = constant_baseline(train_set, eval_set, image_size)
+        if baseline:
+            logging.info(f"constant-prediction baseline: {_format(baseline)}")
 
     loader_kwargs = dict(num_workers=args.workers, pin_memory=device.type == "cuda")
     train_loader = torch.utils.data.DataLoader(
         train_set, batch_size=args.batch_size, shuffle=True,
         drop_last=len(train_set) > args.batch_size, **loader_kwargs)
-    eval_loader = torch.utils.data.DataLoader(
+    eval_loader = (torch.utils.data.DataLoader(
         eval_set, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
+        if eval_set else None)
 
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
@@ -295,26 +311,27 @@ def train(args):
 
         line = f"epoch {epoch + 1}/{args.epochs} " + _format({k: v / max(seen, 1) for k, v in totals.items()})
 
-        if (epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs:
+        due = (epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs
+        if due and eval_loader is not None:
             metrics = evaluate(model, eval_loader, device, image_size)
             logging.info(f"{line} | {_format(metrics)}")
             score = metrics.get("recall@25px", -1.0)
             if score > best:
                 best, best_metrics = score, metrics
-                torch.save({
-                    "state_dict": model.state_dict(),
-                    "backbone_id": args.backbone,
-                    "image_size": image_size,
-                    "fuse_layers": args.fuse_layers,
-                    "attention_layers": args.attention_layers,
-                    "metrics": metrics,
-                    "epoch": epoch + 1,
-                }, args.model_path)
+                torch.save(checkpoint_payload(model, args, metrics, epoch + 1),
+                           args.model_path)
                 logging.info(f"saved {args.model_path} (recall@25px {score:.3f})")
+        elif due:
+            # nothing to score against, so keep the latest instead of the best
+            torch.save(checkpoint_payload(model, args, {}, epoch + 1), args.model_path)
+            logging.info(f"{line} | saved {args.model_path}")
         else:
             logging.info(line)
 
-    logging.info(f"done; best eval recall@25px {best:.3f}, checkpoint at {args.model_path}")
+    if eval_loader is None:
+        logging.info(f"done; no eval split built, checkpoint at {args.model_path}")
+    else:
+        logging.info(f"done; best eval recall@25px {best:.3f}, checkpoint at {args.model_path}")
 
     if args.upload:
         if not Path(args.model_path).exists():
@@ -346,13 +363,11 @@ def main():
     parser.add_argument("--fuse_layers", type=int, default=4)
     parser.add_argument("--attention_layers", type=int, default=3)
     parser.add_argument("--epochs", type=int, default=40)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=400)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--unfreeze_backbone", action="store_true")
     parser.add_argument("--backbone_lr_scale", type=float, default=0.1)
-    parser.add_argument("--holdout", type=float, default=0.2,
-                        help="Fraction of episodes held out when there is no eval split")
     parser.add_argument("--eval_every", type=int, default=1)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)

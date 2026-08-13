@@ -99,10 +99,12 @@ FINGERPLATE_MAX_MISSES = 5
 # against the range it was taken at, so the compositor can rescale it to any simulated
 # height. Trimmed to by measurement, not by commanded altitude.
 PLATE_RANGES_M = (0.20, 0.30, 0.45, 0.65, 0.90)
-# Wrist stops per height for floor and object plates. Fewer than the fingerplate sweep
-# because this is rotational variety rather than a matte, and each one costs a height
-# trim's worth of nothing but time.
-PLATE_WRIST_STEPS = 12
+# (degrees/second, degrees) the continuous wrist sweep floor and object plates are
+# captured during. Slow enough that the pole does not swing and frames stay sharp.
+PLATE_WRIST_SPEED_DPS = 10.0
+PLATE_SWEEP_DEGREES = 360.0
+# (seconds) how often a wrist speed command is repeated to keep the sweep going.
+WRIST_SPEED_REFRESH_S = 0.1
 # (degrees) fingers parked out of frame while capturing floor and object plates. -90 is
 # fully open; anything the camera can see would be composited into every synthetic frame
 # built from these plates.
@@ -2389,19 +2391,68 @@ class AsyncObserver:
             base_wrist_angle=base_wrist,
         )
 
-    async def _height_wrist_sweep(self, kind, ranges, wrist_steps, output_dir, settle_s,
-                                  notes='', run_attrs=None, frame_attrs=None):
-        """Frames at each of several heights, turning the wrist through a full circle at each.
+    async def _sweep_wrist_capturing(self, kind, writer, degrees, expect, speed_dps,
+                                     extra_attrs, timeout_margin=1.5):
+        """Turn the wrist steadily through `degrees` and keep every frame that arrives.
 
-        The shape floorplates and objectplates share. Heights are reached by trimming to a
-        measured rangefinder reading rather than by moving to a computed z, because what
-        the plate needs recorded is how far away the thing in it actually was - a
-        commanded altitude inherits every error in the position estimate, and the whole
-        point of the height stepping is to calibrate apparent scale against range.
+        The speed command is repeated as the loop runs because the gripper zeroes it
+        after ACTION_TIMEOUT, which is also what stops the wrist if this is cancelled.
+        Each frame's wrist angle is looked up by its own capture timestamp, since the
+        video lags the telemetry by several degrees at this speed.
+        """
+        client = self.gripper_client
+        start = self.datastore.winch_line_record.getLast()[1]
+        target = start + degrees
+        direction = 1.0 if degrees >= 0 else -1.0
+        deadline = time.time() + abs(degrees) / speed_dps + timeout_margin
+        last_ts = time.time()
+        next_command = 0.0
+        captured = 0
 
-        The fingers are parked out of frame first: these plates are of the floor and of
-        objects, and hardware in the corner of one would be composited into every
-        synthetic frame built from it.
+        try:
+            while time.time() < deadline:
+                now = time.time()
+                if now >= next_command:
+                    await client.send_commands({'set_wrist_speed': direction * speed_dps})
+                    next_command = now + WRIST_SPEED_REFRESH_S
+
+                timestamp, frame = await client.capture_raw_frame(
+                    last_ts, timeout=WRIST_SPEED_REFRESH_S, expect_size=expect)
+                if frame is not None:
+                    last_ts = timestamp
+                    range_ts, laser = self.datastore.range_record.getLast()
+                    fresh = time.time() - range_ts < RANGE_MAX_AGE_S
+                    writer.add(
+                        frame, captured_at=timestamp,
+                        finger_angle=self.datastore.finger.getLast()[1],
+                        wrist_angle=self.datastore.winch_line_record.getClosest(timestamp)[1],
+                        laser_rangefinder=laser if fresh else None,
+                        finger_pressure=self.datastore.finger.getLast()[2],
+                        **extra_attrs,
+                    )
+                    captured += 1
+
+                travelled = (self.datastore.winch_line_record.getLast()[1] - start) * direction
+                if travelled >= abs(degrees):
+                    break
+        finally:
+            await client.send_commands({'set_wrist_speed': 0.0})
+
+        actual = self.datastore.winch_line_record.getLast()[1]
+        logger.info(f'{kind}: swept wrist {start:.0f} -> {actual:.0f} '
+                    f'({captured} frames at {speed_dps:.0f} deg/s)')
+        return captured
+
+    async def _height_wrist_sweep(self, kind, ranges, output_dir, settle_s,
+                                  notes='', run_attrs=None, frame_attrs=None,
+                                  speed_dps=PLATE_WRIST_SPEED_DPS,
+                                  degrees=PLATE_SWEEP_DEGREES):
+        """Frames at each of several heights, sweeping the wrist through a circle at each.
+
+        The shape floorplates and objectplates share. Heights are reached by trimming to
+        a measured rangefinder reading, so what each plate records is how far away its
+        subject actually was. The fingers are parked out of frame first, since hardware
+        in the corner of a plate would be composited into every frame built from it.
         """
         from nf_robot.ml.visual_servoing.plates import PlateWriter
 
@@ -2410,12 +2461,14 @@ class AsyncObserver:
             return None
 
         start_wrist = self.datastore.winch_line_record.getLast()[1]
-        base_wrist = float(min(max(start_wrist, 0.0), 1080.0 - 360.0))
-        wrist_angles = [base_wrist + 360.0 * i / wrist_steps for i in range(wrist_steps)]
+        # start low enough in the wrist's 0-1080 range that a full sweep fits
+        base_wrist = float(min(max(start_wrist, 0.0), 1080.0 - abs(degrees)))
 
         writer = PlateWriter(output_dir, kind, notes=notes)
-        logger.info(f'{kind}: {len(ranges)} heights x {wrist_steps} wrist steps = '
-                    f'{len(ranges) * wrist_steps} frames, writing to {output_dir}')
+        seconds = len(ranges) * abs(degrees) / speed_dps
+        logger.info(f'{kind}: {len(ranges)} heights, {degrees:.0f} deg at {speed_dps:.0f} '
+                    f'deg/s each, about {seconds / 60:.0f} min of sweeping, '
+                    f'writing to {output_dir}')
 
         expect = CAPTURE_RESOLUTION_SIZE
         await self.gripper_client.use_capture_stream()
@@ -2431,50 +2484,38 @@ class AsyncObserver:
 
             await self._settle_fingers(PLATE_FINGERS_RETRACTED)
 
-            missed = 0
+            # alternating direction keeps the wrist inside its range without rewinding
+            await self._settle_wrist(base_wrist)
+            heading = 1.0
             for target_range in ranges:
                 reached = await self._trim_altitude_to_range(target_range)
                 if reached is None:
                     logger.warning(f'{kind}: no rangefinder reading at target '
                                    f'{target_range:.2f}m; skipping this height')
                     continue
-                for wrist_angle in wrist_angles:
-                    actual_wrist = await self._settle_wrist(wrist_angle)
-                    await asyncio.sleep(settle_s)
-                    timestamp, frame = await self.gripper_client.capture_raw_frame(
-                        time.time(), expect_size=expect)
-                    if frame is None:
-                        missed += 1
-                        logger.warning(f'{kind}: no frame at range {target_range:.2f} '
-                                       f'wrist {wrist_angle:.0f} ({missed} in a row)')
-                        if missed >= FINGERPLATE_MAX_MISSES:
-                            logger.error(f'{kind}: {missed} consecutive frames missing; '
-                                         f'abandoning the run with {len(writer)} captured')
-                            return None
-                        continue
-                    missed = 0
-                    range_ts, laser = self.datastore.range_record.getLast()
-                    fresh = time.time() - range_ts < RANGE_MAX_AGE_S
-                    writer.add(
-                        frame, captured_at=timestamp,
-                        finger_angle=self.datastore.finger.getLast()[1],
-                        wrist_angle=actual_wrist,
-                        laser_rangefinder=laser if fresh else None,
-                        finger_pressure=self.datastore.finger.getLast()[2],
-                        target_range_m=target_range,
-                        wrist_offset_deg=actual_wrist - start_wrist,
-                        **(frame_attrs or {}),
-                    )
+                await asyncio.sleep(settle_s)
+                before = len(writer)
+                await self._sweep_wrist_capturing(
+                    kind, writer, heading * degrees, expect, speed_dps,
+                    extra_attrs={'target_range_m': target_range,
+                                 'start_wrist_angle': start_wrist,
+                                 **(frame_attrs or {})})
+                heading = -heading
+                if len(writer) == before:
+                    logger.error(f'{kind}: no frames at all during the {target_range:.2f}m '
+                                 f'sweep; abandoning the run with {len(writer)} captured')
+                    return None
                 logger.info(f'{kind}: range {target_range:.2f}m done ({len(writer)} frames)')
         finally:
             await self.gripper_client.restore_default_stream()
             await self._settle_wrist(start_wrist)
 
-        return writer.close(target_ranges=list(ranges), wrist_steps=wrist_steps,
-                            start_wrist_angle=start_wrist, **(run_attrs or {}))
+        return writer.close(target_ranges=list(ranges), sweep_degrees=degrees,
+                            sweep_speed_dps=speed_dps, start_wrist_angle=start_wrist,
+                            **(run_attrs or {}))
 
-    async def collect_floorplates(self, ranges=None, wrist_steps=PLATE_WRIST_STEPS,
-                                  output_dir=PLATE_OUTPUT_DIR, settle_s=FINGERPLATE_SETTLE_S):
+    async def collect_floorplates(self, ranges=None, output_dir=PLATE_OUTPUT_DIR,
+                                  settle_s=FINGERPLATE_SETTLE_S):
         """Capture bare floor at a range of heights, for synthetic backgrounds.
 
         The operator flies the gripper somewhere clean and clear and only then triggers
@@ -2485,11 +2526,12 @@ class AsyncObserver:
         are the entire background distribution the model ever sees in synthetic training.
         """
         return await self._height_wrist_sweep(
-            'floorplates', ranges or PLATE_RANGES_M, wrist_steps, output_dir, settle_s,
+            'floorplates', ranges or PLATE_RANGES_M, output_dir, settle_s,
             notes='bare floor at several heights; fingers retracted')
 
-    async def collect_objectplates(self, label='', ranges=None, wrist_steps=PLATE_WRIST_STEPS,
-                                   output_dir=PLATE_OUTPUT_DIR, settle_s=FINGERPLATE_SETTLE_S):
+    async def collect_objectplates(self, label='', ranges=None,
+                                   output_dir=PLATE_OUTPUT_DIR,
+                                   settle_s=FINGERPLATE_SETTLE_S):
         """Capture one object on the green board, for compositing onto floor plates.
 
         Two things the operator sets before triggering this, and both are labels rather
@@ -2502,7 +2544,7 @@ class AsyncObserver:
         """
         start_wrist = self.datastore.winch_line_record.getLast()[1]
         return await self._height_wrist_sweep(
-            'objectplates', ranges or PLATE_RANGES_M, wrist_steps, output_dir, settle_s,
+            'objectplates', ranges or PLATE_RANGES_M, output_dir, settle_s,
             notes=f'object on green board: {label or "unlabelled"}',
             run_attrs={'label': label, 'grasp_axis_wrist_angle': start_wrist},
             frame_attrs={'label': label})

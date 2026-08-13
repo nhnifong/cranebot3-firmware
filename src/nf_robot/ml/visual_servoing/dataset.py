@@ -120,39 +120,3 @@ class VisualServoDataset(torch.utils.data.Dataset):
             "has_present": torch.tensor(float(row["target_present"] is not None)),
             "has_holding": torch.tensor(float(row["holding"] is not None)),
         }
-
-
-def split_by_episode(root: Path, holdout: float, seed: int, augment_train=True):
-    """Train/eval sets from one split directory, holding out whole episodes.
-
-    Whole episodes, because consecutive frames of one approach are near-duplicates and
-    splitting inside an episode scores the model on frames it effectively trained on.
-    Used when the dataset has no eval split of its own.
-    """
-    import random as pyrandom
-
-    probe = VisualServoDataset(root, "train", augment=False)
-    # Only teleop episodes are eligible for the eval side. Synthetic frames are built
-    # from the same plates whatever the split, so holding some back measures how well
-    # the model fits the compositor rather than how well it works on a robot - and a
-    # synthetic row's episode_index is a formality, so grouping on it would put every
-    # generated frame in one group and hand the whole lot to whichever side won.
-    groups = sorted({g for g, row in zip(probe.groups(), probe.rows)
-                     if row["split_source"] == "teleop"})
-    if not groups:
-        raise ValueError(
-            f"{root}/train has no teleop rows, so there is nothing to validate on. "
-            f"Mine a teleop dataset into this split, or point --data_root at one that "
-            f"has both halves.")
-    pyrandom.Random(seed).shuffle(groups)
-    n_eval = max(1, int(round(len(groups) * holdout)))
-    eval_groups = set(groups[:n_eval])
-    logging.info(f"holding out {len(eval_groups)}/{len(groups)} teleop episodes for eval")
-
-    train_set = VisualServoDataset(
-        root, "train", augment=augment_train,
-        keep=lambda r: (r["source_repo_id"], r["episode_index"]) not in eval_groups)
-    eval_set = VisualServoDataset(
-        root, "train", augment=False,
-        keep=lambda r: (r["source_repo_id"], r["episode_index"]) in eval_groups)
-    return train_set, eval_set

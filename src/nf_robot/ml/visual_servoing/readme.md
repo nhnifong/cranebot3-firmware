@@ -310,8 +310,8 @@ geometric label in the synthetic set.
 
 **synth_frames.py**, offline, no robot. Per frame:
 
-1. Sample a simulated range `r` from the distribution of laser_rangefinder in real
-   teleop, so the synthetic height distribution matches the one at eval.
+1. Use a configurable distribution of laser_rangefinder distances for the synthetic height
+   defaulting to a uniform distribution between 0.1 and 1.2 meters.
 2. Pick a floor plate. Prefer one captured near `r` and at whatever wrist angle is
    wanted, since both were swept at capture time; rescale by `r0 / r` only to cover the
    gaps between height steps, and crop or tile to the canvas. The frame's wrist angle
@@ -328,8 +328,8 @@ geometric label in the synthetic set.
 5. Composite the finger plate for a sampled finger_angle **on top**, so fingers occlude
    objects. Objects that end up behind a finger are realistic training signal, not a bug
    to avoid - that occlusion is a large part of why the live frames are hard.
-6. Photometric randomisation: exposure, white balance, sensor noise, motion blur and
-   JPEG quality. Motion blur especially - live frames have it, board captures will not.
+6. Photometric randomisation: sensor noise, and small (2px) random transformations of
+   the final image.
 
 Frames with no object in canvas at all are the negatives for the target-present head,
 and should be a deliberate fraction of the output rather than an accident of sampling.
@@ -404,6 +404,81 @@ relation the synthetic compositor assumes.
 The same `--annotate_dir` treatment applies and matters more here, since a wrong
 extrinsic, a bad spin calibration or a sign flip in the rotation all produce plausible
 looking numbers and obviously wrong crosshairs.
+
+# Commands
+
+## 1. Capture the plates
+
+Debug commands on a connected robot, each writing a parquet file and a manifest line to
+`plates/`. Park the gripper before triggering: over clear textured floor for fingers,
+over clean floor for floorplates, over the board with the object's grasp point under the
+camera and the wrist at the ideal grasping angle for objectplates.
+
+    fingerplates
+    floorplates
+    objectplates blue sock
+
+Survey what has been captured, and eyeball the frames:
+
+    python -m nf_robot.ml.visual_servoing.plates --list --dir plates
+    python -m nf_robot.ml.visual_servoing.plates --dir plates --every 4 --full_size 6
+
+Contact sheets land in `plates/preview/`.
+
+## 2. Extract the pieces
+
+Fingers, as one RGBA plate per aperture. The default separates hardware from background
+by how each pixel behaves as the wrist turns:
+
+    python -m nf_robot.ml.visual_servoing.finger_matte --dir plates
+
+Over a pale floor with dark hardware, brightness separates them outright, which is worth
+using while the capture allows it:
+
+    python -m nf_robot.ml.visual_servoing.finger_matte --dir plates \
+        --contrast_margin -1 --max_brightness 90
+
+Objects, as one RGBA cutout per captured frame. This is a chroma key, so it wants the
+green board; without one, raise `--green_low`/`--green_high` and expect to check the
+result rather than trust it:
+
+    python -m nf_robot.ml.visual_servoing.object_matte --dir plates
+
+Both write a contact sheet beside their output - `plates/fingers/_mattes.png` and
+`plates/objects/_objects.png` - which is the check worth doing before generating
+anything from them.
+
+## 3. Mine the teleop half
+
+    python -m nf_robot.ml.visual_servoing.mine_teleop \
+        --repo_id naavox/combined_targets \
+        --root /home/nhn/data_scratch/combined_targets \
+        --output_root datasets/visual_servoing \
+        --preview_dir datasets/visual_servoing/preview --preview_count 100
+
+This replaces the split it writes, so run it before generating synthetic frames.
+
+## 4. Generate synthetic frames
+
+Joins the same split as extra shards, drawing simulated heights from the mined rows so
+the two halves cover the same range distribution:
+
+    python -m nf_robot.ml.visual_servoing.synth_frames \
+        --plates plates \
+        --output_root datasets/visual_servoing \
+        --ranges_from datasets/visual_servoing/train \
+        --count 20000 \
+        --annotate_dir datasets/visual_servoing/synth_preview
+
+Rerunning replaces only its own shards. The annotated frames show the target, the grasp
+axis and the other candidates, which is where a compositing sign error shows up.
+
+## 5. Train
+
+    python -m nf_robot.ml.visual_servoing.train \
+        --data_root datasets/visual_servoing --epochs 40 --batch_size 32
+
+Eval episodes are held out from the teleop rows only; synthetic frames always train.
 
 # Open questions
 

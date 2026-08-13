@@ -404,14 +404,18 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
     return out, dropped
 
 
+def source_episode_count(root: Path) -> int:
+    """Episodes in a source, read from its metadata."""
+    return int(json.loads((root / "meta" / "info.json").read_text())["total_episodes"])
+
+
 def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds: float,
-                carry_seconds: float, rise_m: float, limit: int | None):
+                carry_seconds: float, rise_m: float, limit: int | None, progress=None):
     """Mine one teleop dataset into an open shard writer."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     calibration = gripper_camera_calibration()
     episodes, fps = read_columns(root)
-    logging.info(f"{root}: {len(episodes)} episodes at {fps} fps")
 
     dataset = LeRobotDataset(repo_id, root=root)
     starts = {
@@ -423,7 +427,8 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
     if image_key not in dataset.meta.video_keys:
         raise ValueError(f"{repo_id} has no {image_key}; present: {dataset.meta.video_keys}")
     src_h, src_w = dataset.meta.features[image_key]["shape"][:2]
-    logging.info(f"{repo_id}: {image_key} at {src_w}x{src_h}")
+    if progress is not None:
+        progress.set_description(f"{repo_id.split('/')[-1]} {src_w}x{src_h}")
 
     mined, skipped = 0, {"no_grasp": 0, "no_rise": 0}
     dropped_total = 0
@@ -432,6 +437,8 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         if limit and n >= limit:
             break
         considered += 1
+        if progress is not None:
+            progress.update(1)
         result, info = mine_episode(episodes[ep], fps, calibration,
                                     approach_seconds, carry_seconds, rise_m)
         if result is None:
@@ -448,13 +455,17 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
             sample["source_repo_id"] = repo_id
             writer.add(sample)
             mined += 1
-        logging.info(f"episode {ep}: {len(result)} frames")
+        if progress is not None:
+            progress.set_postfix(frames=writer.total, refresh=False)
 
-    logging.info(
-        f"{repo_id}: mined {mined} frames from {considered - sum(skipped.values())}"
-        f"/{considered} episodes (skipped {skipped}), "
-        f"{dropped_total} frames dropped as off-canvas or behind the camera"
-    )
+    summary = (f"{repo_id}: mined {mined} frames from "
+               f"{considered - sum(skipped.values())}/{considered} episodes "
+               f"(skipped {skipped}), {dropped_total} frames dropped as off-canvas "
+               f"or behind the camera")
+    if progress is not None:
+        progress.write(summary)
+    else:
+        logging.info(summary)
     return mined
 
 
@@ -472,9 +483,14 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
         shutil.rmtree(split_dir)
     split_dir.mkdir(parents=True)
 
+    from tqdm import tqdm
+
+    total = sum(min(source_episode_count(root), limit or 1 << 30) for _, root in sources)
     writer = ShardWriter(split_dir)
-    for repo_id, root in sources:
-        mine_source(writer, root, repo_id, approach_seconds, carry_seconds, rise_m, limit)
+    with tqdm(total=total, unit="ep", dynamic_ncols=True) as progress:
+        for repo_id, root in sources:
+            mine_source(writer, root, repo_id, approach_seconds, carry_seconds, rise_m,
+                        limit, progress)
     writer.flush()
 
     write_dataset_card(output_root)
