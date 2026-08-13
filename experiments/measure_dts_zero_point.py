@@ -4,14 +4,16 @@ and the 0-point of the DTS clock observed by a stream consumer on the same machi
 The measured constant should be in the neighborhood of 0.5 seconds
 this constant is dependent on the Raspberry Pi Zero 2W hardware and the system load.
 
-Measures the anchor and the gripper stream commands separately, because they differ in
-ways (sensor mode, resolution, framerate) that move the offset. The commands are imported
-from the servers that actually run them rather than copied, so that this stays honest
-when those change. What is measured is each server's default command; the framerate and
-resolution the servers rewrite at runtime are not applied here.
+Measures every named stream mode a component accepts, because the offset is a property of
+the exact rpicam-vid command that gets launched: sensor mode, resolution, bitrate and
+framerate all move it, and a named mode is exactly one such command. The mode names and
+the stream commands are imported from the servers that run them, and combined with the
+same function the servers use, so that this stays honest when those change.
 
-Run this on the pi whose constant you want. The gripper command needs the Camera Module 3
-Wide for its 2304:1296 sensor mode, so that measurement only means something on a gripper.
+Run this on the pi whose constants you want, and paste the printed values into the
+dts_zero_offset field of those modes in component_server.stream_modes. The gripper's modes
+need the Camera Module 3 Wide for their 2304:1296 sensor mode, so those measurements only
+mean something on a gripper, and the anchor's only on an anchor.
 """
 
 import time
@@ -20,16 +22,26 @@ import av
 import re
 from asyncio.subprocess import PIPE, STDOUT
 
-from nf_robot.robot.component_server import stream_command as anchor_stream_command
+from nf_robot.robot.component_server import apply_stream_mode, stream_modes
 
-# the gripper module pulls in the adafruit hardware libraries at import time, which are
-# not installed on every component. Missing them should skip that measurement, not lose
-# the anchor one too.
+# each server module pulls in the hardware libraries for its own component at import time,
+# which are not installed on the other one. A missing one should skip that server's
+# measurements, not lose the other's.
+import_errors = {}
 try:
-    from nf_robot.robot.gripper_arp_server import stream_command as gripper_stream_command
+    from nf_robot.robot.anchor_arp_server import anchor_stream_modes
+    from nf_robot.robot.component_server import stream_command as anchor_stream_command
 except ImportError as e:
-    gripper_stream_command = None
-    gripper_import_error = e
+    anchor_stream_modes, anchor_stream_command = (), None
+    import_errors['anchor'] = e
+
+try:
+    from nf_robot.robot.gripper_arp_server import (
+        stream_command as gripper_stream_command,
+        gripper_stream_modes)
+except ImportError as e:
+    gripper_stream_modes, gripper_stream_command = (), None
+    import_errors['gripper'] = e
 
 # the line we are looking for looks like this
 #Output #0, mpegts, to 'tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1':
@@ -101,6 +113,7 @@ def connect_client():
 
 async def measure(name, stream_command_args):
     print(f'\n===== {name} =====')
+    print(' '.join(stream_command_args))
     event = asyncio.Event()
     server = asyncio.create_task(run_rpicam_vid(event, stream_command_args))
     await event.wait()
@@ -111,18 +124,26 @@ async def measure(name, stream_command_args):
     print(f'{name}: DTS zero occurs {offset}s after the ready line is printed by rpicam-vid')
     return offset
 
+async def measure_modes(stream_command, mode_names, results):
+    """Measure each named mode, in the command that mode really launches."""
+    for name in mode_names:
+        # rpicam-vid holds port 8888 for a few seconds after it exits, and the next
+        # measurement cannot start until it lets go
+        if results:
+            await asyncio.sleep(5)
+        results[name] = await measure(name, apply_stream_mode(stream_command, stream_modes[name]))
+
 async def run_experiment():
     results = {}
-    results['anchor'] = await measure('anchor', anchor_stream_command)
 
-    if gripper_stream_command is None:
-        print(f'\nskipping gripper measurement, could not import it: {gripper_import_error}')
-    else:
-        # both commands listen on the same port, so let the OS release it in between
-        await asyncio.sleep(5)
-        results['gripper'] = await measure('gripper', gripper_stream_command)
+    await measure_modes(anchor_stream_command, anchor_stream_modes, results)
+    await measure_modes(gripper_stream_command, gripper_stream_modes, results)
+
+    for component, error in import_errors.items():
+        print(f'\nskipping {component} modes, could not import them: {error}')
 
     print('\n===== summary =====')
+    print('paste each value into the dts_zero_offset of that mode in stream_modes')
     for name, offset in results.items():
         print(f'{name}: {offset}')
 

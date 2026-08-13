@@ -22,33 +22,22 @@ default_anchor_conf = {
     # speed to reel in when the 'tighten' command is received. Meters of line per second
     'TIGHTENING_SPEED': -0.12,
 
-    # rpicam-vid framerate for the anchor camera stream. Lower this if the pi is running hot
-    # (rpi zero 2w's throttle/shut down around 60C). A running stream is automatically
-    # restarted to pick up changes. Broadcasting this var only affects anchors, not grippers,
-    # which have their own GRIPPER_STREAM_FRAMERATE var.
-    'ANCHOR_STREAM_FRAMERATE': 10,
-
-    # Which entry of AnchorArpServer.stream_resolutions the camera streams at. Same
-    # mechanism as the gripper's, and the same reason for it: capturing stills for
-    # training data wants pixels and does not care about latency, while streaming for
-    # control wants the opposite. 'full' is the anchors' normal mode, so leaving this
-    # alone changes nothing.
-    'ANCHOR_STREAM_RESOLUTION': 'full',
+    # Which entry of component_server.stream_modes the camera streams at. The anchors
+    # have only the one, so this exists to be uniform with the gripper rather than to be
+    # changed; a different resolution or framerate means adding a named, measured mode to
+    # that table, not sending a number.
+    'STREAM_MODE': 'anchor_control',
 }
+
+# names from component_server.stream_modes an anchor accepts, its normal one first
+anchor_stream_modes = ('anchor_control',)
 
 
 class AnchorArpServer(RobotComponentServer):
     def __init__(self, power):
         super().__init__()
         self.conf.update(default_anchor_conf)
-        self.stream_framerate_conf_key = 'ANCHOR_STREAM_FRAMERATE'
-        self.stream_resolution_conf_key = 'ANCHOR_STREAM_RESOLUTION'
-        # 'full' matches the width/height the shared stream_command already declares, so
-        # the default behaviour is unchanged by this table existing.
-        self.stream_resolutions = {
-            'wide': (684, 384, '1200kbps'),
-            'full': (1920, 1080, '1000kbps'),
-        }
+        self.stream_modes = anchor_stream_modes
 
         self.has_power_line = power
 

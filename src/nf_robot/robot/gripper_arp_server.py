@@ -59,16 +59,11 @@ default_gripper_conf = {
     # (dimensionless, 0-1) The proportional weight of the pad pressure in the composite force calculation.
     # the weight allocated to the motor load reading is 1-this value
     'PRESSURE_WEIGHT': 0.7,
-    # rpicam-vid framerate for the gripper camera stream.
-    # A running stream is automatically restarted to pick up changes.
-    'GRIPPER_STREAM_FRAMERATE': 60,
-    # Which entry of GripperArpServer.stream_resolutions the camera streams at. 'wide' is
-    # the normal 684x384 control stream; 'full' is for capturing synthetic-data
-    # ingredients, where the plates are only ever downscaled later so capture resolution
-    # sets the ceiling on how much real detail they can carry. Drop the framerate when
-    # selecting it - the pi zero 2w cannot encode 1080p at speed - and see
-    # arp_gripper_client.use_capture_stream, which sets both together.
-    'GRIPPER_STREAM_RESOLUTION': 'wide',
+    # Which entry of component_server.stream_modes the camera streams at, one of
+    # gripper_stream_modes below. A running stream is automatically restarted to pick up
+    # a change. See arp_gripper_client.use_capture_stream, which is the only thing that
+    # moves it off the control stream.
+    'STREAM_MODE': 'gripper_control',
     # Effective pole length used for swing model
     'POLE_LENGTH': 0.4526 # carbon pole effective length is 0.4350
 }
@@ -91,30 +86,23 @@ stream_command = [
     "--bitrate", "1200kbps"
 ]
 
-# see the comment on component_server.dts_zero_offset. Much smaller than the anchor's
-# because this command starts a far smaller stream.
-dts_zero_offset = 0.44341111183166504 # measured Aug 13 2026
+# names from component_server.stream_modes a gripper accepts, its normal one first.
+# Both keep the 2304:1296 sensor mode the command sets, so they share one field of view:
+# 'gripper_capture' is more pixels of the same scene, not a different framing. That matters
+# because the geometry of anything captured through this camera is calibrated against that
+# field of view.
+gripper_stream_modes = ('gripper_control', 'gripper_capture')
 
 
 class GripperArpServer(RobotComponentServer):
     def __init__(self):
         super().__init__()
         self.conf.update(default_gripper_conf)
-        self.stream_framerate_conf_key = 'GRIPPER_STREAM_FRAMERATE'
-        self.stream_resolution_conf_key = 'GRIPPER_STREAM_RESOLUTION'
-        # Both modes keep the 2304:1296 sensor mode set below, so they share one field of
-        # view: 'full' is more pixels of the same scene, not a different framing. That
-        # matters because the geometry of anything captured through this camera is
-        # calibrated against that field of view.
-        self.stream_resolutions = {
-            'wide': (684, 384, '1200kbps'),
-            'full': (960, 540, '2400kbps'),
-        }
+        self.stream_modes = gripper_stream_modes
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'
 
         self.stream_command = stream_command
-        self.dts_zero_offset = dts_zero_offset
 
         i2c = busio.I2C(board.SCL, board.SDA)
 
