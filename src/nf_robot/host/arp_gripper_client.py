@@ -14,6 +14,7 @@ import nf_robot.common.definitions as model_constants
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.cv_common import SF_TARGET_SHAPE, OTHER_MARKERS, CAL_MARKERS
+from nf_robot.robot.component_server import stream_modes
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,19 @@ ROUTE_TAG_MAX_AGE_S = 0.6
 # Per-tag sighting history. ~8s at a 30Hz detection rate, which covers the longest
 # averaging window any caller asks for.
 ROUTE_TAG_HISTORY = 240
+
+# The two modes the gripper camera can be switched between, by the names the gripper
+# knows them by. Everything about them - resolution, bitrate, framerate - is fixed in the
+# stream_modes table on the robot side, which is where it has to live because it is only
+# meaningful together with a measured dts_zero_offset. component_server is imported for
+# the sizes rather than gripper_arp_server, which only loads on the gripper itself: it
+# pulls in the i2c and servo hardware libraries at import.
+CONTROL_STREAM_MODE = 'gripper_control'
+CAPTURE_STREAM_MODE = 'gripper_capture'
+# (width, height) a mode delivers, so a caller can tell whether the frames it is getting
+# are from the mode it asked for.
+CAPTURE_RESOLUTION_SIZE = (stream_modes[CAPTURE_STREAM_MODE].width,
+                           stream_modes[CAPTURE_STREAM_MODE].height)
 
 
 class ArpeggioGripperClient(ComponentClient):
@@ -298,6 +312,59 @@ class ArpeggioGripperClient(ComponentClient):
         if sm is None:
             return 0.0
         return float(np.linalg.norm(sm) / OMEGA)
+
+    async def use_capture_stream(self):
+        """Switch the gripper camera to its stills-capture mode: more pixels, fewer of them.
+
+        For collecting the ingredients of the synthetic dataset - finger plates, bare
+        floor, objects on a board - which want pixels and do not care about latency,
+        the opposite of what the control stream wants. Those plates are only ever
+        downscaled later, so the capture resolution sets the ceiling on how much real
+        detail a synthetic frame can contain.
+
+        The framerate that pays for those pixels comes with the mode: the gripper runs on
+        a pi zero 2w, which cannot encode this resolution at streaming rates and will
+        overheat or stall trying. These captures hold still at each stop anyway.
+
+        Both modes keep the same sensor mode, so this changes how many pixels the
+        field of view is sampled at and not the field of view itself - which is what
+        keeps captures geometrically comparable to the control stream.
+
+        The stream restarts to pick this up, so expect a gap of a second or two before
+        frames resume. Call restore_default_stream when finished.
+        """
+        await self.send_commands({'set_config_vars': {'STREAM_MODE': CAPTURE_STREAM_MODE}})
+
+    async def capture_raw_frame(self, after_ts, timeout=5.0, expect_size=None):
+        """The newest camera frame captured after after_ts, as (timestamp, RGB array).
+
+        Reads self.frame rather than last_output_frame because process_frame resizes to
+        SF_TARGET_SHAPE, which would throw away exactly the pixels use_capture_stream
+        was switched on to get. Returns (None, None) if nothing arrives in time.
+
+        Waiting on capture time rather than sleeping a fixed interval means the caller
+        gets a frame taken after whatever motion it just commanded, however far the
+        stream is lagging.
+
+        expect_size is a (width, height) to hold out for, and is the only reliable way
+        to tell that a resolution change has actually landed: the old stream keeps
+        delivering frames for seconds after the new settings are sent, and those frames
+        are new enough to satisfy any timestamp test while being the wrong size.
+        """
+        deadline = time.time() + timeout
+        while True:
+            with self.frame_lock:
+                timestamp, frame = self.last_frame_cap_time, self.frame
+                if frame is not None and timestamp is not None and timestamp > after_ts:
+                    if expect_size is None or (frame.shape[1], frame.shape[0]) == tuple(expect_size):
+                        return timestamp, frame.copy()
+            if time.time() > deadline:
+                return None, None
+            await asyncio.sleep(0.02)
+
+    async def restore_default_stream(self):
+        """Put the camera back to the control stream."""
+        await self.send_commands({'set_config_vars': {'STREAM_MODE': CONTROL_STREAM_MODE}})
 
     def get_spin(self, debug=False, timestamp=None):
         # return the rotation of the gripper camera relative to the room in radians.

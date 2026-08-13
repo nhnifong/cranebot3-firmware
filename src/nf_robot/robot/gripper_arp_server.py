@@ -59,36 +59,50 @@ default_gripper_conf = {
     # (dimensionless, 0-1) The proportional weight of the pad pressure in the composite force calculation.
     # the weight allocated to the motor load reading is 1-this value
     'PRESSURE_WEIGHT': 0.7,
-    # rpicam-vid framerate for the gripper camera stream.
-    # A running stream is automatically restarted to pick up changes.
-    'GRIPPER_STREAM_FRAMERATE': 60,
+    # Which entry of component_server.stream_modes the camera streams at, one of
+    # gripper_stream_modes below. A running stream is automatically restarted to pick up
+    # a change. See arp_gripper_client.use_capture_stream, which is the only thing that
+    # moves it off the control stream.
+    'STREAM_MODE': 'gripper_control',
     # Effective pole length used for swing model
     'POLE_LENGTH': 0.4526 # carbon pole effective length is 0.4350
 }
+
+
+# module level, like the anchor's in component_server, so that it can be read without
+# constructing a GripperArpServer (whose __init__ opens the I2C bus).
+stream_command = [
+    "/usr/bin/rpicam-vid", "-t", "0", "-n",
+    # Force the full-FOV 2304x1296 sensor mode and output 684x384 (16:9) so we keep the
+    # whole wide-camera field of view instead of the center crop a square output forces.
+    "--mode", "2304:1296:10",
+    "--width=684", "--height=384",
+    "--framerate=60",
+    "-o", "tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1",
+    "--codec", "libav",
+    "--libav-format", "mpegts",
+    "--autofocus-mode", "continuous",
+    "--low-latency",
+    "--bitrate", "1200kbps"
+]
+
+# names from component_server.stream_modes a gripper accepts, its normal one first.
+# Both keep the 2304:1296 sensor mode the command sets, so they share one field of view:
+# 'gripper_capture' is more pixels of the same scene, not a different framing. That matters
+# because the geometry of anything captured through this camera is calibrated against that
+# field of view.
+gripper_stream_modes = ('gripper_control', 'gripper_capture')
 
 
 class GripperArpServer(RobotComponentServer):
     def __init__(self):
         super().__init__()
         self.conf.update(default_gripper_conf)
-        self.stream_framerate_conf_key = 'GRIPPER_STREAM_FRAMERATE'
+        self.stream_modes = gripper_stream_modes
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'
 
-        self.stream_command = [
-            "/usr/bin/rpicam-vid", "-t", "0", "-n",
-            # Force the full-FOV 2304x1296 sensor mode and output 684x384 (16:9) so we keep the
-            # whole wide-camera field of view instead of the center crop a square output forces.
-            "--mode", "2304:1296:10",
-            "--width=684", "--height=384",
-            "--framerate=60",
-            "-o", "tcp://0.0.0.0:8888?listen=1",
-            "--codec", "libav",
-            "--libav-format", "mpegts",
-            "--autofocus-mode", "continuous",
-            "--low-latency",
-            "--bitrate", "1200kbps"
-        ]
+        self.stream_command = stream_command
 
         i2c = busio.I2C(board.SCL, board.SDA)
 

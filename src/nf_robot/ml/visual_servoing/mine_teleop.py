@@ -161,8 +161,12 @@ def row_schema():
 class ShardWriter:
     """Buffers rows and flushes them as parquet shards of roughly SHARD_TARGET_BYTES."""
 
-    def __init__(self, split_dir: Path, target_bytes: int = SHARD_TARGET_BYTES):
+    def __init__(self, split_dir: Path, target_bytes: int = SHARD_TARGET_BYTES,
+                 prefix: str = "shard"):
         self.split_dir = split_dir
+        # Shards are named by producer so the synthetic compositor can write into the
+        # same split as the miner without either overwriting the other's files.
+        self.prefix = prefix
         self.target_bytes = target_bytes
         self.schema = row_schema()
         self.rows: list[dict] = []
@@ -183,7 +187,7 @@ class ShardWriter:
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        path = self.split_dir / f"shard-{self.shards:04d}.parquet"
+        path = self.split_dir / f"{self.prefix}-{self.shards:04d}.parquet"
         pq.write_table(
             pa.Table.from_pylist(self.rows, schema=self.schema),
             path, compression="snappy", row_group_size=ROW_GROUP_SIZE,
@@ -204,14 +208,20 @@ def encode_frame(bgr):
 
 
 def gripper_camera_calibration():
-    """Intrinsics of the 684x384 gripper stream.
+    """Gripper camera intrinsics as fractions of the frame: (fx, fy), (cx, cy).
 
     The wide calibration rather than camera_cal: the gripper streams the full-sensor
     16:9 field of view, which is what camera_cal_wide was chessboard-calibrated for.
+
+    Normalized, because that makes the labels independent of what resolution the frames
+    happen to be stored at - a resize moves every pixel coordinate and leaves every
+    normalized one alone. A *crop* does not, which is why the recipe that builds the
+    source dataset sets center_crop and pad_clamp false.
     """
     cal = create_default_config().camera_cal_wide
     K = np.array(cal.intrinsic_matrix, dtype=np.float64).reshape(3, 3)
-    return K, (cal.resolution.width, cal.resolution.height)
+    width, height = cal.resolution.width, cal.resolution.height
+    return (K[0, 0] / width, K[1, 1] / height), (K[0, 2] / width, K[1, 2] / height)
 
 
 def read_columns(root: Path):
@@ -289,22 +299,24 @@ def point_in_camera(point_room, gripper_pos, spin):
     return CAMERA_ROT_BODY.inv().apply(in_body - CAMERA_POS_BODY)
 
 
-def project(point_room, gripper_pos, spin, K):
-    """A room point as (u, v) pixels in the gripper camera, plus its distance.
+def project(point_room, gripper_pos, spin, calibration):
+    """A room point as normalized (u, v) in the gripper camera, plus its distance.
 
-    Returns None for anything at or behind the lens, where the projection is meaningless
-    but still numerically produces a plausible looking pixel.
+    0..1 spans the visible frame whatever resolution it is stored at. Returns None for
+    anything at or behind the lens, where the projection is meaningless but still
+    numerically produces a plausible looking coordinate.
 
     Pinhole only, no distortion: the wide calibration's coefficients are small (k1 is
     -0.026) next to the approximations above, and the distortion polynomial diverges
     wildly outside the field of view - which is exactly where this has to stay sane,
     since the whole point is labelling targets past the frame edge.
     """
+    (fx, fy), (cx, cy) = calibration
     p_cam = point_in_camera(point_room, gripper_pos, spin)
     if p_cam[2] < MIN_DEPTH_M:
         return None
-    u = K[0, 0] * p_cam[0] / p_cam[2] + K[0, 2]
-    v = K[1, 1] * p_cam[1] / p_cam[2] + K[1, 2]
+    u = fx * p_cam[0] / p_cam[2] + cx
+    v = fy * p_cam[1] / p_cam[2] + cy
     return float(u), float(v), float(np.linalg.norm(p_cam))
 
 
@@ -333,7 +345,7 @@ def wrap_pi(radians):
     return (radians + math.pi / 2) % math.pi - math.pi / 2
 
 
-def mine_episode(rows, fps, K, size, approach_seconds, carry_seconds, rise_m):
+def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m):
     """Labelled rows for one episode, or (None, reason) if it is not a usable grasp."""
     pressure = np.array([r["pressure"] for r in rows], dtype=np.float32)
     grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
@@ -347,7 +359,6 @@ def mine_episode(rows, fps, K, size, approach_seconds, carry_seconds, rise_m):
 
     target_room = grasp_point_room(rows[grasp])
     wrist_at_grasp = rows[grasp]["wrist_angle"]
-    width, height = size
 
     first = max(0, grasp - int(round(approach_seconds * fps)))
     last = min(len(rows) - 1, grasp + int(round(carry_seconds * fps)))
@@ -375,17 +386,16 @@ def mine_episode(rows, fps, K, size, approach_seconds, carry_seconds, rise_m):
         # Only up to the grasp. After it the object rides in the jaws and the static room
         # point no longer says where it is.
         if i <= grasp:
-            projected = project(target_room, r["gripper_pos"], r["spin"], K)
+            projected = project(target_room, r["gripper_pos"], r["spin"], calibration)
             if projected is None:
                 dropped += 1
                 continue
             u, v, distance = projected
-            un, vn = u / width, v / height
             half = (CANVAS_SCALE - 1.0) / 2.0
-            if not (-half <= un <= 1 + half and -half <= vn <= 1 + half):
+            if not (-half <= u <= 1 + half and -half <= v <= 1 + half):
                 dropped += 1
                 continue
-            sample["target_uv"] = [round(un, 5), round(vn, 5)]
+            sample["target_uv"] = [round(u, 5), round(v, 5)]
             sample["target_range_m"] = round(distance, 4)
             sample["grasp_axis_rad"] = round(
                 wrap_pi(math.radians(wrist_at_grasp - r["wrist_angle"])), 5)
@@ -394,14 +404,18 @@ def mine_episode(rows, fps, K, size, approach_seconds, carry_seconds, rise_m):
     return out, dropped
 
 
+def source_episode_count(root: Path) -> int:
+    """Episodes in a source, read from its metadata."""
+    return int(json.loads((root / "meta" / "info.json").read_text())["total_episodes"])
+
+
 def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds: float,
-                carry_seconds: float, rise_m: float, limit: int | None):
+                carry_seconds: float, rise_m: float, limit: int | None, progress=None):
     """Mine one teleop dataset into an open shard writer."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-    K, size = gripper_camera_calibration()
+    calibration = gripper_camera_calibration()
     episodes, fps = read_columns(root)
-    logging.info(f"{root}: {len(episodes)} episodes at {fps} fps, camera {size[0]}x{size[1]}")
 
     dataset = LeRobotDataset(repo_id, root=root)
     starts = {
@@ -413,12 +427,8 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
     if image_key not in dataset.meta.video_keys:
         raise ValueError(f"{repo_id} has no {image_key}; present: {dataset.meta.video_keys}")
     src_h, src_w = dataset.meta.features[image_key]["shape"][:2]
-    if (src_w, src_h) != size:
-        raise ValueError(
-            f"{repo_id} records {image_key} at {src_w}x{src_h}, but the wide calibration is "
-            f"for {size[0]}x{size[1]}. Mine the natively recorded source, not a resized "
-            f"derivative - every label here is geometric."
-        )
+    if progress is not None:
+        progress.set_description(f"{repo_id.split('/')[-1]} {src_w}x{src_h}")
 
     mined, skipped = 0, {"no_grasp": 0, "no_rise": 0}
     dropped_total = 0
@@ -427,7 +437,9 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         if limit and n >= limit:
             break
         considered += 1
-        result, info = mine_episode(episodes[ep], fps, K, size,
+        if progress is not None:
+            progress.update(1)
+        result, info = mine_episode(episodes[ep], fps, calibration,
                                     approach_seconds, carry_seconds, rise_m)
         if result is None:
             skipped[info] += 1
@@ -443,13 +455,17 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
             sample["source_repo_id"] = repo_id
             writer.add(sample)
             mined += 1
-        logging.info(f"episode {ep}: {len(result)} frames")
+        if progress is not None:
+            progress.set_postfix(frames=writer.total, refresh=False)
 
-    logging.info(
-        f"{repo_id}: mined {mined} frames from {considered - sum(skipped.values())}"
-        f"/{considered} episodes (skipped {skipped}), "
-        f"{dropped_total} frames dropped as off-canvas or behind the camera"
-    )
+    summary = (f"{repo_id}: mined {mined} frames from "
+               f"{considered - sum(skipped.values())}/{considered} episodes "
+               f"(skipped {skipped}), {dropped_total} frames dropped as off-canvas "
+               f"or behind the camera")
+    if progress is not None:
+        progress.write(summary)
+    else:
+        logging.info(summary)
     return mined
 
 
@@ -467,9 +483,14 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
         shutil.rmtree(split_dir)
     split_dir.mkdir(parents=True)
 
+    from tqdm import tqdm
+
+    total = sum(min(source_episode_count(root), limit or 1 << 30) for _, root in sources)
     writer = ShardWriter(split_dir)
-    for repo_id, root in sources:
-        mine_source(writer, root, repo_id, approach_seconds, carry_seconds, rise_m, limit)
+    with tqdm(total=total, unit="ep", dynamic_ncols=True) as progress:
+        for repo_id, root in sources:
+            mine_source(writer, root, repo_id, approach_seconds, carry_seconds, rise_m,
+                        limit, progress)
     writer.flush()
 
     write_dataset_card(output_root)
@@ -602,7 +623,10 @@ def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # force=True: importing lerobot/transformers installs a root handler, which makes a
+    # later basicConfig a silent no-op and drops every info line this tool logs.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                        force=True)
 
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)

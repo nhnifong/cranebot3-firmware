@@ -273,7 +273,7 @@ def test_camera():
     stream_command = """
     /usr/bin/rpicam-vid -t 0 -n \
       --width=1920 --height=1080 \
-      -o tcp://0.0.0.0:8888?listen=1 \
+      -o tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1 \
       --codec libav \
       --libav-format mpegts \
       --autofocus-mode continuous \

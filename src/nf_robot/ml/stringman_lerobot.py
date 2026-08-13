@@ -70,16 +70,13 @@ _CAMERA_MODES: dict[str, dict[int, tuple[int, int]]] = {
     "gripper_floor_224": {0: (224, 224), 3: (224, 224)},
     "gripper_floor_384": {0: (384, 384), 3: (384, 384)},
     "gripper_anchors_384": {0: (384, 384), 1: (384, 384), 2: (384, 384)},
-    # square 224 for encoders that take 224x224: the wide feeds are squished rather
-    # than letterboxed, so every pixel the encoder processes carries scene instead of
-    # blank padding, at the cost of a uniform horizontal squash.
+    # square 224 for encoders that take 224x224
     "gripper_anchors_224": {0: (224, 224), 1: (224, 224), 2: (224, 224)},
     "gripper_anchors_rect": {0: (684, 384), 1: (684, 384), 2: (684, 384)},
+    # The gripper alone at the visual servoing model's input size and warped floor composite on its own
+    "gripper_ortho":     {0: (448, 256), 3: (512, 512)},
     "all_square":        {0: (384, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
     "all":               {0: (684, 384), 3: (512, 512), 1: (960, 544), 2: (960, 544)},
-    # The warped floor composite on its own, at the resolution "all" records it at, so
-    # deriving it from an existing recording re-encodes nothing. See ortho_target.py.
-    "ortho_512":         {3: (512, 512)},
 }
 
 # action_space -> ordered list of action component names.

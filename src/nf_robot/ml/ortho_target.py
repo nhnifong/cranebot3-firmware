@@ -10,32 +10,36 @@ for, so every episode donates one label for free.
 Build, distill, train, then ship. The first two are separate because the intermediate
 is a LeRobot dataset and the result is not:
 
-  1. The two recipes merge the teleop datasets down to the ortho feed alone and run
-     contact labelling. They are split so that a whole room can be held out; see the
-     note on the eval split below:
+  1. The two recipes merge the teleop datasets, keeping the ortho feed this model
+     needs and the gripper feed visual_servoing/mine_teleop.py needs, and run contact
+     labelling. One dataset serves both models because the expensive part - sourcing,
+     excluding episodes and re-encoding video - is identical for each. They are split
+     by room so that a whole room can be held out; see the note on the eval split
+     below. Build both:
 
        python src/nf_robot/ml/lerobot_build_dataset.py \
-           --recipe src/nf_robot/ml/recipes/ortho_target.yaml \
+           --recipe src/nf_robot/ml/recipes/combined_targets.yaml \
            --temp_dir /home/nhn/data_scratch \
-           --output_root /home/nhn/data_scratch/move_clutter_ortho
+           --output_root /home/nhn/data_scratch/combined_targets
 
        python src/nf_robot/ml/lerobot_build_dataset.py \
-           --recipe src/nf_robot/ml/recipes/ortho_target_nick.yaml \
+           --recipe src/nf_robot/ml/recipes/combined_targets_eval.yaml \
            --temp_dir /home/nhn/data_scratch \
-           --output_root /home/nhn/data_scratch/nick_ortho
+           --output_root /home/nhn/data_scratch/combined_targets_eval
 
-  2. `distill` reduces each to one sample per episode - the episode's first ortho
+  2. `distill` reduces that to one sample per episode - the episode's first ortho
      frame and the ortho pixel where contact eventually happened - which is a few
-     hundred MB rather than a few hundred GB. One run per split, and the upload
-     needs both present because it prunes hub files that are absent locally:
+     hundred MB rather than a few hundred GB. One run per split, and --upload needs
+     both splits present locally because it prunes hub files that are absent - so
+     distill the eval split first, or upload only on the second run:
 
        python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/move_clutter_ortho \
-           --root /home/nhn/data_scratch/move_clutter_ortho --split train
+           --repo_id naavox/combined_targets_eval \
+           --root /home/nhn/data_scratch/combined_targets_eval --split eval
 
        python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/nick_ortho \
-           --root /home/nhn/data_scratch/nick_ortho --split eval --upload
+           --repo_id naavox/combined_targets \
+           --root /home/nhn/data_scratch/combined_targets --split train --upload
 
   3. `train` fits the model, saving the best checkpoint by recall@20cm to
      models/ortho_target.pth:
@@ -71,7 +75,9 @@ episodes in one recording session share a floor and usually most of an object la
 duplicates and says nothing about a room the model has not seen. Splitting the sources
 across two recipes is what makes that possible: the merge renumbers episodes and
 discards which source each came from, so by the time a sample exists it is too late to
-separate the rooms.
+separate the rooms. combined_targets_eval.yaml is what does it: the 79west room and
+nothing else, with every processing setting identical to combined_targets.yaml so the
+two differ in which room they hold and in nothing else.
 
 Caveats worth knowing before trusting the labels:
 
@@ -107,14 +113,16 @@ from nf_robot.ml.stringman_lerobot import _FEED_NAMES
 
 ORTHO_FEED = 3
 ORTHO_KEY = f"observation.images.{_FEED_NAMES[ORTHO_FEED]}"
-ORTHO_CAMERA_MODE = "ortho_512"
+# Both feeds this dataset carries: the ortho composite for this model, and the
+# gripper camera at the visual servoing model's input size. See combined_targets.yaml.
+ORTHO_CAMERA_MODE = "gripper_ortho"
 
 # Metres of floor the square ortho map spans, per side, centred on the room origin.
 # host/floor_view.py's EXTENT_M and the map_extent_meters observer._ortho_worker
 # renders with; a recording made with a different extent would need its own value.
 ORTHO_EXTENT_M = 5.0
 
-DEFAULT_SOURCE_REPO_ID = "naavox/move_clutter_ortho"
+DEFAULT_SOURCE_REPO_ID = "naavox/combined_targets"
 DEFAULT_DATASET_ID = "naavox/ortho-target-dataset"
 LOCAL_DATASET_ROOT = "ortho_target_data"
 

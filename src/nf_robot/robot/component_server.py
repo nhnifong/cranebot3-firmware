@@ -18,6 +18,7 @@ from zeroconf.asyncio import (
 import time
 import re
 import logging
+from collections import namedtuple
 
 from nf_robot.robot.forget_wifi import forget_all_wifi_networks
 from nf_robot.common.util import get_local_ip
@@ -25,30 +26,85 @@ from nf_robot.common.util import get_local_ip
 # using libav makes it possible to send a containerized stream with pts
 # hardware h264 encoding is still used as long as resolution is below 1080
 # this requires rpicam-apps (not present in lite OS image)
-# the --framerate value here is just the default; build_stream_command() rewrites it
-# from self.stream_framerate_conf_key's config var each time rpicam-vid is (re)launched.
+# the --framerate/--width/--height/--bitrate values here are just defaults;
+# build_stream_command() rewrites all four from the selected stream mode each time
+# rpicam-vid is (re)launched.
 stream_command = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
     "--width=1920", "--height=1080",
     "--framerate=15",
-    "-o", "tcp://0.0.0.0:8888?listen=1",
+    "-o", "tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1",
     "--codec", "libav",
     "--libav-format", "mpegts",
     "--vflip", "--hflip",
     "--autofocus-mode", "manual",
     "--lens-position", "0.1",
     "--low-latency",
-    "--bitrate", "800kbps"
+    "--bitrate", "1000kbps"
 ]
+
+# One set of camera settings, under one name. The five fields travel together because
+# they are one measurement: dts_zero_offset is the offset in seconds between rpicam-vid
+# printing its ready line and the zero point of the DTS times in the stream container, and
+# it was measured from the exact command the other four build. Bitrate has to rise with
+# resolution or the picture becomes a compression artifact exhibit, and framerate has to
+# fall as resolution rises or the pi zero 2w cannot encode the stream at all - so those do
+# not get to vary independently either.
+StreamMode = namedtuple('StreamMode', ['width', 'height', 'bitrate', 'framerate', 'dts_zero_offset'])
+
+# Every setting any component's camera can stream at. Each server declares which of these
+# it accepts (RobotComponentServer.stream_modes) and the client switches between them by
+# name; there is deliberately no way to ask for an arbitrary resolution or framerate,
+# because an unmeasured combination has no dts_zero_offset and so no usable capture times.
+
+# Offsets come from experiments/measure_dts_zero_point.py, run on the component itself.
+stream_modes = {
+    # the anchors' only mode: the whole room at 1080p, enough res to see the marker but
+    # slow enough to keep the pi cool
+    'anchor_control': StreamMode(1920, 1080, '1000kbps', 15, 1.2034),
+    # the gripper's control stream. Small and fast
+    'gripper_control': StreamMode(684, 384, '1200kbps', 60, 0.4032),
+    # the gripper's quality mode, for collecting synthetic dataset ingredients
+    'gripper_capture': StreamMode(960, 540, '2400kbps', 20, 0.9168),
+}
+
+
+def arg_index(command, prefix):
+    """Index of the first '<prefix>...' entry in command, or None if this particular
+    command doesn't expose one."""
+    for i, arg in enumerate(command):
+        if arg.startswith(prefix):
+            return i
+    return None
+
+
+def apply_stream_mode(command, mode):
+    """command with --width/--height/--framerate/--bitrate taken from a StreamMode.
+
+    Module level, alongside the command it rewrites, so the exact command a mode launches
+    can be built without a server instance - experiments/measure_dts_zero_point.py
+    measures every mode that way, and an offset is only valid for the command it was
+    measured from.
+    """
+    cmd = list(command)
+    for prefix, value in (('--width', f'--width={mode.width}'),
+                          ('--height', f'--height={mode.height}'),
+                          ('--framerate', f'--framerate={mode.framerate}')):
+        i = arg_index(cmd, prefix)
+        if i is not None:
+            cmd[i] = value
+    # --bitrate takes its value as the following argument, not after an '='
+    i = arg_index(cmd, '--bitrate')
+    if i is not None and i + 1 < len(cmd):
+        cmd[i + 1] = mode.bitrate
+    return cmd
 
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
 # the line we are looking for looks like this
-#Output #0, mpegts, to 'tcp://0.0.0.0:8888?listen=1':
-ready_line_re = re.compile(r"Output #0, mpegts, to 'tcp://([^:]+):(\d+)\?listen=1':")
-
-# offset in seconds between the appearance of the ready line and the zero point of the DTS times in the stream container.
-# determined experimentally by running experiments/measure_dts_zero_point.py on the rpi
-dts_zero_offset = 0.719379
+#Output #0, mpegts, to 'tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1':
+# the query string is matched loosely so that adding url options does not silently stop
+# the stream from ever being announced as ready.
+ready_line_re = re.compile(r"Output #0, mpegts, to 'tcp://([^:]+):(\d+)\?[^']*':")
 
 # values that can be overridden by the controller
 default_conf = {
@@ -68,14 +124,14 @@ class RobotComponentServer:
         self.update = {}
         self.ws_delay = self.conf['RUNNING_WS_DELAY']
         self.rpicam_process = None
-        # Name of the conf var that controls this server's rpicam-vid --framerate, or None if
-        # this server's stream_command doesn't expose one / shouldn't be runtime-adjustable.
-        # Subclasses opt in so different component types (anchor vs gripper) can be broadcast
-        # framerate changes independently instead of sharing one var.
-        self.stream_framerate_conf_key = None
-        # framerate value baked into the currently running rpicam_process, if any.
-        # compared against self.conf to decide whether a config change needs a restart.
-        self.running_framerate = None
+        # Names from the module level stream_modes table this component can stream, its
+        # normal mode first. A server that has a camera sets this and conf['STREAM_MODE']
+        # together; the client can then only ever select one of these names.
+        self.stream_modes = ()
+        # mode name baked into the currently running rpicam_process, if any. Held rather
+        # than re-read from conf so that selecting a new mode cannot retroactively
+        # reinterpret the timestamps of the stream still running under the old one.
+        self.running_stream_mode = None
         # the currently running stream_video task, so it can be stopped before a firmware update
         self.stream_video_task = None
         self.zc = None # zerconf instance.
@@ -153,23 +209,24 @@ class RobotComponentServer:
                         return
                     return await self.rpicam_process.wait()
 
-    def _framerate_arg_index(self):
-        """Index of the '--framerate=...' entry in self.stream_command, or None if this
-        particular stream_command doesn't expose one."""
-        for i, arg in enumerate(self.stream_command):
-            if arg.startswith('--framerate'):
-                return i
-        return None
+    def dts_zero_offset(self, mode_name):
+        """The dts zero offset to report for a stream launched in mode `mode_name`.
+
+        Falls back to this component's normal mode where a mode has not been measured on
+        this hardware yet - a stale offset is a constant error in every capture time,
+        which is still better than having none.
+        """
+        offset = stream_modes[mode_name].dts_zero_offset
+        if offset is None:
+            fallback = self.stream_modes[0]
+            logging.warning(f'stream mode {mode_name} has no measured dts_zero_offset, '
+                            f'using {fallback}\'s. run experiments/measure_dts_zero_point.py')
+            offset = stream_modes[fallback].dts_zero_offset
+        return offset
 
     def build_stream_command(self):
-        """self.stream_command with --framerate rewritten from self.stream_framerate_conf_key,
-        if this server has opted into a live-configurable framerate."""
-        idx = self._framerate_arg_index()
-        if idx is None or self.stream_framerate_conf_key is None:
-            return self.stream_command
-        cmd = list(self.stream_command)
-        cmd[idx] = f"--framerate={self.conf[self.stream_framerate_conf_key]}"
-        return cmd
+        """self.stream_command with the selected stream mode's settings applied."""
+        return apply_stream_mode(self.stream_command, stream_modes[self.conf['STREAM_MODE']])
 
     async def run_rpicam_vid(self):
         """
@@ -180,8 +237,7 @@ class RobotComponentServer:
         it prints one more line after that then stops printing stuff until a few lines when the client disconnects.
         """
         command = self.build_stream_command()
-        if self.stream_framerate_conf_key is not None:
-            self.running_framerate = self.conf[self.stream_framerate_conf_key]
+        self.running_stream_mode = self.conf['STREAM_MODE']
         self.rpicam_process = await asyncio.create_subprocess_exec(
             command[0], *command[1:], stdout=PIPE, stderr=STDOUT)
         # read all the lines of output
@@ -203,7 +259,8 @@ class RobotComponentServer:
                 await asyncio.sleep(1.5) # it's not ready quite yet
                 logging.info('rpicam-vid appears to be ready')
                 # tell the websocket client to connect to the video stream. it will do so in another thread.
-                self.update['video_ready'] = (8888, ready_wall_time + dts_zero_offset)
+                self.update['video_ready'] = (
+                    8888, ready_wall_time + self.dts_zero_offset(self.running_stream_mode))
             else:
                 # catch a few different kinds of errors that mean rpi-cam will have to be restarted
                 # some of these can only happen after we have asked the client to try connecting to video.
@@ -243,13 +300,11 @@ class RobotComponentServer:
             lines.append(text)
         return lines
 
-    def restart_stream_if_framerate_changed(self):
-        """Kill the running rpicam-vid process so stream_video's loop relaunches it with the
-        newly configured framerate. A no-op if this server hasn't opted into a live framerate
-        var, no stream is running, or the framerate didn't actually change."""
-        if self.stream_framerate_conf_key is None or self._framerate_arg_index() is None:
-            return
-        if self.rpicam_process is None or self.conf[self.stream_framerate_conf_key] == self.running_framerate:
+    def restart_stream_if_mode_changed(self):
+        """Kill the running rpicam-vid process so stream_video's loop relaunches it in the
+        newly selected stream mode. A no-op if no stream is running or the mode it is
+        running in is the one that is selected."""
+        if self.rpicam_process is None or self.conf['STREAM_MODE'] == self.running_stream_mode:
             return
         try:
             self.rpicam_process.kill()
@@ -391,9 +446,18 @@ class RobotComponentServer:
             update = json.loads(message)
 
             if 'set_config_vars' in update:
+                previous_mode = self.conf.get('STREAM_MODE')
                 self.conf.update(update['set_config_vars'])
-                if self.stream_framerate_conf_key in update['set_config_vars']:
-                    self.restart_stream_if_framerate_changed()
+                if self.conf.get('STREAM_MODE') != previous_mode:
+                    # every component sees a broadcast var, and the value arrives off the
+                    # wire: a name belonging to another component (or junk) has to leave
+                    # this camera alone rather than take its stream down.
+                    if self.conf['STREAM_MODE'] not in self.stream_modes:
+                        logging.warning(f'ignoring STREAM_MODE {self.conf["STREAM_MODE"]!r}, '
+                                        f'this component streams {self.stream_modes}')
+                        self.conf['STREAM_MODE'] = previous_mode
+                    else:
+                        self.restart_stream_if_mode_changed()
                 self.config_updated(update['set_config_vars'])
             if 'host_time' in update:
                 logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
