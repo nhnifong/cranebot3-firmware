@@ -10,7 +10,10 @@ framerate all move it, and a named mode is exactly one such command. The mode na
 the stream commands are imported from the servers that run them, and combined with the
 same function the servers use, so that this stays honest when those change.
 
-Run this on the pi whose constants you want, and paste the printed values into the
+Each mode is measured several times and averaged, because the offset is mostly camera and
+encoder startup and that costs a different amount each launch.
+
+Run this on the pi whose constants you want, and paste the printed averages into the
 dts_zero_offset field of those modes in component_server.stream_modes. The gripper's modes
 need the Camera Module 3 Wide for their 2304:1296 sensor mode, so those measurements only
 mean something on a gripper, and the anchor's only on an anchor.
@@ -51,6 +54,11 @@ ready_line_re = re.compile(r"^\s*Output #0, mpegts, to 'tcp://([^:]+):(\d+)\?[^'
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 line_timeout = 30
+
+# how many times each mode is launched and measured. Four is enough to see whether a mode's
+# offset is a constant at all without making a full run take all afternoon - every sample
+# is a camera startup plus the five second wait for the port to come back.
+samples_per_mode = 4
 
 async def run_rpicam_vid(event, stream_command_args):
     ready_wall_time = None
@@ -125,13 +133,21 @@ async def measure(name, stream_command_args):
     return offset
 
 async def measure_modes(stream_command, mode_names, results):
-    """Measure each named mode, in the command that mode really launches."""
+    """Measure each named mode samples_per_mode times, in the command it really launches.
+
+    Averaging whole runs rather than only frames within one run is what covers the part
+    that actually varies: camera startup is a different amount of work every time, and a
+    single run cannot tell a representative startup from an unlucky one.
+    """
     for name in mode_names:
-        # rpicam-vid holds port 8888 for a few seconds after it exits, and the next
-        # measurement cannot start until it lets go
-        if results:
-            await asyncio.sleep(5)
-        results[name] = await measure(name, apply_stream_mode(stream_command, stream_modes[name]))
+        command = apply_stream_mode(stream_command, stream_modes[name])
+        for sample in range(samples_per_mode):
+            # rpicam-vid holds port 8888 for a few seconds after it exits, and the next
+            # run cannot start until it lets go
+            if results:
+                await asyncio.sleep(5)
+            results.setdefault(name, []).append(
+                await measure(f'{name} sample {sample + 1}/{samples_per_mode}', command))
 
 async def run_experiment():
     results = {}
@@ -143,8 +159,13 @@ async def run_experiment():
         print(f'\nskipping {component} modes, could not import them: {error}')
 
     print('\n===== summary =====')
-    print('paste each value into the dts_zero_offset of that mode in stream_modes')
-    for name, offset in results.items():
-        print(f'{name}: {offset}')
+    print('paste each average into the dts_zero_offset of that mode in stream_modes')
+    for name, offsets in results.items():
+        average = sum(offsets)/len(offsets)
+        # the spread is the honest error bar on the average: a mode whose runs disagree by
+        # more than a frame interval is not a constant, and averaging it harder won't help
+        spread = max(offsets) - min(offsets)
+        print(f'{name}: {average} (spread {spread:.4f} over {len(offsets)} samples)')
+        print(f'    samples: {", ".join(f"{o:.4f}" for o in offsets)}')
 
 asyncio.run(run_experiment())
