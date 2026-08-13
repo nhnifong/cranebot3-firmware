@@ -1,0 +1,22 @@
+variables:
+  architecture: arm64
+  release: trixie
+
+# Target the Pi 3 hardware configuration. The 3A+ is a BCM2837B0, the same
+# 64-bit SoC family the rpi3 device layer covers; it differs from the 3B+ only
+# in RAM (512MB, same as the Zero 2W) and the missing ethernet port, neither of
+# which the image needs to know about.
+device:
+  layer: rpi3
+
+image:
+  name: stringman-pi3aplus
+  layer: image-rpios
+
+layer:
+  # 'minbase' is the rpi-image-gen equivalent of "Lite" (CLI only, includes Net/SSH)
+  os: trixie-minbase
+
+  # Stringman custom layer -- shared with the Zero 2W image.
+  # the name provided must match the X-Env-Layer-Name metadata field in the layer yaml file.
+  robot: robot-component

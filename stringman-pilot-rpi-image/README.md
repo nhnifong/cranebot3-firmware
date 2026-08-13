@@ -13,6 +13,21 @@ Build the pilot anchor image with
       -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/stringman.yaml \
       -- IGconf_device_user1pass='Fo0bar!!'
 
+### Raspberry Pi 3A+
+
+Everything except the target board is shared between images, so the 3A+ only needs a different config
+file (`config/stringman-pi3aplus.yaml`) -- the same `-S` source root, custom layer and setup scripts are used.
+
+    ./rpi-image-gen build \
+      -S ../cranebot3-firmware/stringman-pilot-rpi-image/ \
+      -c ../cranebot3-firmware/stringman-pilot-rpi-image/config/stringman-pi3aplus.yaml \
+      -- IGconf_device_user1pass='Fo0bar!!'
+
+That writes its artefacts to `~/rpi-image-gen/work/image-stringman-pi3aplus/stringman-pi3aplus.img`.
+Note that the 3A+ has no ethernet port, so the fallback debugging path below is wifi or serial only.
+
+### Writing and debugging
+
 If an SD card reader is attached to the Pi that this was run on, you can immediately write the image with this command
 but *make sure you are writing to the correct device*
 
