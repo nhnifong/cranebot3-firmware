@@ -86,7 +86,7 @@ class GripperArpServer(RobotComponentServer):
         # calibrated against that field of view.
         self.stream_resolutions = {
             'wide': (684, 384, '1200kbps'),
-            'full': (1920, 1080, '6000kbps'),
+            'full': (960, 540, '2400kbps'),
         }
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'

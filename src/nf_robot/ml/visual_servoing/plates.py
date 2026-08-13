@@ -170,14 +170,129 @@ def read_manifest(output_dir):
     return [json.loads(line) for line in open(path) if line.strip()]
 
 
-def read_run(output_dir, run_id):
-    """One run's rows, images decoded to RGB."""
+def read_run(output_dir, run_id, columns=None, decode=True):
+    """One run's rows, images decoded to RGB unless decode is False.
+
+    A run of 1080p frames is a couple of hundred megabytes, so pass columns without
+    "image" to read the attributes of a capture without paying for its pixels.
+    """
     import pyarrow.parquet as pq
 
-    table = pq.read_table(Path(output_dir) / f"{run_id}.parquet")
+    table = pq.read_table(Path(output_dir) / f"{run_id}.parquet", columns=columns)
     rows = table.to_pylist()
     for row in rows:
-        buf = np.frombuffer(row["image"], np.uint8)
-        row["image"] = cv2.cvtColor(cv2.imdecode(buf, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
-        row["attrs"] = json.loads(row["attrs"]) if row["attrs"] else {}
+        if decode and row.get("image") is not None:
+            buf = np.frombuffer(row["image"], np.uint8)
+            row["image"] = cv2.cvtColor(cv2.imdecode(buf, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+        if "attrs" in row:
+            row["attrs"] = json.loads(row["attrs"]) if row["attrs"] else {}
     return rows
+
+
+def iter_run(output_dir, run_id, decode=True):
+    """Yield a run's rows one row group at a time, so a whole capture is never resident.
+
+    PlateWriter uses small row groups precisely so this can walk a 200MB file without
+    holding it all, which matters on anything that also has a model loaded.
+    """
+    import pyarrow.parquet as pq
+
+    reader = pq.ParquetFile(Path(output_dir) / f"{run_id}.parquet")
+    for group in range(reader.num_row_groups):
+        for row in reader.read_row_group(group).to_pylist():
+            if decode:
+                buf = np.frombuffer(row["image"], np.uint8)
+                row["image"] = cv2.cvtColor(cv2.imdecode(buf, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+            row["attrs"] = json.loads(row["attrs"]) if row["attrs"] else {}
+            yield row
+
+
+def _label(row):
+    parts = []
+    for key, fmt in (("finger_angle", "fing {:+.0f}"), ("wrist_angle", "wrist {:.0f}"),
+                     ("laser_rangefinder", "rng {:.2f}"), ("finger_pressure", "p {:.2f}")):
+        if row.get(key) is not None:
+            parts.append(fmt.format(row[key]))
+    return "  ".join(parts)
+
+
+def write_preview(output_dir, run_id, preview_dir, cell_width=480, columns=6, group=24,
+                  every=1, full_size=0):
+    """Contact sheets of a capture run, plus optionally some frames at full size.
+
+    Cells are downscaled first and the text drawn afterwards, so it renders at the size
+    it will actually be read at rather than shrinking into illegibility with the image.
+    """
+    preview_dir = Path(preview_dir)
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    for old in list(preview_dir.glob("*.jpg")) + list(preview_dir.glob("*.png")):
+        old.unlink()
+
+    cells, kept = [], 0
+    for index, row in enumerate(iter_run(output_dir, run_id)):
+        if index % every:
+            continue
+        bgr = cv2.cvtColor(row["image"], cv2.COLOR_RGB2BGR)
+        if kept < full_size:
+            cv2.imwrite(str(preview_dir / f"frame{index:04d}.jpg"), bgr)
+        scale = cell_width / bgr.shape[1]
+        cell = cv2.resize(bgr, (cell_width, int(round(bgr.shape[0] * scale))),
+                          interpolation=cv2.INTER_AREA)
+        text = f"{index}  {_label(row)}"
+        cv2.putText(cell, text, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
+        cv2.putText(cell, text, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        cells.append(cell)
+        kept += 1
+
+    sheets = 0
+    for start in range(0, len(cells), group):
+        block = cells[start:start + group]
+        h, w = block[0].shape[:2]
+        blank = np.full((h, w, 3), 25, dtype=np.uint8)
+        block = block + [blank] * (-len(block) % columns)
+        sheet = np.vstack([np.hstack(block[r:r + columns]) for r in range(0, len(block), columns)])
+        cv2.imwrite(str(preview_dir / f"_sheet_{sheets + 1:02d}.png"), sheet)
+        sheets += 1
+
+    logging.info(f"{run_id}: {kept} frames -> {sheets} contact sheet(s) in {preview_dir}")
+    return preview_dir
+
+
+def main():
+    import argparse
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                        force=True)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--dir", default="plates", help="Directory of capture runs")
+    parser.add_argument("--run_id", default=None, help="Which run; defaults to the newest")
+    parser.add_argument("--preview_dir", default=None,
+                        help="Write contact sheets here (default <dir>/preview)")
+    parser.add_argument("--every", type=int, default=1, help="Keep every Nth frame")
+    parser.add_argument("--cell_width", type=int, default=480)
+    parser.add_argument("--columns", type=int, default=6)
+    parser.add_argument("--group", type=int, default=24, help="Frames per contact sheet")
+    parser.add_argument("--full_size", type=int, default=0,
+                        help="Also write this many frames at their captured resolution")
+    parser.add_argument("--list", action="store_true", help="List runs and exit")
+    args = parser.parse_args()
+
+    runs = read_manifest(args.dir)
+    if not runs:
+        parser.error(f"no {MANIFEST_NAME} in {args.dir}")
+    if args.list:
+        for entry in runs:
+            minutes = (entry["finished_at"] - entry["started_at"]) / 60
+            print(f"{entry['run_id']}  {entry['kind']:12s} {entry['frames']:5d} frames  "
+                  f"{entry['width']}x{entry['height']}  {minutes:.1f} min  {entry.get('notes', '')}")
+        return
+
+    run_id = args.run_id or runs[-1]["run_id"]
+    write_preview(args.dir, run_id, args.preview_dir or Path(args.dir) / "preview",
+                  cell_width=args.cell_width, columns=args.columns, group=args.group,
+                  every=args.every, full_size=args.full_size)
+
+
+if __name__ == "__main__":
+    main()

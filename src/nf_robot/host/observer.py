@@ -78,15 +78,15 @@ RANGE_MAX_AGE_S = 1.0 # a rangefinder reading older than this is not evidence of
 PLATE_OUTPUT_DIR = 'plates'
 # Finger sweep bounds. The server clamps finger angle to -90 (open) .. 90 (closed), and a
 # plate is wanted at every aperture the fingers are actually driven to during a grasp.
-FINGERPLATE_ANGLE_MIN = -90
-FINGERPLATE_ANGLE_MAX = 90
-FINGERPLATE_ANGLE_STEP = 15
+FINGERPLATE_ANGLE_MIN = -70
+FINGERPLATE_ANGLE_MAX = 80
+FINGERPLATE_ANGLE_STEP = 2
 # Frames per wrist turn. The matte is a per-pixel variance across these, so it wants
 # enough of them that no background feature sits still through the whole set - and they
 # are cheap next to the finger moves between turns.
-FINGERPLATE_WRIST_STEPS = 24
-# (seconds) extra wait after the wrist reports arrival, for the pole to stop swinging.
-FINGERPLATE_SETTLE_S = 0.6
+FINGERPLATE_WRIST_STEPS = 18
+# (seconds) extra wait after the wrist reports arrival, due to the higher video latency from this format
+FINGERPLATE_SETTLE_S = 0.3
 # How long to wait for the camera to come back at the capture resolution. rpicam-vid is
 # killed and relaunched to change resolution, and the client retries the connection a few
 # times before giving up, so this has to cover all of that.
@@ -2319,13 +2319,12 @@ class AsyncObserver:
             logger.info(f'Fingerplates: capture stream up at {probe.shape[1]}x{probe.shape[0]}')
 
             missed = 0
-            for finger_angle in finger_angles:
-                actual_finger = await self._settle_fingers(finger_angle)
-                for wrist_angle in wrist_angles:
-                    actual_wrist = await self._settle_wrist(wrist_angle)
-                    # Settle again after arrival: the motor stops before the pole does, and
-                    # a frame taken mid-wobble is motion blur in the middle of the matte.
-                    await asyncio.sleep(settle_s)
+            for wrist_angle in wrist_angles:
+                actual_wrist = await self._settle_wrist(wrist_angle)
+                await asyncio.sleep(settle_s)
+                for finger_angle in finger_angles:
+                    actual_finger = await self._settle_fingers(finger_angle)
+                    # await asyncio.sleep(settle_s)
                     after = time.time()
                     timestamp, frame = await self.gripper_client.capture_raw_frame(
                         after, expect_size=expect)
@@ -2349,7 +2348,7 @@ class AsyncObserver:
                         finger_pressure=self.datastore.finger.getLast()[2],
                         commanded_finger_angle=finger_angle, commanded_wrist_angle=wrist_angle,
                     )
-                logger.info(f'Fingerplates: finger {finger_angle} done ({len(writer)} frames)')
+                logger.info(f'Fingerplates: wrist {wrist_angle:.0f} done ({len(writer)} frames)')
         finally:
             # Whatever happened, do not leave the robot on a 6fps 1080p stream - nothing
             # else in the system expects one, and it is not obvious from the UI.

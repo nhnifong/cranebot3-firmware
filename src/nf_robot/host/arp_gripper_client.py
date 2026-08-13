@@ -66,11 +66,11 @@ DEFAULT_STREAM_RESOLUTION = 'wide'
 DEFAULT_STREAM_FRAMERATE = 60
 # (width, height) of each stream_resolutions entry, so a caller can tell whether the
 # frames it is getting are from the mode it asked for.
-STREAM_RESOLUTION_SIZES = {'wide': (684, 384), 'full': (1920, 1080)}
+STREAM_RESOLUTION_SIZES = {'wide': (684, 384), 'full': (960, 540)}
 CAPTURE_RESOLUTION_SIZE = STREAM_RESOLUTION_SIZES['full']
 # Framerate to pair with the 1080p capture mode. Low enough that the pi zero 2w in the
 # gripper is not asked to encode more than it can, which it answers by overheating.
-CAPTURE_FRAMERATE = 6
+CAPTURE_FRAMERATE = 20
 
 
 class ArpeggioGripperClient(ComponentClient):
