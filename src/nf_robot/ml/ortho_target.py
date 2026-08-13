@@ -15,14 +15,9 @@ is a LeRobot dataset and the result is not:
      note on the eval split below:
 
        python src/nf_robot/ml/lerobot_build_dataset.py \
-           --recipe src/nf_robot/ml/recipes/ortho_target.yaml \
+           --recipe src/nf_robot/ml/recipes/combined_targets.yaml \
            --temp_dir /home/nhn/data_scratch \
-           --output_root /home/nhn/data_scratch/move_clutter_ortho
-
-       python src/nf_robot/ml/lerobot_build_dataset.py \
-           --recipe src/nf_robot/ml/recipes/ortho_target_nick.yaml \
-           --temp_dir /home/nhn/data_scratch \
-           --output_root /home/nhn/data_scratch/nick_ortho
+           --output_root /home/nhn/data_scratch/combined_targets
 
   2. `distill` reduces each to one sample per episode - the episode's first ortho
      frame and the ortho pixel where contact eventually happened - which is a few
@@ -30,12 +25,8 @@ is a LeRobot dataset and the result is not:
      needs both present because it prunes hub files that are absent locally:
 
        python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/move_clutter_ortho \
-           --root /home/nhn/data_scratch/move_clutter_ortho --split train
-
-       python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/nick_ortho \
-           --root /home/nhn/data_scratch/nick_ortho --split eval --upload
+           --repo_id naavox/combined_targets \
+           --root /home/nhn/data_scratch/combined_targets --split train --upload
 
   3. `train` fits the model, saving the best checkpoint by recall@20cm to
      models/ortho_target.pth:

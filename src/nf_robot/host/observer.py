@@ -49,7 +49,8 @@ from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
 from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
 from nf_robot.host.component_client import max_origin_detections
-from nf_robot.host.arp_gripper_client import ArpeggioGripperClient, rotate_vector, OMEGA, ROUTE_TAG_MAX_AGE_S
+from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vector, OMEGA,
+                                              ROUTE_TAG_MAX_AGE_S, CAPTURE_RESOLUTION_SIZE)
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL
@@ -79,7 +80,7 @@ PLATE_OUTPUT_DIR = 'plates'
 # Finger sweep bounds. The server clamps finger angle to -90 (open) .. 90 (closed), and a
 # plate is wanted at every aperture the fingers are actually driven to during a grasp.
 FINGERPLATE_ANGLE_MIN = -70
-FINGERPLATE_ANGLE_MAX = 80
+FINGERPLATE_ANGLE_MAX = 88
 FINGERPLATE_ANGLE_STEP = 2
 # Frames per wrist turn. The matte is a per-pixel variance across these, so it wants
 # enough of them that no background feature sits still through the whole set - and they
@@ -93,6 +94,19 @@ FINGERPLATE_SETTLE_S = 0.3
 CAPTURE_STREAM_TIMEOUT_S = 30.0
 # Consecutive missing frames that mean the stream has gone rather than lagged.
 FINGERPLATE_MAX_MISSES = 5
+# (metres) rangefinder readings to capture floor and object plates at. Spans the heights
+# a gripper actually approaches from, and is what calibrates a plate's apparent scale
+# against the range it was taken at, so the compositor can rescale it to any simulated
+# height. Trimmed to by measurement, not by commanded altitude.
+PLATE_RANGES_M = (0.20, 0.30, 0.45, 0.65, 0.90)
+# Wrist stops per height for floor and object plates. Fewer than the fingerplate sweep
+# because this is rotational variety rather than a matte, and each one costs a height
+# trim's worth of nothing but time.
+PLATE_WRIST_STEPS = 12
+# (degrees) fingers parked out of frame while capturing floor and object plates. -90 is
+# fully open; anything the camera can see would be composited into every synthetic frame
+# built from these plates.
+PLATE_FINGERS_RETRACTED = -90.0
 UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
@@ -890,6 +904,16 @@ class AsyncObserver:
                     pickle.dump(gripper_obs, f)
                 logger.info(f'Saved gripper card survey to gripper_card_obs.pkl: {list(gripper_obs.keys())}')
             r = await self.invoke_motion_task(survey_and_save())
+        if item.action == 'floorplates':
+            # Park the gripper over clean, clear floor first; this moves only height and wrist.
+            r = await self.invoke_motion_task(self.collect_floorplates())
+        if item.action.startswith('objectplates'):
+            # "objectplates <label>". Centre the object's intended grasp point under the
+            # camera and turn the wrist to the ideal grasping angle before triggering:
+            # those two acts are what label the grasp point and the grasp axis.
+            parts = item.action.split(maxsplit=1)
+            r = await self.invoke_motion_task(
+                self.collect_objectplates(label=parts[1] if len(parts) > 1 else ''))
         if item.action == 'fingerplates':
             # Park the gripper over clear textured floor before running this; see the
             # docstring for what an unlucky spot does to the matte.
@@ -2280,7 +2304,6 @@ class AsyncObserver:
         robot to do this again.
         """
         from nf_robot.ml.visual_servoing.plates import PlateWriter
-        from nf_robot.host.arp_gripper_client import CAPTURE_RESOLUTION_SIZE
 
         if self.gripper_client is None:
             logger.error('No gripper connected; cannot collect fingerplates')
@@ -2321,7 +2344,13 @@ class AsyncObserver:
             missed = 0
             for wrist_angle in wrist_angles:
                 actual_wrist = await self._settle_wrist(wrist_angle)
+                # Telemetry reports the motor arrived before the video shows it: the
+                # capture stream's settings put the frames further behind than that.
                 await asyncio.sleep(settle_s)
+                # Always the same direction, never serpentine. There is enough slop in
+                # the finger gearing that the same commanded angle approached from above
+                # and from below puts the hardware in visibly different places, which
+                # comes out of the matte as doubled fingers.
                 for finger_angle in finger_angles:
                     actual_finger = await self._settle_fingers(finger_angle)
                     # await asyncio.sleep(settle_s)
@@ -2359,6 +2388,124 @@ class AsyncObserver:
             finger_angles=list(finger_angles), wrist_steps=wrist_steps,
             base_wrist_angle=base_wrist,
         )
+
+    async def _height_wrist_sweep(self, kind, ranges, wrist_steps, output_dir, settle_s,
+                                  notes='', run_attrs=None, frame_attrs=None):
+        """Frames at each of several heights, turning the wrist through a full circle at each.
+
+        The shape floorplates and objectplates share. Heights are reached by trimming to a
+        measured rangefinder reading rather than by moving to a computed z, because what
+        the plate needs recorded is how far away the thing in it actually was - a
+        commanded altitude inherits every error in the position estimate, and the whole
+        point of the height stepping is to calibrate apparent scale against range.
+
+        The fingers are parked out of frame first: these plates are of the floor and of
+        objects, and hardware in the corner of one would be composited into every
+        synthetic frame built from it.
+        """
+        from nf_robot.ml.visual_servoing.plates import PlateWriter
+
+        if self.gripper_client is None:
+            logger.error(f'No gripper connected; cannot collect {kind}')
+            return None
+
+        start_wrist = self.datastore.winch_line_record.getLast()[1]
+        base_wrist = float(min(max(start_wrist, 0.0), 1080.0 - 360.0))
+        wrist_angles = [base_wrist + 360.0 * i / wrist_steps for i in range(wrist_steps)]
+
+        writer = PlateWriter(output_dir, kind, notes=notes)
+        logger.info(f'{kind}: {len(ranges)} heights x {wrist_steps} wrist steps = '
+                    f'{len(ranges) * wrist_steps} frames, writing to {output_dir}')
+
+        expect = CAPTURE_RESOLUTION_SIZE
+        await self.gripper_client.use_capture_stream()
+        try:
+            _, probe = await self.gripper_client.capture_raw_frame(
+                time.time(), timeout=CAPTURE_STREAM_TIMEOUT_S, expect_size=expect)
+            if probe is None:
+                logger.error(f'{kind}: no {expect[0]}x{expect[1]} frames within '
+                             f'{CAPTURE_STREAM_TIMEOUT_S}s of switching to the capture '
+                             f'stream. Check the gripper log for rpicam-vid errors.')
+                return None
+            logger.info(f'{kind}: capture stream up at {probe.shape[1]}x{probe.shape[0]}')
+
+            await self._settle_fingers(PLATE_FINGERS_RETRACTED)
+
+            missed = 0
+            for target_range in ranges:
+                reached = await self._trim_altitude_to_range(target_range)
+                if reached is None:
+                    logger.warning(f'{kind}: no rangefinder reading at target '
+                                   f'{target_range:.2f}m; skipping this height')
+                    continue
+                for wrist_angle in wrist_angles:
+                    actual_wrist = await self._settle_wrist(wrist_angle)
+                    await asyncio.sleep(settle_s)
+                    timestamp, frame = await self.gripper_client.capture_raw_frame(
+                        time.time(), expect_size=expect)
+                    if frame is None:
+                        missed += 1
+                        logger.warning(f'{kind}: no frame at range {target_range:.2f} '
+                                       f'wrist {wrist_angle:.0f} ({missed} in a row)')
+                        if missed >= FINGERPLATE_MAX_MISSES:
+                            logger.error(f'{kind}: {missed} consecutive frames missing; '
+                                         f'abandoning the run with {len(writer)} captured')
+                            return None
+                        continue
+                    missed = 0
+                    range_ts, laser = self.datastore.range_record.getLast()
+                    fresh = time.time() - range_ts < RANGE_MAX_AGE_S
+                    writer.add(
+                        frame, captured_at=timestamp,
+                        finger_angle=self.datastore.finger.getLast()[1],
+                        wrist_angle=actual_wrist,
+                        laser_rangefinder=laser if fresh else None,
+                        finger_pressure=self.datastore.finger.getLast()[2],
+                        target_range_m=target_range,
+                        wrist_offset_deg=actual_wrist - start_wrist,
+                        **(frame_attrs or {}),
+                    )
+                logger.info(f'{kind}: range {target_range:.2f}m done ({len(writer)} frames)')
+        finally:
+            await self.gripper_client.restore_default_stream()
+            await self._settle_wrist(start_wrist)
+
+        return writer.close(target_ranges=list(ranges), wrist_steps=wrist_steps,
+                            start_wrist_angle=start_wrist, **(run_attrs or {}))
+
+    async def collect_floorplates(self, ranges=None, wrist_steps=PLATE_WRIST_STEPS,
+                                  output_dir=PLATE_OUTPUT_DIR, settle_s=FINGERPLATE_SETTLE_S):
+        """Capture bare floor at a range of heights, for synthetic backgrounds.
+
+        The operator flies the gripper somewhere clean and clear and only then triggers
+        this; it moves nothing but height and wrist. An autonomous room sweep would come
+        back with a library of beds, furniture and feet, none of which is a floor plate.
+
+        Worth repeating across rooms, times of day and floor types, because these plates
+        are the entire background distribution the model ever sees in synthetic training.
+        """
+        return await self._height_wrist_sweep(
+            'floorplates', ranges or PLATE_RANGES_M, wrist_steps, output_dir, settle_s,
+            notes='bare floor at several heights; fingers retracted')
+
+    async def collect_objectplates(self, label='', ranges=None, wrist_steps=PLATE_WRIST_STEPS,
+                                   output_dir=PLATE_OUTPUT_DIR, settle_s=FINGERPLATE_SETTLE_S):
+        """Capture one object on the green board, for compositing onto floor plates.
+
+        Two things the operator sets before triggering this, and both are labels rather
+        than settings: the object's intended grasp point goes under the camera, which
+        makes the grasp point the principal point by construction, and the wrist is
+        turned to the ideal grasping angle, which makes the grasp axis zero at the start
+        and a known offset at every later frame. Neither needs marks on the board.
+
+        `label` names the object, and is the only thing here a human has to type.
+        """
+        start_wrist = self.datastore.winch_line_record.getLast()[1]
+        return await self._height_wrist_sweep(
+            'objectplates', ranges or PLATE_RANGES_M, wrist_steps, output_dir, settle_s,
+            notes=f'object on green board: {label or "unlabelled"}',
+            run_attrs={'label': label, 'grasp_axis_wrist_angle': start_wrist},
+            frame_attrs={'label': label})
 
     async def half_auto_calibration(self):
         """

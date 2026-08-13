@@ -21,7 +21,7 @@
 output_repo_id: naavox/grasp_only_224
 camera_mode: gripper_224
 center_crop: false
-pad_clamp: true
+pad_clamp: false
 
 action_space: gripper_vel
 

@@ -42,6 +42,10 @@ from nf_robot.ml.visual_servoing.model import (
 )
 
 DEFAULT_MODEL_PATH = "models/visual_servo.pth"
+# Where the mined dataset lives on the hub, for a run that names no local copy.
+DEFAULT_DATASET_ID = "naavox/visual-servoing-dataset"
+# Where a trained checkpoint is pushed, with --upload.
+DEFAULT_MODEL_ID = "naavox/visual-servo"
 # Relative weights. Position is the point of the model; the flags are easy and would
 # otherwise dominate a sum of raw losses simply by being confidently right.
 DEFAULT_WEIGHTS = {
@@ -187,10 +191,45 @@ def _format(metrics):
         f"{k} {v:.3f}" if abs(v) < 1000 else f"{k} {v:.0f}" for k, v in metrics.items())
 
 
+def resolve_data_root(args) -> Path:
+    """The mined dataset on disk, downloading it from the hub if no local copy was named.
+
+    Same shape as ortho_target.resolve_data_root: a local directory wins, and naming a
+    hub dataset is what asks for a download, so a mistyped path fails loudly instead of
+    quietly fetching something else.
+    """
+    if args.data_root:
+        return Path(args.data_root)
+    from huggingface_hub import snapshot_download
+
+    logging.info(f"Downloading {args.dataset_id}")
+    return Path(snapshot_download(repo_id=args.dataset_id, repo_type="dataset"))
+
+
+def upload_model(path, model_id, metrics=None):
+    """Push a trained checkpoint to the hub, creating the repo if it does not exist.
+
+    Uploaded once at the end rather than on every improvement: the checkpoint carries
+    the frozen backbone's weights too, so it is a few hundred megabytes, and pushing
+    that each time the score ticks up would cost more than the training.
+    """
+    from huggingface_hub import HfApi, create_repo
+
+    path = Path(path)
+    create_repo(model_id, repo_type="model", exist_ok=True)
+    HfApi().upload_file(
+        path_or_fileobj=str(path), path_in_repo=path.name,
+        repo_id=model_id, repo_type="model",
+        commit_message=f"visual servoing checkpoint ({_format(metrics or {})})",
+    )
+    logging.info(f"uploaded {path.name} to {model_id}")
+
+
 def train(args):
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     torch.manual_seed(args.seed)
-    data_root = Path(args.data_root)
+    data_root = resolve_data_root(args)
+    logging.info(f"dataset at {data_root}")
 
     if (data_root / "eval").exists():
         train_set = VisualServoDataset(data_root, "train", augment=True)
@@ -235,7 +274,7 @@ def train(args):
                               enabled=device.type == "cuda")
 
     os.makedirs(os.path.dirname(args.model_path) or ".", exist_ok=True)
-    best = -1.0
+    best, best_metrics = -1.0, {}
     for epoch in range(args.epochs):
         model.train()
         totals, seen = {}, 0
@@ -261,7 +300,7 @@ def train(args):
             logging.info(f"{line} | {_format(metrics)}")
             score = metrics.get("recall@25px", -1.0)
             if score > best:
-                best = score
+                best, best_metrics = score, metrics
                 torch.save({
                     "state_dict": model.state_dict(),
                     "backbone_id": args.backbone,
@@ -277,6 +316,13 @@ def train(args):
 
     logging.info(f"done; best eval recall@25px {best:.3f}, checkpoint at {args.model_path}")
 
+    if args.upload:
+        if not Path(args.model_path).exists():
+            # every eval scored worse than the initial -1.0, so nothing was ever saved
+            logging.error(f"nothing to upload: no checkpoint at {args.model_path}")
+        else:
+            upload_model(args.model_path, args.model_id, best_metrics)
+
 
 def main():
     # force=True: importing lerobot/transformers installs a root handler, which makes a
@@ -285,8 +331,15 @@ def main():
                         force=True)
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--data_root", required=True, help="Root of the mined dataset")
+    parser.add_argument("--data_root", default=None,
+                        help="Local mined dataset directory (default: download --dataset_id)")
+    parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
+                        help="Mined dataset on the hub, used when --data_root is absent")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--model_id", default=DEFAULT_MODEL_ID,
+                        help="Hub model repo to push the checkpoint to with --upload")
+    parser.add_argument("--upload", action="store_true",
+                        help="Push the best checkpoint to --model_id when training ends")
     parser.add_argument("--backbone", default=DEFAULT_BACKBONE)
     parser.add_argument("--image_size", type=int, nargs=2, default=list(DEFAULT_IMAGE_SIZE),
                         metavar=("WIDTH", "HEIGHT"))
