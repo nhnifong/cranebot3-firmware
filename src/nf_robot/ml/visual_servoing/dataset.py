@@ -132,11 +132,22 @@ def split_by_episode(root: Path, holdout: float, seed: int, augment_train=True):
     import random as pyrandom
 
     probe = VisualServoDataset(root, "train", augment=False)
-    groups = sorted(set(probe.groups()))
+    # Only teleop episodes are eligible for the eval side. Synthetic frames are built
+    # from the same plates whatever the split, so holding some back measures how well
+    # the model fits the compositor rather than how well it works on a robot - and a
+    # synthetic row's episode_index is a formality, so grouping on it would put every
+    # generated frame in one group and hand the whole lot to whichever side won.
+    groups = sorted({g for g, row in zip(probe.groups(), probe.rows)
+                     if row["split_source"] == "teleop"})
+    if not groups:
+        raise ValueError(
+            f"{root}/train has no teleop rows, so there is nothing to validate on. "
+            f"Mine a teleop dataset into this split, or point --data_root at one that "
+            f"has both halves.")
     pyrandom.Random(seed).shuffle(groups)
     n_eval = max(1, int(round(len(groups) * holdout)))
     eval_groups = set(groups[:n_eval])
-    logging.info(f"holding out {len(eval_groups)}/{len(groups)} episodes for eval")
+    logging.info(f"holding out {len(eval_groups)}/{len(groups)} teleop episodes for eval")
 
     train_set = VisualServoDataset(
         root, "train", augment=augment_train,

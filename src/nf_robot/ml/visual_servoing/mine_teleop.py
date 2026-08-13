@@ -161,8 +161,12 @@ def row_schema():
 class ShardWriter:
     """Buffers rows and flushes them as parquet shards of roughly SHARD_TARGET_BYTES."""
 
-    def __init__(self, split_dir: Path, target_bytes: int = SHARD_TARGET_BYTES):
+    def __init__(self, split_dir: Path, target_bytes: int = SHARD_TARGET_BYTES,
+                 prefix: str = "shard"):
         self.split_dir = split_dir
+        # Shards are named by producer so the synthetic compositor can write into the
+        # same split as the miner without either overwriting the other's files.
+        self.prefix = prefix
         self.target_bytes = target_bytes
         self.schema = row_schema()
         self.rows: list[dict] = []
@@ -183,7 +187,7 @@ class ShardWriter:
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        path = self.split_dir / f"shard-{self.shards:04d}.parquet"
+        path = self.split_dir / f"{self.prefix}-{self.shards:04d}.parquet"
         pq.write_table(
             pa.Table.from_pylist(self.rows, schema=self.schema),
             path, compression="snappy", row_group_size=ROW_GROUP_SIZE,
