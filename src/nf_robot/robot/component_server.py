@@ -32,7 +32,7 @@ stream_command = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
     "--width=1920", "--height=1080",
     "--framerate=15",
-    "-o", "tcp://0.0.0.0:8888?listen=1",
+    "-o", "tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1",
     "--codec", "libav",
     "--libav-format", "mpegts",
     "--vflip", "--hflip",
@@ -44,12 +44,15 @@ stream_command = [
 
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python
 # the line we are looking for looks like this
-#Output #0, mpegts, to 'tcp://0.0.0.0:8888?listen=1':
-ready_line_re = re.compile(r"Output #0, mpegts, to 'tcp://([^:]+):(\d+)\?listen=1':")
+#Output #0, mpegts, to 'tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1':
+# the query string is matched loosely so that adding url options does not silently stop
+# the stream from ever being announced as ready.
+ready_line_re = re.compile(r"Output #0, mpegts, to 'tcp://([^:]+):(\d+)\?[^']*':")
 
 # offset in seconds between the appearance of the ready line and the zero point of the DTS times in the stream container.
 # determined experimentally by running experiments/measure_dts_zero_point.py on the rpi
-dts_zero_offset = 0.719379
+# dts_zero_offset = 0.719379
+dts_zero_offset = 0.810 # experiment re-ran Aug 13 2026
 
 # values that can be overridden by the controller
 default_conf = {

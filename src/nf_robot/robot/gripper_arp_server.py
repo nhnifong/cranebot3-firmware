@@ -74,6 +74,24 @@ default_gripper_conf = {
 }
 
 
+# module level, like the anchor's in component_server, so that it can be read without
+# constructing a GripperArpServer (whose __init__ opens the I2C bus).
+stream_command = [
+    "/usr/bin/rpicam-vid", "-t", "0", "-n",
+    # Force the full-FOV 2304x1296 sensor mode and output 684x384 (16:9) so we keep the
+    # whole wide-camera field of view instead of the center crop a square output forces.
+    "--mode", "2304:1296:10",
+    "--width=684", "--height=384",
+    "--framerate=60",
+    "-o", "tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1",
+    "--codec", "libav",
+    "--libav-format", "mpegts",
+    "--autofocus-mode", "continuous",
+    "--low-latency",
+    "--bitrate", "1200kbps"
+]
+
+
 class GripperArpServer(RobotComponentServer):
     def __init__(self):
         super().__init__()
@@ -91,20 +109,7 @@ class GripperArpServer(RobotComponentServer):
         # the observer identifies hardware by the service types advertised on zeroconf
         self.service_type = 'cranebot-gripper-arpeggio-service'
 
-        self.stream_command = [
-            "/usr/bin/rpicam-vid", "-t", "0", "-n",
-            # Force the full-FOV 2304x1296 sensor mode and output 684x384 (16:9) so we keep the
-            # whole wide-camera field of view instead of the center crop a square output forces.
-            "--mode", "2304:1296:10",
-            "--width=684", "--height=384",
-            "--framerate=60",
-            "-o", "tcp://0.0.0.0:8888?listen=1",
-            "--codec", "libav",
-            "--libav-format", "mpegts",
-            "--autofocus-mode", "continuous",
-            "--low-latency",
-            "--bitrate", "1200kbps"
-        ]
+        self.stream_command = stream_command
 
         i2c = busio.I2C(board.SCL, board.SDA)
 
