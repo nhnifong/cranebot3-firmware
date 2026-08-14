@@ -23,22 +23,60 @@ default_anchor_conf = {
     # speed to reel in when the 'tighten' command is received. Meters of line per second
     'TIGHTENING_SPEED': -0.12,
 
-    # Which entry of component_server.stream_modes the camera streams at. The anchors
-    # have only the one, so this exists to be uniform with the gripper rather than to be
-    # changed; a different resolution or framerate means adding a named, measured mode to
+    # Which entry of component_server.stream_modes the camera streams at. Which one an
+    # anchor starts in depends on the board it is running on - see anchor_stream_modes
+    # below. A different resolution or framerate means adding a named, measured mode to
     # that table, not sending a number.
     'STREAM_MODE': 'anchor_control',
 }
 
-# names from component_server.stream_modes an anchor accepts, its normal one first
+# names from component_server.stream_modes an anchor accepts, its normal one first.
+# A pi 3a+ has the cpu and the thermal headroom to hold 1080p30, which the zero 2w does
+# not, so it starts in the faster mode; the slower one stays selectable on both.
 anchor_stream_modes = ('anchor_control',)
+anchor_stream_modes_3a_plus = ('anchor_fast', 'anchor_control')
+
+
+def board_revision_code():
+    """This Raspberry Pi's board revision code, or None if it can't be read."""
+    try:
+        with open('/proc/cpuinfo') as f:
+            for line in f:
+                if line.startswith('Revision'):
+                    return int(line.split(':')[1].strip(), 16)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def is_pi_3a_plus():
+    """Whether this is running on a Raspberry Pi 3 Model A+.
+
+    Taken from the revision code rather than a model string because the code is a fixed
+    numeric field, while the strings are prose that has changed spelling across boards
+    ('Model A Plus' here, but 'Zero 2 W' elsewhere) and would need matching by substring.
+    Both come from the same place - the kernel fills them in from the board itself, not
+    from whichever device tree the firmware loaded - so either is trustworthy on an image
+    like ours whose boot partition carries no 3a+ dtb.
+    """
+    rev = board_revision_code()
+    if rev is None:
+        return False
+    # In the new-style encoding (flagged by bit 23), bits 4-11 are the board type and
+    # 0x0e is the 3a+. Old-style codes predate the pi 3 entirely, so they are never one.
+    return bool(rev & (1 << 23)) and (rev >> 4) & 0xff == 0x0e
 
 
 class AnchorArpServer(RobotComponentServer):
     def __init__(self, power, winding=None):
         super().__init__()
         self.conf.update(default_anchor_conf)
-        self.stream_modes = anchor_stream_modes
+        if is_pi_3a_plus():
+            logging.info('running on a pi 3a+; streaming in anchor_fast')
+            self.stream_modes = anchor_stream_modes_3a_plus
+        else:
+            self.stream_modes = anchor_stream_modes
+        self.conf['STREAM_MODE'] = self.stream_modes[0]
 
         self.has_power_line = power
 

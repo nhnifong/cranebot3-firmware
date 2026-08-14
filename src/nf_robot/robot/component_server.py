@@ -50,7 +50,9 @@ stream_command = [
 # resolution or the picture becomes a compression artifact exhibit, and framerate has to
 # fall as resolution rises or the pi zero 2w cannot encode the stream at all - so those do
 # not get to vary independently either.
-StreamMode = namedtuple('StreamMode', ['width', 'height', 'bitrate', 'framerate', 'dts_zero_offset'])
+StreamMode = namedtuple('StreamMode',
+                        ['width', 'height', 'bitrate', 'framerate', 'dts_zero_offset', 'awb'],
+                        defaults=[None])
 
 # Every setting any component's camera can stream at. Each server declares which of these
 # it accepts (RobotComponentServer.stream_modes) and the client switches between them by
@@ -59,13 +61,18 @@ StreamMode = namedtuple('StreamMode', ['width', 'height', 'bitrate', 'framerate'
 
 # Offsets come from experiments/measure_dts_zero_point.py, run on the component itself.
 stream_modes = {
+    # anchor on pi 3a+
+    'anchor_fast': StreamMode(1920, 1080, '2400kbps', 30, 1.000), # todo: measure dts zero
     # the anchors' only mode: the whole room at 1080p, enough res to see the marker but
     # slow enough to keep the pi cool
     'anchor_control': StreamMode(1920, 1080, '1000kbps', 15, 1.2034),
     # the gripper's control stream. Small and fast
     'gripper_control': StreamMode(684, 384, '1200kbps', 60, 0.4032),
-    # the gripper's quality mode, for collecting synthetic dataset ingredients
-    'gripper_capture': StreamMode(960, 540, '2400kbps', 20, 0.9168),
+    # the gripper's quality mode, for collecting synthetic dataset ingredients. White
+    # balance is pinned: a green backdrop filling the frame drags auto white balance
+    # until the sheet photographs blue, which is the one thing the chroma key needs it
+    # not to do. A preset name goes to --awb, an 'r,b' pair to --awbgains.
+    'gripper_capture': StreamMode(960, 540, '2400kbps', 20, 0.9168, awb='indoor'),
 }
 
 
@@ -97,6 +104,11 @@ def apply_stream_mode(command, mode):
     i = arg_index(cmd, '--bitrate')
     if i is not None and i + 1 < len(cmd):
         cmd[i + 1] = mode.bitrate
+
+    # white balance, fixed for modes that ask for it and left automatic otherwise
+    cmd = [a for a in cmd if not a.startswith(('--awb=', '--awbgains='))]
+    if mode.awb:
+        cmd.append(f'--awbgains={mode.awb}' if ',' in mode.awb else f'--awb={mode.awb}')
     return cmd
 
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # https://stackoverflow.com/questions/14693701/how-can-i-remove-the-ansi-escape-sequences-from-a-string-in-python

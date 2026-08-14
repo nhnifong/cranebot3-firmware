@@ -91,6 +91,13 @@ class ComponentClient:
         # This condition variable signals the worker when a new frame is ready
         self.new_frame_condition = threading.Condition(self.frame_lock)
         self.last_output_frame = None
+        # Set to a path to remux the incoming stream to a file; the demux loop owns the
+        # container. Recording keeps the compressed packets exactly as the pi encoded
+        # them, so nothing is decoded or re-encoded on the way to disk.
+        self.recording_path = None
+        self._recording = None
+        self.recorded_packets = 0
+        self.recording_stream_start_ts = None
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
@@ -172,6 +179,8 @@ class ComponentClient:
                     break
                 if packet.dts is None:
                     continue  # flush packet at stream end, not real data
+
+                self._service_recording(stream, packet)
 
                 if self.video_streamer is not None:
                     self.video_streamer.send_packet(bytes(packet), packet.is_keyframe)
@@ -357,10 +366,41 @@ class ComponentClient:
             rgb = cv2.cvtColor(self.last_output_frame, cv2.COLOR_BGR2RGB)
             vs.send_frame(rgb)
 
+        self._close_recording()
         self.remote_stream_path = None
         self.local_video_uri = None
         self.video_streamer = None
         vs.stop()
+
+    def _service_recording(self, stream, packet):
+        """Open, write to, or close the stream recording the demux loop owns."""
+        if self.recording_path is not None and self._recording is None:
+            container = av.open(str(self.recording_path), 'w', format='mpegts')
+            self._recording = (container, container.add_stream_from_template(stream))
+            self.recording_stream_start_ts = self.stream_start_ts
+            self.recorded_packets = 0
+            logger.info(f'Recording video to {self.recording_path}')
+        elif self.recording_path is None and self._recording is not None:
+            self._close_recording()
+
+        if self._recording is not None:
+            container, out_stream = self._recording
+            # a fresh packet from the same bytes, so muxing does not disturb the
+            # original on its way to the decoder
+            copy = av.Packet(bytes(packet))
+            copy.pts, copy.dts, copy.time_base = packet.pts, packet.dts, packet.time_base
+            copy.stream = out_stream
+            container.mux(copy)
+            self.recorded_packets += 1
+
+    def _close_recording(self):
+        if self._recording is not None:
+            try:
+                self._recording[0].close()
+            except Exception:
+                logger.exception('closing video recording')
+            logger.info(f'Recorded {self.recorded_packets} packets to {self.recording_path}')
+            self._recording = None
 
     def process_frame(self, frame_to_encode):
         """

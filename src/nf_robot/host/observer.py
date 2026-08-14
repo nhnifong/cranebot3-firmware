@@ -98,13 +98,17 @@ FINGERPLATE_MAX_MISSES = 5
 # a gripper actually approaches from, and is what calibrates a plate's apparent scale
 # against the range it was taken at, so the compositor can rescale it to any simulated
 # height. Trimmed to by measurement, not by commanded altitude.
-PLATE_RANGES_M = (0.20, 0.30, 0.45, 0.65, 0.90)
+PLATE_RANGES_M = (0.12, 0.28, 0.44, 0.60)
 # (degrees/second, degrees) the continuous wrist sweep floor and object plates are
 # captured during. Slow enough that the pole does not swing and frames stay sharp.
-PLATE_WRIST_SPEED_DPS = 10.0
+PLATE_WRIST_SPEED_DPS = 20.0
 PLATE_SWEEP_DEGREES = 360.0
 # (seconds) how often a wrist speed command is repeated to keep the sweep going.
 WRIST_SPEED_REFRESH_S = 0.1
+# (seconds) how often the robot's state is sampled beside a recorded video sweep.
+TELEMETRY_SAMPLE_S = 0.05
+# (seconds) grace for the demux loop to notice a recording has been asked to stop.
+RECORDING_CLOSE_S = 1.0
 # (degrees) fingers parked out of frame while capturing floor and object plates. -90 is
 # fully open; anything the camera can see would be composited into every synthetic frame
 # built from these plates.
@@ -2305,7 +2309,7 @@ class AsyncObserver:
         with a threshold nobody has tuned, and it should be revisable without asking the
         robot to do this again.
         """
-        from nf_robot.ml.visual_servoing.plates import PlateWriter
+        from nf_robot.ml.visual_servoing.plates import PlateWriter, provenance
 
         if self.gripper_client is None:
             logger.error('No gripper connected; cannot collect fingerplates')
@@ -2381,33 +2385,30 @@ class AsyncObserver:
                     )
                 logger.info(f'Fingerplates: wrist {wrist_angle:.0f} done ({len(writer)} frames)')
         finally:
-            # Whatever happened, do not leave the robot on a 6fps 1080p stream - nothing
-            # else in the system expects one, and it is not obvious from the UI.
-            await self.gripper_client.restore_default_stream()
+            # the capture stream stays selected for the rest of the session; switching
+            # back costs a stream restart and the next plate command would undo it
             await self._settle_wrist(start_wrist)
 
         return writer.close(
             finger_angles=list(finger_angles), wrist_steps=wrist_steps,
-            base_wrist_angle=base_wrist,
+            base_wrist_angle=base_wrist, **provenance(self.config.robot_id),
         )
 
-    async def _sweep_wrist_capturing(self, kind, writer, degrees, expect, speed_dps,
-                                     extra_attrs, timeout_margin=1.5):
-        """Turn the wrist steadily through `degrees` and keep every frame that arrives.
+    async def _sweep_wrist_sampling(self, kind, writer, degrees, speed_dps, extra,
+                                    timeout_margin=1.5):
+        """Turn the wrist steadily through `degrees`, sampling telemetry as it goes.
 
-        The speed command is repeated as the loop runs because the gripper zeroes it
-        after ACTION_TIMEOUT, which is also what stops the wrist if this is cancelled.
-        Each frame's wrist angle is looked up by its own capture timestamp, since the
-        video lags the telemetry by several degrees at this speed.
+        The frames themselves are being recorded as video by the client; what this adds
+        is the state track they get matched against. The speed command is repeated
+        because the gripper zeroes it after ACTION_TIMEOUT, which is also what stops the
+        wrist if this is cancelled.
         """
         client = self.gripper_client
         start = self.datastore.winch_line_record.getLast()[1]
-        target = start + degrees
         direction = 1.0 if degrees >= 0 else -1.0
         deadline = time.time() + abs(degrees) / speed_dps + timeout_margin
-        last_ts = time.time()
         next_command = 0.0
-        captured = 0
+        samples = 0
 
         try:
             while time.time() < deadline:
@@ -2416,32 +2417,29 @@ class AsyncObserver:
                     await client.send_commands({'set_wrist_speed': direction * speed_dps})
                     next_command = now + WRIST_SPEED_REFRESH_S
 
-                timestamp, frame = await client.capture_raw_frame(
-                    last_ts, timeout=WRIST_SPEED_REFRESH_S, expect_size=expect)
-                if frame is not None:
-                    last_ts = timestamp
-                    range_ts, laser = self.datastore.range_record.getLast()
-                    fresh = time.time() - range_ts < RANGE_MAX_AGE_S
-                    writer.add(
-                        frame, captured_at=timestamp,
-                        finger_angle=self.datastore.finger.getLast()[1],
-                        wrist_angle=self.datastore.winch_line_record.getClosest(timestamp)[1],
-                        laser_rangefinder=laser if fresh else None,
-                        finger_pressure=self.datastore.finger.getLast()[2],
-                        **extra_attrs,
-                    )
-                    captured += 1
+                range_ts, laser = self.datastore.range_record.getLast()
+                fresh = time.time() - range_ts < RANGE_MAX_AGE_S
+                writer.add_telemetry(
+                    captured_at=time.time(),
+                    wrist_angle=self.datastore.winch_line_record.getLast()[1],
+                    finger_angle=self.datastore.finger.getLast()[1],
+                    finger_pressure=self.datastore.finger.getLast()[2],
+                    laser_rangefinder=laser if fresh else None,
+                    **extra,
+                )
+                samples += 1
 
                 travelled = (self.datastore.winch_line_record.getLast()[1] - start) * direction
                 if travelled >= abs(degrees):
                     break
+                await asyncio.sleep(TELEMETRY_SAMPLE_S)
         finally:
             await client.send_commands({'set_wrist_speed': 0.0})
 
         actual = self.datastore.winch_line_record.getLast()[1]
         logger.info(f'{kind}: swept wrist {start:.0f} -> {actual:.0f} '
-                    f'({captured} frames at {speed_dps:.0f} deg/s)')
-        return captured
+                    f'({samples} telemetry samples at {speed_dps:.0f} deg/s)')
+        return samples
 
     async def _height_wrist_sweep(self, kind, ranges, output_dir, settle_s,
                                   notes='', run_attrs=None, frame_attrs=None,
@@ -2454,7 +2452,7 @@ class AsyncObserver:
         subject actually was. The fingers are parked out of frame first, since hardware
         in the corner of a plate would be composited into every frame built from it.
         """
-        from nf_robot.ml.visual_servoing.plates import PlateWriter
+        from nf_robot.ml.visual_servoing.plates import VideoRunWriter, provenance
 
         if self.gripper_client is None:
             logger.error(f'No gripper connected; cannot collect {kind}')
@@ -2464,16 +2462,17 @@ class AsyncObserver:
         # start low enough in the wrist's 0-1080 range that a full sweep fits
         base_wrist = float(min(max(start_wrist, 0.0), 1080.0 - abs(degrees)))
 
-        writer = PlateWriter(output_dir, kind, notes=notes)
+        writer = VideoRunWriter(output_dir, kind, notes=notes)
         seconds = len(ranges) * abs(degrees) / speed_dps
         logger.info(f'{kind}: {len(ranges)} heights, {degrees:.0f} deg at {speed_dps:.0f} '
                     f'deg/s each, about {seconds / 60:.0f} min of sweeping, '
                     f'writing to {output_dir}')
 
         expect = CAPTURE_RESOLUTION_SIZE
-        await self.gripper_client.use_capture_stream()
+        client = self.gripper_client
+        await client.use_capture_stream()
         try:
-            _, probe = await self.gripper_client.capture_raw_frame(
+            _, probe = await client.capture_raw_frame(
                 time.time(), timeout=CAPTURE_STREAM_TIMEOUT_S, expect_size=expect)
             if probe is None:
                 logger.error(f'{kind}: no {expect[0]}x{expect[1]} frames within '
@@ -2483,9 +2482,9 @@ class AsyncObserver:
             logger.info(f'{kind}: capture stream up at {probe.shape[1]}x{probe.shape[0]}')
 
             await self._settle_fingers(PLATE_FINGERS_RETRACTED)
-
-            # alternating direction keeps the wrist inside its range without rewinding
             await self._settle_wrist(base_wrist)
+
+            client.recording_path = writer.video_path
             heading = 1.0
             for target_range in ranges:
                 reached = await self._trim_altitude_to_range(target_range)
@@ -2494,25 +2493,25 @@ class AsyncObserver:
                                    f'{target_range:.2f}m; skipping this height')
                     continue
                 await asyncio.sleep(settle_s)
-                before = len(writer)
-                await self._sweep_wrist_capturing(
-                    kind, writer, heading * degrees, expect, speed_dps,
-                    extra_attrs={'target_range_m': target_range,
-                                 'start_wrist_angle': start_wrist,
-                                 **(frame_attrs or {})})
+                await self._sweep_wrist_sampling(
+                    kind, writer, heading * degrees, speed_dps,
+                    extra={'target_range_m': target_range,
+                           'start_wrist_angle': start_wrist,
+                           **(frame_attrs or {})})
                 heading = -heading
-                if len(writer) == before:
-                    logger.error(f'{kind}: no frames at all during the {target_range:.2f}m '
-                                 f'sweep; abandoning the run with {len(writer)} captured')
-                    return None
-                logger.info(f'{kind}: range {target_range:.2f}m done ({len(writer)} frames)')
+                logger.info(f'{kind}: range {target_range:.2f}m done '
+                            f'({client.recorded_packets} packets recorded)')
         finally:
-            await self.gripper_client.restore_default_stream()
+            packets, stream_start_ts = client.recorded_packets, client.recording_stream_start_ts
+            client.recording_path = None
+            # the demux loop closes the file when it next sees a packet
+            await asyncio.sleep(RECORDING_CLOSE_S)
             await self._settle_wrist(start_wrist)
 
-        return writer.close(target_ranges=list(ranges), sweep_degrees=degrees,
+        return writer.close(stream_start_ts or 0.0, packets=packets,
+                            target_ranges=list(ranges), sweep_degrees=degrees,
                             sweep_speed_dps=speed_dps, start_wrist_angle=start_wrist,
-                            **(run_attrs or {}))
+                            **provenance(self.config.robot_id), **(run_attrs or {}))
 
     async def collect_floorplates(self, ranges=None, output_dir=PLATE_OUTPUT_DIR,
                                   settle_s=FINGERPLATE_SETTLE_S):

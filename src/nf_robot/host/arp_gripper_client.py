@@ -331,7 +331,8 @@ class ArpeggioGripperClient(ComponentClient):
         keeps captures geometrically comparable to the control stream.
 
         The stream restarts to pick this up, so expect a gap of a second or two before
-        frames resume. Call restore_default_stream when finished.
+        frames resume. Selecting a mode that is already running is a no-op, and the
+        capture mode stays selected until something asks for the control stream back.
         """
         await self.send_commands({'set_config_vars': {'STREAM_MODE': CAPTURE_STREAM_MODE}})
 

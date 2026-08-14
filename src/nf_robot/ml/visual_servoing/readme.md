@@ -425,6 +425,20 @@ Survey what has been captured, and eyeball the frames:
 
 Contact sheets land in `plates/preview/`.
 
+Collections captured on different machines merge by copying run files and concatenating
+manifests, because a run is already a self-contained set of files named after a run id
+carrying its kind, its moment and six random hex digits:
+
+    python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all \
+        --from plates /mnt/contractor/plates
+    python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all --list
+
+Nothing is combined, resampled or rewritten - every run stays exactly as its camera
+produced it, which is what lets the matte and compositing steps be redone later without
+going back to the robots. Runs already in the destination are skipped by run id, so
+merging the same source twice is harmless and an interrupted merge can be rerun. Each
+run records the robot id and hostname that captured it, and `--list` groups by those.
+
 ## 2. Extract the pieces
 
 Fingers, as one RGBA plate per aperture. The default separates hardware from background

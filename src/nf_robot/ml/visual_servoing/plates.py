@@ -42,6 +42,20 @@ PLATE_JPEG_QUALITY = 95
 MANIFEST_NAME = "manifest.jsonl"
 
 
+def provenance(robot_id=""):
+    """Who captured a run, so merged collections stay attributable."""
+    import socket
+
+    return {"robot_id": robot_id or "", "host": socket.gethostname()}
+
+
+def run_files(entry):
+    """Every file a manifest entry refers to, relative to its directory."""
+    if entry.get("storage") == "video":
+        return [entry["file"], entry["telemetry"]]
+    return [entry.get("file") or f"{entry['run_id']}.parquet"]
+
+
 def plate_schema():
     """One row per captured frame.
 
@@ -139,6 +153,7 @@ class PlateWriter:
         entry = {
             "run_id": self.run_id,
             "kind": self.kind,
+            "storage": "parquet",
             "file": path.name,
             "frames": len(self.rows),
             "image_format": self.image_format,
@@ -160,6 +175,16 @@ class PlateWriter:
 
 def _f(value):
     return None if value is None else float(value)
+
+
+def _number(value):
+    """float() what can be, leave labels and other non-numbers alone."""
+    if value is None or isinstance(value, str):
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
 
 
 def read_manifest(output_dir):
@@ -189,13 +214,137 @@ def read_run(output_dir, run_id, columns=None, decode=True):
     return rows
 
 
-def iter_run(output_dir, run_id, decode=True):
-    """Yield a run's rows one row group at a time, so a whole capture is never resident.
+class VideoRunWriter:
+    """A capture run stored as the camera's own video plus a telemetry track.
 
-    PlateWriter uses small row groups precisely so this can walk a 200MB file without
-    holding it all, which matters on anything that also has a model loaded.
+    For runs where the camera is sweeping continuously there is no reason to decode
+    anything on the robot: the compressed stream goes straight to a file, telemetry is
+    sampled beside it, and the two are matched by timestamp when something offline
+    actually needs pixels. The result is a tenth the size of the same frames as JPEG.
+    """
+
+    def __init__(self, output_dir, kind: str, notes: str = ""):
+        if kind not in KINDS:
+            raise ValueError(f"unknown plate kind {kind!r}; expected one of {KINDS}")
+        self.dir = Path(output_dir)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.kind = kind
+        self.notes = notes
+        self.run_id = f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        self.started_at = time.time()
+        self.samples: list[dict] = []
+
+    @property
+    def video_path(self):
+        return self.dir / f"{self.run_id}.ts"
+
+    def add_telemetry(self, captured_at=None, **fields):
+        """Record the robot's state at a moment, to be matched to frames by time."""
+        self.samples.append({"t": float(captured_at if captured_at is not None else time.time()),
+                             **{k: _number(v) for k, v in fields.items()}})
+
+    def __len__(self):
+        return len(self.samples)
+
+    def close(self, stream_start_ts, packets=0, **run_attrs):
+        """Write the telemetry track and the manifest line for a finished run."""
+        if not self.samples or not self.video_path.exists():
+            logging.warning(f"{self.run_id}: no video or no telemetry, nothing written")
+            self.video_path.unlink(missing_ok=True)
+            return None
+
+        telemetry = self.dir / f"{self.run_id}.jsonl"
+        with open(telemetry, "w") as f:
+            for sample in self.samples:
+                f.write(json.dumps(sample) + "\n")
+
+        entry = {
+            "run_id": self.run_id,
+            "kind": self.kind,
+            "storage": "video",
+            "file": self.video_path.name,
+            "telemetry": telemetry.name,
+            # frame times are stream_start_ts + the frame's own time in the container
+            "stream_start_ts": float(stream_start_ts),
+            "samples": len(self.samples),
+            "packets": int(packets),
+            "started_at": self.started_at,
+            "finished_at": time.time(),
+            "notes": self.notes,
+            **run_attrs,
+        }
+        with open(self.dir / MANIFEST_NAME, "a") as f:
+            f.write(json.dumps(entry, default=float) + "\n")
+
+        size = self.video_path.stat().st_size
+        logging.info(f"{self.run_id}: wrote {size / 1e6:.0f} MB of video and "
+                     f"{len(self.samples)} telemetry samples to {self.dir}")
+        return self.video_path
+
+
+def _run_entry(output_dir, run_id):
+    for entry in read_manifest(output_dir):
+        if entry["run_id"] == run_id:
+            return entry
+    return {}
+
+
+def _nearest_telemetry(samples, times):
+    """For each time, the telemetry sample closest to it."""
+    stamps = np.array([s["t"] for s in samples])
+    order = np.argsort(stamps)
+    stamps, ordered = stamps[order], [samples[i] for i in order]
+    index = np.clip(np.searchsorted(stamps, times), 0, len(stamps) - 1)
+    lower = np.clip(index - 1, 0, len(stamps) - 1)
+    closer = np.abs(stamps[lower] - times) < np.abs(stamps[index] - times)
+    return [ordered[l if c else i] for i, l, c in zip(index, lower, closer)]
+
+
+def iter_video_run(output_dir, run_id, entry):
+    """Decode a video-backed run, attaching the telemetry nearest each frame."""
+    import av
+
+    output_dir = Path(output_dir)
+    samples = [json.loads(line) for line in open(output_dir / entry["telemetry"]) if line.strip()]
+    start_ts = float(entry["stream_start_ts"])
+
+    container = av.open(str(output_dir / entry["file"]))
+    stream = next(s for s in container.streams if s.type == "video")
+    frames = [(start_ts + f.time, f) for f in container.decode(stream)]
+    matched = _nearest_telemetry(samples, np.array([t for t, _ in frames]))
+
+    for (captured_at, frame), sample in zip(frames, matched):
+        image = frame.to_ndarray(format="rgb24")
+        yield {
+            "image": image,
+            "kind": entry["kind"],
+            "run_id": run_id,
+            "captured_at": captured_at,
+            "width": image.shape[1],
+            "height": image.shape[0],
+            "finger_angle": sample.get("finger_angle"),
+            "wrist_angle": sample.get("wrist_angle"),
+            "laser_rangefinder": sample.get("laser_rangefinder"),
+            "finger_pressure": sample.get("finger_pressure"),
+            "attrs": {k: v for k, v in sample.items()
+                      if k not in ("t", "finger_angle", "wrist_angle",
+                                   "laser_rangefinder", "finger_pressure")},
+        }
+    container.close()
+
+
+def iter_run(output_dir, run_id, decode=True):
+    """Yield a run's rows, whichever way it was stored.
+
+    Video-backed runs are decoded and matched to their telemetry track; parquet runs are
+    read a row group at a time, so a whole capture is never resident.
     """
     import pyarrow.parquet as pq
+
+    entry = _run_entry(output_dir, run_id)
+    if entry.get("storage") == "video":
+        yield from iter_video_run(output_dir, run_id, entry)
+        return
 
     reader = pq.ParquetFile(Path(output_dir) / f"{run_id}.parquet")
     for group in range(reader.num_row_groups):
