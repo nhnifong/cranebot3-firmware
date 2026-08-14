@@ -332,7 +332,8 @@ class ArpeggioGripperClient(ComponentClient):
 
         The stream restarts to pick this up, so expect a gap of a second or two before
         frames resume. Selecting a mode that is already running is a no-op, and the
-        capture mode stays selected until something asks for the control stream back.
+        capture mode stays selected until something asks for the control stream back,
+        so a run of captures only pays for the switch once.
         """
         await self.send_commands({'set_config_vars': {'STREAM_MODE': CAPTURE_STREAM_MODE}})
 

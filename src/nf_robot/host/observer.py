@@ -913,13 +913,8 @@ class AsyncObserver:
         if item.action == 'floorplates':
             # Park the gripper over clean, clear floor first; this moves only height and wrist.
             r = await self.invoke_motion_task(self.collect_floorplates())
-        if item.action.startswith('objectplates'):
-            # "objectplates <label>". Centre the object's intended grasp point under the
-            # camera and turn the wrist to the ideal grasping angle before triggering:
-            # those two acts are what label the grasp point and the grasp axis.
-            parts = item.action.split(maxsplit=1)
-            r = await self.invoke_motion_task(
-                self.collect_objectplates(label=parts[1] if len(parts) > 1 else ''))
+        if item.action == 'objectplates':
+            r = await self.invoke_motion_task(self.collect_objectplates())
         if item.action == 'fingerplates':
             # Park the gripper over clear textured floor before running this; see the
             # docstring for what an unlucky spot does to the matte.
@@ -2506,6 +2501,8 @@ class AsyncObserver:
             client.recording_path = None
             # the demux loop closes the file when it next sees a packet
             await asyncio.sleep(RECORDING_CLOSE_S)
+            # the capture stream stays selected for the rest of the session; see
+            # collect_fingerplates
             await self._settle_wrist(start_wrist)
 
         return writer.close(stream_start_ts or 0.0, packets=packets,
@@ -2520,15 +2517,12 @@ class AsyncObserver:
         The operator flies the gripper somewhere clean and clear and only then triggers
         this; it moves nothing but height and wrist. An autonomous room sweep would come
         back with a library of beds, furniture and feet, none of which is a floor plate.
-
-        Worth repeating across rooms, times of day and floor types, because these plates
-        are the entire background distribution the model ever sees in synthetic training.
         """
         return await self._height_wrist_sweep(
             'floorplates', ranges or PLATE_RANGES_M, output_dir, settle_s,
             notes='bare floor at several heights; fingers retracted')
 
-    async def collect_objectplates(self, label='', ranges=None,
+    async def collect_objectplates(self, ranges=None,
                                    output_dir=PLATE_OUTPUT_DIR,
                                    settle_s=FINGERPLATE_SETTLE_S):
         """Capture one object on the green board, for compositing onto floor plates.
@@ -2538,13 +2532,13 @@ class AsyncObserver:
         makes the grasp point the principal point by construction, and the wrist is
         turned to the ideal grasping angle, which makes the grasp axis zero at the start
         and a known offset at every later frame. Neither needs marks on the board.
-
-        `label` names the object, and is the only thing here a human has to type.
         """
+        label = f'object-{time.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:4]}'
         start_wrist = self.datastore.winch_line_record.getLast()[1]
+        logger.info(f'objectplates: labelling this object {label}')
         return await self._height_wrist_sweep(
             'objectplates', ranges or PLATE_RANGES_M, output_dir, settle_s,
-            notes=f'object on green board: {label or "unlabelled"}',
+            notes=f'object on green board: {label}',
             run_attrs={'label': label, 'grasp_axis_wrist_angle': start_wrist},
             frame_attrs={'label': label})
 
@@ -2590,9 +2584,7 @@ class AsyncObserver:
         accelerometer reports the pole is within tolerance, but give up after
         1 meter of travel or 6 seconds since further lifting could break things.
         On giving up, stops the spools, shows a popup, and raises RuntimeError.
-
-        If the gripper never answers the query, its server is too old to support it;
-        we return without doing anything rather than upgrading without permission."""
+        """
         VERTICAL_TOLERANCE_DEG = 10.0
         MAX_LIFT_M = 1.0
         MAX_LIFT_S = 10.0

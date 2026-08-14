@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 # resolution. Retry rather than losing video until the next video_ready.
 VIDEO_OPEN_ATTEMPTS = 5
 VIDEO_OPEN_RETRY_S = 1.5
+# How long a new video session waits for the previous one's streaming thread to release
+# the mjpeg port. The old thread notices its stop event within its 1s condition wait.
+VIDEO_HANDOVER_TIMEOUT_S = 5.0
 
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'fast;1|fflags;nobuffer|flags;low_delay'
 
@@ -85,6 +88,13 @@ class ComponentClient:
         # the active NfVideoStreamer, set by stream_video_loop while it's running (None
         # otherwise); receive_video()'s demux loop forwards raw packet bytes through it.
         self.video_streamer = None
+        # A component announces video_ready again whenever it relaunches rpicam-vid, e.g.
+        # on a resolution change, so more than one set of video threads can be alive at
+        # once. These hand the old set off to the new one: the event ends the previous
+        # session, and the thread handle is what the new session waits on before binding
+        # the mjpeg port the old one still holds.
+        self.video_session_stop = None
+        self.streaming_thread = None
 
         # things used by the video streaming thread
         self.frame_lock = threading.Lock()
@@ -112,7 +122,10 @@ class ComponentClient:
     def send_conn_status(self):
         self.ob.send_ui(component_conn_status=copy.deepcopy(self.conn_status))
 
-    def receive_video(self, port):
+    def receive_video(self, port, stop=None):
+        """Demux one video session; `stop` ends it when a later session replaces it."""
+        if stop is None:
+            stop = threading.Event()
         video_uri = f'tcp://{self.address}:{port}'
         # print(f'Connecting to {video_uri}')
         self.conn_status.video_status = telemetry.ConnStatus.CONNECTING
@@ -156,7 +169,20 @@ class ComponentClient:
             streaming_thread = None
             components_to_stream = [None, *self.config.preferred_cameras]
             if self.anchor_num in components_to_stream:
-                streaming_thread = threading.Thread(target=self.stream_video_loop, kwargs={"feed_number": components_to_stream.index(self.anchor_num)}, daemon=True)
+                # The previous session's streamer still owns the mjpeg port until its
+                # thread returns, and binding it while it does raises EADDRINUSE.
+                previous = self.streaming_thread
+                if previous is not None and previous.is_alive():
+                    previous.join(timeout=VIDEO_HANDOVER_TIMEOUT_S)
+                    if previous.is_alive():
+                        logger.warning('Previous video streaming thread did not exit; '
+                                       'starting the new one anyway')
+                streaming_thread = threading.Thread(
+                    target=self.stream_video_loop,
+                    kwargs={"feed_number": components_to_stream.index(self.anchor_num),
+                            "stop": stop},
+                    daemon=True)
+                self.streaming_thread = streaming_thread
                 streaming_thread.start()
 
             self.conn_status.video_status = telemetry.ConnStatus.CONNECTED
@@ -175,7 +201,7 @@ class ComponentClient:
             # mjpeg streamer is still around for the UI, for which mjpeg is still the only low
             # latency option.
             for packet in container.demux(stream):
-                if not self.connected:
+                if not self.connected or stop.is_set():
                     break
                 if packet.dts is None:
                     continue  # flush packet at stream end, not real data
@@ -275,7 +301,7 @@ class ComponentClient:
             if 'container' in locals():
                 container.close()
 
-    def stream_video_loop(self, feed_number):
+    def stream_video_loop(self, feed_number, stop=None):
         """
         This runs in a dedicated thread. It waits for a signal that a new frame is
         available, runs it through process_frame (a hardware-specific hook subclasses may
@@ -288,7 +314,12 @@ class ComponentClient:
         task (the main loop can keep running while this one works).
 
         feed_number identifies which of the preferred cameras this is. 0 is the gripper, 1 and 2 are the two overhead cams.
+
+        `stop` ends this session, which is how the ports get released for the session that
+        replaces it when the component relaunches its camera.
         """
+        if stop is None:
+            stop = threading.Event()
         path = f'stringman/{self.config.robot_id}/{feed_number}'
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
 
@@ -342,11 +373,11 @@ class ComponentClient:
                     f'compressed passthrough at {vs.compressed_uri}')
         self.streaming_active = True
 
-        while self.connected:
+        while self.connected and not stop.is_set():
             with self.new_frame_condition:
                 # Wait until the main receive_video loop signals us.
                 # The 'wait' call will timeout after 1 second to re-check
-                # the self.connected flag, allowing the thread to exit gracefully.
+                # the exit flags, allowing the thread to exit gracefully.
                 signaled = self.new_frame_condition.wait(timeout=1.0)
                 if not signaled:
                     continue
@@ -366,10 +397,14 @@ class ComponentClient:
             rgb = cv2.cvtColor(self.last_output_frame, cv2.COLOR_BGR2RGB)
             vs.send_frame(rgb)
 
-        self._close_recording()
-        self.remote_stream_path = None
-        self.local_video_uri = None
-        self.video_streamer = None
+        # Only tear down what is still ours: if a later session got going before this
+        # thread noticed its stop event, the recording and these fields are already that
+        # session's, and closing them here would take video out from under it.
+        if self.video_streamer is vs:
+            self._close_recording()
+            self.remote_stream_path = None
+            self.local_video_uri = None
+            self.video_streamer = None
         vs.stop()
 
     def _service_recording(self, stream, packet):
@@ -522,7 +557,17 @@ class ComponentClient:
                     port = int(update['video_ready'][0])
                     self.stream_start_ts = float(update['video_ready'][1])
                     logger.debug(f'stream_start_ts={self.stream_start_ts} ({time.time()-self.stream_start_ts:.2f}s ago)')
-                    vid_thread = threading.Thread(target=self.receive_video, kwargs={"port": port}, daemon=True)
+                    # A component announces this again every time it relaunches its camera,
+                    # e.g. after a resolution change. The threads of the previous session
+                    # are demuxing a stream that is already gone and holding ports the new
+                    # session needs, so retire them here rather than leaving both running.
+                    if self.video_session_stop is not None:
+                        self.video_session_stop.set()
+                    self.video_session_stop = threading.Event()
+                    vid_thread = threading.Thread(
+                        target=self.receive_video,
+                        kwargs={"port": port, "stop": self.video_session_stop},
+                        daemon=True)
                     vid_thread.start()
                 if 'firmware_update_complete' in update:
                     self._handle_firmware_update_complete(update['firmware_update_complete'])

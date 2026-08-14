@@ -416,7 +416,7 @@ camera and the wrist at the ideal grasping angle for objectplates.
 
     fingerplates
     floorplates
-    objectplates blue sock
+    objectplates
 
 Survey what has been captured, and eyeball the frames:
 

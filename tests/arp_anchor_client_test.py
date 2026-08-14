@@ -10,6 +10,8 @@ through RaspiAnchorClient before the pilot anchor was removed.
 import unittest
 from unittest.mock import Mock, MagicMock, patch, call
 import asyncio
+import threading
+import time
 import numpy as np
 import websockets
 from websockets.exceptions import (
@@ -197,3 +199,62 @@ class TestStreamVideoLoopCompressedPassthrough(unittest.TestCase):
 
         sent = ob_mock.send_ui.call_args.kwargs["video_ready"]
         self.assertEqual(sent.compressed_uri, "tcp://192.168.1.50:4348")
+
+
+class TestStreamVideoLoopSessionHandover(unittest.TestCase):
+    """A component relaunches its camera on a resolution change and announces video_ready
+    again, so a second set of video threads starts while the first is still running. The
+    first has to give up its streamer, or the new one cannot bind the same mjpeg port.
+    """
+
+    def _make_client(self):
+        datastore = DataStore()
+        ob_mock = MagicMock()
+        ob_mock.config = create_default_config()
+        ob_mock.bind_address = "127.0.0.1"
+        pool = Mock(spec=Pool).return_value
+        stat = StatCounter(ob_mock)
+        client = ArpeggioAnchorClient("127.0.0.1", ws_port, 1, datastore, ob_mock, pool,
+                                      stat, None)
+        client.connected = True
+        return client
+
+    def _run_until_exit(self, client, stop):
+        thread = threading.Thread(
+            target=client.stream_video_loop,
+            kwargs={"feed_number": 1, "stop": stop}, daemon=True)
+        thread.start()
+        # give the loop time to get past start() before anything is asserted about it
+        while client.video_streamer is None and thread.is_alive():
+            time.sleep(0.01)
+        return thread
+
+    def test_stop_event_ends_the_loop_and_releases_the_streamer(self):
+        client = self._make_client()
+        stop = threading.Event()
+        with patch("nf_robot.host.component_client.NfVideoStreamer") as mock_nfvs:
+            thread = self._run_until_exit(client, stop)
+            self.assertTrue(thread.is_alive())
+            stop.set()
+            # the loop's condition wait times out after 1s, so this is the worst case
+            thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+        mock_nfvs.return_value.stop.assert_called_once()
+        self.assertIsNone(client.video_streamer)
+
+    def test_a_stale_session_does_not_disown_the_new_ones_streamer(self):
+        """The old thread can notice its stop event after the new session is already
+        streaming; clearing video_streamer then would leave the demux loop with nowhere
+        to forward packets."""
+        client = self._make_client()
+        stop = threading.Event()
+        with patch("nf_robot.host.component_client.NfVideoStreamer") as mock_nfvs:
+            thread = self._run_until_exit(client, stop)
+            newer = Mock()
+            client.video_streamer = newer
+            client.local_video_uri = 'http://newer/stream.mjpeg'
+            stop.set()
+            thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+        self.assertIs(client.video_streamer, newer)
+        self.assertEqual(client.local_video_uri, 'http://newer/stream.mjpeg')
