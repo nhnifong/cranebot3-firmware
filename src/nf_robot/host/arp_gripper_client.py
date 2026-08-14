@@ -317,11 +317,12 @@ class ArpeggioGripperClient(ComponentClient):
         landed: the old stream keeps delivering for seconds afterwards, and those frames
         are new enough to pass any timestamp test at the wrong size.
         """
+        fudge = 0.14
         deadline = time.time() + timeout
         while True:
             with self.frame_lock:
                 timestamp, frame = self.last_frame_cap_time, self.frame
-                if frame is not None and timestamp is not None and timestamp > after_ts:
+                if frame is not None and timestamp is not None and timestamp > (after_ts + fudge):
                     if expect_size is None or (frame.shape[1], frame.shape[0]) == tuple(expect_size):
                         return timestamp, frame.copy()
             if time.time() > deadline:

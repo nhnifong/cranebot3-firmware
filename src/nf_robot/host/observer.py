@@ -79,12 +79,12 @@ RANGE_MAX_AGE_S = 1.0 # a rangefinder reading older than this is not evidence of
 PLATE_OUTPUT_DIR = 'plates'
 # Finger sweep bounds. The server clamps finger angle to -90 (open) .. 90 (closed), and a
 # plate is wanted at every aperture the fingers are actually driven to during a grasp.
-FINGERPLATE_ANGLE_MIN = -70
-FINGERPLATE_ANGLE_MAX = 88
+FINGERPLATE_ANGLE_MIN = -76
+FINGERPLATE_ANGLE_MAX = 90
 FINGERPLATE_ANGLE_STEP = 2
-# Frames per wrist turn. The matte is a per-pixel variance across these, so it wants
-# enough of them that no background feature sits still through the whole set - and they
-# are cheap next to the finger moves between turns.
+# Frames per wrist turn. The matte keys each one and takes the median, so it wants enough
+# of them that anything which rotated past is outvoted - and they are cheap next to the
+# finger moves between turns.
 FINGERPLATE_WRIST_STEPS = 18
 # (seconds) extra wait after the wrist reports arrival, due to the higher video latency from this format
 FINGERPLATE_SETTLE_S = 0.3
@@ -2289,19 +2289,16 @@ class AsyncObserver:
                                    output_dir=PLATE_OUTPUT_DIR, settle_s=FINGERPLATE_SETTLE_S):
         """Capture the frames a finger matte is extracted from, one wrist turn per finger angle.
 
-        The gripper camera is in the palm and turns with the wrist, so spinning the wrist
-        leaves the fingers on exactly the same pixels and rotates the entire world behind
-        them. Across one turn the fingers are the only thing that does not move, which is
-        what lets an offline per-pixel variance test separate hardware from background with
-        no chroma key, no backdrop and no manual masking.
+        Park the gripper over the green backdrop first: the matte is a chroma key, so
+        anything ungreen under the fingers comes out as hardware.
 
-        The operator has to park the gripper somewhere useful first: over textured floor,
-        with no strongly rotationally symmetric feature underneath. Anything that survives
-        the turn unchanged - the shadow directly below the lens, a circular rug motif - is
-        indistinguishable from hardware by that test and will end up in the matte.
+        The wrist turn is what makes that robust. The camera is in the palm and turns with
+        the wrist, so the fingers stay on the same pixels while the world rotates behind
+        them; keying every frame and taking the median leaves anything that passed
+        underneath outvoted.
 
         Only the raw frames are written. Deciding what is finger is an offline judgement
-        with a threshold nobody has tuned, and it should be revisable without asking the
+        with thresholds nobody has tuned, and it should be revisable without asking the
         robot to do this again.
         """
         from nf_robot.ml.visual_servoing.plates import PlateWriter, provenance
@@ -2320,7 +2317,7 @@ class AsyncObserver:
         wrist_angles = [base_wrist + 360.0 * i / wrist_steps for i in range(wrist_steps)]
 
         writer = PlateWriter(output_dir, 'fingerplates',
-                             notes='wrist turn per finger angle; matte offline by variance')
+                             notes='wrist turn per finger angle; matte offline by chroma key')
         logger.info(f'Fingerplates: {len(finger_angles)} finger angles x {wrist_steps} wrist '
                     f'steps = {len(finger_angles) * wrist_steps} frames, wrist {base_wrist:.0f}'
                     f'-{base_wrist + 360:.0f}, writing to {output_dir}')

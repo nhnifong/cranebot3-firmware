@@ -2,26 +2,22 @@
 
 """Extract the gripper's fingers, with alpha, from a fingerplates capture.
 
-The capture holds the fingers still and turns the world behind them: the camera is in
-the palm and rotates with the wrist, so across one wrist turn the fingers stay on the
-same pixels while everything else moves. That makes the separation a per-pixel question
-about time rather than a question about colour - no chroma key, no backdrop, no manual
-masking:
+A chroma key against the green backdrop the capture is taken over, the same keyer the
+object cutouts use: greenness is G - max(R, B), which needs no colour space conversion
+and holds up in shadow, where a hue threshold in HSV gets unreliable as saturation falls.
 
-    median over the turn   what was there when nothing moved -> finger colour
-    variance over the turn low where the fingers are, high where the world rotated past
+The wrist turn in the capture is still doing work. Each frame is keyed on its own and the
+per-pixel median taken across the turn, so the fingers - the only ungreen thing that is in
+the same place in every frame - survive, while anything that rotated past underneath is
+outvoted rather than matted in.
 
-Which is only as good as the ground the capture was taken over. A patch of floor with no
-texture, or a soft shadow directly under the lens, does not move in any way the variance
-can see, and comes out of this indistinguishable from hardware. The tool reports the
-fraction of the frame it called static so that failure is visible rather than silent.
-
-Threshold, morphology and the border test are all offline decisions, revisable against
-the same capture - which is why the capture stores raw frames and nothing else.
+One plate per finger angle. Threshold, morphology and the border test are all offline
+decisions, revisable against the same capture, which is why the capture stores raw frames
+and nothing else.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.finger_matte --dir plates
-    python -m nf_robot.ml.visual_servoing.finger_matte --dir plates --contrast_margin 0.25
+    python -m nf_robot.ml.visual_servoing.finger_matte --dir plates --green_low 6
 """
 
 import argparse
@@ -33,130 +29,41 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from nf_robot.ml.visual_servoing.plates import iter_run, read_manifest
+from nf_robot.ml.visual_servoing.object_matte import GREEN_HIGH, GREEN_LOW, chroma_key
+from nf_robot.ml.visual_servoing.plates import (
+    VIDEO_FPS, checkerboard, iter_run, over_checkerboard, read_manifest, write_video)
 
-# How much stiller a pixel has to be in the raw stack than in the rotation-aligned one
-# to count as hardware, as a fraction of the two added together. Scale-free on purpose:
-# an absolute threshold on the raw variation fails at both ends - it keeps floor that
-# happens to look the same from every angle, and it throws away the parts of a finger
-# whose brightness changes as the gripper turns under a fixed light.
-DEFAULT_CONTRAST_MARGIN = 0.15
-# Optical axis as a fraction of the frame, from camera_cal_wide: rotation is about the
-# lens centre, which is where the principal point is, not the middle of the image.
-PRINCIPAL_NORM = (342.0 / 684.0, 192.0 / 384.0)
-# Fraction of the frame above which a "static" region is not plausibly the gripper, and
-# almost certainly means the background did not move enough to be separable.
-IMPLAUSIBLE_STATIC_FRACTION = 0.40
 # Connected components smaller than this fraction of the frame are speckle.
 MIN_COMPONENT_FRACTION = 0.002
-# Radius, in pixels, of the alpha feather. Enough to hide the stair-stepped edge a hard
-# threshold leaves, not enough to smear the finger outline.
-FEATHER_PX = 2
+# Fraction of the frame above which what was kept is not plausibly the gripper, and almost
+# certainly means the backdrop was not green enough to key.
+IMPLAUSIBLE_KEPT_FRACTION = 0.40
+# Fraction of the frame that has to be decisively green before a capture is worth keying
+# at all. Below it the backdrop was missing or badly lit, which is worth saying out loud.
+MIN_GREEN_FRACTION = 0.20
 
 MANIFEST_NAME = "mattes.jsonl"
 
 
-def rotate_about(image, degrees, center):
-    """Rotate an image about the optical axis, with a validity mask for what fell in.
+def green_fraction(image, green_high=GREEN_HIGH):
+    """Fraction of a frame that is decisively green, which is how a backdrop is checked."""
+    image = image.astype(np.float32)
+    greenness = image[:, :, 1] - np.maximum(image[:, :, 0], image[:, :, 2])
+    return float((greenness > green_high).mean())
 
-    Rotating the raw frame is exact rather than approximate: lens distortion here is
-    radial, and a radial function is unchanged by rotation about its own centre. So the
-    background of one frame really does map onto the background of another, without
-    undistorting first.
+
+def clean_mask(raw, border_only=True, min_component_fraction=MIN_COMPONENT_FRACTION):
+    """Speckle, floaters and holes.
+
+    Returns (filled, kept, components): kept is what survived the component tests, filled
+    is that with enclosed holes closed, so a caller can tell a hole from hardware.
+
+    The morphology is deliberately mild - an opening to drop speckle, a closing to bridge
+    the gaps JPEG noise leaves inside a finger - and holes are found as components of the
+    background rather than by a flood from a corner, which does nothing when a finger
+    reaches that corner and reads the whole background as one giant hole.
     """
-    height, width = image.shape[:2]
-    matrix = cv2.getRotationMatrix2D(center, degrees, 1.0)
-    warped = cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_LINEAR,
-                            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-    valid = cv2.warpAffine(np.ones((height, width), np.float32), matrix, (width, height),
-                           flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
-                           borderValue=0)
-    return warped, valid > 0.5
-
-
-def aligned_variance(stack, wrist_angles, center, sign):
-    """Per-pixel variance after rotating every frame back to the first one's heading.
-
-    The background is what this makes still: rotate each frame by the wrist's change and
-    the world lines up, while the fingers - which never moved in the raw frames - are
-    smeared around the circle instead. So low variance here means background, which is
-    the opposite of what low variance in the raw stack means, and comparing the two
-    separates "held still because it is bolted to the camera" from "held still because
-    that patch of floor looks the same everywhere".
-
-    Returns (variance, count) with count the number of frames that actually covered each
-    pixel; rotation pushes the corners out of frame, so some pixels have few samples.
-    """
-    total = np.zeros(stack.shape[1:3], np.float64)
-    total_sq = np.zeros_like(total)
-    count = np.zeros_like(total)
-    for frame, angle in zip(stack, wrist_angles):
-        delta = sign * (angle - wrist_angles[0])
-        warped, valid = rotate_about(frame, delta, center)
-        grey = warped.mean(axis=2)
-        total += np.where(valid, grey, 0.0)
-        total_sq += np.where(valid, grey * grey, 0.0)
-        count += valid
-    safe = np.maximum(count, 1)
-    mean = total / safe
-    variance = np.maximum(total_sq / safe - mean * mean, 0.0)
-    return variance, count
-
-
-def alignment_sign(stack, wrist_angles, center):
-    """Which rotation direction lines the background up, decided from the frames.
-
-    The wrist angle's sign convention against the image is a fact about the mount that
-    is easier to measure here than to derive: whichever direction makes the background
-    agree with itself is the right one, by a wide margin.
-    """
-    scores = {}
-    for sign in (1.0, -1.0):
-        variance, count = aligned_variance(stack, wrist_angles, center, sign)
-        usable = count >= max(3, len(stack) // 2)
-        scores[sign] = float(np.sqrt(variance[usable]).mean()) if usable.any() else np.inf
-    best = min(scores, key=scores.get)
-    return best, scores
-
-
-def finger_mask(stack, wrist_angles, sign, contrast_margin=DEFAULT_CONTRAST_MARGIN,
-                border_only=True, min_component_fraction=MIN_COMPONENT_FRACTION,
-                max_brightness=None):
-    """Boolean mask of the gripper's own hardware in a stack of (N, H, W, 3) frames.
-
-    The test is a comparison, not a threshold. Each pixel is measured twice: how much it
-    varies across the raw frames, and how much it varies once every frame has been
-    rotated back to a common heading. Hardware is stiller raw than aligned, background is
-    stiller aligned than raw, and
-
-        contrast = (aligned - raw) / (aligned + raw)
-
-    is how much stiller, on a scale that does not care about absolute brightness. That
-    matters for both ways an absolute threshold fails here: floor that looks the same
-    from every angle never varies much raw, and a finger's brightness changes as the
-    gripper turns under a fixed light, so parts of it vary quite a lot.
-
-    Returns (mask, diagnostics). The morphology is deliberately mild: an opening to drop
-    speckle, a closing to bridge the gaps that JPEG noise leaves inside a finger, then a
-    hole fill, so a highlight in the middle of the hardware does not punch through it.
-    """
-    raw_std = stack.std(axis=0).mean(axis=2)
-    height, width = raw_std.shape
-    centre = (width * PRINCIPAL_NORM[0], height * PRINCIPAL_NORM[1])
-    variance, count = aligned_variance(stack, wrist_angles, centre, sign)
-    aligned_std = np.sqrt(variance)
-
-    contrast = (aligned_std - raw_std) / (aligned_std + raw_std + 1e-3)
-    # Rotation pushes the corners out of frame, so some pixels are covered by too few
-    # frames for the comparison to mean anything. Those are left out rather than guessed.
-    comparable = count >= 3
-    raw = comparable & (contrast > contrast_margin)
-    if max_brightness is not None:
-        # A prior about one capture, not part of the method: over a pale floor with dark
-        # hardware, brightness alone separates them, and saying so beats leaving the
-        # floor in. Off by default because it is exactly the shortcut the rotation test
-        # exists to avoid needing.
-        raw &= np.median(stack, axis=0).mean(axis=2) < max_brightness
+    height, width = raw.shape
     area = height * width
 
     mask = raw.astype(np.uint8)
@@ -180,10 +87,6 @@ def finger_mask(stack, wrist_angles, sign, contrast_margin=DEFAULT_CONTRAST_MARG
         kept[labels == label] = 1
         components += 1
 
-    # Fill enclosed holes, so a specular highlight inside a finger stays part of it. A
-    # hole is a component of the *background* that does not reach the frame edge; the
-    # obvious flood fill from a corner is wrong here, because a finger that reaches the
-    # corner makes the flood a no-op and the whole background reads as one giant hole.
     filled = kept.copy()
     holes, hole_labels, hole_stats, _ = cv2.connectedComponentsWithStats(
         (kept == 0).astype(np.uint8), connectivity=8)
@@ -193,122 +96,133 @@ def finger_mask(stack, wrist_angles, sign, contrast_margin=DEFAULT_CONTRAST_MARG
             continue
         filled[hole_labels == label] = 1
 
-    diagnostics = {
-        "raw_std_median": float(np.median(raw_std)),
-        "aligned_std_median": float(np.median(aligned_std[comparable])) if comparable.any() else 0.0,
-        "contrast_p90": float(np.percentile(contrast[comparable], 90)) if comparable.any() else 0.0,
-        "selected_fraction": float(raw.mean()),
-        "kept_fraction": float(filled.mean()),
-        "components": components,
-    }
-    return filled.astype(bool), diagnostics
+    return filled.astype(bool), kept.astype(bool), components
 
 
-def build_matte(stack, wrist_angles, sign, contrast_margin=DEFAULT_CONTRAST_MARGIN,
-                border_only=True, feather_px=FEATHER_PX, max_brightness=None):
+def build_matte(stack, green_low=GREEN_LOW, green_high=GREEN_HIGH, border_only=True,
+                min_component_fraction=MIN_COMPONENT_FRACTION):
     """One RGBA plate from a stack of (N, H, W, 3) frames of one finger angle."""
-    mask, diagnostics = finger_mask(stack, wrist_angles, sign, contrast_margin,
-                                    border_only, max_brightness=max_brightness)
+    alphas, colours, greens = [], [], []
+    for frame in stack:
+        alpha, colour = chroma_key(frame, green_low=green_low, green_high=green_high)
+        alphas.append(alpha)
+        colours.append(colour)
+        # measured on the way in: chroma_key's despill has taken the cast out of what it
+        # returns, so the backdrop is no longer green by the time the colour comes back
+        greens.append(green_fraction(frame, green_high))
+    # Median over the turn, so a pixel has to have been ungreen most of the time. Mean
+    # would let one frame's intruder leave a ghost at a third of its opacity.
+    alpha = np.median(np.stack(alphas), axis=0)
+    colour = np.median(np.stack(colours), axis=0)
 
-    # Median rather than mean: a mean over a rotating background bleeds the world into
-    # every edge pixel, where a median throws out anything that was only there part of
-    # the time - which is the whole background, by construction.
-    colour = np.median(stack, axis=0)
-
-    # Sample colour from inside the mask, so the feathered edge fades out finger colour
-    # rather than the average of finger and whatever rotated behind it.
-    eroded = cv2.erode(mask.astype(np.uint8), np.ones((3, 3), np.uint8))
-    if eroded.any():
-        for channel in range(3):
-            plane = colour[:, :, channel]
-            plane[mask & (eroded == 0)] = cv2.blur(plane, (5, 5))[mask & (eroded == 0)]
-
-    alpha = mask.astype(np.float32)
-    if feather_px:
-        size = feather_px * 2 + 1
-        alpha = cv2.GaussianBlur(alpha, (size, size), 0)
+    filled, kept, components = clean_mask(alpha > 0.5, border_only, min_component_fraction)
+    # Keep the ramp wherever it is - it is what puts a soft edge on fluff and on the frayed
+    # rubber of a finger pad - but lift enclosed holes to solid, since a green-lit
+    # highlight inside a finger keys as backdrop and is not one.
+    out = alpha * np.maximum(filled, (alpha > 0) & (alpha <= 0.5))
+    out = np.where(filled & ~kept, 1.0, out)
 
     rgba = np.dstack([
         np.clip(colour, 0, 255).astype(np.uint8),
-        np.clip(alpha * 255, 0, 255).astype(np.uint8),
+        np.clip(out * 255, 0, 255).astype(np.uint8),
     ])
+    diagnostics = {
+        "green_fraction": float(np.mean(greens)),
+        "selected_fraction": float((alpha > 0.5).mean()),
+        "kept_fraction": float(filled.mean()),
+        "components": components,
+    }
     return rgba, diagnostics
 
 
 def group_by_finger_angle(plate_dir, run_id):
-    """Frames of one run grouped by finger angle, as {angle: (images, wrist_angles)}.
+    """Frames of one run grouped by finger angle, as {angle: [images]}.
 
     Keyed on the commanded angle rather than the measured one so that a group is exactly
     one aperture; the measured value wanders by a fraction of a degree and would split
     every group into singletons.
     """
-    groups = defaultdict(lambda: ([], []))
+    groups = defaultdict(list)
     for row in iter_run(plate_dir, run_id):
         key = row["attrs"].get("commanded_finger_angle")
         if key is None:
             key = round(row["finger_angle"]) if row["finger_angle"] is not None else 0
-        images, angles = groups[float(key)]
-        images.append(row["image"])
-        angles.append(float(row["wrist_angle"] if row["wrist_angle"] is not None else 0.0))
+        groups[float(key)].append(row["image"])
     return dict(sorted(groups.items()))
 
 
-def extract_mattes(plate_dir, run_id, output_dir, contrast_margin=DEFAULT_CONTRAST_MARGIN,
-                   border_only=True, feather_px=FEATHER_PX, max_brightness=None):
+def extract_mattes(plate_dir, run_id, output_dir, green_low=GREEN_LOW,
+                   green_high=GREEN_HIGH, border_only=True):
     """Write one RGBA plate per finger angle, plus a manifest line each."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     groups = group_by_finger_angle(plate_dir, run_id)
     logging.info(f"{run_id}: {len(groups)} finger angles, "
-                 f"{sum(len(v[0]) for v in groups.values())} frames")
-
-    # One direction for the whole run: it is a property of the mount, and deciding it per
-    # group would let a bad group flip it and quietly matte the background instead.
-    first = next(iter(groups.values()))
-    probe = np.stack(first[0]).astype(np.float32)
-    height, width = probe.shape[1:3]
-    sign, scores = alignment_sign(
-        probe, first[1], (width * PRINCIPAL_NORM[0], height * PRINCIPAL_NORM[1]))
-    logging.info(f"alignment sign {sign:+.0f} (aligned std {scores[sign]:.1f} vs "
-                 f"{scores[-sign]:.1f} the other way)")
+                 f"{sum(len(v) for v in groups.values())} frames")
 
     entries = []
-    for finger_angle, (frames, wrist_angles) in groups.items():
-        if len(frames) < 3:
-            logging.warning(f"finger {finger_angle:+.0f}: only {len(frames)} frames, skipping")
+    for finger_angle, frames in groups.items():
+        if not frames:
             continue
         stack = np.stack(frames).astype(np.float32)
-        rgba, diagnostics = build_matte(stack, wrist_angles, sign, contrast_margin,
-                                        border_only, feather_px, max_brightness)
+        rgba, diagnostics = build_matte(stack, green_low, green_high, border_only)
 
         name = f"finger{finger_angle:+04.0f}.png"
         # cv2 writes BGRA; the plates are RGB
         cv2.imwrite(str(output_dir / name), rgba[:, :, [2, 1, 0, 3]])
 
-        entry = {
+        entries.append({
             "file": name, "run_id": run_id, "finger_angle": finger_angle,
             "frames": len(frames), "width": rgba.shape[1], "height": rgba.shape[0],
-            "contrast_margin": contrast_margin, "border_only": border_only,
+            "green_low": green_low, "green_high": green_high, "border_only": border_only,
             **diagnostics,
-        }
-        entries.append(entry)
+        })
         flag = ""
-        if diagnostics["kept_fraction"] > IMPLAUSIBLE_STATIC_FRACTION:
-            flag = "  <- implausible, the background cannot have moved enough"
+        if diagnostics["green_fraction"] < MIN_GREEN_FRACTION:
+            flag = "  <- barely any green; was this shot over the backdrop?"
+        elif diagnostics["kept_fraction"] > IMPLAUSIBLE_KEPT_FRACTION:
+            flag = "  <- implausible, too much of the frame keyed as hardware"
         elif diagnostics["components"] == 0:
             flag = "  <- nothing kept"
         logging.info(
-            f"finger {finger_angle:+4.0f}: {len(frames):3d} frames, selected "
+            f"finger {finger_angle:+4.0f}: {len(frames):3d} frames, "
+            f"{diagnostics['green_fraction'] * 100:5.1f}% green, keyed "
             f"{diagnostics['selected_fraction'] * 100:5.1f}% -> kept "
-            f"{diagnostics['kept_fraction'] * 100:5.1f}% in {diagnostics['components']} "
-            f"component(s), std raw {diagnostics['raw_std_median']:.1f} vs aligned "
-            f"{diagnostics['aligned_std_median']:.1f}{flag}")
+            f"{diagnostics['kept_fraction'] * 100:5.1f}% in "
+            f"{diagnostics['components']} component(s){flag}")
 
     with open(output_dir / MANIFEST_NAME, "w") as f:
         for entry in entries:
             f.write(json.dumps(entry) + "\n")
     return entries
+
+
+def write_video_preview(output_dir, entries, fps=VIDEO_FPS):
+    """The plates as an mp4, in finger angle order: the aperture sweep as it will look.
+
+    A still contact sheet hides the failure this catches - a plate whose matte is a few
+    pixels different from its neighbours' reads as a flicker in motion and as nothing at
+    all side by side.
+    """
+    output_dir = Path(output_dir)
+    board = None
+
+    def frames():
+        nonlocal board
+        for entry in sorted(entries, key=lambda e: e["finger_angle"]):
+            bgra = cv2.imread(str(output_dir / entry["file"]), cv2.IMREAD_UNCHANGED)
+            if bgra is None:
+                continue
+            if board is None or board.shape[:2] != bgra.shape[:2]:
+                board = checkerboard(bgra.shape[0], bgra.shape[1])
+            cell = over_checkerboard(bgra, board)
+            text = f"{entry['finger_angle']:+.0f}deg"
+            cv2.putText(cell, text, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
+            cv2.putText(cell, text, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
+            yield cell
+
+    return write_video(output_dir / "_mattes.mp4", frames(), fps)
 
 
 def write_preview(output_dir, entries, cell_width=480, columns=5):
@@ -358,15 +272,14 @@ def main():
     parser.add_argument("--run_id", default=None, help="Which run; defaults to the newest")
     parser.add_argument("--output_dir", default=None,
                         help="Where the RGBA plates go (default <dir>/fingers)")
-    parser.add_argument("--contrast_margin", type=float, default=DEFAULT_CONTRAST_MARGIN,
-                        help="How much stiller raw than aligned a pixel must be, 0-1")
-    parser.add_argument("--max_brightness", type=float, default=None,
-                        help="Reject pixels brighter than this (0-255). A prior about "
-                             "one capture - use it when the floor is pale and the "
-                             "hardware dark - not part of the method.")
+    parser.add_argument("--green_low", type=float, default=GREEN_LOW,
+                        help="Greenness below which a pixel is certainly not backdrop")
+    parser.add_argument("--green_high", type=float, default=GREEN_HIGH,
+                        help="Greenness above which a pixel is certainly backdrop")
     parser.add_argument("--keep_floating", action="store_true",
-                        help="Keep static regions that do not touch the frame edge")
-    parser.add_argument("--feather_px", type=int, default=FEATHER_PX)
+                        help="Keep kept regions that do not touch the frame edge")
+    parser.add_argument("--fps", type=int, default=VIDEO_FPS,
+                        help="Playback rate of the mp4 written beside the plates")
     parser.add_argument("--no_preview", action="store_true")
     args = parser.parse_args()
 
@@ -376,10 +289,11 @@ def main():
     run_id = args.run_id or runs[-1]["run_id"]
     output_dir = Path(args.output_dir or Path(args.dir) / "fingers")
 
-    entries = extract_mattes(args.dir, run_id, output_dir, args.contrast_margin,
-                             not args.keep_floating, args.feather_px, args.max_brightness)
+    entries = extract_mattes(args.dir, run_id, output_dir, args.green_low,
+                             args.green_high, not args.keep_floating)
     if entries and not args.no_preview:
         write_preview(output_dir, entries)
+        write_video_preview(output_dir, entries, args.fps)
 
 
 if __name__ == "__main__":

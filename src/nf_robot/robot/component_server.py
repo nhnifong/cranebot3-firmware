@@ -72,7 +72,7 @@ stream_modes = {
     # balance is pinned: a green backdrop filling the frame drags auto white balance
     # until the sheet photographs blue, which is the one thing the chroma key needs it
     # not to do. A preset name goes to --awb, an 'r,b' pair to --awbgains.
-    'gripper_capture': StreamMode(960, 540, '2400kbps', 20, 0.9168, awb='indoor'),
+    'gripper_capture': StreamMode(960, 540, '2400kbps', 20, 0.9168, awb='daylight'),
 }
 
 
@@ -121,7 +121,7 @@ ready_line_re = re.compile(r"Output #0, mpegts, to 'tcp://([^:]+):(\d+)\?[^']*':
 # values that can be overridden by the controller
 default_conf = {
     # delay in seconds between updates sent on websocket during normal operation
-    'RUNNING_WS_DELAY': 1/25,
+    'RUNNING_WS_DELAY': 1/30,
 }
 
 log_path = '/opt/robot/cranebot.log'

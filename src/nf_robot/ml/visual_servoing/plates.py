@@ -15,10 +15,10 @@ described by a line appended to manifest.jsonl beside it, so a directory of capt
 be read without opening any of the parquet files.
 
 What is deliberately *not* here is any matting, keying or segmentation. Those are offline
-decisions that will be revised - the finger matte in particular is a per-pixel variance
-test whose threshold nobody has tuned yet - and a capture that has already thrown away
-the frames it was derived from cannot be revisited without going back to the robot. This
-module stores what the camera saw.
+decisions that will be revised - both mattes are chroma keys with thresholds nobody has
+tuned yet - and a capture that has already thrown away the frames it was derived from
+cannot be revisited without going back to the robot. This module stores what the camera
+saw.
 """
 
 import json
@@ -32,11 +32,11 @@ import numpy as np
 
 KINDS = ("fingerplates", "floorplates", "objectplates")
 
-# Capture quality. These frames are the source every synthetic image is built from and
-# are only ever downscaled later, so the encoding wants to be near-lossless: the finger
-# matte separates gripper from background by per-pixel variance across a wrist turn, and
-# compression noise is variance. Lossless PNG is available by passing image_format="png"
-# if q95 turns out to muddy the matte, at roughly ten times the bytes.
+# Capture quality. These frames are the source every synthetic image is built from and are
+# only ever downscaled later, so the encoding wants to be near-lossless: compression
+# ringing along a keyed edge is exactly where a matte's alpha ramp lives. Lossless PNG is
+# available by passing image_format="png" if q95 turns out to muddy the matte, at roughly
+# ten times the bytes.
 PLATE_JPEG_QUALITY = 95
 
 MANIFEST_NAME = "manifest.jsonl"
@@ -354,6 +354,64 @@ def iter_run(output_dir, run_id, decode=True):
                 row["image"] = cv2.cvtColor(cv2.imdecode(buf, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
             row["attrs"] = json.loads(row["attrs"]) if row["attrs"] else {}
             yield row
+
+
+# Playback rate for the matte videos. Fast enough that a sweep reads as motion, which is
+# what makes a plate that jumps or a matte that flickers obvious.
+VIDEO_FPS = 60
+# Videos are downscaled to this width. The captures are 1080p and nothing here is being
+# inspected pixel by pixel - that is what the full size stills are for.
+VIDEO_WIDTH = 960
+
+
+def checkerboard(height, width, square=16, light=110, dark=70):
+    """Grey checkerboard, as BGR - the standard "this is transparent" backdrop."""
+    ys, xs = np.mgrid[0:height, 0:width]
+    board = np.where(((ys // square) + (xs // square)) % 2 == 0, light, dark)
+    return np.dstack([board.astype(np.uint8)] * 3)
+
+
+def over_checkerboard(bgra, board=None):
+    """Composite a BGRA image over a checkerboard, so its alpha is visible as an image."""
+    height, width = bgra.shape[:2]
+    if board is None:
+        board = checkerboard(height, width)
+    alpha = bgra[:, :, 3:4].astype(np.float32) / 255.0
+    return (bgra[:, :, :3].astype(np.float32) * alpha
+            + board.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
+
+
+def write_video(path, frames, fps=VIDEO_FPS, width=VIDEO_WIDTH):
+    """Write BGR frames to an mp4, scaling them to a common width.
+
+    Every frame is resized to the first one's shape: a video needs one size, and the
+    cutouts these are built from do not have one.
+
+    Returns the path, or None if there was nothing to write or no encoder for it.
+    """
+    writer, size = None, None
+    count = 0
+    for frame in frames:
+        if size is None:
+            scale = min(1.0, width / frame.shape[1])
+            size = (int(round(frame.shape[1] * scale)), int(round(frame.shape[0] * scale)))
+            # even dimensions: odd ones are legal in the container but choke players that
+            # assume 4:2:0 chroma
+            size = (size[0] - size[0] % 2, size[1] - size[1] % 2)
+            writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+            if not writer.isOpened():
+                logging.warning(f"no mp4 encoder available; skipping {path}")
+                return None
+        if (frame.shape[1], frame.shape[0]) != size:
+            frame = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+        writer.write(frame)
+        count += 1
+
+    if writer is None:
+        return None
+    writer.release()
+    logging.info(f"wrote {path} ({count} frames at {fps}fps, {size[0]}x{size[1]})")
+    return path
 
 
 def _label(row):

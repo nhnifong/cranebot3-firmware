@@ -11,6 +11,11 @@ and hands the compositor a towel-shaped blob.
 Nothing here fills holes, for that reason. Speckle smaller than a threshold is dropped
 and everything else is kept exactly as keyed.
 
+What the key cannot do is reject things that are not green: from the top of a height
+sweep the board no longer fills the frame, and its edge and the floor beyond it key as
+foreground. Everything more than VIGNETTE_DIAMETER_M across the floor from the grasp
+point is cut, which is off-frame low down and well inside it at the top of the sweep.
+
 Two labels come out of how the capture was taken rather than from anything in the image:
 
     grasp point   the operator centred the object's intended grasp lump under the
@@ -37,7 +42,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from nf_robot.ml.visual_servoing.plates import iter_run, read_manifest
+from nf_robot.ml.visual_servoing.plates import (
+    VIDEO_FPS, checkerboard, iter_run, over_checkerboard, read_manifest, write_video)
 
 # Greenness, as G minus the larger of R and B, above which a pixel is certainly
 # backdrop and below which it is certainly not. Between them the alpha ramps, which is
@@ -52,6 +58,19 @@ CROP_MARGIN = 8
 # Optical axis as a fraction of the frame, from camera_cal_wide. The operator centred
 # the grasp point under the lens, so this is where it is.
 PRINCIPAL_NORM = (342.0 / 684.0, 192.0 / 384.0)
+
+# Anything further than this from the grasp point, on the floor, is not the object. The
+# green board fills the frame from close up but not from the top of a height sweep, where
+# its edge - and the floor past it - key as foreground.
+#
+# A real diameter rather than a fraction of the frame, because the thing being excluded is
+# out there in the room: one number covers every height, since the projection shrinks it
+# as the camera climbs. At the bottom of a sweep it lands well outside the frame.
+VIGNETTE_DIAMETER_M = 0.5
+# Focal length over frame size, from camera_cal_wide (439.32/684, 461.56/384). Stored
+# normalized so it holds at the capture resolution, which is not the resolution the camera
+# was calibrated at but the same field of view.
+FOCAL_NORM = (439.31834658631243 / 684.0, 461.5621083718772 / 384.0)
 
 MANIFEST_NAME = "objects.jsonl"
 
@@ -92,12 +111,44 @@ def clean_alpha(alpha, min_component_fraction=MIN_COMPONENT_FRACTION):
     return alpha * np.maximum(keep, (alpha > 0) & (alpha <= 0.5))
 
 
-def extract_cutout(rgb, margin=CROP_MARGIN, **key_kwargs):
+def vignette_axes(shape, range_m, diameter_m=VIGNETTE_DIAMETER_M):
+    """Semi-axes in pixels that VIGNETTE_DIAMETER_M projects to at range_m.
+
+    Two of them, not a radius: fx and fy differ by 5% in this calibration, so a circle out
+    on the floor lands as a slightly elliptical region of pixels.
+    """
+    height, width = shape[:2]
+    radius = diameter_m / 2.0 / max(range_m, 1e-6)
+    return FOCAL_NORM[0] * width * radius, FOCAL_NORM[1] * height * radius
+
+
+def apply_vignette(alpha, range_m, diameter_m=VIGNETTE_DIAMETER_M):
+    """Zero alpha outside the keep-region, centred on the grasp point.
+
+    The object is at the principal point by construction, so distance from there is the
+    only cue available for telling it from board edge and floor - neither of which the
+    chroma key rejects, both being ungreen.
+    """
+    height, width = alpha.shape
+    ax, ay = vignette_axes(alpha.shape, range_m, diameter_m)
+    cx, cy = PRINCIPAL_NORM[0] * width, PRINCIPAL_NORM[1] * height
+    ys, xs = np.ogrid[:height, :width]
+    inside = ((xs - cx) / ax) ** 2 + ((ys - cy) / ay) ** 2 <= 1.0
+    return np.where(inside, alpha, 0.0)
+
+
+def extract_cutout(rgb, margin=CROP_MARGIN, range_m=None,
+                   diameter_m=VIGNETTE_DIAMETER_M, **key_kwargs):
     """One frame as a tight RGBA cutout plus where the grasp point landed in it.
 
-    Returns (rgba, grasp_xy, coverage) or None when the frame keys to nothing.
+    Returns (rgba, grasp_xy, coverage) or None when the frame keys to nothing. range_m
+    scales the vignette; without it nothing outside the key is discarded.
     """
     alpha, colour = chroma_key(rgb, **key_kwargs)
+    if range_m is not None:
+        # before the speckle pass, so the sliver of board edge the cut leaves behind is
+        # judged on the size it ends up, not the size it was
+        alpha = apply_vignette(alpha, range_m, diameter_m)
     alpha = clean_alpha(alpha)
     if not (alpha > 0.5).any():
         return None
@@ -115,14 +166,20 @@ def extract_cutout(rgb, margin=CROP_MARGIN, **key_kwargs):
     return rgba, grasp, float((alpha > 0.5).mean())
 
 
-def extract_run(plate_dir, run_id, output_dir, label=None, **key_kwargs):
+def extract_run(plate_dir, run_id, output_dir, label=None,
+                diameter_m=VIGNETTE_DIAMETER_M, vignette=True, **key_kwargs):
     """Write one RGBA cutout per frame of an objectplates run, plus a manifest line each."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     entries, skipped = [], 0
     for index, row in enumerate(iter_run(plate_dir, run_id)):
-        result = extract_cutout(row["image"], **key_kwargs)
+        attrs = row["attrs"]
+        # the measured range where there is one, the height the sweep was aiming for
+        # otherwise; both size the vignette equally well and one of them is always there
+        range_m = row["laser_rangefinder"] or attrs.get("target_range_m")
+        result = extract_cutout(row["image"], diameter_m=diameter_m,
+                                range_m=range_m if vignette else None, **key_kwargs)
         if result is None:
             skipped += 1
             continue
@@ -130,7 +187,6 @@ def extract_run(plate_dir, run_id, output_dir, label=None, **key_kwargs):
         name = f"{run_id}-{index:04d}.png"
         cv2.imwrite(str(output_dir / name), rgba[:, :, [2, 1, 0, 3]])
 
-        attrs = row["attrs"]
         entries.append({
             "file": name,
             "run_id": run_id,
@@ -138,7 +194,7 @@ def extract_run(plate_dir, run_id, output_dir, label=None, **key_kwargs):
             # Which way round the wrist offset means is a fact about the mount that a
             # real capture will settle; see the note in synth_frames.compose.
             "wrist_offset_deg": attrs.get("wrist_offset_deg", 0.0),
-            "range_m": row["laser_rangefinder"] or attrs.get("target_range_m"),
+            "range_m": range_m,
             "grasp_x": round(float(grasp[0]), 2),
             "grasp_y": round(float(grasp[1]), 2),
             "width": int(rgba.shape[1]),
@@ -148,6 +204,11 @@ def extract_run(plate_dir, run_id, output_dir, label=None, **key_kwargs):
             # the same field of view, so the two only agree after scaling by the ratio.
             "capture_width": int(row["image"].shape[1]),
             "capture_height": int(row["image"].shape[0]),
+            # what the vignette worked out to here, in pixels, for eyeballing a run that
+            # came back over-cropped
+            "vignette_px": (None if not (vignette and range_m) else
+                            [round(2 * a, 1) for a in
+                             vignette_axes(row["image"].shape, range_m, diameter_m)]),
             "coverage": round(coverage, 4),
         })
 
@@ -170,6 +231,42 @@ def read_objects(output_dir):
     if not manifest.exists():
         return []
     return [json.loads(line) for line in open(manifest) if line.strip()]
+
+
+def write_video_preview(output_dir, entries, fps=VIDEO_FPS):
+    """The cutouts as an mp4, each pasted back where it sat in its capture frame.
+
+    Back in place rather than centred, because that is what makes the run readable as the
+    sweep it was: the object holds still near the principal point while the wrist turns
+    around it, so anything that wanders is a keying failure and not the capture.
+    """
+    output_dir = Path(output_dir)
+
+    def frames():
+        board = None
+        for entry in entries:
+            bgra = cv2.imread(str(output_dir / entry["file"]), cv2.IMREAD_UNCHANGED)
+            if bgra is None:
+                continue
+            capture = (int(entry["capture_height"]), int(entry["capture_width"]))
+            if board is None or board.shape[:2] != capture:
+                board = checkerboard(*capture)
+            canvas = np.zeros((*capture, 4), np.uint8)
+            # the crop's offset in the capture frame, recovered from where the grasp point
+            # (the principal point, by construction) ended up inside the cutout
+            x0 = int(round(PRINCIPAL_NORM[0] * capture[1] - entry["grasp_x"]))
+            y0 = int(round(PRINCIPAL_NORM[1] * capture[0] - entry["grasp_y"]))
+            x0 = max(0, min(x0, capture[1] - bgra.shape[1]))
+            y0 = max(0, min(y0, capture[0] - bgra.shape[0]))
+            canvas[y0:y0 + bgra.shape[0], x0:x0 + bgra.shape[1]] = bgra
+
+            cell = over_checkerboard(canvas, board)
+            text = f"{entry['label']}  {entry['range_m'] or 0:.2f}m"
+            cv2.putText(cell, text, (8, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4)
+            cv2.putText(cell, text, (8, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 1)
+            yield cell
+
+    return write_video(output_dir / "_objects.mp4", frames(), fps)
 
 
 def write_preview(output_dir, entries, cell_width=240, columns=8, limit=32):
@@ -215,6 +312,12 @@ def main():
     parser.add_argument("--label", default=None, help="Override the object name")
     parser.add_argument("--green_low", type=float, default=GREEN_LOW)
     parser.add_argument("--green_high", type=float, default=GREEN_HIGH)
+    parser.add_argument("--vignette_m", type=float, default=VIGNETTE_DIAMETER_M,
+                        help="Diameter on the floor, in metres, outside which nothing is object")
+    parser.add_argument("--no_vignette", action="store_true",
+                        help="Keep everything the chroma key kept, however far out it is")
+    parser.add_argument("--fps", type=int, default=VIDEO_FPS,
+                        help="Playback rate of the mp4 written beside the cutouts")
     parser.add_argument("--no_preview", action="store_true")
     args = parser.parse_args()
 
@@ -227,9 +330,12 @@ def main():
 
     for run in runs:
         extract_run(args.dir, run["run_id"], output_dir, label=args.label,
+                    diameter_m=args.vignette_m, vignette=not args.no_vignette,
                     green_low=args.green_low, green_high=args.green_high)
     if not args.no_preview:
-        write_preview(output_dir, read_objects(output_dir))
+        objects = read_objects(output_dir)
+        write_preview(output_dir, objects)
+        write_video_preview(output_dir, objects, args.fps)
 
 
 if __name__ == "__main__":

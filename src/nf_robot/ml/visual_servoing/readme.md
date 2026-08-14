@@ -227,14 +227,12 @@ they are in frame and rotates the entire world behind them. That is the lever th
 tool is built on, and it also means the model's notion of "wrist angle" is a property of
 the background, never of the fingers.
 
-**fingerplates.** For each finger_angle stop, spin the wrist through a full turn and
-hold a frame at intervals. Across that set the fingers are pinned to the pixel and
-everything else rotates, so a per-pixel median plus variance separates them cleanly -
-low variance is gripper, high variance is world - with no chroma key, no special
-backdrop and no manual masking. Feather the alpha a pixel or two so the plate
-composites without a hard edge. Best done over textured floor with no strong
-rotationally symmetric feature under the gripper, since anything that survives the
-rotation unchanged will be mistaken for hardware.
+**fingerplates.** Over the green backdrop, same as objectplates: for each finger_angle
+stop, spin the wrist through a full turn and hold a frame at intervals. Each frame is
+chroma keyed and the per-pixel median taken over the turn, which gives a soft edge on
+fluff and frayed rubber for free and drops anything that merely rotated past underneath -
+the fingers are pinned to the pixel across the set, so they are the only ungreen thing
+that is in the same place in every frame.
 
 The output is one **RGBA plate per finger_angle**, and only per finger_angle: the
 fingers' apparent position and size in frame are fixed by the mount, independent of both
@@ -441,26 +439,36 @@ run records the robot id and hostname that captured it, and `--list` groups by t
 
 ## 2. Extract the pieces
 
-Fingers, as one RGBA plate per aperture. The default separates hardware from background
-by how each pixel behaves as the wrist turns:
+Fingers, as one RGBA plate per aperture. A chroma key on every frame of the wrist turn,
+then the per-pixel median across it:
 
     python -m nf_robot.ml.visual_servoing.finger_matte --dir plates
 
-Over a pale floor with dark hardware, brightness separates them outright, which is worth
-using while the capture allows it:
+Each plate logs how much of its frame was green; a low number there means the capture
+missed the backdrop and nothing downstream of it is worth looking at. `--green_low` /
+`--green_high` move the key's ramp if the fingers are being eaten or the backdrop
+survives.
 
-    python -m nf_robot.ml.visual_servoing.finger_matte --dir plates \
-        --contrast_margin -1 --max_brightness 90
-
-Objects, as one RGBA cutout per captured frame. This is a chroma key, so it wants the
-green board; without one, raise `--green_low`/`--green_high` and expect to check the
+Objects, as one RGBA cutout per captured frame. Same keyer, so it wants the same
+backdrop; without one, raise `--green_low`/`--green_high` and expect to check the
 result rather than trust it:
 
     python -m nf_robot.ml.visual_servoing.object_matte --dir plates
 
+Anything more than `--vignette_m` (0.5m by default) across the floor from the grasp point
+is dropped, since the board stops filling the frame near the top of a height sweep and its
+edge keys as foreground. Lower it if board edge still survives, raise it for an object
+wider than half a metre, `--no_vignette` to keep whatever the key kept.
+
 Both write a contact sheet beside their output - `plates/fingers/_mattes.png` and
 `plates/objects/_objects.png` - which is the check worth doing before generating
 anything from them.
+
+Both also write an mp4 of every result frame over the same checkerboard, at 60fps
+(`--fps` to change it): `_mattes.mp4` in finger angle order, `_objects.mp4` with each
+cutout back where it sat in its capture frame. Worth a look for what a sheet of stills
+cannot show - a matte that flickers between neighbouring plates, or an object that
+wanders when it should be holding still under the wrist turn.
 
 ## 3. Mine the teleop half
 
