@@ -19,10 +19,8 @@ from nf_robot.robot.component_server import RobotComponentServer
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
 from nf_robot.common.util import remap, clamp, PID
 
-""" Server for Arpeggio Gripper
-
-Hardware is a Raspberry pi zero 2W, Camera Module 3 Wide, and Stringman Gripper Hat.
-"""
+"""Server for the Arpeggio gripper: a pi zero 2W, Camera Module 3 Wide, and Stringman
+Gripper Hat."""
 
 FINGER = 1
 WRIST = 2
@@ -56,25 +54,23 @@ default_gripper_conf = {
     # (raw motor units, 0-1000) The maximum allowed motor load before capping the normalized load contribution (finger)
     'MAX_SAFE_LOAD': 500,
     'MAX_SAFE_WRIST_LOAD': 900,
-    # (dimensionless, 0-1) The proportional weight of the pad pressure in the composite force calculation.
-    # the weight allocated to the motor load reading is 1-this value
+    # (dimensionless, 0-1) weight of pad pressure in the composite force; motor load gets
+    # the remaining 1-this
     'PRESSURE_WEIGHT': 0.7,
-    # Which entry of component_server.stream_modes the camera streams at, one of
-    # gripper_stream_modes below. A running stream is automatically restarted to pick up
-    # a change. See arp_gripper_client.use_capture_stream, which is the only thing that
-    # moves it off the control stream.
+    # Which component_server.stream_modes entry the camera runs, from gripper_stream_modes
+    # below. A running stream restarts to pick up a change.
     'STREAM_MODE': 'gripper_control',
-    # Effective pole length used for swing model
-    'POLE_LENGTH': 0.4526 # carbon pole effective length is 0.4350
+    # (m) effective pole length for the swing model; the carbon pole alone is 0.4350
+    'POLE_LENGTH': 0.4526
 }
 
 
-# module level, like the anchor's in component_server, so that it can be read without
-# constructing a GripperArpServer (whose __init__ opens the I2C bus).
+# module level, so it can be read without constructing a GripperArpServer, whose __init__
+# opens the I2C bus
 stream_command = [
     "/usr/bin/rpicam-vid", "-t", "0", "-n",
-    # Force the full-FOV 2304x1296 sensor mode and output 684x384 (16:9) so we keep the
-    # whole wide-camera field of view instead of the center crop a square output forces.
+    # the full-FOV 2304x1296 sensor mode scaled to 684x384 (16:9), which keeps the whole
+    # wide field of view instead of the centre crop a square output would force
     "--mode", "2304:1296:10",
     "--width=684", "--height=384",
     "--framerate=60",
@@ -86,11 +82,9 @@ stream_command = [
     "--bitrate", "1200kbps"
 ]
 
-# names from component_server.stream_modes a gripper accepts, its normal one first.
-# Both keep the 2304:1296 sensor mode the command sets, so they share one field of view:
-# 'gripper_capture' is more pixels of the same scene, not a different framing. That matters
-# because the geometry of anything captured through this camera is calibrated against that
-# field of view.
+# Modes a gripper accepts, its normal one first. Both keep the sensor mode above, so
+# capture mode is more pixels of the same scene rather than a different framing - which is
+# what lets one camera calibration cover both.
 gripper_stream_modes = ('gripper_control', 'gripper_capture')
 
 
@@ -109,7 +103,7 @@ class GripperArpServer(RobotComponentServer):
         self.rangefinder = VL53L1X(i2c)
         model_id, module_type, mask_rev = self.rangefinder.model_info
         logging.info(f'Rangefinder Model ID: 0x{model_id:0X} Module Type: 0x{module_type:0X} Mask Revision: 0x{mask_rev:0X}')
-        self.rangefinder.distance_mode = 2 # LONG. results returned in centimeters.
+        self.rangefinder.distance_mode = 2 # LONG, reports centimeters
         self.rangefinder.start_ranging()
 
         self.ads = ADS1015(i2c)
@@ -120,7 +114,7 @@ class GripperArpServer(RobotComponentServer):
         self.motors = SimpleSTS3215()
         self.motors.configure_multiturn(WRIST)
 
-        # the superclass, RobotComponentServer, assumes the presense of this attribute
+        # RobotComponentServer expects this attribute; a gripper has no spool
         self.spooler = None
 
         unique = ''.join(get_mac_address().split(':'))
@@ -133,8 +127,8 @@ class GripperArpServer(RobotComponentServer):
         self.unrolled_wrist_angle = 0
         self.wrist_step_offset = 0
 
-        # Set while resetWrist/untwistWrist are repositioning the wrist; other wrist
-        # commands are ignored until the operation finishes.
+        # set while resetWrist/untwistWrist reposition the wrist; other wrist commands are
+        # ignored until they finish
         self.wrist_busy = False
             
         self.desired_finger_speed = 0
@@ -148,20 +142,17 @@ class GripperArpServer(RobotComponentServer):
         self.last_gyro = np.zeros(2)
         self.filtered_alpha = np.zeros(2)
 
-        # omega is the constant angular frequency of the pendulum.
-        # It represents the speed that the system progresses along it's cycle radians per second.
-        # Recomputed when the client changes POLE_LENGTH (see config_updated).
+        # the pendulum's angular frequency, rad/s. Recomputed when the client changes
+        # POLE_LENGTH (see config_updated).
         self.omega = np.sqrt(GRAVITY / self.conf['POLE_LENGTH'])
-        
-        # The state matrix representing the sin curves being fitted to the gyro measurements.
-        # Row 0: X-axis swing, Row 1: Y-axis swing.
-        # Col 0: Velocity (Sine component), Col 1: Phase tracker (Cosine component).
+
+        # sin curves fitted to the gyro. Row 0 X swing, row 1 Y; col 0 velocity (sine),
+        # col 1 phase tracker (cosine).
         self.state = np.zeros((2, 2))
 
-        # observation_gain defines how much real sensor data to average into the model each time step
-        self.observation_gain = 0.1 
+        # how much of each real gyro reading to average into the model per step
+        self.observation_gain = 0.1
 
-        # Finger pressure PID controller
         self.fingerpid = PID(self.conf['FINGER_PID_KP'], self.conf['FINGER_PID_KI'], self.conf['FINGER_PID_KD'], DT)
         self.last_finger_data = None
 
@@ -169,7 +160,7 @@ class GripperArpServer(RobotComponentServer):
         self.in_force_mode = False
         self.desired_force = 0.0
         
-        # State tracking for the motor overload safety feature
+        # when the overload cutout lets each motor have torque back
         self.finger_torque_reenable_time = 0.0
         self.wrist_torque_reenable_time = 0.0
 
@@ -178,9 +169,8 @@ class GripperArpServer(RobotComponentServer):
         self.finger_closed_pos = 1000
         self.saved_unrolled_wrist_angle = 0
         self.saved_finger_angle = 0
-        # Net full revolutions of physical wrist rotation that have fallen outside the
-        # [0, 1080] unrolled_wrist_angle window across boots (see getWristAngle). Used to
-        # monitor cumulative cable twist (tolerance is roughly +/-30 turns).
+        # Whole turns that have fallen outside the [0, 1080] window across boots (see
+        # getWristAngle), tracking cumulative cable twist. The cable tolerates about +/-30.
         self.total_wrist_turns = 0
 
         self.motor_loop_pause = False
@@ -213,10 +203,11 @@ class GripperArpServer(RobotComponentServer):
             }, f)
 
     async def resetWrist(self):
-        """Reset the wrist encoder angle to half a revolution above zero,
-        Try to rotate one revolution in the negative direction first so there will be no net wire twisting,
-        then rotate one full revolution in the positive direction,
-        then zero offsets"""
+        """Re-establish 540 as the wrist's neutral position.
+
+        Turns one revolution negative before turning one positive, so the wire ends up
+        with no net twist, then zeroes the offsets.
+        """
         if self.wrist_busy:
             logging.info('resetWrist requested while wrist busy; ignoring')
             return
@@ -259,15 +250,15 @@ class GripperArpServer(RobotComponentServer):
         return clamp(target, 0, 1080)
 
     async def _untwistOneTurn(self, direction):
-        """Rotate the wrist by roughly one full revolution in `direction` (+1 or -1)
-        using two encoder midpoint resets. Each reset re-defines the motor's
-        current physical position (no motion) as reading 180 degrees (2048 steps).
-        Between the two resets, unrolled_wrist_angle ends at 180 - generally a
-        different number than it started at - but the net change in
-        unrolled_wrist_angle mod 360 over the whole call matches the net physical
-        rotation mod 360, so room heading tracking stays consistent. wrist_step_offset
-        ends at 0, and the encoder's zero reference has shifted by exactly one
-        revolution in `direction`, relieving one turn of cable twist."""
+        """Turn the wrist one revolution in `direction` (+1 or -1), relieving one turn of
+        cable twist.
+
+        Works by two encoder midpoint resets, each re-defining the current physical
+        position as 180 degrees without moving. unrolled_wrist_angle lands on 180, usually
+        not where it started, but its value mod 360 changes by the same amount the wrist
+        physically turned, so room heading tracking stays right. wrist_step_offset ends at
+        0 with the encoder's zero shifted a full revolution.
+        """
         for _ in range(2):
             target = self._nearest_multiple_of_360(self.unrolled_wrist_angle, direction)
             self.setWrist(target)
@@ -279,21 +270,19 @@ class GripperArpServer(RobotComponentServer):
             self.last_simple_wrist_angle = 180.0
             self.unrolled_wrist_angle = 180.0
             self.wrist_step_offset = 0.0
-            # The reset just re-defined the wrist's current physical position as
-            # reading 180 degrees, with no motion. Reflect that here so the loop
-            # doesn't think it needs to move, and so the next setWrist() below
-            # (which targets the same desired_wrist_angle as before the reset, in
-            # degrees) is recognized as a real move rather than a no-op.
+            # follow the reset here too, or the motor loop would see a stale target and
+            # drive the wrist back to it
             self.desired_wrist_angle = 180.0
             self.last_sent_wrist_angle = 180.0
             self.motor_loop_pause = False
             await asyncio.sleep(0.1)
 
     async def untwistWrist(self, turns=None):
-        """Physically rotate the wrist by whole revolutions to relieve accumulated
-        cable twist. `turns` is the number of revolutions to remove from
-        total_wrist_turns (defaults to total_wrist_turns itself, i.e. untwist
-        completely). Other wrist commands are ignored until this completes."""
+        """Turn the wrist through whole revolutions to relieve accumulated cable twist.
+
+        `turns` is how many to remove from total_wrist_turns, defaulting to all of them.
+        Other wrist commands are ignored until this finishes.
+        """
         if self.wrist_busy:
             logging.info('untwistWrist requested while wrist busy; ignoring')
             return
@@ -320,77 +309,57 @@ class GripperArpServer(RobotComponentServer):
             self.update['untwist_complete'] = {'turns_done': n, 'total_wrist_turns': self.total_wrist_turns}
 
     def getWristAngle(self):
-        # motor only reports it's position within one revolution.
-        # even though you can command multi turns from it.
-        # return a value between 0 and 1080, which is the same range we accept commands in.
-        # 540 is the neutral position.
-        #
-        # What happens at boot depends on which third of [0, 1080] unrolled_wrist_angle
-        # was in when the device was last powered off (saved_unrolled_wrist_angle), because
-        # the motor's encoder remembers the physical angle (mod 360) but not which of the
-        # three revolutions of [0, 1080] that angle belonged to:
-        #   [0, 360)    -> re-anchor shift of 0.    unrolled_wrist_angle is UNCHANGED at boot.
-        #   [360, 720)  -> re-anchor shift of -360. unrolled_wrist_angle drops by 360 at boot.
-        #   [720, 1080] -> re-anchor shift of -720. unrolled_wrist_angle drops by 720 at boot.
-        # In all three cases the full [0, 1080] command range is available for the rest of
-        # the session with no startup motion, and unrolled_wrist_angle mod 360 (the physical
-        # heading the camera math depends on) is preserved.
-        #
-        # PREFERRED SHUTDOWN RANGE: [0, 360). Only this range guarantees zero shift, which
-        # matters for two reasons:
-        #  1. Continuity: unrolled_wrist_angle (and what "540 = neutral" means physically,
-        #     as established by the last resetWrist()) is preserved exactly across the
-        #     power cycle. A -360/-720 shift permanently re-centers [0, 1080] on a
-        #     different 3-turn slice of the wrist's physical rotation, leaving neutral
-        #     off-center with reduced headroom on one side.
-        #  2. Cable twist: the cable tolerates roughly +/-30 turns before it needs manual
-        #     untwisting. If shutdowns always land in [0, 360), [0, 1080] stays pinned to
-        #     the same 3-turn slice of physical rotation forever (whatever was "good" at
-        #     the last calibration). If shifts occur, each one permanently re-maps
-        #     [0, 1080] to an adjacent 3-turn slice, and repeated shifts in the same
-        #     direction across many power cycles can walk the cable toward its limit
-        #     without any single session's unrolled_wrist_angle leaving [0, 1080].
-        # Practically: an idle/parked pose used before expected shutdowns should have
-        # unrolled_wrist_angle in [0, 360), not at neutral (540, which is in [360, 720)).
+        """Wrist angle in [0, 1080], the same three-revolution range commands use, 540
+        being neutral. The motor only reports position within one revolution, so the extra
+        turns are tracked here.
+
+        At boot the encoder knows the physical angle mod 360 but not which of the three
+        revolutions it belonged to, so unrolled_wrist_angle is re-anchored down by 0, 360
+        or 720 depending on where it was at shutdown. Either way the full command range is
+        available with no startup motion and the angle mod 360 - the heading the camera
+        math needs - survives.
+
+        PREFER SHUTTING DOWN WITH THE ANGLE IN [0, 360), the only range that shifts by
+        zero. A shift re-centers [0, 1080] on a different 3-turn slice of physical
+        rotation, so neutral drifts off-center, and repeated shifts the same way across
+        power cycles can walk the cable toward its ~30 turn twist limit without any single
+        session ever leaving [0, 1080]. So park at, say, 180 rather than neutral 540.
+        """
         wrist_data = self.motors.get_feedback(WRIST)
         simple_angle = wrist_data['position'] / STEPS_PER_REV * 360
 
-        # Anchor continuous tracking to the motor's actual physical position at boot
+        # first read after boot: rebuild the multi-turn angle from saved state, assuming
+        # the joint moved less than half a turn while powered off
         if self.last_simple_wrist_angle is None:
             self.last_simple_wrist_angle = simple_angle
-            
-            # Assume the physical joint moved less than half a turn while powered off
-            # to mathematically reconstruct the continuous multi-turn angle from the saved state
+
             error = (simple_angle - self.saved_unrolled_wrist_angle + 180) % 360 - 180
             self.unrolled_wrist_angle = self.saved_unrolled_wrist_angle + error
 
-            # Calculate the step offset between Python's continuous unrolled frame
-            # and the motor's hardware encoder frame (which wraps 0-4095 at boot).
+            # gap between our continuous frame and the motor's encoder frame, which wraps
+            # 0-4095 at boot
             expected_steps = self.unrolled_wrist_angle / 360 * STEPS_PER_REV
             offset = expected_steps - wrist_data['position']
 
-            # Re-anchor unrolled_wrist_angle to the motor's boot-time frame in whole
-            # revolutions, so the offset becomes zero with no motor movement.
-            # This preserves unrolled_wrist_angle mod 360 (the room-facing heading
-            # that camera math depends on) while ensuring every angle in [0, 1080]
-            # maps to a non-negative motor position for the rest of this session.
+            # Close that gap in whole revolutions rather than by moving the motor, so every
+            # angle in [0, 1080] maps to a non-negative motor position this session.
             revolutions = round(offset / STEPS_PER_REV)
             self.unrolled_wrist_angle -= revolutions * 360
             self.saved_unrolled_wrist_angle -= revolutions * 360
             self.wrist_step_offset = 0.0
 
             if revolutions != 0:
-                # Compensate so total_wrist_turns*360 + unrolled_wrist_angle (the absolute
-                # physical rotation) is unchanged by this re-anchoring.
+                # keep total_wrist_turns*360 + unrolled_wrist_angle, the absolute physical
+                # rotation, unchanged by the re-anchoring
                 self.total_wrist_turns += revolutions
                 self.update['total_wrist_turns'] = self.total_wrist_turns
                 self.save_state()
 
             return clamp(self.unrolled_wrist_angle, 0, 1080)
 
-        # Unroll simple_angle against desired_wrist_angle instead of last_simple_wrist_angle.
-        # Since desired_wrist_angle tracks intent rigidly at 60Hz, this is immune to aliasing
-        # caused by read/CPU stutters (which resulted in unrolled_wrist_angle drifting out of bounds).
+        # Unrolled against desired_wrist_angle, not the last reading: intent advances
+        # rigidly at 60Hz, so a read or CPU stutter cannot alias a turn and walk
+        # unrolled_wrist_angle out of bounds.
         error = (simple_angle - self.desired_wrist_angle + 180) % 360 - 180
         self.unrolled_wrist_angle = self.desired_wrist_angle + error
         
@@ -398,22 +367,19 @@ class GripperArpServer(RobotComponentServer):
         return clamp(self.unrolled_wrist_angle, 0, 1080)
 
     def getFingerAngle(self):
-        # updated in get_current_grip_force which is called in pid loop at 60 hz
+        # last_finger_data comes from get_current_grip_force, in the 60Hz motor loop
         if self.last_finger_data is not None:
             return remap(self.last_finger_data['position'], self.finger_open_pos, self.finger_closed_pos, -90, 90)
         else:
             return 0
 
     def getAngleFromVertical(self):
-        """Return the tilt angle in degrees between the gripper's down axis (Z)
-        and true vertical, derived from the accelerometer's gravity reading.
+        """Unsigned degrees between the gripper's down axis and true vertical, from the
+        accelerometer: ~0 hanging straight down, ~90 horizontal.
 
-        When the gripper hangs straight down and is roughly stationary, the
-        accelerometer reads gravity along Z, so this returns ~0; a fully
-        horizontal gripper reads ~90. The result is unsigned (0-180) and does
-        not indicate tilt direction. It is only meaningful while the gripper is
-        approximately stationary, since the accelerometer cannot distinguish
-        gravity from motion-induced acceleration."""
+        Carries no tilt direction, and only means anything while the gripper is roughly
+        still - the accelerometer cannot tell gravity from motion.
+        """
         ax, ay, az = self.imu.acceleration  # m/s^2
         horizontal = math.sqrt(ax * ax + ay * ay)
         return math.degrees(math.atan2(horizontal, az))
@@ -433,13 +399,14 @@ class GripperArpServer(RobotComponentServer):
 
         if self.rangefinder.data_ready:
             distance = self.rangefinder.distance
-            # If the floor is out of range, distance is None
+            # None when the floor is out of range
             if distance:
                 self.rangefinder.clear_interrupt()
                 self.update['grip_sensors']['range'] = distance / 100
 
     def checkMotorLoad(self, finger_data, wrist_data):
-        # Prevent repetitive triggering by checking if the re-enable timer is already running
+        """Cut torque for a second on either motor that is overloaded."""
+        # a running re-enable timer means this already fired; don't stack cutouts
         if finger_data['load'] < 1000 and finger_data['load'] > self.conf['MAX_SAFE_LOAD'] and not self.finger_torque_reenable_time:
             logging.warning(f"Finger motor load ({finger_data['load']}) exceeds limit. Disabling torque for 1s.")
             self.motors.torque_enable(FINGER, False)
@@ -454,18 +421,19 @@ class GripperArpServer(RobotComponentServer):
             self.wrist_torque_reenable_time = time.time() + 1.0
 
     def get_current_grip_force(self):
+        """(filtered composite grip force, raw normalized pad pressure), both 0-1."""
         self.last_finger_data = self.motors.get_feedback(FINGER)
-        
-        # Values greater than 1000 represent load in the opposite direction, which is irrelevant for grip force
+
+        # over 1000 means load in the opening direction, which is not grip force
         raw_load = self.last_finger_data['load'] if self.last_finger_data['load'] <= 1000 else 0
         norm_load = min(raw_load / self.conf['MAX_SAFE_LOAD'], 1.0)
-        
-        # Force Sensitive Resistors (FSRs) drop resistance logarithmically with applied force, 
-        # causing a highly non-linear voltage curve (massive drop on light touch, slow drop on heavy press).
-        # Applying an exponent > 1 compresses the overly sensitive light-touch region and linearizes the usable force proxy.
+
+        # The FSR's resistance falls logarithmically with force - a big voltage drop on a
+        # light touch, very little on a hard press - so the exponent flattens the
+        # oversensitive light end into something usable as a force proxy.
         norm_pressure = clamp((max(0.0, 3.3 - self.pressure_sensor.voltage) / 3.3) ** 2.5, 0.0, 1.0)
-        
-        # Low-pass filter mitigates sensor noise and prevents the PID derivative term from causing severe jitter
+
+        # low-pass, or sensor noise reaches the PID's derivative term as jitter
         weighted_sum = (norm_pressure * self.conf['PRESSURE_WEIGHT']) + (norm_load * (1-self.conf['PRESSURE_WEIGHT']))
         self.filtered_force = (self.conf['FILTER_COEFF'] * weighted_sum) + ((1 - self.conf['FILTER_COEFF']) * self.filtered_force)
         
@@ -477,36 +445,36 @@ class GripperArpServer(RobotComponentServer):
         return [umtask]
 
     async def updateMotors(self):
+        """The 60Hz loop that owns both motors: applies commanded speeds, runs the finger
+        force controller, and saves state once movement stops."""
         try:
-            # runs at startup of server
             self.motors.torque_enable(FINGER, True)
             self.motors.torque_enable(WRIST, True)
 
-            # Reconcile wrist tracking against the motor's boot-time position
-            # (anchors wrist_step_offset to 0) before commanding any movement.
+            # reconcile wrist tracking with the motor's boot position before commanding
+            # anything, which anchors wrist_step_offset at 0
             self.getWristAngle()
 
-            # initialize with current positions to prevent sudden moves
+            # start from where the hardware already is, so nothing lurches
             self.desired_wrist_angle = self.saved_unrolled_wrist_angle
             logging.info(f'wrist angle at startup = {self.desired_wrist_angle}')
             self.desired_finger_angle = self.saved_finger_angle
             logging.info(f'finger angle at startup = {self.desired_finger_angle}')
 
             last_movement_time = time.time()
-            
-            # State tracking to detect what actually changed in the current loop
+
+            # what was last written to each motor, so the loop only sends real changes
             last_sent_finger_angle = self.desired_finger_angle
             self.last_sent_wrist_angle = self.desired_wrist_angle
 
             while self.run_server:
                 now = time.time()
                 
-                # Halt routine updates if the calibration script requested motor control
+                # something else (calibration, untwist) has taken the motors
                 if self.motor_loop_pause:
                     await asyncio.sleep(0.1)
                     continue
 
-                # Restore torque after safety timeout expires
                 if self.finger_torque_reenable_time and now >= self.finger_torque_reenable_time:
                     logging.info("Safety timeout expired. Re-enabling finger motor torque.")
                     self.motors.torque_enable(FINGER, True)
@@ -517,7 +485,7 @@ class GripperArpServer(RobotComponentServer):
                     self.motors.torque_enable(WRIST, True)
                     self.wrist_torque_reenable_time = 0.0
 
-                # Actions are only valid for a short time.
+                # a speed command expires, so a dropped connection stops the motors
                 if now > self.time_last_commanded_finger_speed + self.conf['ACTION_TIMEOUT']:
                     self.desired_finger_speed = 0
                 if now > self.time_last_commanded_wrist_speed + self.conf['ACTION_TIMEOUT']:
@@ -535,11 +503,9 @@ class GripperArpServer(RobotComponentServer):
                 # update fingers
                 current_force, current_pressure = self.get_current_grip_force()
                 
-                # check for rising edges in pad pressure
                 self.countFingerPresses(current_pressure)
-                
-                # Check for safety overload conditions on every loop iteration
-                # We fetch wrist data here as well since get_current_grip_force only pulls finger data
+
+                # get_current_grip_force only reads the finger motor
                 wrist_data = self.motors.get_feedback(WRIST)
                 self.checkMotorLoad(self.last_finger_data, wrist_data)
 
@@ -549,17 +515,17 @@ class GripperArpServer(RobotComponentServer):
                     if abs(self.desired_finger_speed) > 0:
                         fa = self.getFingerAngle()
                     
-                    # Enter force mode dynamically upon contact while closing
+                    # touching something while closing hands the fingers to the force
+                    # controller, so the operator's speed command becomes a force command
                     if current_pressure > self.conf['FORCE_TRIGGER_THRESHOLD'] and self.desired_finger_speed > 0:
                         self.in_force_mode = True
                         self.desired_force = self.conf['INITIAL_DESIRED_FORCE']
                         self.fingerpid._error_sum = 0
-                
+
                 if self.in_force_mode:
-                    # Modulate desired force based on finger speed commands
                     self.desired_force += self.desired_finger_speed * DT * self.conf['FORCE_RATE_MULTIPLIER']
-                    
-                    # Revert to position mode if commanded below zero force
+
+                    # commanding below zero force is how the operator lets go
                     if self.desired_force < 0:
                         self.in_force_mode = False
                         self.desired_force = 0
@@ -578,11 +544,11 @@ class GripperArpServer(RobotComponentServer):
                     last_sent_finger_angle = self.desired_finger_angle
                     finger_changed = True
                     
-                # Record time logic for tracking inactivity to save layout state
+                # Persist the pose 5s after motion stops, so a power cut leaves the saved
+                # angles right. Writes once per stop: the saved values match immediately.
                 if finger_changed or wrist_changed:
                     last_movement_time = now
                 elif now - last_movement_time > 5.0:
-                    # Triggers exactly once per stop since properties sync immediately after write
                     if self.unrolled_wrist_angle != self.saved_unrolled_wrist_angle or self.desired_finger_angle != self.saved_finger_angle:
                         self.saved_unrolled_wrist_angle = self.unrolled_wrist_angle
                         self.saved_finger_angle = self.desired_finger_angle
@@ -598,34 +564,28 @@ class GripperArpServer(RobotComponentServer):
             self.omega = np.sqrt(GRAVITY / self.conf['POLE_LENGTH'])
 
     async def process_imu(self, ws):
-        """
-        Observe gyro and fit a sin curve for use in active swing cancellation
+        """Fit a swinging pendulum to the gyro at 100Hz and publish it for the host's
+        swing cancellation.
+
+        Sending the model rather than raw gyro lets the host project it forward to cover
+        control latency; see arp_gripper_client.compute_swing_correction.
         """
         while True:
             now = time.time()
             dt = now - self.last_time_imu
             self.last_time_imu = now
 
-            # Get current angular velocity (rad/s)
-            # MPU6050 returns (gx, gy, gz) in rad/s
-            current_gyro = np.array(self.imu.gyro[:2])
+            current_gyro = np.array(self.imu.gyro[:2]) # rad/s
 
+            # advance the virtual pendulum's phase to now, then pull the velocity
+            # component toward what the gyro actually reads
             step_angle = self.omega * dt
             c_step, s_step = np.cos(step_angle), np.sin(step_angle)
-            # Rotation matrix to keep the virtual pendulum 'swinging' in sync with time.
             self.state = self.state @ np.array([[c_step, -s_step], [s_step, c_step]])
-
-            # Correct the Sine component (Col 0) using the actual Gyro reading.
             self.state[:, 0] += self.observation_gain * (current_gyro - self.state[:, 0])
 
-            # The state of the model only needs to be sent to the client at the regular rate
             self.update['sm'] = self.state.tolist()
             self.update['st'] = self.last_time_imu
-
-            # To use this information, the motion controller should evaluate the derivative of the model at future times
-            # based on expected latency in order to obtain a prediction of the angular acceleration in X and Y.
-            # the compensatory velocity to apply to the marker box is proportional to the inverse of that angular acceleration.
-            # the compensation must be rotated to account for the wrist.
 
             await asyncio.sleep(1/100)
 
@@ -643,12 +603,15 @@ class GripperArpServer(RobotComponentServer):
         self.desired_finger_angle = clamp(angle, -90, 90)
             
     def setWrist(self, angle):
-        # Accept an angle in degrees between 0 and 1080 (3 revolutions)
+        # degrees in [0, 1080], three revolutions
         self.desired_wrist_angle = clamp(angle, 0, 1080)
 
     async def findTouchPoint(self):
+        """Close the fingers slowly until the pad reads pressure, returning that encoder
+        position. Raises if the motor loads up with no pressure, which means something is
+        jammed between the fingers."""
         pos = self.motors.get_position(FINGER)
-        # open a few degrees in case fingers were already touching.
+        # open a few degrees in case the fingers were already touching
         rel = 200
         self.motors.set_position(FINGER, pos + rel)
         await asyncio.sleep(0.5)
@@ -659,16 +622,14 @@ class GripperArpServer(RobotComponentServer):
         if v < 2.2:
             logging.info("Voltage too low on finger pad ({v}). Is pressure sensor connected?")
 
-        # slowly close until the fingerpad voltage drops below 2V
         start = time.time()
         load = 0
         while v > 2.2 and time.time() < start+16:
-            # logging.info(f'self.motors.set_position(FINGER, {pos + rel})')
             self.motors.set_position(FINGER, pos + rel)
             rel -= 20
 
-            # you cannot command negative positions from these servos (though they will report negative positions in feedback)
-            # so as the fingers get more closed, we may cross that point and need to reset midpoint again to move it off the edge of our working range.
+            # These servos accept no negative position commands, though they report them,
+            # so closing far enough runs off the end of the range; re-centre to continue.
             if pos+rel < 0:
                 self.motors.set_speed(FINGER, 0)
                 self.motors.torque_enable(FINGER, False)
@@ -683,7 +644,7 @@ class GripperArpServer(RobotComponentServer):
             v = self.pressure_sensor.voltage
             data = self.motors.get_feedback(FINGER)
             load = data["load"]
-            if load < 1000: # ignore load values over 1000, they indicate force in the other direction
+            if load < 1000: # over 1000 is load in the opening direction
                 if load>450:
                     self.motors.torque_enable(FINGER, False)
                     raise RuntimeError("motor load too high while no finger pressure detected")
@@ -694,10 +655,11 @@ class GripperArpServer(RobotComponentServer):
         return touch_pos
 
     async def measureFingerContact(self):
+        """Calibrate finger_open_pos/finger_closed_pos by feeling for where the fingers
+        meet, twice: the first pass moves the encoder midpoint into the middle of the
+        range, the second measures against it."""
         try:
-            # pause the motor control loop
             self.motor_loop_pause = True
-            # measure the motor angle where the fingers touch.
             logging.info(f"Calibrating finger servo...")
             self.motors.reset_encoder_to_midpoint(FINGER)
 
@@ -708,7 +670,7 @@ class GripperArpServer(RobotComponentServer):
             self.saved_finger_angle = 90 
             self.desired_finger_angle = 90
 
-            # Put the midpoint somwhere actually in the middle because we need nearly the full 4096 range
+            # the fingers need nearly the whole 4096 range, so centre the midpoint
             self.motors.set_position(FINGER, touch_pos + 1800)
             await asyncio.sleep(2)
             self.motors.reset_encoder_to_midpoint(FINGER)
@@ -751,28 +713,28 @@ class GripperArpServer(RobotComponentServer):
             asyncio.create_task(self.untwistWrist(update['untwist']))
 
     def identify(self):
-        """ make a noise """
+        """Twitch the fingers, so an operator can tell which gripper this is."""
         self.motor_loop_pause = True
         pos = self.motors.get_position(FINGER)
-        # open and close a few degrees
         self.motors.set_position(FINGER, pos + 60)
         time.sleep(0.2)
         self.motors.set_position(FINGER, pos)
         self.motor_loop_pause = False
 
     def countFingerPresses(self, pressure):
-        """ Detect rising edge in finger pressure.
-        If there is no client and it occurs five times in two seconds, set the reset wifi event from the parent class"""
+        """Five taps on the finger pad within two seconds sets the wifi reset event.
+
+        The pad is the only input the gripper has when it cannot reach a host, which is
+        exactly when the wifi needs resetting. component_server.watch_for_reset acts on
+        the event, and ignores it if a client is connected, so a grasp cannot trip it.
+        """
         if self.reset_wifi_event is None:
             return
         pressed = pressure > 0.2
 
         if pressed and not self.was_pressed:
-            # rising edge has been detected. 
             self.taps.append(time.time())
-            # how many taps have occured in the past two seconds?
             tap_count = len(list(filter(lambda t: t>time.time()-2, self.taps)))
-            # trigger special behavior. event is watched in component_server.py
             if tap_count == 5:
                 self.reset_wifi_event.set()
         self.was_pressed = pressed

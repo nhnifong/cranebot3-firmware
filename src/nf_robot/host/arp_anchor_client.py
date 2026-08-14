@@ -13,20 +13,14 @@ from nf_robot.common.util import *
 
 # looking for cranebot-anchor-arpeggio-service
 
-"""
-"Arpeggio" is the codename of the 2nd revision of the Stringman
+"""Host-side client for an "Arpeggio" anchor, the 2nd revision of the Stringman anchor.
 
-The new anchors differ drastically from the pilot version. Pairs of lines are combined into units,
-So each server will report the length of two different lines. One line spans from the anchor to the marker box directly.
-the other passes through a ceramic eyelet on an adjacent wall, referred to as the "indirect line"
-What we pass as the reference_length to each spool controller determines the length we get back.
-for the indirect line, we pass the length between the ceramic eyelet and the marker box.
+Each anchor drives two lines and reports both: the direct line from anchor to marker box,
+and the indirect line, which runs through a ceramic eyelet on an adjacent wall. The
+reference_length handed to a spool controller decides what length it reports back, and for
+the indirect line that is eyelet-to-marker-box, so calibration has to locate the eyelet.
 
-Determining the real position of the ceramic eyelet is done during calibration.
-
-These anchors also use a direct drive BLDC motor with built in FOC controller that continuously reports torque rather than
-a binary tight/slack value.
-
+The direct drive BLDC motors report continuous torque, not the pilot's binary tight/slack.
 """
 
 class ArpeggioAnchorClient(ComponentClient):
@@ -59,11 +53,12 @@ class ArpeggioAnchorClient(ComponentClient):
             await self.websocket.send(json.dumps({'set_config_vars': anchor_config_vars}))
 
     def updatePoseAndEye(self, pose=None, eye=None):
+        """Set the anchor's room pose and eyelet position, and rebuild camera_pose from them."""
         if pose is not None:
             self.anchor_pose = pose
         if eye is not None:
             self.eye_pos = eye
-        # 22 is the tilt of the camera in the model
+        # the model has the camera tilted 22 degrees; config records what it actually is
         extratilt = 22 - self.config.anchors[self.anchor_num].indirect_line.cam_tilt
         self.camera_pose = np.array(compose_poses([
             self.anchor_pose,
@@ -72,9 +67,9 @@ class ArpeggioAnchorClient(ComponentClient):
         ]))
 
     async def handle_update_from_ws(self, update):
-        if 'spool0' in update:
+        if 'spool0' in update: # high spool (direct line)
             self.storeSpoolData(0, update['spool0'])
-        if 'spool1' in update:
+        if 'spool1' in update: # low spool (indirect line)
             self.storeSpoolData(1, update['spool1'])
 
         if len(self.gantry_pos_sightings) > 0:
@@ -85,14 +80,16 @@ class ArpeggioAnchorClient(ComponentClient):
                 self.gantry_pos_sightings.clear()
 
     def storeSpoolData(self, spool_no, data):
-        # data= [(time, line_length, line_speed, torque), ...]
+        """File one spool's [(time, line_length, line_speed, torque), ...] records."""
         line_number = self.anchor_num * 2 + spool_no
         self.datastore.anchor_line_record[line_number].insertList(np.array(data))
         self.datastore.anchor_line_record_event.set()
 
     def handle_detections(self, detections, timestamp):
-        """
-        handle a list of apriltag detections from the pool
+        """File one frame's apriltag detections, called back from the detector pool.
+
+        Every pose arrives relative to this anchor's camera and is composed through
+        camera_pose into the room frame before anything else sees it.
         """
         self.stat.pending_frames_in_pool -= 1
         self.stat.detection_count += len(detections)
@@ -103,28 +100,20 @@ class ArpeggioAnchorClient(ComponentClient):
             self.last_known_half_extents[name] = detection.get('half_extent')
 
             if name in CAL_MARKERS:
-                # save all the detections of the origin for later analysis
+                # kept raw, for calibration to analyse later
                 self.origin_poses[detection['n']].append(detection['p'])
-                # if detection['n'] == "origin":
-                #     print(detection)
 
             if name == 'gantry':
-                # rotate and translate to where that object's origin would be
-                # given the position and rotation of the camera that made this observation (relative to the origin)
-                # store the time and that position in the appropriate measurement array in observer.
-                # you have the pose of gantry_front relative to a particular anchor camera
-                # convert it to a pose relative to the origin
                 pose = np.array(compose_poses([
                     self.camera_pose, # config dependent
                     detection['p'], # the pose obtained just now
                     gantry_april_inv, # constant
                 ]))
-                position = pose[1] # take only the position from the pose
+                position = pose[1]
                 self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position]))
-                # print(f'Inserted gantry pose ts={timestamp}, pose={pose}')
                 self.datastore.gantry_pos_event.set()
 
-                self.last_gantry_frame_coords = detection['p'][1] # second item in pose tuple is position
+                self.last_gantry_frame_coords = detection['p'][1]
                 with self.gantry_pos_sightings_lock:
                     self.gantry_pos_sightings.append(position)
 
@@ -135,12 +124,11 @@ class ArpeggioAnchorClient(ComponentClient):
             if name in OTHER_MARKERS:
                 offset = model_constants.basket_offset_inv if name.endswith('back') else model_constants.basket_offset
                 pose = np.array(compose_poses([
-                    self.camera_pose, # config dependent
-                    detection['p'], # the pose obtained just now
-                    offset, # the named location is out in front of the tag.
+                    self.camera_pose,
+                    detection['p'],
+                    offset, # the named location is out in front of the tag
                 ]))
                 position = pose.reshape(6)[3:]
-                # save the position of this object for use in various planning tasks.
                 self.ob.update_avg_named_pos(detection['n'], position)
 
 

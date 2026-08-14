@@ -13,26 +13,19 @@ from nf_robot.robot.component_server import RobotComponentServer
 from nf_robot.robot.spool_dm import DamiaoSpoolController
 from nf_robot.robot.server_conf import read_winding
 
-""" Server for Arpeggio Anchor
-
-A double anchor containing two damiao hub motors and a custom hat that provides a CAN bus interface.
-
-"""
+"""Server for an Arpeggio anchor: two damiao hub motors and a custom CAN bus hat."""
 
 default_anchor_conf = {
-    # speed to reel in when the 'tighten' command is received. Meters of line per second
+    # meters of line per second to reel in on a 'tighten' command
     'TIGHTENING_SPEED': -0.12,
 
-    # Which entry of component_server.stream_modes the camera streams at. Which one an
-    # anchor starts in depends on the board it is running on - see anchor_stream_modes
-    # below. A different resolution or framerate means adding a named, measured mode to
-    # that table, not sending a number.
+    # Which component_server.stream_modes entry the camera runs. Changing resolution or
+    # framerate means adding a named, measured mode to that table, not sending a number.
     'STREAM_MODE': 'anchor_control',
 }
 
-# names from component_server.stream_modes an anchor accepts, its normal one first.
-# A pi 3a+ has the cpu and the thermal headroom to hold 1080p30, which the zero 2w does
-# not, so it starts in the faster mode; the slower one stays selectable on both.
+# Modes an anchor accepts, its normal one first. A pi 3a+ has the cpu and thermal headroom
+# to hold 1080p30, which the zero 2w does not, so it starts in the faster mode.
 anchor_stream_modes = ('anchor_control',)
 anchor_stream_modes_3a_plus = ('anchor_fast', 'anchor_control')
 
@@ -52,18 +45,16 @@ def board_revision_code():
 def is_pi_3a_plus():
     """Whether this is running on a Raspberry Pi 3 Model A+.
 
-    Taken from the revision code rather than a model string because the code is a fixed
-    numeric field, while the strings are prose that has changed spelling across boards
-    ('Model A Plus' here, but 'Zero 2 W' elsewhere) and would need matching by substring.
-    Both come from the same place - the kernel fills them in from the board itself, not
-    from whichever device tree the firmware loaded - so either is trustworthy on an image
-    like ours whose boot partition carries no 3a+ dtb.
+    From the revision code, not the model string: the code is a fixed numeric field, while
+    the strings are prose whose spelling varies across boards ('Model A Plus' here, 'Zero
+    2 W' elsewhere). The kernel fills both in from the board itself, so both are
+    trustworthy even on our image, whose boot partition carries no 3a+ dtb.
     """
     rev = board_revision_code()
     if rev is None:
         return False
-    # In the new-style encoding (flagged by bit 23), bits 4-11 are the board type and
-    # 0x0e is the 3a+. Old-style codes predate the pi 3 entirely, so they are never one.
+    # new-style codes (bit 23) put the board type in bits 4-11, 0x0e being the 3a+.
+    # old-style codes predate the pi 3, so they are never one.
     return bool(rev & (1 << 23)) and (rev >> 4) & 0xff == 0x0e
 
 
@@ -80,9 +71,9 @@ class AnchorArpServer(RobotComponentServer):
 
         self.has_power_line = power
 
-        # How much line this anchor was wound with, recorded in server.conf when it was built.
-        # Read here rather than passed down from the host so an anchor reports correct lengths
-        # without anything upstream having to know how it was assembled.
+        # How much line this anchor was wound with, from server.conf. Read here rather than
+        # sent by the host so lengths come out right without anything upstream knowing how
+        # this anchor was assembled.
         self.winding = winding if winding is not None else read_winding()
 
         unique = ''.join(get_mac_address().split(':'))
@@ -90,14 +81,12 @@ class AnchorArpServer(RobotComponentServer):
 
         # https://jia-xie.github.io/python-damiao-driver/dev/package-usage/python-api/
         self.controller = DaMiaoController(channel="can0", bustype="socketcan")
-        # h6220 is probaly the closest to DM-H6215 but they all seem the same to me.
         self.motor1 = self.controller.add_motor(motor_id=0x02, feedback_id=0x02, motor_type="G6215") # high motor
         self.motor2 = self.controller.add_motor(motor_id=0x01, feedback_id=0x01, motor_type="G6215") # lower motor
         self.motors = [self.motor1, self.motor2]
 
-        # consider the direct line (high) spool 0 and the indirect line (low) spool 1
-
-        # the power line, if present is always on the high spool
+        # spool 0 is the direct line (high), spool 1 the indirect (low). A power line, if
+        # this anchor has one, is always on the high spool.
         high_length, high_diameter = model_constants.damiao_spool_geometry[
             (self.winding, 'high', 'power' if self.has_power_line else 'fishing')]
         low_length, low_diameter = model_constants.damiao_spool_geometry[
@@ -111,10 +100,9 @@ class AnchorArpServer(RobotComponentServer):
             full_diameter=high_diameter,
             full_length=high_length,
             config=self.conf, direction=-1,
-            # the stiffer powerline needs extra tension to stay taut.
+            # the stiffer powerline needs extra tension to stay taut
             extra_tension_n=0.4 if self.has_power_line else 0.0)
 
-        # Create a spool controller for each spool
         spooler2 = DamiaoSpoolController(
             self.motor2,
             empty_diameter=model_constants.damiao_empty_spool_diameter,
@@ -122,7 +110,7 @@ class AnchorArpServer(RobotComponentServer):
             full_length=low_length,
             config=self.conf, direction=1)
 
-        # parent class would use this to send line updates. setting it to None supresses that. we send our own.
+        # None suppresses the parent's line updates; readOtherSensors sends both spools
         self.spooler = None
         self.spools = [spooler1, spooler2]
 
@@ -181,15 +169,8 @@ class AnchorArpServer(RobotComponentServer):
             self.spools[spool_no].setTensionTarget(None if val is None else float(val))
 
     def readOtherSensors(self):
-        """ Sends updates about both spools with the form
-        {
-            'spool0' : [
-                (time, line_length, line_speed, torque),
-                ...
-            ],
-            'spool1': [...]
-        }
-        """
+        """Queue both spools' records: {'spool0': [(time, length, speed, torque), ...],
+        'spool1': [...]}"""
         for i, spool in enumerate(self.spools):
             meas = spool.popMeasurements()
             if len(meas) > 0:
@@ -203,9 +184,10 @@ class AnchorArpServer(RobotComponentServer):
         ])
 
     async def tighten(self, spool_no):
-        """
-        Pulls in the line until tight. If the line slips within 3 seconds,
-        it reduces the speed by 30% and retries, up to 5 times.
+        """Reel in until the line holds tension for 3 seconds.
+
+        A line that goes slack again was pulled in too fast to seat, so each retry backs
+        the speed off 30%, up to 5 attempts.
         """
         if spool_no not in (0, 1):
             return
@@ -220,34 +202,28 @@ class AnchorArpServer(RobotComponentServer):
             return self.spools[spool_no].last_tension < desired_tension
 
         for attempt in range(1, max_retries + 1):
-            # Pull in the line until target torque is reached
             while slack():
                 self.spools[spool_no].setAimSpeed(current_speed)
                 await asyncio.sleep(check_interval_s)
             self.spools[spool_no].setAimSpeed(0)
 
-            # Monitor for re-loosening over the next 3 seconds
             loosened = False
             end_time = time.monotonic() + monitoring_duration_s
             while time.monotonic() < end_time:
                 if slack():
                     loosened = True
-                    break  # Exit monitoring loop immediately on slip
+                    break
                 await asyncio.sleep(check_interval_s)
 
-            # Check the outcome
             if not loosened:
-                return # Success!
-
-            # If it slipped, reduce speed and the loop will try again
+                return
             current_speed *= 0.7
 
-        # If the loop finishes, all retries have failed
         self.spools[spool_no].setAimSpeed(0)
         logging.error(f"Failed to tighten line after {max_retries} attempts.")
 
     async def stow(self, spool_no):
-        """ Pulls the line till tight, then disables the motor for storage """
+        """Pull the line tight, then disable the motor for storage."""
         if spool_no not in (0, 1):
             return
         check_interval_s = 0.05
@@ -263,13 +239,13 @@ class AnchorArpServer(RobotComponentServer):
         self.motors[spool_no].disable()
 
     async def relax(self, spool_no):
-        """ Lets out line until not tight """
+        """Let out line until it is no longer tight."""
         if spool_no not in (0, 1):
             return
         pass
 
     def identify(self, spool_no=1):
-        """ make a noise """
+        """Buzz one motor, so an operator can tell which anchor this is."""
         self.spools[spool_no].pauseTrackingLoop()
         m = self.motors[spool_no]
 
@@ -282,7 +258,7 @@ class AnchorArpServer(RobotComponentServer):
         self.spools[spool_no].resumeTrackingLoop()
 
     async def process_imu(self, ws):
-        """Runs when a new client connects.
+        """Enable the motors when a client connects.
         TODO don't just piggyback off this, organize it"""
         for m in self.motors:
             m.enable()

@@ -18,19 +18,12 @@ from nf_robot.robot.component_server import stream_modes
 
 logger = logging.getLogger(__name__)
 
-"""
-"Arpeggio" is the codename of the 2nd revision of the Stringman gripper
+"""Host-side client for "Arpeggio", the 2nd revision of the Stringman gripper.
 
-It differs from the previous gripper in that it has a wrist instead of a winch.
-Since it uses smart servos it can report the exact angle of either the fingers or wrist
-It does not send 'line records' because there is no changing length of line, but wherever line
-records were being used as a heartbeat signal, the grip sensors can be used instead.
-
-It has a wide angle camera instead of standard, and the camera is pointed inward at a point 1m below the gripper
-
-The gripper and gantry are now one model, with the gripper's origin being 57cm below the gantry's.
-They are related by a chain of poses from the gantry tags, through the wrist rotation, 
-
+A wrist instead of a winch, smart servos that report exact finger and wrist angles, and a
+wide angle camera aimed 1m below the gripper. It sends no line records; grip sensor
+messages are the heartbeat instead. Gripper and gantry are one model whose origins are
+57cm apart, related by a chain of poses from the gantry tags through the wrist rotation.
 """
 
 R_imu_to_cam = np.array([
@@ -39,7 +32,7 @@ R_imu_to_cam = np.array([
     [0,  0,  1]
 ])
 
-# omega is the constant angular frequency of the pendulum. Effectuve length from pivot to center of gripper mass is 0.4526 meters
+# pivot to center of gripper mass, which sets the pendulum's angular frequency
 LENGTH = 0.4526
 OMEGA = np.sqrt(9.81 / LENGTH)
 SWING_CANCEL_GAIN = -0.12
@@ -53,23 +46,19 @@ def rotate_vector(vec, rad):
         vec[0] * sin_a + vec[1] * cos_a
     ])
 
-# How long a route/cal tag sighting stays usable. Covers a full-scan interval plus
-# detection latency, so a run of frames that miss the tag doesn't blank its pose.
+# How long a route/cal tag sighting stays usable: a full-scan interval plus detection
+# latency, so a run of frames that miss the tag doesn't blank its pose.
 ROUTE_TAG_MAX_AGE_S = 0.6
-# Per-tag sighting history. ~8s at a 30Hz detection rate, which covers the longest
-# averaging window any caller asks for.
+# ~8s of sightings at a 30Hz detection rate, the longest window any caller asks for
 ROUTE_TAG_HISTORY = 240
 
-# The two modes the gripper camera can be switched between, by the names the gripper
-# knows them by. Everything about them - resolution, bitrate, framerate - is fixed in the
-# stream_modes table on the robot side, which is where it has to live because it is only
-# meaningful together with a measured dts_zero_offset. component_server is imported for
-# the sizes rather than gripper_arp_server, which only loads on the gripper itself: it
-# pulls in the i2c and servo hardware libraries at import.
+# The camera's two modes, by the names the gripper knows them by. Resolution, bitrate and
+# framerate live in the robot side's stream_modes table, where they have to be: they are
+# only meaningful next to a measured dts_zero_offset. Imported from component_server
+# rather than gripper_arp_server, which pulls in i2c and servo libraries at import.
 CONTROL_STREAM_MODE = 'gripper_control'
 CAPTURE_STREAM_MODE = 'gripper_capture'
-# (width, height) a mode delivers, so a caller can tell whether the frames it is getting
-# are from the mode it asked for.
+# (width, height) capture mode delivers, so a caller can tell which mode a frame came from
 CAPTURE_RESOLUTION_SIZE = (stream_modes[CAPTURE_STREAM_MODE].width,
                            stream_modes[CAPTURE_STREAM_MODE].height)
 
@@ -86,9 +75,9 @@ class ArpeggioGripperClient(ComponentClient):
         self.anchor_num = None
         self.pe = pe
         self.park_pose_relative_to_camera = None
-        # tag name -> deque of (capture timestamp, (rotvec, position)) sightings of that
-        # route-point tag relative to the gripper camera, oldest first. Every detection is
-        # appended exactly once, so a window read out of here counts each sighting once.
+        # tag name -> (capture timestamp, (rotvec, position)) relative to the gripper
+        # camera, oldest first. Each detection is appended once, so a window read out of
+        # here counts each sighting once.
         self.route_tag_samples = defaultdict(lambda: deque(maxlen=ROUTE_TAG_HISTORY))
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
@@ -97,15 +86,16 @@ class ArpeggioGripperClient(ComponentClient):
         self.angle_from_vertical_received = asyncio.Event()
         self.last_angle_from_vertical = None
         
-        # State variables added to track and prevent platform drift
+        # integrated drift from swing cancellation, which compute_swing_correction
+        # subtracts back out so the platform holds its place
         self._swing_position_offset = np.zeros(2)
         self._last_future_time = 0
 
-        # State for looking in direction of motion
+        # look_towards_vector's controller
         self.smoothed_error = 0.0
-        self.ema_alpha = 0.3  # Smoothing factor (0 to 1)
-        self.deadband = 0.02  # Radians (~1.1 degrees)
-        self.p_gain = 2.0     # Proportional gain for speed calculation
+        self.ema_alpha = 0.3
+        self.deadband = 0.02  # radians, ~1.1 degrees
+        self.p_gain = 2.0
 
     async def handle_update_from_ws(self, update):
         if 'st' in update:
@@ -137,17 +127,15 @@ class ArpeggioGripperClient(ComponentClient):
             if 'dforce' in gs:
                 target_force = float(gs['dforce'])
 
-            # Note that finger angles are returned in the range of (-90, 90) even though these are not the actual angle
-            # -90 is open
+            # (-90, 90), not the true angle; -90 is open
             finger_angle = float(gs['fing_a'])
 
-            # finger pad pressure is indicated by this voltage with 3.3 being no pressure.
-            # lower values indicate more pressure.
+            # finger pad pressure, inverted: 3.3V is no pressure, lower is more
             voltage = float(gs['fing_v'])
 
-            # wrist angle in degrees of rotation from the original zero point. can be more than one revolution.
-            # the zero point is probably a safe bet for where the wire would be least twisted.
-            # the angle at which it aligns with the gantry or the room must be determined in calibration
+            # degrees from the servo's zero point, possibly past a full revolution. Zero is
+            # where the wire is least twisted; how it aligns with the gantry or the room
+            # comes out of calibration.
             wrist_angle = float(gs['wrist_a'])
             
             self.datastore.winch_line_record.insert([timestamp, wrist_angle, 0])
@@ -169,9 +157,8 @@ class ArpeggioGripperClient(ComponentClient):
             self.angle_from_vertical_received.set()
 
     async def query_angle_from_vertical(self, timeout=2.0):
-        """Ask the gripper for a one-shot reading of how many degrees its pole is
-        tilted from vertical (from the accelerometer) and return it. Returns None
-        if the gripper does not reply within `timeout` seconds."""
+        """Degrees the pole is tilted from vertical, from the accelerometer, or None if
+        the gripper does not reply within `timeout`."""
         self.angle_from_vertical_received.clear()
         await self.send_commands({'query_angle_from_vertical': None})
         try:
@@ -182,55 +169,49 @@ class ArpeggioGripperClient(ComponentClient):
         return self.last_angle_from_vertical
 
     def compute_swing_correction(self, future_time):
-        """Compute a corrective velocity to be applied at a future time in order to cancel the swing"""
+        """Room-frame gantry velocity that will cancel the gripper's swing at future_time.
+
+        The model is projected forward to future_time rather than used as-is, which is
+        what compensates for control latency.
+        """
         sm = self.gripper_swing_model
         st = self.swing_model_ts
         if sm is None or st is None:
             return None
 
-        # calculate swing cancellation
         latency_comp = future_time - st
         look_ahead_angle = OMEGA * latency_comp
         c_future, s_future = np.cos(look_ahead_angle), np.sin(look_ahead_angle)
-        
-        # The angular acceleration (alpha) is the derivative of the velocity (gyro).
-        # For this model, the derivative is omega * [-sin(theta), cos(theta)].
+
+        # angular acceleration is the derivative of the gyro velocity, which for this
+        # model is omega * [-sin(theta), cos(theta)]
         future_accel = OMEGA * (sm[:, 1] * c_future - sm[:, 0] * s_future)
 
-        # A corrective velocity to the gantry inversely proportional to the angular velocity of the gripper cancels the swing
+        # a gantry velocity opposing the gripper's angular velocity cancels the swing
         raw_vel = future_accel * SWING_CANCEL_GAIN
 
-        # cancel accumulated drift introduced from swing cancellation
-        # Calculate time elapsed since last call to update the integrator
         dt = future_time - self._last_future_time
         self._last_future_time = future_time
 
-        # Ignore massive jumps in time if the control loop paused
+        # a paused control loop leaves a huge dt that would wreck the integrator
         if dt > 0.5 or dt < 0:
             dt = 0.0
 
-        # Apply a centering restorative velocity proportional to the accumulated position offset
+        # cancelling swing drifts the platform, so pull back toward where it started
         centering_vel = self._swing_position_offset * CENTERING_GAIN
         vel = raw_vel - centering_vel
-
-        # Track the accumulated position offset based on the velocity we are actually commanding
         self._swing_position_offset += vel * dt
 
-        # rotate vector into room frame of reference
         wrist = self.datastore.winch_line_record.getLast()[1]
         imu_to_room_z = wrist / 180 * np.pi + self.config.gripper.frame_room_spin - np.pi/2
         return rotate_vector(vel, -imu_to_room_z)
 
     def handle_detections(self, detections, timestamp):
-        """
-        handle a list of tag detections from the pool
-        """
+        """File one frame's tag detections, called back from the detector pool."""
         self.stat.pending_frames_in_pool -= 1
         self.stat.detection_count += len(detections)
-        # setting to none every frame so we know whether it's in frame by looking at this variable
+        # cleared every frame, so this doubles as "is the park target in view"
         self.park_pose_relative_to_camera = None
-        # route tag sightings accumulate in route_tag_samples with their capture time;
-        # readers apply their own staleness bound.
 
         for detection in detections:
             name = detection['n']
@@ -238,20 +219,19 @@ class ArpeggioGripperClient(ComponentClient):
             self.last_known_half_extents[name] = detection.get('half_extent')
 
             if name == 'park_target':
-                # pose of parking target relative to gripper camera
                 self.park_pose_relative_to_camera = detection['p']
             elif name in OTHER_MARKERS or name in CAL_MARKERS:
-                # (rotvec, position) of a route-point or calibration card relative to the gripper
-                # camera, in the raw (unstabilized, tilted) camera optical frame. CAL_MARKERS are
-                # included for the gripper card survey (collect_gripper_card_observations).
+                # poses stay in the raw (unstabilized, tilted) camera optical frame, with
+                # their capture time; readers apply their own staleness bound. CAL_MARKERS
+                # are here for the gripper card survey.
                 self.route_tag_samples[name].append((timestamp, detection['p']))
 
     def get_route_tag_pose(self, name, max_age_s=ROUTE_TAG_MAX_AGE_S):
-        """Most recent (rotvec, position) of a route-point or calibration tag relative to
-        the gripper camera, or None if it has not been seen within max_age_s.
+        """Latest (rotvec, position) of a route-point or calibration tag relative to the
+        gripper camera, or None if it has not been seen within max_age_s.
 
-        Ages are measured from the frame's capture time, so they cover streaming and
-        detection latency as well as the gap since the last sighting.
+        Ages run from the frame's capture time, so they include streaming and detection
+        latency, not just the gap since the last sighting.
         """
         samples = self.route_tag_samples.get(name)
         if not samples:
@@ -262,10 +242,11 @@ class ArpeggioGripperClient(ComponentClient):
         return pose
 
     def get_route_tag_samples(self, name, since=None, max_age_s=None):
-        """Snapshot of buffered (capture timestamp, pose) sightings of a tag, oldest first.
+        """Buffered (capture timestamp, pose) sightings of a tag, oldest first, bounded by
+        since / max_age_s.
 
-        since / max_age_s bound how far back to look. Detections are appended from a pool
-        callback thread, so this snapshots the deque before filtering.
+        Copies the deque before filtering: detections are appended from a pool callback
+        thread.
         """
         samples = list(self.route_tag_samples.get(name, ()))
         if since is not None:
@@ -279,34 +260,29 @@ class ArpeggioGripperClient(ComponentClient):
         pass
 
     def get_gripper_rvec(self, timestamp=None):
-        """
-        Calculates the rotation of the gripper in its local frame of reference
-        at a specific timestamp, not counting the wrist.
-        """
+        """Tilt of the gripper in its own frame, wrist rotation excluded. timestamp reads
+        it at that moment instead of now."""
         if timestamp is None:
             projected_state = self.gripper_swing_model
         else:
-            # Calculate how much the phase has evolved between the model's last update and the requested timestamp.
+            # rotate the state matrix by however far the pendulum's phase has evolved
+            # since the model was last updated, giving A*sin and A*cos at that instant
             dt = timestamp - self.swing_model_ts
             angle = OMEGA * dt
             c, s = np.cos(angle), np.sin(angle)
-            # Project the state matrix to the target timestamp using a rotation matrix.
-            # This allows us to find the A*sin and A*cos components at that exact moment.
             projected_state = self.gripper_swing_model @ np.array([[c, -s], [s, c]])
-        
-        # In a harmonic oscillator, displacement is the integral of velocity.
-        # For a model where Col 0 is Velocity (A*sin), the displacement is -A/omega * cos.
-        # This corresponds to the negative of the phase tracker (Col 1) divided by omega.
+
+        # displacement is the integral of velocity, so with col 0 velocity (A*sin) it is
+        # -A/omega*cos: the phase tracker in col 1, over omega
         theta_x = projected_state[0, 1] / OMEGA
         theta_y = projected_state[1, 1] / OMEGA
         return np.array([theta_x, theta_y, 0])
 
     def get_swing_amplitude(self):
-        """Return the current angular amplitude of the gripper's swing, in radians.
-        
-        This is a phase-independent measure of "how much it is swinging" that can
-        be read at any instant without watching for peaks over a full period.
-        Returns 0.0 when there is no swing (or no IMU populating the model).
+        """Angular amplitude of the swing in radians, 0.0 if there is none (or no IMU).
+
+        Phase independent, so it can be read at any instant rather than by watching for a
+        peak over a full period.
         """
         sm = self.gripper_swing_model
         if sm is None:
@@ -314,44 +290,32 @@ class ArpeggioGripperClient(ComponentClient):
         return float(np.linalg.norm(sm) / OMEGA)
 
     async def use_capture_stream(self):
-        """Switch the gripper camera to its stills-capture mode: more pixels, fewer of them.
+        """Switch the gripper camera to stills-capture mode: higher res, lower fps.
 
-        For collecting the ingredients of the synthetic dataset - finger plates, bare
-        floor, objects on a board - which want pixels and do not care about latency,
-        the opposite of what the control stream wants. Those plates are only ever
-        downscaled later, so the capture resolution sets the ceiling on how much real
-        detail a synthetic frame can contain.
+        For the synthetic dataset's plates, which want detail and don't care about
+        latency. The low framerate comes with the mode - a pi zero 2w cannot encode this
+        resolution at streaming rates - and the captures hold still at each stop anyway.
+        Both modes share a sensor mode, so the field of view is unchanged and captures
+        stay geometrically comparable to the control stream.
 
-        The framerate that pays for those pixels comes with the mode: the gripper runs on
-        a pi zero 2w, which cannot encode this resolution at streaming rates and will
-        overheat or stall trying. These captures hold still at each stop anyway.
-
-        Both modes keep the same sensor mode, so this changes how many pixels the
-        field of view is sampled at and not the field of view itself - which is what
-        keeps captures geometrically comparable to the control stream.
-
-        The stream restarts to pick this up, so expect a gap of a second or two before
-        frames resume. Selecting a mode that is already running is a no-op, and the
-        capture mode stays selected until something asks for the control stream back,
-        so a run of captures only pays for the switch once.
+        Costs a stream restart, so frames stop for a second or two. Re-selecting the
+        running mode is a no-op, and the mode holds until something asks for the control
+        stream back.
         """
         await self.send_commands({'set_config_vars': {'STREAM_MODE': CAPTURE_STREAM_MODE}})
 
     async def capture_raw_frame(self, after_ts, timeout=5.0, expect_size=None):
-        """The newest camera frame captured after after_ts, as (timestamp, RGB array).
+        """The newest camera frame captured after after_ts, as (timestamp, RGB array), or
+        (None, None) on timeout.
 
-        Reads self.frame rather than last_output_frame because process_frame resizes to
-        SF_TARGET_SHAPE, which would throw away exactly the pixels use_capture_stream
-        was switched on to get. Returns (None, None) if nothing arrives in time.
+        Reads self.frame, not last_output_frame, which process_frame has already resized
+        to SF_TARGET_SHAPE - throwing away the pixels capture mode exists to get. Waiting
+        on capture time rather than sleeping guarantees the frame is from after whatever
+        motion the caller just commanded, however far the stream is lagging.
 
-        Waiting on capture time rather than sleeping a fixed interval means the caller
-        gets a frame taken after whatever motion it just commanded, however far the
-        stream is lagging.
-
-        expect_size is a (width, height) to hold out for, and is the only reliable way
-        to tell that a resolution change has actually landed: the old stream keeps
-        delivering frames for seconds after the new settings are sent, and those frames
-        are new enough to satisfy any timestamp test while being the wrong size.
+        expect_size (width, height) is the only reliable test that a resolution change has
+        landed: the old stream keeps delivering for seconds afterwards, and those frames
+        are new enough to pass any timestamp test at the wrong size.
         """
         deadline = time.time() + timeout
         while True:
@@ -369,9 +333,8 @@ class ArpeggioGripperClient(ComponentClient):
         await self.send_commands({'set_config_vars': {'STREAM_MODE': CONTROL_STREAM_MODE}})
 
     def get_spin(self, debug=False, timestamp=None):
-        # return the rotation of the gripper camera relative to the room in radians.
-        # timestamp selects the winch reading nearest that capture time, for measurements
-        # computed after the fact from buffered samples.
+        # Rotation of the gripper camera relative to the room, in radians. timestamp picks
+        # the wrist reading nearest that capture time, for measurements made after the fact.
         if timestamp is None:
             wrist = self.datastore.winch_line_record.getLast()[1]
         else:
@@ -396,11 +359,12 @@ class ArpeggioGripperClient(ComponentClient):
         return R_heading * R_tilt
 
     def measure_gantry_minus_card(self, pose_cam, timestamp=None):
-        """Given a calibration card's pose in the raw gripper camera optical frame (rvec, tvec,
-        as stored in route_tag_samples), return the room-frame vector from the
-        card to the gantry point (gantry_position - card_position). The gantry's absolute room
-        position cancels, so this depends only on the body orientation and the observed card
-        pose; the caller adds the card's known room position to recover the gantry position.
+        """Room-frame (gantry_position - card_position), from a calibration card's pose in
+        the raw camera optical frame as stored in route_tag_samples.
+
+        The gantry's absolute room position cancels, so this needs only the body
+        orientation and the observed pose; the caller adds the card's known room position
+        to recover where the gantry is.
 
         Frame chain:
         * model_constants.gripper_camera places the card in the CAD 'gripper frame' (y-up:
@@ -409,9 +373,9 @@ class ArpeggioGripperClient(ComponentClient):
         * the gantry sits arp_pole_length up the +z body axis from the gripper origin.
         * gripper_body_room_rotation() rotates the body frame into the room.
 
-        timestamp is the pose's capture time. Pass it when computing from a buffered
-        sample: the body orientation to combine with the card pose is the one from the
-        instant the frame was taken, not whatever the gripper is doing now.
+        Pass timestamp (the pose's capture time) when working from a buffered sample: the
+        body orientation that belongs with the card pose is the one from when the frame
+        was taken, not whatever the gripper is doing now.
         """
         # card position in the CAD y-up gripper frame
         card_in_gripper = compose_poses([model_constants.gripper_camera, pose_cam])[1]
@@ -423,63 +387,47 @@ class ArpeggioGripperClient(ComponentClient):
         return -card_minus_gantry_room
 
     def look_towards_vector(self, vec2):
-        """
-        Turn the head to face in the direction of the given XY vector in room space.
-        vec2: A numpy array [x, y]
-        """
-        # Calculate target angle from vector
-        target_angle_base = math.atan2(vec2[0], vec2[1]) # Result in (-pi, pi]
+        """Turn the wrist to face along the room-space XY vector [x, y].
 
-        # Spin ranges from 0 to 6*pi. Nose @ +Y is spin % 2pi == 0.
+        Spin runs 0 to 6*pi (nose at +Y is spin % 2pi == 0), so three wrist angles face
+        the same way. The choice between them is what keeps the cable from winding up
+        against either limit.
+        """
+        target_angle_base = math.atan2(vec2[0], vec2[1]) # (-pi, pi]
         current_spin = self.get_spin()
-        
-        # Determine the best target within the [0, 6*pi] range
-        # There are 3 possible rotations that face the same direction:
-        # base_angle (normalized to [0, 2pi]), base_angle + 2pi, and base_angle + 4pi.
+
         norm_target = target_angle_base % (2 * math.pi)
         candidates = [norm_target, norm_target + 2 * math.pi, norm_target + 4 * math.pi]
-        
-        # Determine proximity to bounds
+
         lower_bound = 0.5 * math.pi
         upper_bound = 5.5 * math.pi
         center_point = 3 * math.pi
 
+        # near either limit, take a candidate that moves back toward the centre even if a
+        # closer one exists; otherwise just the closest
         if current_spin < lower_bound:
-            # Near lower limit: Force selection of a candidate that moves us toward center
-            # Typically picking the candidate > current_spin
             target = min([c for c in candidates if c > current_spin] or [candidates[-1]])
         elif current_spin > upper_bound:
-            # Near upper limit: Force selection of a candidate that moves us toward center
             target = max([c for c in candidates if c < current_spin] or [candidates[0]])
         else:
-            # Normal operation: Pick the closest candidate
             target = min(candidates, key=lambda c: abs(c - current_spin))
 
-        # Calculate raw error
         raw_error = target - current_spin
 
-        # Apply Deadband
         if abs(raw_error) < self.deadband:
             raw_error = 0.0
 
-        # Exponential Moving Average (EMA) Smoothing
-        # smoothed = alpha * new + (1 - alpha) * old
         self.smoothed_error = (self.ema_alpha * raw_error) + (1.0 - self.ema_alpha) * self.smoothed_error
 
-        # Convert Error to Speed (Degrees per Second)
-        # Convert radians to degrees: radians * (180 / pi)
-        # Apply a proportional gain
         wrist_speed_deg = self.smoothed_error * self.p_gain * (180.0 / math.pi)
 
-        # 8. Clamp and Send
         wrist_speed = clamp(wrist_speed_deg, -120, 120)
         asyncio.create_task(self.send_commands({'set_wrist_speed': wrist_speed}))
 
     def process_frame(self, frame_to_encode):
-        # an action space in which the gripper camera is not stabilized or rotated.
-        # no matter what perspective the operator is driving with, the network is always seeing
-        # control inputs relative to the gripper image. it will see a +Y direction when the motion is up in
-        # the gripper image.
+        # Downscale only; the image is deliberately left unstabilized and unrotated. The
+        # network's action space is then relative to the gripper image whatever
+        # perspective the operator drives with: +Y means up in this frame.
         input_shape = (frame_to_encode.shape[1], frame_to_encode.shape[0])
         if input_shape != SF_TARGET_SHAPE:
             temp_image = cv2.resize(frame_to_encode, SF_TARGET_SHAPE, interpolation=cv2.INTER_AREA)
