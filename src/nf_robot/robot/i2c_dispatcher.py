@@ -46,18 +46,10 @@ async def asyncmain():
         r = await gs.main()
 
     elif len(addrs) == 0:
-        # to differentiate power anchor, look for file written by server.conf
-        component_type = 'arpeggio anchor'
-        try:
-            with open('server.conf', 'r') as file:
-                for line in file:
-                    line = line.strip()  # Remove leading/trailing whitespace
-                    if not line.startswith('#') and line:  # Check if line is not a comment and is not empty
-                        component_type = line
-        except FileNotFoundError:
-            component_type = 'arpeggio anchor'
-
-        component_type = component_type.replace('_', ' ')
+        # to differentiate power anchor, look for file written by anchor_arp_eval. The winding
+        # field in the same file is read by AnchorArpServer itself.
+        from nf_robot.robot.server_conf import read_server_conf
+        component_type, _ = read_server_conf()
 
         if component_type == 'arpeggio anchor':
             from nf_robot.robot.anchor_arp_server import AnchorArpServer

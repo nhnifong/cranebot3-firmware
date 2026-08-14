@@ -54,6 +54,33 @@ damiao_empty_spool_diameter = 72.0
 damiao_full_spool_diameter_fishing_line = 73.1
 damiao_full_spool_diameter_power_line = 86.1
 
+# The state each anchor spool is built to, as (line on a full spool in m, the diameter the spool
+# reaches with that much on it in mm). SpiralCalculator ramps the diameter from
+# damiao_empty_spool_diameter up to full_diameter across full_length, so both numbers have to
+# describe the same spool: get full_length wrong and the reported diameter is right for the wrong
+# point on the spiral, which biases length-per-revolution at every angle.
+#
+# anchor_arp_eval.py winds 15 m low / 7.5 m high normally, 20 m / 12 m with --long. The low
+# (indirect) line takes more because it routes out around the eyelet. A power line, when fitted,
+# is always on the high spool; it is much thicker than fishing line, so its pile grows far faster
+# and it is the entry that really moves between the two windings.
+#
+#   (winding, spool, line type) -> (full_length_m, full_diameter_mm)
+damiao_spool_geometry = {
+    # Short winding keeps the values every already-calibrated robot was built against. The low
+    # spool carries 15 m but has always been modelled at 7.5; correcting that would shift the
+    # indirect line on every short-wound robot, so it is left alone here.
+    ('short', 'high', 'fishing'): (assumed_full_line_length, damiao_full_spool_diameter_fishing_line),
+    ('short', 'high', 'power'):   (assumed_full_line_length, damiao_full_spool_diameter_power_line),
+    ('short', 'low',  'fishing'): (assumed_full_line_length, damiao_full_spool_diameter_fishing_line),
+    # Long winding, measured: 20 m of fishing line piles to 75 mm, 12 m of power line to 100 mm.
+    # The 12 m fishing case was not measured directly, but the two fishing measurements agree on
+    # 0.15 mm of diameter per meter wound (1.1/7.5 and 3.0/20), which puts 12 m at 73.8 mm.
+    ('long',  'high', 'fishing'): (12.0, 73.8),
+    ('long',  'high', 'power'):   (12.0, 100.0),
+    ('long',  'low',  'fishing'): (20.0, 75.0),
+}
+
 # arp anchor model
 arp_anchor_right_eyelet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
 arp_anchor_left_eyelet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))

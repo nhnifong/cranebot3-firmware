@@ -11,6 +11,7 @@ from damiao_motor import DaMiaoController
 import nf_robot.common.definitions as model_constants
 from nf_robot.robot.component_server import RobotComponentServer
 from nf_robot.robot.spool_dm import DamiaoSpoolController
+from nf_robot.robot.server_conf import read_winding
 
 """ Server for Arpeggio Anchor
 
@@ -34,12 +35,17 @@ anchor_stream_modes = ('anchor_control',)
 
 
 class AnchorArpServer(RobotComponentServer):
-    def __init__(self, power):
+    def __init__(self, power, winding=None):
         super().__init__()
         self.conf.update(default_anchor_conf)
         self.stream_modes = anchor_stream_modes
 
         self.has_power_line = power
+
+        # How much line this anchor was wound with, recorded in server.conf when it was built.
+        # Read here rather than passed down from the host so an anchor reports correct lengths
+        # without anything upstream having to know how it was assembled.
+        self.winding = winding if winding is not None else read_winding()
 
         unique = ''.join(get_mac_address().split(':'))
         self.service_name = 'cranebot-anchor-arpeggio-service.' + unique
@@ -54,12 +60,18 @@ class AnchorArpServer(RobotComponentServer):
         # consider the direct line (high) spool 0 and the indirect line (low) spool 1
 
         # the power line, if present is always on the high spool
-        fulld = model_constants.damiao_full_spool_diameter_power_line if self.has_power_line else model_constants.damiao_full_spool_diameter_fishing_line
+        high_length, high_diameter = model_constants.damiao_spool_geometry[
+            (self.winding, 'high', 'power' if self.has_power_line else 'fishing')]
+        low_length, low_diameter = model_constants.damiao_spool_geometry[
+            (self.winding, 'low', 'fishing')]
+        logging.info(f'{self.winding} winding: high spool {high_length} m to {high_diameter} mm, '
+                     f'low spool {low_length} m to {low_diameter} mm')
+
         spooler1 = DamiaoSpoolController(
             self.motor1,
             empty_diameter=model_constants.damiao_empty_spool_diameter,
-            full_diameter=fulld,
-            full_length=model_constants.assumed_full_line_length,
+            full_diameter=high_diameter,
+            full_length=high_length,
             config=self.conf, direction=-1,
             # the stiffer powerline needs extra tension to stay taut.
             extra_tension_n=0.4 if self.has_power_line else 0.0)
@@ -68,8 +80,8 @@ class AnchorArpServer(RobotComponentServer):
         spooler2 = DamiaoSpoolController(
             self.motor2,
             empty_diameter=model_constants.damiao_empty_spool_diameter,
-            full_diameter=model_constants.damiao_full_spool_diameter_fishing_line,
-            full_length=model_constants.assumed_full_line_length,
+            full_diameter=low_diameter,
+            full_length=low_length,
             config=self.conf, direction=1)
 
         # parent class would use this to send line updates. setting it to None supresses that. we send our own.

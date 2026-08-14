@@ -2694,7 +2694,6 @@ class AsyncObserver:
                 f"{entry['best_cost']:.4f} (recorded {time.ctime(entry['best_timestamp'])})"
             )
             logger.warning(msg)
-            self.send_ui(pop_message=telemetry.Popup(message=msg))
         else:
             best_desc = f"best-known {entry['best_cost']:.4f}" if entry else "first recorded attempt"
             logger.info(f'Calibration {pass_name} fitness: cost={cost:.4f} ({best_desc})')

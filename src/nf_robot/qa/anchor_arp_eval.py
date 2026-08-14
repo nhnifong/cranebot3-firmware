@@ -9,8 +9,8 @@ import subprocess
 from damiao_motor import DaMiaoController
 from math import pi, sqrt
 
-import nf_robot.common.definitions as model_constants
 from nf_robot.qa.set_hostname import set_component_hostname
+from nf_robot.robot import server_conf
 
 MOTOR_TYPE = "G6215"
 FEEDBACK_ID_REGISTER = 7  # MST_ID
@@ -324,15 +324,15 @@ def main():
     if input("Does this anchor have a powerline spool? y/n").strip().lower() == 'y':
         anchor_type = "arpeggio power anchor"
         component = "power-anchor"
-        full_diameter = model_constants.damiao_full_spool_diameter_power_line
     else:
         anchor_type = "arpeggio anchor"
         component = "anchor"
-        full_diameter = model_constants.damiao_full_spool_diameter_fishing_line
 
-    # Write the file that differentiates power anchors from regular anchors
-    with open('/opt/robot/server.conf', 'w') as f:
-        f.write(anchor_type + '\n')
+    # Record what differentiates this anchor: which spool it carries, and how much line went on.
+    # The server needs the winding to pick the right full spool diameter, and a spool wound long
+    # with the thick power line ends up nearly 14 mm fatter than a short one.
+    winding = server_conf.WINDING_LONG if args.long else server_conf.WINDING_SHORT
+    server_conf.write_server_conf(anchor_type, winding=winding)
 
     # Give this Pi a hostname unique to its role so the two anchors and the
     # gripper in a setup don't all share one hostname.
