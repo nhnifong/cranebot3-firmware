@@ -24,6 +24,11 @@ default_anchor_conf = {
     'STREAM_MODE': 'anchor_control',
 }
 
+# (newtons) tension to stow a line at. The powerline is stiffer and heavier, and has to be
+# wound harder to sit on the spool without unwinding itself once the motor is disabled.
+STOW_TENSION_N = 1.38
+POWERLINE_STOW_TENSION_N = 3.0
+
 # Modes an anchor accepts, its normal one first. A pi 3a+ has the cpu and thermal headroom
 # to hold 1080p30, which the zero 2w does not, so it starts in the faster mode.
 anchor_stream_modes = ('anchor_control',)
@@ -227,7 +232,9 @@ class AnchorArpServer(RobotComponentServer):
         if spool_no not in (0, 1):
             return
         check_interval_s = 0.05
-        desired_tension = 1.38 # Newtons
+        # spool 0 is the high spool, which is where a power line lives if there is one
+        powerline = self.has_power_line and spool_no == 0
+        desired_tension = POWERLINE_STOW_TENSION_N if powerline else STOW_TENSION_N
         current_speed = self.conf['TIGHTENING_SPEED']
         def slack():
             return self.spools[spool_no].last_tension < desired_tension
