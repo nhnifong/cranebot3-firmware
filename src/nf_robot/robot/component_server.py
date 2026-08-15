@@ -62,17 +62,17 @@ StreamMode = namedtuple('StreamMode',
 # Offsets come from experiments/measure_dts_zero_point.py, run on the component itself.
 stream_modes = {
     # anchor on pi 3a+
-    'anchor_fast': StreamMode(1920, 1080, '2400kbps', 30, 1.000), # Must measure on a Pi3A+
+    'anchor_fast': StreamMode(1920, 1080, '2400kbps', 30, 1.12777), # Must measure on a Pi3A+
     # the anchors' only mode: the whole room at 1080p, enough res to see the marker but
     # slow enough to keep the pi cool
-    'anchor_control': StreamMode(1920, 1080, '1000kbps', 15, 1.2034),
+    'anchor_control': StreamMode(1920, 1080, '1000kbps', 15, 1.17866),
     # the gripper's control stream. Small and fast
     'gripper_control': StreamMode(684, 384, '1200kbps', 60, 0.4032),
     # the gripper's quality mode, for collecting synthetic dataset ingredients. White
     # balance is pinned: a green backdrop filling the frame drags auto white balance
     # until the sheet photographs blue, which is the one thing the chroma key needs it
     # not to do. A preset name goes to --awb, an 'r,b' pair to --awbgains.
-    'gripper_capture': StreamMode(960, 540, '2400kbps', 16, 0.9168, awb='daylight'),
+    'gripper_capture': StreamMode(960, 540, '2400kbps', 16, 1.066398, awb='daylight'),
 }
 
 
