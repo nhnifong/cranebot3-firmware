@@ -8,7 +8,8 @@ Measures every named stream mode a component accepts, because the offset is a pr
 the exact rpicam-vid command that gets launched: sensor mode, resolution, bitrate and
 framerate all move it, and a named mode is exactly one such command. The mode names and
 the stream commands are imported from the servers that run them, and combined with the
-same function the servers use, so that this stays honest when those change.
+same function the servers use, so that this stays honest when those change. Pass
+--mode NAME to measure a single mode, for when only one of them needs a number.
 
 Each mode is measured several times and averaged, because the offset is mostly camera and
 encoder startup and that costs a different amount each launch.
@@ -19,6 +20,7 @@ need the Camera Module 3 Wide for their 2304:1296 sensor mode, so those measurem
 mean something on a gripper, and the anchor's only on an anchor.
 """
 
+import argparse
 import time
 import asyncio
 import av
@@ -32,8 +34,14 @@ from nf_robot.robot.component_server import apply_stream_mode, stream_modes
 # measurements, not lose the other's.
 import_errors = {}
 try:
-    from nf_robot.robot.anchor_arp_server import anchor_stream_modes
+    from nf_robot.robot.anchor_arp_server import (
+        anchor_stream_modes, anchor_stream_modes_3a_plus)
     from nf_robot.robot.component_server import stream_command as anchor_stream_command
+    # every mode an anchor can run on any board, not only the ones the board this is
+    # running on starts in: measuring a mode is how it earns an offset, and a faster
+    # board's mode still has to be measured on that board before it can be used there.
+    anchor_stream_modes = tuple(dict.fromkeys(
+        anchor_stream_modes + anchor_stream_modes_3a_plus))
 except ImportError as e:
     anchor_stream_modes, anchor_stream_command = (), None
     import_errors['anchor'] = e
@@ -45,6 +53,13 @@ try:
 except ImportError as e:
     gripper_stream_modes, gripper_stream_command = (), None
     import_errors['gripper'] = e
+
+# each component's stream command with the modes that command can be given. A component
+# whose import failed contributes no modes, so nothing ever reaches its None command.
+components = (
+    (anchor_stream_command, anchor_stream_modes),
+    (gripper_stream_command, gripper_stream_modes),
+)
 
 # the line we are looking for looks like this
 #Output #0, mpegts, to 'tcp://0.0.0.0:8888?listen=1&tcp_nodelay=1':
@@ -149,11 +164,30 @@ async def measure_modes(stream_command, mode_names, results):
             results.setdefault(name, []).append(
                 await measure(f'{name} sample {sample + 1}/{samples_per_mode}', command))
 
-async def run_experiment():
+def select(only_mode):
+    """The (command, mode names) pairs to measure, narrowed to one mode if one was named.
+
+    A named mode is looked up in the components rather than in the whole stream_modes table
+    so that asking for another component's mode fails here, saying so, instead of measuring
+    the wrong camera command and printing a plausible number for it.
+    """
+    if only_mode is None:
+        return components
+    for command, mode_names in components:
+        if only_mode in mode_names:
+            return ((command, (only_mode,)),)
+    known = ', '.join(sorted({n for _, names in components for n in names})) or 'none'
+    skipped = ''.join(f'\n{c} modes could not be imported here: {e}'
+                      for c, e in import_errors.items())
+    raise SystemExit(f'no component here accepts stream mode {only_mode!r}.'
+                     f'\nmeasurable on this machine: {known}{skipped}')
+
+
+async def run_experiment(only_mode=None):
     results = {}
 
-    await measure_modes(anchor_stream_command, anchor_stream_modes, results)
-    await measure_modes(gripper_stream_command, gripper_stream_modes, results)
+    for command, mode_names in select(only_mode):
+        await measure_modes(command, mode_names, results)
 
     for component, error in import_errors.items():
         print(f'\nskipping {component} modes, could not import them: {error}')
@@ -168,4 +202,11 @@ async def run_experiment():
         print(f'{name}: {average} (spread {spread:.4f} over {len(offsets)} samples)')
         print(f'    samples: {", ".join(f"{o:.4f}" for o in offsets)}')
 
-asyncio.run(run_experiment())
+parser = argparse.ArgumentParser(
+    description='Measure the dts zero offset of this component\'s stream modes.')
+parser.add_argument('--mode', metavar='NAME', default=None,
+                    help='measure only this named stream mode, instead of every mode a '
+                         'component on this machine accepts')
+args = parser.parse_args()
+
+asyncio.run(run_experiment(args.mode))
