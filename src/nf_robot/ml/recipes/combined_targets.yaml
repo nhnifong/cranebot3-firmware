@@ -25,13 +25,14 @@ merge:
   - repo_id: justink04/laundry-in-hamper3-8-1-26
     exclude_episodes: ['48-99']
   - justink04/cranebot-ethernet-test-02
-  # - repo_id: justink04/laundry-in-hamper4-8-1-26
-  #   exclude_episodes: [13]
+  - repo_id: justink04/laundry-in-hamper4-8-1-26
+    exclude_episodes: [13]
   - naavox/nick-clutter-aug3
   - naavox/playroom-clutter-aug4
   - naavox/bedroom-laundry-aug5
   - naavox/playroom-aug6
   - naavox/bedroom-laundry-aug7-2
+  - naavox/bedroom-laundry-Aug16
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
 keep_state_features:
