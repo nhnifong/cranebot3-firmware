@@ -154,6 +154,9 @@ class AnchorArpServer(RobotComponentServer):
                 self.spools[int(spool_no)].jog(float(delta))
             except (TypeError, ValueError, IndexError):
                 logging.warning(f'invalid jog command: {updates["jog"]}')
+        # Only commanded changes are reported. The tracking loop's own over-tension
+        # cut is deliberately not, so a safety trip never shows up as the operator
+        # having turned torque off.
         if 'disable_torque' in updates:
             for spool in self.spools:
                 spool.pauseTrackingLoop(disable_torque=True)

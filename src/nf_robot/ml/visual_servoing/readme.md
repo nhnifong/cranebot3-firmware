@@ -525,6 +525,54 @@ were scored, joined by a line. Numbers say whether it is right; the previews say
 it is right for the right reason, which is the check worth doing before a model reaches
 a robot.
 
+## 7. Grasp with it
+
+    python -m nf_robot.host.observer --visual_servo --local_models
+
+`--visual_servo` replaces the grasping routine pick and place calls: `execute_grasp`
+runs `visual_servo_grasp` in observer.py instead of asking a lerobot session or falling
+back to the centering model. It is an override rather than another fallback, because the
+reason to run it is to find out how it does and a silent fall back to something else
+would hide that. `--local_models` reads `models/visual_servo.pth`; without it the
+checkpoint comes from `naavox/visual-servo` on the hub.
+
+The `servograsp` debug command runs one grasp from wherever the gripper is parked, which
+is the way to try a checkpoint without the pick and place loop choosing targets around
+it.
+
+The loop is the downstream half the model was shaped for. Each pass:
+
+- one gripper frame plus laser range, finger angle and grip set point in, one target
+  position out (`servo.predict_frame`)
+- the predicted camera-frame point becomes a room-frame offset from the *lens* through
+  `geometry.camera_to_room` - the inverse of the transform mine_teleop labelled with,
+  which is why both directions live in one file
+- the horizontal part of that offset is the centering error, closed with a gain and a
+  speed cap, the same shape as `_center_card_in_view`
+- descent is gated on being centered, with a tolerance that is a fraction of the range
+  and therefore an angular one: 3cm of error at 60cm up is a correction the rest of the
+  descent absorbs, and the same 3cm at 8cm up is a miss
+- the grasp axis is commanded as a fraction of the predicted angle each pass, which is a
+  closed loop because the camera turns with the wrist and the prediction shrinks as it
+  comes around
+- the fingers stay open until something asks to close: the finger head sustained above
+  threshold while centered, the rangefinder reaching the object, the gripper reaching
+  floor height, or a tip-over. The close itself is the existing pressure loop, and a
+  pressure rise is what makes the routine report success, exactly as the other grasping
+  routines do
+
+After the close it logs the holding head beside the pressure verdict. The two disagreeing
+is the informative case (readme head 5), and having it in the log is what makes the
+question answerable from a run rather than from a fixture set.
+
+Every prediction also goes out as `GripCamPredictions`, which the UI draws over the
+gripper feed: an arrow from the centre of the frame to the target, a bar for the grasp
+axis, and the two probability bars. `move_x`/`move_y` are the target's position as a
+displacement from the frame centre, so they can fall outside the frame - an arrow
+leaving the picture is the off-canvas case being reported honestly rather than clipped.
+Watching that overlay during a descent is the fastest way to tell a model that is
+mislocating the object from a loop that is mistuned.
+
 # Open questions
 
 - 1.5x canvas extent is a guess. If misses are usually small, 1.25x is cheaper to learn;

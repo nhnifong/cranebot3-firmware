@@ -83,6 +83,9 @@ export class DynamicRoom {
           this.userPers = clonedScene.getObjectByName('user_pers');
           this.hamper = clonedScene.getObjectByName('hamper_tag');
           this.reticule = clonedScene.getObjectByName('reticule');
+          // Half the size it is authored at in decor.glb — the full-size ring
+          // swamps the target circles it sits among.
+          this.reticule?.scale.multiplyScalar(0.5);
           this.toybox = clonedScene.getObjectByName('toybox');
           this.trash_can = clonedScene.getObjectByName('trash_can');
 

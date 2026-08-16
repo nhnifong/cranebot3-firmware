@@ -3,6 +3,11 @@ import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { nf } from '../generated/proto_bundle.js';
 import { DynamicRoom } from './dynamic_room.ts';
 
+// Eyelet 2 is mounted a quarter turn from the way the model is authored, so its
+// copy gets yawed counterclockwise to match. The glb is Y-up (its root node's
+// rotation is about Y), so a turn about the model's Z axis is a Y rotation here.
+const ROTATED_EYELET_CORNER = 2;
+
 export class Eyelet {
     // single copy of the geometry
     private static modelPromise: Promise<GLTF> | null = null;
@@ -41,7 +46,11 @@ export class Eyelet {
             const masterGltf = await Eyelet.modelPromise;
             const clonedScene = masterGltf.scene.clone();
             this.root.add(clonedScene);
-            
+
+            if (this.cornerIndex === ROTATED_EYELET_CORNER) {
+                clonedScene.rotateY(Math.PI / 2);
+            }
+
             this.wallCorner = clonedScene.getObjectByName('wall_corner');
             this.grommet = clonedScene.getObjectByName('grommet');
 

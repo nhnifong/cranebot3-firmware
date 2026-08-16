@@ -29,6 +29,7 @@ __all__ = (
     "TelemetryBatchUpdate",
     "TelemetryItem",
     "TensionRegulationState",
+    "TorqueState",
     "UplinkStatus",
     "VidStats",
     "VideoReady",
@@ -793,6 +794,10 @@ class TelemetryItem(betterproto2.Message):
         25, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
+    torque_state: "TorqueState | None" = betterproto2.field(
+        26, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
     retain_key: "str | None" = betterproto2.field(
         14, betterproto2.TYPE_STRING, optional=True
     )
@@ -819,6 +824,25 @@ class TensionRegulationState(betterproto2.Message):
 default_message_pool.register_message(
     "nf.telemetry", "TensionRegulationState", TensionRegulationState
 )
+
+
+@dataclass(eq=False, repr=False)
+class TorqueState(betterproto2.Message):
+    """
+    Whether the anchors are actively holding position. Reported by the anchors
+    rather than inferred from the last command, since they drop torque on their
+    own when a line goes over-tension.
+    """
+
+    enabled: "bool" = betterproto2.field(1, betterproto2.TYPE_BOOL)
+
+    present: "bool" = betterproto2.field(2, betterproto2.TYPE_BOOL)
+    """
+    something must be present other than a boolean with a false value for the message to even exist.
+    """
+
+
+default_message_pool.register_message("nf.telemetry", "TorqueState", TorqueState)
 
 
 @dataclass(eq=False, repr=False)

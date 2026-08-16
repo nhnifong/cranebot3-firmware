@@ -534,3 +534,8 @@ body.mobile .goto-popup-btn {
   padding: 14px 24px;
   font-size: 1rem;
 }
+
+body.mobile .floor-popup-btn {
+  padding: 14px 20px;
+  font-size: 1rem;
+}

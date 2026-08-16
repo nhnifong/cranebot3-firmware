@@ -19,7 +19,8 @@ Getting that point into the frame is the rotated contact vector that
 lerobot_label_contact_actions already builds - the room-frame vector from the gripper to
 the target, with its horizontal part rotated by `spin` into the gripper frame - followed
 by the fixed camera mount and config.camera_cal_wide's 684x384 intrinsics. See
-point_in_camera for the mount, which is two sign flips once the gripper is assumed level.
+geometry.point_in_camera for the mount, which is two sign flips once the gripper is
+assumed level; the robot's inverse of it lives beside it, so the two cannot drift apart.
 
 The camera's 9.06 degree backward tilt and its 2.7cm offset toward the nose are both
 accounted for. Swing of the gripper away from vertical is still ignored - the recorded
@@ -71,11 +72,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from scipy.spatial.transform import Rotation
-
-import nf_robot.common.definitions as definitions
 from nf_robot.common.config_loader import create_default_config
 from nf_robot.ml.stringman_lerobot import rotate_vector
+from nf_robot.ml.visual_servoing.geometry import CAMERA_POS_BODY, point_in_camera
 from nf_robot.ml.lerobot_trim_to_grasp import (
     MIN_GRASP_SECONDS,
     PRESSURE_THRESHOLD,
@@ -108,15 +107,6 @@ SHARD_TARGET_BYTES = 512 * 1024 * 1024
 # Rows per parquet row group. Small groups let the preview pull a handful of scattered
 # images back without reading whole shards.
 ROW_GROUP_SIZE = 256
-
-# The camera mount, moved from the CAD y-up gripper frame (grommet at +y, nose at -z)
-# into the z-up body frame the rest of the system uses (pole up +z, nose at +y). Rx(90)
-# is the same seam arp_gripper_client.measure_gantry_minus_card crosses.
-_YUP_TO_ZUP = Rotation.from_euler("x", 90, degrees=True)
-# Comes out as Rx(180 - 9.06 deg): looking down, tilted back away from the nose.
-CAMERA_ROT_BODY = _YUP_TO_ZUP * Rotation.from_rotvec(definitions.gripper_camera[0])
-# Comes out as (0, +0.027, +0.006): 2.7cm toward the nose, 6mm up from the body origin.
-CAMERA_POS_BODY = _YUP_TO_ZUP.apply(definitions.gripper_camera[1])
 
 STATE_NEEDED = (
     "gripper_pos_x", "gripper_pos_y", "gripper_pos_z",
@@ -275,28 +265,6 @@ def read_columns(root: Path):
     for rows in episodes.values():
         rows.sort(key=lambda r: r["frame_index"])
     return episodes, float(info["fps"])
-
-
-def point_in_camera(point_room, gripper_pos, spin):
-    """A room point in the gripper camera's optical frame, assuming the gripper hangs level.
-
-    Step one is the rotated contact vector that lerobot_label_contact_actions already
-    builds: the room-frame vector from the gripper to the target, turned into the gripper
-    frame by rotating its horizontal part by `spin`. get_spin is a clockwise bearing, so
-    gripper->room is a rotation by -spin and room->gripper is +spin, which is the
-    direction rotate_vector takes here and there.
-
-    Step two is the fixed camera mount, taken from definitions.gripper_camera rather
-    than idealised: the lens sits 2.7cm toward the nose and 6mm up from the body origin,
-    and looks 9.06 degrees back from straight down. Both matter at grasping range, where
-    the object is only a few centimetres away and 2.7cm is a large part of the frame.
-
-    Still ignored: any swing of the gripper away from vertical.
-    """
-    delta = np.asarray(point_room, dtype=np.float64) - np.asarray(gripper_pos, dtype=np.float64)
-    horizontal = rotate_vector(delta[:2], spin)
-    in_body = np.array([horizontal[0], horizontal[1], delta[2]])
-    return CAMERA_ROT_BODY.inv().apply(in_body - CAMERA_POS_BODY)
 
 
 def project(point_room, gripper_pos, spin, calibration):

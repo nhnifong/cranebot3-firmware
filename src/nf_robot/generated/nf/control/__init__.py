@@ -5,6 +5,7 @@
 
 __all__ = (
     "AddTargetFromAnchorCam",
+    "AddTargetInRoom",
     "CombinedMove",
     "Command",
     "CommonCommand",
@@ -329,6 +330,25 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class AddTargetInRoom(betterproto2.Message):
+    """
+    Add a new target at a point on the floor, in room coordinates. Used by the 3D
+    view, which picks a point on the floor directly and so has no camera image to
+    project from.
+    """
+
+    x: "float" = betterproto2.field(1, betterproto2.TYPE_FLOAT)
+    """
+    Floor position in room space, meters.
+    """
+
+    y: "float" = betterproto2.field(2, betterproto2.TYPE_FLOAT)
+
+
+default_message_pool.register_message("nf.control", "AddTargetInRoom", AddTargetInRoom)
+
+
+@dataclass(eq=False, repr=False)
 class CombinedMove(betterproto2.Message):
     """
     A movement command typically sent from a gamepad or policy
@@ -530,6 +550,10 @@ class ControlItem(betterproto2.Message):
 
     add_relay_creds: "_common__.RelayCreds | None" = betterproto2.field(
         18, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+
+    add_room_target: "AddTargetInRoom | None" = betterproto2.field(
+        19, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
 
 

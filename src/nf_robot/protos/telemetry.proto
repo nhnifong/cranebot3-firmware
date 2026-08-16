@@ -165,7 +165,7 @@ message GripperSensors {
 
 // values predicted by model using the gripper camera provided to UI for diagnostic visualization
 message GripCamPredictions {
-  // prediction motion vector to center gripper over target
+  // predicted vector to target (posiution of target)
   float move_x = 1;
   float move_y = 2;
   // probability a target is in view
@@ -260,6 +260,14 @@ message TensionRegulationState {
   bool present = 2; // something must be present other than a boolean with a false value for the message to even exist.
 }
 
+// Whether the anchors are actively holding position. Reported by the anchors
+// rather than inferred from the last command, since they drop torque on their
+// own when a line goes over-tension.
+message TorqueState {
+  bool enabled = 1;
+  bool present = 2; // something must be present other than a boolean with a false value for the message to even exist.
+}
+
 message AutoTargetingState {
   bool enabled = 1;
   bool present = 2; // something must be present other than a boolean with a false value for the message to even exist.
@@ -314,6 +322,7 @@ message TelemetryItem {
     Logs logs = 23;
     TensionRegulationState tension_regulation_state = 24;
     AutoTargetingState auto_targeting_state = 25;
+    TorqueState torque_state = 26;
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

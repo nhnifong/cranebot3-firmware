@@ -255,9 +255,14 @@
             <div id="action-dataset" class="menu-item">Add targets to dataset</div>
             <div id="action-collect-images" class="menu-item">Collect Gripper Images</div>
             <div id="action-update-firmware" class="menu-item" title="Run pip install --upgrade nf_robot[pi] on all connected robot components.">Update Firmware on Components</div>
-            <div id="action-disable-torque" class="menu-item" title="Stop actively holding position, switch to damped fall mode.">Disable torque</div>
-            <div id="action-enable-torque" class="menu-item" title="Resume active position holding on all motors.">Enable torque</div>
-            <div id="action-toggle-tension-reg" class="menu-item" title="Toggle onboard tension regulation (floor + soft mute) on both spools of every anchor.">Disable tension reg</div>
+            <div id="action-toggle-torque" class="menu-item menu-item-toggle" title="Actively hold position on all motors. Off switches to damped fall mode, so line can be pulled out by hand.">
+              <span>Torque</span>
+              <div class="toggle-track"><div id="toggle-torque-indicator" class="toggle-knob"></div></div>
+            </div>
+            <div id="action-toggle-tension-reg" class="menu-item menu-item-toggle" title="Onboard tension regulation (floor + soft mute) on both spools of every anchor.">
+              <span>Tension reg</span>
+              <div class="toggle-track"><div id="toggle-tension-reg-indicator" class="toggle-knob"></div></div>
+            </div>
             <div id="action-get-ticket" class="menu-item" title="Request a temporary auth ticket for accessing the robot's video streams directly.">Get Stream Ticket</div>
             <div id="action-toggle-logs" class="menu-item" title="Show or hide the log panel at the bottom of the screen.">Toggle Log Panel</div>
 

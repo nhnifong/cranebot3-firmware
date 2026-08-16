@@ -580,6 +580,8 @@ class ComponentClient:
                         self.conn_status.motor_enabled = telemetry.MotorTorque.ENABLED
                     else:
                         self.conn_status.motor_enabled = telemetry.MotorTorque.DISABLED
+                    # keep the robot-wide torque state the UI toggle reads in sync
+                    self.ob.publish_torque_state()
                 if 'logs' in update:
                     self.pulled_logs = update['logs']
                 if 'thermal' in update:

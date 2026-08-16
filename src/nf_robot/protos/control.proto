@@ -148,6 +148,15 @@ message AddTargetFromAnchorCam {
   optional string target_id = 4;
 }
 
+// Add a new target at a point on the floor, in room coordinates. Used by the 3D
+// view, which picks a point on the floor directly and so has no camera image to
+// project from.
+message AddTargetInRoom {
+  // Floor position in room space, meters.
+  float x = 1;
+  float y = 2;
+}
+
 message DeleteTarget {
   string target_id = 1;
 }
@@ -268,6 +277,7 @@ message ControlItem {
     SetTargetModel set_target_model = 16;
     PopupAck popup_ack = 17;
     nf.common.RelayCreds addRelayCreds = 18;
+    AddTargetInRoom add_room_target = 19;
   }
 }
 

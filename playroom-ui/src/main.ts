@@ -45,7 +45,6 @@ let currentRobotId: string | null = urlParams.get('robotid');
 let detectedRobotId: string | null = null; // Stored from incoming telemetry
 let swingCancellationEnabled = false;
 let autoTargetEnabled = false;
-let tensionRegEnabled = true;
 let userRobots: RobotInfo[] = [];
 
 // Calibration tracking variables
@@ -208,7 +207,7 @@ const firstOverheadVideo = new VideoFeed(document.getElementById('firstOverhead'
 const secondOverheadVideo = new VideoFeed(document.getElementById('secondOverhead')!, targetListManager);
 const gripperVideo = new VideoFeed(document.getElementById('gripper')!);
 const overheadVideofeeds = [firstOverheadVideo, secondOverheadVideo];
-const floorProjection = new FloorProjection(scene, 5, 0.001);
+const floorProjection = new FloorProjection(scene, 5, 0.001, targetListManager);
 
 // Debug visualization: wireframe frustums for the anchor cameras used in floor-projection
 // raycasting, so misalignment between the virtual camera and the video feed is visible.
@@ -218,11 +217,13 @@ const cameraHelpers: (THREE.CameraHelper | null)[] = [];
 targetListManager.onTargetHover = () => {
   firstOverheadVideo.refresh();
   secondOverheadVideo.refresh();
+  floorProjection.refresh();
 };
 
 targetListManager.onTargetSelect = () => {
   firstOverheadVideo.refresh();
   secondOverheadVideo.refresh();
+  floorProjection.refresh();
 };
 
 // ------ Authorization and Connection Logic ------
@@ -258,8 +259,7 @@ const CONTROL_MENU_ITEMS: Record<string, string[]> = {
   'action-dataset':           ['owner', 'full'],
   'action-collect-images':    ['owner', 'full'],
   'action-update-firmware':   ['owner', 'full'],
-  'action-disable-torque':    ['owner', 'full'],
-  'action-enable-torque':     ['owner', 'full'],
+  'action-toggle-torque':     ['owner', 'full'],
   'action-toggle-tension-reg':['owner', 'full'],
   'action-debug-send':        ['owner', 'full'],
 };
@@ -758,6 +758,7 @@ function connect(wsUrl: string) {
         else if (update.operationProgress) handleOperationProgress(update.operationProgress);
         else if (update.swingCancellationState) handleSwingCancellationState(update.swingCancellationState);
         else if (update.tensionRegulationState) handleTensionRegulationState(update.tensionRegulationState);
+        else if (update.torqueState) handleTorqueState(update.torqueState);
         else if (update.autoTargetingState) handleAutoTargetingState(update.autoTargetingState);
         else if (update.taskStatus) handleTaskStatus(update.taskStatus);
         else if (update.visibilityStates) handleVisibilityStates(update.visibilityStates);
@@ -1299,6 +1300,8 @@ function handleTargetList(data: nf.telemetry.ITargetList) {
   // show the targets in every video feed
   overheadVideofeeds.forEach(feed => {feed.updateList(data)});
   targetListManager.updateList(targets);
+  // and as rings over the orthographic floor projection in the 3D view
+  floorProjection.updateTargets(targets);
 }
 
 function hidePopup() {
@@ -1562,12 +1565,53 @@ function handleSwingCancellationState(data: nf.telemetry.ISwingCancellationState
   }
 }
 
+// --- Menu state toggles (torque, tension regulation) ---
+// Both are on/off states the robot reports rather than one-shot commands, so they
+// render as the same switch the swing cancellation toggle uses: the knob shows the
+// robot's state, a click sends the matching enable/disable command, and the menu
+// stays open so the state coming back is visible.
+interface MenuToggle {
+  knob: HTMLElement;
+  enabled: boolean;
+  enableCmd: nf.control.Command;
+  disableCmd: nf.control.Command;
+}
+const menuToggles = new Map<string, MenuToggle>();
+
+function initMenuToggle(elementId: string, knobId: string,
+                        enableCmd: nf.control.Command, disableCmd: nf.control.Command) {
+  const el = document.getElementById(elementId);
+  const knob = document.getElementById(knobId);
+  if (!el || !knob) return;
+
+  // Both states are on by default on the robot (see spool_dm), so start on here
+  // too and let the first telemetry correct it.
+  menuToggles.set(elementId, { knob, enabled: true, enableCmd, disableCmd });
+
+  el.addEventListener('click', (e) => {
+    // Keep the menu open: the document-level handler closes it on any click.
+    e.stopPropagation();
+    if (el.classList.contains('disabled')) return;
+    const toggle = menuToggles.get(elementId)!;
+    simpleCommand(toggle.enabled ? toggle.disableCmd : toggle.enableCmd);
+  });
+}
+
+// Called from telemetry. The switch only ever shows robot-reported state, never
+// what was just clicked, so a command the robot drops leaves the knob where it was.
+function setMenuToggleState(elementId: string, enabled: boolean) {
+  const toggle = menuToggles.get(elementId);
+  if (!toggle) return;
+  toggle.enabled = enabled;
+  toggle.knob.classList.toggle('status-offline', !enabled);
+}
+
 function handleTensionRegulationState(data: nf.telemetry.ITensionRegulationState) {
-  tensionRegEnabled = data.enabled ?? false;
-  const tensionRegEl = document.getElementById('action-toggle-tension-reg');
-  if (tensionRegEl) {
-    tensionRegEl.textContent = tensionRegEnabled ? 'Disable tension reg' : 'Enable tension reg';
-  }
+  setMenuToggleState('action-toggle-tension-reg', data.enabled ?? false);
+}
+
+function handleTorqueState(data: nf.telemetry.ITorqueState) {
+  setMenuToggleState('action-toggle-torque', data.enabled ?? false);
 }
 
 function handleAutoTargetingState(data: nf.telemetry.IAutoTargetingState) {
@@ -1739,6 +1783,18 @@ function sendSingleComponentAction(type: string, index: number, actionEnum: nf.c
 overheadVideofeeds.forEach(feed => {feed.sendFn = sendControl});
 targetListManager.sendFn = sendControl;
 
+// A floor point clicked in the 3D view is already in room coordinates, so it goes
+// straight to the robot — no anchor cam needs to be able to see it.
+// Any popup closing (button clicked, timed out, clicked elsewhere) takes the
+// provisional target down with it.
+targetListManager.onPopupClosed = () => floorProjection.setProvisionalTarget(null);
+
+targetListManager.onAddTargetAtFloorPoint = (point: THREE.Vector3) => {
+  sendControl([nf.control.ControlItem.create({
+    addRoomTarget: { x: point.x, y: -point.z }
+  })]);
+};
+
 // --- Run menu ---
 function initRunMenu() {
   const runBtn = document.getElementById('run-btn');
@@ -1845,20 +1901,12 @@ function initRunMenu() {
   bindCommand('action-update-firmware', Command.COMMAND_UPDATE_FIRMWARE);
   bindCommand('action-record-park',    Command.COMMAND_RECORD_PARK);
   // Park / UnPark temporarily removed from the menu — feature is unstable and unrecommended.
-  bindCommand('action-disable-torque', Command.COMMAND_DISABLE_TORQUE);
-  bindCommand('action-enable-torque', Command.COMMAND_ENABLE_TORQUE);
-
-  // Tension regulation toggle. The label reflects the action the next press will take;
-  // actual state comes from tension_regulation_state telemetry (see handleTensionRegulationState).
-  const tensionRegEl = document.getElementById('action-toggle-tension-reg');
-  if (tensionRegEl) {
-    tensionRegEl.addEventListener('click', () => {
-      if (tensionRegEl.classList.contains('disabled')) return;
-      simpleCommand(tensionRegEnabled ? Command.COMMAND_DISABLE_TENSION_REG : Command.COMMAND_ENABLE_TENSION_REG);
-      runMenu?.classList.remove('show');
-      maintMenu?.classList.remove('show');
-    });
-  }
+  // State toggles. Both show what the robot reports (torque_state and
+  // tension_regulation_state telemetry) rather than what was last clicked.
+  initMenuToggle('action-toggle-torque', 'toggle-torque-indicator',
+    Command.COMMAND_ENABLE_TORQUE, Command.COMMAND_DISABLE_TORQUE);
+  initMenuToggle('action-toggle-tension-reg', 'toggle-tension-reg-indicator',
+    Command.COMMAND_ENABLE_TENSION_REG, Command.COMMAND_DISABLE_TENSION_REG);
 
   document.getElementById('action-get-ticket')?.addEventListener('click', () => {
     maintMenu?.classList.remove('show');
@@ -2706,6 +2754,18 @@ function isDescendant(child: THREE.Object3D, parent: THREE.Object3D): boolean {
   return false;
 }
 
+// The target the 3D view is currently hovering, if any. Tracked so that leaving
+// the canvas only clears a hover this view set — hovers coming from the target
+// list or a video feed are theirs to clear.
+let floorHoverId: string | null = null;
+
+renderer.domElement.addEventListener('pointerleave', () => {
+  if (floorHoverId) {
+    floorHoverId = null;
+    targetListManager.setHoveredId(null);
+  }
+});
+
 window.addEventListener('pointermove', (event) => {
   if (event.target !== renderer.domElement) {
     clearHover();
@@ -2722,6 +2782,7 @@ window.addEventListener('pointermove', (event) => {
   let foundType: string | null = null;
   let foundIndex = -1;
   let hoverTarget: THREE.Object3D | null = null;
+  let floorTargetId: string | null = null;
 
     // Check all intersections along the ray to bypass invisible room walls
   for (const hit of intersects) {
@@ -2753,14 +2814,24 @@ window.addEventListener('pointermove', (event) => {
       // Verify if hit point is roughly at the floor plane (Y=0) because the mesh also includes the walls and celing.
       if (Math.abs(hit.point.y) < 0.05) {
         room.setReticule(hit.point);
+        floorTargetId = floorProjection.pickTarget(hit.point);
       }
     }
   }
 
   if (foundType && hoverTarget) {
     applyHover(hoverTarget, foundType, foundIndex);
+    floorTargetId = null; // a component is in front of the floor
   } else {
     clearHover();
+  }
+
+  // Hovering a target ring on the floor highlights it everywhere, since hover is
+  // shared with the video feeds and the target list.
+  floorHoverId = floorTargetId;
+  targetListManager.setHoveredId(floorTargetId);
+  if (floorTargetId && !foundType) {
+    document.body.style.cursor = 'pointer';
   }
 });
 
@@ -2774,7 +2845,14 @@ window.addEventListener('click', (event) => {
     let hitFloor = false;
     for (const hit of intersects) {
       if (hit.object === room.mesh && Math.abs(hit.point.y) < 0.05) {
-        targetListManager.showFloorGotoPopup(event.clientX, event.clientY, hit.point);
+        // Clicking a target ring selects it (in every view); clicking bare floor
+        // clears the selection, matching the video feeds' behaviour.
+        const clickedId = floorProjection.pickTarget(hit.point);
+        targetListManager.setSelectedId(clickedId);
+        targetListManager.showFloorPopup(event.clientX, event.clientY, hit.point, clickedId);
+        // Preview what "Add target" would create. Set after the popup, which
+        // clears any previous preview on its way up.
+        floorProjection.setProvisionalTarget(clickedId ? null : hit.point);
         hitFloor = true;
         break;
       }

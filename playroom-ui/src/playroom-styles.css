@@ -824,6 +824,19 @@ h2 {
 /* Thin separator rule between menu groups. */
 .menu-separator { border: none; border-bottom: 1px solid #ddd; margin-bottom: 5px; }
 
+/* Menu row whose action is an on/off state rather than a one-shot command:
+   name on the left, the same switch the swing cancellation toggle uses on the
+   right. The switch shows what the robot reports, so the row stays open on
+   click (see initMenuToggle) and the knob moves when the state comes back. */
+.menu-item.menu-item-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+/* The whole row is the hit target; the track is only an indicator. */
+.menu-item-toggle .toggle-track { pointer-events: none; flex: none; }
+
 /* Debug command row: a non-clickable item containing an input + send button. */
 .menu-item-debug { cursor: default; }
 .menu-item-debug:hover { background: none; color: inherit; }
@@ -1456,6 +1469,37 @@ h2 {
   from { opacity: 0; transform: translate(-50%, -100%) scale(0.8); }
   to   { opacity: 1; transform: translate(-50%, -130%) scale(1); }
 }
+
+/* Floor click panel in the 3D view: "Go here" plus either "Add target"
+   (bare floor) or "Delete target" (an existing target was clicked). */
+.floor-popup {
+  position: fixed;
+  z-index: 2000;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background-color: rgba(30, 30, 30, 0.92);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+  transform: translate(-50%, -130%);
+  animation: popUpSmall 0.15s ease-out;
+  white-space: nowrap;
+}
+.floor-popup-btn {
+  background-color: var(--green);
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-weight: bold;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.floor-popup-btn:hover  { background-color: var(--green-hover); }
+.floor-popup-btn:active { transform: scale(0.95); }
+.floor-popup-delete       { background-color: var(--red); }
+.floor-popup-delete:hover { background-color: var(--red-hover); }
 
 /* ============================================================
    TUTORIAL OVERLAY

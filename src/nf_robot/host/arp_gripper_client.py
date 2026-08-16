@@ -85,6 +85,10 @@ class ArpeggioGripperClient(ComponentClient):
         # set when the gripper replies to a query_angle_from_vertical request
         self.angle_from_vertical_received = asyncio.Event()
         self.last_angle_from_vertical = None
+        # grip force set point last reported by the gripper. Kept because it is one of the
+        # three state inputs the visual servoing model takes, and unlike the range and the
+        # finger angle it has no home in the datastore.
+        self.last_target_force = 0.0
         
         # integrated drift from swing cancellation, which compute_swing_correction
         # subtracts back out so the platform holds its place
@@ -126,6 +130,7 @@ class ArpeggioGripperClient(ComponentClient):
             target_force = 0
             if 'dforce' in gs:
                 target_force = float(gs['dforce'])
+            self.last_target_force = target_force
 
             # (-90, 90), not the true angle; -90 is open
             finger_angle = float(gs['fing_a'])

@@ -27,6 +27,7 @@ CONSTANT_RETAIN_KEYS = (
     'new_anchor_poses',
     'swing_cancellation_state',
     'tension_regulation_state',
+    'torque_state',
     'auto_targeting_state',
     'task_status',
 )

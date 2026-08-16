@@ -73,9 +73,9 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
 
   { // attach your carabiners to the marker box
     id: 'carabiners',
-    highlightId: 'action-disable-torque',
+    highlightId: 'action-toggle-torque',
     openMenuId: 'maintenance-menu',
-    message: `With the gripper in the center of the room, Attach all four lines with carabiners so no lines cross. In order to be able to pull out the lines while the robot is turned on, disable the torque.<br><br><img src="${import.meta.env.VITE_ASSET_BUCKET_URL ?? ''}/assets/playroom/simplified_box.webp">`,
+    message: `With the gripper in the center of the room, Attach all four lines with carabiners so no lines cross. In order to be able to pull out the lines while the robot is turned on, switch the torque toggle off.<br><br><img src="${import.meta.env.VITE_ASSET_BUCKET_URL ?? ''}/assets/playroom/simplified_box.webp">`,
   },
 
   { // Place markers on the floor

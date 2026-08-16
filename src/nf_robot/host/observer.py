@@ -210,7 +210,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE, visual_servo=False) -> None:
         self.port = port
         # (half height, half width, floor clearance) of the calibration diamond, in meters.
         # Overridable with --diamond_size. Consumed both by the physical diamond motion in
@@ -258,8 +258,16 @@ class AsyncObserver:
         # any other calibration step is aborted (passive_safety cancels the task).
         self.tension_over_limit = False
         # onboard tension regulation (floor + soft mute) on/off state, mirrored to the UI
-        # via tension_regulation_state whenever it changes.
-        self.tension_reg_enabled = False
+        # via tension_regulation_state whenever it changes. Both this and torque below
+        # start on because that is what a spool comes up in (see spool_dm); nothing
+        # commands either at startup, so anything else would be a wrong initial guess.
+        self.tension_reg_enabled = True
+        # motor torque on/off state, mirrored to the UI via torque_state whenever it
+        # changes. Sourced from what the anchors report rather than what was commanded.
+        self.torque_enabled = True
+        # set while passive_safety cycles torque to shed an over-tension. That is a safety
+        # action, not an operator one, so it is kept out of the reported torque state.
+        self._torque_reports_suppressed = False
         # true while swing latency cal is running, so passive_safety recovers instead of
         # aborting on a tension trip during that step.
         self.swing_cal_in_progress = False
@@ -274,6 +282,9 @@ class AsyncObserver:
         # which kind of target model is loaded, so run_perception knows how to drive it
         self.target_model_kind = None
         self.centering_model = None
+        # the visual servoing grasp's network, loaded on first use when --visual_servo is set
+        self.visual_servo = visual_servo
+        self.servo_model = None
         self.predicted_lateral_vector = None
         self.perception_task = None
         self.webui_server = None
@@ -399,6 +410,7 @@ class AsyncObserver:
         ))
         self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=('swingc' in self.active_set), present='.'))
         self.send_ui(tension_regulation_state=telemetry.TensionRegulationState(enabled=self.tension_reg_enabled, present=True))
+        self.send_ui(torque_state=telemetry.TorqueState(enabled=self.torque_enabled, present=True))
         self.send_ui(auto_targeting_state=telemetry.AutoTargetingState(enabled=self.target_model is not None, present=True))
         r = await self.flush_tele_buffer()
 
@@ -475,8 +487,11 @@ class AsyncObserver:
         elif item.add_cam_target is not None:
             self._handle_add_cam_target(item.add_cam_target)
 
+        elif item.add_room_target is not None:
+            self._handle_add_room_target(item.add_room_target)
+
         elif item.delete_target is not None:
-            self._handle_delete_target(item.delete_target)
+            r = await self._handle_delete_target(item.delete_target)
 
         elif item.debug is not None:
             r = await self._handle_debug_command(item.debug)
@@ -988,6 +1003,18 @@ class AsyncObserver:
                     r = await self.set_tension_reg(False)
         if item.action == 'centerorigin':
             r = await self.invoke_motion_task(self._center_card_in_view('origin'))
+        if item.action == 'servograsp':
+            # One visual servoing grasp from wherever the gripper is now, without the
+            # pick and place loop or the --visual_servo flag. Park it over the object
+            # first, roughly - closing the rest is the model's job.
+            async def servo_grasp_once():
+                if self.servo_model is None:
+                    await self._load_servo_model()
+                if self.servo_model is None:
+                    return
+                success = await self.visual_servo_grasp()
+                logger.info(f'servograsp succeeded={success}')
+            r = await self.invoke_motion_task(servo_grasp_once())
 
     async def set_tension_reg(self, enabled: bool):
         """Enable or disable onboard tension regulation (the floor + soft mute) on both
@@ -1180,9 +1207,11 @@ class AsyncObserver:
         await asyncio.create_task(self.gripper_client.send_commands({'measure_finger_contact': None}))
         await asyncio.wait_for(self.gripper_client.finger_contact_calibration_complete.wait(), 20)
 
-    def _handle_delete_target(self, item: control.DeleteTarget):
+    async def _handle_delete_target(self, item: control.DeleteTarget):
         if item.target_id is not None:
             self.target_queue.remove_target(item.target_id);
+        self.send_tq_to_ui()
+        await self.flush_tele_buffer()
 
     def _handle_add_cam_target(self, item: control.AddTargetFromAnchorCam):
         # Add the target
@@ -1196,6 +1225,12 @@ class AsyncObserver:
                 self.target_queue.set_target_position(item.target_id, floor_points[0])
             else:   
                 new_id = self.target_queue.add_user_target(floor_points[0], dropoff='hamper')
+        self.send_tq_to_ui()
+
+    def _handle_add_room_target(self, item: control.AddTargetInRoom):
+        # Used when the position arrives already in room coordinates.
+        logger.info(f'Adding target at floor point ({item.x}, {item.y}) from the 3d view')
+        self.target_queue.add_user_target((item.x, item.y), dropoff='hamper')
         self.send_tq_to_ui()
 
     def submitTargets(self):
@@ -1278,9 +1313,9 @@ class AsyncObserver:
             case control.Command.UPDATE_FIRMWARE:
                 r = await self._handle_update_firmware()
             case control.Command.DISABLE_TORQUE:
-                await self._handle_disable_torque()
+                await self.set_torque(False)
             case control.Command.ENABLE_TORQUE:
-                await self._handle_enable_torque()
+                await self.set_torque(True)
             case control.Command.DEBUG_LOG_OVER_T:
                 self._enable_debug_log_over_telemetry()
             case control.Command.ENABLE_TENSION_REG:
@@ -1345,21 +1380,35 @@ class AsyncObserver:
             current_action=message,
         ))
 
-    async def _handle_disable_torque(self):
+    async def set_torque(self, enabled: bool):
+        """Enable or disable position-holding torque on every anchor's motors.
+
+        Counterpart to set_tension_reg. The resulting state is not recorded here: the
+        anchors echo the commanded torque state back and publish_torque_state reports it.
+        """
         if self.config.anchor_type != common.AnchorType.ARPEGGIO:
             return
+        logger.info(f'setting torque {"on" if enabled else "off"} for all anchors')
+        command = 'enable_torque' if enabled else 'disable_torque'
         await asyncio.gather(*[
-            client.send_commands({'disable_torque': None})
+            client.send_commands({command: None})
             for client in self.anchors.values()
         ])
 
-    async def _handle_enable_torque(self):
-        if self.config.anchor_type != common.AnchorType.ARPEGGIO:
+    def publish_torque_state(self):
+        """Push the anchors' aggregate torque state to the UI when it changes.
+
+        Called by every anchor client that reports a torque state. Torque counts as on
+        only when every connected anchor says it is on. Automatic torque cycling done
+        for safety is suppressed, so the UI only ever shows operator-driven state.
+        """
+        if self._torque_reports_suppressed:
             return
-        await asyncio.gather(*[
-            client.send_commands({'enable_torque': None})
-            for client in self.anchors.values()
-        ])
+        states = [client.conn_status.motor_enabled for client in self.anchors.values()]
+        enabled = bool(states) and all(s == telemetry.MotorTorque.ENABLED for s in states)
+        if enabled != self.torque_enabled:
+            self.torque_enabled = enabled
+            self.send_ui(torque_state=telemetry.TorqueState(enabled=enabled, present=True))
 
     async def _handle_jog_spool(self, jog: control.JogSpool):
         """Handles manually jogging a spool motor."""
@@ -1448,10 +1497,16 @@ class AsyncObserver:
                     if not self.swing_cal_in_progress:
                         logger.warning(f'Tension overload during motion task "{self.motion_task.get_name()}" - aborting it')
                         self.motion_task.cancel()
-                await self._handle_disable_torque()
-                await asyncio.sleep(1)
-                await self._handle_enable_torque()
-                await asyncio.sleep(1)
+                # Shedding tension by cycling torque is a safety action, not an
+                # operator one, so it must not move the UI's torque toggle.
+                self._torque_reports_suppressed = True
+                try:
+                    await self.set_torque(False)
+                    await asyncio.sleep(1)
+                    await self.set_torque(True)
+                    await asyncio.sleep(1)
+                finally:
+                    self._torque_reports_suppressed = False
             await asyncio.sleep(0.2)
 
     def update_avg_named_pos(self, key: str, position: np.ndarray):
@@ -2722,7 +2777,7 @@ class AsyncObserver:
                 return
             elif len(self.anchors) > N_ANCHORS:
                 logger.warning(f'Too many anchors found \n{self.anchors}')
-            await self._handle_enable_torque()
+            await self.set_torque(True)
             # collect observations of origin card aruco marker to get initial guess of anchor poses.
             #   origin pose detections are actually always stored by all connected clients,
             #   it is only necessary to ensure enough have been collected from each client and average them.
@@ -4595,6 +4650,17 @@ class AsyncObserver:
 
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
+        if self.visual_servo:
+            # --visual_servo takes the grasp away from both the lerobot policy and the
+            # centering model. It is a deliberate override rather than another fallback:
+            # the point of running it is to find out how it does, which a silent fall
+            # back to something else would hide.
+            if self.servo_model is None:
+                await self._load_servo_model()
+            if self.servo_model is None:
+                logger.warning('No visual servoing model loaded; cannot grasp')
+                return False
+            return await self.visual_servo_grasp()
         # A lerobot session may be driving from our own subprocess or connected remotely
         # through the prod telemetry relay, so we can't tell locally if one is present.
         # lerobot_grasp broadcasts the eval-start and returns None if no session answers,
@@ -4756,6 +4822,280 @@ class AsyncObserver:
             raise
         finally:
             self.slow_stop_all_spools()
+
+    async def visual_servo_grasp(self):
+        """Try to grasp whatever the visual servoing model sees below the gripper.
+
+        The model (ml/visual_servoing/readme.md) answers "where is the object", not "how
+        fast to move", so the other half of the loop lives here: read one gripper frame,
+        turn the predicted point into a room-frame offset from the lens, and close that
+        offset with a gain. Same shape as _center_card_in_view, but continuous, and
+        against a network rather than a tag pose - which is why it commands a velocity
+        instead of stepping through open loop nudges.
+
+        Descent is gated on being centered rather than run alongside it, and the tolerance
+        is a fraction of the range, which makes it an angular tolerance: 3cm of error at
+        60cm up is a correction the rest of the descent absorbs, and the same 3cm at 8cm
+        up is a miss.
+
+        Fingers stay open through the approach even though the model has an opinion about
+        them; its finger head is used only as one of the triggers to start closing. A hand
+        that closes early is how an approach fails to reach the floor, and the close itself
+        wants the pressure loop below rather than a per-frame speed.
+
+        Returns True if the fingers ended up holding something, like the other grasping
+        routines. Requires self.servo_model; execute_grasp loads it.
+        """
+        from nf_robot.ml.visual_servoing import servo
+
+        FLOOR_GRIPPER_HEIGHT = 0.11 # (m) gripper origin height at which the floor is reached
+        RANGE_ITEM = 0.04 # (m) range to item below which the grip should be started
+        COMMIT_RANGE_M = 0.3 # (m) below this, a low target-present score no longer aborts
+        DOWNWARD_SPEED = -0.07
+        LATERAL_GAIN = 1.2 # (1/s) fraction of the remaining offset commanded per second
+        LATERAL_SPEED_MAX = 0.15 # (m/s)
+        CENTER_TOL_FRACTION = 0.12 # of the range, so the tolerance is really an angle
+        CENTER_TOL_MIN_M = 0.012
+        PRESENT_THRESHOLD = 0.5
+        NOTHING_SEEN_FRAMES = 15
+        FINGER_CLOSE_THRESHOLD = 0.4 # finger head output above which it is asking to close
+        CLOSE_CONFIRM_FRAMES = 3 # consecutive frames asking, so one noisy frame can't close
+        WRIST_GAIN = 0.5
+        WRIST_MAX_STEP_DEG = 20.0
+        WRIST_LOCK_RANGE_M = 0.08 # (m) stop turning the wrist this close in
+        APPROACH_TIMEOUT_S = 20.0
+        LOOP_DELAY = 0.1
+        PRESSURE_SENSE_WAIT = 10.0
+        NUM_ATTEMPTS = 3
+        CLOSING_FINGER_SPEED = 30
+
+        async def predict():
+            """One prediction from the newest gripper frame, or None if there isn't one.
+
+            Everything it reads goes to the UI as GripCamPredictions on the way out, so
+            the overlay on the gripper feed shows what the loop below is acting on. Every
+            call site is here, which is why the send is too.
+            """
+            frame = self.gripper_client.last_output_frame
+            if frame is None:
+                return None
+            _, finger_angle, _ = self.datastore.finger.getLast()
+            state = {
+                'laser_rangefinder': self.datastore.range_record.getLast()[1],
+                'finger_angle': finger_angle,
+                'target_force': self.gripper_client.last_target_force,
+            }
+            prediction = await asyncio.to_thread(
+                servo.predict_frame, self.servo_model, frame, state, self._device,
+                self.gripper_client.get_spin())
+            self.send_ui(grip_cam_preditions=telemetry.GripCamPredictions(
+                # the overlay draws the arrow from the centre of the frame, so it wants a
+                # displacement rather than a position. uv may fall outside 0..1 - that is
+                # the target being off the edge, and an arrow leaving the frame is the
+                # right picture of it.
+                move_x=float(prediction['uv'][0] - 0.5),
+                move_y=float(prediction['uv'][1] - 0.5),
+                prob_target_in_view=prediction['present'],
+                prob_holding=prediction['holding'],
+                # the bar is drawn along (cos, sin) of this in image axes, which is the
+                # convention the mined labels and their previews already use; folded into
+                # [0, pi) because the grasp axis is pi-periodic and the field says so.
+                grip_angle=float(prediction['grasp_axis_rad'] % np.pi),
+            ))
+            return prediction
+
+        try:
+            attempts = NUM_ATTEMPTS
+            while not self.pe.holding and attempts > 0 and self.run_command_loop:
+                attempts -= 1
+                logger.debug(f'Open fingers to {OPEN} to clear camera')
+                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+
+                nothing_seen_countdown = NOTHING_SEEN_FRAMES
+                close_countdown = CLOSE_CONFIRM_FRAMES
+                approach_timeout = time.time() + APPROACH_TIMEOUT_S
+                reason = 'approach timed out'
+                self.pe.tip_over.clear()
+
+                while time.time() < approach_timeout and self.run_command_loop:
+                    if self.pe.tip_over.is_set():
+                        reason = 'tip over, must be floor'
+                        break
+
+                    range_ts, range_to_target = self.datastore.range_record.getLast()
+                    if time.time() - range_ts > RANGE_MAX_AGE_S:
+                        # the range is both an input to the model and the descent's only
+                        # sense of how far there is left to go; flying on a stale one is
+                        # how the fingers end up driven into the floor.
+                        reason = 'rangefinder reading went stale'
+                        break
+                    gripper_height = self.pe.grip_pose[1][2]
+                    if range_to_target < RANGE_ITEM or gripper_height < FLOOR_GRIPPER_HEIGHT:
+                        reason = (f'reached target at height {gripper_height:.3f}m '
+                                  f'range {range_to_target:.3f}m')
+                        break
+
+                    prediction = await predict()
+                    if prediction is None:
+                        logger.debug('No frame available from gripper')
+                        await asyncio.sleep(LOOP_DELAY)
+                        continue
+
+                    if prediction['present'] < PRESENT_THRESHOLD and range_to_target > COMMIT_RANGE_M:
+                        if nothing_seen_countdown == NOTHING_SEEN_FRAMES:
+                            # High up and unsure anything graspable is down there. Hold
+                            # still rather than chase whatever the position head picked out
+                            # of an empty floor - every other head is conditional on this
+                            # one. Stopping once, not every pass, since it stays stopped.
+                            self.slow_stop_all_spools()
+                        nothing_seen_countdown -= 1
+                        if nothing_seen_countdown <= 0:
+                            reason = 'nothing seen'
+                            break
+                        await asyncio.sleep(LOOP_DELAY)
+                        continue
+                    nothing_seen_countdown = NOTHING_SEEN_FRAMES
+
+                    # horizontal part of the offset from the lens to the target, in the room
+                    # frame: exactly the error that must go to zero for the jaws to be over it
+                    error_xy = prediction['room_offset'][:2]
+                    error = float(np.linalg.norm(error_xy))
+                    tolerance = max(CENTER_TOL_MIN_M, CENTER_TOL_FRACTION * range_to_target)
+                    centered = error < tolerance
+
+                    lateral = error_xy * LATERAL_GAIN
+                    lateral_speed = float(np.linalg.norm(lateral))
+                    if lateral_speed > LATERAL_SPEED_MAX:
+                        lateral = lateral * (LATERAL_SPEED_MAX / lateral_speed)
+                    await self.move_direction_speed(
+                        [lateral[0], lateral[1], DOWNWARD_SPEED if centered else 0.0])
+
+                    if range_to_target > WRIST_LOCK_RANGE_M:
+                        # The axis is predicted relative to the current frame and the camera
+                        # turns with the wrist, so commanding a fraction of it each pass is
+                        # a closed loop: as the wrist comes around, the prediction shrinks.
+                        wrist_now = self.datastore.winch_line_record.getLast()[1]
+                        step = clamp(np.degrees(prediction['grasp_axis_rad']) * WRIST_GAIN,
+                                     -WRIST_MAX_STEP_DEG, WRIST_MAX_STEP_DEG)
+                        await self.gripper_client.send_commands(
+                            {'set_wrist_angle': wrist_now + step})
+
+                    logger.debug(
+                        f"servo uv {np.round(prediction['uv'], 3)} err {error*100:.1f}cm "
+                        f"tol {tolerance*100:.1f}cm {'centered' if centered else 'off'} "
+                        f"range {range_to_target:.3f}m (model {prediction['range_m']:.3f}m) "
+                        f"present {prediction['present']:.2f} finger {prediction['finger']:+.2f} "
+                        f"axis {np.degrees(prediction['grasp_axis_rad']):+.0f}deg")
+
+                    # Only while centered: the finger head is a property of the whole frame
+                    # and says nothing about whether the jaws are over the object yet.
+                    if prediction['finger'] > FINGER_CLOSE_THRESHOLD and centered:
+                        close_countdown -= 1
+                        if close_countdown <= 0:
+                            reason = 'model asked to close'
+                            break
+                    else:
+                        close_countdown = CLOSE_CONFIRM_FRAMES
+
+                    try:
+                        # the normal sleep on this loop is LOOP_DELAY, but if tip is detected
+                        # we want to stop immediately.
+                        await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
+                    except TimeoutError:
+                        pass
+
+                self.slow_stop_all_spools()
+                self.pe.tip_over.clear()
+                logger.info(f'Visual servo approach ended: {reason}')
+
+                if reason in ('nothing seen', 'rangefinder reading went stale'):
+                    continue # nothing worth closing on; spend another attempt looking
+
+                logger.info('Close gripper')
+                end_time = time.time() + PRESSURE_SENSE_WAIT
+                self.pe.finger_pressure_rising.clear()
+
+                await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
+                # finger speed commands take effect for 200ms only. they must be sent repeatedly.
+                t, angle, pressure = self.datastore.finger.getLast()
+                while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and angle < CLOSED:
+                    await asyncio.sleep(0.03)
+                    await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
+                    t, angle, pressure = self.datastore.finger.getLast()
+                await self.gripper_client.send_commands({'set_finger_speed': 0})
+                held = self.pe.finger_pressure_rising.is_set()
+                logger.debug(f'End grip finger_pressure_rising={held} angle={angle}')
+
+                # The holding head is an independent, purely visual answer to the same
+                # question the pressure sensor just answered, so log both: pressure without
+                # a visual grasp is a snagged carpet or a finger jammed on the floor, and a
+                # visual grasp without pressure is something slipping out of the jaws.
+                after = await predict()
+                if after is not None:
+                    logger.info(f"Grasp check: pressure says {held}, holding head says "
+                                f"{after['holding']:.2f}")
+
+                if not held:
+                    pressure = self.datastore.finger.getLast()[2]
+                    logger.debug(f'Did not detect a successful hold, pressure=({pressure}) open '
+                                 'and go back up high enough to get a view of the object')
+                    # move up slowly at first, till fingers just touch ground and we are vertical.
+                    # this keeps unwanted swinging to a minimum
+                    await self.move_direction_speed([0, 0, 0.06])
+                    await asyncio.sleep(1.0)
+                    asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
+                    # now move up a little faster in a slightly random direction
+                    direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
+                    await self.move_direction_speed(direction)
+                    await asyncio.sleep(2.0)
+                    self.slow_stop_all_spools()
+                    continue
+
+                self.pe.finger_pressure_rising.clear()
+                logger.info('Successful grasp')
+                # slowly at first
+                await self.move_direction_speed(np.array([0, 0, 0.05]))
+                await asyncio.sleep(1.0)
+                # and then all at once
+                await self.move_direction_speed(np.array([0, 0, 0.15]))
+                await asyncio.sleep(2.0)
+                logger.info('Stop moving')
+                self.slow_stop_all_spools()
+                return True
+            logger.info(f'Gave up on visual servo grasp after {NUM_ATTEMPTS-attempts} attempts. '
+                        f'self.pe.holding={self.pe.holding}')
+            return False
+
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self.slow_stop_all_spools()
+
+    async def _load_servo_model(self):
+        """Load the visual servoing checkpoint onto the eval device, or leave it None."""
+        import torch
+        from nf_robot.ml.visual_servoing import servo
+
+        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+        self._device = DEVICE
+
+        if DEVICE == "cpu":
+            logger.warning("Refusing to load the visual servoing model on CPU; hardware acceleration required.")
+            self.servo_model = None
+            self.send_ui(pop_message=telemetry.Popup(
+                message="The visual servoing grasp (--visual_servo) cannot be used without some "
+                        "kind of hardware acceleration. Loading was aborted because the torch "
+                        "device is CPU."
+            ))
+            return
+
+        def load_sync():
+            model, checkpoint = servo.load_model(DEVICE, local_models=self.local_models)
+            logger.info(f"Visual servoing model ready: epoch {checkpoint.get('epoch')}, "
+                        f"input {tuple(checkpoint['image_size'])}, metrics {checkpoint.get('metrics')}")
+            return model
+
+        self.servo_model = await asyncio.to_thread(load_sync)
 
     async def _load_centering_model(self):
         import torch
@@ -4951,6 +5291,13 @@ def main():
     parser.add_argument("--stream_heatmap", action="store_true", help="Generate and stream the target heatmap video feed (off by default)")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
+    parser.add_argument(
+        "--visual_servo",
+        action="store_true",
+        help="Grasp with the visual servoing model (see ml/visual_servoing/readme.md) instead "
+             "of a lerobot policy or the centering model. Also available as the 'servograsp' "
+             "debug command, which runs one grasp where the gripper is now."
+    )
     parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     parser.add_argument(
         "--rec_diagnostics",
@@ -5019,6 +5366,7 @@ def main():
             serve_ui=(not args.no_serve_ui),
             ui_port=args.ui_port,
             diamond_size=tuple(args.diamond_size),
+            visual_servo=args.visual_servo,
         )
 
         # Idempotent stop trigger. Runs as a signal-handler callback on the event

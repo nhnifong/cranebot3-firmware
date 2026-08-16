@@ -11,6 +11,13 @@ export class TargetListManager {
     public onTargetSelect: ((id: string | null) => void) | null = null;
     public onTargetHover: ((id: string | null) => void) | null = null;
     public sendFn: ((items: Array<nf.control.ControlItem>) => void) | null = null
+    // Invoked when the user asks to add a target at a floor point in the 3D view.
+    // The robot only accepts new targets as anchor-cam image coordinates, so the
+    // owner of the anchor cameras (main.ts) supplies the projection.
+    public onAddTargetAtFloorPoint: ((point: THREE.Vector3) => void) | null = null
+    // Fired whenever a popup goes away, so the 3D view can take down the green
+    // provisional target that accompanies an open "Add target" button.
+    public onPopupClosed: (() => void) | null = null
 
     constructor() {
         // Setup background click handler for the list container to clear selection
@@ -169,29 +176,53 @@ export class TargetListManager {
         this.activeGotoBtn = btn;
     }
 
-    // Shows a "Go here" popup for floor clicks in the 3D scene.
-    public showFloorGotoPopup(x: number, y: number, worldPoint: THREE.Vector3) {
+    // Panel shown for floor clicks in the 3D scene. Always offers "Go here";
+    // the second action depends on whether an existing target was clicked.
+    public showFloorPopup(x: number, y: number, worldPoint: THREE.Vector3, targetId: string | null) {
         this.hideGotoPopup();
 
-        const btn = document.createElement('button');
-        btn.className = 'goto-popup-btn';
-        btn.textContent = 'Go here';
-        btn.style.left = `${x}px`;
-        btn.style.top = `${y}px`;
+        const panel = document.createElement('div');
+        panel.className = 'floor-popup';
+        panel.style.left = `${x}px`;
+        panel.style.top = `${y}px`;
 
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (this.sendFn) {
-                this.sendFn([nf.control.ControlItem.create({
-                  moveGripperTo: {pos: { x: worldPoint.x, y: -worldPoint.z, z: 0.3 }
-                }
-            })]);
-            }
-            this.hideGotoPopup();
+        const addButton = (label: string, extraClass: string, onClick: () => void) => {
+            const btn = document.createElement('button');
+            btn.className = `floor-popup-btn ${extraClass}`;
+            btn.textContent = label;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                onClick();
+                this.hideGotoPopup();
+            });
+            panel.appendChild(btn);
+        };
+
+        addButton('Go here', 'floor-popup-go', () => {
+            if (!this.sendFn) return;
+            // When a target was clicked, send its id so the robot keeps tracking
+            // it as it re-observes; otherwise go to the bare floor point.
+            const dest = targetId
+                ? { targetId }
+                : { pos: { x: worldPoint.x, y: -worldPoint.z, z: 0.3 } };
+            this.sendFn([nf.control.ControlItem.create({ moveGripperTo: dest })]);
         });
 
-        document.body.appendChild(btn);
-        this.activeGotoBtn = btn;
+        if (targetId) {
+            addButton('Delete target', 'floor-popup-delete', () => {
+                if (!this.sendFn) return;
+                this.sendFn([nf.control.ControlItem.create({
+                    deleteTarget: { targetId }
+                })]);
+            });
+        } else {
+            addButton('Add target', 'floor-popup-add', () => {
+                this.onAddTargetAtFloorPoint?.(worldPoint);
+            });
+        }
+
+        document.body.appendChild(panel);
+        this.activeGotoBtn = panel;
         this.activeGotoTimeout = setTimeout(() => this.hideGotoPopup(), 10000);
     }
 
@@ -204,6 +235,7 @@ export class TargetListManager {
             this.activeGotoBtn.remove();
             this.activeGotoBtn = null;
         }
+        if (this.onPopupClosed) this.onPopupClosed();
     }
 
     public deleteSelectedItem() {

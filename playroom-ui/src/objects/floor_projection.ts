@@ -1,5 +1,15 @@
 import * as THREE from 'three';
 import Hls from 'hls.js';
+import { nf } from '../generated/proto_bundle.js';
+import { TargetColors } from '../utils.ts';
+import { TargetListManager } from '../ui/target_list_manager.ts';
+
+// Radius (meters) of the target rings laid over the projected floor image.
+const TARGET_RING_OUTER = 0.06;
+const TARGET_RING_INNER = 0.045;
+// How close a floor point has to be to count as hitting a target. Slightly wider
+// than the ring, since the 3D view is often looking at the floor edge-on.
+const TARGET_PICK_RADIUS = 0.09;
 
 /**
  * Renders a video stream (feed 3 — orthographic color projection) as a texture
@@ -21,7 +31,23 @@ export class FloorProjection {
     private hls: Hls | null = null;
     private isLocalMode = false;
 
-    constructor(scene: THREE.Scene, sizeMeters: number = 5, yOffset: number = 0.001) {
+    // Flat rings floating just above the projected image, mirroring the target
+    // circles the 2D overlays draw on the anchor cam feeds. Each marker is a ring
+    // (status colour) plus a disc underneath it that only shows when the target is
+    // hovered or selected. Markers are pooled and hidden rather than destroyed,
+    // since the target list churns on every update.
+    private targetsRoot: THREE.Group;
+    private ringGeometry: THREE.RingGeometry;
+    private discGeometry: THREE.CircleGeometry;
+    private markerPool: { ring: THREE.Mesh; disc: THREE.Mesh }[] = [];
+    private lastTargets: nf.telemetry.IOneTarget[] = [];
+    private targetListManager: TargetListManager | null;
+    // Green ring previewing the target the "Add target" button would create,
+    // the 3D counterpart of the video feeds' green new-item square.
+    private provisionalRing: THREE.Mesh;
+
+    constructor(scene: THREE.Scene, sizeMeters: number = 5, yOffset: number = 0.001,
+                tlm: TargetListManager | null = null) {
         this.video = document.createElement('video');
         this.video.autoplay = true;
         this.video.muted = true;
@@ -49,6 +75,132 @@ export class FloorProjection {
         this.mesh.position.y = yOffset;
         this.mesh.visible = false;
         scene.add(this.mesh);
+
+        this.targetListManager = tlm;
+        this.targetsRoot = new THREE.Group();
+        this.targetsRoot.position.y = yOffset + 0.002; // clear of the projection quad
+        scene.add(this.targetsRoot);
+        this.ringGeometry = new THREE.RingGeometry(TARGET_RING_INNER, TARGET_RING_OUTER, 32);
+        this.discGeometry = new THREE.CircleGeometry(TARGET_RING_OUTER, 32);
+
+        this.provisionalRing = new THREE.Mesh(this.ringGeometry, new THREE.MeshBasicMaterial({
+            color: TargetColors.mouse,
+            transparent: true,
+            opacity: 0.9,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        }));
+        this.provisionalRing.rotation.x = -Math.PI / 2;
+        this.provisionalRing.visible = false;
+        this.targetsRoot.add(this.provisionalRing);
+    }
+
+    // Preview where a target would be added, or null to take the preview down.
+    // The point is a world-space floor position, as picked in the 3D view.
+    public setProvisionalTarget(point: THREE.Vector3 | null) {
+        if (!point) {
+            this.provisionalRing.visible = false;
+            return;
+        }
+        this.provisionalRing.position.set(point.x, 0, point.z);
+        this.provisionalRing.visible = true;
+    }
+
+    // Show the current target list as rings on the floor.
+    public updateTargets(targets: nf.telemetry.IOneTarget[]) {
+        this.lastTargets = targets;
+        this.renderTargets();
+    }
+
+    // Repaint with the current hover/selection state. Hover and selection are
+    // global (owned by the TargetListManager), so a change made in any view —
+    // the target list or either anchor cam — has to be reflected here too.
+    public refresh() {
+        this.renderTargets();
+    }
+
+    // Which target, if any, a point on the floor lands on. Done analytically
+    // rather than by raycasting the ring meshes so that a click just inside or
+    // beside the thin annulus still counts.
+    public pickTarget(floorPoint: THREE.Vector3): string | null {
+        let bestId: string | null = null;
+        let bestDist = TARGET_PICK_RADIUS;
+        for (const target of this.lastTargets) {
+            if (!target.id) continue;
+            const dx = (target.position?.x ?? 0) - floorPoint.x;
+            const dz = -(target.position?.y ?? 0) - floorPoint.z;
+            const dist = Math.hypot(dx, dz);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestId = target.id;
+            }
+        }
+        return bestId;
+    }
+
+    private renderTargets() {
+        const hoveredId = this.targetListManager?.getHoveredId() ?? null;
+        const selectedId = this.targetListManager?.getSelectedId() ?? null;
+
+        this.lastTargets.forEach((target, i) => {
+            if (i >= this.markerPool.length) this.growMarkerPool();
+            const { ring, disc } = this.markerPool[i];
+
+            // Ring colour tracks the target's status in the robot's queue.
+            let color = TargetColors.seen;
+            if (target.status == nf.telemetry.TargetStatus.TARGETSTATUS_SELECTED) {
+                color = TargetColors.movingTo;
+            } else if (target.status == nf.telemetry.TargetStatus.TARGETSTATUS_PICKED_UP) {
+                color = TargetColors.grasped;
+            }
+            (ring.material as THREE.MeshBasicMaterial).color.set(color);
+
+            // Positions are robot coordinates (Z-up), same conversion as elsewhere.
+            const x = target.position?.x ?? 0;
+            const z = -(target.position?.y ?? 0);
+            ring.position.set(x, 0, z);
+            disc.position.set(x, -0.0005, z); // just under the ring, avoids z-fighting
+            ring.visible = true;
+
+            // Fill matches the 2D overlays: orange when selected, blue on hover.
+            const discMat = disc.material as THREE.MeshBasicMaterial;
+            if (target.id && target.id === selectedId) {
+                discMat.color.set(TargetColors.selected);
+                discMat.opacity = 0.7;
+                disc.visible = true;
+            } else if (target.id && target.id === hoveredId) {
+                discMat.color.set(TargetColors.hovered);
+                discMat.opacity = 0.3;
+                disc.visible = true;
+            } else {
+                disc.visible = false;
+            }
+        });
+
+        for (let i = this.lastTargets.length; i < this.markerPool.length; i++) {
+            this.markerPool[i].ring.visible = false;
+            this.markerPool[i].disc.visible = false;
+        }
+    }
+
+    private growMarkerPool() {
+        const makeMesh = (geometry: THREE.BufferGeometry, opacity: number) => {
+            const material = new THREE.MeshBasicMaterial({
+                transparent: true,
+                opacity,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.rotation.x = -Math.PI / 2; // lay flat
+            this.targetsRoot.add(mesh);
+            return mesh;
+        };
+
+        this.markerPool.push({
+            ring: makeMesh(this.ringGeometry, 0.9),
+            disc: makeMesh(this.discGeometry, 0.3),
+        });
     }
 
     private teardownHls() {
@@ -190,5 +342,9 @@ export class FloorProjection {
         this.img.src = '';
         this.isLocalMode = false;
         this.mesh.visible = false;
+        // Drop the markers too, so nothing stale stays on the floor or pickable.
+        this.lastTargets = [];
+        this.renderTargets();
+        this.setProvisionalTarget(null);
     }
 }
