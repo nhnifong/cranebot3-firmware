@@ -1039,6 +1039,33 @@ class AsyncObserver:
             for client in self.bot_clients.values()
         ])
 
+    async def shutdown_all_bots(self):
+        """Ask every connected component to power its Pi off cleanly.
+
+        Hard-cutting power to a running component is what corrupts its SD card, so this
+        is the way to put the robot away: every Pi stops its motors, releases its camera
+        and halts through systemd, and only then is it safe to cut the supply.
+
+        Each component drops its websocket as it goes down, so connection errors here are
+        the expected outcome rather than a failure - they are logged and swallowed so one
+        component going quiet cannot stop the rest from being told to halt.
+        """
+        clients = list(self.bot_clients.items())
+        if not clients:
+            logger.warning('no components connected; nothing to shut down')
+            return
+        logger.info(f'requesting poweroff of {len(clients)} components: '
+                    f'{", ".join(name for name, _ in clients)}')
+        results = await asyncio.gather(*[
+            client.send_commands({'shutdown_pi': True})
+            for _, client in clients
+        ], return_exceptions=True)
+        for (name, _), result in zip(clients, results):
+            if isinstance(result, Exception):
+                logger.warning(f'{name} may not have received the poweroff request: {result!r}')
+        logger.info('poweroff requested; wait for the green activity LEDs to stop '
+                    'flickering before cutting power')
+
     async def pull_logs_to_zip(self):
         """Pull recent log lines from every connected component and bundle them into a
         local zip file, entries named after each component's IP address. Includes the

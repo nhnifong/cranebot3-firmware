@@ -156,6 +156,9 @@ class RobotComponentServer:
         self.client_websocket = None
         self.reset_wifi_event = asyncio.Event()
         self.wait_reset_task = None
+        # latched once a poweroff has been started, so a repeated shutdown_pi command
+        # cannot stack a second halt on top of one already in progress.
+        self.halting = False
 
     async def stream_measurements(self, ws):
         """
@@ -443,6 +446,53 @@ class RobotComponentServer:
             self.update['firmware_update_complete'] = {'returncode': returncode, 'error': error_output}
             logging.error(f'Self update failed with returncode {returncode}. Not restarting.')
 
+    async def halt_pi(self):
+        """Halt this Pi through systemd, in response to a 'shutdown_pi' command.
+
+        Cutting power to a running component is what damages these SD cards: the image
+        mounts root with commit=30, so a hard power cut can lose the last half minute of
+        writes and leave truncated files behind. This gives the host a way to ask for a
+        real shutdown - motion stopped, camera released, filesystems synced and
+        unmounted - so the user can then pull the plug safely.
+
+        Returns without halting if anything about the poweroff fails, leaving the
+        component running and connected rather than half torn down.
+        """
+        if self.halting:
+            logging.info('poweroff already in progress; ignoring repeat shutdown_pi')
+            return
+        self.halting = True
+        logging.info('Host requested poweroff.')
+
+        # Stop everything that moves before the OS goes away underneath it. shutdown()
+        # fastStops self.spooler; the arp anchor drives two spools instead and needs them
+        # stopped separately, the same pair handler() stops on client disconnect.
+        self.shutdown()
+        for spool in getattr(self, 'spools', None) or []:
+            spool.setAimSpeed(0)
+        await self.stop_camera_stream()
+
+        # give stream_measurements a chance to flush whatever it is holding (logs, the
+        # last line records) before systemd starts killing services.
+        await asyncio.sleep(0.2)
+
+        command = ['sudo', '-n', 'systemctl', 'poweroff']
+        try:
+            proc = await asyncio.create_subprocess_exec(*command, stdout=PIPE, stderr=STDOUT)
+            output = (await proc.stdout.read()).decode('utf-8', errors='ignore')
+            returncode = await proc.wait()
+        except OSError as e:
+            logging.error(f"'{' '.join(command)}' could not be run: {e}")
+            self.halting = False
+            return
+        if returncode != 0:
+            logging.error(f"'{' '.join(command)}' failed: {output}")
+            self.halting = False
+            return
+        # systemd takes it from here and will SIGTERM this service on its way down; there
+        # is deliberately no os._exit() so the unit gets to stop cleanly like any other.
+        logging.info('Poweroff underway.')
+
     def read_recent_logs(self, path=None):
         """Return the last log_tail_lines lines of a log file, for the
         'pull_logs' debug command."""
@@ -475,6 +525,8 @@ class RobotComponentServer:
                 logging.debug(f'measured latency = {time.time() - float(update["host_time"])}')
             if 'run_update' in update:
                 self.extra_tasks.append(asyncio.create_task(self.run_update()))
+            if 'shutdown_pi' in update:
+                self.extra_tasks.append(asyncio.create_task(self.halt_pi()))
 
             if self.spooler is not None:
                 if 'length_set' in update:
