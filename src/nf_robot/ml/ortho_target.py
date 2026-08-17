@@ -46,7 +46,8 @@ is a LeRobot dataset and the result is not:
 
        python -m nf_robot.ml.ortho_target train
 
-  4. `evaluate` scores that checkpoint against the held-out room, and --preview_dir
+  4. `evaluate` scores that checkpoint - or the published one, downloaded, if training
+     has not run on this machine - against the held-out room, and --preview_dir
      draws what it actually predicted: the label in green, the ranked candidates in
      red. Numbers say whether it is right, the previews say whether it is right for
      the right reason, which is the check worth doing before a model reaches a robot:
@@ -550,8 +551,8 @@ DEFAULT_MODEL_PATH = "models/ortho_target.pth"
 class OrthoTargetNet(SharedTrunkMixin, nn.Module):
     """Frozen DINOv3 patch features -> one softmax over floor locations.
 
-    The output is a single categorical distribution over grid x grid cells rather
-    than a per-pixel sigmoid heatmap. Several objects on the floor are all plausible
+    The output is a single categorical distribution over grid x grid cells.
+    Several objects on the floor are all plausible
     next targets and the operator picked one, so the honest output is a distribution
     with a mode per candidate; a softmax over locations gives that, needs no
     threshold to decode, and spends none of its loss on the 99.8% of pixels that are
@@ -775,6 +776,24 @@ def resolve_data_root(args) -> Path:
     return Path(snapshot_download(repo_id=args.dataset_id, repo_type="dataset"))
 
 
+def resolve_model_path(model_path) -> str:
+    """The checkpoint to evaluate, downloading the published one if there is none local.
+
+    The same shape as resolve_data_root. The default path is only where `train` writes,
+    so on a machine that has not trained one there is nothing there and the published
+    model is what the user meant; a path they named themselves is an error if it is
+    missing, because silently scoring a different model would be worse than stopping.
+    """
+    if Path(model_path).exists():
+        return model_path
+    if model_path != DEFAULT_MODEL_PATH:
+        raise FileNotFoundError(f"No checkpoint at {model_path}")
+    from huggingface_hub import hf_hub_download
+
+    logging.info(f"No {model_path}; downloading {TARGETING_MODEL_REPOID}/{TARGETING_MODEL_FILENAME}")
+    return hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename=TARGETING_MODEL_FILENAME)
+
+
 def train(args):
     device = torch.device(args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu"))
     torch.manual_seed(args.seed)
@@ -884,7 +903,7 @@ def load_checkpoint(path, device):
 def evaluate(args):
     device = torch.device(args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu"))
     data_root = resolve_data_root(args)
-    model, checkpoint = load_checkpoint(args.model_path, device)
+    model, checkpoint = load_checkpoint(resolve_model_path(args.model_path), device)
 
     eval_set = OrthoTargetDataset(data_root, args.split, model.image_size, augment=False)
     loader = torch.utils.data.DataLoader(eval_set, batch_size=args.batch_size, num_workers=args.workers)
