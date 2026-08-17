@@ -11,8 +11,15 @@ version of the file readable by every version of the code:
     component type.
   - a missing field means the build predates it, so every field's default is how the robots
     were built before the field existed.
+
+Run as a script to write the file directly, for a Pi whose build changed without the whole
+anchor_arp_eval procedure being worth re-running:
+
+    python -m nf_robot.robot.server_conf --power --long --set_hostname
+    python -m nf_robot.robot.server_conf --path server.conf
 """
 
+import argparse
 import logging
 
 logger = logging.getLogger(__name__)
@@ -23,6 +30,8 @@ CONF_PATH = '/opt/robot/server.conf'
 FALLBACK_CONF_PATH = 'server.conf'
 
 DEFAULT_COMPONENT_TYPE = 'arpeggio anchor'
+# the other type anchor_arp_eval writes; i2c_dispatcher keys the powerline spool off it
+POWER_COMPONENT_TYPE = 'arpeggio power anchor'
 
 # how much line anchor_arp_eval.py wound onto the spools: 'long' is its --long mode, which
 # puts 20 m on the lower spool and 12 m on the upper instead of 15 m and 7.5 m.
@@ -82,3 +91,41 @@ def write_server_conf(component_type, winding=WINDING_SHORT, path=CONF_PATH):
     with open(path, 'w') as f:
         f.write(f'winding={winding}\n')
         f.write(component_type + '\n')
+
+
+def main():
+    """Write server.conf from the two things it records, without winding any line.
+
+    The flags are named after anchor_arp_eval's, which is where these details are normally
+    captured, so the same --long that wound the spools writes the same file here.
+    """
+    parser = argparse.ArgumentParser(description=main.__doc__.splitlines()[0])
+    parser.add_argument('--power', action='store_true',
+                        help=f"this anchor carries the powerline spool ('{POWER_COMPONENT_TYPE}' "
+                             f"rather than '{DEFAULT_COMPONENT_TYPE}')")
+    parser.add_argument('--long', action='store_true',
+                        help='spools were wound long (20 m lower, 12 m upper) rather than '
+                             'short (15 m, 7.5 m); the server picks its full spool diameter from this')
+    parser.add_argument('--path', default=CONF_PATH,
+                        help=f'file to write (default {CONF_PATH})')
+    parser.add_argument('--set_hostname', action='store_true',
+                        help='also rename this Pi for its role, the step anchor_arp_eval does '
+                             'next. Needs sudo, and takes full effect on the next reboot')
+    args = parser.parse_args()
+
+    component_type = POWER_COMPONENT_TYPE if args.power else DEFAULT_COMPONENT_TYPE
+    winding = WINDING_LONG if args.long else WINDING_SHORT
+    write_server_conf(component_type, winding=winding, path=args.path)
+    print(f'Wrote {args.path}: {component_type}, winding={winding}')
+
+    if args.set_hostname:
+        # Imported here rather than at module scope: every robot server reads this module
+        # at boot, and nothing on that path should drag in the QA package.
+        from nf_robot.qa.set_hostname import set_component_hostname
+
+        # The role names anchor_arp_eval passes, so a Pi renamed here matches one renamed there.
+        set_component_hostname('power-anchor' if args.power else 'anchor')
+
+
+if __name__ == '__main__':
+    main()
