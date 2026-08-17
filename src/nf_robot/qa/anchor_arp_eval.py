@@ -68,6 +68,11 @@ def configure_one_motor(controller, label, target_motor_id, target_feedback_id, 
     against the old id, which is why their writes silently fail to persist. This
     mirrors the web GUI's working sequence: write a register, point the motor object
     at its new id, store; then a final explicit store like the GUI's button.
+
+    Equally important: the motor has to be DISABLED before any of this. A store sent
+    to an enabled motor is ACKed and the register writes still land in RAM, so
+    everything (including this function's verification, which re-reads registers)
+    reports success -- and then the values revert on the next power cycle.
     """
     if target_motor_id == 0:
         raise ValueError("target_motor_id cannot be 0 (motor_id 0 bricks the motor)")
@@ -99,6 +104,16 @@ def configure_one_motor(controller, label, target_motor_id, target_feedback_id, 
         time.sleep(0.1)
         controller.poll_feedback()
 
+        # The motor must be disabled for store_parameters() to commit to flash.
+        # An enabled motor still ACKs the 0xAA store frame and still applies the
+        # register writes to RAM, so the write looks like it succeeded and only
+        # reverts on the next power cycle. Motors arrive here already enabled if a
+        # previous run or cranebot.service left them that way, and it has to be
+        # re-done on every attempt because each one re-adds the motor.
+        motor.set_zero_command()
+        motor.disable()
+        time.sleep(0.2)
+
         # Feedback_id (MST_ID) first, while the motor is still at its current id.
         if current_feedback_id != target_feedback_id:
             motor.write_register(FEEDBACK_ID_REGISTER, target_feedback_id)
@@ -122,9 +137,14 @@ def configure_one_motor(controller, label, target_motor_id, target_feedback_id, 
         controller.motors.clear()
         controller._motors_by_feedback.clear()
 
-        # Verify it persisted. The motor may now answer at its old OR new id, so
-        # match on the feedback value rather than the id. A persisted feedback_id is
-        # our proxy that store_parameters committed all params (including ESC_ID).
+        # Verify the write took effect. The motor may now answer at its old OR new
+        # id, so match on the feedback value rather than the id.
+        #
+        # Caveat: this reads back live registers, i.e. RAM, so it confirms the write
+        # was applied but CANNOT prove store_parameters() committed it to flash -- an
+        # enabled motor applies writes to RAM and ACKs the store, and only reverts on
+        # the next power cycle. The disable above is what makes the commit reliable;
+        # the power cycle prompt in ensure_motor_ids is what actually proves it.
         verify = scan_motors(controller, motor_type=motor_type)
         if len(verify) == 1 and target_feedback_id in verify.values():
             answering_id = next(iter(verify))
@@ -134,9 +154,9 @@ def configure_one_motor(controller, label, target_motor_id, target_feedback_id, 
 
         if len(verify) == 1:
             current_motor_id, current_feedback_id = next(iter(verify.items()))
-        print(f"  Write did not persist (attempt {attempt}/{attempts}), retrying...")
+        print(f"  Write did not take effect (attempt {attempt}/{attempts}), retrying...")
 
-    raise RuntimeError(f"Failed to configure {label} motor after {attempts} attempts (writes not persisting to flash).")
+    raise RuntimeError(f"Failed to configure {label} motor after {attempts} attempts (register writes not taking effect).")
 
 
 def configure_feedback_in_place(controller, label, target_motor_id, target_feedback_id, motor_type=MOTOR_TYPE, attempts=3):
@@ -146,6 +166,9 @@ def configure_feedback_in_place(controller, label, target_motor_id, target_feedb
     already answers on, addressing target_motor_id reaches only that motor even
     with the other motor present on the bus. Used for the lower motor, which stays
     on the factory motor_id (1), so it never needs to be unplugged on its own.
+
+    As in configure_one_motor, the motor must be disabled before the write/store or
+    the store never reaches flash, silently and with a successful-looking readback.
     """
     for attempt in range(1, attempts + 1):
         controller.motors.clear()
@@ -154,6 +177,11 @@ def configure_feedback_in_place(controller, label, target_motor_id, target_feedb
         motor = controller.add_motor(motor_id=target_motor_id, feedback_id=0x00, motor_type=motor_type)
         time.sleep(0.1)
         controller.poll_feedback()
+
+        # Must be disabled or store_parameters() silently fails to reach flash.
+        motor.set_zero_command()
+        motor.disable()
+        time.sleep(0.2)
 
         motor.write_register(FEEDBACK_ID_REGISTER, target_feedback_id)
         time.sleep(0.1)
@@ -170,9 +198,9 @@ def configure_feedback_in_place(controller, label, target_motor_id, target_feedb
         if verify.get(target_motor_id) == target_feedback_id:
             print(f"  Set {label} motor to motor_id={target_motor_id}, feedback_id={target_feedback_id}.")
             return
-        print(f"  Write did not persist (attempt {attempt}/{attempts}), retrying...")
+        print(f"  Write did not take effect (attempt {attempt}/{attempts}), retrying...")
 
-    raise RuntimeError(f"Failed to configure {label} motor after {attempts} attempts (writes not persisting to flash).")
+    raise RuntimeError(f"Failed to configure {label} motor after {attempts} attempts (register writes not taking effect).")
 
 
 def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TARGETS):
@@ -203,7 +231,15 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
     input("Plug in both motors, then press Enter...")
 
     if motor_id_changed:
-        print("The upper motor's motor_id (ESC_ID) was changed; that only takes effect after a power cycle.")
+        # ESC_ID takes effect the instant it is written -- the motor stops answering
+        # on the old id and answers on the new one within the same run, no reboot
+        # needed. The power cycle is not what applies the change; it is how we prove
+        # store_parameters() actually committed it to flash, since reading the
+        # register back only ever reports RAM. Without this check a failed store
+        # looks identical to a successful one until the anchor is next powered up.
+        print("The upper motor's motor_id (ESC_ID) was changed. It already took effect, "
+              "but a power cycle is the only way to confirm it was saved to flash "
+              "rather than just applied in memory.")
         input("Power cycle both motors now by re-plugging the AC wall plug, then press Enter. If you are not powering the pi any other way, just come back and start this script again, and it will pick up where it left off.")
 
     # With the upper motor now on id 2, the lower motor is the only one still on the
@@ -211,7 +247,9 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
     configure_feedback_in_place(
         controller, "lower", lower_motor_id, lower_feedback_id, motor_type=motor_type)
 
-    print("Confirming final motor IDs...")
+    # After the power cycle above, this is a genuine flash check rather than a RAM
+    # readback: anything that failed to commit has reverted to its old id by now.
+    print("Confirming final motor IDs (post power cycle, so this checks flash)...")
     found = {}
     for _ in range(3):  # motors may need a moment to come up after a power cycle
         found = scan_motors(controller, motor_type=motor_type)
