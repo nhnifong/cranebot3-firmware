@@ -24,6 +24,7 @@ pad_clamp: false
 merge:
   # Add any new 79west sets here
   - naavox/toys-79west
+  - naavox/79west-toys-aug17
 
 # Exactly mine_teleop.STATE_NEEDED plus ortho_target.STATE_COMPONENTS, and nothing else.
 keep_state_features:
