@@ -322,7 +322,7 @@ class ArpeggioGripperClient(ComponentClient):
         landed: the old stream keeps delivering for seconds afterwards, and those frames
         are new enough to pass any timestamp test at the wrong size.
         """
-        fudge = 0.14
+        fudge = 0.20 # I don't think the dts zeros are accurate enough
         deadline = time.time() + timeout
         while True:
             with self.frame_lock:
