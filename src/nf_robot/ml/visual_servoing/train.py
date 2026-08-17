@@ -233,6 +233,9 @@ def checkpoint_payload(model, args, metrics, epoch):
         "image_size": tuple(args.image_size),
         "fuse_layers": args.fuse_layers,
         "attention_layers": args.attention_layers,
+        # Whether the state dict above holds a backbone at all: a frozen one is left to
+        # dino_trunk's shared instance and never written.
+        "freeze": not args.unfreeze_backbone,
         "metrics": metrics,
         "epoch": epoch,
     }
@@ -273,7 +276,7 @@ def train(args):
     head_params = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
     groups = [{"params": head_params, "lr": args.lr}]
     if args.unfreeze_backbone:
-        groups.append({"params": list(model.backbone.parameters()),
+        groups.append({"params": list(model.trunk.parameters()),
                        "lr": args.lr * args.backbone_lr_scale})
         logging.info(f"backbone unfrozen at {args.backbone_lr_scale}x the head learning rate")
     else:

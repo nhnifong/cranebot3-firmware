@@ -65,6 +65,16 @@ is a LeRobot dataset and the result is not:
 
        hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 
+Train with the backbone frozen, which is what step 3 does by default. --unfreeze_backbone
+exists but is not the supported path, for three reasons that all point the same way: a
+few thousand samples is far too few to move an 86M-parameter trunk without memorising
+the floors it saw; frozen is what lets the observer serve this model and the visual
+servoing one from a single shared DINOv3 (ml/dino_trunk.py) rather than two copies of
+the same 327MB; and a frozen trunk is recoverable from backbone_id and a download, so
+it stays out of the checkpoint and ortho_target.pth carries heads alone. A checkpoint
+trained unfrozen records "freeze": False, loads a private trunk and shares nothing -
+the model still runs, it just costs what it used to.
+
 The ortho view is an orthographic projection of the floor plane (host/floor_view.py),
 so room metres map to its pixels analytically - no camera pose is involved, unlike
 camera_goal.py's per-anchor projection.
@@ -108,6 +118,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from nf_robot.ml.dino_trunk import SharedTrunkMixin, drop_trunk_weights
 from nf_robot.ml.lerobot_label_contact_actions import contact_blend_alphas
 from nf_robot.ml.stringman_lerobot import _FEED_NAMES
 
@@ -536,7 +547,7 @@ DEFAULT_GRID = 128
 DEFAULT_MODEL_PATH = "models/ortho_target.pth"
 
 
-class OrthoTargetNet(nn.Module):
+class OrthoTargetNet(SharedTrunkMixin, nn.Module):
     """Frozen DINOv3 patch features -> one softmax over floor locations.
 
     The output is a single categorical distribution over grid x grid cells rather
@@ -551,24 +562,18 @@ class OrthoTargetNet(nn.Module):
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  grid=DEFAULT_GRID, fuse_layers=4, width=256, freeze=True):
         super().__init__()
-        from transformers import AutoModel
-
-        self.backbone = AutoModel.from_pretrained(backbone_id)
+        trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
         self.image_size = image_size
         self.grid = grid
         self.fuse_layers = fuse_layers
         self.freeze = freeze
 
-        config = self.backbone.config
+        config = trunk.config
         self.patch_size = config.patch_size
         self.token_grid = image_size // self.patch_size
         if image_size % self.patch_size:
             raise ValueError(f"image_size {image_size} is not a multiple of patch {self.patch_size}")
-
-        if freeze:
-            for param in self.backbone.parameters():
-                param.requires_grad_(False)
 
         in_ch = config.hidden_size * fuse_layers
         # Two bilinear x2 steps take the 16px token grid to 4px cells at 512 input.
@@ -591,7 +596,7 @@ class OrthoTargetNet(nn.Module):
 
     def features(self, pixel_values):
         with torch.set_grad_enabled(self.training and not self.freeze):
-            out = self.backbone(pixel_values, output_hidden_states=True)
+            out = self.trunk(pixel_values, output_hidden_states=True)
         n_patches = self.token_grid ** 2
         # [CLS] and the register tokens lead the sequence; patches are always the tail.
         feats = [h[:, -n_patches:, :] for h in out.hidden_states[-self.fuse_layers:]]
@@ -605,7 +610,7 @@ class OrthoTargetNet(nn.Module):
     def train(self, mode=True):
         super().train(mode)
         if self.freeze:
-            self.backbone.eval()  # a frozen backbone must not update its norm statistics
+            self.trunk.eval()  # a frozen backbone must not update its norm statistics
         return self
 
 
@@ -798,7 +803,7 @@ def train(args):
     head_params = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
     groups = [{"params": head_params, "lr": args.lr}]
     if args.unfreeze_backbone:
-        groups.append({"params": list(model.backbone.parameters()), "lr": args.lr * args.backbone_lr_scale})
+        groups.append({"params": list(model.trunk.parameters()), "lr": args.lr * args.backbone_lr_scale})
         logging.info(f"backbone unfrozen at {args.backbone_lr_scale}x the head learning rate")
     else:
         logging.info(f"backbone frozen; training {sum(p.numel() for p in head_params) / 1e6:.1f}M head parameters")
@@ -846,6 +851,9 @@ def train(args):
                     "image_size": args.image_size,
                     "grid": args.grid,
                     "fuse_layers": args.fuse_layers,
+                    # Whether the state dict above holds a backbone at all: a frozen one
+                    # is left to dino_trunk's shared instance and never written.
+                    "freeze": not args.unfreeze_backbone,
                     "metrics": metrics,
                     "epoch": epoch + 1,
                 }, args.model_path)
@@ -858,11 +866,17 @@ def train(args):
 
 def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
+    freeze = checkpoint.get("freeze", True)
     model = OrthoTargetNet(
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],
-        grid=checkpoint["grid"], fuse_layers=checkpoint["fuse_layers"],
+        grid=checkpoint["grid"], fuse_layers=checkpoint["fuse_layers"], freeze=freeze,
     ).to(device)
-    model.load_state_dict(checkpoint["state_dict"])
+    state = checkpoint["state_dict"]
+    if freeze:
+        # Checkpoints written before the trunk was shared still carry it; verify they
+        # really are the pretrained weights when the checkpoint does not say so itself.
+        state = drop_trunk_weights(state, model.trunk, verify="freeze" not in checkpoint)
+    model.load_state_dict(state)
     model.eval()
     return model, checkpoint
 

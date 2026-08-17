@@ -38,6 +38,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from nf_robot.ml.dino_trunk import SharedTrunkMixin, drop_trunk_weights
+
 DEFAULT_BACKBONE = "facebook/dinov3-vitb16-pretrain-lvd1689m"
 # (width, height). 28x16 tokens at /16, within 1.5% of the gripper camera's native
 # 684x384 aspect ratio.
@@ -126,33 +128,27 @@ class AttentionBlock(nn.Module):
         return x + self.mlp(self.norm2(x))
 
 
-class VisualServoNet(nn.Module):
+class VisualServoNet(SharedTrunkMixin, nn.Module):
     """Frozen DINOv3 patch features -> target position, grasp axis, finger, flags."""
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
                  state_dim=STATE_DIM):
         super().__init__()
-        from transformers import AutoModel
-
-        self.backbone = AutoModel.from_pretrained(backbone_id)
+        trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
         self.image_size = tuple(image_size)
         self.fuse_layers = fuse_layers
         self.freeze = freeze
         self.state_dim = state_dim
 
-        config = self.backbone.config
+        config = trunk.config
         self.patch_size = config.patch_size
         width_px, height_px = self.image_size
         if width_px % self.patch_size or height_px % self.patch_size:
             raise ValueError(f"image_size {self.image_size} is not a multiple of patch {self.patch_size}")
         self.token_grid = (height_px // self.patch_size, width_px // self.patch_size)
         self.grid = (self.token_grid[0] * CELLS_PER_TOKEN, self.token_grid[1] * CELLS_PER_TOKEN)
-
-        if freeze:
-            for param in self.backbone.parameters():
-                param.requires_grad_(False)
 
         hidden = config.hidden_size
         self.stem = nn.Sequential(
@@ -203,7 +199,7 @@ class VisualServoNet(nn.Module):
     def features(self, pixel_values):
         """Fused patch features as a map, plus the global [CLS]/register vector."""
         with torch.set_grad_enabled(self.training and not self.freeze):
-            out = self.backbone(pixel_values, output_hidden_states=True)
+            out = self.trunk(pixel_values, output_hidden_states=True)
         rows, cols = self.token_grid
         n_patches = rows * cols
         # [CLS] and the register tokens lead the sequence; patches are always the tail.
@@ -241,7 +237,7 @@ class VisualServoNet(nn.Module):
     def train(self, mode=True):
         super().train(mode)
         if self.freeze:
-            self.backbone.eval()  # a frozen backbone must not update its norm statistics
+            self.trunk.eval()  # a frozen backbone must not update its norm statistics
         return self
 
 
@@ -304,10 +300,17 @@ def predict(model, images, state, top_k=1):
 
 def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
+    freeze = checkpoint.get("freeze", True)
     model = VisualServoNet(
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],
         fuse_layers=checkpoint["fuse_layers"], attention_layers=checkpoint["attention_layers"],
+        freeze=freeze,
     ).to(device)
-    model.load_state_dict(checkpoint["state_dict"])
+    state = checkpoint["state_dict"]
+    if freeze:
+        # Checkpoints written before the trunk was shared still carry it; verify they
+        # really are the pretrained weights when the checkpoint does not say so itself.
+        state = drop_trunk_weights(state, model.trunk, verify="freeze" not in checkpoint)
+    model.load_state_dict(state)
     model.eval()
     return model, checkpoint
