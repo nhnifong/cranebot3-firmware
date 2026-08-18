@@ -114,6 +114,8 @@ class ComponentClient:
         self._recording = None
         self.recorded_packets = 0
         self.recording_stream_start_ts = None
+        # packets dropped while waiting for the keyframe a recording has to start on
+        self._recording_skipped = 0
         # The final, encoded bytes for lerobot. Atomic write, so no lock needed.
         self.lerobot_jpeg_bytes = None
         self.lerobot_mode = False # when false disables constant encoded to improve performance.
@@ -416,11 +418,22 @@ class ComponentClient:
     def _service_recording(self, stream, packet):
         """Open, write to, or close the stream recording the demux loop owns."""
         if self.recording_path is not None and self._recording is None:
+            # Start at a keyframe. Recording begins the moment a caller sets
+            # recording_path, which lands mid-GOP: those leading slices reference an
+            # SPS/PPS that went past before the file existed, so anything decoding the
+            # result reports "non-existing PPS 0 referenced" and throws the frames away as
+            # far as the next keyframe - which is the same place starting here begins. The
+            # wait costs one GOP, before the sweep it is recording has started moving.
+            if not packet.is_keyframe:
+                self._recording_skipped += 1
+                return
             container = av.open(str(self.recording_path), 'w', format='mpegts')
             self._recording = (container, container.add_stream_from_template(stream))
             self.recording_stream_start_ts = self.stream_start_ts
             self.recorded_packets = 0
-            logger.info(f'Recording video to {self.recording_path}')
+            logger.info(f'Recording video to {self.recording_path} '
+                        f'(waited {self._recording_skipped} packet(s) for a keyframe)')
+            self._recording_skipped = 0
         elif self.recording_path is None and self._recording is not None:
             self._close_recording()
 
@@ -442,6 +455,7 @@ class ComponentClient:
                 logger.exception('closing video recording')
             logger.info(f'Recorded {self.recorded_packets} packets to {self.recording_path}')
             self._recording = None
+        self._recording_skipped = 0
 
     def process_frame(self, frame_to_encode):
         """

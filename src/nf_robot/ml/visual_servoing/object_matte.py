@@ -166,11 +166,36 @@ def extract_cutout(rgb, margin=CROP_MARGIN, range_m=None,
     return rgba, grasp, float((alpha > 0.5).mean())
 
 
+def wrist_offset_deg(wrist_angle, grasp_axis_deg):
+    """How far a frame's view of the object is turned from the ideal grasping angle.
+
+    The operator set the wrist to that angle before starting, so it is the capture's zero;
+    every later frame is the sweep having turned away from it. Folded to -180..180 because
+    a sweep crosses 360 and the raw difference would jump there.
+
+    None when the capture cannot say - an older run with no recorded zero, or a frame with
+    no wrist telemetry - so a caller can tell "not known" from "aligned".
+    """
+    if wrist_angle is None or grasp_axis_deg is None:
+        return None
+    return (float(wrist_angle) - float(grasp_axis_deg) + 180.0) % 360.0 - 180.0
+
+
 def extract_run(plate_dir, run_id, output_dir, label=None,
                 diameter_m=VIGNETTE_DIAMETER_M, vignette=True, **key_kwargs):
     """Write one RGBA cutout per frame of an objectplates run, plus a manifest line each."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # The wrist angle the capture started at, which the operator had set to the object's
+    # ideal grasping angle. start_wrist_angle is the same reading under the name the
+    # sweep records it by, and is the fallback for runs written before this was named.
+    run = next((e for e in read_manifest(plate_dir) if e["run_id"] == run_id), {})
+    grasp_axis = run.get("grasp_axis_wrist_angle", run.get("start_wrist_angle"))
+    if grasp_axis is None:
+        logging.warning(f"{run_id}: no grasp_axis_wrist_angle; every cutout's grasp axis "
+                        f"will be unlabelled and synthetic frames built from them will "
+                        f"train the axis head on nothing")
 
     entries, skipped = [], 0
     for index, row in enumerate(iter_run(plate_dir, run_id)):
@@ -191,9 +216,12 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
             "file": name,
             "run_id": run_id,
             "label": label or attrs.get("label", ""),
-            # Which way round the wrist offset means is a fact about the mount that a
-            # real capture will settle; see the note in synth_frames.compose.
-            "wrist_offset_deg": attrs.get("wrist_offset_deg", 0.0),
+            # Measured per frame from the wrist telemetry, not carried in attrs: the
+            # capture records where the wrist was, and the run records where zero was.
+            # Which way round the offset means is a fact about the mount that a real
+            # capture will settle; see the note in synth_frames.compose.
+            "wrist_offset_deg": attrs.get(
+                "wrist_offset_deg", wrist_offset_deg(row.get("wrist_angle"), grasp_axis)),
             "range_m": range_m,
             "grasp_x": round(float(grasp[0]), 2),
             "grasp_y": round(float(grasp[1]), 2),
@@ -219,9 +247,21 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
         for entry in existing + entries:
             f.write(json.dumps(entry) + "\n")
 
+    if not entries:
+        logging.info(f"{run_id}: nothing extracted")
+        return entries
+
+    # The spread of the axis label, reported because a capture that produces one value for
+    # every cutout trains the axis head to answer that value and nothing else, and looks
+    # identical to a good run everywhere else in this output.
+    offsets = [e["wrist_offset_deg"] for e in entries if e["wrist_offset_deg"] is not None]
+    axis = (f"grasp axis {min(offsets):+.0f}..{max(offsets):+.0f} deg" if offsets
+            else "grasp axis UNLABELLED")
+    if offsets and max(offsets) - min(offsets) < 1.0:
+        axis += "  <- the wrist barely moved; the axis head has nothing to learn here"
     logging.info(f"{run_id}: {len(entries)} cutouts, {skipped} frames keyed to nothing; "
-                 f"median coverage {np.median([e['coverage'] for e in entries]) * 100:.1f}%"
-                 if entries else f"{run_id}: nothing extracted")
+                 f"median coverage {np.median([e['coverage'] for e in entries]) * 100:.1f}%, "
+                 f"{axis}")
     return entries
 
 

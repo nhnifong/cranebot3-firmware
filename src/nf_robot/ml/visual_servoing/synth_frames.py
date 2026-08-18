@@ -249,7 +249,11 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng)
             # The wrist offset the object was photographed at is how far it is rotated
             # from the ideal grasping angle, so it is the angle to turn back. The sign
             # is the one thing here a real objectplates capture has to confirm.
-            "axis": math.radians(float(entry["wrist_offset_deg"] or 0.0)),
+            # None when the cutout carries no offset - a capture that recorded no ideal
+            # angle to measure against - which masks the axis loss rather than teaching
+            # the head that every object in the world is aligned.
+            "axis": (None if entry.get("wrist_offset_deg") is None
+                     else math.radians(float(entry["wrist_offset_deg"]))),
             "label": entry.get("label", ""),
         })
 
@@ -284,7 +288,8 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng)
         # A real approximation, and it biases tall objects; recording object height at
         # capture time and subtracting it is the fix if it shows up in eval.
         "target_range_m": round(target_range, 4) if winner else None,
-        "grasp_axis_rad": round(wrap_half_pi(winner["axis"]), 5) if winner else None,
+        "grasp_axis_rad": (round(wrap_half_pi(winner["axis"]), 5)
+                           if winner and winner["axis"] is not None else None),
         # No finger label: what a human does with the fingers is not something the
         # compositing knows, and teleop is where that signal lives.
         "finger": None,
@@ -320,10 +325,18 @@ def annotate(frame, row, candidates):
     if row["target_uv"]:
         x = int(row["target_uv"][0] * frame.shape[1] + pad_x)
         y = int(row["target_uv"][1] * frame.shape[0] + pad_y)
-        length, angle = 26, row["grasp_axis_rad"]
-        cv2.line(canvas, (int(x - math.cos(angle) * length), int(y - math.sin(angle) * length)),
-                 (int(x + math.cos(angle) * length), int(y + math.sin(angle) * length)),
-                 (0, 200, 255), 2)
+        angle = row["grasp_axis_rad"]
+        if angle is None:
+            # no bar at all, rather than one lying flat: a flat bar is what an axis of
+            # exactly zero looks like, and telling those apart is the whole point here
+            cv2.putText(canvas, "no axis", (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.4, (0, 200, 255), 1)
+        else:
+            length = 26
+            cv2.line(canvas,
+                     (int(x - math.cos(angle) * length), int(y - math.sin(angle) * length)),
+                     (int(x + math.cos(angle) * length), int(y + math.sin(angle) * length)),
+                     (0, 200, 255), 2)
         cv2.drawMarker(canvas, (x, y), (0, 255, 0), cv2.MARKER_CROSS, 22, 2)
     text = (f"range {row['state']['laser_rangefinder']:.2f}  fing "
             f"{row['state']['finger_angle']:+.0f}  present {row['target_present']}  "

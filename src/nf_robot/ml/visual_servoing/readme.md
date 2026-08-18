@@ -492,11 +492,11 @@ Joins the same split as extra shards, drawing simulated heights from the mined r
 the two halves cover the same range distribution:
 
     python -m nf_robot.ml.visual_servoing.synth_frames \
-        --plates plates \
-        --output_root datasets/visual_servoing \
-        --ranges_from datasets/visual_servoing/train \
+        --plates plates_all \
+        --output_root datasets/visual_servoing_synth_test/ \
+        --ranges_from datasets/visual_servoing_synth_test/train \
         --count 20000 \
-        --annotate_dir datasets/visual_servoing/synth_preview
+        --annotate_dir datasets/visual_servoing_synth_test/synth_preview
 
 Rerunning replaces only its own shards. The annotated frames show the target, the grasp
 axis and the other candidates, which is where a compositing sign error shows up.
