@@ -119,6 +119,50 @@ class AnchorArpServer(RobotComponentServer):
         self.spooler = None
         self.spools = [spooler1, spooler2]
 
+    async def check_motor_ids(self, settle_s=0.5):
+        """Verify both motors answer on the CAN ids this server addresses them by.
+
+        qa-anchor-arp writes these ids into motor flash, and a store that fails to
+        commit is silent: the ids stay live in RAM for the rest of that QA session and
+        only fall back to the factory ESC_ID 1 / MST_ID 0 at the next power up. Startup
+        here is therefore the first moment the mistake is observable on a built anchor.
+
+        Both failures are worth naming. A motor that does not answer leaves its spool
+        with no position feedback. Two motors left on the factory id 1 is worse: each
+        listens on the id the other reports feedback on, so they answer each other in a
+        loop that saturates the bus and no command from here gets through at all.
+        """
+        # A diagnostic must never be the reason the server fails to come up, so any
+        # trouble reaching the bus becomes the error state rather than an exception.
+        try:
+            for m in self.motors:
+                # zero position/velocity/stiffness/damping/torque: probes for a feedback
+                # frame without driving the spool
+                m.send_cmd_mit(0.0, 0.0, 0.0, 0.0, 0.0)
+            # The controller runs its own polling thread as the bus's single reader, so
+            # the replies land in motor.state on their own; just give them time to.
+            await asyncio.sleep(settle_s)
+        except Exception as e:
+            self.set_error_state(f'could not probe the CAN bus for spool motors: {e}')
+            return
+
+        problems = []
+        for m, label in ((self.motor1, 'high'), (self.motor2, 'low')):
+            if not m.state or m.state.get('can_id') is None:
+                problems.append(f'{label} spool motor did not answer on CAN id {m.motor_id}')
+            elif m.state.get('arbitration_id') != m.feedback_id:
+                # answers, but reports on the wrong feedback id
+                problems.append(
+                    f'{label} spool motor reports feedback on CAN id '
+                    f'{m.state["arbitration_id"]}, expected {m.feedback_id}')
+
+        if problems:
+            self.set_error_state(
+                'spool motor CAN ids are wrong (' + '; '.join(problems)
+                + '); re-run qa-anchor-arp on this anchor')
+        else:
+            logging.info('both spool motors answered on their expected CAN ids')
+
     async def processOtherUpdates(self, updates, tg):
         if 'tighten' in updates:
             spool_no = updates['tighten']
@@ -189,7 +233,7 @@ class AnchorArpServer(RobotComponentServer):
         return list([
             asyncio.create_task(asyncio.to_thread(spool.trackingLoop))
             for spool in self.spools
-        ])
+        ]) + [asyncio.create_task(self.check_motor_ids())]
 
     async def tighten(self, spool_no):
         """Reel in until the line holds tension for 3 seconds.

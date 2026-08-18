@@ -30,6 +30,21 @@ from nf_robot.generated.nf import telemetry, control, common
 
 from port_utils import free_ports
 
+def make_mock_motor(motor_id, feedback_id, motor_type):
+    """A stand-in for a correctly configured DaMiao motor.
+
+    AnchorArpServer.check_motor_ids() probes each motor at startup and faults the
+    component if it does not answer on the ids the server addresses it by, so a bare
+    Mock (whose .state is a Mock, not a dict) would put every mocked anchor into an
+    error state.
+    """
+    motor = Mock()
+    motor.motor_id = motor_id
+    motor.feedback_id = feedback_id
+    motor.state = {'can_id': motor_id, 'arbitration_id': feedback_id}
+    return motor
+
+
 class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.patchers = []
@@ -84,6 +99,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
     def setup_anchor_mocks(self):
         # mock the CAN bus controller and spool controllers so AnchorArpServer can run without real hardware.
         self.mock_dm_class = MagicMock()
+        self.mock_dm_class.return_value.add_motor.side_effect = make_mock_motor
         self.patchers.append(patch('nf_robot.robot.anchor_arp_server.DaMiaoController', self.mock_dm_class))
         self.patchers.append(patch('nf_robot.robot.anchor_arp_server.get_mac_address', return_value='aa:bb:cc:dd:ee:ff'))
 

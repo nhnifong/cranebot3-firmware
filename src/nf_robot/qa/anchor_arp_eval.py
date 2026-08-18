@@ -225,33 +225,32 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
     print("Motor IDs need to be configured.")
 
     # Configure the upper motor by itself, moving it off the factory id 1 to id 2.
-    motor_id_changed = configure_one_motor(
+    # Its return value (whether ESC_ID changed) is deliberately unused: both id
+    # registers take effect the instant they are written, so nothing below needs a
+    # power cycle to apply them.
+    configure_one_motor(
         controller, "upper", upper_motor_id, upper_feedback_id, motor_type=motor_type)
 
     input("Plug in both motors, then press Enter...")
 
-    if motor_id_changed:
-        # ESC_ID takes effect the instant it is written -- the motor stops answering
-        # on the old id and answers on the new one within the same run, no reboot
-        # needed. The power cycle is not what applies the change; it is how we prove
-        # store_parameters() actually committed it to flash, since reading the
-        # register back only ever reports RAM. Without this check a failed store
-        # looks identical to a successful one until the anchor is next powered up.
-        print("The upper motor's motor_id (ESC_ID) was changed. It already took effect, "
-              "but a power cycle is the only way to confirm it was saved to flash "
-              "rather than just applied in memory.")
-        input("Power cycle both motors now by re-plugging the AC wall plug, then press Enter. If you are not powering the pi any other way, just come back and start this script again, and it will pick up where it left off.")
-
     # With the upper motor now on id 2, the lower motor is the only one still on the
     # factory id 1, so set its feedback_id in place without unplugging anything.
+    # This runs BEFORE the power cycle prompt on purpose: every flash write then
+    # happens up front, so one cycle verifies both motors at once, and a cycle that
+    # takes the pi down with it (the anchor commonly powers both from the same AC
+    # plug) cannot strand this step and leave the lower motor unconfigured.
     configure_feedback_in_place(
         controller, "lower", lower_motor_id, lower_feedback_id, motor_type=motor_type)
 
-    # After the power cycle above, this is a genuine flash check rather than a RAM
-    # readback: anything that failed to commit has reverted to its old id by now.
-    print("Confirming final motor IDs (post power cycle, so this checks flash)...")
+    # This re-reads live registers, i.e. RAM, so it confirms the ids are in effect but
+    # cannot prove store_parameters() committed them to flash. There is no cheaper way
+    # to read flash -- the motors have no soft-reset command, so only cutting their
+    # power reloads it, and on an anchor that also reboots the pi and kills this script.
+    # AnchorArpServer re-checks the ids at startup instead, which is exactly where a
+    # store that never reached flash shows up: the first power up after this runs.
+    print("Confirming final motor IDs...")
     found = {}
-    for _ in range(3):  # motors may need a moment to come up after a power cycle
+    for _ in range(3):  # motors may need a moment to answer after the writes
         found = scan_motors(controller, motor_type=motor_type)
         if found == expected:
             print("Motor IDs confirmed correct.")
@@ -359,7 +358,8 @@ def main():
     ]
 
     # Differentiate power anchors from regular anchors before winding line.
-    if input("Does this anchor have a powerline spool? y/n").strip().lower() == 'y':
+    has_powerline = input("Does this anchor have a powerline spool? y/n").strip().lower() == 'y'
+    if has_powerline:
         anchor_type = "arpeggio power anchor"
         component = "power-anchor"
     else:
@@ -383,13 +383,26 @@ def main():
             circumfrence = 2*pi*radius
             revs = length / circumfrence
 
-            input("When ready press Enter...")
+            # A powerline, when this anchor has one, always goes on the upper spool
+            # (the server's 'high' spool); every other spool takes fishing line.
+            if has_powerline and name == 'upper':
+                print("The powerline must be spliced onto the spool according to the guide at")
+                print("  https://neufangled.com/docs/arpeggio_anchor_build_guide/#splice-the-line")
+                print("If you need to do that now, power off and splice, then rerun this script.")
+                print("The powerline wire is live during winding. Don't cut it.")
+                input("Hold the source spool so it can spin. Press Enter when ready to wind...")
+            else:
+                print("Tie fishing line to the spool's tie off point with a buntline hitch "
+                      "and hold the source spool so it can spin.")
+                input("Press Enter when ready to wind...")
             try:
                 motor.enable()
                 wind_with_ramp(motor, direction, revs, max_rev_per_s=4.0)
             finally:
                 motor.send_cmd_vel(target_velocity=0)
                 motor.disable()
+            print("With the end of the line passing through the sunglasses part, "
+                  "tie on a carabiner with a palomar knot.")
         else:
             continue
 

@@ -80,6 +80,12 @@ class ComponentClient:
         # once received (see receive_loop()'s handling of the 'logs'/'thermal' keys).
         self.pulled_logs = None
         self.pulled_thermal = None
+        # Error state reported by this component, or None if it has not reported one.
+        # The server repeats it once a second for as long as it holds, so this tracks
+        # the current fault rather than a one-shot. Stored and logged for now; nothing
+        # else consumes it yet. Note a component only sends this while it is faulted,
+        # so this never returns to None on its own once set.
+        self.error_state = None
 
         # saved for setup telemetry
         self.local_video_uri = None
@@ -582,6 +588,12 @@ class ComponentClient:
                         self.conn_status.motor_enabled = telemetry.MotorTorque.DISABLED
                     # keep the robot-wide torque state the UI toggle reads in sync
                     self.ob.publish_torque_state()
+                if 'error_state' in update:
+                    # repeated by the component every second while it holds, so log the
+                    # transitions rather than every repeat
+                    if update['error_state'] != self.error_state:
+                        logger.error(f'component {self.address} reports error state: {update["error_state"]}')
+                    self.error_state = update['error_state']
                 if 'logs' in update:
                     self.pulled_logs = update['logs']
                 if 'thermal' in update:

@@ -124,6 +124,10 @@ default_conf = {
     'RUNNING_WS_DELAY': 1/30,
 }
 
+# How often a component repeats its error state to the host while one is set. Repeated
+# rather than sent once so a client that connects after the fault still learns about it.
+ERROR_STATE_WS_DELAY = 1.0
+
 log_path = '/opt/robot/cranebot.log'
 thermal_log_path = '/opt/robot/wifi_thermal_watchdog.log'
 log_tail_lines = 2000
@@ -159,6 +163,34 @@ class RobotComponentServer:
         # latched once a poweroff has been started, so a repeated shutdown_pi command
         # cannot stack a second halt on top of one already in progress.
         self.halting = False
+        # Component-wide error state: None while healthy, otherwise a short
+        # operator-facing string saying what is wrong with this component. Set by
+        # set_error_state() from anywhere in a subclass; streamed to the host by
+        # stream_error_state() for as long as it is set.
+        self.error_state = None
+
+    def set_error_state(self, message):
+        """Put this component into an error state, or replace the message of one it is
+        already in. Logged on change only, since the state is otherwise re-sent every
+        second and would bury the log."""
+        if message != self.error_state:
+            logging.error(f'component error state: {message}')
+        self.error_state = message
+
+    def clear_error_state(self):
+        """Return this component to healthy."""
+        if self.error_state is not None:
+            logging.info(f'component error state cleared (was: {self.error_state})')
+        self.error_state = None
+
+    async def stream_error_state(self, ws):
+        """Repeat this component's error state to the host once a second for as long as
+        it holds. Sends nothing while healthy, so the host only ever hears about faults.
+        """
+        while True:
+            if self.error_state is not None:
+                await ws.send(json.dumps({'error_state': self.error_state}))
+            await asyncio.sleep(ERROR_STATE_WS_DELAY)
 
     async def stream_measurements(self, ws):
         """
@@ -573,6 +605,7 @@ class RobotComponentServer:
                 self.stream_video_task = tg.create_task(self.stream_video(websocket))
                 stabil = tg.create_task(self.process_imu(websocket))
                 temp = tg.create_task(self.read_temperature())
+                errors = tg.create_task(self.stream_error_state(websocket))
         except* (ConnectionClosedOK, ConnectionClosedError):
             logging.info("Client disconnected")
         finally:

@@ -32,6 +32,21 @@ from nf_robot.robot.anchor_arp_server import AnchorArpServer
 from port_utils import free_port
 
 
+def make_mock_motor(motor_id, feedback_id, motor_type):
+    """A stand-in for a correctly configured DaMiao motor.
+
+    AnchorArpServer.check_motor_ids() probes each motor at startup and faults the
+    component if it does not answer on the ids the server addresses it by, so a bare
+    Mock (whose .state is a Mock, not a dict) would put every mocked anchor into an
+    error state.
+    """
+    motor = Mock()
+    motor.motor_id = motor_id
+    motor.feedback_id = feedback_id
+    motor.state = {'can_id': motor_id, 'arbitration_id': feedback_id}
+    return motor
+
+
 class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
@@ -53,6 +68,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
          _) = [p.start() for p in self.patchers]
 
         self.mock_controller = self.mock_dm_class.return_value
+        self.mock_controller.add_motor.side_effect = make_mock_motor
 
         # AnchorArpServer creates two DamiaoSpoolController instances; hand back a
         # distinct Mock for each so per-spool assertions are unambiguous.
