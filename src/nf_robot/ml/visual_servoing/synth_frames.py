@@ -89,21 +89,30 @@ def load_floorplates(plate_dir, limit_runs=None):
 
 
 def load_finger_plates(finger_dir):
-    """RGBA finger plates by aperture, as [(finger_angle, rgba), ...]."""
+    """RGBA finger plates grouped by capture, as [[(finger_angle, rgba), ...], ...].
+
+    One list per fingerplates run rather than one flat list, because a run is one physical
+    set of fingers - they get swapped, and they are not all the same colour. Keeping them
+    apart lets a frame pick a set and then an aperture within it, so the model sees each
+    set at every aperture instead of a chimera that is blue at one angle and white at the
+    next.
+    """
     finger_dir = Path(finger_dir)
     manifest = finger_dir / "mattes.jsonl"
     if not manifest.exists():
         logging.warning(f"no finger mattes at {manifest}; frames will have no fingers")
         return []
-    plates = []
+    by_run = {}
     for line in open(manifest):
         entry = json.loads(line)
         bgra = cv2.imread(str(finger_dir / entry["file"]), cv2.IMREAD_UNCHANGED)
         if bgra is None or bgra.shape[2] != 4:
             continue
-        plates.append((float(entry["finger_angle"]), bgra[:, :, [2, 1, 0, 3]]))
-    logging.info(f"{len(plates)} finger plates from {finger_dir}")
-    return sorted(plates)
+        by_run.setdefault(entry.get("run_id", ""), []).append(
+            (float(entry["finger_angle"]), bgra[:, :, [2, 1, 0, 3]]))
+    for run_id, plates in sorted(by_run.items()):
+        logging.info(f"{len(plates)} finger plates from {run_id or finger_dir}")
+    return [sorted(plates) for _, plates in sorted(by_run.items())]
 
 
 def sample_ranges(dataset_root, count, rng):
@@ -248,7 +257,11 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng)
 
     finger_angle = rng.uniform(*FINGER_ANGLE_RANGE)
     if finger_plates:
-        finger_angle, plate_rgba = min(finger_plates, key=lambda p: abs(p[0] - finger_angle))
+        # a set of fingers first, then the aperture nearest the one drawn. Uniform over
+        # sets, not over plates, so a capture that swept more angles does not crowd out
+        # the colour of the fingers in another.
+        chosen = rng.choice(finger_plates)
+        finger_angle, plate_rgba = min(chosen, key=lambda p: abs(p[0] - finger_angle))
         if (plate_rgba.shape[1], plate_rgba.shape[0]) != IMAGE_SIZE:
             plate_rgba = cv2.resize(plate_rgba, IMAGE_SIZE, interpolation=cv2.INTER_AREA)
         paste_rgba(frame, plate_rgba, (0, 0))
@@ -330,6 +343,8 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
     if not objects:
         logging.warning(f"no object cutouts in {object_dir}; every frame will be bare floor")
     finger_plates = load_finger_plates(finger_dir or Path(plate_dir) / "fingers")
+    if len(finger_plates) > 1:
+        logging.info(f"{len(finger_plates)} sets of fingers; each frame picks one")
 
     rng = random.Random(seed)
     ranges = sample_ranges(ranges_from, count, rng)

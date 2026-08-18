@@ -42,9 +42,10 @@ from nf_robot.ml.visual_servoing.plates import MANIFEST_NAME, read_manifest, run
 HF_PREFIX = "hf://"
 
 # Where a merge is reading from. `present` is False for a manifest fetched without its
-# runs, and `remote` marks a huggingface cache directory, whose files are shared symlinks
-# that must be copied out of rather than moved.
-Source = collections.namedtuple("Source", "dir present remote")
+# runs, `remote` marks a huggingface cache directory, whose files are shared symlinks that
+# must be copied out of rather than moved, and `sizes` is {filename: bytes} read off the
+# hub when the files themselves are not here to measure.
+Source = collections.namedtuple("Source", "dir present remote sizes", defaults=(None,))
 
 
 def plate_count(entry):
@@ -75,6 +76,24 @@ def _hub_manifest(repo_id):
     return read_manifest(Path(path).parent)
 
 
+def _hub_sizes(repo_id):
+    """{filename: bytes} for a hub dataset, or {} if the listing cannot be had.
+
+    One metadata call, no download - which is what lets a dry run report what a merge
+    would actually cost. Without it the only honest answer is that the size is unknown,
+    since a manifest-only pull has nothing on disk to measure.
+    """
+    from huggingface_hub import HfApi
+
+    try:
+        return {item.path: item.size for item in
+                HfApi().list_repo_tree(repo_id, repo_type="dataset", recursive=True)
+                if getattr(item, "size", None) is not None}
+    except Exception as error:
+        logging.debug(f"{repo_id}: could not list file sizes ({error})")
+        return {}
+
+
 def _pull(repo_id, manifest_only=False):
     """Fetch a hub collection into the usual cache.
 
@@ -89,7 +108,7 @@ def _pull(repo_id, manifest_only=False):
         return Source(None, False, True)
     if manifest_only:
         path = hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=MANIFEST_NAME)
-        return Source(Path(path).parent, False, True)
+        return Source(Path(path).parent, False, True, _hub_sizes(repo_id))
 
     logging.info(f"pulling {len(entries)} run(s) of {repo_id} from the hub")
     root = snapshot_download(repo_id=repo_id, repo_type="dataset",
@@ -122,6 +141,7 @@ def merge(sources, into: Path, move=False, dry_run=False):
 
     known = {entry["run_id"] for entry in read_manifest(into)}
     added, skipped, broken = [], 0, 0
+    total_bytes = 0
 
     for name in sources:
         source = resolve_source(name, manifest_only=dry_run)
@@ -144,9 +164,18 @@ def merge(sources, into: Path, move=False, dry_run=False):
                 skipped += 1
                 continue
 
-            size = sum((source.dir / f).stat().st_size for f in files) if source.present else 0
+            if source.present:
+                size = sum((source.dir / f).stat().st_size for f in files)
+            elif source.sizes:
+                size = sum(source.sizes.get(f, 0) for f in files)
+            else:
+                # a manifest-only pull from a hub that would not list its files
+                size = None
+            total_bytes += size or 0
             logging.info(f"{'would add' if dry_run else 'adding'} {entry['run_id']} "
-                         f"({entry['kind']}, {size / 1e6:.0f} MB) from {name}")
+                         f"({entry['kind']}, "
+                         f"{f'{size / 1e6:.0f} MB' if size is not None else 'size unknown'})"
+                         f" from {name}")
             if not dry_run:
                 for file in files:
                     if taking:
@@ -161,8 +190,12 @@ def merge(sources, into: Path, move=False, dry_run=False):
             for entry in added:
                 f.write(json.dumps(entry) + "\n")
 
-    logging.info(f"{'would merge' if dry_run else 'merged'} {len(added)} run(s) into {into}; "
+    logging.info(f"{'would merge' if dry_run else 'merged'} {len(added)} run(s), "
+                 f"{total_bytes / 1e9:.2f} GB, into {into}; "
                  f"{skipped} already present, {broken} incomplete")
+    if dry_run and added:
+        logging.info("dry run: hub sources were listed but not downloaded, and nothing "
+                     "was written; rerun without --dry_run to fetch and merge")
     return added
 
 

@@ -444,6 +444,12 @@ then the per-pixel median across it:
 
     python -m nf_robot.ml.visual_servoing.finger_matte --dir plates
 
+Every fingerplates run in the collection is matted, not just the newest, and the plates
+are named after their run - a collection gathers captures of more than one set of fingers,
+and they are not all the same colour. `synth_frames` picks a set per frame and then an
+aperture within it, uniformly over sets, so one capture that swept more angles than
+another cannot crowd out the colour of its fingers. `--run_id` mats a single run.
+
 Each plate logs how much of its frame was green; a low number there means the capture
 missed the backdrop and nothing downstream of it is worth looking at. `--green_low` /
 `--green_high` move the key's ramp if the fingers are being eaten or the backdrop

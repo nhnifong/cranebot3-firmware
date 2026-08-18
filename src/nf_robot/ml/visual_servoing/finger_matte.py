@@ -168,7 +168,10 @@ def extract_mattes(plate_dir, run_id, output_dir, green_low=GREEN_LOW,
         stack = np.stack(frames).astype(np.float32)
         rgba, diagnostics = build_matte(stack, green_low, green_high, border_only)
 
-        name = f"finger{finger_angle:+04.0f}.png"
+        # named per run, not per angle alone: a collection holds captures of more than one
+        # set of fingers - they get swapped, and they are not all the same colour - and
+        # every one of them is wanted, not just the last one matted
+        name = f"{run_id}-finger{finger_angle:+04.0f}.png"
         # cv2 writes BGRA; the plates are RGB
         cv2.imwrite(str(output_dir / name), rgba[:, :, [2, 1, 0, 3]])
 
@@ -192,10 +195,23 @@ def extract_mattes(plate_dir, run_id, output_dir, green_low=GREEN_LOW,
             f"{diagnostics['kept_fraction'] * 100:5.1f}% in "
             f"{diagnostics['components']} component(s){flag}")
 
-    with open(output_dir / MANIFEST_NAME, "w") as f:
-        for entry in entries:
+    # rewrite only this run's lines, so matting one capture does not disown the others
+    manifest = output_dir / MANIFEST_NAME
+    existing = [json.loads(line) for line in open(manifest) if line.strip()] \
+        if manifest.exists() else []
+    existing = [e for e in existing if e["run_id"] != run_id]
+    with open(manifest, "w") as f:
+        for entry in existing + entries:
             f.write(json.dumps(entry) + "\n")
     return entries
+
+
+def read_mattes(output_dir):
+    """Every finger plate in a directory, as manifest rows - all runs, not just the last."""
+    manifest = Path(output_dir) / MANIFEST_NAME
+    if not manifest.exists():
+        return []
+    return [json.loads(line) for line in open(manifest) if line.strip()]
 
 
 def write_video_preview(output_dir, entries, fps=VIDEO_FPS):
@@ -210,14 +226,15 @@ def write_video_preview(output_dir, entries, fps=VIDEO_FPS):
 
     def frames():
         nonlocal board
-        for entry in sorted(entries, key=lambda e: e["finger_angle"]):
+        # one run's whole sweep before the next, so a set of fingers reads as one motion
+        for entry in sorted(entries, key=lambda e: (e["run_id"], e["finger_angle"])):
             bgra = cv2.imread(str(output_dir / entry["file"]), cv2.IMREAD_UNCHANGED)
             if bgra is None:
                 continue
             if board is None or board.shape[:2] != bgra.shape[:2]:
                 board = checkerboard(bgra.shape[0], bgra.shape[1])
             cell = over_checkerboard(bgra, board)
-            text = f"{entry['finger_angle']:+.0f}deg"
+            text = f"{entry['run_id']}  {entry['finger_angle']:+.0f}deg"
             cv2.putText(cell, text, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
             cv2.putText(cell, text, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
             yield cell
@@ -246,7 +263,7 @@ def write_preview(output_dir, entries, cell_width=480, columns=5):
                 + board.astype(np.float32) * (1 - alpha)).astype(np.uint8)
 
         text = (f"{entry['finger_angle']:+.0f}deg  {entry['kept_fraction'] * 100:.1f}% "
-                f"{entry['components']}c")
+                f"{entry['components']}c  {entry['run_id'][-6:]}")
         cv2.putText(cell, text, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
         cv2.putText(cell, text, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         cells.append(cell)
@@ -269,7 +286,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dir", default="plates", help="Directory of capture runs")
-    parser.add_argument("--run_id", default=None, help="Which run; defaults to the newest")
+    parser.add_argument("--run_id", default=None,
+                        help="Which run; defaults to every fingerplates run in the directory")
     parser.add_argument("--output_dir", default=None,
                         help="Where the RGBA plates go (default <dir>/fingers)")
     parser.add_argument("--green_low", type=float, default=GREEN_LOW,
@@ -284,13 +302,19 @@ def main():
     args = parser.parse_args()
 
     runs = [r for r in read_manifest(args.dir) if r["kind"] == "fingerplates"]
+    if args.run_id:
+        runs = [r for r in runs if r["run_id"] == args.run_id]
     if not runs:
         parser.error(f"no fingerplates runs in {args.dir}")
-    run_id = args.run_id or runs[-1]["run_id"]
     output_dir = Path(args.output_dir or Path(args.dir) / "fingers")
 
-    entries = extract_mattes(args.dir, run_id, output_dir, args.green_low,
-                             args.green_high, not args.keep_floating)
+    # Every capture, not the newest one: a collection can hold several sets of fingers,
+    # and synth_frames picks between them per frame.
+    for run in runs:
+        extract_mattes(args.dir, run["run_id"], output_dir, args.green_low,
+                       args.green_high, not args.keep_floating)
+
+    entries = read_mattes(output_dir)
     if entries and not args.no_preview:
         write_preview(output_dir, entries)
         write_video_preview(output_dir, entries, args.fps)
