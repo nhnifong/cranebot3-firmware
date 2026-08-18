@@ -2620,6 +2620,9 @@ class AsyncObserver:
             notes=f'object on green board: {label}',
             run_attrs={'label': label, 'grasp_axis_wrist_angle': start_wrist},
             frame_attrs={'label': label})
+        self.send_ui(pop_message=telemetry.Popup(
+            message='Objectplate capture complete.'
+        ))
 
     async def half_auto_calibration(self):
         """

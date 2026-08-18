@@ -161,7 +161,7 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
             if c.anchor_type == common.AnchorType.ARPEGGIO:
                 for anchor in c.anchors:
                     if anchor.indirect_line.cam_tilt is None:
-                        anchor.indirect_line.cam_tilt = 26.0
+                        anchor.indirect_line.cam_tilt = 30.0
 
             if c.max_safe_tension == 0:
                 c.max_safe_tension = 16

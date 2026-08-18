@@ -29,7 +29,7 @@ import { getAuthBridge, type RobotInfo } from './auth-bridge.ts';
 const AuthManager = getAuthBridge();
 
 // --- GLOBAL VARIABLES ---
-const DEFAULT_CAM_TILT = 26.0; // degrees — matches the standard tilt adapter
+const DEFAULT_CAM_TILT = 30.0; // degrees — matches the standard tilt adapter
 // Toothed tilt adapters are set by how many teeth are exposed; index = tooth count, value = degrees.
 const TILT_TEETH_ANGLES = [22.0, 26.0, 30.0, 34.0, 38.0, 42.0];
 
