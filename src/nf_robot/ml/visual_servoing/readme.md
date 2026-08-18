@@ -268,8 +268,13 @@ The setup instruction carries both labels, so the board needs no printed marking
   the centroid of a flat expanse, and it is the operator's judgement that puts the lump
   under the lens.
 - **The operator orients the wrist to the ideal grasping angle before triggering.** The
-  grasp axis is then zero in the first frame, and every later frame's axis label is just
-  its commanded wrist angle minus the starting one. Recorded per frame anyway.
+  grasp axis is then zero in the first frame, and every later frame's axis label is its
+  wrist angle minus the starting one, which `object_matte` measures from the telemetry
+  track. The label is an image-plane direction, not a wrist command: zero means the
+  object stands upright in frame, which is the orientation the servoing steers to, and
+  the annotated bar runs perpendicular to the object's long axis. The wrist turns one way
+  and the image the other, which is the one sign in this pipeline that only a real
+  capture settles - `synth_frames.AXIS_FROM_WRIST_SIGN`.
 - **The range is recorded with every capture**, since the cutout gets rescaled to the
   simulated height at composite time and that needs to know what height it came from.
 

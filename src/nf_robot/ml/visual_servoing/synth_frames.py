@@ -65,6 +65,19 @@ OBJECT_COUNT_WEIGHTS = {0: 0.12, 1: 0.45, 2: 0.25, 3: 0.12, 4: 0.06}
 JAW_REF_UV = (0.5, 0.308)
 # Finger apertures to sample, in degrees; -90 is fully open.
 FINGER_ANGLE_RANGE = (-90.0, 90.0)
+# Sign taking a cutout's measured wrist offset to the grasp axis in the image.
+#
+# The axis label is an image-plane direction - the line the jaws close along - because
+# that is the only thing a network looking at one frame can be asked for. It is drawn
+# perpendicular to the object's long axis, and it reads zero (a horizontal bar) when the
+# object stands upright in frame, which is the orientation the servoing is steering to.
+#
+# The offset it comes from is a wrist angle, and the camera turns with the wrist: a wrist
+# turned +30 degrees off ideal photographs the object rotated 30 degrees the *other* way
+# in the image. So the image-plane angle is the negative of the wrist offset. Flip this
+# to +1 if annotated frames show the bar mirrored about the horizontal - it is a fact
+# about the mount, and one look at a long object settles it.
+AXIS_FROM_WRIST_SIGN = -1.0
 
 
 def load_floorplates(plate_dir, limit_runs=None):
@@ -207,6 +220,17 @@ def photometric(image, rng):
     return cv2.cvtColor(cv2.imdecode(buf, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB) if ok else out
 
 
+def axis_from_wrist_offset(offset_deg):
+    """A cutout's measured wrist offset as the grasp axis in the image, in radians.
+
+    None passes through as None - an unlabelled capture masks the axis loss instead of
+    claiming the object is upright.
+    """
+    if offset_deg is None:
+        return None
+    return math.radians(AXIS_FROM_WRIST_SIGN * float(offset_deg))
+
+
 def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng):
     """One synthetic frame and its labels.
 
@@ -246,14 +270,9 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng)
         candidates.append({
             "uv": ((top_left[0] + grasp[0] - offset_x) / frame_w,
                    (top_left[1] + grasp[1] - offset_y) / frame_h),
-            # The wrist offset the object was photographed at is how far it is rotated
-            # from the ideal grasping angle, so it is the angle to turn back. The sign
-            # is the one thing here a real objectplates capture has to confirm.
-            # None when the cutout carries no offset - a capture that recorded no ideal
-            # angle to measure against - which masks the axis loss rather than teaching
-            # the head that every object in the world is aligned.
-            "axis": (None if entry.get("wrist_offset_deg") is None
-                     else math.radians(float(entry["wrist_offset_deg"]))),
+            # The cutout was photographed with the wrist this far off ideal, which is the
+            # same thing as the object being that far off upright in the image.
+            "axis": axis_from_wrist_offset(entry.get("wrist_offset_deg")),
             "label": entry.get("label", ""),
         })
 

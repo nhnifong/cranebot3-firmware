@@ -7,6 +7,7 @@ that measurement is missing the whole thing still runs and produces a dataset wh
 head trains on a constant - which is what these tests exist to catch.
 """
 
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ import numpy as np
 from nf_robot.ml.visual_servoing.object_matte import (
     PRINCIPAL_NORM, extract_run, wrist_offset_deg)
 from nf_robot.ml.visual_servoing.plates import PlateWriter
+from nf_robot.ml.visual_servoing.synth_frames import axis_from_wrist_offset
 
 SHAPE = (240, 320)
 
@@ -51,6 +53,31 @@ def write_run(plate_dir, wrist_angles, **run_attrs):
         writer.add(rgb, wrist_angle=wrist, laser_rangefinder=0.3, label="sock")
     writer.close(**run_attrs)
     return writer.run_id
+
+
+class TestAxisConvention(unittest.TestCase):
+    """The label is an image-plane direction: the line the jaws close along, drawn
+    perpendicular to the object's long axis and zero when the object stands upright."""
+
+    def test_zero_offset_is_an_upright_object(self):
+        self.assertEqual(axis_from_wrist_offset(0.0), 0.0)
+
+    def test_the_image_turns_the_opposite_way_to_the_wrist(self):
+        """The camera rides on the wrist, so a wrist turned +30 off ideal photographs the
+        object rotated 30 the other way."""
+        self.assertAlmostEqual(math.degrees(axis_from_wrist_offset(30.0)), -30.0)
+        self.assertAlmostEqual(math.degrees(axis_from_wrist_offset(-30.0)), 30.0)
+
+    def test_unlabelled_stays_unlabelled(self):
+        self.assertIsNone(axis_from_wrist_offset(None))
+
+    def test_a_swept_capture_gives_axes_either_side_of_upright(self):
+        """A sweep passes through ideal, so the labels have to bracket it - all one sign
+        would mean the zero was measured from the wrong place."""
+        offsets = [wrist_offset_deg(w, 90.0) for w in (30.0, 60.0, 90.0, 120.0, 150.0)]
+        axes = [math.degrees(axis_from_wrist_offset(o)) for o in offsets]
+        self.assertLess(min(axes), 0)
+        self.assertGreater(max(axes), 0)
 
 
 class TestExtractRunLabelsTheAxis(unittest.TestCase):

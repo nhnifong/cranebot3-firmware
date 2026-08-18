@@ -83,7 +83,12 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
         room_offset     the same vector in room axes; its horizontal part is the
                         centering error, measured from the lens
         point_room      where that lands in the room, if a gripper position was given
-        grasp_axis_rad  how much further to turn the wrist, pi-periodic
+        grasp_axis_rad  the line the jaws should close along, in the image plane and
+                        pi-periodic: zero means the object already stands upright in
+                        frame, which is what the wrist is turned to achieve. Turning the
+                        wrist by it is only right if the mount's sign agrees - see
+                        synth_frames.AXIS_FROM_WRIST_SIGN, which is where the training
+                        labels commit to a direction.
         finger          commanded finger speed in -1..1, positive meaning more grip
         present         probability there is anything graspable in view at all
         holding         probability we are already holding something
