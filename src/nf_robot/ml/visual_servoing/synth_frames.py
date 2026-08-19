@@ -65,6 +65,11 @@ OBJECT_COUNT_WEIGHTS = {0: 0.12, 1: 0.45, 2: 0.25, 3: 0.12, 4: 0.06}
 JAW_REF_UV = (0.5, 0.308)
 # Finger apertures to sample, in degrees; -90 is fully open.
 FINGER_ANGLE_RANGE = (-90.0, 90.0)
+# How much extra zoom a floor plate may be given on top of the scale its range implies.
+# Inwards only, and only a little. Zooming out would need floor outside what was
+# captured - which is what the tiling used to invent - and a large zoom in would tell the
+# model the floor is nearer than the range label it is being trained against says.
+FLOOR_ZOOM_MAX = 1.12
 # Sign taking a cutout's measured wrist offset to the grasp axis in the image.
 #
 # The axis label is an image-plane direction - the line the jaws close along - because
@@ -153,29 +158,52 @@ def sample_ranges(dataset_root, count, rng):
 
 
 def floor_canvas(plate, target_range, canvas_size, rng):
-    """A floor plate rescaled to the simulated height and cropped or tiled to the canvas.
+    """A floor plate rescaled to the simulated height and cropped to the canvas.
 
     Two scalings, and forgetting either puts the floor at the wrong size. The plate was
     captured at some resolution of the same field of view the model input covers, so it
     first has to be scaled by the ratio between them; then a plate captured at r0 and
     viewed from r covers r0/r as much floor per pixel.
 
-    Picking a plate captured at or above the target range keeps the second factor at or
-    above 1, which is what keeps the tiling below out of the visible frame - it only
-    covers the canvas margin, which is label space and never rendered.
+    That product regularly lands short of the frame - whenever nothing was captured above
+    the simulated height, and by a couple of percent anyway because the plate's aspect
+    ratio is not exactly the model input's. Filling the shortfall by tiling is what put a
+    seam through the middle of every frame: repeated floor is not something any camera can
+    see, and the model would have been free to learn the repeat as a feature. So the scale
+    is floored at what covers the frame and then given a small random zoom that only ever
+    goes inwards, and the crop moves within the slack that zoom leaves. Every pixel of the
+    result is floor that was photographed exactly once.
+
+    Being magnified past r0/r does mean the texture looks nearer than the range label
+    says. The alternative is inventing floor; generate() counts how often it happens,
+    because the fix is capturing floorplates from higher up rather than anything here.
+
+    The canvas margin outside the frame is edge-replicated. Objects are pasted in canvas
+    coordinates and the frame is cut out of the middle, so nothing out there is ever
+    rendered - the margin exists to give an off-frame object somewhere to land.
     """
     image = plate["image"]
-    scale = (IMAGE_SIZE[0] / image.shape[1]) * (plate["range_m"] / target_range)
-    scaled = cv2.resize(image, None, fx=scale, fy=scale,
-                        interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
+    frame_w, frame_h = IMAGE_SIZE
+    canvas_w, canvas_h = canvas_size
 
-    width, height = canvas_size
-    if scaled.shape[1] < width or scaled.shape[0] < height:
-        reps = (int(np.ceil(height / scaled.shape[0])), int(np.ceil(width / scaled.shape[1])), 1)
-        scaled = np.tile(scaled, reps)
-    x = rng.randrange(0, max(1, scaled.shape[1] - width + 1))
-    y = rng.randrange(0, max(1, scaled.shape[0] - height + 1))
-    return scaled[y:y + height, x:x + width].copy()
+    physical = (frame_w / image.shape[1]) * (plate["range_m"] / target_range)
+    # the least magnification that still fills the frame on both axes
+    cover = max(frame_w / image.shape[1], frame_h / image.shape[0])
+    scale = max(physical, cover) * rng.uniform(1.0, FLOOR_ZOOM_MAX)
+
+    # ceil, and never below the frame, so rounding cannot leave a row of pixels missing
+    width = max(frame_w, math.ceil(image.shape[1] * scale))
+    height = max(frame_h, math.ceil(image.shape[0] * scale))
+    scaled = cv2.resize(image, (width, height),
+                        interpolation=cv2.INTER_AREA if width < image.shape[1] else cv2.INTER_LINEAR)
+
+    x = rng.randint(0, width - frame_w)
+    y = rng.randint(0, height - frame_h)
+    crop = scaled[y:y + frame_h, x:x + frame_w]
+
+    pad_x, pad_y = (canvas_w - frame_w) // 2, (canvas_h - frame_h) // 2
+    return cv2.copyMakeBorder(crop, pad_y, canvas_h - frame_h - pad_y,
+                              pad_x, canvas_w - frame_w - pad_x, cv2.BORDER_REPLICATE)
 
 
 def paste_rgba(canvas, rgba, top_left):
@@ -244,8 +272,9 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng)
     canvas_w, canvas_h = int(frame_w * CANVAS_SCALE), int(frame_h * CANVAS_SCALE)
     offset_x, offset_y = (canvas_w - frame_w) // 2, (canvas_h - frame_h) // 2
 
-    # Prefer a plate captured no closer than the simulated height, so its floor is
-    # being magnified rather than tiled; fall back to the nearest if there is none.
+    # Prefer a plate captured no closer than the simulated height. Magnifying it by r0/r
+    # is then the honest transform, and floor_canvas has to magnify further than that -
+    # putting the texture at the wrong scale - only when nothing was captured high enough.
     higher = [p for p in floor_plates if p["range_m"] >= target_range]
     pool = higher or floor_plates
     plate = min(pool, key=lambda p: abs(math.log(p["range_m"] / target_range)))
@@ -380,6 +409,17 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
 
     rng = random.Random(seed)
     ranges = sample_ranges(ranges_from, count, rng)
+
+    # Above the tallest plate there is no floor captured wide enough to fill the frame, so
+    # floor_canvas magnifies past r0/r and the texture comes out looking nearer than the
+    # label says. Worth knowing how much of the output that is, since the fix is a capture
+    # run from higher up rather than anything this file can do.
+    tallest = max(p["range_m"] for p in floor_plates)
+    stretched = sum(1 for r in ranges if r > tallest)
+    if stretched:
+        logging.warning(f"{stretched}/{count} frames simulate a height above the tallest floor "
+                        f"plate ({tallest:.2f}m); their floor is magnified past its true scale. "
+                        f"Capture floorplates higher up to remove the approximation.")
 
     split_dir = Path(output_root) / split
     split_dir.mkdir(parents=True, exist_ok=True)

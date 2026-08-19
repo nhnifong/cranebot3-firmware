@@ -315,10 +315,21 @@ geometric label in the synthetic set.
 
 1. Use a configurable distribution of laser_rangefinder distances for the synthetic height
    defaulting to a uniform distribution between 0.1 and 1.2 meters.
-2. Pick a floor plate. Prefer one captured near `r` and at whatever wrist angle is
-   wanted, since both were swept at capture time; rescale by `r0 / r` only to cover the
-   gaps between height steps, and crop or tile to the canvas. The frame's wrist angle
+2. Pick a floor plate. Prefer one captured at or above `r` and at whatever wrist angle
+   is wanted, since both were swept at capture time; rescale by `r0 / r` only to cover
+   the gaps between height steps, and crop the frame out of it. The frame's wrist angle
    is a property of this choice - the fingers do not move with it.
+
+   Never tile. `r0 / r` regularly leaves the plate short of the frame - above the tallest
+   capture there is no plate wide enough, and the plate's aspect ratio is a couple of
+   percent off the model input's anyway - and filling that gap by repeating the plate
+   puts a seam through the middle of the frame, which is not a floor any camera can see
+   and is a feature the model would be free to key on. So the scale is floored at what
+   covers the frame, plus a small zoom that only ever goes inwards, and the crop moves
+   only within the slack that zoom leaves. Magnifying past `r0 / r` makes the texture
+   look nearer than the range label says, which is the lesser wrong; synth_frames logs
+   how many frames it affects, and the fix for that number is a floorplates run from
+   higher up.
 3. Pick 0-4 object cutouts. Scale each by its own capture range over `r`, rotate by a
    random angle, and paste at a random position **in the 1.5x canvas, not the frame** -
    so a good fraction land partly or wholly off the visible edge. This is the sock case
@@ -447,7 +458,7 @@ run records the robot id and hostname that captured it, and `--list` groups by t
 Fingers, as one RGBA plate per aperture. A chroma key on every frame of the wrist turn,
 then the per-pixel median across it:
 
-    python -m nf_robot.ml.visual_servoing.finger_matte --dir plates
+    python -m nf_robot.ml.visual_servoing.finger_matte --dir plates_all
 
 Every fingerplates run in the collection is matted, not just the newest, and the plates
 are named after their run - a collection gathers captures of more than one set of fingers,
@@ -464,7 +475,7 @@ Objects, as one RGBA cutout per captured frame. Same keyer, so it wants the same
 backdrop; without one, raise `--green_low`/`--green_high` and expect to check the
 result rather than trust it:
 
-    python -m nf_robot.ml.visual_servoing.object_matte --dir plates
+    python -m nf_robot.ml.visual_servoing.object_matte --dir plates_all
 
 Anything more than `--vignette_m` (0.5m by default) across the floor from the grasp point
 is dropped, since the board stops filling the frame near the top of a height sweep and its
@@ -510,7 +521,7 @@ axis and the other candidates, which is where a compositing sign error shows up.
 ## 5. Train
 
     python -m nf_robot.ml.visual_servoing.train \
-        --data_root datasets/visual_servoing --epochs 40 --batch_size 400
+        --data_root datasets/visual_servoing --epochs 60 --batch_size 400
 
 The whole `train/` split trains. `eval/` is scored each epoch when it exists and the
 best checkpoint by `recall@25px` is kept; without it, the latest is saved instead.
