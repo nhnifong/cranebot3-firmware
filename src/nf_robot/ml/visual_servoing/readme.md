@@ -495,8 +495,7 @@ wanders when it should be holding still under the wrist turn.
 ## 3. Mine the teleop half
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/combined_targets \
-        --root /home/nhn/data_scratch/combined_targets \
+        --repo_id naavox/combined_targets naavox/simple_grasp_spin \
         --output_root datasets/visual_servoing \
         --preview_dir datasets/visual_servoing/preview \
         --preview_count 100 \
@@ -511,10 +510,10 @@ the two halves cover the same range distribution:
 
     python -m nf_robot.ml.visual_servoing.synth_frames \
         --plates plates_all \
-        --output_root datasets/visual_servoing_synth_test/ \
-        --ranges_from datasets/visual_servoing_synth_test/train \
-        --count 20000 \
-        --annotate_dir datasets/visual_servoing_synth_test/synth_preview
+        --output_root datasets/visual_servoing/ \
+        --ranges_from datasets/visual_servoing/train \
+        --count 40000 \
+        --annotate_dir datasets/visual_servoing/synth_preview
 
 Rerunning replaces only its own shards. The annotated frames show the target, the grasp
 axis and the other candidates, which is where a compositing sign error shows up.

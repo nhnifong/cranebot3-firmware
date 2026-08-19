@@ -316,6 +316,44 @@ def _stat(key, spin):
     return float(np.mean(spin))
 
 
+def upload_dataset(root: Path, repo_id: str):
+    """Publish a recovered dataset, with the two things a raw folder upload leaves out.
+
+    The videos are a symlink into the cache of whatever this was recovered from, and
+    upload_folder walks with os.walk, which does not follow symlinked directories - a
+    plain upload silently publishes a dataset with no frames in it, which passes every
+    metadata check and fails at the first frame read.
+
+    The tag is how lerobot finds a dataset at all: it resolves a repo by a git tag named
+    after the codebase version in meta/info.json, and a repo without one fails deep inside
+    LeRobotDataset with an error that names neither the tag nor the repo.
+    """
+    from huggingface_hub import HfApi, create_repo
+
+    root = Path(root)
+    version = json.loads((root / "meta" / "info.json").read_text())["codebase_version"]
+    api = HfApi()
+    create_repo(repo_id, repo_type="dataset", exist_ok=True)
+
+    api.upload_folder(folder_path=str(root), repo_id=repo_id, repo_type="dataset",
+                      ignore_patterns=["videos*", ".DS_Store"],
+                      commit_message="state and metadata with the recovered spin field")
+    videos = root / "videos"
+    if videos.exists():
+        api.upload_folder(folder_path=str(videos.resolve()), path_in_repo="videos",
+                          repo_id=repo_id, repo_type="dataset",
+                          commit_message="videos, unchanged from the source dataset")
+    else:
+        logging.warning(f"no videos under {root}; the upload will not be mineable. "
+                        f"Recover again with --videos to fetch them.")
+
+    tags = [t.name for t in api.list_repo_refs(repo_id, repo_type="dataset").tags]
+    if version not in tags:
+        api.create_tag(repo_id, tag=version, repo_type="dataset",
+                       tag_message="lerobot codebase version, matching meta/info.json")
+    logging.info(f"uploaded to https://huggingface.co/datasets/{repo_id} (tag {version})")
+
+
 def resolve_root(repo_id, root=None, videos=False):
     """Where the dataset is on disk.
 
@@ -350,6 +388,8 @@ def main():
                              "just inspected. They are the bulk of the download.")
     parser.add_argument("--copy_videos", action="store_true",
                         help="Copy the videos instead of symlinking them")
+    parser.add_argument("--upload", metavar="REPO_ID", default=None,
+                        help="Publish the recovered dataset to this hub repo")
     args = parser.parse_args()
 
     if not args.into and not args.report_only:
@@ -369,6 +409,8 @@ def main():
     logging.info(f"done. Check it with:\n"
                  f"    python -m nf_robot.ml.visual_servoing.mine_teleop --check "
                  f"--repo_id {args.into}")
+    if args.upload:
+        upload_dataset(Path(args.into), args.upload)
 
 
 if __name__ == "__main__":

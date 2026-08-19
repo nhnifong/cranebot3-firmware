@@ -56,6 +56,19 @@ DEFAULT_WEIGHTS = {
 # frame, because a split's blind rows are a constant nobody can predict away and they
 # otherwise swamp the number a run is judged by.
 SELECTION_METRIC = "onscreen_recall@25px"
+# Width, in cells, of the Gaussian the cell head is trained against. Cells are 12px of the
+# 448x256 input (the 1.5x canvas over 56x32 cells), so 1.5 cells is about 18px.
+#
+# Sized to the labels rather than to the grid. A mined label is a room point projected
+# back through the approach, and that projection ignores the gripper's swing and hangs its
+# anchor off a rangefinder reading - it is good to a few cells, not to one. Training a
+# 1792-way softmax on a one-hot target against a label that imprecise asks the network to
+# reproduce the error along with the position, which it can only do by memorising: the
+# training cross-entropy falls and nothing transfers. Spreading the target over the cells
+# the label plausibly covers asks for what is actually known.
+#
+# Set to 0 for the old one-hot target, which is the A/B worth running.
+CELL_SIGMA = 1.5
 
 
 def masked_mean(values, mask):
@@ -64,7 +77,43 @@ def masked_mean(values, mask):
     return (values * mask).sum() / total.clamp(min=1.0), total
 
 
-def servo_loss(outputs, batch, grid, weights=None):
+def soft_cell_target(cell, grid, sigma):
+    """A Gaussian over the cell grid centred on the true position, as a distribution.
+
+    Centres are at i + 0.5 in the continuous cell coordinates uv_to_cell produces, so the
+    peak sits where the label actually falls rather than snapping to the cell it lands in.
+
+    Normalized over the grid after the fact, which matters at the edges: a target near a
+    corner has most of its Gaussian outside the canvas, and renormalizing puts that mass
+    back on the cells that exist instead of quietly training against a target that sums to
+    less than one.
+    """
+    rows, cols = grid
+    xs = torch.arange(cols, device=cell.device, dtype=cell.dtype).view(1, 1, cols) + 0.5
+    ys = torch.arange(rows, device=cell.device, dtype=cell.dtype).view(1, rows, 1) + 0.5
+    squared = ((xs - cell[:, 0].view(-1, 1, 1)) ** 2
+               + (ys - cell[:, 1].view(-1, 1, 1)) ** 2)
+    target = torch.exp(-0.5 * squared / (sigma * sigma))
+    return target.flatten(1) / target.flatten(1).sum(dim=1, keepdim=True).clamp(min=1e-12)
+
+
+def cell_loss(logits, cell, grid, index, sigma):
+    """Cross-entropy of the cell head against a hard or a softened target.
+
+    Reported as a KL divergence rather than a raw cross-entropy: against a soft target the
+    cross-entropy bottoms out at the target's own entropy, so the raw number would neither
+    reach zero nor compare with a run at another sigma. The gradient is identical - the
+    entropy subtracted is a constant of the labels.
+    """
+    if sigma <= 0:
+        return F.cross_entropy(logits.flatten(1), index, reduction="none")
+    target = soft_cell_target(cell, grid, sigma)
+    log_probs = F.log_softmax(logits.flatten(1), dim=1)
+    entropy = -(target * target.clamp(min=1e-12).log()).sum(dim=1)
+    return -(target * log_probs).sum(dim=1) - entropy
+
+
+def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA):
     """Total loss and its parts, each averaged only over rows that carry that label."""
     weights = {**DEFAULT_WEIGHTS, **(weights or {})}
     logits = outputs["logits"]
@@ -77,8 +126,10 @@ def servo_loss(outputs, batch, grid, weights=None):
     has_uv = batch["has_uv"]
 
     parts = {}
+    # Only the cell head is softened. The offset, distance and axis heads are all read at
+    # the one true cell, where a spread target would mean nothing.
     parts["cell"], _ = masked_mean(
-        F.cross_entropy(logits.flatten(1), index, reduction="none"), has_uv)
+        cell_loss(logits, cell, grid, index, cell_sigma), has_uv)
 
     frac = (cell - torch.stack([cx, cy], dim=1).float()).clamp(0.0, 1.0)
     offset = gather_cells(outputs["offsets"], index).sigmoid()
@@ -259,6 +310,8 @@ def checkpoint_payload(model, args, metrics, epoch):
         "freeze": not args.unfreeze_backbone,
         "metrics": metrics,
         "epoch": epoch,
+        # not needed to rebuild the model, kept so a checkpoint says how it was trained
+        "cell_sigma": args.cell_sigma,
     }
 
 
@@ -324,7 +377,7 @@ def train(args):
             with autocast:
                 outputs = model(batch["image"], batch["state"])
             outputs = {k: v.float() for k, v in outputs.items()}
-            loss, parts = servo_loss(outputs, batch, model.grid)
+            loss, parts = servo_loss(outputs, batch, model.grid, cell_sigma=args.cell_sigma)
             loss.backward()
             optimizer.step()
             schedule.step()
@@ -390,6 +443,9 @@ def main():
                         metavar=("WIDTH", "HEIGHT"))
     parser.add_argument("--fuse_layers", type=int, default=4)
     parser.add_argument("--attention_layers", type=int, default=3)
+    parser.add_argument("--cell_sigma", type=float, default=CELL_SIGMA,
+                        help="Width in cells of the Gaussian the cell head is trained "
+                             "against; 0 for the old one-hot target")
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--batch_size", type=int, default=400)
     parser.add_argument("--lr", type=float, default=3e-4)

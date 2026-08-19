@@ -471,6 +471,37 @@ def check_source(source):
     }
 
 
+def hub_root(repo_id):
+    """A hub dataset's local root, downloading it if it is not already there.
+
+    Wrapped for the error: lerobot resolves a dataset by a git tag named after the
+    codebase_version in its meta/info.json, and a repo published by a plain folder upload
+    has no such tag. What comes back then is a TypeError raised while raising
+    RevisionNotFoundError, naming neither the repo nor the tag - so say it here instead.
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    try:
+        return LeRobotDataset(repo_id).root
+    except Exception as error:
+        from huggingface_hub import HfApi
+
+        try:
+            tags = [t.name for t in
+                    HfApi().list_repo_refs(repo_id, repo_type="dataset").tags]
+        except Exception:
+            raise error
+        if not tags:
+            raise RuntimeError(
+                f"{repo_id} has no version tag, so lerobot cannot resolve it. A dataset "
+                f"uploaded with upload_folder rather than push_to_hub needs one: create a "
+                f"tag named after the codebase_version in its meta/info.json, e.g.\n"
+                f"    HfApi().create_tag('{repo_id}', tag='v3.0', repo_type='dataset')\n"
+                f"Or pass --root to read it from disk and skip the hub entirely."
+            ) from error
+        raise
+
+
 def report_sources(sources):
     """Print what check_source found for each, and return the ones that can be mined."""
     usable = []
@@ -753,8 +784,7 @@ def main():
         if roots:
             sources.append((repo_id, Path(roots[i])))
         else:
-            from lerobot.datasets.lerobot_dataset import LeRobotDataset
-            sources.append((repo_id, Path(LeRobotDataset(repo_id).root)))
+            sources.append((repo_id, Path(hub_root(repo_id))))
 
     total, split_dir = mine(
         sources, Path(args.output_root), args.split,
