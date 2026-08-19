@@ -530,7 +530,10 @@ Build the eval split by mining the held-out room's own recipe into the same root
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/combined_targets_eval \
-        --output_root datasets/visual_servoing --split eval
+        --output_root datasets/visual_servoing \
+        --split eval \
+        --approach_seconds 5
+
 
 ## 6. Evaluate
 
