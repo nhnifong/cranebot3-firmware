@@ -52,6 +52,10 @@ DEFAULT_WEIGHTS = {
     "cell": 1.0, "offset": 1.0, "distance": 0.5,
     "axis": 0.5, "finger": 0.5, "present": 0.2, "holding": 0.2,
 }
+# Which metric decides the checkpoint kept. Measured on rows whose target is inside the
+# frame, because a split's blind rows are a constant nobody can predict away and they
+# otherwise swamp the number a run is judged by.
+SELECTION_METRIC = "onscreen_recall@25px"
 
 
 def masked_mean(values, mask):
@@ -123,6 +127,7 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
     scale = torch.tensor([width, height], dtype=torch.float32)
 
     errors, axis_errors, range_ratio = [], [], []
+    onscreen = []
     finger_abs, present_ok, holding_ok = [], [], []
     for batch in loader:
         batch = {k: v.to(device) for k, v in batch.items()}
@@ -134,6 +139,11 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         if has_uv.any():
             delta = (uv - batch["target_uv"])[has_uv].cpu() * scale
             errors.append(delta.norm(dim=-1))
+            # Whether the answer was in the picture at all. A target outside the frame
+            # cannot be found by looking, so it sets a floor on any average that includes
+            # it, and a model can improve for a long time without moving one.
+            target = batch["target_uv"][has_uv].cpu()
+            onscreen.append(((target - 0.5).abs() <= 0.5).all(dim=-1))
             ratio = distance[has_uv] / batch["target_range_m"][has_uv].clamp(min=1e-3)
             range_ratio.append(ratio.cpu())
         has_axis = batch["has_axis"] > 0.5
@@ -159,6 +169,17 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         metrics["mean_px"] = errors.mean().item()
         for radius in radii_px:
             metrics[f"recall@{radius}px"] = (errors <= radius).float().mean().item()
+        # The same again over the rows the image can actually answer. This is the number
+        # that moves when the model learns something, and the one to select a checkpoint
+        # on; the headline figures above are diluted by however many blind rows the split
+        # happens to carry.
+        visible = torch.cat(onscreen)
+        if visible.any():
+            seen = errors[visible]
+            metrics["onscreen_frac"] = visible.float().mean().item()
+            metrics["onscreen_median_px"] = seen.median().item()
+            for radius in radii_px:
+                metrics[f"onscreen_recall@{radius}px"] = (seen <= radius).float().mean().item()
     if range_ratio:
         metrics["range_ratio"] = torch.cat(range_ratio).median().item()
     if axis_errors:
@@ -318,12 +339,15 @@ def train(args):
         if due and eval_loader is not None:
             metrics = evaluate(model, eval_loader, device, image_size)
             logging.info(f"{line} | {_format(metrics)}")
-            score = metrics.get("recall@25px", -1.0)
+            # Selected on the rows whose answer is in the picture. The all-rows figure
+            # includes targets no image can locate, which puts a large constant in the
+            # metric and lets a genuinely improving model look flat.
+            score = metrics.get(SELECTION_METRIC, metrics.get("recall@25px", -1.0))
             if score > best:
                 best, best_metrics = score, metrics
                 torch.save(checkpoint_payload(model, args, metrics, epoch + 1),
                            args.model_path)
-                logging.info(f"saved {args.model_path} (recall@25px {score:.3f})")
+                logging.info(f"saved {args.model_path} ({SELECTION_METRIC} {score:.3f})")
         elif due:
             # nothing to score against, so keep the latest instead of the best
             torch.save(checkpoint_payload(model, args, {}, epoch + 1), args.model_path)
@@ -334,7 +358,8 @@ def train(args):
     if eval_loader is None:
         logging.info(f"done; no eval split built, checkpoint at {args.model_path}")
     else:
-        logging.info(f"done; best eval recall@25px {best:.3f}, checkpoint at {args.model_path}")
+        logging.info(f"done; best eval {SELECTION_METRIC} {best:.3f}, "
+                     f"checkpoint at {args.model_path}")
 
     if args.upload:
         if not Path(args.model_path).exists():

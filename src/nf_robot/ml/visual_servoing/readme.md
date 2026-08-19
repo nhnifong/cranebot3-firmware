@@ -488,6 +488,7 @@ wanders when it should be holding still under the wrist turn.
         --root /home/nhn/data_scratch/combined_targets \
         --output_root datasets/visual_servoing \
         --preview_dir datasets/visual_servoing/preview --preview_count 100
+        --approach_seconds 5
 
 This replaces the split it writes, so run it before generating synthetic frames.
 

@@ -91,6 +91,20 @@ CARRY_SECONDS = 3.0
 # The canvas the target head predicts over, as a fraction of the frame. 1.5 means
 # coordinates run -0.25..1.25 and a target a quarter-frame off the edge still has a cell.
 CANVAS_SCALE = 1.5
+# How far outside the visible frame a target may be and still be worth predicting, as a
+# fraction of the frame. A tenth is about 45px of the 448 wide input.
+#
+# A little way out is the case the oversized canvas exists for: the object is still in
+# shot, only the spot to grab it by has slipped past the edge, and "down there, just off
+# the bottom" is an answer the image supports. Further out there is nothing in the picture
+# to point at, and asking for a position anyway trains the head to invent one from
+# whatever the floor happens to look like. Those rows keep their frame and lose their
+# position labels.
+#
+# Measured on the combined_targets eval split, this masks 15% of the labelled rows; 0.05
+# would mask 20% and 0.20 only 4%, with the off-screen ones spread evenly out to the
+# canvas edge at 0.25.
+OFF_SCREEN_MARGIN = 0.10
 # (metres) minimum distance in front of the camera for a projection to mean anything.
 MIN_DEPTH_M = 0.02
 # Full-scale commanded finger speed, used to normalize the finger label into -1..1.
@@ -151,8 +165,12 @@ def row_schema():
 class ShardWriter:
     """Buffers rows and flushes them as parquet shards of roughly SHARD_TARGET_BYTES."""
 
+    # What the miner's own shards are called. The compositor passes its own prefix, and
+    # each producer only ever deletes files carrying its own.
+    DEFAULT_PREFIX = "shard"
+
     def __init__(self, split_dir: Path, target_bytes: int = SHARD_TARGET_BYTES,
-                 prefix: str = "shard"):
+                 prefix: str = DEFAULT_PREFIX):
         self.split_dir = split_dir
         # Shards are named by producer so the synthetic compositor can write into the
         # same split as the miner without either overwriting the other's files.
@@ -313,17 +331,27 @@ def wrap_pi(radians):
     return (radians + math.pi / 2) % math.pi - math.pi / 2
 
 
-def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m):
-    """Labelled rows for one episode, or (None, reason) if it is not a usable grasp."""
+def in_view(u, v, margin=OFF_SCREEN_MARGIN):
+    """Whether a projected target is close enough to the frame to be worth predicting."""
+    return -margin <= u <= 1 + margin and -margin <= v <= 1 + margin
+
+
+def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m,
+                 margin=OFF_SCREEN_MARGIN):
+    """Labelled rows for one episode, or (None, reason, 0) if it is not a usable grasp.
+
+    Returns (rows, dropped, blind): dropped fell off the canvas entirely, blind kept their
+    frame but lost their position labels for being too far outside it to see.
+    """
     pressure = np.array([r["pressure"] for r in rows], dtype=np.float32)
     grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
     if grasp is None:
-        return None, "no_grasp"
+        return None, "no_grasp", 0
 
     heights = np.array([r["gripper_pos"][2] for r in rows])
     if not np.any(heights[grasp:] >= heights[grasp] + rise_m):
         # closed on nothing, or on something it could not pick up
-        return None, "no_rise"
+        return None, "no_rise", 0
 
     target_room = grasp_point_room(rows[grasp])
     wrist_at_grasp = rows[grasp]["wrist_angle"]
@@ -331,7 +359,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
     first = max(0, grasp - int(round(approach_seconds * fps)))
     last = min(len(rows) - 1, grasp + int(round(carry_seconds * fps)))
 
-    out, dropped = [], 0
+    out, dropped, blind = [], 0, 0
     for i in range(first, last + 1):
         r = rows[i]
         sample = {
@@ -363,18 +391,106 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
             if not (-half <= u <= 1 + half and -half <= v <= 1 + half):
                 dropped += 1
                 continue
-            sample["target_uv"] = [round(u, 5), round(v, 5)]
-            sample["target_range_m"] = round(distance, 4)
-            sample["grasp_axis_rad"] = round(
-                wrap_pi(math.radians(wrist_at_grasp - r["wrist_angle"])), 5)
+            if in_view(u, v, margin):
+                sample["target_uv"] = [round(u, 5), round(v, 5)]
+                sample["target_range_m"] = round(distance, 4)
+                sample["grasp_axis_rad"] = round(
+                    wrap_pi(math.radians(wrist_at_grasp - r["wrist_angle"])), 5)
+            else:
+                # The frame is kept and its position labels are not: nothing in it shows
+                # where this object is, so every position head is masked here.
+                #
+                # target_present is masked rather than set to 0. All that is known is that
+                # the object being approached is out of shot - not that the picture is
+                # empty, and in a room with laundry over the floor it usually is not.
+                # Teaching "nothing here" off that would be a lie the model can see
+                # through. The honest negatives are the synthetic bare-floor frames, which
+                # are empty by construction.
+                blind += 1
+                sample["target_present"] = None
 
         out.append(sample)
-    return out, dropped
+    return out, dropped, blind
 
 
 def source_episode_count(root: Path) -> int:
     """Episodes in a source, read from its metadata."""
     return int(json.loads((root / "meta" / "info.json").read_text())["total_episodes"])
+
+
+IMAGE_KEY = "observation.images.gripper_camera"
+
+
+def check_source(source):
+    """Whether a teleop dataset can be mined, from its metadata alone.
+
+    Worth having as its own thing because the answer is a property of how the robot was
+    recorded, not of the frames: a dataset that never logged the rangefinder cannot be
+    mined however many good grasps are in it, and finding that out by downloading a few
+    hundred GB of video first is the expensive way round.
+
+    `source` is a directory or a hub dataset repo id. Returns a dict; `ok` is whether
+    every requirement is met and `missing` says which are not.
+    """
+    root = Path(source)
+    if root.is_dir():
+        info = json.loads((root / "meta" / "info.json").read_text())
+    else:
+        from huggingface_hub import hf_hub_download
+
+        info = json.loads(Path(hf_hub_download(
+            repo_id=str(source), repo_type="dataset",
+            filename="meta/info.json")).read_text())
+
+    features = info.get("features", {})
+    state_names = features.get("observation.state", {}).get("names") or []
+    action_names = features.get("action", {}).get("names") or []
+    # names can arrive as {"motors": [...]} in some writers
+    if isinstance(state_names, dict):
+        state_names = sum(state_names.values(), [])
+    if isinstance(action_names, dict):
+        action_names = sum(action_names.values(), [])
+    cameras = [k for k in features if k.startswith("observation.images.")]
+
+    missing = [n for n in STATE_NEEDED if n not in state_names]
+    if "finger_speed" not in action_names:
+        missing.append("action.finger_speed")
+    if IMAGE_KEY not in cameras:
+        missing.append(IMAGE_KEY)
+
+    return {
+        "source": str(source),
+        "ok": not missing,
+        "missing": missing,
+        "episodes": info.get("total_episodes"),
+        "frames": info.get("total_frames"),
+        "fps": info.get("fps"),
+        "codebase_version": info.get("codebase_version"),
+        "cameras": cameras,
+        "state_names": state_names,
+    }
+
+
+def report_sources(sources):
+    """Print what check_source found for each, and return the ones that can be mined."""
+    usable = []
+    for source in sources:
+        try:
+            result = check_source(source)
+        except Exception as error:
+            logging.warning(f"{source}: cannot read metadata ({error})")
+            continue
+        head = "MINEABLE  " if result["ok"] else "unusable  "
+        logging.info(f"{head}{result['source']}: {result['episodes']} episodes, "
+                     f"{result['frames']} frames at {result['fps']}fps, "
+                     f"lerobot v{result['codebase_version']}")
+        logging.info(f"    cameras: {result['cameras'] or 'none'}")
+        if result["missing"]:
+            logging.info(f"    missing: {result['missing']}")
+            logging.info(f"    state:   {result['state_names']}")
+        else:
+            usable.append(result["source"])
+    return usable
 
 
 def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds: float,
@@ -399,7 +515,7 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         progress.set_description(f"{repo_id.split('/')[-1]} {src_w}x{src_h}")
 
     mined, skipped = 0, {"no_grasp": 0, "no_rise": 0}
-    dropped_total = 0
+    dropped_total, blind_total = 0, 0
     considered = 0
     for n, ep in enumerate(sorted(episodes)):
         if limit and n >= limit:
@@ -407,12 +523,13 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         considered += 1
         if progress is not None:
             progress.update(1)
-        result, info = mine_episode(episodes[ep], fps, calibration,
-                                    approach_seconds, carry_seconds, rise_m)
+        result, info, blind = mine_episode(episodes[ep], fps, calibration,
+                                           approach_seconds, carry_seconds, rise_m)
         if result is None:
             skipped[info] += 1
             continue
         dropped_total += info
+        blind_total += blind
         base = starts[ep]
         for sample in result:
             frame = dataset[base + sample["frame_index"]][image_key]
@@ -429,7 +546,8 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
     summary = (f"{repo_id}: mined {mined} frames from "
                f"{considered - sum(skipped.values())}/{considered} episodes "
                f"(skipped {skipped}), {dropped_total} frames dropped as off-canvas "
-               f"or behind the camera")
+               f"or behind the camera, {blind_total} kept with no target in view "
+               f"({blind_total / max(mined, 1) * 100:.0f}% of what was mined)")
     if progress is not None:
         progress.write(summary)
     else:
@@ -441,15 +559,16 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
          carry_seconds: float, rise_m: float, limit: int | None):
     """Replace one split of the mined dataset with the given (repo_id, root) sources.
 
-    The split directory is emptied first. Mining is deterministic given its inputs, so
-    a rerun should leave no trace of the previous one - appending instead is how a
-    dataset ends up with rows for frames that are no longer produced, or two rows for
-    the same frame.
+    Only this producer's shards go: mining is deterministic given its inputs, so a rerun
+    should leave no trace of the previous one - appending instead is how a dataset ends up
+    with rows for frames that are no longer produced, or two rows for the same frame. The
+    synthetic compositor writes its own shards into this same split and they are not ours
+    to delete, which emptying the whole directory used to do silently.
     """
     split_dir = output_root / split
-    if split_dir.exists():
-        shutil.rmtree(split_dir)
-    split_dir.mkdir(parents=True)
+    split_dir.mkdir(parents=True, exist_ok=True)
+    for stale in split_dir.glob(f"{ShardWriter.DEFAULT_PREFIX}-*.parquet"):
+        stale.unlink()
 
     from tqdm import tqdm
 
@@ -602,11 +721,14 @@ def main():
                         help="Source teleop dataset(s). Several are mined into one split.")
     parser.add_argument("--root", default=None, nargs="+",
                         help="Their roots on disk, in the same order (defaults to the HF cache)")
-    parser.add_argument("--output_root", required=True,
+    parser.add_argument("--check", action="store_true",
+                        help="Say whether each --repo_id can be mined, and exit. Reads "
+                             "metadata only, so it costs nothing against the hub.")
+    parser.add_argument("--output_root", required=False,
                         help="Where the mined dataset is written; its split directory is replaced")
     parser.add_argument("--split", default="train", choices=["train", "eval"])
     parser.add_argument("--preview_dir", default=None, help="Write annotated sample frames here")
-    parser.add_argument("--preview_count", type=int, default=20)
+    parser.add_argument("--preview_count", type=int, default=100)
     parser.add_argument("--preview_group", type=int, default=20,
                         help="Frames per contact sheet")
     parser.add_argument("--preview_seed", type=int, default=0)
@@ -619,6 +741,12 @@ def main():
     roots = args.root or []
     if roots and len(roots) != len(args.repo_id):
         parser.error(f"got {len(args.repo_id)} --repo_id but {len(roots)} --root")
+
+    if args.check:
+        report_sources(roots or args.repo_id)
+        return
+    if not args.output_root:
+        parser.error("--output_root is required unless --check")
 
     sources = []
     for i, repo_id in enumerate(args.repo_id):
