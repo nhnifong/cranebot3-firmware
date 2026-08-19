@@ -14,7 +14,6 @@ pad_clamp: false
 merge:
   # naavox/toys-79west and naavox/move_clutter_79west4 are the 79west room, held out
   # for eval by combined_targets_eval.yaml. Keep them out of here.
-  - naavox/simple_grasp_spin
   - naavox/move_clutter_nick_2
   - justink04/laundry-in-hamper-7-19-26
   - justink04/laundry-in-hamper-7-23-26
