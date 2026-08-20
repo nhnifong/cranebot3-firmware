@@ -521,7 +521,9 @@ axis and the other candidates, which is where a compositing sign error shows up.
 ## 5. Train
 
     python -m nf_robot.ml.visual_servoing.train \
-        --data_root datasets/visual_servoing --epochs 60 --batch_size 400
+        --data_root datasets/visual_servoing \
+        --epochs 40 \
+        --batch_size 400
 
 The whole `train/` split trains. `eval/` is scored each epoch when it exists and the
 best checkpoint by `recall@25px` is kept; without it, the latest is saved instead.
