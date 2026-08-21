@@ -5138,7 +5138,31 @@ class AsyncObserver:
         LOOP_DELAY = 0.03
         PRESSURE_SENSE_WAIT = 10.0
         NUM_ATTEMPTS = 3
-        CLOSING_FINGER_SPEED = 40
+        # The finger head is trained against commanded finger speed divided by 90
+        # (mine_teleop.FINGER_SPEED_FULL_SCALE), so this undoes that and nothing else.
+        FINGER_SPEED_FULL_SCALE = 90.0
+        # Predictions smaller than this are treated as zero. The head has a bias like any
+        # regressor, and a standing 0.02 is 1.8 deg/s - eleven degrees of unasked-for
+        # finger travel over a six second approach. Set to 0 to hand it the head raw.
+        FINGER_DEADBAND = 0.05
+        # What it takes to call the object held, and so to lift.
+        #
+        # The pressure half is a ratio, not a level: the gripper turns a finger speed into
+        # a force ramp once it feels contact, so target_force is what the grip *asked* for
+        # and filtered_force is what it got. Those matching is the difference between a
+        # grip that is loaded and one that is still closing on air, and a ratio says that
+        # at whatever force this particular object wants - a fixed level has to be set for
+        # the softest thing that will ever be picked up.
+        #
+        # A minimum on the commanded side is what keeps the ratio meaningful: with nothing
+        # asked for, nothing achieved satisfies any ratio. During teleop carries the median
+        # commanded force is 0.11 and 41% of frames ask for nothing at all, so this sits
+        # below the former and well above the latter.
+        HOLD_FORCE_FRACTION = 0.8
+        HOLD_FORCE_MIN_COMMANDED = 0.15
+        # And the model's own opinion, which is the half that can tell a loaded grip on an
+        # object from a loaded grip on a finger, a carpet edge or the floor.
+        HOLD_PROB_THRESHOLD = 0.5
         WATCH_LOG_S = 2.0 # (s) how often the debugging modes print, well under the loop rate
 
         async def predict():
@@ -5184,6 +5208,54 @@ class AsyncObserver:
 
         smoothed_target = None
         smoothed_at = None
+
+        def grip_loaded():
+            """Whether the grip is carrying the force it asked for, and by how much.
+
+            A ratio rather than a level, so it means the same thing on a sock as on a
+            shoe: the gripper turns finger speed into a force ramp once it feels contact,
+            so target_force is what the grip asked for and filtered_force is what it got.
+            The minimum on the commanded side is what stops "asked for nothing, achieved
+            nothing" from satisfying any ratio.
+            """
+            commanded = float(self.gripper_client.last_target_force)
+            felt = float(self.datastore.finger.getLast()[2])
+            ratio = felt / commanded if commanded > 0 else 0.0
+            return (commanded >= HOLD_FORCE_MIN_COMMANDED
+                    and ratio >= HOLD_FORCE_FRACTION), commanded, felt, ratio
+
+        def holding_now(prediction):
+            """This routine's own answer to "we have it, go up", and its evidence.
+
+            Deliberately not pe.holding. That flag is a pressure threshold shared with
+            every other grasping routine in this file, and it says something coarser than
+            what is wanted here - it cannot tell a loaded grip on an object from a loaded
+            grip on a carpet edge, and it fires at a fixed level whatever force this grip
+            was asking for. This is the pair the model makes possible: the grip is carrying
+            what it asked for, and the model recognises what is in the jaws.
+            """
+            loaded, commanded, felt, ratio = grip_loaded()
+            probability = prediction['holding'] if prediction is not None else 0.0
+            return (loaded and probability > HOLD_PROB_THRESHOLD,
+                    f'felt {felt:.3f} of {commanded:.3f} commanded ({ratio:.0%}, needs '
+                    f'{HOLD_FORCE_FRACTION:.0%}), holding head {probability:.2f}')
+
+        async def drive_fingers(prediction):
+            """Put the model's finger speed on the fingers, in the robot's units.
+
+            The head predicts a rate in the same normalized units the teleop labels were
+            recorded in, and during a grasp this is the only thing that moves the fingers.
+            Nothing else has a better claim: the fixed closing speed it replaces was a
+            constant chosen for a routine with no opinion about fingers, and the point of
+            this model is that it has one - when to close, when to hold, when to squeeze
+            harder, none of which a constant can express.
+            """
+            speed = prediction['finger']
+            if abs(speed) < FINGER_DEADBAND:
+                speed = 0.0
+            await self.gripper_client.send_commands(
+                {'set_finger_speed': speed * FINGER_SPEED_FULL_SCALE})
+            return speed
 
         def descent_speed(range_to_target, lateral_speed):
             """How fast to descend right now, in m/s, from the range and what the lateral
@@ -5294,7 +5366,10 @@ class AsyncObserver:
 
             remaining = NUM_ATTEMPTS if attempts is None else attempts
             tried = 0
-            while not self.pe.holding and remaining > 0 and self.run_command_loop:
+            held = False
+            evidence = 'no attempt made'
+            while not held and remaining > 0 and self.run_command_loop:
+                # Make one attempt at picking up an object
                 remaining -= 1
                 tried += 1
                 logger.debug(f'Open fingers to {OPEN} to clear camera')
@@ -5387,10 +5462,15 @@ class AsyncObserver:
                     #     f"k{prediction['axis_concentration']:.1f} "
                     #     f"raw {np.round(prediction['room_offset'][:2], 3)}m")
 
-                    # Only while centered: the finger head is a property of the whole frame
-                    # and says nothing about whether the jaws are over the object yet.
-                    last_finger = prediction['finger']
-                    if prediction['finger'] > FINGER_CLOSE_THRESHOLD and centered:
+                    last_finger = await drive_fingers(prediction)
+
+                    held, evidence = holding_now(prediction)
+                    if held:
+                        reason = 'grip loaded'
+                        break
+
+                    # Stop moving gantry if fingers are closing
+                    if prediction['finger'] > FINGER_CLOSE_THRESHOLD:
                         close_countdown -= 1
                         if close_countdown <= 0:
                             reason = 'model asked to close'
@@ -5400,62 +5480,42 @@ class AsyncObserver:
 
                     await asyncio.sleep(LOOP_DELAY)
 
+                    # end approach loop
+
                 self.slow_stop_all_spools()
                 logger.info(f'Visual servo approach ended: {reason}')
 
-                if reason in ('nothing seen', 'rangefinder reading went stale'):
+                if held:
+                    logger.info(f'Grip loaded: {evidence}')
+
+                elif reason in ('nothing seen', 'rangefinder reading went stale'):
                     continue # nothing worth closing on; spend another attempt looking
 
-                if reason == 'stuck' and last_finger <= FINGER_CLOSE_THRESHOLD:
-                    # Being stuck is not itself a reason to close - the gripper could be
-                    # hung up anywhere. But it is often what arriving feels like when the
-                    # object stops the descent before the rangefinder reads through it, so
-                    # the model gets the casting vote: if it is asking to close, close.
+                elif reason == 'stuck' and last_finger <= FINGER_CLOSE_THRESHOLD:
+                    # Being stuck is not itself a reason to close
                     logger.info(f'Stuck with the finger head at {last_finger:+.2f}, below '
                                 f'{FINGER_CLOSE_THRESHOLD}; not grasping')
                     continue
 
-                logger.info('Close gripper')
-                end_time = time.time() + PRESSURE_SENSE_WAIT
-                self.pe.finger_pressure_rising.clear()
-
-                await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
-                # finger speed commands take effect for 200ms only. they must be sent repeatedly.
-                t, angle, pressure = self.datastore.finger.getLast()
-                while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and angle < CLOSED:
-                    await asyncio.sleep(0.03)
-                    await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
-                    t, angle, pressure = self.datastore.finger.getLast()
-                await self.gripper_client.send_commands({'set_finger_speed': 0})
-                held = self.pe.finger_pressure_rising.is_set()
-                logger.debug(f'End grip finger_pressure_rising={held} angle={angle}')
-
-                # The holding head is an independent, purely visual answer to the same
-                # question the pressure sensor just answered, so log both: pressure without
-                # a visual grasp is a snagged carpet or a finger jammed on the floor, and a
-                # visual grasp without pressure is something slipping out of the jaws.
-                after = await predict()
-                if after is not None:
-                    logger.info(f"Grasp check: pressure says {held}, holding head says "
-                                f"{after['holding']:.2f}")
-
+                else:
+                    held, evidence = await self._close_until_held(
+                        predict, drive_fingers, holding_now, PRESSURE_SENSE_WAIT, LOOP_DELAY)
                 if not held:
-                    pressure = self.datastore.finger.getLast()[2]
-                    logger.debug(f'Did not detect a successful hold, pressure=({pressure}) open '
-                                 'and go back up high enough to get a view of the object')
+                    logger.info(f'No hold ({evidence}); opening and going back up high '
+                                f'enough to get a view of the object')
                     # move up slowly at first, till fingers just touch ground and we are vertical.
                     # this keeps unwanted swinging to a minimum
                     await self.move_direction_speed([0, 0, 0.06])
                     await asyncio.sleep(1.0)
                     asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
                     # now move up a little faster in a slightly random direction
+                    # random so that the next attempt has a chance to see the object.
                     direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
                     await self.move_direction_speed(direction)
                     await asyncio.sleep(2.0)
                     self.slow_stop_all_spools()
                     continue
 
-                self.pe.finger_pressure_rising.clear()
                 logger.info('Successful grasp')
                 # slowly at first
                 await self.move_direction_speed(np.array([0, 0, 0.05]))
@@ -5466,14 +5526,45 @@ class AsyncObserver:
                 logger.info('Stop moving')
                 self.slow_stop_all_spools()
                 return True
-            logger.info(f'Gave up on visual servo grasp after {tried} attempt(s). '
-                        f'self.pe.holding={self.pe.holding}')
+            logger.info(f'Gave up on visual servo grasp after {tried} attempt(s): {evidence}')
             return False
 
         except asyncio.CancelledError:
             raise
         finally:
             self.slow_stop_all_spools()
+
+    async def _close_until_held(self, predict, drive_fingers, holding_now,
+                                timeout, loop_delay):
+        """Hold the gantry still, let the model work the fingers, and wait for a grip.
+
+        Reached when the approach ended without the grip already being made - the model
+        stopped short of it, or the descent ran out of range first. The gantry is stopped
+        by the caller, so the only thing moving here is the fingers, and the only thing
+        moving them is the model: these frames, jaws around the object and filling the
+        view, are exactly the ones its finger label was mined from.
+
+        Returns (held, evidence), the same pair the approach loop's own test returns.
+        """
+        logger.info('Close gripper')
+        end_time = time.time() + timeout
+        held, evidence = False, 'no frames'
+        angle = self.datastore.finger.getLast()[1]
+        while time.time() < end_time and angle < CLOSED:
+            prediction = await predict()
+            if prediction is not None:
+                await drive_fingers(prediction)
+            held, evidence = holding_now(prediction)
+            if held:
+                break
+            await asyncio.sleep(loop_delay)
+            angle = self.datastore.finger.getLast()[1]
+        # finger speed commands expire after 200ms, so this is only tidiness - but it
+        # keeps a failed close from leaving one more command in flight behind it
+        await self.gripper_client.send_commands({'set_finger_speed': 0})
+        logger.info(f'Close ended {"held" if held else "empty"}: {evidence}, '
+                    f'finger angle {angle:.1f}')
+        return held, evidence
 
     async def _release_payload(self, timeout=6.0):
         """Open the fingers and wait for the payload to be gone. True if it went.

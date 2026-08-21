@@ -652,11 +652,16 @@ The loop is the downstream half the model was shaped for. Each pass:
   holds. The grasp axis is pi-periodic, so the same jaw line is always reachable 180
   degrees away; the choice weighs travel against distance from the neutral 540, which
   keeps a long run off the ends without spending half turns chasing the middle
-- the fingers stay open until something asks to close: the finger head sustained above
-  threshold while centered, the rangefinder reaching the object, the gripper reaching
-  floor height, or a tip-over. The close itself is the existing pressure loop, and a
-  pressure rise is what makes the routine report success, exactly as the other grasping
-  routines do
+- the fingers are driven by the finger head, every pass, and by nothing else - the
+  prediction is a rate in the units the teleop labels were recorded in, so deploying it is
+  a multiply by 90 and no more. That includes the commit at the end: the gantry stops, the
+  model keeps the fingers, and a pressure rise is what makes the routine report success.
+  A fixed closing speed would be a constant standing in for the one part of the approach
+  the head has the most evidence about, since the frames where a teleoperator ever
+  commanded a close are frames with the object already between the jaws
+- the close threshold no longer starts the close - the fingers are already following the
+  head - it decides when to stop the gantry, because driving on once the model is closing
+  is how an object gets pushed out of the jaws
 
 After the close it logs the holding head beside the pressure verdict. The two disagreeing
 is the informative case (readme head 5), and having it in the log is what makes the
