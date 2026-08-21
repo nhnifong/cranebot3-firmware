@@ -594,8 +594,11 @@ a robot.
     python -m nf_robot.host.observer --visual_servo --local_models
 
 `--visual_servo` replaces the grasping routine pick and place calls: `execute_grasp`
-runs `visual_servo_grasp` in observer.py instead of asking a lerobot session or falling
-back to the centering model. It is an override rather than another fallback, because the
+runs `host/visual_servo.py` instead of asking a lerobot session or falling back to the
+centering model. That module holds the whole deployed loop - the three modes, the tuning
+constants, the wrist limit arithmetic and the scoring run - and reaches into the observer
+only for the things that are the robot rather than the routine: the gripper client, the
+datastore, the position estimate and the motion primitives. It is an override rather than another fallback, because the
 reason to run it is to find out how it does and a silent fall back to something else
 would hide that. `--local_models` reads `models/visual_servo.pth`; without it the
 checkpoint comes from `naavox/visual-servo` on the hub.

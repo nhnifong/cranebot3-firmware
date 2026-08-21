@@ -46,6 +46,14 @@ def rotate_vector(vec, rad):
         vec[0] * sin_a + vec[1] * cos_a
     ])
 
+# Finger angles, in the (-90, 90) range the gripper clamps commands to: -90 is fully
+# open. OPEN is open enough to clear the camera's view and to drop a payload; CLOSED is
+# the far end, where a close has run out of travel without finding anything.
+OPEN = -30
+CLOSED = 90
+# (seconds) a rangefinder reading older than this is not evidence of where we are now.
+RANGE_MAX_AGE_S = 1.0
+
 # How long a route/cal tag sighting stays usable: a full-scan interval plus detection
 # latency, so a run of frames that miss the tag doesn't blank its pose.
 ROUTE_TAG_MAX_AGE_S = 0.6
