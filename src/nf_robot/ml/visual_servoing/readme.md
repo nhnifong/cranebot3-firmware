@@ -602,7 +602,24 @@ checkpoint comes from `naavox/visual-servo` on the hub.
 
 The `servograsp` debug command runs one grasp from wherever the gripper is parked, which
 is the way to try a checkpoint without the pick and place loop choosing targets around
-it. `servowatch` is the step before that: `visual_servo_grasp(observe_only=True)` runs
+it. `servoloop` repeats that forever - grasp, drop where the lift ended, settle, again -
+logging a running tally after every attempt:
+
+    servoloop attempt 7: SUCCESS in 8.2s | servoloop 5/7 (71%) in 2.3 min | success 8.4s avg | failure 21.1s avg
+
+After each drop the wrist is sent to a random angle anywhere in its three revolutions -
+which exercises the axis head on a new orientation and the limit turnaround below - and
+the gantry hops to a random point within 0.4m of wherever the run began,
+so the object is approached from a different direction and distance every time rather than
+the same geometry being measured over and over and reported as a hit rate. The draw is
+uniform over the ball, stays inside the work area, and will not go more than 10cm below
+the start height - the parking height is the operator's judgement about clearance, and
+40cm below it finds the floor, the furniture, or the object just dropped.
+
+Nothing re-targets between attempts, so it measures this loop rather than the room-level
+targeting, and an object flung out of view ends the useful part of a run. Success and
+failure times are kept apart because a failure spends its attempts on timeouts and one
+mean over both hides each of them. `servowatch` is the step before that: `visual_servo_grasp(observe_only=True)` runs
 the model on every frame and reports it to the overlay while commanding nothing at all -
 no gantry velocity, no wrist, no fingers - until the motion task is cancelled. Park the
 gripper over an object, or fly it by hand, and watch where the arrow points. A checkpoint
@@ -629,6 +646,12 @@ The loop is the downstream half the model was shaped for. Each pass:
   comes around - but only when the axis head's concentration clears a threshold. An unsure
   head still decodes to some angle, since atan2 throws the length away, so without the
   gate the wrist turns to a hedge
+- that command is an absolute angle chosen out of the wrist's three revolutions, not a
+  raw sum. `setWrist` clamps to [0, 1080] silently, so an approach that has walked toward
+  a limit would otherwise go quiet, every correction clamping to the angle it already
+  holds. The grasp axis is pi-periodic, so the same jaw line is always reachable 180
+  degrees away; the choice weighs travel against distance from the neutral 540, which
+  keeps a long run off the ends without spending half turns chasing the middle
 - the fingers stay open until something asks to close: the finger head sustained above
   threshold while centered, the rangefinder reaching the object, the gripper reaching
   floor height, or a tip-over. The close itself is the existing pressure loop, and a

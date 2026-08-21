@@ -77,6 +77,62 @@ NUDGE_VELOCITY_KEY = 'centering'
 # heartbeat, so in normal running the nearest record is milliseconds away; this only fires
 # across a telemetry gap, where the honest move is to skip the correction.
 WRIST_ANCHOR_MAX_AGE_S = 0.2
+# How many times a scoring run will redraw a reposition that landed outside the work area
+# before giving up on the hop and staying where it is.
+REPOSITION_DRAW_TRIES = 20
+
+# (m, s) how little the gantry may move, for how long, before an approach calls itself
+# stuck. The threshold sits well above the position estimate's noise and well below what
+# even the slowest part of a descent covers in this time, so it means "not moving" rather
+# than "moving slowly".
+STUCK_DISTANCE_M = 0.02
+STUCK_TIMEOUT_S = 5.0
+
+# The wrist's command range, in degrees from the servo's zero: three revolutions with
+# neutral in the middle. gripper_arp_server.setWrist *clamps* to this, silently, so a
+# setpoint past the end does not turn the wrist a little way and stop - it stops the wrist
+# entirely, and every later correction clamps to the same place.
+WRIST_RANGE_DEG = (0.0, 1080.0)
+WRIST_NEUTRAL_DEG = 540.0
+# (degrees) how far from each end to stay when there is a choice. A setpoint sitting on
+# the limit has no room for the next correction in one of its two directions.
+WRIST_LIMIT_MARGIN_DEG = 20.0
+# How much a degree away from neutral costs, against a degree of travel, when choosing
+# between equivalent setpoints. Small: it should decide a near-tie and bias a long run
+# back toward the middle, not spend a half turn chasing the centre.
+WRIST_NEUTRAL_PULL = 0.25
+
+
+def choose_wrist_setpoint(goal_deg, wrist_now, neutral=WRIST_NEUTRAL_DEG,
+                          limits=WRIST_RANGE_DEG, margin=WRIST_LIMIT_MARGIN_DEG,
+                          neutral_pull=WRIST_NEUTRAL_PULL):
+    """A reachable wrist angle that puts the jaws on the same line as `goal_deg`.
+
+    A two finger grasp axis is pi-periodic - the jaws close along the same line at X and
+    at X+180 - so every target has several equivalent wrist angles, 180 degrees apart,
+    and the wrist's three revolutions hold about six of them. That is what makes the
+    limits survivable: a goal off the end of the range is still reachable by turning
+    around and coming at it the other way.
+
+    Which one to take is a trade between two costs. Travel is the obvious one. The other
+    is distance from neutral, because a wrist parked near a limit has nowhere to go the
+    next time a correction points that way, and because the cable twists. Weighting them
+    together means a near-tie goes to the middle of the range while a clear winner on
+    travel still wins - `neutral_pull` sets where that line falls.
+
+    Candidates within `margin` of either limit are dropped when anything else is
+    available, so the choice leaves room for the next correction to be acted on rather
+    than clamped away.
+    """
+    low, high = limits
+    base = goal_deg + round((wrist_now - goal_deg) / 180.0) * 180.0
+    candidates = [base + 180.0 * k for k in range(-8, 9)]
+    reachable = [c for c in candidates if low <= c <= high]
+    if not reachable:
+        return clamp(goal_deg, low, high)
+    roomy = [c for c in reachable if low + margin <= c <= high - margin]
+    return min(roomy or reachable,
+               key=lambda c: abs(c - wrist_now) + neutral_pull * abs(c - neutral))
 TRIM_SPEED_MPS = 0.08 # altitude trim moves slower than a lateral nudge; it is closing centimeters
 RANGE_MAX_AGE_S = 1.0 # a rangefinder reading older than this is not evidence of where we are now
 
@@ -1051,6 +1107,17 @@ class AsyncObserver:
                     return
                 await self.visual_servo_grasp(mode=SERVO_MODE_CENTER)
             r = await self.invoke_motion_task(servo_center())
+        if item.action == 'servoloop':
+            # Grasp, drop, repeat, keeping score until cancelled. One checkpoint against
+            # the next is a question about hit rate on real objects, and a hit rate needs
+            # more attempts than anyone will sit through by hand.
+            async def servo_score_loop():
+                if self.servo_model is None:
+                    await self._load_servo_model()
+                if self.servo_model is None:
+                    return
+                await self.score_visual_servo_grasps()
+            r = await self.invoke_motion_task(servo_score_loop())
 
     async def set_tension_reg(self, enabled: bool):
         """Enable or disable onboard tension regulation (the floor + soft mute) on both
@@ -3746,6 +3813,16 @@ class AsyncObserver:
         ))
         await self.stop_all()
 
+    def speed_limit(self):
+        """Fastest total gantry velocity this robot will accept, in m/s.
+
+        move_direction_speed enforces it by scaling the whole vector, which is worth
+        knowing before asking for a large one: a descent commanded past the limit does not
+        merely get shortened, it shrinks the lateral correction summed with it by the same
+        factor. A caller that cares which component survives should budget against this.
+        """
+        return 0.45 if self.feature_supported("speed_0.45") else 0.35
+
     def feature_supported(self, feature_key):
         """Return True if every connected component runs an nf_robot version at or above the
         minimum required for the given feature (a key in VERSION_GATES). A component that has
@@ -4291,9 +4368,7 @@ class AsyncObserver:
         speed = np.linalg.norm(total_velocity)
 
         # enforce a model dependent speed limit
-        speed_limit = 0.35
-        if self.feature_supported("speed_0.45"):
-            speed_limit = 0.45
+        speed_limit = self.speed_limit()
 
         if speed > speed_limit:
             total_velocity = total_velocity * (speed_limit / speed)
@@ -4949,11 +5024,16 @@ class AsyncObserver:
         wrist_at_capture = record[1]
         offset = clamp(np.degrees(prediction['grasp_axis_rad']) * gain,
                        -max_step_deg, max_step_deg)
-        await self.gripper_client.send_commands(
-            {'set_wrist_angle': wrist_at_capture + offset})
+        # Not the raw sum: the wrist has three revolutions of travel and the server clamps
+        # anything past them, so an approach that has walked toward a limit would otherwise
+        # go quiet - every correction clamping to the angle it is already at. The grasp
+        # axis is pi-periodic, so the same jaw line is always available from the other
+        # side. See choose_wrist_setpoint.
+        goal = choose_wrist_setpoint(wrist_at_capture + offset, wrist_at_capture)
+        await self.gripper_client.send_commands({'set_wrist_angle': goal})
         return True
 
-    async def visual_servo_grasp(self, mode=SERVO_MODE_GRASP):
+    async def visual_servo_grasp(self, mode=SERVO_MODE_GRASP, attempts=None):
         """Try to grasp whatever the visual servoing model sees below the gripper.
 
         The model (ml/visual_servoing/readme.md) answers "where is the object", not "how
@@ -5001,6 +5081,12 @@ class AsyncObserver:
         Both debugging modes run until the motion task is cancelled and return False,
         since nothing was grasped.
 
+        `attempts` overrides how many tries one call gets before it reports failure; the
+        default is NUM_ATTEMPTS. A benchmark wants 1, so that a call and an attempt are the
+        same thing and a hit rate means what it says - a success on the third try is a
+        different event from a success on the first, and averaging them together hides
+        which one the model is producing.
+
         Returns True if the fingers ended up holding something, like the other grasping
         routines. Requires self.servo_model; execute_grasp loads it.
         """
@@ -5011,14 +5097,29 @@ class AsyncObserver:
         FLOOR_GRIPPER_HEIGHT = 0.11 # (m) gripper origin height at which the floor is reached
         RANGE_ITEM = 0.04 # (m) range to item below which the grip should be started
         COMMIT_RANGE_M = 0.3 # (m) below this, a low target-present score no longer aborts
-        DOWNWARD_SPEED = -0.07
+        # Descent speed as a function of how far there is left to fall, rather than one
+        # number for the whole approach. A constant slow enough to be safe at the bottom
+        # spends the whole descent being slow where nothing is at stake, and one fast
+        # enough to be quick at the top arrives at the object still moving.
+        #
+        # The profile is speed proportional to the range still to close, which makes the
+        # approach exponential: fast while there is room, self-limiting as the floor comes
+        # up, and no explicit braking phase to tune.
+        # Roughly: full speed above 20cm, then tapering to a crawl over the last few
+        # centimetres, where the gain sets how early the taper starts.
+        #
+        #   range   0.60  0.40  0.20  0.15  0.10  0.06
+        #   m/s     0.12  0.12  0.12  0.08  0.05  0.03
+        DESCENT_GAIN = 0.75 # (1/s) speed asked for per metre of range left to close
+        DESCENT_SPEED_MAX = 0.12 # (m/s) cap while there is plenty of room below
+        DESCENT_SPEED_MIN = 0.03 # (m/s) floor, or the last centimetres never arrive
         LATERAL_GAIN = 1.2 # (1/s) fraction of the remaining offset commanded per second
         LATERAL_SPEED_MAX = 0.15 # (m/s)
         CENTER_TOL_FRACTION = 0.12 # of the range, so the tolerance is really an angle
         CENTER_TOL_MIN_M = 0.012
         PRESENT_THRESHOLD = 0.5
         NOTHING_SEEN_FRAMES = 15
-        FINGER_CLOSE_THRESHOLD = 0.6 # finger head output above which it is asking to close
+        FINGER_CLOSE_THRESHOLD = 0.5 # finger head output above which it is asking to close
         CLOSE_CONFIRM_FRAMES = 10 # consecutive frames asking, so one noisy frame can't close
         WRIST_GAIN = 0.5
         WRIST_MAX_STEP_DEG = 20.0
@@ -5026,22 +5127,18 @@ class AsyncObserver:
         # See _servo_wrist: below this the head has no real opinion about orientation, and
         # its decoded angle is a hedge rather than an answer.
         WRIST_MIN_KAPPA = 1.5
-        # (s) time constant of the target filter, at one pendulum period (OMEGA in
-        # arp_gripper_client puts that at about 1.35s). The gripper hangs on half a metre
-        # of pole and swings; a per-frame prediction is a picture of where the target was
-        # from wherever the lens happened to be at that instant, so anything faster than
-        # this is steering at the swing rather than at the object.
-        TARGET_EMA_S = 1.4
+        # (s) time constant of EMA on lateral motion
+        TARGET_EMA_S = 1.0
         # (m) a jump further than this is a different object, not swing. Slewing across
         # the gap would spend seconds pointing at the floor between the two, so the filter
         # re-seeds instead.
         TARGET_EMA_RESET_M = 0.5
         WRIST_LOCK_RANGE_M = 0.08 # (m) stop turning the wrist this close in
-        APPROACH_TIMEOUT_S = 20.0
+        APPROACH_TIMEOUT_S = 40.0
         LOOP_DELAY = 0.03
         PRESSURE_SENSE_WAIT = 10.0
         NUM_ATTEMPTS = 3
-        CLOSING_FINGER_SPEED = 30
+        CLOSING_FINGER_SPEED = 40
         WATCH_LOG_S = 2.0 # (s) how often the debugging modes print, well under the loop rate
 
         async def predict():
@@ -5087,6 +5184,26 @@ class AsyncObserver:
 
         smoothed_target = None
         smoothed_at = None
+
+        def descent_speed(range_to_target, lateral_speed):
+            """How fast to descend right now, in m/s, from the range and what the lateral
+            correction is already spending.
+
+            The profile is proportional to the range still to close, aiming to run out
+            where the grip starts, so the descent slows itself as the floor comes up rather
+            than braking on a schedule.
+
+            The headroom term does nothing at the speeds above and is there for the day the
+            cap is raised. move_direction_speed enforces the machine's limit by scaling the
+            *whole* velocity vector, so a descent asked for beyond it does not simply get
+            shortened - it shrinks the lateral correction summed with it in the same
+            proportion, and the loop stops steering exactly when it is moving fastest. At
+            0.12m/s against a limit of 0.35 there is plenty of room; at 1.2 there would not
+            be, and the failure would look like the centering quietly giving up.
+            """
+            profile = DESCENT_GAIN * max(0.0, range_to_target - RANGE_ITEM)
+            headroom = float(np.sqrt(max(0.0, self.speed_limit() ** 2 - lateral_speed ** 2)))
+            return clamp(min(profile, headroom), DESCENT_SPEED_MIN, DESCENT_SPEED_MAX)
 
         def centering_error(prediction):
             """The lateral error to close, filtered over about one swing period.
@@ -5175,9 +5292,11 @@ class AsyncObserver:
                     await asyncio.sleep(LOOP_DELAY)
                 return False
 
-            attempts = NUM_ATTEMPTS
-            while not self.pe.holding and attempts > 0 and self.run_command_loop:
-                attempts -= 1
+            remaining = NUM_ATTEMPTS if attempts is None else attempts
+            tried = 0
+            while not self.pe.holding and remaining > 0 and self.run_command_loop:
+                remaining -= 1
+                tried += 1
                 logger.debug(f'Open fingers to {OPEN} to clear camera')
                 asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
 
@@ -5186,11 +5305,21 @@ class AsyncObserver:
                 smoothed_target = smoothed_at = None # re-seed the filter for this attempt
                 approach_timeout = time.time() + APPROACH_TIMEOUT_S
                 reason = 'approach timed out'
-                self.pe.tip_over.clear()
+                last_finger = 0.0
+                still_since = time.time()
+                still_at = np.array(self.pe.gant_pos, dtype=float)
 
                 while time.time() < approach_timeout and self.run_command_loop:
-                    if self.pe.tip_over.is_set():
-                        reason = 'tip over, must be floor'
+                    # Stuck: the gantry has not gone anywhere for a while. Whatever the
+                    # reason - a line snagged, the gripper resting on something, a descent
+                    # that has run out of rangefinder to close - continuing to command a
+                    # velocity into it achieves nothing and the approach timeout is a long
+                    # time to spend finding that out.
+                    if float(np.linalg.norm(self.pe.gant_pos - still_at)) > STUCK_DISTANCE_M:
+                        still_at = np.array(self.pe.gant_pos, dtype=float)
+                        still_since = time.time()
+                    elif time.time() - still_since > STUCK_TIMEOUT_S:
+                        reason = 'stuck'
                         break
 
                     range_ts, range_to_target = self.datastore.range_record.getLast()
@@ -5201,7 +5330,7 @@ class AsyncObserver:
                         reason = 'rangefinder reading went stale'
                         break
                     gripper_height = self.pe.grip_pose[1][2]
-                    if range_to_target < RANGE_ITEM or gripper_height < FLOOR_GRIPPER_HEIGHT:
+                    if range_to_target < RANGE_ITEM:
                         reason = (f'reached target at height {gripper_height:.3f}m '
                                   f'range {range_to_target:.3f}m')
                         break
@@ -5240,24 +5369,27 @@ class AsyncObserver:
                     lateral_speed = float(np.linalg.norm(lateral))
                     if lateral_speed > LATERAL_SPEED_MAX:
                         lateral = lateral * (LATERAL_SPEED_MAX / lateral_speed)
-                    await self.move_direction_speed(
-                        [lateral[0], lateral[1], DOWNWARD_SPEED if centered else 0.0])
+                        lateral_speed = LATERAL_SPEED_MAX
+                    descent = descent_speed(range_to_target, lateral_speed) if centered else 0.0
+                    await self.move_direction_speed([lateral[0], lateral[1], -descent])
 
                     if range_to_target > WRIST_LOCK_RANGE_M:
                         await self._servo_wrist(prediction, WRIST_GAIN, WRIST_MAX_STEP_DEG,
                                                 WRIST_MIN_KAPPA)
 
-                    logger.debug(
-                        f"servo uv {np.round(prediction['uv'], 3)} err {error*100:.1f}cm "
-                        f"tol {tolerance*100:.1f}cm {'centered' if centered else 'off'} "
-                        f"range {range_to_target:.3f}m (model {prediction['range_m']:.3f}m) "
-                        f"present {prediction['present']:.2f} finger {prediction['finger']:+.2f} "
-                        f"axis {np.degrees(prediction['grasp_axis_rad']):+.0f}deg "
-                        f"k{prediction['axis_concentration']:.1f} "
-                        f"raw {np.round(prediction['room_offset'][:2], 3)}m")
+                    # logger.debug(
+                    #     f"servo uv {np.round(prediction['uv'], 3)} err {error*100:.1f}cm "
+                    #     f"tol {tolerance*100:.1f}cm {'centered' if centered else 'off'} "
+                    #     f"down {descent:.2f}m/s "
+                    #     f"range {range_to_target:.3f}m (model {prediction['range_m']:.3f}m) "
+                    #     f"present {prediction['present']:.2f} finger {prediction['finger']:+.2f} "
+                    #     f"axis {np.degrees(prediction['grasp_axis_rad']):+.0f}deg "
+                    #     f"k{prediction['axis_concentration']:.1f} "
+                    #     f"raw {np.round(prediction['room_offset'][:2], 3)}m")
 
                     # Only while centered: the finger head is a property of the whole frame
                     # and says nothing about whether the jaws are over the object yet.
+                    last_finger = prediction['finger']
                     if prediction['finger'] > FINGER_CLOSE_THRESHOLD and centered:
                         close_countdown -= 1
                         if close_countdown <= 0:
@@ -5266,19 +5398,22 @@ class AsyncObserver:
                     else:
                         close_countdown = CLOSE_CONFIRM_FRAMES
 
-                    try:
-                        # the normal sleep on this loop is LOOP_DELAY, but if tip is detected
-                        # we want to stop immediately.
-                        await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
-                    except TimeoutError:
-                        pass
+                    await asyncio.sleep(LOOP_DELAY)
 
                 self.slow_stop_all_spools()
-                self.pe.tip_over.clear()
                 logger.info(f'Visual servo approach ended: {reason}')
 
                 if reason in ('nothing seen', 'rangefinder reading went stale'):
                     continue # nothing worth closing on; spend another attempt looking
+
+                if reason == 'stuck' and last_finger <= FINGER_CLOSE_THRESHOLD:
+                    # Being stuck is not itself a reason to close - the gripper could be
+                    # hung up anywhere. But it is often what arriving feels like when the
+                    # object stops the descent before the rangefinder reads through it, so
+                    # the model gets the casting vote: if it is asking to close, close.
+                    logger.info(f'Stuck with the finger head at {last_finger:+.2f}, below '
+                                f'{FINGER_CLOSE_THRESHOLD}; not grasping')
+                    continue
 
                 logger.info('Close gripper')
                 end_time = time.time() + PRESSURE_SENSE_WAIT
@@ -5331,13 +5466,162 @@ class AsyncObserver:
                 logger.info('Stop moving')
                 self.slow_stop_all_spools()
                 return True
-            logger.info(f'Gave up on visual servo grasp after {NUM_ATTEMPTS-attempts} attempts. '
+            logger.info(f'Gave up on visual servo grasp after {tried} attempt(s). '
                         f'self.pe.holding={self.pe.holding}')
             return False
 
         except asyncio.CancelledError:
             raise
         finally:
+            self.slow_stop_all_spools()
+
+    async def _release_payload(self, timeout=6.0):
+        """Open the fingers and wait for the payload to be gone. True if it went.
+
+        pe.holding is driven by finger pressure with hysteresis, so opening the hand is
+        what clears it; waiting for that rather than sleeping a fixed time is what keeps a
+        scoring run honest, because visual_servo_grasp will not even start an attempt
+        while the robot thinks it is already holding something.
+        """
+        await self.gripper_client.send_commands({'set_finger_angle': OPEN})
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not self.pe.holding:
+                return True
+            await asyncio.sleep(0.1)
+        logger.warning(f'Payload still registering as held {timeout}s after opening the '
+                       f'fingers; the next attempt will refuse to start')
+        return False
+
+    async def _reposition_near(self, origin, radius, max_drop=0.1, timeout=30.0):
+        """Fly the gantry to a random point within `radius` metres of `origin`.
+
+        Uniform over the ball rather than over the coordinates, so the middle does not get
+        visited more often than the edge - a benchmark that mostly repeats the same
+        approach is not sampling approaches.
+
+        Two constraints on the draw. The work area is the same test move_direction_speed
+        applies before it will move at all, so a point outside it would simply not be flown
+        to. `max_drop` is the vertical one: a gantry z below the start puts the fingers
+        nearer the floor than the operator's parking judgement allowed for, and 40cm of
+        that finds the floor, the furniture, or the object just dropped. Upward is left
+        alone - the descent covers height variety anyway, from above.
+
+        Returns the point actually flown to, or None if the draw kept landing outside the
+        work area, in which case nothing moves.
+        """
+        origin = np.asarray(origin, dtype=float)
+        for _ in range(REPOSITION_DRAW_TRIES):
+            direction = np.random.normal(size=3)
+            direction /= np.linalg.norm(direction) + 1e-9
+            # cube root, so the samples fill the volume evenly instead of crowding the centre
+            offset = direction * radius * np.random.random() ** (1 / 3)
+            target = origin + offset
+            target[2] = max(target[2], origin[2] - max_drop)
+            if self.pe.point_inside_work_area(target):
+                break
+        else:
+            logger.warning('Could not draw a reposition inside the work area; staying put')
+            return None
+
+        logger.info(f'servoloop repositioning to {np.round(target, 3)} '
+                    f'({np.linalg.norm(target - origin):.2f}m from the start point)')
+        try:
+            # auto_altitude off: it climbs to a traversal height and back down, which is
+            # the right move across a room and absurd for a hop of tens of centimetres
+            await asyncio.wait_for(self.seek_goal(target, auto_altitude=False), timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f'Reposition did not arrive within {timeout}s; carrying on')
+        finally:
+            await self.clear_goal()
+        return target
+
+    async def score_visual_servo_grasps(self, settle_s=0.5, radius_m=0.3):
+        """Grasp whatever is below, drop it, repeat, and keep score until cancelled.
+
+        Each pass is one call to visual_servo_grasp allowed a single attempt, so a failure
+        here is one grab that missed rather than the routine exhausting its retries. That
+        is the number worth reporting: a hit rate over attempts, not over calls that each
+        got three goes at it.
+
+        Nothing re-targets between passes: the routine takes whatever is under the gripper,
+        so this measures the servo loop and not the room-level targeting. An object that
+        gets flung out of view ends the useful part of the run, which is worth watching for
+        rather than reading the tally afterwards and wondering.
+
+        The drop is where the lift ended, a third of a metre or so up, which suits socks
+        and towels and is worth thinking about before running it on anything fragile.
+
+        Success and failure durations are tracked apart because they mean different things:
+        a failure runs its attempts out and is dominated by timeouts, so mixing them into
+        one mean hides both numbers.
+
+        After each drop the gantry moves to a random point within `radius_m` of where the
+        run began, and the wrist to a random angle anywhere in its range, so the object is
+        approached from a different direction, distance and orientation every time. Without
+        it the loop would measure one approach geometry repeatedly and report the result as
+        a hit rate.
+        """
+        origin = np.array(self.pe.gant_pos, dtype=float)
+        logger.info(f'servoloop starting from {np.round(origin, 3)}; '
+                    f'repositioning within {radius_m}m of it after every drop')
+        attempts = successes = 0
+        success_time, failure_time = [], []
+        started_at = time.time()
+
+        def tally():
+            rate = successes / attempts if attempts else 0.0
+            line = (f'servoloop {successes}/{attempts} ({rate:.0%}) in '
+                    f'{(time.time() - started_at) / 60:.1f} min')
+            if success_time:
+                line += f' | success {np.mean(success_time):.1f}s avg'
+            if failure_time:
+                line += f' | failure {np.mean(failure_time):.1f}s avg'
+            return line
+
+        try:
+            while self.run_command_loop:
+                began = time.time()
+                # One attempt per call, so a call and an attempt are the same event and the
+                # hit rate below is per attempt. The routine's own retries would otherwise
+                # fold three tries into one score and quietly flatter it.
+                success = await self.visual_servo_grasp(mode=SERVO_MODE_GRASP, attempts=1)
+                elapsed = time.time() - began
+
+                attempts += 1
+                if success:
+                    successes += 1
+                    success_time.append(elapsed)
+                else:
+                    failure_time.append(elapsed)
+                logger.info(f'servoloop attempt {attempts}: '
+                            f'{"SUCCESS" if success else "failure"} in {elapsed:.1f}s | '
+                            f'{tally()}')
+
+                if success:
+                    if not await self._release_payload():
+                        # Refusing to keep going beats logging failures that are really
+                        # this one condition repeating: every later attempt would return
+                        # False without ever moving.
+                        logger.error('servoloop stopping: could not release the payload')
+                        break
+                    await self._reposition_near(origin, radius_m)
+                    # A random wrist angle too, drawn across the whole usable range rather
+                    # than around neutral. Two things get exercised by that: the axis head,
+                    # which sees the object at a new orientation every attempt, and the
+                    # turnaround in choose_wrist_setpoint, which only comes into play when
+                    # an approach starts near a limit.
+                    wrist_target = float(np.random.uniform(
+                        WRIST_NEUTRAL_DEG - 180,
+                        WRIST_NEUTRAL_DEG + 180))
+                    logger.info(f'servoloop wrist to {wrist_target:.0f} deg')
+                    await self._settle_wrist(wrist_target)
+                # after the hop, not before it: the settle is for the swing the hop leaves
+                await asyncio.sleep(settle_s)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            logger.info(f'servoloop final: {tally()}')
             self.slow_stop_all_spools()
 
     async def _load_servo_model(self):

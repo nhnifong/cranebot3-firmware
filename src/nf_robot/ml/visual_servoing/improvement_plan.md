@@ -202,6 +202,13 @@ error is motion-correlated, and is a candidate for the observed +Y lean.
 - **3.4 Read `gripper_rot_*` in `mine_teleop`** to de-bias existing labels. No new
   recordings needed and it re-labels all 228k rows.
 
+## Scoring a checkpoint
+
+`servoloop` is the debug command that answers "is this one better than the last one":
+grasp, drop, settle, repeat, with a running hit rate logged after every attempt. A run
+needs a floor's worth of the same objects and no re-targeting, so it measures the servo
+loop rather than the targeting - which is the thing being changed in Phases 1 and 2.
+
 ## Diagnostics to run either side of the above
 
 - Mean **signed** uv residual on a training room against the eval room, which separates
