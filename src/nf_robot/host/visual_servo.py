@@ -43,7 +43,7 @@ SERVO_MODE_CENTER = 'center'
 SERVO_MODES = (SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER)
 
 # Where a trained checkpoint is published, and where --local_models looks instead.
-SERVO_MODEL_REPOID = "naavox/visual-servo"
+SERVO_MODEL_REPOID = "naavox/visual_servo"
 
 # ---------------------------------------------------------------------------
 # Approach and descent
@@ -280,6 +280,10 @@ class VisualServo:
             return
 
         def load_sync():
+            # transformers is not in the host extra, so a plain install has torch but no
+            # way to build the DINOv3 backbone. That is a missing dependency rather than a
+            # broken robot, and it deserves to say so instead of surfacing as a traceback
+            # from three modules down.
             model, checkpoint = servo.load_model(device, local_models=self.ob.local_models)
             logger.info(f"Visual servoing model ready: epoch {checkpoint.get('epoch')}, "
                         f"input {tuple(checkpoint['image_size'])}, "
@@ -287,7 +291,16 @@ class VisualServo:
                         f"metrics {checkpoint.get('metrics')}")
             return model
 
-        self.model = await asyncio.to_thread(load_sync)
+        try:
+            self.model = await asyncio.to_thread(load_sync)
+        except ImportError as e:
+            logger.error(f'Visual servoing needs a package this install does not have: {e}')
+            self.model = None
+            self.ob.send_ui(pop_message=telemetry.Popup(
+                message=f"The visual servoing model could not be loaded: {e}. It needs the "
+                        f"'transformers' package, which is not part of the standard host "
+                        f"install; add it with 'pip install transformers'."
+            ))
 
     # -- what the model says ----------------------------------------------
 

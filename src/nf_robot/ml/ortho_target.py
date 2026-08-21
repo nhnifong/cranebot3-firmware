@@ -120,11 +120,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from nf_robot.ml.dino_trunk import SharedTrunkMixin, drop_trunk_weights
-from nf_robot.ml.lerobot_label_contact_actions import contact_blend_alphas
-from nf_robot.ml.stringman_lerobot import _FEED_NAMES
 
 ORTHO_FEED = 3
-ORTHO_KEY = f"observation.images.{_FEED_NAMES[ORTHO_FEED]}"
+
+
+def ortho_key():
+    """The dataset feature the ortho view lives in.
+
+    A function rather than a module constant so that the lerobot import it needs happens
+    in the distill path and nowhere else. Everything downstream of this module that only
+    wants the model, or the normalization constants below, then costs nothing to import:
+    the observer reaches ortho_target through visual_servoing/dataset.py on the way to
+    three numbers, and pulling the whole training stack in behind that made the visual
+    servoing grasp unusable on a host-only install.
+    """
+    from nf_robot.ml.stringman_lerobot import _FEED_NAMES
+
+    return f"observation.images.{_FEED_NAMES[ORTHO_FEED]}"
 # Both feeds this dataset carries: the ortho composite for this model, and the
 # gripper camera at the visual servoing model's input size. See combined_targets.yaml.
 ORTHO_CAMERA_MODE = "gripper_ortho"
@@ -284,6 +296,8 @@ def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit
         if meta is None:
             raise ValueError(f"episode {ep} has frames but no episode metadata")
 
+        from nf_robot.ml.lerobot_label_contact_actions import contact_blend_alphas
+
         contact_index, _ = contact_blend_alphas(
             [r["timestamp"] for r in rows], [r["pressure"] for r in rows],
             pressure_threshold, blend_seconds=0.0,
@@ -296,7 +310,7 @@ def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit
             continue
 
         contact = rows[contact_index]
-        bgr = frame_to_bgr(dataset[meta["start"] + frame_offset][ORTHO_KEY])
+        bgr = frame_to_bgr(dataset[meta["start"] + frame_offset][ortho_key()])
         height, width = bgr.shape[:2]
 
         if coverage_fraction(bgr) < min_coverage:
@@ -385,9 +399,10 @@ def distill(args):
 
     root = Path(args.root) if args.root else None
     dataset = LeRobotDataset(repo_id=args.repo_id, root=root)
-    if ORTHO_KEY not in dataset.meta.video_keys:
+    key = ortho_key()
+    if key not in dataset.meta.video_keys:
         raise ValueError(
-            f"'{args.repo_id}' has no '{ORTHO_KEY}' feature, so it carries no ortho view. "
+            f"'{args.repo_id}' has no '{key}' feature, so it carries no ortho view. "
             f"Build it with recipes/ortho_target.yaml. Present: {list(dataset.meta.video_keys)}"
         )
 
