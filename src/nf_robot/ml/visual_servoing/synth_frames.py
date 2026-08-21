@@ -36,6 +36,7 @@ import json
 import logging
 import math
 import random
+import resource
 from pathlib import Path
 
 import cv2
@@ -83,26 +84,97 @@ FLOOR_ZOOM_MAX = 1.12
 # to +1 if annotated frames show the bar mirrored about the horizontal - it is a fact
 # about the mount, and one look at a long object settles it.
 AXIS_FROM_WRIST_SIGN = -1.0
+# (MB) how much decoded floor plate to hold. This is the tool's high water mark by a wide
+# margin - every other structure here is either streaming or a manifest - so it is the
+# number to move when the machine is smaller or larger, not a thing to discover by
+# watching the OOM killer.
+FLOOR_CACHE_MB = 2048
+# (MB) how much image data a synthetic shard buffers before it is written. The buffer is
+# copied into an arrow table on the way out, so the transient cost is about twice this.
+SHARD_MB = 256
+# (metres) the simulated heights this tool is willing to composite, whatever a recording
+# says. The mined rangefinder column bottoms out at 0.001m - 1.5% of rows are under 1cm -
+# which is the sensor in contact rather than a camera looking at a floor. Composited
+# literally, 0.001m asks for a floor plate magnified 283x: a 271936x152964 image, 125GB in
+# one allocation, and the end of the run. The ceiling is the same idea from the other end,
+# where a plate shrinks past the point of carrying any texture.
+SIM_RANGE_M = (0.05, 1.5)
+# Hard cap on magnifying any plate or cutout, as a backstop that bounds the largest
+# intermediate array whatever ranges arrive. With SIM_RANGE_M in force the worst real case
+# is about 5.7x, so this never binds in normal operation - it exists so that a bad capture
+# range cannot allocate the machine.
+MAX_MAGNIFICATION = 6.0
 
 
-def load_floorplates(plate_dir, limit_runs=None):
-    """Every floorplate frame in a directory, with the range it was captured at.
+def load_floorplates(plate_dir, limit_runs=None, budget_mb=FLOOR_CACHE_MB, seed=0):
+    """A bounded pool of floorplate frames, with the range each was captured at.
 
-    Held in memory: a floor plate run is tens of frames, and the compositor picks a
-    different one for every synthetic frame, so a random read per frame would spend the
-    whole run seeking.
+    Kept decoded, because the compositor picks a different plate for every synthetic frame
+    and seeking into an h264 capture per frame would cost more than the composite does.
+
+    Bounded, because decoded frames are enormous and the pool is the peak of this whole
+    tool: one 960x540 frame is 1.56MB, and eleven runs of ~1,700 frames each is 28GB of
+    resident numpy - enough to have the OOM killer end a 40,000 frame run before a single
+    shard is written, which is exactly what it did. The budget caps that at something a
+    machine can hold, and everything else here is streaming.
+
+    Which frames make the cut matters as much as how many. A run steps through heights and
+    turns the wrist at each one, so the first N frames of a run are all one height: taking
+    the front of the run would quietly narrow the background distribution to the lowest
+    capture. Each run is reservoir sampled instead, so every frame of the sweep has the
+    same chance of being in the pool however long the run turns out to be - no frame count
+    is needed in advance, which is just as well, since the manifest's `samples` undercounts
+    the frames a video run decodes to by over 10%.
     """
     runs = [r for r in read_manifest(plate_dir) if r["kind"] == "floorplates"]
     if limit_runs:
         runs = runs[-limit_runs:]
-    plates = []
+    if not runs:
+        return []
+
+    # One frame decoded up front, only to find out what a frame costs here; capture
+    # resolution is a property of the run, not something this tool should assume.
+    probe = iter_run(plate_dir, runs[0]["run_id"])
+    try:
+        first = next(probe, None)
+    finally:
+        probe.close()
+    if first is None:
+        return []
+    frame_bytes = first["image"].nbytes
+
+    capacity = max(len(runs), int(budget_mb * 1e6 // frame_bytes))
+    quota = max(1, capacity // len(runs))
+    rng = random.Random(seed)
+
+    plates, seen_total = [], 0
     for run in runs:
+        kept, seen = [], 0
         for row in iter_run(plate_dir, run["run_id"]):
             range_m = row["laser_rangefinder"] or row["attrs"].get("target_range_m")
-            if range_m:
-                plates.append({"image": row["image"], "range_m": float(range_m),
-                               "run_id": run["run_id"]})
-    logging.info(f"{len(plates)} floor plates from {len(runs)} run(s)")
+            if not range_m:
+                continue
+            seen += 1
+            entry = {"image": row["image"], "range_m": float(range_m),
+                     "run_id": run["run_id"]}
+            if len(kept) < quota:
+                kept.append(entry)
+            else:
+                # standard reservoir replacement; anything not kept is freed as the
+                # generator moves on, so the high water mark is the pool itself
+                index = rng.randrange(seen)
+                if index < quota:
+                    kept[index] = entry
+        plates += kept
+        seen_total += seen
+
+    resident = len(plates) * frame_bytes / 1e6
+    logging.info(f"{len(plates)} floor plates held from {seen_total} frames across "
+                 f"{len(runs)} run(s), {resident:.0f} MB resident "
+                 f"(budget {budget_mb} MB, {quota} per run)")
+    if len(plates) < seen_total:
+        logging.info("raise --floor_cache_mb for more background variety if the machine "
+                     "has the memory for it")
     return plates
 
 
@@ -126,11 +198,31 @@ def load_finger_plates(finger_dir):
         bgra = cv2.imread(str(finger_dir / entry["file"]), cv2.IMREAD_UNCHANGED)
         if bgra is None or bgra.shape[2] != 4:
             continue
+        # Downscaled once here rather than per composite: a finger plate is always pasted
+        # over the whole frame at exactly this size, so anything larger is memory that is
+        # thrown away every time it is used. A capture-resolution set of plates is 2MB
+        # each; at frame size they are a quarter of that.
+        if (bgra.shape[1], bgra.shape[0]) != IMAGE_SIZE:
+            bgra = cv2.resize(bgra, IMAGE_SIZE, interpolation=cv2.INTER_AREA)
         by_run.setdefault(entry.get("run_id", ""), []).append(
             (float(entry["finger_angle"]), bgra[:, :, [2, 1, 0, 3]]))
     for run_id, plates in sorted(by_run.items()):
         logging.info(f"{len(plates)} finger plates from {run_id or finger_dir}")
     return [sorted(plates) for _, plates in sorted(by_run.items())]
+
+
+def capped_scale(scale, what):
+    """A rescale factor, clamped to something that cannot allocate the machine.
+
+    Logged when it binds, because it should not: SIM_RANGE_M is what keeps the inputs
+    sane, and this firing means a plate or a cutout carries a range that the range clamp
+    did not cover.
+    """
+    if scale <= MAX_MAGNIFICATION:
+        return scale
+    logging.warning(f"{what}: magnification {scale:.1f}x capped at {MAX_MAGNIFICATION}x; "
+                    f"check the capture range on this plate")
+    return MAX_MAGNIFICATION
 
 
 def sample_ranges(dataset_root, count, rng):
@@ -151,10 +243,29 @@ def sample_ranges(dataset_root, count, rng):
         if values:
             logging.info(f"sampling ranges from {len(values)} mined rows "
                          f"({np.percentile(values, 5):.2f}-{np.percentile(values, 95):.2f}m)")
-            return [float(rng.choice(values)) for _ in range(count)]
+            drawn = [float(rng.choice(values)) for _ in range(count)]
+            return clamp_ranges(drawn)
         logging.warning(f"no ranges found under {dataset_root}; falling back to log-uniform")
     low, high = math.log(RANGE_MIN_M), math.log(RANGE_MAX_M)
-    return [math.exp(rng.uniform(low, high)) for _ in range(count)]
+    return clamp_ranges([math.exp(rng.uniform(low, high)) for _ in range(count)])
+
+
+def clamp_ranges(values):
+    """Simulated heights held inside SIM_RANGE_M, reporting how many had to move.
+
+    A recorded rangefinder reading is not automatically a height worth simulating: the
+    sensor reads 0.001m while the fingers are closing on something, and that number
+    composites into an allocation no machine has. Clamping rather than dropping keeps the
+    height distribution the mined data asked for everywhere it is meaningful.
+    """
+    low, high = SIM_RANGE_M
+    clamped = [min(max(v, low), high) for v in values]
+    moved = sum(1 for v, c in zip(values, clamped) if v != c)
+    if moved:
+        logging.info(f"{moved}/{len(values)} simulated heights clamped into "
+                     f"{low}-{high}m; readings outside it are the sensor in contact or "
+                     f"out of range rather than a view of a floor")
+    return clamped
 
 
 def floor_canvas(plate, target_range, canvas_size, rng):
@@ -189,7 +300,8 @@ def floor_canvas(plate, target_range, canvas_size, rng):
     physical = (frame_w / image.shape[1]) * (plate["range_m"] / target_range)
     # the least magnification that still fills the frame on both axes
     cover = max(frame_w / image.shape[1], frame_h / image.shape[0])
-    scale = max(physical, cover) * rng.uniform(1.0, FLOOR_ZOOM_MAX)
+    scale = capped_scale(max(physical, cover) * rng.uniform(1.0, FLOOR_ZOOM_MAX),
+                         f"floor plate {plate['run_id']} at {plate['range_m']:.2f}m")
 
     # ceil, and never below the frame, so rounding cannot leave a row of pixels missing
     width = max(frame_w, math.ceil(image.shape[1] * scale))
@@ -288,8 +400,10 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng)
         if bgra is None:
             continue
         rgba = bgra[:, :, [2, 1, 0, 3]]
-        scale = ((IMAGE_SIZE[0] / entry.get("capture_width", IMAGE_SIZE[0]))
-                 * float(entry["range_m"]) / target_range)
+        scale = capped_scale(
+            (IMAGE_SIZE[0] / entry.get("capture_width", IMAGE_SIZE[0]))
+            * float(entry["range_m"]) / target_range,
+            f"cutout {entry['file']} at {entry['range_m']}m")
         rgba = cv2.resize(rgba, None, fx=scale, fy=scale,
                           interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
         grasp = (entry["grasp_x"] * scale, entry["grasp_y"] * scale)
@@ -395,8 +509,9 @@ def annotate(frame, row, candidates):
 
 
 def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger_dir=None,
-             ranges_from=None, annotate_dir=None, annotate_count=40):
-    floor_plates = load_floorplates(plate_dir)
+             ranges_from=None, annotate_dir=None, annotate_count=40,
+             floor_cache_mb=FLOOR_CACHE_MB, shard_mb=SHARD_MB):
+    floor_plates = load_floorplates(plate_dir, budget_mb=floor_cache_mb, seed=seed)
     if not floor_plates:
         raise ValueError(f"no floorplates runs in {plate_dir}; nothing to build a background from")
     object_dir = Path(object_dir or Path(plate_dir) / "objects")
@@ -432,7 +547,7 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
         for old in Path(annotate_dir).glob("*.jpg"):
             old.unlink()
 
-    writer = ShardWriter(split_dir, prefix="synth")
+    writer = ShardWriter(split_dir, prefix="synth", target_bytes=int(shard_mb * 1e6))
     present = 0
     for index, target_range in enumerate(ranges):
         frame, row, candidates = compose(floor_plates, objects, object_dir,
@@ -450,6 +565,10 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
 
     logging.info(f"{writer.total} synthetic frames in {writer.shards} shard(s) under "
                  f"{split_dir}; {present} with a target, {writer.total - present} without")
+    # Measured rather than predicted, because the budget above only bounds the plate pool
+    # and this is the number that decides whether the run survives on this machine.
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6
+    logging.info(f"peak resident memory {peak:.1f} GB")
     return writer.total
 
 
@@ -471,11 +590,19 @@ def main():
                         help="Write annotated sample frames here, to check the labels")
     parser.add_argument("--annotate_count", type=int, default=40)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--floor_cache_mb", type=float, default=FLOOR_CACHE_MB,
+                        help="Memory budget for the decoded floor plate pool, which is "
+                             "this tool's high water mark. More is more background "
+                             "variety; the full set of captures is tens of GB.")
+    parser.add_argument("--shard_mb", type=float, default=SHARD_MB,
+                        help="Image bytes buffered before a shard is written; the arrow "
+                             "copy on the way out costs about the same again")
     args = parser.parse_args()
 
     generate(args.plates, args.output_root, args.split, args.count, args.seed,
              args.object_dir, args.finger_dir, args.ranges_from,
-             args.annotate_dir, args.annotate_count)
+             args.annotate_dir, args.annotate_count,
+             args.floor_cache_mb, args.shard_mb)
 
 
 if __name__ == "__main__":

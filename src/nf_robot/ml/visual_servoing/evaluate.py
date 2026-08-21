@@ -149,7 +149,8 @@ def draw_prediction(image, label_uv, predicted, image_size):
         f"err {predicted['error_px']:.0f}px" if label_uv is not None else "no label",
         f"range {predicted['range_m']:.3f}m" + (
             f" (label {predicted['label_range_m']:.3f})" if label_uv is not None else ""),
-        f"axis {math.degrees(predicted['axis']):+.0f}deg  finger {predicted['finger']:+.2f}",
+        f"axis {math.degrees(predicted['axis']):+.0f}deg k{predicted['kappa']:.1f}  "
+        f"finger {predicted['finger']:+.2f}",
         f"present {predicted['present']:.2f}  holding {predicted['holding']:.2f}",
     ]
     for i, text in enumerate(lines):
@@ -174,7 +175,7 @@ def write_preview(model, dataset, device, preview_dir, count, seed, image_size):
         item = dataset[index]
         batch = {k: v[None].to(device) for k, v in item.items()}
         outputs = model(batch["image"], batch["state"])
-        uv, distance, angle, _ = decode(outputs, model.grid, top_k=1)
+        uv, distance, angle, _, concentration = decode(outputs, model.grid, top_k=1)
 
         has_uv = bool(item["has_uv"])
         label_uv = item["target_uv"].numpy() if has_uv else None
@@ -183,6 +184,7 @@ def write_preview(model, dataset, device, preview_dir, count, seed, image_size):
             "range_m": float(distance[0, 0]),
             "label_range_m": float(item["target_range_m"]),
             "axis": float(angle[0, 0]),
+            "kappa": float(concentration[0, 0]),
             "finger": float(outputs["finger"][0]),
             "present": float(outputs["present_logit"][0].sigmoid()),
             "holding": float(outputs["holding_logit"][0].sigmoid()),

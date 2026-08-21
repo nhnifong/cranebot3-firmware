@@ -265,7 +265,7 @@ def decode(outputs, grid, top_k=1, nms_radius=2):
         prob = torch.where(prob >= pooled, prob, torch.zeros_like(prob))
 
     scores, index = prob.flatten(1).topk(top_k, dim=1)
-    uv, distance, angle = [], [], []
+    uv, distance, angle, concentration = [], [], [], []
     for k in range(top_k):
         idx = index[:, k]
         cx = (idx % cols).float()
@@ -276,8 +276,13 @@ def decode(outputs, grid, top_k=1, nms_radius=2):
         distance.append(gather_cells(outputs["log_distance"].unsqueeze(1), idx).squeeze(-1).exp())
         axis = gather_cells(outputs["axis"], idx)
         angle.append(torch.atan2(axis[:, 0], axis[:, 1]) / 2.0)
+        # The length of the axis vector, which the von Mises objective in train.py trains
+        # as the head's concentration: how sure it is, not just what it thinks. atan2
+        # throws it away, so it is returned beside the angle rather than recovered later.
+        # Near zero means "no opinion", and a consumer turning a wrist should want one.
+        concentration.append(axis.norm(dim=1))
     return (torch.stack(uv, dim=1), torch.stack(distance, dim=1),
-            torch.stack(angle, dim=1), scores)
+            torch.stack(angle, dim=1), scores, torch.stack(concentration, dim=1))
 
 
 @torch.no_grad()
@@ -285,12 +290,13 @@ def predict(model, images, state, top_k=1):
     """Everything the robot wants from one frame, decoded and unbatched-friendly."""
     model.eval()
     outputs = model(images, state)
-    uv, distance, angle, scores = decode(outputs, model.grid, top_k=top_k)
+    uv, distance, angle, scores, concentration = decode(outputs, model.grid, top_k=top_k)
     return {
         "uv": uv,
         "distance_m": distance,
         "point_m": camera_point(uv, distance),
         "grasp_axis_rad": angle,
+        "axis_concentration": concentration,
         "score": scores,
         "finger": outputs["finger"],
         "present": outputs["present_logit"].sigmoid(),

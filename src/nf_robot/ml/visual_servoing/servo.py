@@ -83,6 +83,8 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
         room_offset     the same vector in room axes; its horizontal part is the
                         centering error, measured from the lens
         point_room      where that lands in the room, if a gripper position was given
+        axis_concentration  how sure the axis head is, in von Mises kappa; near zero
+                        means it has no opinion and a wrist gate should not act on it
         grasp_axis_rad  the line the jaws should close along, in the image plane and
                         pi-periodic: zero means the object already stands upright in
                         frame, which is what the wrist is turned to achieve. Turning the
@@ -111,6 +113,10 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
         "room_offset": camera_to_room(point_cam, spin),
         "point_room": None if gripper_pos is None else point_in_room(point_cam, gripper_pos, spin),
         "grasp_axis_rad": float(out["grasp_axis_rad"][0, 0]),
+        # Length of the axis vector, which train.py's von Mises objective fits as the
+        # head's concentration. Near zero is "no opinion about orientation", which is a
+        # different thing from "upright" even though both decode to the same angle.
+        "axis_concentration": float(out["axis_concentration"][0, 0]),
         "finger": float(out["finger"][0]),
         "present": float(out["present"][0]),
         "holding": float(out["holding"][0]),

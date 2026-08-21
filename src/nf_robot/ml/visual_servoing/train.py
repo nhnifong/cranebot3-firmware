@@ -70,11 +70,98 @@ SELECTION_METRIC = "onscreen_recall@25px"
 # Set to 0 for the old one-hot target, which is the A/B worth running.
 CELL_SIGMA = 1.5
 
+# Angle bins used to re-weight the axis loss, over the -pi/2..pi/2 a pi-periodic axis
+# lives in. Ten degrees per bin: fine enough to separate "upright" from "a little off",
+# coarse enough that a bin still holds a usable number of rows.
+AXIS_BINS = 18
+# Most any one bin's rows can be worth relative to the average row. Inverse frequency
+# without a cap hands a nearly empty bin unbounded pull.
+AXIS_WEIGHT_CAP = 10.0
+# Largest concentration the axis head may claim. The von Mises likelihood is unbounded in
+# kappa for a perfectly predicted angle, and an unbounded kappa is how the axis term comes
+# to dominate every other head late in a run.
+KAPPA_MAX = 50.0
+
 
 def masked_mean(values, mask):
-    """Mean over the rows a label actually exists for; zero when there are none."""
+    """Mean over the rows a label actually exists for; zero when there are none.
+
+    `mask` doubles as a per-row weight: it is 0/1 for a plain label mask, and the axis
+    head passes a re-weighted version of it so that rare angles count for more. The
+    denominator is the weight sum either way, which keeps the loss a mean rather than a
+    sum that grows with how many rare rows a batch happened to draw.
+    """
     total = mask.sum()
     return (values * mask).sum() / total.clamp(min=1.0), total
+
+
+def axis_bin(angle, bins=AXIS_BINS):
+    """Which angle bin a pi-periodic axis label falls in, over -pi/2..pi/2."""
+    scaled = (angle / math.pi + 0.5) * bins
+    return scaled.floor().clamp(0, bins - 1).long()
+
+
+def axis_bin_weights(angles, bins=AXIS_BINS, cap=AXIS_WEIGHT_CAP):
+    """Per-bin weights that undo the label distribution's lean toward zero.
+
+    69% of the axis labels in a mixed split sit within 5 degrees of zero, and the mined
+    half is 85% of the way there on its own, because a teleoperator sets the wrist early
+    and "how much further it turns" is zero from then on. Weighting every row equally
+    therefore spends almost all of the head's gradient on the one answer it already knows,
+    and the rare orientations - the ones the wrist actually has to move for - arrive as
+    noise around it.
+
+    Inverse frequency over bins, normalized so the mean weight of the training rows is 1,
+    which keeps this from silently rescaling the axis term against the other heads. Capped
+    because inverse frequency is unstable in the tail: a bin holding five rows would
+    otherwise be handed thousands of times the pull of the bulk, and the head would chase
+    those five.
+    """
+    angles = np.asarray(angles, dtype=np.float64)
+    if not len(angles):
+        return np.ones(bins, dtype=np.float32)
+    index = np.clip(((angles / math.pi + 0.5) * bins).astype(int), 0, bins - 1)
+    counts = np.bincount(index, minlength=bins).astype(np.float64)
+    # empty bins keep weight 1: no rows carry it, so the value never applies
+    weights = np.where(counts > 0, 1.0 / np.maximum(counts, 1.0), 1.0)
+    weights = np.clip(weights / np.average(weights, weights=counts / counts.sum()), None, cap)
+    # renormalize after the clamp so the mean row weight is 1 again
+    weights /= np.average(weights, weights=counts / counts.sum())
+    return weights.astype(np.float32)
+
+
+def von_mises_axis_loss(predicted, angle, kappa_max=KAPPA_MAX):
+    """Negative log likelihood of a pi-periodic angle under a von Mises the head predicts.
+
+    The head emits an unnormalized (sin 2t, cos 2t). Read as a von Mises, its direction is
+    the answer and its length is the concentration - how sure the head is - so both halves
+    of the output mean something and both are trained.
+
+    That is the whole point of the change. Under the mean squared error this replaces, the
+    optimum is the conditional mean of the target vector, and `decode` reads the direction
+    with atan2, which does not care how long the vector is. Shrinking toward the mean was
+    therefore free, and with labels piled at zero the mean *is* zero: a head that answered
+    "0 degrees, always" was sitting at the bottom of its loss. Here, shrinking costs
+    likelihood - log I0 rewards length when the direction is right and punishes it when it
+    is wrong - so hedging has a price and confidence has a meaning.
+
+    Written as log I0(k) - v.u because the dot product of the raw output with the unit
+    target already equals k cos(2t_pred - 2t_true); no atan2 in the loss and no gradient
+    through one.
+    """
+    target = torch.stack([torch.sin(2 * angle), torch.cos(2 * angle)], dim=1)
+    # The whole vector is bounded, not just the kappa read off it. Clamping only the
+    # log-partition term leaves the dot product below free to grow without limit, which
+    # makes an arbitrarily long vector an arbitrarily large reward - the exact runaway
+    # kappa_max exists to stop. Rescaling instead keeps the direction and its gradient
+    # while the magnitude saturates.
+    norm = predicted.norm(dim=1, keepdim=True).clamp(min=1e-6)
+    bounded = predicted * (norm.clamp(max=kappa_max) / norm)
+    kappa = bounded.norm(dim=1)
+    # log I0 via the exponentially scaled Bessel, which is what keeps this finite at the
+    # concentrations a confident head reaches
+    log_i0 = torch.special.i0e(kappa).log() + kappa
+    return log_i0 - (bounded * target).sum(dim=1)
 
 
 def soft_cell_target(cell, grid, sigma):
@@ -113,8 +200,15 @@ def cell_loss(logits, cell, grid, index, sigma):
     return -(target * log_probs).sum(dim=1) - entropy
 
 
-def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA):
-    """Total loss and its parts, each averaged only over rows that carry that label."""
+def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
+               axis_loss="vonmises", axis_bin_weight=None):
+    """Total loss and its parts, each averaged only over rows that carry that label.
+
+    axis_loss picks between the von Mises likelihood and the mean squared error it
+    replaced, which is the A/B worth running before believing any of the argument above
+    it. axis_bin_weight is a per-bin weight vector from axis_bin_weights, or None to
+    weight every axis row alike.
+    """
     weights = {**DEFAULT_WEIGHTS, **(weights or {})}
     logits = outputs["logits"]
     rows, cols = grid
@@ -144,10 +238,18 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA):
         F.smooth_l1_loss(predicted_log, target_log, reduction="none"), has_uv)
 
     angle = batch["grasp_axis_rad"]
-    axis_target = torch.stack([torch.sin(2 * angle), torch.cos(2 * angle)], dim=1)
     axis = gather_cells(outputs["axis"], index)
-    parts["axis"], _ = masked_mean(
-        F.mse_loss(axis, axis_target, reduction="none").mean(dim=1), batch["has_axis"])
+    if axis_loss == "mse":
+        axis_target = torch.stack([torch.sin(2 * angle), torch.cos(2 * angle)], dim=1)
+        axis_terms = F.mse_loss(axis, axis_target, reduction="none").mean(dim=1)
+    else:
+        axis_terms = von_mises_axis_loss(axis, angle)
+    axis_mask = batch["has_axis"]
+    if axis_bin_weight is not None:
+        # folded into the mask rather than the loss, so masked_mean divides by the weight
+        # that was actually applied and an unlabelled row still contributes nothing
+        axis_mask = axis_mask * axis_bin_weight.to(angle.device)[axis_bin(angle)]
+    parts["axis"], _ = masked_mean(axis_terms, axis_mask)
 
     parts["finger"], _ = masked_mean(
         F.smooth_l1_loss(outputs["finger"], batch["finger"], reduction="none"),
@@ -177,14 +279,15 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
     width, height = image_size
     scale = torch.tensor([width, height], dtype=torch.float32)
 
-    errors, axis_errors, range_ratio = [], [], []
+    errors, axis_errors, range_ratio, axis_kappa, axis_labels = [], [], [], [], []
     onscreen = []
     finger_abs, present_ok, holding_ok = [], [], []
     for batch in loader:
         batch = {k: v.to(device) for k, v in batch.items()}
         outputs = model(batch["image"], batch["state"])
-        uv, distance, angle, _ = decode(outputs, model.grid, top_k=1)
+        uv, distance, angle, _, concentration = decode(outputs, model.grid, top_k=1)
         uv, distance, angle = uv[:, 0], distance[:, 0], angle[:, 0]
+        concentration = concentration[:, 0]
 
         has_uv = batch["has_uv"] > 0.5
         if has_uv.any():
@@ -201,6 +304,8 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         if has_axis.any():
             diff = wrap_half_pi(angle[has_axis] - batch["grasp_axis_rad"][has_axis])
             axis_errors.append(diff.abs().cpu())
+            axis_kappa.append(concentration[has_axis].cpu())
+            axis_labels.append(batch["grasp_axis_rad"][has_axis].abs().cpu())
         has_finger = batch["has_finger"] > 0.5
         if has_finger.any():
             finger_abs.append((outputs["finger"][has_finger] - batch["finger"][has_finger]).abs().cpu())
@@ -235,6 +340,14 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         metrics["range_ratio"] = torch.cat(range_ratio).median().item()
     if axis_errors:
         metrics["axis_deg"] = math.degrees(torch.cat(axis_errors).median().item())
+        # What "always upright" scores on the same rows. The labels pile up at zero, so
+        # that is a strong answer and a head can look good while knowing nothing about the
+        # image; printing the two together is what makes the difference legible.
+        metrics["axis_deg_flat"] = math.degrees(torch.cat(axis_labels).median().item())
+        # Median concentration: how sure the head is, in the units the von Mises loss
+        # trains. Near zero is a head that has learned to hedge, which is the failure this
+        # objective exists to make visible rather than silent.
+        metrics["axis_kappa"] = torch.cat(axis_kappa).median().item()
     if finger_abs:
         metrics["finger_mae"] = torch.cat(finger_abs).mean().item()
     if present_ok:
@@ -312,6 +425,11 @@ def checkpoint_payload(model, args, metrics, epoch):
         "epoch": epoch,
         # not needed to rebuild the model, kept so a checkpoint says how it was trained
         "cell_sigma": args.cell_sigma,
+        # A checkpoint trained under the mean squared error decodes the same way and
+        # answers zero far more often; that is worth being able to tell from the file
+        # rather than from whichever run log is still around.
+        "axis_loss": args.axis_loss,
+        "axis_balance": args.axis_balance,
     }
 
 
@@ -328,6 +446,16 @@ def train(args):
                 if (data_root / "eval").exists() else None)
     logging.info(f"train {len(train_set)} row(s) | "
                  f"eval {len(eval_set) if eval_set else 'none built'}")
+
+    axis_bin_weight = None
+    if args.axis_balance:
+        labels = train_set.labelled_axis()
+        weights_np = axis_bin_weights(labels)
+        axis_bin_weight = torch.from_numpy(weights_np)
+        near_zero = float(np.mean(np.abs(np.degrees(labels)) < 5.0)) if len(labels) else 0.0
+        logging.info(f"axis balance over {AXIS_BINS} bins from {len(labels)} labels "
+                     f"({near_zero:.0%} within 5 deg of zero): weights "
+                     f"{weights_np.min():.2f}-{weights_np.max():.2f}")
 
     image_size = tuple(args.image_size)
     if eval_set:
@@ -377,7 +505,9 @@ def train(args):
             with autocast:
                 outputs = model(batch["image"], batch["state"])
             outputs = {k: v.float() for k, v in outputs.items()}
-            loss, parts = servo_loss(outputs, batch, model.grid, cell_sigma=args.cell_sigma)
+            loss, parts = servo_loss(outputs, batch, model.grid, cell_sigma=args.cell_sigma,
+                                     axis_loss=args.axis_loss,
+                                     axis_bin_weight=axis_bin_weight)
             loss.backward()
             optimizer.step()
             schedule.step()
@@ -434,6 +564,14 @@ def main():
     parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
                         help="Mined dataset on the hub, used when --data_root is absent")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--axis_loss", default="vonmises", choices=["vonmises", "mse"],
+                        help="Objective for the grasp axis head. vonmises trains the "
+                             "output's length as a confidence and charges for hedging; "
+                             "mse is the previous behaviour, kept for the A/B")
+    parser.add_argument("--no_axis_balance", dest="axis_balance", action="store_false",
+                        help="Weight every axis row alike instead of by angle bin. The "
+                             "labels lean hard on zero, so this is the old behaviour")
+    parser.set_defaults(axis_balance=True)
     parser.add_argument("--model_id", default=DEFAULT_MODEL_ID,
                         help="Hub model repo to push the checkpoint to with --upload")
     parser.add_argument("--upload", action="store_true",

@@ -80,6 +80,11 @@ class VisualServoDataset(torch.utils.data.Dataset):
         return np.array([r["target_uv"] for r in self.rows if r["target_uv"] is not None],
                         dtype=np.float32)
 
+    def labelled_axis(self):
+        """Every present grasp_axis_rad, for the loss's angle-bin weights."""
+        return np.array([r["grasp_axis_rad"] for r in self.rows
+                         if r["grasp_axis_rad"] is not None], dtype=np.float32)
+
     def __getitem__(self, idx):
         row = self.rows[idx]
         bgr = cv2.imdecode(np.frombuffer(self.images[idx], np.uint8), cv2.IMREAD_COLOR)

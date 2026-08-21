@@ -289,48 +289,66 @@ def _run_entry(output_dir, run_id):
     return {}
 
 
-def _nearest_telemetry(samples, times):
-    """For each time, the telemetry sample closest to it."""
+def _telemetry_lookup(samples):
+    """A nearest-sample lookup over one run's telemetry track, sorted once up front.
+
+    One time at a time rather than a whole run's worth at once, because batching the match
+    meant holding every decoded frame of the run to have their timestamps - about 1.6GB
+    per floorplates run, on a path whose whole job is to stream.
+    """
     stamps = np.array([s["t"] for s in samples])
     order = np.argsort(stamps)
     stamps, ordered = stamps[order], [samples[i] for i in order]
-    index = np.clip(np.searchsorted(stamps, times), 0, len(stamps) - 1)
-    lower = np.clip(index - 1, 0, len(stamps) - 1)
-    closer = np.abs(stamps[lower] - times) < np.abs(stamps[index] - times)
-    return [ordered[l if c else i] for i, l, c in zip(index, lower, closer)]
+
+    def nearest(time):
+        index = int(np.clip(np.searchsorted(stamps, time), 0, len(stamps) - 1))
+        lower = max(index - 1, 0)
+        return ordered[lower if abs(stamps[lower] - time) < abs(stamps[index] - time)
+                       else index]
+
+    return nearest
 
 
 def iter_video_run(output_dir, run_id, entry):
-    """Decode a video-backed run, attaching the telemetry nearest each frame."""
+    """Decode a video-backed run, attaching the telemetry nearest each frame.
+
+    One frame resident at a time: the decode is a generator and each frame is converted,
+    yielded and dropped. The consumer decides what to keep, which is what lets
+    synth_frames hold a bounded sample of a capture that does not fit in memory whole.
+    """
     import av
 
     output_dir = Path(output_dir)
     samples = [json.loads(line) for line in open(output_dir / entry["telemetry"]) if line.strip()]
     start_ts = float(entry["stream_start_ts"])
+    nearest = _telemetry_lookup(samples)
 
     container = av.open(str(output_dir / entry["file"]))
-    stream = next(s for s in container.streams if s.type == "video")
-    frames = [(start_ts + f.time, f) for f in container.decode(stream)]
-    matched = _nearest_telemetry(samples, np.array([t for t, _ in frames]))
-
-    for (captured_at, frame), sample in zip(frames, matched):
-        image = frame.to_ndarray(format="rgb24")
-        yield {
-            "image": image,
-            "kind": entry["kind"],
-            "run_id": run_id,
-            "captured_at": captured_at,
-            "width": image.shape[1],
-            "height": image.shape[0],
-            "finger_angle": sample.get("finger_angle"),
-            "wrist_angle": sample.get("wrist_angle"),
-            "laser_rangefinder": sample.get("laser_rangefinder"),
-            "finger_pressure": sample.get("finger_pressure"),
-            "attrs": {k: v for k, v in sample.items()
-                      if k not in ("t", "finger_angle", "wrist_angle",
-                                   "laser_rangefinder", "finger_pressure")},
-        }
-    container.close()
+    try:
+        stream = next(s for s in container.streams if s.type == "video")
+        for frame in container.decode(stream):
+            captured_at = start_ts + frame.time
+            sample = nearest(captured_at)
+            image = frame.to_ndarray(format="rgb24")
+            yield {
+                "image": image,
+                "kind": entry["kind"],
+                "run_id": run_id,
+                "captured_at": captured_at,
+                "width": image.shape[1],
+                "height": image.shape[0],
+                "finger_angle": sample.get("finger_angle"),
+                "wrist_angle": sample.get("wrist_angle"),
+                "laser_rangefinder": sample.get("laser_rangefinder"),
+                "finger_pressure": sample.get("finger_pressure"),
+                "attrs": {k: v for k, v in sample.items()
+                          if k not in ("t", "finger_angle", "wrist_angle",
+                                       "laser_rangefinder", "finger_pressure")},
+            }
+    finally:
+        # a consumer that stops early - the probe synth_frames uses to size one frame -
+        # closes the generator here, and the container has to go with it
+        container.close()
 
 
 def iter_run(output_dir, run_id, decode=True):

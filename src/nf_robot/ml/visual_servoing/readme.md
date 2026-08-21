@@ -518,6 +518,29 @@ the two halves cover the same range distribution:
 Rerunning replaces only its own shards. The annotated frames show the target, the grasp
 axis and the other candidates, which is where a compositing sign error shows up.
 
+Memory is bounded rather than a function of how much has been captured. The decoded floor
+plate pool is the high water mark, so it is capped by `--floor_cache_mb` (2GB by default,
+a reservoir sample spread evenly through each run's sweep) - the full set of floorplates
+runs decodes to about 29GB and will end the run on most machines. Simulated heights are
+also clamped into 0.05-1.5m: a mined rangefinder column bottoms out at 0.001m when the
+fingers are closing on something, and composited literally that asks for a floor plate
+magnified 283x, which is a single 125GB allocation. Both report what they did, and the
+run prints its peak resident memory at the end.
+
+## 4b. Audit what was built
+
+    python -m nf_robot.ml.visual_servoing.audit --data_root datasets/visual_servoing
+
+Label columns only, no image decode, so a 4.5GB split reads in seconds. It prints what
+each head actually has to learn from - coverage, class balance, distributions, and a
+per-producer breakdown of the axis - and exits non-zero when a head has labels on only
+one side of its range.
+
+Worth running after every rebuild, because the two failures that cost the most so far
+were both invisible in a loss curve: a split with no synthetic shards and therefore no
+`target_present = 0` anywhere, and object cutouts whose grasp axis was a constant zero.
+In both cases the network was fitting its labels correctly.
+
 ## 5. Train
 
     python -m nf_robot.ml.visual_servoing.train \
@@ -527,6 +550,19 @@ axis and the other candidates, which is where a compositing sign error shows up.
 
 The whole `train/` split trains. `eval/` is scored each epoch when it exists and the
 best checkpoint by `recall@25px` is kept; without it, the latest is saved instead.
+
+The grasp axis head is trained as a von Mises likelihood, so its output's length is a
+concentration - how sure it is - and not just a leftover of averaging. `axis_kappa` in the
+metrics is the median of that, and a head sitting near zero has learned to hedge. Its rows
+are also weighted by angle bin, because the labels lean hard on "already upright" and
+unweighted they spend 69% of the head's gradient on the answer it already knows. Both are
+on by default; `--axis_loss mse` and `--no_axis_balance` restore the previous behaviour
+for an A/B. Note the axis term is a log likelihood, so it is expected to go *negative* as
+the head grows confident - it is bounded below at about -2.9 by `KAPPA_MAX`.
+
+`axis_deg_flat` beside `axis_deg` is what "always upright" scores on the same rows. On a
+teleop-only eval split it is 0.0, which is the honest statement that the split cannot
+grade this head at all.
 
 Build the eval split by mining the held-out room's own recipe into the same root:
 
@@ -566,7 +602,11 @@ checkpoint comes from `naavox/visual-servo` on the hub.
 
 The `servograsp` debug command runs one grasp from wherever the gripper is parked, which
 is the way to try a checkpoint without the pick and place loop choosing targets around
-it.
+it. `servowatch` is the step before that: `visual_servo_grasp(observe_only=True)` runs
+the model on every frame and reports it to the overlay while commanding nothing at all -
+no gantry velocity, no wrist, no fingers - until the motion task is cancelled. Park the
+gripper over an object, or fly it by hand, and watch where the arrow points. A checkpoint
+that cannot be trusted with the gantry shows itself here for free.
 
 The loop is the downstream half the model was shaped for. Each pass:
 
@@ -576,13 +616,19 @@ The loop is the downstream half the model was shaped for. Each pass:
   `geometry.camera_to_room` - the inverse of the transform mine_teleop labelled with,
   which is why both directions live in one file
 - the horizontal part of that offset is the centering error, closed with a gain and a
-  speed cap, the same shape as `_center_card_in_view`
+  speed cap, the same shape as `_center_card_in_view`. It is filtered first, over about
+  one pendulum period: what is smoothed is the target's room position rather than the
+  offset to it, so the filter removes swing without lagging the loop's own corrections,
+  and a jump of more than half a metre re-seeds it rather than sliding across the floor
+  between two objects
 - descent is gated on being centered, with a tolerance that is a fraction of the range
   and therefore an angular one: 3cm of error at 60cm up is a correction the rest of the
   descent absorbs, and the same 3cm at 8cm up is a miss
 - the grasp axis is commanded as a fraction of the predicted angle each pass, which is a
   closed loop because the camera turns with the wrist and the prediction shrinks as it
-  comes around
+  comes around - but only when the axis head's concentration clears a threshold. An unsure
+  head still decodes to some angle, since atan2 throws the length away, so without the
+  gate the wrist turns to a hedge
 - the fingers stay open until something asks to close: the finger head sustained above
   threshold while centered, the rangefinder reaching the object, the gripper reaching
   floor height, or a tip-over. The close itself is the existing pressure loop, and a

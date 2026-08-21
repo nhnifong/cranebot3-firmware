@@ -45,6 +45,12 @@ sam_rate = 1.0 # per second
 sam_confidence_cutoff = 0.75
 
 # the genertic client for a raspberri pi based robot component
+# How many recent frames the per-camera latency estimate keeps. At the gripper's 60fps
+# this is about two seconds, long enough to be steady and short enough to follow a stream
+# that genuinely changes - a resolution switch, or a pi that has started struggling.
+VIDEO_LATENCY_SAMPLES = 120
+
+
 class ComponentClient:
     def __init__(self, address, port, datastore, ob, pool, stat, telemetry_env):
         self.address = address
@@ -65,6 +71,12 @@ class ComponentClient:
         self.connection_established_event = None
         self.frame = None # last frame of video seen
         self.last_frame_cap_time = None
+        # This camera's own capture-to-here latency, per frame. The shared StatCounter
+        # mixes every camera into one mean for the UI, which is the right number to show a
+        # person and the wrong one to control on: the gripper's 60fps control stream and an
+        # anchor's stream do not have the same lag, and a servo loop correcting for video
+        # delay needs the lag of the feed it is actually looking at.
+        self.latency_samples = deque(maxlen=VIDEO_LATENCY_SAMPLES)
         self.heartbeat_receipt = asyncio.Event()
         self.safety_task = None
         self.telemetry_env = telemetry_env
@@ -233,6 +245,7 @@ class ComponentClient:
                     # save information about stream latency and framerate
                     now = time.time()
                     self.stat.latency.append(now - timestamp)
+                    self.latency_samples.append(now - timestamp)
                     fr = 1/(now - last_time)
                     self.stat.framerate.append(fr)
                     last_time = now
@@ -308,6 +321,27 @@ class ComponentClient:
         finally:
             if 'container' in locals():
                 container.close()
+
+    def video_latency(self, default=None):
+        """Median capture-to-here latency of this camera's recent frames, in seconds.
+
+        Median rather than mean: a stalled decode or a burst of dropped packets produces a
+        few very late frames, and a mean is dragged along by them. `default` comes back
+        while the sample window is still empty, so a caller can name what to assume before
+        the stream has said anything.
+
+        One caveat on the absolute value. Capture is stamped by the component's own clock
+        (stream_start_ts comes from the bot, plus the frame's time in the container) and
+        "here" by ours, so any offset between the two machines is inside this number. It is
+        a latency plus a clock skew. A control loop that needs to know *when* a frame was
+        taken should prefer comparing capture times to other bot-stamped times - the grip
+        sensor records are stamped on the gripper too, so that comparison has no skew in it
+        at all - and use this for reporting, for sanity checks, and for reaching across to
+        quantities that only exist on this side.
+        """
+        if not self.latency_samples:
+            return default
+        return float(np.median(self.latency_samples))
 
     def stream_video_loop(self, feed_number, stop=None):
         """
