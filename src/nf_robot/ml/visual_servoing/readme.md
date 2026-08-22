@@ -32,8 +32,7 @@ frame and closes the error with a gain, which is exactly the consumer this head 
 Two reasons for the split:
 
 - The synthetic labels for position are exact and free - we know where we pasted the
-  object, at what zoom, at what rotation. "The velocity a teleoperator would have
-  commanded" is an invented label with an arbitrary gain baked into it.
+  object, at what zoom, at what rotation.
 - A geometric output is inspectable. When it misbehaves we can look at the heatmap and
   see whether it mislocated the object or misjudged the distance.
 

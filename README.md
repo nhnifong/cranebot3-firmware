@@ -40,7 +40,9 @@ Type "Microsft Store" in the start menu, Search for python, Install python 3.13,
 
 The stringman motion controller (stringman-headless) is the program which communicates with the robot components over wifi and acts as the central brain of a single robot. It must be running on the same network as the powered on anchors and gripper in order for the robot to be active and controllable. The main entrypoint is observer.py
 
-It listens on port 4245 for a connection from a UI or local AI policy. By default the UI is also hosted locally and is accessed at [http://localhost:8090/?robotid=lan](http://localhost:8090/?robotid=lan)
+It listens on port 4245 for a connection from a UI or local AI policy. By default the UI is also hosted locally and is accessed at
+
+**[http://localhost:8090/?robotid=lan](http://localhost:8090/?robotid=lan)**
 
 ## Binding a robot to an account on neufangled.com
 

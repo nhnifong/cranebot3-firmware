@@ -2,10 +2,8 @@
 
 """The visual servoing network: frozen DINOv3 patch tokens -> where the object is.
 
-See readme.md for why it is shaped this way. The short version: the model predicts
-*where* the target is, not how fast to move, because the position labels are exact and
-inspectable while velocity labels are an invented quantity with a teleoperator's pace
-baked in. Something downstream turns a position into a velocity, the way
+The model predicts where the target is, not how fast to move, because the position
+Something downstream turns a position into a velocity, the way
 observer.py's _center_card_in_view already does.
 
     input   448x256 RGB, the gripper camera at its native aspect
