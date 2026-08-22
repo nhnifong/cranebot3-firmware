@@ -25,7 +25,7 @@ needs_firmware = unittest.skipIf(default_gripper_conf is None,
 
 
 class TestPoleTypeConfig(unittest.TestCase):
-    """The pole a robot wears sets its swing frequency, so a config that predates the
+    """The pole a robot has sets its swing frequency, so a config that predates the
     field has to keep the pole it was calibrated against rather than take today's."""
 
     def _load_written(self, config_dict):

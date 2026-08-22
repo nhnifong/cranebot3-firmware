@@ -229,7 +229,7 @@ class AsyncObserver:
         # TODO allow a command line argument to override the config file path
         self.config_path = config_path
         self.config = load_config(config_path)
-        # What the configured pole makes of this robot: how far the gripper hangs below the
+        # What the configured pole affects on this robot: how far the gripper hangs below the
         # gantry, which marker the gantry wears, and the pendulum it swings as.
         self.pole_geometry = model_constants.pole_geometry(self.config)
         self.pole = np.array([0, 0, self.pole_geometry.gantry_to_gripper])

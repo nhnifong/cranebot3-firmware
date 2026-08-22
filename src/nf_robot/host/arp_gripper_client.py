@@ -84,7 +84,7 @@ class ArpeggioGripperClient(ComponentClient):
         self.route_tag_samples = defaultdict(lambda: deque(maxlen=ROUTE_TAG_HISTORY))
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
-        # the pole this robot wears; send_config tells the gripper the same length so both
+        # the pole this robot has. send_config tells the gripper the same length so both
         # ends fit and project the swing at one frequency
         self.pendulum = swing.pendulum_for(self.config)
         self.finger_contact_calibration_complete = asyncio.Event()

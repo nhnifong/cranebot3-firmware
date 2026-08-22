@@ -91,7 +91,8 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # Gripper
     config.gripper = nf_config.Gripper()
     config.gripper.frame_room_spin = (50.0 / 180.0) * np.pi
-    # what a robot built today wears; load_config gives configs older than this field the
+    # what a robot built today has (carbon pole)
+    # load_config gives configs older than this field the
     # ABS pole they were built with instead.
     config.gripper.pole_type = common.PoleType.CARBON400
     
