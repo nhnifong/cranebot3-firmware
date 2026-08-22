@@ -601,7 +601,7 @@ only for the things that are the robot rather than the routine: the gripper clie
 datastore, the position estimate and the motion primitives. It is an override rather than another fallback, because the
 reason to run it is to find out how it does and a silent fall back to something else
 would hide that. `--local_models` reads `models/visual_servo.pth`; without it the
-checkpoint comes from `naavox/visual-servo` on the hub.
+checkpoint comes from `naavox/visual_servo` on the hub.
 
 The `servograsp` debug command runs one grasp from wherever the gripper is parked, which
 is the way to try a checkpoint without the pick and place loop choosing targets around

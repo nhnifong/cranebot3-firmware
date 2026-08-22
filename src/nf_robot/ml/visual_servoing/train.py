@@ -43,9 +43,9 @@ from nf_robot.ml.visual_servoing.model import (
 
 DEFAULT_MODEL_PATH = "models/visual_servo.pth"
 # Where the mined dataset lives on the hub, for a run that names no local copy.
-DEFAULT_DATASET_ID = "naavox/visual-servoing-dataset"
+DEFAULT_DATASET_ID = "naavox/visual_servoing_dataset"
 # Where a trained checkpoint is pushed, with --upload.
-DEFAULT_MODEL_ID = "naavox/visual-servo"
+DEFAULT_MODEL_ID = "naavox/visual_servo"
 # Relative weights. Position is the point of the model; the flags are easy and would
 # otherwise dominate a sum of raw losses simply by being confidently right.
 DEFAULT_WEIGHTS = {
