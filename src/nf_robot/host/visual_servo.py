@@ -25,6 +25,7 @@ await, cleaning up in a finally.
 
 import asyncio
 import logging
+import pathlib
 import time
 
 import numpy as np
@@ -41,9 +42,6 @@ SERVO_MODE_GRASP = 'grasp'
 SERVO_MODE_OBSERVE = 'observe'
 SERVO_MODE_CENTER = 'center'
 SERVO_MODES = (SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER)
-
-# Where a trained checkpoint is published, and where --local_models looks instead.
-SERVO_MODEL_REPOID = "naavox/visual_servo"
 
 # ---------------------------------------------------------------------------
 # Approach and descent
@@ -260,47 +258,81 @@ class VisualServo:
         return self.model is not None
 
     async def load_model(self):
-        """Load the visual servoing checkpoint onto the eval device, or leave it None."""
-        import torch
-        from nf_robot.ml.visual_servoing import servo
+        """Load the visual servoing checkpoint onto the eval device, or leave it None.
 
-        device = self.ob._device or ("cuda" if torch.cuda.is_available()
-                                     else "mps" if torch.backends.mps.is_available() else "cpu")
-        self.ob._device = device
+        Everything happens in the worker thread, including `import torch` and the hub
+        lookup. Both are slow enough to matter: the first torch import is most of a
+        second, and a download is however long the network takes, and on the event loop
+        thread either one stalls the whole robot - the telemetry, the position estimator
+        and every other motion task - for exactly that long.
 
-        if device == "cpu":
-            logger.warning("Refusing to load the visual servoing model on CPU; hardware "
-                           "acceleration required.")
-            self.model = None
-            self.ob.send_ui(pop_message=telemetry.Popup(
-                message="The visual servoing grasp (--visual_servo) cannot be used without some "
-                        "kind of hardware acceleration. Loading was aborted because the torch "
-                        "device is CPU."
-            ))
-            return
-
+        Nothing here raises. A model that will not load is a robot that cannot use this
+        grasping routine, which is a thing to report and decline over, not a traceback out
+        of whatever motion task happened to ask for it first.
+        """
         def load_sync():
-            # transformers is not in the host extra, so a plain install has torch but no
-            # way to build the DINOv3 backbone. That is a missing dependency rather than a
-            # broken robot, and it deserves to say so instead of surfacing as a traceback
-            # from three modules down.
+            import torch
+
+            from nf_robot.ml.visual_servoing import servo
+
+            device = self.ob._device or ("cuda" if torch.cuda.is_available()
+                                         else "mps" if torch.backends.mps.is_available() else "cpu")
+            if device == "cpu":
+                return None, device, (
+                    "The visual servoing grasp (--visual_servo) cannot be used without some "
+                    "kind of hardware acceleration. Loading was aborted because the torch "
+                    "device is CPU.")
+
             model, checkpoint = servo.load_model(device, local_models=self.ob.local_models)
             logger.info(f"Visual servoing model ready: epoch {checkpoint.get('epoch')}, "
                         f"input {tuple(checkpoint['image_size'])}, "
                         f"axis loss {checkpoint.get('axis_loss')}, "
                         f"metrics {checkpoint.get('metrics')}")
-            return model
+            return model, device, None
 
+        self.model = None
         try:
-            self.model = await asyncio.to_thread(load_sync)
-        except ImportError as e:
-            logger.error(f'Visual servoing needs a package this install does not have: {e}')
-            self.model = None
-            self.ob.send_ui(pop_message=telemetry.Popup(
-                message=f"The visual servoing model could not be loaded: {e}. It needs the "
-                        f"'transformers' package, which is not part of the standard host "
-                        f"install; add it with 'pip install transformers'."
-            ))
+            model, device, refusal = await asyncio.to_thread(load_sync)
+        except Exception as e:
+            logger.error(f'Could not load the visual servoing model: {e!r}')
+            self.ob.send_ui(pop_message=telemetry.Popup(message=self._load_failure_message(e)))
+            return
+
+        self.ob._device = device
+        if refusal:
+            logger.warning(refusal)
+            self.ob.send_ui(pop_message=telemetry.Popup(message=refusal))
+            return
+        self.model = model
+
+    def _load_failure_message(self, error):
+        """What to tell a person about a checkpoint that would not load.
+
+        The three ways this actually fails have three different answers, and a traceback
+        gives none of them: the hub repo does not exist yet, the local file is not there,
+        or the install is missing a package the model needs.
+        """
+        from nf_robot.ml.visual_servoing.servo import (
+            LOCAL_MODEL_PATH, SERVO_MODEL_FILENAME, SERVO_MODEL_REPOID)
+
+        name = type(error).__name__
+        if isinstance(error, ImportError):
+            return (f"The visual servoing model could not be loaded: {error}. It needs the "
+                    f"'transformers' package, which is not part of the standard host "
+                    f"install; add it with 'pip install transformers'.")
+        if isinstance(error, FileNotFoundError) or name == 'EntryNotFoundError':
+            return (f"No visual servoing checkpoint at {LOCAL_MODEL_PATH}. Train one, or drop "
+                    f"a downloaded {SERVO_MODEL_FILENAME} there, or run without "
+                    f"--local_models to fetch it from the hub.")
+        if name in ('RepositoryNotFoundError', 'GatedRepoError', 'HfHubHTTPError',
+                    'LocalEntryNotFoundError'):
+            local = pathlib.Path(LOCAL_MODEL_PATH)
+            here = (f" A local copy is sitting at {LOCAL_MODEL_PATH}; restart with "
+                    f"--local_models to use it.") if local.exists() else ""
+            return (f"The visual servoing model is not available from {SERVO_MODEL_REPOID} "
+                    f"on huggingface ({name}). It may not be published yet.{here}")
+        return (f"The visual servoing model could not be loaded ({name}: {error}). "
+                f"See the log for the full traceback.")
 
     # -- what the model says ----------------------------------------------
 

@@ -23,7 +23,7 @@ from nf_robot.ml.visual_servoing.geometry import camera_to_room, point_in_room
 logger = logging.getLogger(__name__)
 
 # Where a trained checkpoint is published, and where --local_models looks for it instead.
-SERVO_MODEL_REPOID = "naavox/visual-servo"
+SERVO_MODEL_REPOID = "naavox/visual_servo"
 SERVO_MODEL_FILENAME = "visual_servo.pth"
 LOCAL_MODEL_PATH = "models/visual_servo.pth"
 
