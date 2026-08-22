@@ -97,6 +97,8 @@ class Command(betterproto2.Enum):
     SUBMIT_TARGETS_TO_DATASET = 13
     """
     Take the current set of targets as complete and correct and add entries to dataset
+
+    deprecated
     """
 
     TIGHTEN_LINES = 16
@@ -124,6 +126,11 @@ class Command(betterproto2.Enum):
     Disable onboard tension regulation on both spools of every anchor
     """
 
+    SAFE_COMPONENT_SHUTDOWN = 22
+    """
+    Ask all robot components to safely shut down
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -134,6 +141,8 @@ class Command(betterproto2.Enum):
     COLLECT_GRIPPER_IMAGES = 7
     """
     Begin saving images of the gripper camera at regular intervals in a local directory
+
+    deprecated
     """
 
     SHUTDOWN = 8
@@ -171,6 +180,7 @@ class Command(betterproto2.Enum):
             18: "COMMAND_ENABLE_TORQUE",
             20: "COMMAND_ENABLE_TENSION_REG",
             21: "COMMAND_DISABLE_TENSION_REG",
+            22: "COMMAND_SAFE_COMPONENT_SHUTDOWN",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -198,6 +208,7 @@ class Command(betterproto2.Enum):
             "COMMAND_ENABLE_TORQUE": 18,
             "COMMAND_ENABLE_TENSION_REG": 20,
             "COMMAND_DISABLE_TENSION_REG": 21,
+            "COMMAND_SAFE_COMPONENT_SHUTDOWN": 22,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,

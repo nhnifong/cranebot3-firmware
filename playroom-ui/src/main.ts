@@ -1898,6 +1898,7 @@ function initRunMenu() {
   bindCommand('action-grasp',          Command.COMMAND_GRASP);
   bindCommand('action-update-firmware', Command.COMMAND_UPDATE_FIRMWARE);
   bindCommand('action-record-park',    Command.COMMAND_RECORD_PARK);
+  bindCommand('action-shutdown-components', Command.COMMAND_SAFE_COMPONENT_SHUTDOWN);
   // Park / UnPark temporarily removed from the menu — feature is unstable and unrecommended.
   // State toggles. Both show what the robot reports (torque_state and
   // tension_regulation_state telemetry) rather than what was last clicked.

@@ -315,7 +315,7 @@ class GripCamPredictions(betterproto2.Message):
 
     move_x: "float" = betterproto2.field(1, betterproto2.TYPE_FLOAT)
     """
-    prediction motion vector to center gripper over target
+    predicted vector to target (posiution of target)
     """
 
     move_y: "float" = betterproto2.field(2, betterproto2.TYPE_FLOAT)

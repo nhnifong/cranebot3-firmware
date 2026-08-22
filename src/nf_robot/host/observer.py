@@ -513,6 +513,7 @@ class AsyncObserver:
             self._handle_add_relay_creds(item.add_relay_creds)
 
     async def _handle_set_point(self, item: control.SetPoint):
+        """Set either the route source or destination (the To: and From: fields in the UI)"""
         logger.debug(f'_handle_set_point {item}')
         if item.route_source:
             self.pnp_src = item.route_source
@@ -1058,31 +1059,25 @@ class AsyncObserver:
         ])
 
     async def shutdown_all_bots(self):
-        """Ask every connected component to power its Pi off cleanly.
-
-        Hard-cutting power to a running component is what corrupts its SD card, so this
-        is the way to put the robot away: every Pi stops its motors, releases its camera
-        and halts through systemd, and only then is it safe to cut the supply.
-
-        Each component drops its websocket as it goes down, so connection errors here are
-        the expected outcome rather than a failure - they are logged and swallowed so one
-        component going quiet cannot stop the rest from being told to halt.
-        """
+        """Ask every connected component to power its Pi off cleanly."""
         clients = list(self.bot_clients.items())
         if not clients:
             logger.warning('no components connected; nothing to shut down')
+            self.send_ui(pop_message=telemetry.Popup(message='No components are connected.'))
             return
+        # nothing should be commanding motion into a component that is about to halt.
+        await self.stop_all()
         logger.info(f'requesting poweroff of {len(clients)} components: '
                     f'{", ".join(name for name, _ in clients)}')
         results = await asyncio.gather(*[
             client.send_commands({'shutdown_pi': True})
             for _, client in clients
-        ], return_exceptions=True)
+        ] + [asyncio.sleep(10)], return_exceptions=True) # ten seconds to ensure green led is off. user cant see them.
         for (name, _), result in zip(clients, results):
             if isinstance(result, Exception):
                 logger.warning(f'{name} may not have received the poweroff request: {result!r}')
-        logger.info('poweroff requested; wait for the green activity LEDs to stop '
-                    'flickering before cutting power')
+        logger.info('poweroff requested; wait 10 seconds before cutting power')
+        self.send_ui(pop_message=telemetry.Popup(message='Shutdown complete.'))
 
     async def pull_logs_to_zip(self):
         """Pull recent log lines from every connected component and bundle them into a
@@ -1343,6 +1338,8 @@ class AsyncObserver:
                 r = await self.set_tension_reg(True)
             case control.Command.DISABLE_TENSION_REG:
                 r = await self.set_tension_reg(False)
+            case control.Command.SAFE_COMPONENT_SHUTDOWN:
+                r = await self.shutdown_all_bots()
 
     def _enable_debug_log_over_telemetry(self):
         if self._telem_log_handler is not None:
