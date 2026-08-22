@@ -1896,8 +1896,6 @@ function initRunMenu() {
   });
   bindCommand('action-half-cal',       Command.COMMAND_HALF_CAL);
   bindCommand('action-grasp',          Command.COMMAND_GRASP);
-  bindCommand('action-dataset',        Command.COMMAND_SUBMIT_TARGETS_TO_DATASET);
-  bindCommand('action-collect-images', Command.COMMAND_COLLECT_GRIPPER_IMAGES);
   bindCommand('action-update-firmware', Command.COMMAND_UPDATE_FIRMWARE);
   bindCommand('action-record-park',    Command.COMMAND_RECORD_PARK);
   // Park / UnPark temporarily removed from the menu — feature is unstable and unrecommended.

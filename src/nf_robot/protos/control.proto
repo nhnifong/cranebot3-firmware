@@ -50,7 +50,7 @@ enum Command {
   // A horizontal move paralell to the floor that measures the quality of calibration
   COMMAND_HORIZONTAL_CHECK = 6;
   // Begin saving images of the gripper camera at regular intervals in a local directory
-  COMMAND_COLLECT_GRIPPER_IMAGES = 7;
+  COMMAND_COLLECT_GRIPPER_IMAGES = 7; // deprecated
   // Shuts down the observer process. robot components remain on.
   COMMAND_SHUTDOWN = 8;
   // Run a firmware update on every connected component.

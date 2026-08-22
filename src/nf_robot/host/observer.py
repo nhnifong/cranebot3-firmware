@@ -163,25 +163,6 @@ def _robust_spread(points):
     P = np.asarray(points, dtype=float)
     return float(np.median(np.linalg.norm(P - np.median(P, axis=0), axis=1)))
 
-def capture_gripper_image(ndimage, gripper_occupied=False):
-    """
-    Saves an image to the unprocessed directory. 
-    Encodes gripper state in filename: {uuid}_g{1|0}.jpg
-    """
-    if not os.path.exists(UNPROCESSED_DIR):
-        os.makedirs(UNPROCESSED_DIR)
-    
-    h, w = ndimage.shape[:2]
-        
-    state_str = "g1" if gripper_occupied else "g0"
-    file_id = str(uuid.uuid4())
-    img_filename = f"{file_id}_{state_str}.jpg"
-    img_full_path = os.path.join(UNPROCESSED_DIR, img_filename)
-    
-    # Save (ensure RGB/BGR consistency)
-    cv2.imwrite(img_full_path, ndimage)
-    logger.info(f"Captured: {img_filename} (Gripper: {gripper_occupied})")
-
 class TelemetryLogHandler(logging.Handler):
     """Forwards log records to the telemetry stream via send_ui."""
 
@@ -321,7 +302,6 @@ class AsyncObserver:
         self.passive_safety_task = None
         # last attempt to connect, keyed by service name
         self.connection_tasks: dict[str, asyncio.Task] = {}
-        self.run_collect_images = False
         self.time_last_grip_sensors_retain_key = 0
         # {key: (velocity, monotonic_timestamp)} last velocities commanded by different subsystems. all keys in active_set are summed.
         # Entries expire INPUT_VELOCITY_TTL_S after their last update; expiration is lazy (pruned at read time in move_direction_speed),
@@ -1298,26 +1278,6 @@ class AsyncObserver:
         self.target_queue.add_user_target((item.x, item.y), dropoff='hamper')
         self.send_tq_to_ui()
 
-    def submitTargets(self):
-        """snapshot any active cameras at 1920x1080 and save images in the raw dir"""
-        images = []
-        for anchor in self.anchors.values():
-            if anchor.frame is not None:
-                images.append(anchor.frame.copy())
-
-        def save_data(images):
-            directory_path = Path("target_heatmap_data_unlabeled")
-            directory_path.mkdir(exist_ok=True, parents=True)
-            
-            for img in images:
-                img_filename = f"{str(uuid.uuid4())}.jpg"
-                # write the image
-                rgb_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img_full_path = directory_path / img_filename
-                cv2.imwrite(str(img_full_path), rgb_image)
-
-        threading.Thread(target=save_data, args=(images,)).start()
-
     def _handle_scale_room(self, item: control.ScaleRoom):
         # not implemented for arpeggio anchor
         if item.scale:
@@ -1361,8 +1321,6 @@ class AsyncObserver:
                 r = await self.invoke_motion_task(self.pick_and_place_loop())
             case control.Command.HORIZONTAL_CHECK:
                 r = await self.invoke_motion_task(self.linear_height_check_task())
-            case control.Command.COLLECT_GRIPPER_IMAGES:
-                self._handle_collect_images()
             case control.Command.SHUTDOWN:
                 self.run_command_loop = False
             case control.Command.RECORD_PARK:
@@ -1373,8 +1331,6 @@ class AsyncObserver:
                 r = await self.invoke_motion_task(self.unpark())
             case control.Command.GRASP:
                 r = await self.invoke_motion_task(self.execute_grasp())
-            case control.Command.SUBMIT_TARGETS_TO_DATASET:
-                self.submitTargets()
             case control.Command.UPDATE_FIRMWARE:
                 r = await self._handle_update_firmware()
             case control.Command.DISABLE_TORQUE:
@@ -5047,24 +5003,6 @@ class AsyncObserver:
             self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_STOP))
             await asyncio.sleep(0.01)
             self.slow_stop_all_spools()
-
-    def _handle_collect_images(self):
-        if self.run_collect_images:
-            self.run_collect_images = False # ends the task
-        else:
-            self.run_collect_images = True
-            self.gip_task = asyncio.create_task(self.collect_images())
-
-    async def collect_images(self):
-        """Collects data for the centering network"""
-        while self.run_command_loop and self.run_collect_images:
-            if self.gripper_client.last_output_frame is not None:
-                logger.debug(f'Gripper frame shape: {self.gripper_client.last_output_frame.shape}')
-                rgb_image = cv2.cvtColor(self.gripper_client.last_output_frame, cv2.COLOR_BGR2RGB)
-                capture_gripper_image(rgb_image, gripper_occupied=self.pe.holding)
-            else:
-                logger.debug('No resized frame available from gripper')
-            await asyncio.sleep(1)
 
 def main():
     """
