@@ -36,11 +36,16 @@ import json
 import logging
 import math
 import random
-import resource
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+try:
+    # Unix only; absent on Windows, where the peak-memory line is simply skipped.
+    import resource
+except ImportError:
+    resource = None
 
 from nf_robot.ml.visual_servoing.mine_teleop import (
     CANVAS_SCALE,
@@ -567,8 +572,9 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
                  f"{split_dir}; {present} with a target, {writer.total - present} without")
     # Measured rather than predicted, because the budget above only bounds the plate pool
     # and this is the number that decides whether the run survives on this machine.
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6
-    logging.info(f"peak resident memory {peak:.1f} GB")
+    if resource is not None:
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6
+        logging.info(f"peak resident memory {peak:.1f} GB")
     return writer.total
 
 
