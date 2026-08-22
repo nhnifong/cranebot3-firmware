@@ -54,6 +54,9 @@ RANGE_MAX_AGE_S = 1.0
 ROUTE_TAG_MAX_AGE_S = 0.6
 # ~8s of sightings at a 30Hz detection rate, the longest window any caller asks for
 ROUTE_TAG_HISTORY = 240
+# Two minutes of the gripper's 100Hz IMU loop, which is far longer than the pole
+# measurement's swing-and-decay run needs.
+RAW_GYRO_HISTORY = 12000
 
 # The camera's two modes, by the names the gripper knows them by. Resolution, bitrate and
 # framerate live in the robot side's stream_modes table, where they have to be: they are
@@ -96,6 +99,10 @@ class ArpeggioGripperClient(ComponentClient):
         # finger angle it has no home in the datastore.
         self.last_target_force = 0.0
         
+        # (time, gyro x, gyro y) samples, only while record_raw_gyro has the gripper
+        # sending them. Bounded so a recording nobody stops cannot grow without end.
+        self.raw_gyro = deque(maxlen=RAW_GYRO_HISTORY)
+
         # integrated drift from swing cancellation, which compute_swing_correction
         # subtracts back out so the platform holds its place
         self._swing_position_offset = np.zeros(2)
@@ -113,6 +120,9 @@ class ArpeggioGripperClient(ComponentClient):
 
         if 'sm' in update:
             self.gripper_swing_model = np.array(update['sm'])
+
+        if 'gyro_record' in update:
+            self.raw_gyro.extend(update['gyro_record'])
             
         if 'grip_sensors' in update:
             gs = update['grip_sensors']
@@ -178,6 +188,20 @@ class ArpeggioGripperClient(ComponentClient):
             logger.warning('Timed out waiting for angle_from_vertical reply from gripper')
             return None
         return self.last_angle_from_vertical
+
+    async def record_raw_gyro(self, enabled):
+        """Turn the gripper's raw gyro stream on or off.
+
+        Enabling drops whatever the last recording left, on both ends, so a caller reads
+        only what its own run produced.
+        """
+        if enabled:
+            self.raw_gyro.clear()
+        await self.send_commands({'record_gyro': enabled})
+
+    def collect_raw_gyro(self):
+        """Everything recorded so far as (n, 3) of (time, gyro x, gyro y), oldest first."""
+        return np.array(self.raw_gyro, dtype=float) if self.raw_gyro else np.zeros((0, 3))
 
     def compute_swing_correction(self, future_time):
         """Room-frame gantry velocity that will cancel the gripper's swing at future_time.

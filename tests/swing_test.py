@@ -207,5 +207,37 @@ class TestSelectMinResidual(unittest.TestCase):
         self.assertAlmostEqual(swing.select_min_residual(results), 0.15)
 
 
+class TestMeasurePendulum(unittest.TestCase):
+    """Enough to trust the number this prints: a synthetic swing carrying what a real
+    recording has - gyro bias, jittered sample times, decay, and a second axis ringing
+    along with the first - has to come back out as the length that went in."""
+
+    def _recording(self, length, duration=20.0, seed=0):
+        rng = np.random.default_rng(seed)
+        n = int(duration * 100)
+        ts = np.sort(np.arange(n) / 100 + rng.normal(0, 0.002, n)) + 1_700_000_000.0
+        omega = np.sqrt(swing.GRAVITY / length)
+        envelope = 0.5 * np.exp(-(ts - ts[0]) / 12.0)
+        gx = envelope * np.sin(omega * (ts - ts[0])) + 0.04 + rng.normal(0, 0.01, n)
+        gy = 0.25 * envelope * np.sin(omega * (ts - ts[0]) + 0.6) - 0.02 + rng.normal(0, 0.01, n)
+        return np.stack([ts, gx, gy], axis=1)
+
+    def test_recovers_the_length_it_was_given(self):
+        # 2mm is the accuracy worth running this for: well inside the 18mm between the two
+        # poles, so a measurement can say which one is fitted.
+        for length in (model_constants.pole_length_carbon400,
+                       model_constants.pole_length_abs500):
+            with self.subTest(length=length):
+                freq, measured = swing.measure_pendulum(self._recording(length))
+                self.assertAlmostEqual(measured, length, delta=0.002)
+                self.assertAlmostEqual(swing.length_for_frequency(freq), measured)
+
+    def test_says_nothing_rather_than_guessing(self):
+        self.assertEqual(swing.measure_pendulum(np.zeros((0, 3))), (None, None))
+        # too few swings to time
+        self.assertEqual(swing.measure_pendulum(self._recording(0.4526, duration=4.0)),
+                         (None, None))
+
+
 if __name__ == '__main__':
     unittest.main()

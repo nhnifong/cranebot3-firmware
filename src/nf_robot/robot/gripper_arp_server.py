@@ -31,6 +31,13 @@ FINGER_TRAVEL_DEG = 59
 FINGER_TRAVEL_STEPS = FINGER_TRAVEL_DEG / 360 / GEAR_RATIO * STEPS_PER_REV
 DT = 1/60
 GRAVITY = 9.81
+# Ceiling on the raw gyro backlog, in samples: a minute of the 100Hz IMU loop. Only fills
+# while the host has recording on, and it drains every send, so this is just a bound on
+# what one stalled connection can hold.
+RAW_GYRO_MAX_SAMPLES = 6000
+# How many samples one message carries, so a backlog drains over several sends rather than
+# in one outsized frame.
+RAW_GYRO_PER_MESSAGE = 200
 
 # values that can be overridden by the controller
 default_gripper_conf = {
@@ -152,6 +159,12 @@ class GripperArpServer(RobotComponentServer):
         # sin curves fitted to the gyro. Row 0 X swing, row 1 Y; col 0 velocity (sine),
         # col 1 phase tracker (cosine).
         self.state = np.zeros((2, 2))
+
+        # Raw gyro samples held for the host, only while it asks for them ('record_gyro').
+        # The fitted model above cannot answer what the swing frequency actually is - it is
+        # built assuming omega - so measuring the pole needs the untouched readings.
+        self.record_gyro = False
+        self.raw_gyro = deque(maxlen=RAW_GYRO_MAX_SAMPLES)
 
         # how much of each real gyro reading to average into the model per step
         self.observation_gain = 0.1
@@ -407,6 +420,12 @@ class GripperArpServer(RobotComponentServer):
                 self.rangefinder.clear_interrupt()
                 self.update['grip_sensors']['range'] = distance / 100
 
+        # drained here rather than in process_imu so a whole send interval's samples travel
+        # together, keeping every one of them instead of only the last write before a send
+        if self.raw_gyro:
+            batch = [self.raw_gyro.popleft() for _ in range(min(len(self.raw_gyro), RAW_GYRO_PER_MESSAGE))]
+            self.update['gyro_record'] = batch
+
     def checkMotorLoad(self, finger_data, wrist_data):
         """Cut torque for a second on either motor that is overloaded."""
         # a running re-enable timer means this already fired; don't stack cutouts
@@ -580,6 +599,9 @@ class GripperArpServer(RobotComponentServer):
 
             current_gyro = np.array(self.imu.gyro[:2]) # rad/s
 
+            if self.record_gyro:
+                self.raw_gyro.append([now, float(current_gyro[0]), float(current_gyro[1])])
+
             # advance the virtual pendulum's phase to now, then pull the velocity
             # component toward what the gyro actually reads
             step_angle = self.omega * dt
@@ -714,6 +736,13 @@ class GripperArpServer(RobotComponentServer):
             asyncio.create_task(self.resetWrist())
         if 'untwist' in update and not self.wrist_busy:
             asyncio.create_task(self.untwistWrist(update['untwist']))
+        if 'record_gyro' in update:
+            self.record_gyro = bool(update['record_gyro'])
+            if self.record_gyro:
+                # a new recording starts empty, so whatever the last one left behind
+                # cannot show up in it. Stopping leaves the backlog to finish draining.
+                self.raw_gyro.clear()
+            logging.info(f'raw gyro recording {"on" if self.record_gyro else "off"}')
 
     def identify(self):
         """Twitch the fingers, so an operator can tell which gripper this is."""

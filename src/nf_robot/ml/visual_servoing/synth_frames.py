@@ -32,6 +32,7 @@ Usage:
 """
 
 import argparse
+from datetime import datetime
 import json
 import logging
 import math
@@ -55,6 +56,7 @@ from nf_robot.ml.visual_servoing.mine_teleop import (
 )
 from nf_robot.ml.visual_servoing.object_matte import read_objects
 from nf_robot.ml.visual_servoing.plates import iter_run, read_manifest
+from nf_robot.ml.visual_servoing import white_balance
 
 # Simulated camera heights, in metres, when no real distribution is supplied. Sampled
 # log-uniformly because what matters to the image is the ratio between heights, not the
@@ -111,6 +113,24 @@ SIM_RANGE_M = (0.05, 1.5)
 MAX_MAGNIFICATION = 6.0
 
 
+def neutralize_plates(entries, what):
+    """Take one capture's colour cast out of its plates, in place.
+
+    Returns the illuminant that was removed, so a caller holding sources that cannot be
+    measured on their own - a cutout is mostly object, and the object's colour is not the
+    light's - can borrow it.
+    """
+    if not entries:
+        return np.ones(3)
+    illuminant = white_balance.estimate_illuminant(e["image"] for e in entries)
+    gains = white_balance.neutralize_gains(illuminant)
+    for entry in entries:
+        entry["image"] = white_balance.apply_gains(entry["image"], gains)
+    logging.info(f"{what}: lit at RGB {np.round(illuminant, 3)}, "
+                 f"neutralized by {np.round(gains, 3)}")
+    return illuminant
+
+
 def load_floorplates(plate_dir, limit_runs=None, budget_mb=FLOOR_CACHE_MB, seed=0):
     """A bounded pool of floorplate frames, with the range each was captured at.
 
@@ -152,7 +172,7 @@ def load_floorplates(plate_dir, limit_runs=None, budget_mb=FLOOR_CACHE_MB, seed=
     quota = max(1, capacity // len(runs))
     rng = random.Random(seed)
 
-    plates, seen_total = [], 0
+    plates, seen_total, illuminants = [], 0, {}
     for run in runs:
         kept, seen = [], 0
         for row in iter_run(plate_dir, run["run_id"]):
@@ -170,6 +190,10 @@ def load_floorplates(plate_dir, limit_runs=None, budget_mb=FLOOR_CACHE_MB, seed=
                 index = rng.randrange(seen)
                 if index < quota:
                     kept[index] = entry
+        # Per run, because a run is one session under one set of room lights, and two runs
+        # shot at different times of day are not the same yellow.
+        if kept:
+            illuminants[run["run_id"]] = neutralize_plates(kept, run["run_id"])
         plates += kept
         seen_total += seen
 
@@ -180,10 +204,52 @@ def load_floorplates(plate_dir, limit_runs=None, budget_mb=FLOOR_CACHE_MB, seed=
     if len(plates) < seen_total:
         logging.info("raise --floor_cache_mb for more background variety if the machine "
                      "has the memory for it")
-    return plates
+    return plates, illuminants
 
 
-def load_finger_plates(finger_dir):
+def run_time(run_id):
+    """The capture time a run id carries, or None if it is not shaped like one."""
+    parts = str(run_id).split("-")
+    try:
+        return datetime.strptime(parts[1] + parts[2], "%Y%m%d%H%M%S")
+    except (IndexError, ValueError):
+        return None
+
+
+def nearest_illuminant(run_id, measured):
+    """The illuminant of whichever measured capture sits closest in time to run_id.
+
+    For sources whose own pixels cannot be measured: the light in the house is what these
+    all have in common, and the capture nearest in time is the best record of it there is.
+    """
+    when = run_time(run_id)
+    dated = {other: value for other, value in measured.items() if run_time(other)}
+    if not dated:
+        return np.ones(3)
+    if when is None:
+        return next(iter(dated.values()))
+    return dated[min(dated, key=lambda other: abs(run_time(other) - when))]
+
+
+def cutout_gains(entries, floor_illuminants):
+    """Neutralizing gains per objectplates run, borrowed from the floorplates runs.
+
+    The cutouts cannot be measured on their own. A cutout is object and nothing else, and
+    assorted objects do not average to grey the way a room does: measured that way this
+    set asks for a 4.6x blue gain, which is the toys being warm-coloured rather than the
+    light being warm. The floor captured nearest in time is the same house under the same
+    pinned preset, and it has a room's worth of surfaces to average over.
+    """
+    gains = {}
+    for run_id in sorted({entry.get("run_id", "") for entry in entries}):
+        illuminant = nearest_illuminant(run_id, floor_illuminants)
+        gains[run_id] = white_balance.neutralize_gains(illuminant)
+        logging.info(f"cutouts from {run_id or 'unknown run'}: neutralized by "
+                     f"{np.round(gains[run_id], 3)}, borrowed from the nearest floor capture")
+    return gains
+
+
+def load_finger_plates(finger_dir, neutralize=True):
     """RGBA finger plates grouped by capture, as [[(finger_angle, rgba), ...], ...].
 
     One list per fingerplates run rather than one flat list, because a run is one physical
@@ -212,7 +278,17 @@ def load_finger_plates(finger_dir):
         by_run.setdefault(entry.get("run_id", ""), []).append(
             (float(entry["finger_angle"]), bgra[:, :, [2, 1, 0, 3]]))
     for run_id, plates in sorted(by_run.items()):
-        logging.info(f"{len(plates)} finger plates from {run_id or finger_dir}")
+        # Per run again: a run is one set of fingers under one set of lights, and the sets
+        # really are different colours, so pooling them would read a white set as the
+        # light and turn a blue set bluer.
+        if neutralize:
+            illuminant = white_balance.estimate_illuminant(rgba for _, rgba in plates)
+            gains = white_balance.neutralize_gains(illuminant)
+            plates[:] = [(angle, white_balance.apply_gains(rgba, gains)) for angle, rgba in plates]
+            logging.info(f"{len(plates)} finger plates from {run_id or finger_dir}: "
+                         f"lit at RGB {np.round(illuminant, 3)}, neutralized by {np.round(gains, 3)}")
+        else:
+            logging.info(f"{len(plates)} finger plates from {run_id or finger_dir}")
     return [sorted(plates) for _, plates in sorted(by_run.items())]
 
 
@@ -338,12 +414,18 @@ def paste_rgba(canvas, rgba, top_left):
 
 
 def photometric(image, rng):
-    """Exposure, white balance, noise, motion blur and JPEG quality.
+    """Colour temperature, exposure, white balance, noise, motion blur and JPEG quality.
 
     Motion blur especially: live frames have it and no captured plate does, so without
     it the model can key on sharpness to tell synthetic from real - which it cannot do
     at eval, where everything is real and half of it is blurred.
+
+    The temperature comes first because it is the light in the room, not something the
+    camera did: the ingredients have each been neutralized on the way in, so this is what
+    puts a cast back, and it re-lights the whole frame at once the way a room does. The
+    per-channel jitter below stays, on top of it, for everything that is the camera.
     """
+    image = white_balance.apply_gains(image, white_balance.random_illuminant_gains(rng))
     out = image.astype(np.float32)
     out *= rng.uniform(0.75, 1.3)
     out *= np.array([rng.uniform(0.94, 1.06) for _ in range(3)], dtype=np.float32)
@@ -376,7 +458,8 @@ def axis_from_wrist_offset(offset_deg):
     return math.radians(AXIS_FROM_WRIST_SIGN * float(offset_deg))
 
 
-def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng):
+def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
+            object_gains=None):
     """One synthetic frame and its labels.
 
     The winner - the object the target head is trained to point at - is whichever
@@ -405,6 +488,8 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng)
         if bgra is None:
             continue
         rgba = bgra[:, :, [2, 1, 0, 3]]
+        if object_gains:
+            rgba = white_balance.apply_gains(rgba, object_gains[entry.get("run_id", "")])
         scale = capped_scale(
             (IMAGE_SIZE[0] / entry.get("capture_width", IMAGE_SIZE[0]))
             * float(entry["range_m"]) / target_range,
@@ -516,13 +601,19 @@ def annotate(frame, row, candidates):
 def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger_dir=None,
              ranges_from=None, annotate_dir=None, annotate_count=40,
              floor_cache_mb=FLOOR_CACHE_MB, shard_mb=SHARD_MB):
-    floor_plates = load_floorplates(plate_dir, budget_mb=floor_cache_mb, seed=seed)
+    # Every ingredient is neutralized as it loads, each measured against its own capture,
+    # so the floor, the objects and the fingers in a composite agree on what white is.
+    # photometric then re-lights the finished frame at one random colour temperature, the
+    # way a room lights everything in it at once.
+    floor_plates, floor_illuminants = load_floorplates(plate_dir, budget_mb=floor_cache_mb, seed=seed)
     if not floor_plates:
         raise ValueError(f"no floorplates runs in {plate_dir}; nothing to build a background from")
+
     object_dir = Path(object_dir or Path(plate_dir) / "objects")
     objects = read_objects(object_dir)
     if not objects:
         logging.warning(f"no object cutouts in {object_dir}; every frame will be bare floor")
+    object_gains = cutout_gains(objects, floor_illuminants)
     finger_plates = load_finger_plates(finger_dir or Path(plate_dir) / "fingers")
     if len(finger_plates) > 1:
         logging.info(f"{len(finger_plates)} sets of fingers; each frame picks one")
@@ -556,7 +647,7 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
     present = 0
     for index, target_range in enumerate(ranges):
         frame, row, candidates = compose(floor_plates, objects, object_dir,
-                                         finger_plates, target_range, rng)
+                                         finger_plates, target_range, rng, object_gains)
         row["image"] = encode_frame(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         row["frame_index"] = index
         writer.add(row)

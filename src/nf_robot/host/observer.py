@@ -104,10 +104,10 @@ FINGERPLATE_MAX_MISSES = 5
 # a gripper actually approaches from, and is what calibrates a plate's apparent scale
 # against the range it was taken at, so the compositor can rescale it to any simulated
 # height. Trimmed to by measurement, not by commanded altitude.
-PLATE_RANGES_M = (0.12, 0.28, 0.44, 0.60)
+PLATE_RANGES_M = (0.12, 0.28, 0.44, 0.60, 0.74)
 # (degrees/second, degrees) the continuous wrist sweep floor and object plates are
 # captured during. Slow enough that the pole does not swing and frames stay sharp.
-PLATE_WRIST_SPEED_DPS = 20.0
+PLATE_WRIST_SPEED_DPS = 24.0
 PLATE_SWEEP_DEGREES = 360.0
 # (seconds) how often a wrist speed command is repeated to keep the sweep going.
 WRIST_SPEED_REFRESH_S = 0.1
@@ -230,7 +230,7 @@ class AsyncObserver:
         self.config_path = config_path
         self.config = load_config(config_path)
         # What the configured pole affects on this robot: how far the gripper hangs below the
-        # gantry, which marker the gantry wears, and the pendulum it swings as.
+        # gantry, which marker the gantry has, and the pendulum it swings as.
         self.pole_geometry = model_constants.pole_geometry(self.config)
         self.pole = np.array([0, 0, self.pole_geometry.gantry_to_gripper])
         self.gantry_april_inv = invert_pose(self.pole_geometry.gantry_april)
@@ -639,6 +639,71 @@ class AsyncObserver:
         finally:
             self.slow_stop_all_spools()
 
+    async def measure_pendulum_length(self, decay_s=None):
+        """Measure what the gripper actually swings as, and report it against the config.
+
+        The pole a robot has is recorded in config.gripper.pole_type, but the number behind
+        it is an effective pendulum length: the gripper is a body with its own moment of
+        inertia, not a weight on a string, so the length that sets the swing frequency is
+        not something to measure with a tape. Swinging it and reading the frequency back
+        off the gyro is. Use this after changing a pole, a marker, or anything that moves
+        the gripper's mass, and put the answer in definitions.POLE_GEOMETRY.
+
+        The gripper's published swing model is no use here: it is fitted assuming the
+        configured frequency, so it would only ever confirm what it was told. This records
+        the raw gyro instead, over a free decay with nothing cancelling or driving it.
+
+        This is a motion task. Run it hanging clear, with room to swing.
+        """
+        # long enough for the spectrum to resolve the peak, short enough that the swing has
+        # not decayed into the noise by the end of it
+        decay_s = decay_s or 20.0
+
+        gc = self.gripper_client
+        if gc is None:
+            logger.warning('Measuring the pendulum requires a connected gripper')
+            return None
+
+        def report(action):
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=100.0, name="Measure Pendulum", current_action=action))
+
+        # anything still driving the gantry would show up in the gyro as a second frequency
+        was_cancelling = self.set_swing_cancellation(False)
+        try:
+            await gc.record_raw_gyro(True)
+            logger.info('Inducing a swing to measure the pendulum')
+            report('Inducing a swing...')
+            await self._induce_swing()
+            logger.info(f'Letting it swing freely for {decay_s:.0f}s')
+            report(f'Recording a free swing for {decay_s:.0f}s...')
+            await asyncio.sleep(decay_s)
+        finally:
+            await gc.record_raw_gyro(False)
+            self.slow_stop_all_spools()
+            if was_cancelling:
+                self.set_swing_cancellation(True)
+        # the last samples are still in flight when recording stops
+        await asyncio.sleep(0.5)
+
+        samples = gc.collect_raw_gyro()
+        freq, length = swing.measure_pendulum(samples)
+        if freq is None:
+            message = (f'No swing found in {len(samples)} gyro samples. Is the IMU '
+                       f'installed, and did the gripper have room to swing?')
+            logger.warning(message)
+            report(message)
+            return None
+
+        configured = self.pendulum.length
+        logger.info(f'Measured swing {freq:.4f} Hz ({1 / freq:.3f}s period) from '
+                    f'{len(samples)} gyro samples over {samples[-1, 0] - samples[0, 0]:.1f}s')
+        logger.info(f'Effective pendulum length {length:.4f} m; configured '
+                    f'{configured:.4f} m ({(length - configured) * 1000:+.0f} mm)')
+        report(f'{freq:.4f} Hz, effective length {length:.4f} m '
+               f'(configured {configured:.4f} m, {(length - configured) * 1000:+.0f} mm off)')
+        return length
+
     def _broadcast_swing_latency(self, latency):
         """Set config.swing_latency (in memory) and tell the UI. Does not persist;
         callers save_config only once a value is committed."""
@@ -881,6 +946,11 @@ class AsyncObserver:
             # Run the fine pass and emit progress so the debug-triggered run refines around
             # the coarse best and reports status just like the in-calibration invocation.
             r = await self.invoke_motion_task(self.calibrate_swing_latency(fine_pass=True, progress_range=(0.0, 100.0)))
+        if item.action.startswith('polecal'):
+            # 'polecal [seconds]' - how long to record the free decay for
+            parts = item.action.split()
+            decay_s = float(parts[1]) if len(parts) == 2 else None
+            r = await self.invoke_motion_task(self.measure_pendulum_length(decay_s))
         if item.action == 'reset_wrist':
              r = await self.gripper_client.send_commands({'reset_wrist': None})
         if item.action == 'spind':

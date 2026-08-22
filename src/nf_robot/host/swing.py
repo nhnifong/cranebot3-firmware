@@ -193,3 +193,157 @@ def select_min_residual(results):
     best = float((lats[lo] + lats[hi]) / 2)
     logger.info(f'Fully-damped latency range {lats[lo]:.3f}-{lats[hi]:.3f}s; picking center {best:.3f}s')
     return best
+
+
+# ===== measuring the pole =====
+
+# The swing has to be somewhere in here to be a swing at all: a 0.25m pendulum rings at
+# 1Hz and a 1.5m one at 0.4Hz, and anything outside that is a bumped gantry or gyro noise.
+FREQ_SEARCH_HZ = (0.35, 1.10)
+# A shorter recording holds too few swings to time; ~6 of them.
+MIN_RECORD_S = 8.0
+# resampling rate, comfortably above the swing but below the IMU's 100Hz
+RESAMPLE_HZ = 50.0
+# zero-pad the spectrum by this factor, so the coarse peak lands near enough to the real
+# one for a narrow band around it to contain the swing
+FFT_PAD = 8
+# half-width of that band, wide enough to keep the peak even when the coarse pick is a
+# little off, narrow enough that noise outside it cannot make a zero crossing
+BAND_HALF_WIDTH_HZ = 0.25
+# Stop reading once the swing has decayed to this fraction of its strongest. Past that
+# point the crossings are being timed off noise rather than off the pendulum.
+MIN_SWING_FRACTION = 0.25
+# fewer crossings than this is not a line worth fitting
+MIN_CROSSINGS = 6
+# How far the refined frequency may sit from the spectrum's peak. Beyond this the crossings
+# found something other than the swing, and the coarse peak is the safer answer.
+MAX_REFINEMENT_SHIFT = 0.10
+
+
+def length_for_frequency(freq_hz):
+    """Pendulum length in metres that swings at freq_hz."""
+    return GRAVITY / (2 * np.pi * freq_hz) ** 2
+
+
+def _resample(samples):
+    """Gyro samples on an even time grid, each axis with its bias removed.
+
+    The IMU loop is an asyncio sleep, so its samples come near 100Hz but never exactly,
+    and everything below wants uniform spacing. Removing each axis's mean takes the gyro's
+    bias out with it, which would otherwise be the loudest thing in the spectrum.
+    """
+    ts = samples[:, 0]
+    n = int((ts[-1] - ts[0]) * RESAMPLE_HZ)
+    grid = np.linspace(ts[0], ts[-1], n)
+    signal = np.stack([np.interp(grid, ts, samples[:, i]) - np.mean(samples[:, i])
+                       for i in (1, 2)])
+    return grid, signal
+
+
+def _coarse_frequency(signal):
+    """Loudest in-band frequency, from the spectrum of both gyro axes together.
+
+    A swing induced along one axis still leaks into the other as the gripper spins, so
+    summing the two spectra keeps that energy rather than making the caller pick an axis.
+    """
+    n = signal.shape[1]
+    spectrum = np.abs(np.fft.rfft(signal * np.hanning(n), n=n * FFT_PAD)).sum(axis=0)
+    freqs = np.fft.rfftfreq(n * FFT_PAD, 1 / RESAMPLE_HZ)
+    in_band = (freqs >= FREQ_SEARCH_HZ[0]) & (freqs <= FREQ_SEARCH_HZ[1])
+    if not in_band.any():
+        return None
+    return float(freqs[int(np.argmax(np.where(in_band, spectrum, 0.0)))])
+
+
+def _bandpass(signal, freq):
+    """Both axes with everything but a narrow band around freq removed."""
+    n = signal.shape[1]
+    spectrum = np.fft.rfft(signal)
+    freqs = np.fft.rfftfreq(n, 1 / RESAMPLE_HZ)
+    spectrum[:, (freqs < freq - BAND_HALF_WIDTH_HZ) | (freqs > freq + BAND_HALF_WIDTH_HZ)] = 0
+    return np.fft.irfft(spectrum, n=n)
+
+
+def _swinging_span(x, freq):
+    """The slice of a band-passed axis that still holds a real swing.
+
+    Amplitude is read as an RMS over one period, so a decay that runs into the noise floor
+    is cut off there rather than contributing crossings that time the noise.
+    """
+    width = max(3, int(RESAMPLE_HZ / freq))
+    rms = np.sqrt(np.convolve(x ** 2, np.ones(width) / width, mode='same'))
+    loud = rms >= MIN_SWING_FRACTION * rms.max()
+    start = int(np.argmax(loud))
+    quiet_after = np.argmax(~loud[start:])
+    return start, len(x) if quiet_after == 0 else start + int(quiet_after)
+
+
+def _refine_frequency(grid, filtered, freq):
+    """Frequency from the timing of the zero crossings, or None if there are too few.
+
+    The spectrum can only place the peak to within a bin, and a bin over a recording this
+    short is worth several millimetres of length. Crossing times carry the period far more
+    precisely, and unlike the spectrum they do not care that the swing is decaying - so
+    the peak picks the band and the crossings measure inside it.
+    """
+    x = filtered[int(np.argmax(filtered.std(axis=1)))]
+    start, end = _swinging_span(x, freq)
+    x, grid = x[start:end], grid[start:end]
+    if len(x) < RESAMPLE_HZ * 4 / freq:
+        return None
+
+    crossings = []
+    # half a period, so noise riding on a crossing cannot be counted as several
+    min_gap = 0.4 / freq
+    for i in np.where(np.sign(x[:-1]) != np.sign(x[1:]))[0]:
+        fraction = x[i] / (x[i] - x[i + 1])
+        t = grid[i] + fraction * (grid[i + 1] - grid[i])
+        if crossings and t - crossings[-1] < min_gap:
+            continue
+        crossings.append(t)
+
+    # the band-pass rings at the ends of the record, which moves the outermost crossings
+    if len(crossings) > MIN_CROSSINGS + 2:
+        crossings = crossings[1:-1]
+    if len(crossings) < MIN_CROSSINGS:
+        return None
+    # crossings come every half period, so a line through them has that for its slope
+    half_period = np.polyfit(np.arange(len(crossings)), crossings, 1)[0]
+    return float(1 / (2 * half_period))
+
+
+def measure_swing_frequency(samples):
+    """Swing frequency in Hz from raw gyro samples, or None if there is no swing in them.
+
+    samples is (n, 3) of (time, gyro x, gyro y) at whatever rate and jitter the gripper
+    delivered.
+    """
+    samples = np.asarray(samples, dtype=float)
+    if samples.ndim != 2 or samples.shape[0] < 2:
+        return None
+    if samples[-1, 0] - samples[0, 0] < MIN_RECORD_S:
+        return None
+
+    grid, signal = _resample(samples)
+    coarse = _coarse_frequency(signal)
+    if coarse is None:
+        return None
+    refined = _refine_frequency(grid, _bandpass(signal, coarse), coarse)
+    if refined is None or abs(refined - coarse) / coarse > MAX_REFINEMENT_SHIFT:
+        return coarse
+    return refined
+
+
+def measure_pendulum(samples):
+    """(frequency in Hz, effective length in metres) from raw gyro samples.
+
+    The effective length is what the swing behaves as, not the pole's own length: the
+    gripper is a body with its own moment of inertia hanging on the end of it, so this is
+    measured rather than reached for with a tape. It is the number POLE_GEOMETRY wants.
+
+    Returns (None, None) when the recording holds no usable swing.
+    """
+    freq = measure_swing_frequency(samples)
+    if freq is None or freq <= 0:
+        return None, None
+    return freq, length_for_frequency(freq)
