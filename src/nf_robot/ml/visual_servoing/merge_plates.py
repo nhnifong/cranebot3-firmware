@@ -24,8 +24,8 @@ Usage:
         --from /mnt/contractor/plates nathanielnifong/stringman-plates --dry_run
     python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all --list
     python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all --prune
-    python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all \
-        --upload nathanielnifong/stringman-plates
+    python -m nf_robot.ml.visual_servoing.merge_plates --into plates \
+            --upload naavox/plates-macbook
 """
 
 import argparse

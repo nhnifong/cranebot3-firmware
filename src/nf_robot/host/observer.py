@@ -107,7 +107,7 @@ FINGERPLATE_MAX_MISSES = 5
 PLATE_RANGES_M = (0.12, 0.28, 0.44, 0.60, 0.74)
 # (degrees/second, degrees) the continuous wrist sweep floor and object plates are
 # captured during. Slow enough that the pole does not swing and frames stay sharp.
-PLATE_WRIST_SPEED_DPS = 24.0
+PLATE_WRIST_SPEED_DPS = 30.0
 PLATE_SWEEP_DEGREES = 360.0
 # (seconds) how often a wrist speed command is repeated to keep the sweep going.
 WRIST_SPEED_REFRESH_S = 0.1
