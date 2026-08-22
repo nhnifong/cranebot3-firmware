@@ -37,7 +37,7 @@ import subprocess
 import zipfile
 from packaging.version import parse as parse_version, InvalidVersion
 
-from nf_robot.common.pose_functions import compose_poses
+from nf_robot.common.pose_functions import compose_poses, invert_pose
 from nf_robot.common.cv_common import *
 from nf_robot.common.config_loader import *
 import nf_robot.common.definitions as model_constants
@@ -49,9 +49,10 @@ from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
 from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
 from nf_robot.host.component_client import max_origin_detections
-from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vector, OMEGA,
+from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vector,
                                               ROUTE_TAG_MAX_AGE_S, CAPTURE_RESOLUTION_SIZE,
                                               OPEN, CLOSED, RANGE_MAX_AGE_S)
+from nf_robot.host import swing
 from nf_robot.host.visual_servo import VisualServo, SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
@@ -134,9 +135,8 @@ SERVO_MODE_OBSERVE = 'observe'
 SERVO_MODE_CENTER = 'center'
 SERVO_MODES = (SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER)
 
-POLE = np.array([0,0,0.5334])
-# distance from the tip of the pole (POLE[2] below the gantry) down to the bottom of the
-# arp gripper fingers when they hang straight. gantry -> fingertip is POLE[2] + this.
+# distance from the tip of the pole (self.pole[2] below the gantry) down to the bottom of
+# the arp gripper fingers when they hang straight. gantry -> fingertip is self.pole[2] + this.
 GRIPPER_FINGER_LEN_M = 0.18
 GRIPPER_HEIGHT_OVER_TARGET = np.array([0,0,0.3])
 
@@ -229,6 +229,12 @@ class AsyncObserver:
         # TODO allow a command line argument to override the config file path
         self.config_path = config_path
         self.config = load_config(config_path)
+        # What the configured pole makes of this robot: how far the gripper hangs below the
+        # gantry, which marker the gantry wears, and the pendulum it swings as.
+        self.pole_geometry = model_constants.pole_geometry(self.config)
+        self.pole = np.array([0, 0, self.pole_geometry.gantry_to_gripper])
+        self.gantry_april_inv = invert_pose(self.pole_geometry.gantry_april)
+        self.pendulum = swing.pendulum_for(self.config)
         self.telemetry_env = telemetry_env
         self.debug = debug
         self.loop_monitor = None  # only created in main() when --debug is passed
@@ -533,9 +539,9 @@ class AsyncObserver:
             # derive target position from target
             target = self.target_queue.get_target_info(item.target_id)
             if target is not None:
-                goal_pos = tonp(target.position) + GRIPPER_HEIGHT_OVER_TARGET + POLE
+                goal_pos = tonp(target.position) + GRIPPER_HEIGHT_OVER_TARGET + self.pole
         elif item.pos is not None:
-            goal_pos = tonp(item.pos) + GRIPPER_HEIGHT_OVER_TARGET + POLE
+            goal_pos = tonp(item.pos) + GRIPPER_HEIGHT_OVER_TARGET + self.pole
 
         if goal_pos is None:
             return
@@ -622,21 +628,14 @@ class AsyncObserver:
     async def _induce_swing(self, direction=np.array([1.0, 0.0, 0.0]), cycles=2, speed=0.05):
         """Pump the gripper into a swing by driving the gantry back and forth at
         the pendulum's resonant frequency.
-
-        Moving the pivot (gantry) one way for half a pendulum period and back for
-        the other half repeatedly adds energy in phase with the swing, the same
-        way you pump a playground swing. A couple of cycles builds a clean,
-        repeatable swing to measure against. The gantry returns to roughly where
-        it started, so this does not require an accurate absolute position.
         """
-        half_period = np.pi / OMEGA  # half of one pendulum swing
         direction = np.asarray(direction, dtype=float)
         try:
             for _ in range(cycles):
                 await self.move_direction_speed(direction, speed, downward_bias=0)
-                await asyncio.sleep(half_period)
+                await asyncio.sleep(self.pendulum.half_period)
                 await self.move_direction_speed(-direction, speed, downward_bias=0)
-                await asyncio.sleep(half_period)
+                await asyncio.sleep(self.pendulum.half_period)
         finally:
             self.slow_stop_all_spools()
 
@@ -670,22 +669,15 @@ class AsyncObserver:
         residual swing. So we induce a fresh swing, run cancellation for a while,
         and report the average swing over the last few periods. Lower is better.
 
-        Returns (residual, abort_reason):
-          - pumped past the safety cap  -> residual = cap (definitively bad)
-          - drifted out of the workspace -> residual = None (never settled, ignore)
+        Returns (residual, abort_reason); see Pendulum.trial_residual for what each abort
+        scores.
         """
         RUN_PERIODS = 6.4          # how many pendulum periods to run cancellation per trial (main time cost)
-        MEASURE_PERIODS = 3        # average the swing over this many final periods
         SETTLE_S = 0.5             # pause after inducing, before turning cancellation on
-        SAFETY_AMP_RAD = 0.4       # stop early if the swing grows past this
         DRIFT_LIMIT_M = 0.6        # stop early if the gantry wanders this far
         LOOP_S = 1 / 100
-        MIN_SAMPLES = 10
-        ALTITUDE_HOLD_GAIN = 4.0       # 1/s, proportional gain pulling z back to the start altitude
-        ALTITUDE_HOLD_MAX_MPS = 0.15   # cap on the vertical hold speed
 
         gc = self.gripper_client
-        period = 2 * np.pi / OMEGA
 
         # A fresh, modest swing so every candidate starts comparably. Cancellation
         # is off during the settle pause, so it cannot pump.
@@ -702,13 +694,11 @@ class AsyncObserver:
         start = time.time()
         aborted = None
         try:
-            while (t := time.time() - start) < RUN_PERIODS * period:
+            while (t := time.time() - start) < RUN_PERIODS * self.pendulum.period:
                 now = time.time()
                 v = gc.compute_swing_correction(now + latency)
                 vx, vy = (float(v[0]), float(v[1])) if v is not None else (0.0, 0.0)
-                # Actively hold altitude. 
-                z_error = center_pos[2] - self.pe.gant_pos[2]
-                vz = float(np.clip(ALTITUDE_HOLD_GAIN * z_error, -ALTITUDE_HOLD_MAX_MPS, ALTITUDE_HOLD_MAX_MPS))
+                vz = swing.altitude_hold_velocity(center_pos[2] - self.pe.gant_pos[2])
                 await self.move_direction_speed(np.array([vx, vy, vz]), key='swingc', downward_bias=0)
                 # passive_safety raised a tension trip; bail out so the caller can back off and retry.
                 if self.tension_over_limit:
@@ -719,7 +709,7 @@ class AsyncObserver:
                 if amp is not None:
                     ts.append(t)
                     amps.append(amp)
-                    if amp > SAFETY_AMP_RAD:
+                    if amp > swing.SAFETY_AMP_RAD:
                         aborted = 'amp_cap'
                         logger.warning(f'latency {latency:.3f}s pumped past cap; stopping (counts as bad)')
                         break
@@ -734,16 +724,7 @@ class AsyncObserver:
             self.slow_stop_all_spools()
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
 
-        ts, amps = np.array(ts), np.array(amps)
-        if aborted == 'tension':
-            return None, aborted
-        if aborted == 'amp_cap':
-            return SAFETY_AMP_RAD, aborted
-        if aborted == 'drift' or len(amps) < MIN_SAMPLES:
-            return None, aborted
-        late = amps[ts > ts[-1] - MEASURE_PERIODS * period]
-        residual = float(np.mean(late)) if len(late) else float(np.mean(amps))
-        return residual, aborted
+        return self.pendulum.trial_residual(ts, amps, aborted), aborted
 
     async def calibrate_swing_latency(self, fine_pass=False, progress_range=None):
         """Tune config.swing_latency by finding the value that damps the swing best.
@@ -766,11 +747,6 @@ class AsyncObserver:
         around the coarse best; the early stop only applies then, since the fine pass is what
         supplies the trials MIN_TRIALS wants.
         """
-        COARSE_CANDS = (0.3, 0.0, 0.6)  # seconds; spread wide enough to bracket the ideal even under heavy loop contention
-        COARSE_GOOD_ENOUGH_RAD = 0.15   # a coarse trial damped this well is worth refining around immediately
-        FINE_HALF_WIDTH = 0.15       # fine pass spans +/- this around the coarse best (covers the gap between coarse samples)
-        FINE_COUNT = 7
-        FINE_CLIP = (0.0, 0.75)      # keep refined candidates within a sane latency range
         DRIFT_LIMIT_M = 0.6          # recenter between trials once drift exceeds this
         MIN_TRIALS = 3               # need at least this many good trials to choose
         TENSION_BACKOFF_S = 1.1      # wait this long after a tension trip before retrying a trial
@@ -834,14 +810,14 @@ class AsyncObserver:
         self.tension_over_limit = False  # clear any stale trip so the first trial isn't cut short
         self.swing_cal_in_progress = True  # let passive_safety recover (not abort) on a tension trip here
         try:
-            coarse = await sweep(COARSE_CANDS, stop_below=COARSE_GOOD_ENOUGH_RAD if fine_pass else None)
+            coarse = await sweep(swing.COARSE_CANDS,
+                                 stop_below=swing.COARSE_GOOD_ENOUGH_RAD if fine_pass else None)
             if coarse and fine_pass:
                 best_coarse = min(coarse, key=lambda r: r[1])[0]
                 # Recenter before the fine pass so the trials we care about start with
                 # full drift headroom and don't get cut short.
                 await self._recenter_gantry(center_pos)
-                fine = np.clip(np.linspace(best_coarse - FINE_HALF_WIDTH, best_coarse + FINE_HALF_WIDTH, FINE_COUNT), *FINE_CLIP)
-                await sweep(sorted(set(np.round(fine, 3))))
+                await sweep(swing.fine_candidates(best_coarse))
         finally:
             # Do not clear tension_over_limit here: on a max-retry abort it must survive to the
             # calibration's CancelledError handler so it can report the tension reason.
@@ -857,44 +833,10 @@ class AsyncObserver:
             self._broadcast_swing_latency(original_latency)
             return None
 
-        best = self._select_min_residual(all_results)
+        best = swing.select_min_residual(all_results)
         self._broadcast_swing_latency(best)
         save_config(self.config, self.config_path)
         logger.info(f'Calibrated swing_latency = {best:.3f}s')
-        return best
-
-    @staticmethod
-    def _select_min_residual(results):
-        """Pick the center of the range of latencies that all damp the swing fully.
-
-        The swing measurement can't read below a small floor (~20 mrad), so every
-        latency that fully damps ties near that floor -- the best isn't a single
-        point but a range. Any latency in that range works; we return its midpoint,
-        which sits farthest from the edges where damping starts to fail and is more
-        repeatable than picking an edge.
-
-        results is a list of (latency, residual). Duplicate latencies keep their
-        best reading so one bad settle doesn't reject an otherwise-good latency.
-        """
-        FLOOR_MARGIN = 0.010   # "as good as the best" = within this (or 50%) of the smallest residual
-
-        groups = defaultdict(list)
-        for lat, r in results:
-            groups[round(lat, 3)].append(r)
-        lats = np.array(sorted(groups))
-        resid = np.array([min(groups[l]) for l in lats])
-
-        rmin = float(resid.min())
-        at_floor = resid <= rmin + max(0.5 * rmin, FLOOR_MARGIN)
-
-        i0 = int(np.argmin(resid))
-        lo = hi = i0
-        while lo - 1 >= 0 and at_floor[lo - 1]:
-            lo -= 1
-        while hi + 1 < len(lats) and at_floor[hi + 1]:
-            hi += 1
-        best = float((lats[lo] + lats[hi]) / 2)
-        logger.info(f'Fully-damped latency range {lats[lo]:.3f}-{lats[hi]:.3f}s; picking center {best:.3f}s')
         return best
 
     async def _handle_debug_command(self, item: control.Debug):
@@ -1128,7 +1070,7 @@ class AsyncObserver:
                 await asyncio.sleep(0.1)
                 if not name in self.config.named_positions:
                     continue
-                goal = tonp(self.config.named_positions[name]) + POLE
+                goal = tonp(self.config.named_positions[name]) + self.pole
                 if chase_task is None or chase_task.done():
                     chase_task = asyncio.create_task(self.seek_goal(goal))
                 else:
@@ -1149,7 +1091,7 @@ class AsyncObserver:
                 while not source in self.config.named_positions:
                     await asyncio.sleep(0.5)
                 # go to position
-                goal = tonp(self.config.named_positions[source]) + POLE + GRIPPER_HEIGHT_OVER_TARGET
+                goal = tonp(self.config.named_positions[source]) + self.pole + GRIPPER_HEIGHT_OVER_TARGET
                 await self.seek_goal(goal)
 
                 # auto grasp
@@ -1161,7 +1103,7 @@ class AsyncObserver:
                 while not dest in self.config.named_positions:
                     await asyncio.sleep(0.5)
                 # go to position
-                goal = tonp(self.config.named_positions[dest]) + POLE + GRIPPER_HEIGHT_OVER_TARGET
+                goal = tonp(self.config.named_positions[dest]) + self.pole + GRIPPER_HEIGHT_OVER_TARGET
                 await self.seek_goal(goal)
 
                 # drop
@@ -2009,7 +1951,7 @@ class AsyncObserver:
             for a in self.anchors.values():
                 a.save_raw = True
 
-            analyze_diamond_data(results, anchor_poses, tilts)
+            analyze_diamond_data(results, anchor_poses, tilts, gantry_marker_inv=self.gantry_april_inv)
 
             return results, line_deltas
 
@@ -2141,7 +2083,7 @@ class AsyncObserver:
                 # gantry altitudes to sample this card from, clamped under the top of the work area,
                 # deduplicated (a low ceiling can collapse several requests onto the same height), and
                 # ordered highest-first so we approach high and descend through the samples.
-                gant_zs = sorted({min(upper_z - 0.1, cpos[2] + POLE[2] + h) for h in HOVER_CAMERA_HEIGHTS_M}, reverse=True)
+                gant_zs = sorted({min(upper_z - 0.1, cpos[2] + self.pole[2] + h) for h in HOVER_CAMERA_HEIGHTS_M}, reverse=True)
 
                 # Fly toward the anchor-camera estimate at the highest sampled height (widest view, so
                 # the best chance to catch and center the card), but stop the moment the gripper camera
@@ -2170,10 +2112,10 @@ class AsyncObserver:
                 # it gives the length-delta constraints a vertical baseline to triangulate the eyelets.
                 samples = []
                 for i, gz in enumerate(gant_zs):
-                    # the camera hangs POLE below the gantry, so this is the height the camera (and
+                    # the camera hangs self.pole below the gantry, so this is the height the camera (and
                     # the rangefinder beside it) should end up at. Derived from the clamped gz rather
                     # than from h, so a height the ceiling cut short trims to what it can reach.
-                    target_range = gz - POLE[2] - cpos[2]
+                    target_range = gz - self.pole[2] - cpos[2]
                     if i == 0:
                         # hold the exact target altitude (auto_altitude would cruise at a fixed height and
                         # defeat the point of sampling several).
@@ -2846,9 +2788,10 @@ class AsyncObserver:
             tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
             # determine position of two anchors visually and guess at external eyelets.
             pass1_args = (raw_obs, None, None, None, None, tilts)
+            pass1_kwargs = {'diamond_size': self.diamond_size, 'gantry_marker_inv': self.gantry_april_inv}
             if self.rec_diagnostics:
-                self._record_calibration_diagnostics('anchors_pass1', optimize_arp_anchors, pass1_args, {'diamond_size': self.diamond_size})
-            async_result = self.pool.apply_async(optimize_arp_anchors, pass1_args, {'diamond_size': self.diamond_size})
+                self._record_calibration_diagnostics('anchors_pass1', optimize_arp_anchors, pass1_args, pass1_kwargs)
+            async_result = self.pool.apply_async(optimize_arp_anchors, pass1_args, pass1_kwargs)
             anchor_poses, eyelet_positions, floor_z, fit_info = async_result.get(timeout=30)
             if self.rec_diagnostics:
                 self._record_calibration_fitness('anchors_pass1', fit_info)
@@ -2882,11 +2825,11 @@ class AsyncObserver:
 
             # even without full calibration we should be able to make crude movements. go to the center
             # of the room just above the floor. This is the diamond's bottom point, so place the gantry
-            # such that the gripper fingertips (POLE[2] + GRIPPER_FINGER_LEN_M below the gantry) sit
+            # such that the gripper fingertips (self.pole[2] + GRIPPER_FINGER_LEN_M below the gantry) sit
             # floor_clearance_m above the floor.
             gant_z = min(
                 upper_z-0.1, # stay at least 0.1 under the top of the work area
-                POLE[2] + GRIPPER_FINGER_LEN_M + floor_clearance_m - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
+                self.pole[2] + GRIPPER_FINGER_LEN_M + floor_clearance_m - floor_z # mind that the origin card might be on a bed or a table, with the origin under the bed
             )
             await self.seek_goal(np.array([0, 0, gant_z]))
 
@@ -2911,7 +2854,8 @@ class AsyncObserver:
             r = await self.flush_tele_buffer()
 
             pass2_args = (raw_obs, diamond_data, None, None, line_deltas, tilts)
-            pass2_kwargs = {'diamond_size': self.diamond_size, 'yaw_reference': yaw_reference}
+            pass2_kwargs = {'diamond_size': self.diamond_size, 'yaw_reference': yaw_reference,
+                            'gantry_marker_inv': self.gantry_april_inv}
             if self.rec_diagnostics:
                 self._record_calibration_diagnostics('anchors_pass2', optimize_arp_anchors, pass2_args, pass2_kwargs)
             async_result = self.pool.apply_async(optimize_arp_anchors, pass2_args, pass2_kwargs)
@@ -2941,7 +2885,7 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Moving gripper to origin",
             ))
-            gant_z = min(upper_z-0.1, POLE[2] + 0.8 - floor_z)
+            gant_z = min(upper_z-0.1, self.pole[2] + 0.8 - floor_z)
             await self.seek_goal(np.array([0,0,gant_z]), head_turn=False)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -3028,6 +2972,7 @@ class AsyncObserver:
                         'diamond_size': self.diamond_size,
                         'yaw_reference': yaw_reference,
                         'initial_anchor_guesses': warm_anchors,
+                        'gantry_marker_inv': self.gantry_april_inv,
                     }
                     if self.rec_diagnostics:
                         self._record_calibration_diagnostics('anchors_pass3', optimize_arp_anchors, args, pass3_kwargs)
@@ -3175,7 +3120,7 @@ class AsyncObserver:
         no obstructions, so the traverse runs between the route source and destination
         (self.pnp_src -> self.pnp_dst), both at 1.5m altitude. The gantry flies directly to
         the source, pauses for 2 seconds, then traverses to the
-        destination. Through an ideal move the laser should read (1.5 - POLE - laser_offset)
+        destination. Through an ideal move the laser should read (1.5 - self.pole - laser_offset)
         the whole way. Aborts if the laser altitude drops below 0.2m or if the gantry comes
         within 0.4m of the ceiling (the z position of anchor 0).
         """
@@ -3183,7 +3128,7 @@ class AsyncObserver:
         MIN_LASER_ALTITUDE_M = 0.2
         CEILING_MARGIN_M = 0.4
         SAMPLE_INTERVAL_S = 0.02
-        ideal_laser_range = TEST_ALTITUDE_M - POLE[2] - model_constants.laser_offset
+        ideal_laser_range = TEST_ALTITUDE_M - self.pole[2] - model_constants.laser_offset
 
         # ceiling height for the proximity abort
         ceiling_z = self.pe.anchor_points[0][2]
@@ -4087,11 +4032,11 @@ class AsyncObserver:
 
     async def seek_goal(self, goal_pos, head_turn=False, auto_altitude=True):
         """
-        Fly the marker box to goal_pos, using the constantly updating marker box position
-        provided by the position estimator.
+        Fly the gantry to goal_pos, using the constantly updating gantry position provided
+        by the position estimator.
 
-        goal_pos is where the MARKER BOX goes, not the gripper. The gripper hangs POLE below
-        the marker box, so a caller aiming the gripper at something must add POLE to the goal.
+        goal_pos is where the GANTRY goes, not the gripper. The gripper hangs self.pole
+        below it, so a caller aiming the gripper at something must add self.pole to the goal.
 
         The goal is also published as self.goal_pos so it can be steered while in flight:
         assigning self.goal_pos retargets a running seek, and clear_goal() ends it.

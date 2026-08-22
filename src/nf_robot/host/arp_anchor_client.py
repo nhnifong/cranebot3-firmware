@@ -107,7 +107,7 @@ class ArpeggioAnchorClient(ComponentClient):
                 pose = np.array(compose_poses([
                     self.camera_pose, # config dependent
                     detection['p'], # the pose obtained just now
-                    gantry_april_inv, # constant
+                    self.ob.gantry_april_inv, # which marker the gantry has, per pole type
                 ]))
                 position = pose[1]
                 self.datastore.gantry_pos.insert(np.concatenate([[timestamp], [self.anchor_num], position]))

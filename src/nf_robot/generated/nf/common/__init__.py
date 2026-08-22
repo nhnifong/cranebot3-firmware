@@ -10,6 +10,7 @@ __all__ = (
     "EpisodeControl",
     "LerobotSessionStatus",
     "LerobotStatus",
+    "PoleType",
     "Pose",
     "RelayCreds",
     "RoutePoint",
@@ -221,6 +222,44 @@ class LerobotStatus(betterproto2.Enum):
             "LEROBOTSTATUS_EVAL_ACTIVE": 6,
             "LEROBOTSTATUS_EVAL_ALL_COMPLETE": 8,
             "LEROBOTSTATUS_ERROR": 7,
+        }
+
+
+class PoleType(betterproto2.Enum):
+    """
+    The pole the gripper hangs from, which sets the length of the pendulum the swing
+    model fits. Effective lengths are in common/definitions.py.
+    """
+
+    UNSPECIFIED = 0
+    """
+    pole type not recorded; treated as the ABS pole every robot shipped with first
+    """
+
+    ABS500 = 1
+    """
+    500mm printed ABS pole
+    """
+
+    CARBON400 = 2
+    """
+    400mm carbon pole, carrying the flat marker
+    """
+
+    @classmethod
+    def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
+        return {
+            0: "POLETYPE_UNSPECIFIED",
+            1: "POLETYPE_ABS500",
+            2: "POLETYPE_CARBON400",
+        }
+
+    @classmethod
+    def betterproto_renamed_proto_names_to_value(cls) -> dict[str, int]:
+        return {
+            "POLETYPE_UNSPECIFIED": 0,
+            "POLETYPE_ABS500": 1,
+            "POLETYPE_CARBON400": 2,
         }
 
 

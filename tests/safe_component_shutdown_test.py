@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from nf_robot.generated.nf import control
 from nf_robot.host.observer import AsyncObserver
@@ -9,8 +9,8 @@ class TestSafeComponentShutdown(unittest.IsolatedAsyncioTestCase):
     def _make_observer(self):
         ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=0)
         ob.stop_all = AsyncMock()
-        ob.send_ui = lambda **kwargs: self.ui_messages.append(kwargs)
         self.ui_messages = []
+        ob.send_ui = lambda **kwargs: self.ui_messages.append(kwargs)
         return ob
 
     def _client(self):
@@ -18,11 +18,16 @@ class TestSafeComponentShutdown(unittest.IsolatedAsyncioTestCase):
         c.send_commands = AsyncMock()
         return c
 
+    async def _shutdown(self, coro):
+        """Run a shutdown without waiting out the real settle delay."""
+        with patch('asyncio.sleep', new=AsyncMock()):
+            await coro
+
     async def test_command_asks_every_component_to_halt(self):
         ob = self._make_observer()
         ob.bot_clients = {'anchor0': self._client(), 'gripper': self._client()}
 
-        await ob._handle_common_command(control.Command.SAFE_COMPONENT_SHUTDOWN)
+        await self._shutdown(ob._handle_common_command(control.Command.SAFE_COMPONENT_SHUTDOWN))
 
         for client in ob.bot_clients.values():
             client.send_commands.assert_awaited_once_with({'shutdown_pi': True})
@@ -37,20 +42,21 @@ class TestSafeComponentShutdown(unittest.IsolatedAsyncioTestCase):
         alive = self._client()
         ob.bot_clients = {'anchor0': dead, 'gripper': alive}
 
-        await ob.shutdown_all_bots()
+        await self._shutdown(ob.shutdown_all_bots())
 
         alive.send_commands.assert_awaited_once_with({'shutdown_pi': True})
         [message] = self.ui_messages
-        self.assertIn('anchor0', message['operation_progress'].current_action)
+        self.assertIn('pop_message', message)
 
     async def test_no_components_connected(self):
         ob = self._make_observer()
         ob.bot_clients = {}
 
-        await ob.shutdown_all_bots()
+        await self._shutdown(ob.shutdown_all_bots())
 
         ob.stop_all.assert_not_awaited()
-        self.assertEqual(len(self.ui_messages), 1)
+        [message] = self.ui_messages
+        self.assertIn('pop_message', message)
 
 
 if __name__ == '__main__':

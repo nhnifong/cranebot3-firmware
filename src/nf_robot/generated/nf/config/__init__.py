@@ -117,6 +117,13 @@ class Gripper(betterproto2.Message):
     Rotation in radians
     """
 
+    pole_type: "_common__.PoleType" = betterproto2.field(
+        5, betterproto2.TYPE_ENUM, default_factory=lambda: _common__.PoleType(0)
+    )
+    """
+    Which pole this gripper hangs from, which sets its pendulum length.
+    """
+
 
 default_message_pool.register_message("nf.config", "Gripper", Gripper)
 

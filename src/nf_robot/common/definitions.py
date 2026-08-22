@@ -1,5 +1,8 @@
 import numpy as np
 from math import pi, sqrt
+from typing import NamedTuple
+
+from nf_robot.generated.nf import common
 
 # data obtained manually from onshape
 # poses are specified as tuples of (rvec, tvec) # ROTATION IS FIRST
@@ -27,6 +30,14 @@ gripper_grommet = (np.array([0,0,0], dtype=float), np.array([0,0.115,0.013], dty
 # position of the gripper center of gravity in the gripper reference frame. rotation is irrelevant
 gripper_cog = (np.array([0,0,0], dtype=float), np.array([0,0.055,0.011], dtype=float))
 
+# The two poles the gripper can hang on, as (effective pendulum length, gantry origin down
+# to gripper origin) in meters. PoleGeometry below says what each is for; a robot's pole is
+# in config.gripper.pole_type.
+pole_length_abs500 = 0.4526
+pole_offset_abs500 = 0.5334
+pole_length_carbon400 = 0.4350
+pole_offset_carbon400 = 0.5757
+
 # z offset of the gripper laser rangefinder from the origin of the gantry when the winch is zeroed.
 laser_offset = 0.14 # meters
 
@@ -39,9 +50,8 @@ anchor_wall_corner = (np.array([0,0,0], dtype=float), np.array([0.005978, 0.0894
 # rotation and translation vectors of the 'gantry' april tag in the gantry reference frame.
 # gantry_april = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105], dtype=float))
 gantry_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055], dtype=float))
-
-# position of the gantry keyring point in the gantry reference frame
-gantry_keyring = (np.array([0,0,0], dtype=float), np.array([0,0,0], dtype=float))
+# flat marker,
+gantry_flat_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.007, -0.0652], dtype=float))
 
 # position in front of a basket marker where objects should be dropped
 basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.10], dtype=float))
@@ -89,5 +99,35 @@ arp_anchor_camera = (np.array([0.0, 2.60449835, -1.75675632]), np.array([ 0.001,
 
 rpi_cam_3_wide_fov = np.array([102, 67])
 
-# Arp gripper pole length (m)
-arp_pole_length = 0.53
+
+class PoleGeometry(NamedTuple):
+    """Everything about the robot that the gripper's pole changes.
+
+    The gantry origin is where the support lines meet, so swapping the pole moves the
+    gripper, the marker, or both relative to that point. Which pole a robot has is in
+    config.gripper.pole_type; look the geometry up with pole_geometry().
+    """
+
+    # (m) effective pendulum length, gantry pivot to gripper center of mass. Sets the
+    # swing frequency the gripper's onboard fit and the host's cancellation both run at,
+    # so the wrong one lands the correction at the wrong phase. See host/swing.py.
+    swing_length: float
+    # (m) straight down from the gantry model origin to the gripper model origin
+    gantry_to_gripper: float
+    # where the gantry marker sits in the gantry frame, since the two poles carry
+    # different markers mounted at different points
+    gantry_april: tuple
+
+
+POLE_GEOMETRY = {
+    # A config with no pole recorded predates the field, so it belongs to a robot built
+    # with the ABS pole; config_loader backfills it to ABS500 on load.
+    common.PoleType.UNSPECIFIED: PoleGeometry(pole_length_abs500, pole_offset_abs500, gantry_april),
+    common.PoleType.ABS500: PoleGeometry(pole_length_abs500, pole_offset_abs500, gantry_april),
+    common.PoleType.CARBON400: PoleGeometry(pole_length_carbon400, pole_offset_carbon400, gantry_flat_april),
+}
+
+
+def pole_geometry(config):
+    """The PoleGeometry this robot's configured pole gives it."""
+    return POLE_GEOMETRY[config.gripper.pole_type]

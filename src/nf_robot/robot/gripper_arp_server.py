@@ -18,6 +18,7 @@ from adafruit_ads1x15 import ADS1015, AnalogIn, ads1x15 # analog2digital convert
 from nf_robot.robot.component_server import RobotComponentServer
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
 from nf_robot.common.util import remap, clamp, PID
+import nf_robot.common.definitions as model_constants
 
 """Server for the Arpeggio gripper: a pi zero 2W, Camera Module 3 Wide, and Stringman
 Gripper Hat."""
@@ -60,8 +61,10 @@ default_gripper_conf = {
     # Which component_server.stream_modes entry the camera runs, from gripper_stream_modes
     # below. A running stream restarts to pick up a change.
     'STREAM_MODE': 'gripper_control',
-    # (m) effective pole length for the swing model; the carbon pole alone is 0.4350
-    'POLE_LENGTH': 0.4526
+    # (m) effective pole length for the swing model. Only used until the host connects and
+    # sends the length its config.gripper.pole_type calls for, so this is the older pole:
+    # a gripper that is never told is one on a robot too old to have the field.
+    'POLE_LENGTH': model_constants.pole_length_abs500
 }
 
 

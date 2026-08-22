@@ -77,7 +77,7 @@ def room_yaw_offset(anchor_poses, yaw_reference):
     return np.arctan2(sin_term, cos_term)
 
 
-def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, diamond_size=DIAMOND_SIZE, yaw_reference=None):
+def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None, debug=False, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, diamond_size=DIAMOND_SIZE, yaw_reference=None, gantry_marker_inv=gantry_april_inv):
     """
     Computes the vector of residuals (differences) for least_squares.
 
@@ -148,7 +148,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                     marker_pose_cam
                 ]
                 if marker_name == 'gantry':
-                    pose_list.append(gantry_april_inv)
+                    pose_list.append(gantry_marker_inv)
                 
                 pose_in_room = compose_poses(pose_list)
                 
@@ -211,7 +211,7 @@ def multi_card_residuals(x, raw_obs, diamond_observations, initial_eyelets=None,
                         model_constants.arp_anchor_camera,
                         tilt_nodes[c],
                         pose_cam,
-                        gantry_april_inv
+                        gantry_marker_inv
                     ]
                     pose_in_room = compose_poses(pose_list)
                     points.append(pose_in_room[1])
@@ -529,7 +529,7 @@ class _OptTimeout(Exception):
     pass
 
 
-def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, time_budget_s=12.0, diamond_size=DIAMOND_SIZE, yaw_reference=None, initial_anchor_guesses=None):
+def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, time_budget_s=12.0, diamond_size=DIAMOND_SIZE, yaw_reference=None, initial_anchor_guesses=None, gantry_marker_inv=gantry_april_inv):
     """
     Finds optimal anchor poses AND external eyelet positions.
     
@@ -604,12 +604,12 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # Configure the state vector and args depending on whether we are freezing anchors
     if fixed_anchor_poses is not None:
         x0 = initial_eyelet_guesses.flatten()
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts, gripper_obs, diamond_size, yaw_reference)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, fixed_anchor_poses, line_deltas, cam_tilts, gripper_obs, diamond_size, yaw_reference, gantry_marker_inv)
     else:
         initial_anchor_flat = anchor_poses_to_use.flatten()
         initial_eyelet_flat = initial_eyelet_guesses.flatten()
         x0 = np.concatenate([initial_anchor_flat, initial_eyelet_flat])
-        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts, gripper_obs, diamond_size, yaw_reference)
+        opt_args = (raw_obs, diamond_observations, initial_eyelet_guesses, False, None, line_deltas, cam_tilts, gripper_obs, diamond_size, yaw_reference, gantry_marker_inv)
 
     logger.info('Running least squares optimization...')
     # Bound the wall-clock time: least_squares can occasionally thrash for many iterations on a
@@ -652,7 +652,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # cost breakdown as this pass's fitness score (lower is better; same formula every call,
     # so it's directly comparable across calibration attempts).
     logger.info("Final Optimization Costs:")
-    _, costs = multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs, diamond_size=diamond_size, yaw_reference=yaw_reference)
+    _, costs = multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs, diamond_size=diamond_size, yaw_reference=yaw_reference, gantry_marker_inv=gantry_marker_inv)
     fit_info = {
         'total_cost': float(sum(costs.values())),
         'costs': costs,
@@ -680,7 +680,7 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     return optimized_anchors, optimized_eyelets, floor_z, fit_info
 
 
-def analyze_diamond_data(diamond_observations, anchor_poses, cam_tilts=(22, 22)):
+def analyze_diamond_data(diamond_observations, anchor_poses, cam_tilts=(22, 22), gantry_marker_inv=gantry_april_inv):
     """
     Analyzes the raw diamond observations to determine their inherent planarity 
     and geometric consistency before passing them to the optimizer.
@@ -715,7 +715,7 @@ def analyze_diamond_data(diamond_observations, anchor_poses, cam_tilts=(22, 22))
                     model_constants.arp_anchor_camera,
                     tilt_nodes[c],
                     pose_cam,
-                    gantry_april_inv
+                    gantry_marker_inv
                 ]
                 pose_in_room = compose_poses(pose_list)
                 pts[c].append(pose_in_room[1]) # We just care about physical translation

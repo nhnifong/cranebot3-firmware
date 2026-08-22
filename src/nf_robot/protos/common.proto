@@ -91,6 +91,17 @@ enum AnchorType {
   ANCHORTYPE_ARPEGGIO = 2;
 }
 
+// The pole the gripper hangs from, which sets the length of the pendulum the swing
+// model fits. Effective lengths are in common/definitions.py.
+enum PoleType {
+  // pole type not recorded; treated as the ABS pole every robot shipped with first
+  POLETYPE_UNSPECIFIED = 0;
+  // 500mm printed ABS pole attached to the Box marker
+  POLETYPE_ABS500 = 1;
+  // 400mm carbon pole, attached to the flat marker
+  POLETYPE_CARBON400 = 2;
+}
+
 // Points which can be set as the source or destination for auto pick and drop.
 enum RoutePoint {
   ROUTEPOINT_NA = 0;

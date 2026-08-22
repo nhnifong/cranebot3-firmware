@@ -238,6 +238,10 @@ class TestEstimateGripper(unittest.TestCase):
         self.mock_datastore = MagicMock()
         self.mock_observer = MagicMock()
         self.mock_observer.config = create_default_config()
+        # how far the gripper hangs below the gantry, which the real observer takes from
+        # the configured pole
+        self.mock_observer.pole = np.array(
+            [0, 0, model_constants.pole_geometry(self.mock_observer.config).gantry_to_gripper])
 
         self.pe = Positioner2(self.mock_datastore, self.mock_observer)
 
@@ -246,15 +250,15 @@ class TestEstimateGripper(unittest.TestCase):
 
     def test_grip_pose_hangs_from_gantry_along_pole(self):
         """
-        grip_pose should be the gantry position translated downward by arp_pole_length,
-        rotated by whatever rvec the gripper client reports.
+        grip_pose should be the gantry position translated downward by the configured
+        pole offset, rotated by whatever rvec the gripper client reports.
         """
         self.mock_observer.gripper_client.get_gripper_rvec.return_value = np.zeros(3, dtype=float)
 
         self.pe.estimate_gripper()
 
         _, tvec = self.pe.grip_pose
-        expected = self.pe.gant_pos + np.array([0, 0, -model_constants.arp_pole_length])
+        expected = self.pe.gant_pos - self.mock_observer.pole
         np.testing.assert_array_almost_equal(tvec, expected)
 
     def test_no_gripper_client_leaves_grip_pose_unchanged(self):

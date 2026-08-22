@@ -40,6 +40,7 @@ def invert_pose(pose):
     return rvec_marker_to_cam.reshape((3,)), tvec_marker_to_cam
 
 # --- Precompute some inverted poses ---
+# The box marker, a fine default for this function when used in tests.
 gantry_april_inv = invert_pose(model_constants.gantry_april)
 gripper_imu_inv = invert_pose(model_constants.gripper_imu)
 

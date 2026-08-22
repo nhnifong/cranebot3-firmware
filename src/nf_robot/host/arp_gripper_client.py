@@ -15,6 +15,7 @@ from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.cv_common import SF_TARGET_SHAPE, OTHER_MARKERS, CAL_MARKERS
 from nf_robot.robot.component_server import stream_modes
+from nf_robot.host import swing
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,6 @@ R_imu_to_cam = np.array([
     [0,  -1, 0],
     [0,  0,  1]
 ])
-
-# pivot to center of gripper mass, which sets the pendulum's angular frequency
-LENGTH = 0.4526
-OMEGA = np.sqrt(9.81 / LENGTH)
-SWING_CANCEL_GAIN = -0.12
-CENTERING_GAIN = 0.4
 
 def rotate_vector(vec, rad):
     """Rotates a 2D vector [x, y] by a given angle in radians."""
@@ -89,6 +84,9 @@ class ArpeggioGripperClient(ComponentClient):
         self.route_tag_samples = defaultdict(lambda: deque(maxlen=ROUTE_TAG_HISTORY))
         self.gripper_swing_model = np.zeros((2,2))
         self.swing_model_ts = time.time()
+        # the pole this robot wears; send_config tells the gripper the same length so both
+        # ends fit and project the swing at one frequency
+        self.pendulum = swing.pendulum_for(self.config)
         self.finger_contact_calibration_complete = asyncio.Event()
         # set when the gripper replies to a query_angle_from_vertical request
         self.angle_from_vertical_received = asyncio.Event()
@@ -192,28 +190,12 @@ class ArpeggioGripperClient(ComponentClient):
         if sm is None or st is None:
             return None
 
-        latency_comp = future_time - st
-        look_ahead_angle = OMEGA * latency_comp
-        c_future, s_future = np.cos(look_ahead_angle), np.sin(look_ahead_angle)
-
-        # angular acceleration is the derivative of the gyro velocity, which for this
-        # model is omega * [-sin(theta), cos(theta)]
-        future_accel = OMEGA * (sm[:, 1] * c_future - sm[:, 0] * s_future)
-
-        # a gantry velocity opposing the gripper's angular velocity cancels the swing
-        raw_vel = future_accel * SWING_CANCEL_GAIN
+        raw_vel = self.pendulum.cancel_velocity(sm, future_time - st)
 
         dt = future_time - self._last_future_time
         self._last_future_time = future_time
-
-        # a paused control loop leaves a huge dt that would wreck the integrator
-        if dt > 0.5 or dt < 0:
-            dt = 0.0
-
-        # cancelling swing drifts the platform, so pull back toward where it started
-        centering_vel = self._swing_position_offset * CENTERING_GAIN
-        vel = raw_vel - centering_vel
-        self._swing_position_offset += vel * dt
+        vel, self._swing_position_offset = swing.integrate_centering(
+            raw_vel, self._swing_position_offset, dt)
 
         wrist = self.datastore.winch_line_record.getLast()[1]
         imu_to_room_z = wrist / 180 * np.pi + self.config.gripper.frame_room_spin - np.pi/2
@@ -270,37 +252,24 @@ class ArpeggioGripperClient(ComponentClient):
         return samples
 
     async def send_config(self):
-        pass
+        """Push host-side settings on every connect, before the gripper is used.
+
+        The gripper boots with a default pole length, so a robot wearing the other pole
+        fits its swing model at the wrong frequency until this arrives.
+        """
+        await self.websocket.send(json.dumps({'set_config_vars': {
+            'POLE_LENGTH': self.pendulum.length,
+        }}))
 
     def get_gripper_rvec(self, timestamp=None):
         """Tilt of the gripper in its own frame, wrist rotation excluded. timestamp reads
         it at that moment instead of now."""
-        if timestamp is None:
-            projected_state = self.gripper_swing_model
-        else:
-            # rotate the state matrix by however far the pendulum's phase has evolved
-            # since the model was last updated, giving A*sin and A*cos at that instant
-            dt = timestamp - self.swing_model_ts
-            angle = OMEGA * dt
-            c, s = np.cos(angle), np.sin(angle)
-            projected_state = self.gripper_swing_model @ np.array([[c, -s], [s, c]])
-
-        # displacement is the integral of velocity, so with col 0 velocity (A*sin) it is
-        # -A/omega*cos: the phase tracker in col 1, over omega
-        theta_x = projected_state[0, 1] / OMEGA
-        theta_y = projected_state[1, 1] / OMEGA
-        return np.array([theta_x, theta_y, 0])
+        dt = 0.0 if timestamp is None else timestamp - self.swing_model_ts
+        return self.pendulum.tilt(self.gripper_swing_model, dt)
 
     def get_swing_amplitude(self):
-        """Angular amplitude of the swing in radians, 0.0 if there is none (or no IMU).
-
-        Phase independent, so it can be read at any instant rather than by watching for a
-        peak over a full period.
-        """
-        sm = self.gripper_swing_model
-        if sm is None:
-            return 0.0
-        return float(np.linalg.norm(sm) / OMEGA)
+        """Angular amplitude of the swing in radians, 0.0 if there is none (or no IMU)."""
+        return self.pendulum.amplitude(self.gripper_swing_model)
 
     async def use_capture_stream(self):
         """Switch the gripper camera to stills-capture mode: higher res, lower fps.
@@ -384,7 +353,8 @@ class ArpeggioGripperClient(ComponentClient):
         * model_constants.gripper_camera places the card in the CAD 'gripper frame' (y-up:
           grommet at +y, optical axis looking down -y).
         * Rx(90 deg) re-expresses that in the z-up body frame the rest of the system uses.
-        * the gantry sits arp_pole_length up the +z body axis from the gripper origin.
+        * the gantry sits the configured pole offset up the +z body axis from the gripper
+          origin.
         * gripper_body_room_rotation() rotates the body frame into the room.
 
         Pass timestamp (the pose's capture time) when working from a buffered sample: the
@@ -395,7 +365,7 @@ class ArpeggioGripperClient(ComponentClient):
         card_in_gripper = compose_poses([model_constants.gripper_camera, pose_cam])[1]
         # re-express in the z-up body frame, then measure relative to the gantry (pole up +z)
         y_up_to_z_up = Rotation.from_euler('x', 90, degrees=True)
-        card_in_body = y_up_to_z_up.apply(card_in_gripper) - np.array([0.0, 0.0, model_constants.arp_pole_length])
+        card_in_body = y_up_to_z_up.apply(card_in_gripper) - self.ob.pole
         # rotate the card-relative-to-gantry vector into the room, then negate for gantry-card
         card_minus_gantry_room = self.gripper_body_room_rotation(timestamp).apply(card_in_body)
         return -card_minus_gantry_room

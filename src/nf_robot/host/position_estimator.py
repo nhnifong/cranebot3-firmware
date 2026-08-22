@@ -559,7 +559,7 @@ class Positioner2:
             rotvec = self.ob.gripper_client.get_gripper_rvec()
             self.grip_pose = compose_poses([
                 (rotvec, self.gant_pos),
-                (_ZERO_3, np.array([0,0,-model_constants.arp_pole_length], dtype=float)),
+                (_ZERO_3, -self.ob.pole),
             ])
 
     def detect_grip(self):

@@ -91,6 +91,9 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     # Gripper
     config.gripper = nf_config.Gripper()
     config.gripper.frame_room_spin = (50.0 / 180.0) * np.pi
+    # what a robot built today wears; load_config gives configs older than this field the
+    # ABS pole they were built with instead.
+    config.gripper.pole_type = common.PoleType.CARBON400
     
     # Preferred Cameras
     config.preferred_cameras = [0, 1]
@@ -168,6 +171,15 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
 
             # Backfill fields added after this config was first saved.
             default = create_default_config()
+            if c.gripper is None:
+                c.gripper = default.gripper
+                # nothing was recorded about this gripper at all, so it predates pole_type
+                c.gripper.pole_type = common.PoleType.UNSPECIFIED
+            # A config written before pole_type existed belongs to a robot built with the
+            # ABS pole, so it keeps the swing length it was calibrated against. Only a
+            # freshly created config gets the carbon pole.
+            if c.gripper.pole_type == common.PoleType.UNSPECIFIED:
+                c.gripper.pole_type = common.PoleType.ABS500
             if c.last_gantry_pos is None:
                 c.last_gantry_pos = default.last_gantry_pos
             if c.last_route_source == common.RoutePoint.NA:
