@@ -49,15 +49,9 @@ is a LeRobot dataset and the result is not:
 
        python -m nf_robot.ml.ortho_target train
 
-     The default backbone is a gated repo: DINOv3 needs an access application approved
-     by a human, and an HF_TOKEN wherever this runs. DINOv2 with registers is the
-     ungated stand-in, and needs no code change - only these two flags:
-
-       python -m nf_robot.ml.ortho_target train \
-           --backbone facebook/dinov2-with-registers-base --image_size 448
-
-     the dataset resizes to whatever --image_size asks for, and the checkpoint records the backbone
-     id and image size, so `evaluate` needs no flags at all.
+     The dataset resizes to whatever --image_size asks for, and the checkpoint records
+     the backbone id and image size, so `evaluate` needs no flags at all. See the DINOv3
+     footnote at the bottom for the backbone this used to default to.
 
   4. `evaluate` scores that checkpoint - or the published one, downloaded, if training
      has not run on this machine - against the held-out room, and --preview_dir
@@ -83,8 +77,9 @@ Train with the backbone frozen, which is what step 3 does by default. --unfreeze
 exists but is not the supported path, for three reasons that all point the same way: a
 few thousand samples is far too few to move an 86M-parameter trunk without memorising
 the floors it saw; frozen is what lets the observer serve this model and the visual
-servoing one from a single shared DINOv3 (ml/dino_trunk.py) rather than two copies of
-the same 327MB; and a frozen trunk is recoverable from backbone_id and a download, so
+servoing one from a single shared trunk (ml/dino_trunk.py) rather than two copies of
+the same 327MB - they default to the same backbone id, which is what makes that sharing
+happen; and a frozen trunk is recoverable from backbone_id and a download, so
 it stays out of the checkpoint and ortho_target.pth carries heads alone. A checkpoint
 trained unfrozen records "freeze": False, loads a private trunk and shares nothing -
 the model still runs, it just costs what it used to.
@@ -119,6 +114,25 @@ Caveats worth knowing before trusting the labels:
     gets a zeroed contact_vec, which is indistinguishable from "contact at the
     starting position". Reading the pressure directly is what makes those episodes
     skippable instead of silently mislabelled.
+
+Footnote: DINOv3.
+
+The backbone was facebook/dinov3-vitb16-pretrain-lvd1689m at 512 until 2026-08-23. It is
+gated - an approved access request plus an HF_TOKEN on every machine that trains or runs
+the model - and DINOv2 with registers scores the same on the visual servoing task, so
+there is no reason to prefer it. To train against it anyway:
+
+    python -m nf_robot.ml.ortho_target train \
+        --backbone facebook/dinov3-vitb16-pretrain-lvd1689m --image_size 512
+
+The image size moves with the backbone because the trunk's patch size has to divide it,
+and the grid has to stay a power-of-two multiple of the token grid: 512/16 and 448/14
+both give 32x32 tokens and a 128 grid, so nothing downstream of the trunk changes.
+
+A checkpoint carries its own backbone_id and image_size, so anything already trained
+keeps loading and running as it was - including the copy published at naavox/targeting,
+which is a DINOv3 model and still needs gated access to fetch its trunk. Retraining and
+republishing is what actually removes the gate for anyone downloading it.
 """
 
 import argparse
@@ -574,14 +588,16 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
 # MODEL
 # ==========================================
 
-DEFAULT_BACKBONE = "facebook/dinov3-vitb16-pretrain-lvd1689m"
-DEFAULT_IMAGE_SIZE = 512
+DEFAULT_BACKBONE = "facebook/dinov2-with-registers-base"
+# 448 = 14 x 32, so the /14 trunk gives a 32x32 token grid and DEFAULT_GRID stays a
+# power-of-two multiple of it. Moves with the backbone: a /16 trunk wants 512.
+DEFAULT_IMAGE_SIZE = 448
 DEFAULT_GRID = 128
 DEFAULT_MODEL_PATH = "models/ortho_target.pth"
 
 
 class OrthoTargetNet(SharedTrunkMixin, nn.Module):
-    """Frozen DINOv3 patch features -> one softmax over floor locations.
+    """Frozen DINOv2 patch features -> one softmax over floor locations.
 
     The output is a single categorical distribution over grid x grid cells.
     Several objects on the floor are all plausible

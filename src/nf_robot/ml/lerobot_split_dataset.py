@@ -18,12 +18,13 @@ not overlap.
 
 Outputs are named after the splits, `<repo_id>_train` and `<repo_id>_eval`, in the
 LeRobot home unless --new_root says otherwise. Downstream tools then find them by repo id
-with no path juggling; see visual_servoing/readme.md step 3.
+with no path juggling; see visual_servoing/readme.md step 3. --upload pushes both to the
+hub under those same names, replacing whatever is already there.
 
 Usage:
     python src/nf_robot/ml/lerobot_split_dataset.py \
         --repo_id naavox/combined_targets \
-        --root /home/nhn/data_scratch/combined_targets
+        --root /home/nhn/data_scratch/combined_targets --upload
 """
 
 import argparse
@@ -46,6 +47,24 @@ def dataset_root(repo_id, root=None):
     from lerobot.utils.constants import HF_LEROBOT_HOME
 
     return HF_LEROBOT_HOME / repo_id
+
+
+def split_outputs(repo_id, new_root=None):
+    """Where each half lands, as [(split repo id, directory), ...].
+
+    Mirrors what lerobot's split operation does with the names: `<repo_id>_<split>` in the
+    LeRobot home, or `<new_root>/<split>` when one is given.
+    """
+    outputs = []
+    for name in ("train", "eval"):
+        split_repo = f"{repo_id}_{name}"
+        if new_root:
+            outputs.append((split_repo, Path(new_root) / name))
+        else:
+            from lerobot.utils.constants import HF_LEROBOT_HOME
+
+            outputs.append((split_repo, HF_LEROBOT_HOME / split_repo))
+    return outputs
 
 
 def total_episodes(root):
@@ -82,6 +101,9 @@ def main():
     parser.add_argument("--seed", type=int, default=0,
                         help="Reruns with the same seed give the same split, which is "
                              "what lets the two halves be mined at different times")
+    parser.add_argument("--upload", action="store_true",
+                        help="Push both halves to the hub as <repo_id>_train and "
+                             "<repo_id>_eval, replacing whatever is at those ids")
     parser.add_argument("--dry_run", action="store_true",
                         help="Print the split and the command, and stop")
     args = parser.parse_args()
@@ -103,10 +125,26 @@ def main():
     if args.new_root:
         command += ["--new_root", args.new_root]
 
+    outputs = split_outputs(args.repo_id, args.new_root)
     if args.dry_run:
         logging.info(" ".join(command))
+        for split_repo, path in outputs:
+            logging.info(f"would write {path}" + (f", upload to {split_repo}" if args.upload else ""))
         return
-    sys.exit(subprocess.call(command))
+
+    returncode = subprocess.call(command)
+    if returncode or not args.upload:
+        sys.exit(returncode)
+
+    # Reused rather than reimplemented: a plain upload_folder publishes a dataset with no
+    # frames in it (os.walk does not follow the symlinked video directory) and no version
+    # tag (which is how lerobot resolves a repo at all). Both are silent.
+    from nf_robot.ml.visual_servoing.recover_spin import upload_dataset
+
+    for split_repo, path in outputs:
+        logging.info(f"uploading {path} to {split_repo}")
+        upload_dataset(path, split_repo, what=f"a {args.eval_fraction:g} random split "
+                                              f"of {args.repo_id}, seed {args.seed}")
 
 
 if __name__ == "__main__":

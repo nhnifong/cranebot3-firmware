@@ -316,8 +316,8 @@ def _stat(key, spin):
     return float(np.mean(spin))
 
 
-def upload_dataset(root: Path, repo_id: str):
-    """Publish a recovered dataset, with the two things a raw folder upload leaves out.
+def upload_dataset(root: Path, repo_id: str, what="the recovered spin field"):
+    """Publish a LeRobot dataset, with the two things a raw folder upload leaves out.
 
     The videos are a symlink into the cache of whatever this was recovered from, and
     upload_folder walks with os.walk, which does not follow symlinked directories - a
@@ -337,12 +337,12 @@ def upload_dataset(root: Path, repo_id: str):
 
     api.upload_folder(folder_path=str(root), repo_id=repo_id, repo_type="dataset",
                       ignore_patterns=["videos*", ".DS_Store"],
-                      commit_message="state and metadata with the recovered spin field")
+                      commit_message=f"state and metadata with {what}")
     videos = root / "videos"
     if videos.exists():
         api.upload_folder(folder_path=str(videos.resolve()), path_in_repo="videos",
                           repo_id=repo_id, repo_type="dataset",
-                          commit_message="videos, unchanged from the source dataset")
+                          commit_message="videos")
     else:
         logging.warning(f"no videos under {root}; the upload will not be mineable. "
                         f"Recover again with --videos to fetch them.")

@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 
-"""The visual servoing network: frozen DINOv3 patch tokens -> where the object is.
+"""The visual servoing network: frozen DINOv2 patch tokens -> where the object is.
 
 The model predicts where the target is, not how fast to move, because the position
 Something downstream turns a position into a velocity, the way
 observer.py's _center_card_in_view already does.
 
-    input   448x256 RGB, the gripper camera at its native aspect
+    input   448x252 RGB, the gripper camera at its native aspect
             plus laser_rangefinder, finger_angle and target_force
 
-    trunk   frozen DINOv3 ViT-B/16, last 4 hidden states, patch tokens only
-              -> concat on channels                     (B, 3072, 16, 28)
-            Conv2d(3072 -> 256, 1x1), GroupNorm, GELU   (B,  256, 16, 28)
+    trunk   frozen DINOv2 ViT-B/14, last 4 hidden states, patch tokens only
+              -> concat on channels                     (B, 3072, 18, 32)
+            Conv2d(3072 -> 256, 1x1), GroupNorm, GELU   (B,  256, 18, 32)
             FiLM from the state vector
-            self-attention blocks over 448 tokens       (B,  256, 16, 28)
-            bilinear x2, Conv 3x3 -> 128, GN, GELU      (B,  128, 32, 56)
+            self-attention blocks over 576 tokens       (B,  256, 18, 32)
+            bilinear x2, Conv 3x3 -> 128, GN, GELU      (B,  128, 36, 64)
 
     heads   1. target position, 3D, in the gripper camera frame
             2. grasp axis, 2 channels, read from the winning cell
@@ -25,13 +25,10 @@ observer.py's _center_card_in_view already does.
 The self-attention blocks are the one real addition over OrthoTargetNet in
 ortho_target.py, whose decoder this otherwise follows.
 
-The backbone is gated on the hub and so is a barrier to anyone reproducing this.
-facebook/dinov2-with-registers-base is the ungated stand-in, and everything above holds
-for it - same 768-wide 12-layer ViT-B, registers ahead of the patch tokens, ImageNet
-normalization - except that it is a /14 model. 448x252 is then the input (32x18 tokens,
-64x36 cells of about 10.5px), and 252 rather than 256 has to be what the dataset was
-written at, because nothing here resizes a stored frame. readme.md, "Training on the
-ungated backbone", is the whole procedure.
+The input size is tied to the backbone's patch size and to the size the dataset was
+written at, because nothing here resizes a stored frame. 448x252 is 14 x (32, 18).
+Swapping backbones therefore means re-mining; readme.md's DINOv3 footnote has the
+details and the failure mode.
 """
 
 import math
@@ -43,16 +40,15 @@ from torch import nn
 
 from nf_robot.ml.dino_trunk import SharedTrunkMixin, drop_trunk_weights
 
-DEFAULT_BACKBONE = "facebook/dinov3-vitb16-pretrain-lvd1689m"
-# (width, height). 28x16 tokens at /16, within 1.5% of the gripper camera's native
-# 684x384 aspect ratio.
-DEFAULT_IMAGE_SIZE = (448, 256)
+DEFAULT_BACKBONE = "facebook/dinov2-with-registers-base"
+# (width, height). 32x18 tokens at /14, and exactly the gripper camera's native 16:9.
+DEFAULT_IMAGE_SIZE = (448, 252)
 # The head predicts over 1.5x the frame extent, so normalized coordinates run
 # -0.25..1.25 and an object just past an edge has a real cell instead of being clamped
 # to the border. That case is the whole reason this model exists.
 CANVAS_SCALE = 1.5
-# Cells per token, i.e. how far the decoder upsamples. 2 gives 32x56 cells of about
-# 12px each, and the offset head takes precision below that.
+# Cells per token, i.e. how far the decoder upsamples. 2 gives 36x64 cells of about
+# 10.5px each, and the offset head takes precision below that.
 CELLS_PER_TOKEN = 2
 # laser_rangefinder, finger_angle, target_force. Deliberately not the previous velocity
 # (the shortcut that teaches "keep doing what you were doing") and not the measured
@@ -132,7 +128,7 @@ class AttentionBlock(nn.Module):
 
 
 class VisualServoNet(SharedTrunkMixin, nn.Module):
-    """Frozen DINOv3 patch features -> target position, grasp axis, finger, flags."""
+    """Frozen DINOv2 patch features -> target position, grasp axis, finger, flags."""
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
@@ -192,7 +188,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
         # centred object.
         global_dim = hidden * 2 + state_dim
         self.global_head = nn.Sequential(
-            # LayerNorm first, and it is load-bearing: DINOv3's [CLS] comes out with a
+            # LayerNorm first, and it is load-bearing: the trunk's [CLS] comes out with a
             # large norm, which drives the finger head's tanh straight into saturation
             # where its gradient is zero and it never trains at all. The spatial heads
             # do not have this problem because GroupNorm rescales the trunk for them.

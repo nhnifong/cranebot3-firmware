@@ -454,26 +454,17 @@ hf upload naavox/targeting models/target_heatmap.pth target_heatmap.pth
 hf upload naavox/centering models/square_centering.pth square_centering.pth
 ```
 
-## Training without the gated backbone
+## Backbone
 
-`facebook/dinov3-vitb16-pretrain-lvd1689m` is the default trunk for both `ortho_target`
-and `visual_servoing`, and it is a gated repo — access is granted by manual review, and
-every machine that trains or runs a model needs an `HF_TOKEN`. `facebook/dinov2-with-registers-base`
-is the ungated equivalent: same 768-wide 12-layer ViT-B, same register tokens, same
-ImageNet normalization, Apache-2.0. It is a /14 model rather than /16, so input sizes
-have to be multiples of 14.
+Both `ortho_target` and `visual_servoing` default to `facebook/dinov2-with-registers-base`,
+which is ungated and Apache-2.0. It is a /14 model, so input sizes have to be multiples
+of 14: ortho trains at 448 and visual servoing at 448x252, and both defaults already say
+so. Nothing to pass.
 
-Ortho targeting needs no code change, just two flags:
+They share one frozen trunk in the observer (`dino_trunk.py`), keyed by backbone id, so
+running two models on different backbones costs a second copy of it.
 
-```bash
-python -m nf_robot.ml.ortho_target train \
-    --backbone facebook/dinov2-with-registers-base --image_size 448
-```
-
-Visual servoing needs its dataset rebuilt first — the frames are stored at the model's
-input size, and 256 is not a multiple of 14. See `visual_servoing/readme.md`,
-"Training on the ungated backbone".
-
-Either way the checkpoint records `backbone_id` and `image_size`, so evaluation and the
-observer follow automatically. Both models are retrained from scratch: the trunk changes,
-so existing checkpoints are meaningless against it.
+A checkpoint records its own `backbone_id` and `image_size` and rebuilds from them, so
+older DINOv3 checkpoints keep working - but fetching their trunk still needs gated
+access. The published `naavox/targeting` and `naavox/visual-servo` copies are DINOv3
+until they are retrained and republished. Each model's own docs carry a DINOv3 footnote.

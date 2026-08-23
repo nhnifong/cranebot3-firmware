@@ -41,13 +41,9 @@ being baked into weights.
 
 ## Input
 
-The gripper feed is natively 684x384. The model takes **448x256** (28x16 = 448 patch
-tokens at /16), which is within 1.5% of the native aspect ratio. DINOv3 interpolates its
-position embeddings, so a non-square input is fine.
-
-On the ungated /14 backbone the input is 448x252 instead (32x18 = 576 tokens, and exactly
-16:9); see "Training on the ungated backbone" below, since the stored dataset has to be
-rebuilt to match.
+The gripper feed is natively 684x384. The model takes **448x252** (32x18 = 576 patch
+tokens at /14), which is exactly the native 16:9. DINOv2 interpolates its position
+embeddings, so a non-square input is fine.
 
 Other inputs include the laser range, the grip pressure set point, and finger angle.
 Explicitly *not* vel_x/vel_y/vel_z: the previous action is the most reliable route to
@@ -65,20 +61,19 @@ against the sensor.
 
 Same skeleton as OrthoTargetNet in ortho_target.py, which already works in this repo:
 
-    frozen DINOv3 ViT-B/16, last 4 hidden states, patch tokens only
-      -> concat on channels                        (B, 3072, 16, 28)
-    Conv2d(3072 -> 256, 1x1), GroupNorm, GELU      (B,  256, 16, 28)
-    2-4 x self-attention blocks over 448 tokens    (B,  256, 16, 28)
-    [bilinear x2, Conv 3x3 -> 128, GN, GELU]       (B,  128, 32, 56)
+    frozen DINOv2 ViT-B/14, last 4 hidden states, patch tokens only
+      -> concat on channels                        (B, 3072, 18, 32)
+    Conv2d(3072 -> 256, 1x1), GroupNorm, GELU      (B,  256, 18, 32)
+    2-4 x self-attention blocks over 576 tokens    (B,  256, 18, 32)
+    [bilinear x2, Conv 3x3 -> 128, GN, GELU]       (B,  128, 36, 64)
 
-Every shape here is derived from the trunk's patch size and hidden width, so the ungated
-/14 backbone changes only the numbers: 3072 channels over an 18x32 token grid, 576 tokens
-under attention, 36x64 cells out.
+Every shape is derived from the trunk's patch size and hidden width, so another backbone
+changes only the numbers.
 
 The self-attention blocks are the one real addition over OrthoTargetNet. A pure conv
 head has a bounded receptive field, but this task needs global reasoning: "this dark
 blob is cut off at the bottom edge, so the object continues past it" is exactly the
-inference dit-grasp-4 fails to make. At 448 tokens the attention costs almost nothing.
+inference dit-grasp-4 fails to make. At 576 tokens the attention costs almost nothing.
 
 [CLS] and the register tokens are kept aside as a separate global vector for the heads
 that describe the whole image rather than a location.
@@ -97,8 +92,8 @@ floor between them - the same argument as the ortho targeting model.
 The grid spans **1.5x the frame extent in each axis** (image coordinates -0.25 to 1.25),
 so an object just past the bottom edge has a real cell to live in and the softmax can
 answer "down there, off-screen" instead of being forced to pick a visible cell. This is
-the sock case, and it is the specific thing dit-grasp-4 cannot represent. At 32x56 cells
-over 1.5x extent each cell is about 12px of frame; a 2-channel sub-cell offset head
+the sock case, and it is the specific thing dit-grasp-4 cannot represent. At 36x64 cells
+over 1.5x extent each cell is about 10.5px of frame; a 2-channel sub-cell offset head
 (sigmoid, L1 loss, supervised only at the true cell) takes precision below that.
 
 The spatial softmax gives two of the three dimensions. The third - distance along the
@@ -449,7 +444,7 @@ Contact sheets land in `plates/preview/`.
 Collections captured on different machines merge:
 
     python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all \
-        --from plates /mnt/contractor/plates
+        --from plates naavox/plates-macbook justink04/raw_plates
     python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all --list
 
 Runs already in the destination are skipped by run id, so merging the same source twice
@@ -493,38 +488,45 @@ mining twice.
 
     python src/nf_robot/ml/lerobot_split_dataset.py \
         --repo_id naavox/combined_targets \
-        --root /home/nhn/data_scratch/combined_targets
+        --root /home/nhn/data_scratch/combined_targets --upload
 
 Writes `naavox/combined_targets_train` and `naavox/combined_targets_eval` into the
 LeRobot home, which is where the commands below find them by repo id. A random sample of
-episodes, seeded, so rerunning gives the same split. `--eval_fraction` (0.1),
-`--seed` (0), `--new_root`, `--dry_run`.
+episodes, seeded, so rerunning gives the same split. `--upload` pushes both to the hub
+under those same names, replacing whatever is there. `--eval_fraction` (0.1), `--seed`
+(0), `--new_root`, `--dry_run`.
 
 Then mine each half into its own split of the same root:
+simple_grasp_spin can be added here, but can't be merged with naavox/combined_targets
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/combined_targets_train naavox/simple_grasp_spin \
-        --output_root datasets/visual_servoing \
-        --preview_dir datasets/visual_servoing/preview \
+        --output_root datasets/visual_servoing_252 \
+        --preview_dir datasets/visual_servoing_252/preview \
         --preview_count 100 \
         --approach_seconds 5
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/combined_targets_eval \
-        --output_root datasets/visual_servoing \
+        --output_root datasets/visual_servoing_252 \
         --split eval \
         --approach_seconds 5
+
+Frames are stored at 448x252, the default, and every split has to keep it: the backbone
+is a /14 DINOv2 and 252 = 14 x 18. Do not pass `--image_size`. A split written at any
+other height is a silent mismatch rather than an error, which is where the `_252` in the
+dataset name comes from.
 
 Each run replaces the split it writes, so run these before generating synthetic frames -
 and mine every source of a split in one run, since a second run into the same split
 replaces the first rather than adding to it.
 
-Recordings of flying over empty floor are mined the other way round, with `--negatives`:
+Recordings of flying over empty floor are mined with `--negatives`:
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/empty-floor-sweep --negatives \
-        --output_root datasets/visual_servoing \
-        --preview_dir datasets/visual_servoing/negative_preview
+        --repo_id naavox/combined_negatives --negatives \
+        --output_root datasets/visual_servoing_252 \
+        --preview_dir datasets/visual_servoing_252/negative_preview
 
 Every frame becomes a `target_present = 0` row with no position labels, one frame in five
 by default (`--negative_stride`), written as `negative-*.parquet` beside the positives
@@ -539,17 +541,19 @@ the two halves cover the same range distribution:
 
     python -m nf_robot.ml.visual_servoing.synth_frames \
         --plates plates_all \
-        --output_root datasets/visual_servoing/ \
-        --ranges_from datasets/visual_servoing/train \
+        --output_root datasets/visual_servoing_252/ \
+        --ranges_from datasets/visual_servoing_252/train \
         --count 80000 \
-        --annotate_dir datasets/visual_servoing/synth_preview
+        --annotate_dir datasets/visual_servoing_252/synth_preview
 
-Rerunning replaces only its own shards. The annotated frames show the target, the grasp
+Composites at `mine_teleop.IMAGE_SIZE`, the same constant the mining above defaults to,
+so both producers of a split agree without being told. Rerunning replaces only its own
+shards. The annotated frames show the target, the grasp
 axis and the other candidates, which is where a compositing sign error shows up.
 
 ## 4b. Audit what was built
 
-    python -m nf_robot.ml.visual_servoing.audit --data_root datasets/visual_servoing
+    python -m nf_robot.ml.visual_servoing.audit --data_root datasets/visual_servoing_252
 
 Run after every rebuild. Label columns only, no image decode, so a 4.5GB split reads in
 seconds. Prints what each head has to learn from - coverage, class balance,
@@ -561,7 +565,7 @@ grasp axis is a constant zero.
 ## 5. Train
 
     python -m nf_robot.ml.visual_servoing.train \
-        --data_root datasets/visual_servoing \
+        --data_root datasets/visual_servoing_252 \
         --epochs 40 \
         --batch_size 400
 
@@ -579,82 +583,21 @@ Reading the metrics:
 `--axis_loss mse` and `--no_axis_balance` turn off the von Mises objective and the
 per-angle-bin row weighting for an A/B; both are on by default.
 
-## 5b. Training on the ungated backbone
+## 5c. Publishing the dataset
 
-`facebook/dinov3-vitb16-pretrain-lvd1689m` is gated - it needs an approved access
-request and an `HF_TOKEN` wherever the model trains or runs.
-`facebook/dinov2-with-registers-base` is the ungated equivalent, same 768-wide 12-layer
-ViT-B with registers and ImageNet normalization, Apache-2.0:
+    hf upload naavox/visual_servoing_dataset_252 datasets/visual_servoing_252 \
+        --repo-type dataset
 
-    python -m nf_robot.ml.visual_servoing.train \
-        --data_root datasets/visual_servoing_252 \
-        --backbone facebook/dinov2-with-registers-base \
-        --image_size 448 252 \
-        --epochs 40 --batch_size 400
-
-The dataset has to be rebuilt first. DINOv2 is a **/14** model and the stored frames are
-448x**256**, which 14 does not divide.
-
-Nothing catches it if you skip that. `VisualServoDataset` hands the stored frame over
-unresized, and 448x256 through a /14 patch embedding floors to the same 32x18 token grid
-the model computes for 448x252 - so it trains, the loss falls, the bottom 4 pixel rows
-are never seen, and `target_uv` stays normalized over all 256, putting every label about
-1.6% low against the feature map. It shows up later as an unexplained downward bias.
-
-### What has to change
-
-1. **`mine_teleop.py`**: `IMAGE_SIZE = (448, 256)` -> `(448, 252)`, or pass
-   `--image_size 448 252`. This is the stored frame size and the only edit; labels are
-   normalized, so they need no adjustment.
-
-2. **`synth_frames.py`**: nothing. It imports `IMAGE_SIZE` from `mine_teleop`.
-
-3. **Re-mine and re-generate into a new root**, so the 256-tall dataset stays where it is:
-
-        python -m nf_robot.ml.visual_servoing.mine_teleop \
-            --repo_id naavox/combined_targets_train naavox/simple_grasp_spin \
-            --output_root datasets/visual_servoing_252 \
-            --approach_seconds 5
-
-        python -m nf_robot.ml.visual_servoing.mine_teleop \
-            --repo_id naavox/combined_targets_eval \
-            --output_root datasets/visual_servoing_252 \
-            --split eval --approach_seconds 5
-
-        python -m nf_robot.ml.visual_servoing.synth_frames \
-            --plates plates_all \
-            --output_root datasets/visual_servoing_252/ \
-            --ranges_from datasets/visual_servoing_252/train \
-            --count 80000
-
-   No re-capture or re-matting: plates are stored at capture resolution and resized on
-   use.
-
-4. **Upload to a new dataset repo**, not over `naavox/visual_servoing_dataset`. That id
-   is `train.py`'s `DEFAULT_DATASET_ID`, what a run with no `--data_root` downloads, so
-   overwriting it would mis-train every default run against the /16 model:
-
-        hf upload naavox/visual_servoing_dataset_252 datasets/visual_servoing_252 \
-            --repo-type dataset
-
-   Then train with `--dataset_id naavox/visual_servoing_dataset_252` in place of
-   `--data_root`.
-
-5. **Evaluate against the 252 root.** `evaluate` rebuilds the model from the checkpoint,
-   which records `backbone_id` and `image_size`, so it needs no new flags - but a
-   `--data_root` pointing at the 256 dataset hits the same silent mismatch.
-
-Compare `onscreen_recall@25px` against the DINOv3 run. Expect some loss: DINOv3's ViT-B
-is distilled from a 7B teacher over ~1.7B images against DINOv2's ViT-g over 142M, and
-its Gram anchoring targets exactly the patch tokens this model reads. Against that, /14
-gives 32x18 tokens where /16 gives 28x16.
+Train from it with `--dataset_id naavox/visual_servoing_dataset_252` in place of
+`--data_root`. Not over `naavox/visual_servoing_dataset`, which holds 448x256 frames for
+the older DINOv3 checkpoints; that id is still `train.py`'s `DEFAULT_DATASET_ID`.
 
 ## 6. Evaluate
 
     python -m nf_robot.ml.visual_servoing.evaluate \
-        --data_root datasets/visual_servoing \
+        --data_root datasets/visual_servoing_252 \
         --model_path models/visual_servo.pth \
-        --preview_dir datasets/visual_servoing/eval_predictions
+        --preview_dir datasets/visual_servoing_252/eval_predictions
 
 Prints the metrics next to the constant-prediction baseline. Beating that baseline is the
 bar: for a centering task "always predict the middle" already scores well.
@@ -754,3 +697,28 @@ during a descent distinguishes a model mislocating the object from a mistuned lo
   direction-only fallback would be needed for those.
 - Whether the holding head has enough teleop positives on its own, given that synthetic
   frames can't supply any.
+
+# Footnote: DINOv3
+
+The backbone was `facebook/dinov3-vitb16-pretrain-lvd1689m` until 2026-08-23. It scores
+the same as DINOv2 with registers on this task and is gated - an approved access request
+plus an `HF_TOKEN` on every machine that trains or runs the model - so there is no reason
+to prefer it.
+
+To train against it anyway:
+
+    python -m nf_robot.ml.visual_servoing.train \
+        --data_root datasets/visual_servoing \
+        --backbone facebook/dinov3-vitb16-pretrain-lvd1689m \
+        --image_size 448 256
+
+It is a /16 model, so it wants 448x256 frames and a dataset mined at that size
+(`--image_size 448 256`, and a different `--output_root`). `naavox/visual_servoing_dataset`
+on the hub is the 256-tall one.
+
+Do not point it at a 252 dataset, or the reverse. `VisualServoDataset` hands the stored
+frame over unresized and 448x256 through a /14 patch embedding floors to the same 32x18
+token grid the model computes for 448x252 - so it trains, the loss falls, the bottom 4
+pixel rows are never seen, and `target_uv` stays normalized over all 256, putting every
+label about 1.6% low against the feature map. It shows up later as an unexplained
+downward bias. Mining into a split that already holds the other size does raise.

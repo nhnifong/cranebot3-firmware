@@ -131,18 +131,17 @@ FINGER_SPEED_FULL_SCALE = 90.0
 # Frames are stored at the model's input resolution. Labels are normalized coordinates,
 # so they survive the resize untouched, and the stored frame is then exactly what the
 # model sees - nothing is gained by keeping pixels the training loader would throw away.
-# A default, not a decision: --image_size overrides it, and a run into a split that
-# already holds frames takes that split's size instead. It has to be a per-run choice
-# because the right answer depends on the backbone the dataset is destined for - 448x256
-# for DINOv3 at /16, 448x252 for DINOv2 at /14 - and a dataset holding both is one that
-# will not collate.
+# 252 rather than 256 because the model's backbone is a /14 DINOv2 and 252 = 14 x 18.
+# --image_size overrides it, and a run into a split that already holds frames takes that
+# split's size instead; synth_frames imports this constant, so both producers of a split
+# agree by construction.
 #
 # Getting it wrong is quiet in both directions. Frames written at 256 tall and fed to a
 # /14 model configured for 252 run fine: the patch embedding floors to the same 18 token
 # rows, the bottom 4 pixel rows are never seen, and every label stays normalized over all
 # 256, which is a 1.6% downward bias nothing reports. Frames of two different heights in
 # one split are at least loud, but only at the first batch.
-IMAGE_SIZE = (448, 256)
+IMAGE_SIZE = (448, 252)
 JPEG_QUALITY = 90
 # Roughly how much image data goes in one parquet shard. The point of shards is file
 # count: a few hundred large files upload and download from the hub in a way that
