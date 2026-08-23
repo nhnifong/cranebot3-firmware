@@ -45,6 +45,10 @@ The gripper feed is natively 684x384. The model takes **448x256** (28x16 = 448 p
 tokens at /16), which is within 1.5% of the native aspect ratio. DINOv3 interpolates its
 position embeddings, so a non-square input is fine.
 
+On the ungated /14 backbone the input is 448x252 instead (32x18 = 576 tokens, and exactly
+16:9); see "Training on the ungated backbone" below, since the stored dataset has to be
+rebuilt to match.
+
 Other inputs include the laser range, the grip pressure set point, and finger angle.
 Explicitly *not* vel_x/vel_y/vel_z: the previous action is the most reliable route to
 causal confusion there is, and the recorded 14-dim state vector leads with it.
@@ -66,6 +70,10 @@ Same skeleton as OrthoTargetNet in ortho_target.py, which already works in this 
     Conv2d(3072 -> 256, 1x1), GroupNorm, GELU      (B,  256, 16, 28)
     2-4 x self-attention blocks over 448 tokens    (B,  256, 16, 28)
     [bilinear x2, Conv 3x3 -> 128, GN, GELU]       (B,  128, 32, 56)
+
+Every shape here is derived from the trunk's patch size and hidden width, so the ungated
+/14 backbone changes only the numbers: 3072 channels over an 18x32 token grid, 576 tokens
+under attention, 36x64 cells out.
 
 The self-attention blocks are the one real addition over OrthoTargetNet. A pure conv
 head has a bounded receptive field, but this task needs global reasoning: "this dark
@@ -588,6 +596,92 @@ Build the eval split by mining the held-out room's own recipe into the same root
         --split eval \
         --approach_seconds 5
 
+## 5b. Training on the ungated backbone
+
+`facebook/dinov3-vitb16-pretrain-lvd1689m` is a gated repo. Access is granted by manual
+review and every machine that trains or runs the model needs an `HF_TOKEN`, which makes
+it the one step in this pipeline nobody else can just run.
+`facebook/dinov2-with-registers-base` is the ungated equivalent — the same 768-wide
+12-layer ViT-B with register tokens and ImageNet normalization, under Apache-2.0 — and
+the trained command is:
+
+    python -m nf_robot.ml.visual_servoing.train \
+        --data_root datasets/visual_servoing_252 \
+        --backbone facebook/dinov2-with-registers-base \
+        --image_size 448 252 \
+        --epochs 40 --batch_size 400
+
+Note the data root. Unlike `ortho_target`, which can switch on flags alone, this side
+needs its dataset rebuilt first, because DINOv2 is a **/14** model and the current
+frames are 448x**256** — and 256 is not a multiple of 14.
+
+Nothing catches that if you get it wrong. `VisualServoDataset` decodes the stored frame
+and hands it over unresized, and a 448x256 input through a /14 patch embedding floors to
+18 token rows, which is exactly the 32x18 grid the model computes for 448x252. So it
+trains, the shapes agree, the loss falls — and the bottom 4 pixel rows are never seen
+while `target_uv` is still normalized over all 256, putting every label about 1.6% low
+against the feature map it supervises. That surfaces weeks later as a model with an
+unexplained downward bias.
+
+### What has to change
+
+One constant, then a rebuild of both halves of the dataset:
+
+1. **`mine_teleop.py`**: `IMAGE_SIZE = (448, 256)` -> `(448, 252)`. This is the stored
+   frame size and the only edit; the resize on the way in follows it, and labels are
+   normalized so they need no adjustment. 448x252 is exactly 16:9, marginally closer to
+   the gripper's native 684x384 than 448x256 is.
+
+2. **`synth_frames.py`**: nothing. It imports `IMAGE_SIZE` from `mine_teleop`, so the
+   canvas, the finger plates and the composited frames all follow the change.
+
+3. **Re-mine and re-generate into a new root**, so the existing 256-tall dataset stays
+   where it is and both can be trained against:
+
+        python -m nf_robot.ml.visual_servoing.mine_teleop \
+            --repo_id naavox/combined_targets naavox/simple_grasp_spin \
+            --output_root datasets/visual_servoing_252 \
+            --approach_seconds 5
+
+        python -m nf_robot.ml.visual_servoing.mine_teleop \
+            --repo_id naavox/combined_targets_eval \
+            --output_root datasets/visual_servoing_252 \
+            --split eval --approach_seconds 5
+
+        python -m nf_robot.ml.visual_servoing.synth_frames \
+            --plates plates_all \
+            --output_root datasets/visual_servoing_252/ \
+            --ranges_from datasets/visual_servoing_252/train \
+            --count 40000
+
+   The plates themselves are untouched — they are stored at capture resolution and
+   resized on use, so no re-capture and no re-matting.
+
+4. **Upload to a new dataset repo**, not over `naavox/visual_servoing_dataset`. That id
+   is `train.py`'s `DEFAULT_DATASET_ID`, what a run with no `--data_root` downloads, so
+   replacing its contents with 252-tall frames would silently mis-train every default
+   run against the /16 model:
+
+        hf upload naavox/visual_servoing_dataset_252 datasets/visual_servoing_252 \
+            --repo-type dataset
+
+   Then train from it with `--dataset_id naavox/visual_servoing_dataset_252` in place of
+   `--data_root`.
+
+5. **Audit and evaluate as usual.** `audit` reads label columns only and is unaffected.
+   `evaluate` rebuilds the model from the checkpoint, which records `backbone_id` and
+   `image_size`, so it needs no new flags — but point `--data_root` at the 252 root, or
+   it will score a /14 model on 256-tall frames and hit the same silent mismatch.
+
+### What it costs
+
+Retraining, and DINOv3's dense-feature quality: its Gram anchoring was aimed squarely at
+keeping patch tokens sharp over long training, and patch tokens are all this model reads.
+Its ViT-B is also distilled from a 7B teacher over ~1.7B images, against DINOv2's ViT-g
+teacher over 142M. Against that, 32x18 tokens is more than the 28x16 the /16 model gets,
+and cells come out about 10.5px instead of 12px. Whether any of that nets out for
+"where is the toy on the carpet" is an A/B, not a prediction — compare
+`onscreen_recall@25px` between the two runs.
 
 ## 6. Evaluate
 

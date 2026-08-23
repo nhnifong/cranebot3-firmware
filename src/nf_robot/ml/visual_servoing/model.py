@@ -23,10 +23,15 @@ observer.py's _center_card_in_view already does.
             5. probability we are currently holding something
 
 The self-attention blocks are the one real addition over OrthoTargetNet in
-ortho_target.py, whose decoder this otherwise follows. A pure conv head has a bounded
-receptive field, but this task needs global reasoning: "this dark blob is cut off at the
-bottom edge, so the object continues past it" is exactly the inference the CLS-token
-policies fail to make, and it is the case this model exists to get right.
+ortho_target.py, whose decoder this otherwise follows.
+
+The backbone is gated on the hub and so is a barrier to anyone reproducing this.
+facebook/dinov2-with-registers-base is the ungated stand-in, and everything above holds
+for it - same 768-wide 12-layer ViT-B, registers ahead of the patch tokens, ImageNet
+normalization - except that it is a /14 model. 448x252 is then the input (32x18 tokens,
+64x36 cells of about 10.5px), and 252 rather than 256 has to be what the dataset was
+written at, because nothing here resizes a stored frame. readme.md, "Training on the
+ungated backbone", is the whole procedure.
 """
 
 import math

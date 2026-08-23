@@ -131,6 +131,13 @@ FINGER_SPEED_FULL_SCALE = 90.0
 # Frames are stored at the model's input resolution. Labels are normalized coordinates,
 # so they survive the resize untouched, and the stored frame is then exactly what the
 # model sees - nothing is gained by keeping pixels the training loader would throw away.
+#
+# Which means this is tied to the backbone's patch size, and the training loader does not
+# resize or check: a dataset written here at 256 tall, fed to a /14 model configured for
+# 252, runs and silently drops the bottom 4 rows while the labels still span all 256.
+# Changing backbones means rebuilding the dataset with this constant changed to match -
+# synth_frames imports it, so both halves follow. See visual_servoing/readme.md,
+# "Training on the ungated backbone".
 IMAGE_SIZE = (448, 256)
 JPEG_QUALITY = 90
 # Roughly how much image data goes in one parquet shard. The point of shards is file

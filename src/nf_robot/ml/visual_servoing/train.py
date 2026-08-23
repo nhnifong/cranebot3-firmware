@@ -18,6 +18,15 @@ Usage:
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing \
         --epochs 40 --batch_size 32
+
+    On the ungated backbone, against a dataset rebuilt at 448x252 (see readme.md,
+    "Training on the ungated backbone" - the stored frame size has to change with the
+    backbone's patch size, and nothing checks that it did):
+
+    python -m nf_robot.ml.visual_servoing.train \
+        --data_root datasets/visual_servoing_252 \
+        --backbone facebook/dinov2-with-registers-base --image_size 448 252 \
+        --epochs 40 --batch_size 32
 """
 
 import argparse

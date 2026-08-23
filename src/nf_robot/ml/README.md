@@ -453,3 +453,27 @@ Push trained weights to the Hub (PUSH TO PROD):
 hf upload naavox/targeting models/target_heatmap.pth target_heatmap.pth
 hf upload naavox/centering models/square_centering.pth square_centering.pth
 ```
+
+## Training without the gated backbone
+
+`facebook/dinov3-vitb16-pretrain-lvd1689m` is the default trunk for both `ortho_target`
+and `visual_servoing`, and it is a gated repo — access is granted by manual review, and
+every machine that trains or runs a model needs an `HF_TOKEN`. `facebook/dinov2-with-registers-base`
+is the ungated equivalent: same 768-wide 12-layer ViT-B, same register tokens, same
+ImageNet normalization, Apache-2.0. It is a /14 model rather than /16, so input sizes
+have to be multiples of 14.
+
+Ortho targeting needs no code change, just two flags:
+
+```bash
+python -m nf_robot.ml.ortho_target train \
+    --backbone facebook/dinov2-with-registers-base --image_size 448
+```
+
+Visual servoing needs its dataset rebuilt first — the frames are stored at the model's
+input size, and 256 is not a multiple of 14. See `visual_servoing/readme.md`,
+"Training on the ungated backbone".
+
+Either way the checkpoint records `backbone_id` and `image_size`, so evaluation and the
+observer follow automatically. Both models are retrained from scratch: the trunk changes,
+so existing checkpoints are meaningless against it.
