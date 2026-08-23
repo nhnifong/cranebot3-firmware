@@ -12,8 +12,6 @@ center_crop: false
 pad_clamp: false
 
 merge:
-  # naavox/toys-79west and naavox/move_clutter_79west4 are the 79west room, held out
-  # for eval by combined_targets_eval.yaml. Keep them out of here.
   - naavox/move_clutter_nick_2
   - justink04/laundry-in-hamper-7-19-26
   - justink04/laundry-in-hamper-7-23-26
@@ -32,8 +30,11 @@ merge:
   - naavox/bedroom-laundry-aug5
   - naavox/playroom-aug6
   - naavox/bedroom-laundry-aug7-2
-  - naavox/bedroom-laundry-Aug16
+  - naavox/bedroom-laundry-Aug16x
+  - naavox/toys-79west
+  - naavox/79west-toys-aug17
   - naavox/playroom-aug23
+  - naavox/nick-aug23
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
 keep_state_features:

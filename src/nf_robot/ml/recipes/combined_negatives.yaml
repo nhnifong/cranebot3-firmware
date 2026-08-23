@@ -1,0 +1,40 @@
+# Dataset containing purely episodes of empty floors.
+# used for doing teleop mining with --negatives to specify that
+# all frames are used as examples where no target is in view 
+
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/combined_negatives.yaml \
+#     --temp_dir /home/nhn/data_scratch \
+#     --output_root /home/nhn/data_scratch/combined_negatives \
+#     --upload
+
+output_repo_id: naavox/combined_negatives
+camera_mode: gripper_ortho
+center_crop: false
+pad_clamp: false
+
+merge:
+  - naavox/negatives
+  - naavox/negatives-2
+
+# Exactly mine_teleop.STATE_NEEDED, and nothing else.
+keep_state_features:
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+
+drop_features:
+  - anchor_poses
+
+label_contact_actions:
+  enabled: true
+  pressure_threshold: 0.1
+  episode_end_seconds: 1.0
+  blend_seconds: 0.5
+  rotate_contact_vec: false

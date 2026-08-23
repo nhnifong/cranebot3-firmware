@@ -46,6 +46,9 @@ merge:
   - naavox/toys-79west
   - naavox/playroom-aug6
   - naavox/bedroom-laundry-aug7-2
+  - naavox/bedroom-laundry-Aug16
+  - naavox/playroom-aug23
+  - naavox/nick-aug23
 
 # 20 of the 44 recorded components. lerobot/xvla-base ships max_state_dim=20 (not
 # the config class default of 32) and X-VLA's from_pretrained does a strict load,

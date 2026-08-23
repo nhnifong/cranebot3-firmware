@@ -10,22 +10,27 @@ for, so every episode donates one label for free.
 Build, distill, train, then ship. The first two are separate because the intermediate
 is a LeRobot dataset and the result is not:
 
-  1. The two recipes merge the teleop datasets, keeping the ortho feed this model
-     needs and the gripper feed visual_servoing/mine_teleop.py needs, and run contact
+  1. The recipe merges the teleop datasets, keeping the ortho feed this model needs
+     and the gripper feed visual_servoing/mine_teleop.py needs, and runs contact
      labelling. One dataset serves both models because the expensive part - sourcing,
-     excluding episodes and re-encoding video - is identical for each. They are split
-     by room so that a whole room can be held out; see the note on the eval split
-     below. Build both:
+     excluding episodes and re-encoding video - is identical for each:
 
        python src/nf_robot/ml/lerobot_build_dataset.py \
            --recipe src/nf_robot/ml/recipes/combined_targets.yaml \
            --temp_dir /home/nhn/data_scratch \
            --output_root /home/nhn/data_scratch/combined_targets
 
-       python src/nf_robot/ml/lerobot_build_dataset.py \
-           --recipe src/nf_robot/ml/recipes/combined_targets_eval.yaml \
-           --temp_dir /home/nhn/data_scratch \
-           --output_root /home/nhn/data_scratch/combined_targets_eval
+     Then hold an eval set out of it. The two halves come out named after their splits
+     - naavox/combined_targets_train and naavox/combined_targets_eval - in the LeRobot
+     home, so everything below finds them by repo id alone:
+
+       python src/nf_robot/ml/lerobot_split_dataset.py \
+           --repo_id naavox/combined_targets \
+           --root /home/nhn/data_scratch/combined_targets
+
+     --eval_fraction defaults to 0.1 and --seed to 0, so the same command twice is the
+     same split - which is what lets the two halves be distilled separately without
+     overlapping. See the note on the eval split below for what it measures.
 
   2. `distill` reduces that to one sample per episode - the episode's first ortho
      frame and the ortho pixel where contact eventually happened - which is a few
@@ -34,12 +39,10 @@ is a LeRobot dataset and the result is not:
      distill the eval split first, or upload only on the second run:
 
        python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/combined_targets_eval \
-           --root /home/nhn/data_scratch/combined_targets_eval --split eval
+           --repo_id naavox/combined_targets_eval --split eval
 
        python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/combined_targets \
-           --root /home/nhn/data_scratch/combined_targets --split train --upload
+           --repo_id naavox/combined_targets_train --split train --upload
 
   3. `train` fits the model, saving the best checkpoint by recall@20cm to
      models/ortho_target.pth:
@@ -90,15 +93,19 @@ The ortho view is an orthographic projection of the floor plane (host/floor_view
 so room metres map to its pixels analytically - no camera pose is involved, unlike
 camera_goal.py's per-anchor projection.
 
-The eval split is a whole held-out room, not a random sample of episodes. Consecutive
-episodes in one recording session share a floor and usually most of an object layout
-- the operator clearing one pile item by item - so a random split scores near
-duplicates and says nothing about a room the model has not seen. Splitting the sources
-across two recipes is what makes that possible: the merge renumbers episodes and
-discards which source each came from, so by the time a sample exists it is too late to
-separate the rooms. combined_targets_eval.yaml is what does it: the 79west room and
-nothing else, with every processing setting identical to combined_targets.yaml so the
-two differ in which room they hold and in nothing else.
+The eval split is a random sample of episodes, which is what lerobot_split_dataset.py
+makes it. Worth knowing what that measures: consecutive episodes in one recording
+session share a floor and usually most of an object layout - the operator clearing one
+pile item by item - so a random cut lands near duplicates on both sides, and the score
+says how well the model does on more of the rooms it has seen rather than on a room it
+has not. This model used to get the harder measurement from a second recipe holding the
+79west room whole; that recipe is gone and its sources are in combined_targets.yaml with
+everything else.
+
+Note that lerobot-edit-dataset's own fractional split is not a random sample - it takes
+a contiguous range, the last tenth in order, which after a merge is whichever sources
+sit at the bottom of the recipe. lerobot_split_dataset.py shuffles the indices and
+passes them explicitly, which is the whole reason it exists.
 
 Caveats worth knowing before trusting the labels:
 

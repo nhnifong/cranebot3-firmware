@@ -446,41 +446,31 @@ Survey what has been captured, and eyeball the frames:
 
 Contact sheets land in `plates/preview/`.
 
-Collections captured on different machines merge by copying run files and concatenating
-manifests, because a run is already a self-contained set of files named after a run id
-carrying its kind, its moment and six random hex digits:
+Collections captured on different machines merge:
 
     python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all \
         --from plates /mnt/contractor/plates
     python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all --list
 
-Nothing is combined, resampled or rewritten - every run stays exactly as its camera
-produced it, which is what lets the matte and compositing steps be redone later without
-going back to the robots. Runs already in the destination are skipped by run id, so
-merging the same source twice is harmless and an interrupted merge can be rerun. Each
-run records the robot id and hostname that captured it, and `--list` groups by those.
+Runs already in the destination are skipped by run id, so merging the same source twice
+is harmless and an interrupted merge can be rerun. `--list` groups by the robot id and
+hostname that captured each run.
 
 ## 2. Extract the pieces
 
-Fingers, as one RGBA plate per aperture. A chroma key on every frame of the wrist turn,
-then the per-pixel median across it:
+Fingers, as one RGBA plate per aperture:
 
     python -m nf_robot.ml.visual_servoing.finger_matte --dir plates_all
 
-Every fingerplates run in the collection is matted, not just the newest, and the plates
-are named after their run - a collection gathers captures of more than one set of fingers,
-and they are not all the same colour. `synth_frames` picks a set per frame and then an
-aperture within it, uniformly over sets, so one capture that swept more angles than
-another cannot crowd out the colour of its fingers. `--run_id` mats a single run.
+Every fingerplates run in the collection is matted, not just the newest; `--run_id` mats
+a single run.
 
-Each plate logs how much of its frame was green; a low number there means the capture
-missed the backdrop and nothing downstream of it is worth looking at. `--green_low` /
+Each plate logs how much of its frame was green; a low number means the capture missed
+the backdrop and nothing downstream of it is worth looking at. `--green_low` /
 `--green_high` move the key's ramp if the fingers are being eaten or the backdrop
 survives.
 
-Objects, as one RGBA cutout per captured frame. Same keyer, so it wants the same
-backdrop; without one, raise `--green_low`/`--green_high` and expect to check the
-result rather than trust it:
+Objects, as one RGBA cutout per captured frame, same keyer and same backdrop:
 
     python -m nf_robot.ml.visual_servoing.object_matte --dir plates_all
 
@@ -489,26 +479,45 @@ is dropped, since the board stops filling the frame near the top of a height swe
 edge keys as foreground. Lower it if board edge still survives, raise it for an object
 wider than half a metre, `--no_vignette` to keep whatever the key kept.
 
-Both write a contact sheet beside their output - `plates/fingers/_mattes.png` and
-`plates/objects/_objects.png` - which is the check worth doing before generating
-anything from them.
+Check both before generating anything from them. Each writes a contact sheet
+(`plates/fingers/_mattes.png`, `plates/objects/_objects.png`) and an mp4 over a
+checkerboard (`--fps`, 60 by default): `_mattes.mp4` in finger angle order, `_objects.mp4`
+with each cutout back where it sat in its capture frame. The mp4 is what shows a matte
+flickering between neighbouring plates, or an object wandering when it should hold still
+under the wrist turn.
 
-Both also write an mp4 of every result frame over the same checkerboard, at 60fps
-(`--fps` to change it): `_mattes.mp4` in finger angle order, `_objects.mp4` with each
-cutout back where it sat in its capture frame. Worth a look for what a sheet of stills
-cannot show - a matte that flickers between neighbouring plates, or an object that
-wanders when it should be holding still under the wrist turn.
+## 3. Split the teleop dataset, then mine both halves
 
-## 3. Mine the teleop half
+Split before mining: everything downstream is per-split, and deciding it later means
+mining twice.
+
+    python src/nf_robot/ml/lerobot_split_dataset.py \
+        --repo_id naavox/combined_targets \
+        --root /home/nhn/data_scratch/combined_targets
+
+Writes `naavox/combined_targets_train` and `naavox/combined_targets_eval` into the
+LeRobot home, which is where the commands below find them by repo id. A random sample of
+episodes, seeded, so rerunning gives the same split. `--eval_fraction` (0.1),
+`--seed` (0), `--new_root`, `--dry_run`.
+
+Then mine each half into its own split of the same root:
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/combined_targets naavox/simple_grasp_spin \
+        --repo_id naavox/combined_targets_train naavox/simple_grasp_spin \
         --output_root datasets/visual_servoing \
         --preview_dir datasets/visual_servoing/preview \
         --preview_count 100 \
         --approach_seconds 5
 
-This replaces the split it writes, so run it before generating synthetic frames.
+    python -m nf_robot.ml.visual_servoing.mine_teleop \
+        --repo_id naavox/combined_targets_eval \
+        --output_root datasets/visual_servoing \
+        --split eval \
+        --approach_seconds 5
+
+Each run replaces the split it writes, so run these before generating synthetic frames -
+and mine every source of a split in one run, since a second run into the same split
+replaces the first rather than adding to it.
 
 Recordings of flying over empty floor are mined the other way round, with `--negatives`:
 
@@ -521,16 +530,7 @@ Every frame becomes a `target_present = 0` row with no position labels, one fram
 by default (`--negative_stride`), written as `negative-*.parquet` beside the positives
 rather than over them.
 
-It takes the recording at its word. Nothing here can check that a flight was really over
-empty floor: the pressure signature of a grasp and of the fingers closing on each other
-are the same signature, so a flight with the jaws shut looks exactly like a pick-up to
-any test worth writing. `--preview_dir` is the check that works, since a person can see
-an empty floor.
-
-This is what the target-present head actually needs. Trained on synthetic negatives alone
-it learns "nothing here" as a property of composited images - on a real checkpoint it
-fires low on half the synthetic bare-floor frames and never once on a real one, because
-the live camera only ever produces real frames.
+Nothing here can check that the flight was really over empty floor. You are responsible for making sure they were all over empty floor.
 
 ## 4. Generate synthetic frames
 
@@ -541,34 +541,22 @@ the two halves cover the same range distribution:
         --plates plates_all \
         --output_root datasets/visual_servoing/ \
         --ranges_from datasets/visual_servoing/train \
-        --count 40000 \
+        --count 80000 \
         --annotate_dir datasets/visual_servoing/synth_preview
 
 Rerunning replaces only its own shards. The annotated frames show the target, the grasp
 axis and the other candidates, which is where a compositing sign error shows up.
 
-Memory is bounded rather than a function of how much has been captured. The decoded floor
-plate pool is the high water mark, so it is capped by `--floor_cache_mb` (2GB by default,
-a reservoir sample spread evenly through each run's sweep) - the full set of floorplates
-runs decodes to about 29GB and will end the run on most machines. Simulated heights are
-also clamped into 0.05-1.5m: a mined rangefinder column bottoms out at 0.001m when the
-fingers are closing on something, and composited literally that asks for a floor plate
-magnified 283x, which is a single 125GB allocation. Both report what they did, and the
-run prints its peak resident memory at the end.
-
 ## 4b. Audit what was built
 
     python -m nf_robot.ml.visual_servoing.audit --data_root datasets/visual_servoing
 
-Label columns only, no image decode, so a 4.5GB split reads in seconds. It prints what
-each head actually has to learn from - coverage, class balance, distributions, and a
-per-producer breakdown of the axis - and exits non-zero when a head has labels on only
-one side of its range.
-
-Worth running after every rebuild, because the two failures that cost the most so far
-were both invisible in a loss curve: a split with no synthetic shards and therefore no
-`target_present = 0` anywhere, and object cutouts whose grasp axis was a constant zero.
-In both cases the network was fitting its labels correctly.
+Run after every rebuild. Label columns only, no image decode, so a 4.5GB split reads in
+seconds. Prints what each head has to learn from - coverage, class balance,
+distributions, and a per-producer breakdown of the axis - and exits non-zero when a head
+has labels on only one side of its range. Catches the failures a loss curve cannot: a
+split with no synthetic shards and so no `target_present = 0` anywhere, or cutouts whose
+grasp axis is a constant zero.
 
 ## 5. Train
 
@@ -577,42 +565,26 @@ In both cases the network was fitting its labels correctly.
         --epochs 40 \
         --batch_size 400
 
-The whole `train/` split trains, and the checkpoint written after every epoch is always
-the newest one - `eval/` is scored when it exists and reported, but it selects nothing.
-Keeping the best-scoring epoch sounds strictly better and is not: the eval split is one
-held-out room measured on a position proxy the axis, finger and flag heads never enter,
-and a twenty epoch run once kept epoch 1 and discarded the other nineteen, leaving a
-model on the robot that was one epoch old without saying so anywhere.
+The whole `train/` split trains. The checkpoint written after every epoch is always the
+newest one; `eval/` is scored and reported but selects nothing.
 
-The grasp axis head is trained as a von Mises likelihood, so its output's length is a
-concentration - how sure it is - and not just a leftover of averaging. `axis_kappa` in the
-metrics is the median of that, and a head sitting near zero has learned to hedge. Its rows
-are also weighted by angle bin, because the labels lean hard on "already upright" and
-unweighted they spend 69% of the head's gradient on the answer it already knows. Both are
-on by default; `--axis_loss mse` and `--no_axis_balance` restore the previous behaviour
-for an A/B. Note the axis term is a log likelihood, so it is expected to go *negative* as
-the head grows confident - it is bounded below at about -2.9 by `KAPPA_MAX`.
+Reading the metrics:
 
-`axis_deg_flat` beside `axis_deg` is what "always upright" scores on the same rows. On a
-teleop-only eval split it is 0.0, which is the honest statement that the split cannot
-grade this head at all.
+- `axis_kappa` is the median concentration of the grasp axis head. Near zero means it has
+  learned to hedge. The axis term is a log likelihood, so it goes *negative* as the head
+  grows confident, bounded below at about -2.9 by `KAPPA_MAX`.
+- `axis_deg_flat` beside `axis_deg` is what "always upright" scores on the same rows. On
+  a teleop-only eval split it is 0.0, meaning the split cannot grade this head.
 
-Build the eval split by mining the held-out room's own recipe into the same root:
-
-    python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/combined_targets_eval \
-        --output_root datasets/visual_servoing \
-        --split eval \
-        --approach_seconds 5
+`--axis_loss mse` and `--no_axis_balance` turn off the von Mises objective and the
+per-angle-bin row weighting for an A/B; both are on by default.
 
 ## 5b. Training on the ungated backbone
 
-`facebook/dinov3-vitb16-pretrain-lvd1689m` is a gated repo. Access is granted by manual
-review and every machine that trains or runs the model needs an `HF_TOKEN`, which makes
-it the one step in this pipeline nobody else can just run.
-`facebook/dinov2-with-registers-base` is the ungated equivalent — the same 768-wide
-12-layer ViT-B with register tokens and ImageNet normalization, under Apache-2.0 — and
-the trained command is:
+`facebook/dinov3-vitb16-pretrain-lvd1689m` is gated - it needs an approved access
+request and an `HF_TOKEN` wherever the model trains or runs.
+`facebook/dinov2-with-registers-base` is the ungated equivalent, same 768-wide 12-layer
+ViT-B with registers and ImageNet normalization, Apache-2.0:
 
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing_252 \
@@ -620,35 +592,27 @@ the trained command is:
         --image_size 448 252 \
         --epochs 40 --batch_size 400
 
-Note the data root. Unlike `ortho_target`, which can switch on flags alone, this side
-needs its dataset rebuilt first, because DINOv2 is a **/14** model and the current
-frames are 448x**256** — and 256 is not a multiple of 14.
+The dataset has to be rebuilt first. DINOv2 is a **/14** model and the stored frames are
+448x**256**, which 14 does not divide.
 
-Nothing catches that if you get it wrong. `VisualServoDataset` decodes the stored frame
-and hands it over unresized, and a 448x256 input through a /14 patch embedding floors to
-18 token rows, which is exactly the 32x18 grid the model computes for 448x252. So it
-trains, the shapes agree, the loss falls — and the bottom 4 pixel rows are never seen
-while `target_uv` is still normalized over all 256, putting every label about 1.6% low
-against the feature map it supervises. That surfaces weeks later as a model with an
-unexplained downward bias.
+Nothing catches it if you skip that. `VisualServoDataset` hands the stored frame over
+unresized, and 448x256 through a /14 patch embedding floors to the same 32x18 token grid
+the model computes for 448x252 - so it trains, the loss falls, the bottom 4 pixel rows
+are never seen, and `target_uv` stays normalized over all 256, putting every label about
+1.6% low against the feature map. It shows up later as an unexplained downward bias.
 
 ### What has to change
 
-One constant, then a rebuild of both halves of the dataset:
+1. **`mine_teleop.py`**: `IMAGE_SIZE = (448, 256)` -> `(448, 252)`, or pass
+   `--image_size 448 252`. This is the stored frame size and the only edit; labels are
+   normalized, so they need no adjustment.
 
-1. **`mine_teleop.py`**: `IMAGE_SIZE = (448, 256)` -> `(448, 252)`. This is the stored
-   frame size and the only edit; the resize on the way in follows it, and labels are
-   normalized so they need no adjustment. 448x252 is exactly 16:9, marginally closer to
-   the gripper's native 684x384 than 448x256 is.
+2. **`synth_frames.py`**: nothing. It imports `IMAGE_SIZE` from `mine_teleop`.
 
-2. **`synth_frames.py`**: nothing. It imports `IMAGE_SIZE` from `mine_teleop`, so the
-   canvas, the finger plates and the composited frames all follow the change.
-
-3. **Re-mine and re-generate into a new root**, so the existing 256-tall dataset stays
-   where it is and both can be trained against:
+3. **Re-mine and re-generate into a new root**, so the 256-tall dataset stays where it is:
 
         python -m nf_robot.ml.visual_servoing.mine_teleop \
-            --repo_id naavox/combined_targets naavox/simple_grasp_spin \
+            --repo_id naavox/combined_targets_train naavox/simple_grasp_spin \
             --output_root datasets/visual_servoing_252 \
             --approach_seconds 5
 
@@ -663,34 +627,27 @@ One constant, then a rebuild of both halves of the dataset:
             --ranges_from datasets/visual_servoing_252/train \
             --count 80000
 
-   The plates themselves are untouched — they are stored at capture resolution and
-   resized on use, so no re-capture and no re-matting.
+   No re-capture or re-matting: plates are stored at capture resolution and resized on
+   use.
 
 4. **Upload to a new dataset repo**, not over `naavox/visual_servoing_dataset`. That id
    is `train.py`'s `DEFAULT_DATASET_ID`, what a run with no `--data_root` downloads, so
-   replacing its contents with 252-tall frames would silently mis-train every default
-   run against the /16 model:
+   overwriting it would mis-train every default run against the /16 model:
 
         hf upload naavox/visual_servoing_dataset_252 datasets/visual_servoing_252 \
             --repo-type dataset
 
-   Then train from it with `--dataset_id naavox/visual_servoing_dataset_252` in place of
+   Then train with `--dataset_id naavox/visual_servoing_dataset_252` in place of
    `--data_root`.
 
-5. **Audit and evaluate as usual.** `audit` reads label columns only and is unaffected.
-   `evaluate` rebuilds the model from the checkpoint, which records `backbone_id` and
-   `image_size`, so it needs no new flags — but point `--data_root` at the 252 root, or
-   it will score a /14 model on 256-tall frames and hit the same silent mismatch.
+5. **Evaluate against the 252 root.** `evaluate` rebuilds the model from the checkpoint,
+   which records `backbone_id` and `image_size`, so it needs no new flags - but a
+   `--data_root` pointing at the 256 dataset hits the same silent mismatch.
 
-### What it costs
-
-Retraining, and DINOv3's dense-feature quality: its Gram anchoring was aimed squarely at
-keeping patch tokens sharp over long training, and patch tokens are all this model reads.
-Its ViT-B is also distilled from a 7B teacher over ~1.7B images, against DINOv2's ViT-g
-teacher over 142M. Against that, 32x18 tokens is more than the 28x16 the /16 model gets,
-and cells come out about 10.5px instead of 12px. Whether any of that nets out for
-"where is the toy on the carpet" is an A/B, not a prediction — compare
-`onscreen_recall@25px` between the two runs.
+Compare `onscreen_recall@25px` against the DINOv3 run. Expect some loss: DINOv3's ViT-B
+is distilled from a 7B teacher over ~1.7B images against DINOv2's ViT-g over 142M, and
+its Gram anchoring targets exactly the patch tokens this model reads. Against that, /14
+gives 32x18 tokens where /16 gives 28x16.
 
 ## 6. Evaluate
 
@@ -699,60 +656,48 @@ and cells come out about 10.5px instead of 12px. Whether any of that nets out fo
         --model_path models/visual_servo.pth \
         --preview_dir datasets/visual_servoing/eval_predictions
 
-Prints the metrics next to the constant-prediction baseline, which is the number that
-says whether the model has learned anything about the image at all: for a centering task
-"always predict the middle" scores well, and beating it is the bar.
+Prints the metrics next to the constant-prediction baseline. Beating that baseline is the
+bar: for a centering task "always predict the middle" already scores well.
 
-`--preview_dir` draws the label in green and the prediction in red on the frames that
-were scored, joined by a line. Numbers say whether it is right; the previews say whether
-it is right for the right reason, which is the check worth doing before a model reaches
-a robot.
+`--preview_dir` draws the label in green and the prediction in red on the scored frames,
+joined by a line.
 
 ## 7. Grasp with it
 
     python -m nf_robot.host.observer --visual_servo --local_models
 
-`--visual_servo` replaces the grasping routine pick and place calls: `execute_grasp`
-runs `host/visual_servo.py` instead of asking a lerobot session or falling back to the
-centering model. That module holds the whole deployed loop - the three modes, the tuning
-constants, the wrist limit arithmetic and the scoring run - and reaches into the observer
-only for the things that are the robot rather than the routine: the gripper client, the
-datastore, the position estimate and the motion primitives. It is an override rather than another fallback, because the
-reason to run it is to find out how it does and a silent fall back to something else
-would hide that. `--local_models` reads `models/visual_servo.pth`; without it the
-checkpoint comes from `naavox/visual-servo` on the hub, which has to have been published
-there first:
+`--visual_servo` makes `execute_grasp` run `host/visual_servo.py` instead of asking a
+lerobot session or falling back to the centering model. It is an override, not another
+fallback: a silent fall back to something else would hide how this one does.
+
+`--local_models` reads `models/visual_servo.pth`; without it the checkpoint comes from
+`naavox/visual-servo` on the hub, which has to have been published there first:
 
     hf upload naavox/visual-servo models/visual_servo.pth visual_servo.pth
 
 Until it is, a run without `--local_models` declines the grasp and says so rather than
-raising: a checkpoint that will not load is a routine the robot cannot offer, not a
-reason to end whatever motion task happened to ask for it.
+raising.
 
-The `servograsp` debug command runs one grasp from wherever the gripper is parked, which
-is the way to try a checkpoint without the pick and place loop choosing targets around
-it. `servoloop` repeats that forever - grasp, drop where the lift ended, settle, again -
+The `servograsp` debug command runs one grasp from wherever the gripper is parked, so a
+checkpoint can be tried without the pick and place loop choosing targets around it.
+`servoloop` repeats that forever - grasp, drop where the lift ended, settle, again -
 logging a running tally after every attempt:
 
     servoloop attempt 7: SUCCESS in 8.2s | servoloop 5/7 (71%) in 2.3 min | success 8.4s avg | failure 21.1s avg
 
-After each drop the wrist is sent to a random angle anywhere in its three revolutions -
-which exercises the axis head on a new orientation and the limit turnaround below - and
-the gantry hops to a random point within 0.4m of wherever the run began,
-so the object is approached from a different direction and distance every time rather than
-the same geometry being measured over and over and reported as a hit rate. The draw is
-uniform over the ball, stays inside the work area, and will not go more than 10cm below
-the start height - the parking height is the operator's judgement about clearance, and
-40cm below it finds the floor, the furniture, or the object just dropped.
+After each drop the wrist goes to a random angle in its three revolutions and the gantry
+hops to a random point within 0.4m of where the run began, so each attempt approaches
+from a different direction and distance. The draw stays inside the work area and will not
+go more than 10cm below the start height.
 
 Nothing re-targets between attempts, so it measures this loop rather than the room-level
 targeting, and an object flung out of view ends the useful part of a run. Success and
-failure times are kept apart because a failure spends its attempts on timeouts and one
-mean over both hides each of them. `servowatch` is the step before that: `visual_servo_grasp(observe_only=True)` runs
-the model on every frame and reports it to the overlay while commanding nothing at all -
-no gantry velocity, no wrist, no fingers - until the motion task is cancelled. Park the
-gripper over an object, or fly it by hand, and watch where the arrow points. A checkpoint
-that cannot be trusted with the gantry shows itself here for free.
+failure times are reported separately.
+
+`servowatch` is the step before that: it runs the model on every frame and reports it to
+the overlay while commanding nothing - no gantry velocity, no wrist, no fingers - until
+the motion task is cancelled. Park the gripper over an object, or fly it by hand, and
+watch where the arrow points.
 
 The loop is the downstream half the model was shaped for. Each pass:
 
@@ -797,12 +742,10 @@ is the informative case (readme head 5), and having it in the log is what makes 
 question answerable from a run rather than from a fixture set.
 
 Every prediction also goes out as `GripCamPredictions`, which the UI draws over the
-gripper feed: an arrow from the centre of the frame to the target, a bar for the grasp
-axis, and the two probability bars. `move_x`/`move_y` are the target's position as a
-displacement from the frame centre, so they can fall outside the frame - an arrow
-leaving the picture is the off-canvas case being reported honestly rather than clipped.
-Watching that overlay during a descent is the fastest way to tell a model that is
-mislocating the object from a loop that is mistuned.
+gripper feed: an arrow from the frame centre to the target, a bar for the grasp axis, and
+the two probability bars. `move_x`/`move_y` are a displacement from the frame centre, so
+an arrow can leave the picture - that is the off-canvas case, not a bug. Watching it
+during a descent distinguishes a model mislocating the object from a mistuned loop.
 
 # Open questions
 
