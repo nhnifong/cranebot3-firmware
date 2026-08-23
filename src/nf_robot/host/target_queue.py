@@ -110,7 +110,7 @@ class TargetQueue:
             
         return merged_targets
 
-    def add_ai_targets(self, targets_data: List[dict]):
+    def add_ai_targets(self, targets_data: List[dict], prune_stale: bool = True):
         """
         Batch processes AI suggestions with specific reconciliation logic:
         0. Deduplicate batch
@@ -119,12 +119,16 @@ class TargetQueue:
              - If existing is USER: Keep User data, ignore AI update.
              - If existing is AI: Update position/dropoff to new AI data, keep existing ID.
            - If no match: Add as new AI target.
-        2. Prunes stale AI targets:
-           - Any existing AI target not matched in this batch is removed.
+        2. Prunes stale AI targets (only when prune_stale is True):
+           - Any existing AI target not matched in this batch is removed, except one the
+             robot has already committed to (status SELECTED), which survives whether or
+             not the model still reports it.
 
-        All targets known to the model must be submitted at once in a single call.
-        Absense of a target is taken as proof it has slipped into the interdimensional space where socks
-        go sometimes betweneen the wash and dry cycle.
+        With prune_stale=True (the default), all targets known to the model must be submitted at once in
+        a single call. Absense of a target is taken as proof it has slipped into the interdimensional
+        space where socks go sometimes betweneen the wash and dry cycle.
+
+        Pass prune_stale=False to submit a partial batch, leaving unmatched AI targets in place.
         """
         with self._lock:
             targets_to_process = self._deduplicate_batch(targets_data)
@@ -184,13 +188,19 @@ class TargetQueue:
                     )
                     new_targets.append(new_target)
 
-            # Rebuild queue: Keep Users + Matched AI + New AI
+            # Rebuild queue: Keep Users + Selected + Matched AI + New AI
             # This logic effectively deletes unmatched (stale) AI targets
             # while preserving the order of existing items.
-            self._queue = [
-                t for t in self._queue 
-                if t.source == 'user' or t.id in matched_ids
-            ]
+            # A SELECTED target is the one the robot is acting on right now, so it is not
+            # the model's to retire: losing sight of it (the gripper is over it, an anchor
+            # view is blocked) must not pull the goal out from under a grasp in progress.
+            if prune_stale:
+                self._queue = [
+                    t for t in self._queue 
+                    if t.source == 'user'
+                    or t.id in matched_ids
+                    or t.status == telemetry.TargetStatus.SELECTED
+                ]
             self._queue.extend(new_targets)
 
     def remove_target(self, target_id: str) -> bool:

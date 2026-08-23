@@ -238,12 +238,12 @@ class PoleType(betterproto2.Enum):
 
     ABS500 = 1
     """
-    500mm printed ABS pole
+    500mm printed ABS pole attached to the Box marker
     """
 
     CARBON400 = 2
     """
-    400mm carbon pole, carrying the flat marker
+    400mm carbon pole, attached to the flat marker
     """
 
     @classmethod

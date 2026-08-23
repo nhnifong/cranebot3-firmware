@@ -248,6 +248,11 @@ message OperationProgress {
 
   // Extra message (what is happening right now)
   string current_action = 3;
+
+  // When true, the UI hides the progress bar at 100% without the usual completion
+  // popup. For routine operations the user did not explicitly ask for, such as a
+  // model loading itself on first use.
+  bool suppress_completion_popup = 4;
 }
 
 message SwingCancellationState {

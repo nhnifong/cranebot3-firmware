@@ -489,6 +489,13 @@ class OperationProgress(betterproto2.Message):
     Extra message (what is happening right now)
     """
 
+    suppress_completion_popup: "bool" = betterproto2.field(4, betterproto2.TYPE_BOOL)
+    """
+    When true, the UI hides the progress bar at 100% without the usual completion
+    popup. For routine operations the user did not explicitly ask for, such as a
+    model loading itself on first use.
+    """
+
 
 default_message_pool.register_message(
     "nf.telemetry", "OperationProgress", OperationProgress

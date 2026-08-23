@@ -45,6 +45,7 @@ from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
 import nf_robot.generated.nf.config as nf_config
 from nf_robot.host.data_store import DataStore
+from nf_robot.host.fake_progress import FakeProgress
 from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
 from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
@@ -4469,6 +4470,7 @@ class AsyncObserver:
             # confused with the empty list, which retires every AI target in the queue.
             if floor_targets is None:
                 continue
+            floor_targets = self._reject_targets_at_dropoff(floor_targets)
             self.target_queue.add_ai_targets(floor_targets)
             self.send_tq_to_ui()
 
@@ -4476,6 +4478,38 @@ class AsyncObserver:
             ortho_floor_vs.stop()
             if heatmap_floor_vs is not None:
                 heatmap_floor_vs.stop()
+
+    def _route_dst_floor_pos(self):
+        """Floor position of the current route destination, or None if it has none.
+
+        Quiet about failures: this is consulted every targeting round, and NA (drop where
+        each target says) genuinely has no single destination.
+        """
+        if self.pnp_dst == common.RoutePoint.ORIGIN:
+            return np.zeros(3)
+        name = ROUTE_POINT_TAG_NAMES.get(self.pnp_dst)
+        if name is None or name not in self.config.named_positions:
+            return None
+        return tonp(self.config.named_positions[name])
+
+    def _reject_targets_at_dropoff(self, targets):
+        """Drop targets sitting on the route destination, whatever model proposed them.
+
+        This is to prevent the robot from repeatedly picking and dropping the same thing forver.
+        """
+        DROPOFF_EXCLUSION_M = 0.10
+
+        dst = self._route_dst_floor_pos()
+        if dst is None:
+            return targets
+        kept = []
+        for t in targets:
+            # Horizontal distance only
+            if np.linalg.norm(np.asarray(t['position'])[:2] - dst[:2]) < DROPOFF_EXCLUSION_M:
+                logger.debug(f'discarding target at {t["position"]}, inside the dropoff exclusion')
+                continue
+            kept.append(t)
+        return kept
 
     def _floor_target(self, x, y):
         """A target dict for the queue, or None if it lies outside the work area."""
@@ -4485,12 +4519,22 @@ class AsyncObserver:
         return {'position': position, 'dropoff': 'hamper'}
 
     async def _find_targets_ortho(self):
-        """One target from the ortho floor view, chosen by the ortho_target model.
+        """Every confident target in the ortho floor view, per the ortho_target model.
 
         The model reads the same projection the ortho worker already renders, so unlike
         the heatmap path nothing per-camera is inferred and no warping is needed.
         """
         from nf_robot.ml import ortho_target
+
+        # Scores have no absolute scale - the softmax mass is split across every cell and
+        # split again by every object in frame - so a second target is recognised by being
+        # a rival to the best peak, not by clearing a fixed bar. Logged crowded frames put
+        # the real objects at 0.020-0.05 of the winner and the noise at 0.004, so the
+        # ratio sits between with roughly 2x margin either way. Chance is only the "is
+        # anything here" bar, low enough that a lone object never trips it.
+        ORTHO_SCORE_RATIO = 0.038
+        ORTHO_SCORE_OVER_CHANCE = 4.0
+        ORTHO_MAX_CANDIDATES = 16  # NMS peaks to consider before thresholding
 
         ortho_frame = self.last_ortho_rgb
         if ortho_frame is None:
@@ -4499,10 +4543,12 @@ class AsyncObserver:
             return None
 
         predictions = await asyncio.to_thread(
-            ortho_target.predict_room_targets, self.target_model, ortho_frame, self._device
+            partial(ortho_target.predict_room_targets, self.target_model, ortho_frame, self._device,
+                    top_k=ORTHO_MAX_CANDIDATES, min_score_over_chance=ORTHO_SCORE_OVER_CHANCE,
+                    min_score_ratio=ORTHO_SCORE_RATIO),
         )
-        target = self._floor_target(predictions[0][0], predictions[0][1]) if predictions else None
-        return [target] if target is not None else []
+        targets = [self._floor_target(x, y) for x, y, _ in predictions]
+        return [t for t in targets if t is not None]
 
     async def _find_targets_heatmap(self, extent):
         """Targets from per-anchor heatmaps warped onto the floor by the ortho worker."""
@@ -4554,7 +4600,7 @@ class AsyncObserver:
         LOOP_DELAY = ppc.loop_delay
         END_LOOP_TIMEOUT = ppc.end_loop_timeout
 
-        if not await self.check_lerobot_session_connected():
+        if not self.visual_servo and not await self.check_lerobot_session_connected():
             import torch
             has_acceleration = torch.cuda.is_available() or torch.backends.mps.is_available()
             if not has_acceleration:
@@ -4696,9 +4742,7 @@ class AsyncObserver:
         """Try to grasp whatever is directly below the gripper"""
         if self.visual_servo:
             # --visual_servo takes the grasp away from both the lerobot policy and the
-            # centering model. It is a deliberate override rather than another fallback:
-            # the point of running it is to find out how it does, which a silent fall
-            # back to something else would hide.
+            # centering model. It is a deliberate override rather than another fallback.
             if not await self.servo.ensure_model():
                 logger.warning('No visual servoing model loaded; cannot grasp')
                 return False
@@ -4893,7 +4937,19 @@ class AsyncObserver:
             c_model.eval()
             return c_model
 
-        self.centering_model = await asyncio.to_thread(load_sync)
+        # Same clock-driven bar as the target model: the download and the torch import
+        # inside load_sync report nothing, so it holds at 99% until this returns.
+        async with FakeProgress(
+            self.send_ui,
+            name="Centering Model",
+            current_action="Loading centering model...",
+            done_action="Centering model ready",
+            failed_action="Could not load the centering model",
+            expected_s=5.0,
+            interval_s=0.2,
+            suppress_completion_popup=True,
+        ):
+            self.centering_model = await asyncio.to_thread(load_sync)
 
     def _set_target_model(self, model, kind=None):
         """Set self.target_model, notifying the UI via auto_targeting_state whenever
@@ -4944,7 +5000,20 @@ class AsyncObserver:
             return t_model
 
         load_sync = load_ortho if kind == "ortho" else load_heatmap
-        self._set_target_model(await asyncio.to_thread(load_sync), kind)
+        # The checkpoint fetch and torch import inside load_sync report nothing, so the
+        # bar is on a 5s timer; it holds at 99% for as long as the load actually takes.
+        async with FakeProgress(
+            self.send_ui,
+            name="Target Model",
+            current_action=f"Loading {kind} target model...",
+            done_action=f"{kind} target model ready",
+            failed_action=f"Could not load the {kind} target model",
+            expected_s=5.0,
+            interval_s=0.2,
+            suppress_completion_popup=True,
+        ):
+            model = await asyncio.to_thread(load_sync)
+        self._set_target_model(model, kind)
 
     async def _handle_set_target_model(self, item: control.SetTargetModel):
         # DEFAULT is ortho; the heatmap model is only loaded when asked for by name.

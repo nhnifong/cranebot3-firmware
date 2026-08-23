@@ -33,6 +33,7 @@ import numpy as np
 from nf_robot.common.util import clamp
 from nf_robot.generated.nf import telemetry
 from nf_robot.host.arp_gripper_client import OPEN, CLOSED, RANGE_MAX_AGE_S
+from nf_robot.host.fake_progress import FakeProgress
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ SERVO_MODES = (SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER)
 # ---------------------------------------------------------------------------
 # (m) range to the item below which the grip is started, and where the descent profile
 # aims to run out - so the two agree on where the approach ends.
-RANGE_ITEM = 0.04
+RANGE_ITEM = 0.02
 # (m) below this, a low target-present score no longer aborts: too far in to go looking
 # for something better.
 COMMIT_RANGE_M = 0.3
@@ -61,10 +62,10 @@ COMMIT_RANGE_M = 0.3
 #
 #   range   0.60  0.40  0.20  0.15  0.10  0.06
 #   m/s     0.12  0.12  0.12  0.08  0.05  0.03
-DESCENT_GAIN = 0.75         # (1/s) speed asked for per metre of range left to close
-DESCENT_SPEED_MAX = 0.12    # (m/s) cap while there is plenty of room below
-DESCENT_SPEED_MIN = 0.03    # (m/s) floor, or the last centimetres never arrive
-LATERAL_GAIN = 1.2          # (1/s) fraction of the remaining offset commanded per second
+DESCENT_GAIN = 0.85         # (1/s) speed asked for per metre of range left to close
+DESCENT_SPEED_MAX = 0.14    # (m/s) cap while there is plenty of room below
+DESCENT_SPEED_MIN = 0.07    # (m/s) floor, or the last centimetres never arrive
+LATERAL_GAIN = 0.8          # (1/s) fraction of the remaining offset commanded per second
 LATERAL_SPEED_MAX = 0.15    # (m/s)
 # Descent is gated on being centered, and the tolerance is a fraction of the range, which
 # makes it an angular tolerance: 3cm of error at 60cm up is a correction the rest of the
@@ -87,7 +88,7 @@ TARGET_EMA_RESET_M = 0.5
 # stuck. The threshold sits well above the position estimate's noise and well below what
 # even the slowest part of a descent covers in this time, so it means "not moving" rather
 # than "moving slowly".
-STUCK_DISTANCE_M = 0.02
+STUCK_DISTANCE_M = 0.05
 STUCK_TIMEOUT_S = 5.0
 
 APPROACH_TIMEOUT_S = 40.0
@@ -125,6 +126,18 @@ CLOSE_CONFIRM_FRAMES = 10
 # force is 0.11 and 41% of frames ask for nothing at all.
 HOLD_FORCE_FRACTION = 0.8
 HOLD_FORCE_MIN_COMMANDED = 0.15
+#
+# The second way to be loaded needs no reference to what was commanded: a felt force this
+# high that has stopped moving is something solid between the pads. The force loop does
+# not always converge on its setpoint - a thin or compliant object can leave it short
+# indefinitely - and a grip that has settled at a real force is held, however far under
+# the setpoint it came to rest.
+HOLD_FORCE_MIN_FELT = 0.15
+HOLD_FORCE_SETTLE_S = 0.5
+# Peak-to-peak the felt force may wander over that window and still count as still.
+HOLD_FORCE_SETTLE_BAND = 0.02
+# Below this many samples in the window there is nothing to judge stillness from.
+HOLD_FORCE_SETTLE_MIN_SAMPLES = 5
 # And the model's own opinion, which is the half that can tell a loaded grip on an object
 # from a loaded grip on a finger, a carpet edge or the floor.
 HOLD_PROB_THRESHOLD = 0.5
@@ -291,19 +304,35 @@ class VisualServo:
             return model, device, None
 
         self.model = None
-        try:
-            model, device, refusal = await asyncio.to_thread(load_sync)
-        except Exception as e:
-            logger.error(f'Could not load the visual servoing model: {e!r}')
-            self.ob.send_ui(pop_message=telemetry.Popup(message=self._load_failure_message(e)))
-            return
+        # A grasp is what asked for this, so the wait happens mid-motion with no other
+        # explanation on screen; the bar is on a timer because load_sync reports nothing.
+        # It ends quietly - the failure paths below raise their own popups, which say far
+        # more than a completion notice would.
+        async with FakeProgress(
+            self.ob.send_ui,
+            name="Visual Servoing Model",
+            current_action="Loading visual servoing model...",
+            done_action="Visual servoing model ready",
+            failed_action="Could not load the visual servoing model",
+            expected_s=5.0,
+            interval_s=0.2,
+            suppress_completion_popup=True,
+        ) as progress:
+            try:
+                model, device, refusal = await asyncio.to_thread(load_sync)
+            except Exception as e:
+                logger.error(f'Could not load the visual servoing model: {e!r}')
+                self.ob.send_ui(pop_message=telemetry.Popup(message=self._load_failure_message(e)))
+                progress.fail()
+                return
 
-        self.ob._device = device
-        if refusal:
-            logger.warning(refusal)
-            self.ob.send_ui(pop_message=telemetry.Popup(message=refusal))
-            return
-        self.model = model
+            self.ob._device = device
+            if refusal:
+                logger.warning(refusal)
+                self.ob.send_ui(pop_message=telemetry.Popup(message=refusal))
+                progress.fail(refusal)
+                return
+            self.model = model
 
     def _load_failure_message(self, error):
         """What to tell a person about a checkpoint that would not load.
@@ -470,47 +499,57 @@ class VisualServo:
 
     # -- whether we have it -------------------------------------------------
 
-    def grip_loaded(self):
-        """Whether the grip is carrying the force it asked for, and by how much.
+    def force_settled(self):
+        """Whether the felt force has held still lately, and the spread it held within.
 
-        A ratio rather than a level, so it means the same thing on a sock as on a shoe:
-        the gripper turns finger speed into a force ramp once it feels contact, so
-        target_force is what the grip asked for and filtered_force is what it got. The
-        minimum on the commanded side is what stops "asked for nothing, achieved nothing"
-        from satisfying any ratio.
+        Peak-to-peak over the window rather than a slope: the value arrives already
+        low-passed from the gripper, so what is left to catch is drift, and a band catches
+        drift in either direction. The window is measured against host time the way the
+        rangefinder's staleness check is, which means a gripper that stopped sending
+        empties the window and reads as unsettled rather than as a perfectly steady force.
+        Spread is None when there was not enough to judge.
+        """
+        recent = self.ob.datastore.finger.deepCopy(cutoff=time.time() - HOLD_FORCE_SETTLE_S)
+        if len(recent) < HOLD_FORCE_SETTLE_MIN_SAMPLES:
+            return False, None
+        spread = float(recent[:, 2].max() - recent[:, 2].min())
+        return spread <= HOLD_FORCE_SETTLE_BAND, spread
+
+    def grip_loaded(self):
+        """Whether the grip is carrying a load, by either of two independent tests.
+
+        It is loaded if it is carrying the force it asked for (a ratio against the
+        commanded force), or if it has simply come to rest at a real force, whatever was
+        asked for. Either is enough: the first cannot fire when little or nothing was
+        commanded, and the second cannot fire while the force is still moving.
         """
         commanded = float(self.ob.gripper_client.last_target_force)
         felt = float(self.ob.datastore.finger.getLast()[2])
         ratio = felt / commanded if commanded > 0 else 0.0
-        return (commanded >= HOLD_FORCE_MIN_COMMANDED
-                and ratio >= HOLD_FORCE_FRACTION), commanded, felt, ratio
+
+        tracking = (commanded >= HOLD_FORCE_MIN_COMMANDED
+                    and ratio >= HOLD_FORCE_FRACTION)
+        settled, spread = self.force_settled()
+        resting = felt >= HOLD_FORCE_MIN_FELT and settled and commanded > HOLD_FORCE_MIN_COMMANDED
+        return tracking or resting, commanded, felt, ratio, spread
 
     def holding_now(self, prediction):
-        """This routine's own answer to "we have it, go up", and its evidence.
-
-        Deliberately not pe.holding. That flag is a pressure threshold shared with every
-        other grasping routine, and it says something coarser than what is wanted here: it
-        cannot tell a loaded grip on an object from a loaded grip on a carpet edge, and it
-        fires at a fixed level whatever force this grip was asking for. This is the pair
-        the model makes possible - the grip is carrying what it asked for, and the model
-        recognises what is in the jaws.
-        """
-        loaded, commanded, felt, ratio = self.grip_loaded()
+        """This routine's own answer to "we have it, go up", and its evidence."""
+        loaded, commanded, felt, ratio, spread = self.grip_loaded()
         probability = prediction['holding'] if prediction is not None else 0.0
+        steadiness = 'too few samples' if spread is None else f'{spread:.3f}'
         return (loaded and probability > HOLD_PROB_THRESHOLD,
                 f'felt {felt:.3f} of {commanded:.3f} commanded ({ratio:.0%}, needs '
-                f'{HOLD_FORCE_FRACTION:.0%}), holding head {probability:.2f}')
+                f'{HOLD_FORCE_FRACTION:.0%}), spread {steadiness} over {HOLD_FORCE_SETTLE_S}s '
+                f'(needs <{HOLD_FORCE_SETTLE_BAND:.3f} at felt >{HOLD_FORCE_MIN_FELT:.2f}), '
+                f'holding head {probability:.2f}')
 
     # -- the modes ---------------------------------------------------------
 
     async def run(self, mode=SERVO_MODE_GRASP, attempts=None):
         """Run one of SERVO_MODES. True only if a grasp ended with the object held.
 
-        `attempts` overrides how many tries a grasp gets before it reports failure; the
-        default is NUM_ATTEMPTS. A benchmark wants 1, so that a call and an attempt are
-        the same thing and a hit rate means what it says - a success on the third try is a
-        different event from a success on the first, and averaging them hides which one
-        the model is producing.
+        `attempts` overrides how many tries a grasp gets before it reports failure.
 
         The debugging modes run until the motion task is cancelled and return False, since
         nothing was grasped.

@@ -891,8 +891,11 @@ function handleOperationProgress(data: nf.telemetry.IOperationProgress) {
   if (percentComplete >= 100) {
     if (data.name) completedOperations[data.name] = true;
     container.classList.add('hidden');
-    // Use data.name and data.currentAction for the popup
-    showPopup({ message: `${data.name ?? 'Operation'} \n${data.currentAction ?? ''}` });
+    // Background work the user never asked for finishes quietly; the bar was the whole story.
+    if (!data.suppressCompletionPopup) {
+      // Use data.name and data.currentAction for the popup
+      showPopup({ message: `${data.name ?? 'Operation'} \n${data.currentAction ?? ''}` });
+    }
     return;
   }
 

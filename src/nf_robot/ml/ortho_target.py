@@ -725,12 +725,37 @@ def prepare_ortho_image(rgb, image_size, device):
 
 
 @torch.no_grad()
-def predict_room_targets(model, rgb, device, top_k=1, tta=False):
-    """Best target(s) for one ortho frame, as [(x_m, y_m, score)] in the room frame."""
+def predict_room_targets(model, rgb, device, top_k=1, tta=False,
+                         min_score_over_chance=None, min_score_ratio=None):
+    """Best target(s) for one ortho frame, as [(x_m, y_m, score)] in the room frame.
+
+    A score is one cell's share of a single softmax over all grid*grid cells, so it has
+    no fixed scale: chance level is 1/cells, and every extra object in frame divides the
+    mass again. Two gates, either of which may be None to disable it:
+
+    `min_score_ratio` keeps only peaks worth at least that fraction of the best peak. It
+    is the gate that adapts to the scene, because it asks whether a peak is a rival to
+    the best one rather than whether it clears some absolute bar. A busy floor flattens
+    every score together and the real objects stay comparable; an empty floor concentrates
+    the mass on the one object and leaves the ripple far below it.
+
+    `min_score_over_chance` is a multiple of chance, and only decides whether anything at
+    all is here: it drops the whole frame's worth of peaks, the best one included, when
+    the map is flat enough that even the winner is barely above uniform.
+    """
     batch = prepare_ortho_image(rgb, model.image_size, device)
     uv, scores = predict(model, batch, tta=tta, top_k=top_k)
+    uv, scores = uv[0].cpu().numpy(), scores[0].cpu().numpy()
+
+    floor = 0.0 if min_score_over_chance is None else min_score_over_chance / (model.grid ** 2)
+    if min_score_ratio is not None and len(scores):
+        # topk sorts descending, so the first score is the best peak.
+        floor = max(floor, min_score_ratio * float(scores[0]))
+
     out = []
-    for (u, v), score in zip(uv[0].cpu().numpy(), scores[0].cpu().numpy()):
+    for (u, v), score in zip(uv, scores):
+        if score < floor:
+            continue
         x_m, y_m = ortho_px_to_room(float(u), float(v), model.image_size, model.image_size)
         out.append((x_m, y_m, float(score)))
     return out
