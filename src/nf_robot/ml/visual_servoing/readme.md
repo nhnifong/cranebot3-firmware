@@ -502,6 +502,23 @@ wanders when it should be holding still under the wrist turn.
 
 This replaces the split it writes, so run it before generating synthetic frames.
 
+Recordings of flying over empty floor are mined the other way round, with `--negatives`:
+
+    python -m nf_robot.ml.visual_servoing.mine_teleop \
+        --repo_id naavox/empty-floor-sweep --negatives \
+        --output_root datasets/visual_servoing \
+        --preview_dir datasets/visual_servoing/negative_preview
+
+Every frame becomes a `target_present = 0` row with no position labels, one frame in five
+by default (`--negative_stride`), written as `negative-*.parquet` beside the positives
+rather than over them. Episodes that contain a successful grasp are skipped and counted:
+mining one of those this way would teach that an object in the jaws is nothing at all.
+
+This is what the target-present head actually needs. Trained on synthetic negatives alone
+it learns "nothing here" as a property of composited images - on a real checkpoint it
+fires low on half the synthetic bare-floor frames and never once on a real one, because
+the live camera only ever produces real frames.
+
 ## 4. Generate synthetic frames
 
 Joins the same split as extra shards, drawing simulated heights from the mined rows so
