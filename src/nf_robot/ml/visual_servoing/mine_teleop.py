@@ -131,8 +131,8 @@ FINGER_SPEED_FULL_SCALE = 90.0
 # Frames are stored at the model's input resolution. Labels are normalized coordinates,
 # so they survive the resize untouched, and the stored frame is then exactly what the
 # model sees - nothing is gained by keeping pixels the training loader would throw away.
-#
-# Which means this is tied to the backbone's patch size, and the training loader does not
+#IMAGE_SIZE = (448, 256) # dinov3
+IMAGE_SIZE = (448, 252) # dinov2
 # resize or check: a dataset written here at 256 tall, fed to a /14 model configured for
 # 252, runs and silently drops the bottom 4 rows while the labels still span all 256.
 # Changing backbones means rebuilding the dataset with this constant changed to match -
@@ -440,8 +440,8 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
     return out, dropped, blind
 
 
-def mine_negative_episode(rows, fps, stride=NEGATIVE_STRIDE, rise_m=RISE_M):
-    """Rows for one episode of an empty-floor recording, or (None, reason, 0).
+def mine_negative_episode(rows, stride=NEGATIVE_STRIDE):
+    """Rows for one episode of an empty-floor recording.
 
     The mirror image of mine_episode: no grasp to run time backwards from, so nothing is
     labelled about *where* anything is - only that there was nothing there to go to.
@@ -461,19 +461,14 @@ def mine_negative_episode(rows, fps, stride=NEGATIVE_STRIDE, rise_m=RISE_M):
                         an operator who picked something up mid-recording is no longer
                         describing empty floor, and guessing would be worse than masking
 
-    Refuses an episode that contains a grasp. Pointing this mode at an ordinary grasping
-    dataset would label every frame of every approach "nothing here", which is not a
-    mislabelled row but a poisoned head, and it is an easy mistake to make from the
-    command line. The test is the same held-pressure-then-lift the positive path uses to
-    decide a grasp succeeded, so it costs nothing and catches exactly that.
-    """
-    pressure = np.array([r["pressure"] for r in rows], dtype=np.float32)
-    grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
-    if grasp is not None:
-        heights = np.array([r["gripper_pos"][2] for r in rows])
-        if np.any(heights[grasp:] >= heights[grasp] + rise_m):
-            return None, "has_grasp", 0
+    Takes the recording at its word about being empty. It cannot check: the pressure
+    signature of a grasp and of the fingers closing on each other are the same signature,
+    so a flight with the jaws shut trips every test for "something was picked up here".
+    The preview is the check that works, because a person can see an empty floor.
 
+    Returns (rows, dropped, blind) like mine_episode, the last two always zero, so both
+    producers report through the same path.
+    """
     out = []
     for i in range(0, len(rows), max(1, stride)):
         r = rows[i]
@@ -633,7 +628,7 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
     if progress is not None:
         progress.set_description(f"{repo_id.split('/')[-1]} {src_w}x{src_h}")
 
-    mined, skipped = 0, {"no_grasp": 0, "no_rise": 0, "has_grasp": 0}
+    mined, skipped = 0, {"no_grasp": 0, "no_rise": 0}
     dropped_total, blind_total = 0, 0
     considered = 0
     for n, ep in enumerate(sorted(episodes)):
@@ -643,7 +638,7 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         if progress is not None:
             progress.update(1)
         if negatives:
-            result, info, blind = mine_negative_episode(episodes[ep], fps, stride, rise_m)
+            result, info, blind = mine_negative_episode(episodes[ep], stride)
         else:
             result, info, blind = mine_episode(episodes[ep], fps, calibration,
                                                approach_seconds, carry_seconds, rise_m)
@@ -885,9 +880,8 @@ def main():
         "--negatives", action="store_true",
         help="The source is a recording of empty floor, so every frame is a "
              "target_present=0 row with no position labels. Writes negative-*.parquet "
-             "beside the positives rather than replacing them. Episodes that turn out to "
-             "contain a successful grasp are skipped, since one of those mined this way "
-             "would teach that an object in the jaws is nothing at all.")
+             "beside the positives rather than replacing them. Point it only at a "
+             "recording that really is empty - nothing here can check that for you.")
     parser.add_argument("--negative_stride", type=int, default=NEGATIVE_STRIDE,
                         help="With --negatives, keep one frame in this many")
     args = parser.parse_args()

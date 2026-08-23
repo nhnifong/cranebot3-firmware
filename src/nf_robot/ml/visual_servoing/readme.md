@@ -519,8 +519,13 @@ Recordings of flying over empty floor are mined the other way round, with `--neg
 
 Every frame becomes a `target_present = 0` row with no position labels, one frame in five
 by default (`--negative_stride`), written as `negative-*.parquet` beside the positives
-rather than over them. Episodes that contain a successful grasp are skipped and counted:
-mining one of those this way would teach that an object in the jaws is nothing at all.
+rather than over them.
+
+It takes the recording at its word. Nothing here can check that a flight was really over
+empty floor: the pressure signature of a grasp and of the fingers closing on each other
+are the same signature, so a flight with the jaws shut looks exactly like a pick-up to
+any test worth writing. `--preview_dir` is the check that works, since a person can see
+an empty floor.
 
 This is what the target-present head actually needs. Trained on synthetic negatives alone
 it learns "nothing here" as a property of composited images - on a real checkpoint it
