@@ -61,10 +61,6 @@ DEFAULT_WEIGHTS = {
     "cell": 1.0, "offset": 1.0, "distance": 0.5,
     "axis": 0.5, "finger": 0.5, "present": 0.2, "holding": 0.2,
 }
-# Which metric decides the checkpoint kept. Measured on rows whose target is inside the
-# frame, because a split's blind rows are a constant nobody can predict away and they
-# otherwise swamp the number a run is judged by.
-SELECTION_METRIC = "onscreen_recall@25px"
 # Width, in cells, of the Gaussian the cell head is trained against. Cells are 12px of the
 # 448x256 input (the 1.5x canvas over 56x32 cells), so 1.5 cells is about 18px.
 #
@@ -448,13 +444,11 @@ def train(args):
     data_root = resolve_data_root(args)
     logging.info(f"dataset at {data_root}")
 
-    # The whole train split trains; eval is a separate split, mined from the held-out
-    # room's own recipe, and absent unless it has been built.
+    # Only the train split. Scoring a held-out room is what evaluate.py is for, and it is
+    # a separate command on purpose: it takes a finished checkpoint and says how it did,
+    # rather than getting a vote in what the checkpoint is.
     train_set = VisualServoDataset(data_root, "train", augment=True)
-    eval_set = (VisualServoDataset(data_root, "eval", augment=False)
-                if (data_root / "eval").exists() else None)
-    logging.info(f"train {len(train_set)} row(s) | "
-                 f"eval {len(eval_set) if eval_set else 'none built'}")
+    logging.info(f"train {len(train_set)} row(s)")
 
     axis_bin_weight = None
     if args.axis_balance:
@@ -467,18 +461,10 @@ def train(args):
                      f"{weights_np.min():.2f}-{weights_np.max():.2f}")
 
     image_size = tuple(args.image_size)
-    if eval_set:
-        baseline = constant_baseline(train_set, eval_set, image_size)
-        if baseline:
-            logging.info(f"constant-prediction baseline: {_format(baseline)}")
-
     loader_kwargs = dict(num_workers=args.workers, pin_memory=device.type == "cuda")
     train_loader = torch.utils.data.DataLoader(
         train_set, batch_size=args.batch_size, shuffle=True,
         drop_last=len(train_set) > args.batch_size, **loader_kwargs)
-    eval_loader = (torch.utils.data.DataLoader(
-        eval_set, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
-        if eval_set else None)
 
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
@@ -504,7 +490,6 @@ def train(args):
                               enabled=device.type == "cuda")
 
     os.makedirs(os.path.dirname(args.model_path) or ".", exist_ok=True)
-    best, best_metrics = -1.0, {}
     for epoch in range(args.epochs):
         model.train()
         totals, seen = {}, 0
@@ -527,38 +512,18 @@ def train(args):
 
         line = f"epoch {epoch + 1}/{args.epochs} " + _format({k: v / max(seen, 1) for k, v in totals.items()})
 
-        due = (epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs
-        if due and eval_loader is not None:
-            metrics = evaluate(model, eval_loader, device, image_size)
-            logging.info(f"{line} | {_format(metrics)}")
-            # Selected on the rows whose answer is in the picture. The all-rows figure
-            # includes targets no image can locate, which puts a large constant in the
-            # metric and lets a genuinely improving model look flat.
-            score = metrics.get(SELECTION_METRIC, metrics.get("recall@25px", -1.0))
-            if score > best:
-                best, best_metrics = score, metrics
-                torch.save(checkpoint_payload(model, args, metrics, epoch + 1),
-                           args.model_path)
-                logging.info(f"saved {args.model_path} ({SELECTION_METRIC} {score:.3f})")
-        elif due:
-            # nothing to score against, so keep the latest instead of the best
-            torch.save(checkpoint_payload(model, args, {}, epoch + 1), args.model_path)
-            logging.info(f"{line} | saved {args.model_path}")
-        else:
-            logging.info(line)
+        logging.info(line)
+        # Written every epoch, always the newest weights. Nothing here judges a checkpoint
+        # and nothing here discards one.
+        torch.save(checkpoint_payload(model, args, {}, epoch + 1), args.model_path)
 
-    if eval_loader is None:
-        logging.info(f"done; no eval split built, checkpoint at {args.model_path}")
-    else:
-        logging.info(f"done; best eval {SELECTION_METRIC} {best:.3f}, "
-                     f"checkpoint at {args.model_path}")
+    logging.info(f"done; {args.epochs} epoch(s), checkpoint at {args.model_path}")
 
     if args.upload:
         if not Path(args.model_path).exists():
-            # every eval scored worse than the initial -1.0, so nothing was ever saved
             logging.error(f"nothing to upload: no checkpoint at {args.model_path}")
         else:
-            upload_model(args.model_path, args.model_id, best_metrics)
+            upload_model(args.model_path, args.model_id)
 
 
 def main():
@@ -599,7 +564,6 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--unfreeze_backbone", action="store_true")
     parser.add_argument("--backbone_lr_scale", type=float, default=0.1)
-    parser.add_argument("--eval_every", type=int, default=1)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default=None)

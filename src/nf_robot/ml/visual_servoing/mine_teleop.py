@@ -131,15 +131,18 @@ FINGER_SPEED_FULL_SCALE = 90.0
 # Frames are stored at the model's input resolution. Labels are normalized coordinates,
 # so they survive the resize untouched, and the stored frame is then exactly what the
 # model sees - nothing is gained by keeping pixels the training loader would throw away.
-#IMAGE_SIZE = (448, 256) # dinov3
-IMAGE_SIZE = (448, 252) # dinov2
-# resize or check: a dataset written here at 256 tall, fed to a /14 model configured for
-# 252, runs and silently drops the bottom 4 rows while the labels still span all 256.
-# Changing backbones means rebuilding the dataset with this constant changed to match -
-# synth_frames imports it, so both halves follow. See visual_servoing/readme.md,
-# "Training on the ungated backbone".
-IMAGE_SIZE = (448, 256) # dinov3
-# IMAGE_SIZE = (448, 252) # dinov2
+# A default, not a decision: --image_size overrides it, and a run into a split that
+# already holds frames takes that split's size instead. It has to be a per-run choice
+# because the right answer depends on the backbone the dataset is destined for - 448x256
+# for DINOv3 at /16, 448x252 for DINOv2 at /14 - and a dataset holding both is one that
+# will not collate.
+#
+# Getting it wrong is quiet in both directions. Frames written at 256 tall and fed to a
+# /14 model configured for 252 run fine: the patch embedding floors to the same 18 token
+# rows, the bottom 4 pixel rows are never seen, and every label stays normalized over all
+# 256, which is a 1.6% downward bias nothing reports. Frames of two different heights in
+# one split are at least loud, but only at the first batch.
+IMAGE_SIZE = (448, 256)
 JPEG_QUALITY = 90
 # Roughly how much image data goes in one parquet shard. The point of shards is file
 # count: a few hundred large files upload and download from the hub in a way that
@@ -233,9 +236,9 @@ class ShardWriter:
         self.pending = 0
 
 
-def encode_frame(bgr):
+def encode_frame(bgr, image_size=IMAGE_SIZE):
     """One frame as JPEG bytes at the model's input resolution."""
-    resized = cv2.resize(bgr, IMAGE_SIZE, interpolation=cv2.INTER_AREA)
+    resized = cv2.resize(bgr, tuple(image_size), interpolation=cv2.INTER_AREA)
     ok, buf = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
     if not ok:
         raise RuntimeError("JPEG encoding failed")
@@ -492,6 +495,25 @@ def mine_negative_episode(rows, stride=NEGATIVE_STRIDE):
     return out, 0, 0
 
 
+def split_image_size(split_dir: Path):
+    """The frame size the shards in a split are already written at, or None if empty.
+
+    One row out of one shard is enough: a split that holds two sizes cannot be collated
+    into a batch, so either they all agree or the split is already broken.
+    """
+    import pyarrow.parquet as pq
+
+    for path in sorted(split_dir.glob("*.parquet")):
+        table = pq.read_table(path, columns=["image"]).slice(0, 1)
+        blobs = table.column("image").to_pylist()
+        if not blobs:
+            continue
+        img = cv2.imdecode(np.frombuffer(blobs[0], np.uint8), cv2.IMREAD_COLOR)
+        if img is not None:
+            return (img.shape[1], img.shape[0])
+    return None
+
+
 def source_episode_count(root: Path) -> int:
     """Episodes in a source, read from its metadata."""
     return int(json.loads((root / "meta" / "info.json").read_text())["total_episodes"])
@@ -605,7 +627,8 @@ def report_sources(sources):
 
 def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds: float,
                 carry_seconds: float, rise_m: float, limit: int | None, progress=None,
-                negatives: bool = False, stride: int = NEGATIVE_STRIDE):
+                negatives: bool = False, stride: int = NEGATIVE_STRIDE,
+                image_size=IMAGE_SIZE):
     """Mine one teleop dataset into an open shard writer.
 
     `negatives` treats the whole recording as empty floor: see mine_negative_episode.
@@ -652,7 +675,7 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
             frame = dataset[base + sample["frame_index"]][image_key]
             bgr = cv2.cvtColor(
                 (frame.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8), cv2.COLOR_RGB2BGR)
-            sample["image"] = encode_frame(bgr)
+            sample["image"] = encode_frame(bgr, image_size)
             sample["episode_index"] = ep
             sample["source_repo_id"] = repo_id
             writer.add(sample)
@@ -674,7 +697,8 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
 
 def mine(sources, output_root: Path, split: str, approach_seconds: float,
          carry_seconds: float, rise_m: float, limit: int | None,
-         negatives: bool = False, stride: int = NEGATIVE_STRIDE):
+         negatives: bool = False, stride: int = NEGATIVE_STRIDE,
+         image_size=IMAGE_SIZE):
     """Replace one split of the mined dataset with the given (repo_id, root) sources.
 
     Only this producer's shards go: mining is deterministic given its inputs, so a rerun
@@ -685,6 +709,17 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
     """
     split_dir = output_root / split
     split_dir.mkdir(parents=True, exist_ok=True)
+
+    # Frames of two heights in one split do not collate, and the failure surfaces as a
+    # torch.stack error inside a dataloader worker on the first batch - long after the
+    # ten gigabytes of mismatched rows were written and the run was left overnight.
+    existing = split_image_size(split_dir)
+    if existing is not None and tuple(existing) != tuple(image_size):
+        raise SystemExit(
+            f"{split_dir} already holds {existing[0]}x{existing[1]} frames and this run "
+            f"would write {image_size[0]}x{image_size[1]}. Pass --image_size "
+            f"{existing[0]} {existing[1]} to match it, or mine into a different "
+            f"--output_root.")
     # Negatives are their own producer, written beside the positives rather than over
     # them: a split wants both, and each rerun should replace only what it wrote.
     prefix = NEGATIVE_PREFIX if negatives else ShardWriter.DEFAULT_PREFIX
@@ -698,7 +733,8 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
     with tqdm(total=total, unit="ep", dynamic_ncols=True) as progress:
         for repo_id, root in sources:
             mine_source(writer, root, repo_id, approach_seconds, carry_seconds, rise_m,
-                        limit, progress, negatives=negatives, stride=stride)
+                        limit, progress, negatives=negatives, stride=stride,
+                        image_size=image_size)
     writer.flush()
 
     write_dataset_card(output_root)
@@ -884,6 +920,12 @@ def main():
              "recording that really is empty - nothing here can check that for you.")
     parser.add_argument("--negative_stride", type=int, default=NEGATIVE_STRIDE,
                         help="With --negatives, keep one frame in this many")
+    parser.add_argument("--image_size", type=int, nargs=2, default=list(IMAGE_SIZE),
+                        metavar=("WIDTH", "HEIGHT"),
+                        help="Frame size to store, which has to suit the backbone the "
+                             "dataset is for: 448 256 for DINOv3 at /16, 448 252 for "
+                             "DINOv2 at /14. A split that already holds frames refuses a "
+                             "run that disagrees with it. Default %(default)s.")
     args = parser.parse_args()
 
     roots = args.root or []
@@ -907,6 +949,7 @@ def main():
         sources, Path(args.output_root), args.split,
         args.approach_seconds, args.carry_seconds, args.rise_m, args.limit,
         negatives=args.negatives, stride=args.negative_stride,
+        image_size=tuple(args.image_size),
     )
     if args.preview_dir and total:
         write_preview(split_dir, Path(args.preview_dir),

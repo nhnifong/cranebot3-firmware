@@ -577,8 +577,12 @@ In both cases the network was fitting its labels correctly.
         --epochs 40 \
         --batch_size 400
 
-The whole `train/` split trains. `eval/` is scored each epoch when it exists and the
-best checkpoint by `recall@25px` is kept; without it, the latest is saved instead.
+The whole `train/` split trains, and the checkpoint written after every epoch is always
+the newest one - `eval/` is scored when it exists and reported, but it selects nothing.
+Keeping the best-scoring epoch sounds strictly better and is not: the eval split is one
+held-out room measured on a position proxy the axis, finger and flag heads never enter,
+and a twenty epoch run once kept epoch 1 and discarded the other nineteen, leaving a
+model on the robot that was one epoch old without saying so anywhere.
 
 The grasp axis head is trained as a von Mises likelihood, so its output's length is a
 concentration - how sure it is - and not just a leftover of averaging. `axis_kappa` in the
