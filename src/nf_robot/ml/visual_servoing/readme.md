@@ -652,7 +652,7 @@ One constant, then a rebuild of both halves of the dataset:
             --plates plates_all \
             --output_root datasets/visual_servoing_252/ \
             --ranges_from datasets/visual_servoing_252/train \
-            --count 40000
+            --count 80000
 
    The plates themselves are untouched — they are stored at capture resolution and
    resized on use, so no re-capture and no re-matting.

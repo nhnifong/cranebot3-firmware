@@ -138,7 +138,8 @@ FINGER_SPEED_FULL_SCALE = 90.0
 # Changing backbones means rebuilding the dataset with this constant changed to match -
 # synth_frames imports it, so both halves follow. See visual_servoing/readme.md,
 # "Training on the ungated backbone".
-IMAGE_SIZE = (448, 256)
+IMAGE_SIZE = (448, 256) # dinov3
+# IMAGE_SIZE = (448, 252) # dinov2
 JPEG_QUALITY = 90
 # Roughly how much image data goes in one parquet shard. The point of shards is file
 # count: a few hundred large files upload and download from the hub in a way that

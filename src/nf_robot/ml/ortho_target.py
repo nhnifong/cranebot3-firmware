@@ -53,15 +53,8 @@ is a LeRobot dataset and the result is not:
        python -m nf_robot.ml.ortho_target train \
            --backbone facebook/dinov2-with-registers-base --image_size 448
 
-     448 rather than 512 because DINOv2 is a /14 model: 448 = 14 x 32 keeps the token
-     grid at exactly 32x32, so --grid 128 still divides by a power of two and every
-     shape downstream of the trunk is unchanged (768 hidden x 12 layers, 4 registers
-     ahead of the patch tokens, ImageNet normalization - all the same). What is lost is
-     23% of the input pixels, since the feature map covers the same frame either way,
-     and DINOv3's dense-feature training. Nothing else in this file cares: the dataset
-     resizes to whatever --image_size asks for, and the checkpoint records the backbone
-     id and image size, so `evaluate` needs no flags at all. 560 (= 14 x 40) with
-     --grid 160 buys the resolution back at about 1.6x the trunk's compute.
+     the dataset resizes to whatever --image_size asks for, and the checkpoint records the backbone
+     id and image size, so `evaluate` needs no flags at all.
 
   4. `evaluate` scores that checkpoint - or the published one, downloaded, if training
      has not run on this machine - against the held-out room, and --preview_dir
