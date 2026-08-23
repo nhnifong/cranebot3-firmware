@@ -30,10 +30,17 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import random
 import subprocess
 import sys
 from pathlib import Path
+
+# The AV1 encoder prints a twenty line configuration banner per video file, straight to
+# stderr from libSvtAv1Enc rather than through ffmpeg's log system, so the split's own
+# progress is unreadable without this. 1 is the library's "errors only" level; export
+# SVT_LOG to keep the banner.
+os.environ.setdefault("SVT_LOG", "1")
 
 def dataset_root(repo_id, root=None):
     """The dataset's directory, from --root or the LeRobot home.

@@ -103,7 +103,14 @@ from nf_robot.ml.lerobot_label_contact_actions import label_dataset
 from nf_robot.ml import camera_goal
 from nf_robot.ml.lerobot_normalize_tasks import load_mapping
 from nf_robot.ml.stringman_lerobot import _ACTION_SPACES, _CAMERA_MODES, camera_mode_from_features
+from nf_robot.ml.lerobot_repair_episode_meta import repair as repair_episode_meta
 from nf_robot.ml.lerobot_trim_to_grasp import trim_dataset_to_grasp
+
+# The AV1 encoder prints a twenty line configuration banner per video file, straight to
+# stderr from libSvtAv1Enc rather than through ffmpeg's log system - so av.logging cannot
+# reach it and a merge of a few hundred episodes buries its own progress. SVT_LOG is the
+# library's own level: 1 is errors only. Exported before the run to keep the banner.
+os.environ.setdefault("SVT_LOG", "1")
 
 
 def _short_name(repo_id: str) -> str:
@@ -690,6 +697,15 @@ def build(
     logging.info(f"Merging {len(converted)} datasets into '{output_repo_id}' at {output_root}")
     converted_datasets = [LeRobotDataset(repo_id=rid, root=root) for rid, root in converted]
     merge_datasets(converted_datasets, output_repo_id=output_repo_id, output_dir=output_root)
+    # A merge leaves every episode metadata row pointing at the file index it had in its
+    # source, while writing them all into one destination file - so any source that had
+    # more than one metadata file leaves rows naming a file that was never created. See
+    # lerobot_repair_episode_meta for the mechanism. Repaired here, right after the step
+    # that breaks it, because the next thing to read an episode's stats is the one that
+    # fails, and that can be days later in a split.
+    broken = repair_episode_meta(output_root)
+    if broken:
+        logging.info(f"repaired {broken} episode metadata row(s) after the merge")
     validate_dataset(output_repo_id, output_root, expected_camera_mode=camera_mode,
                      decode_videos=verify_decode)
 
