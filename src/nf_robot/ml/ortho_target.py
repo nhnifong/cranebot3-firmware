@@ -2,10 +2,9 @@
 
 """Predict where the robot should reach next, in the ortho floor view's pixel space.
 
-A separate approach to nf_robot.ml.target_heatmap, which learns from hand-labelled
-anchor camera frames. Here the labels come from teleop recordings instead: wherever
-an operator actually grasped something is by construction a place worth reaching
-for, so every episode donates one label for free.
+The labels come from teleop recordings: wherever an operator actually grasped something
+is by construction a place worth reaching for, so every episode donates one label for
+free, with no hand labelling.
 
 Build, distill, train, then ship. The first two are separate because the intermediate
 is a LeRobot dataset and the result is not:
@@ -63,13 +62,12 @@ is a LeRobot dataset and the result is not:
 
   5. Try it on a robot before publishing. --local_models makes the observer load
      models/ortho_target.pth - where training just wrote it - instead of the hub
-     copy. Targeting is switched on from the UI, which asks for this model by
-     default (see TargetModelAction in protos/control.proto):
+     copy. This is the only target model; the UI's targeting switch loads it:
 
        stringman-headless --local_models
 
-  6. Publish for stringman users, into the same hub repo the heatmap model lives in.
-     Until this is done, anyone without --local_models is still on the old model:
+  6. Publish for stringman users. Until this is done, anyone without --local_models
+     is still on the previously published checkpoint:
 
        hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 
@@ -388,8 +386,8 @@ def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit
             images[file_name] = bgr
             samples.append({
                 "file_name": file_name,
-                # "points" (a list, of one) rather than a bare pair, so this dataset has
-                # the same row shape as the hand-labelled target_heatmap one
+                # "points" (a list, of one) rather than a bare pair, leaving room for
+                # rows that carry more than a single label
                 "points": [[round(u, 2), round(v, 2)]],
                 "contact_m": [round(c, 4) for c in (x_m, y_m, z_m)],
                 "episode_index": ep,
@@ -700,8 +698,8 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
             labels = table.select(list(LABEL_COLUMNS)).to_pylist()
             for blob, row in zip(blobs, labels):
                 self.images.append(blob)
-                # "points" (a list, of one) is the shape target_heatmap's hand-labelled
-                # rows have, and what the previews and the baseline read.
+                # "points" (a list, of one) is the row shape build_samples writes, and
+                # what the previews and the baseline read.
                 self.samples.append({**row, "points": [[row["u"], row["v"]]]})
 
         self.image_size = image_size

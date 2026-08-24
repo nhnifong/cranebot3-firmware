@@ -6,12 +6,12 @@ target resolution and framerate for anchor cameras
  - for apriltag detection: 1920x1080 30fps
  - for teleoperation: 1920x1080 30fps
  - for UI's both local and remote: 960x544 2fps
- - for inference with object recognizer such as dobby: 960x544 2fps
 
 summary of anchor video pipline:
  1. detect aruco markers in frame.
  2. every 15th frame, resize down to 960x544, send to UI,
- 3. send to dobby, take heatmap from dobby, also send that to UI
+ 3. warp onto the floor plane, combining every anchor into one orthographic view,
+    which is both streamed to the UI and read by the target model
 
 target resolution and framerate for gripper camera
  - as captured: 960x540 30fps

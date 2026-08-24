@@ -202,7 +202,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, stream_heatmap=False, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE, visual_servo=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE, visual_servo=False) -> None:
         self.port = port
         # (half height, half width, floor clearance) of the calibration diamond, in meters.
         # Overridable with --diamond_size. Consumed both by the physical diamond motion in
@@ -277,8 +277,6 @@ class AsyncObserver:
         # last known positions of named tags/objects live in self.config.named_positions
         # (the single source of truth). It's written to disk on shutdown, in async_close.
         self.target_model = None
-        # which kind of target model is loaded, so run_perception knows how to drive it
-        self.target_model_kind = None
         self.centering_model = None
         # the visual servoing grasp's network, loaded on first use when --visual_servo is set
         self.visual_servo = visual_servo
@@ -316,7 +314,6 @@ class AsyncObserver:
         self.input_velocities = {'default': (np.zeros(3), time.monotonic())}
         self.active_set = set(['default'])
         self.run_ortho = run_ortho
-        self.stream_heatmap = stream_heatmap
         self.auto_start = auto_start
         self._device = None
         self._telem_log_handler: TelemetryLogHandler | None = None
@@ -326,8 +323,6 @@ class AsyncObserver:
         self.ortho_event = threading.Event()
         # rgb24, the order the anchor clients decode to; only converted to BGR for the streamer
         self.last_ortho_rgb = None
-        self.last_ortho_heatmap = None
-        self.last_heatmaps_np = None
         # list of (NfVideoStreamer, feed_number) for ortho feeds, so send_setup_telemetry can replay them
         self.ortho_streamers: list = []
         self.lerobot_process_watcher = None
@@ -4333,7 +4328,7 @@ class AsyncObserver:
             self.send_ui(target_list=snapshot)
             self.last_snapshot_hash = current_hash
 
-    def _ortho_worker(self, ortho_floor_vs, heatmap_floor_vs):
+    def _ortho_worker(self, ortho_floor_vs):
         """
         Sync thread driven by self.ortho_event, which anchor stream_video_loops set on every
         new processed frame.  Projects all anchor views onto the floor and stores the result so
@@ -4353,42 +4348,27 @@ class AsyncObserver:
                 if not valid_clients:
                     continue
 
-                # Pass heatmaps=None when the target model isn't producing them so
-                # generate_orthographic_floor_maps skips all heatmap warp work and
-                # only computes the ortho floor projection.
-                heatmaps = self.last_heatmaps_np
-                if heatmaps is not None and len(heatmaps) != len(valid_clients):
-                    heatmaps = None  # stale/mismatched batch; skip the heatmap channel
-
-                ortho_heatmap, ortho_rgb = generate_orthographic_floor_maps(
-                    valid_clients, heatmaps, self.config.camera_cal,
+                ortho_rgb = generate_orthographic_floor_maps(
+                    valid_clients, self.config.camera_cal,
                     map_size_px=1000, map_extent_meters=EXTENT,
                 )
                 self.last_ortho_rgb = ortho_rgb
-                if ortho_heatmap is not None:
-                    self.last_ortho_heatmap = ortho_heatmap
 
                 if ortho_floor_vs is not None:
                     # the streamer's encoders take BGR
                     ortho_floor_vs.send_frame(cv2.cvtColor(ortho_rgb, cv2.COLOR_RGB2BGR))
-                if heatmap_floor_vs is not None and ortho_heatmap is not None:
-                    heatmap_floor_vs.send_frame(
-                        cv2.applyColorMap((ortho_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
-                    )
             except Exception:
                 logger.exception('_ortho_worker iteration failed')
 
     async def run_perception(self):
         """
         Orthographic floor projection and target inference.
-        run_ortho and target model inference are independent; the target model is loaded at
-        runtime via SetTargetModel control messages, in one of two kinds: "ortho" reads the
-        floor projection and names a single target, "heatmap" infers per anchor camera and
-        relies on the ortho worker to warp those heatmaps onto the floor.
+        The target model is loaded at runtime via SetTargetModel control messages, and reads
+        the floor projection the ortho worker renders, so run_ortho must be on for it to see
+        anything.
         """
         LOOP_DELAY = 0.1
         FIND_TARGETS_EVERY = 5
-        EXTENT = 5.0
 
         # wait until at least one preferred camera is producing frames
         logging.info('waiting for camera frames')
@@ -4405,7 +4385,6 @@ class AsyncObserver:
                 break
 
         ortho_floor_vs = None
-        heatmap_floor_vs = None
         if self.run_ortho:
             from nf_robot.host.video_streamer import NfVideoStreamer
 
@@ -4432,21 +4411,10 @@ class AsyncObserver:
             )
             ortho_floor_vs.start()
             self.ortho_streamers = [(ortho_floor_vs, 3)]
-            if self.stream_heatmap:
-                heatmap_floor_vs = NfVideoStreamer(
-                    width=1000, height=1000, fps=10,
-                    mjpeg_port=8748,
-                    stream_path=f'stringman/{self.config.robot_id}/4',
-                    telemetry_env=self.telemetry_env,
-                    on_ready=_make_on_ready(4),
-                    bind_address=self.bind_address,
-                )
-                heatmap_floor_vs.start()
-                self.ortho_streamers.append((heatmap_floor_vs, 4))
 
         ortho_thread = threading.Thread(
             target=self._ortho_worker,
-            args=(ortho_floor_vs, heatmap_floor_vs),
+            args=(ortho_floor_vs,),
             daemon=True,
         )
         ortho_thread.start()
@@ -4461,10 +4429,7 @@ class AsyncObserver:
                 continue
             counter = 0
 
-            if self.target_model_kind == "ortho":
-                floor_targets = await self._find_targets_ortho()
-            else:
-                floor_targets = await self._find_targets_heatmap(EXTENT)
+            floor_targets = await self._find_targets_ortho()
 
             # None means "no opinion this round" (no input frame yet), which must not be
             # confused with the empty list, which retires every AI target in the queue.
@@ -4476,8 +4441,6 @@ class AsyncObserver:
 
         if self.run_ortho:
             ortho_floor_vs.stop()
-            if heatmap_floor_vs is not None:
-                heatmap_floor_vs.stop()
 
     def _route_dst_floor_pos(self):
         """Floor position of the current route destination, or None if it has none.
@@ -4521,8 +4484,8 @@ class AsyncObserver:
     async def _find_targets_ortho(self):
         """Every confident target in the ortho floor view, per the ortho_target model.
 
-        The model reads the same projection the ortho worker already renders, so unlike
-        the heatmap path nothing per-camera is inferred and no warping is needed.
+        The model reads the same projection the ortho worker already renders, so nothing
+        per-camera is inferred and no warping is needed.
         """
         from nf_robot.ml import ortho_target
 
@@ -4549,44 +4512,6 @@ class AsyncObserver:
         )
         targets = [self._floor_target(x, y) for x, y, _ in predictions]
         return [t for t in targets if t is not None]
-
-    async def _find_targets_heatmap(self, extent):
-        """Targets from per-anchor heatmaps warped onto the floor by the ortho worker."""
-        # Lazy imports: only reached once a target model is loaded, so torch stays off
-        # the startup path. Both are import-cached after first use.
-        import torch
-        from nf_robot.ml.target_heatmap import extract_targets_from_heatmap, HM_IMAGE_RES
-
-        valid_anchor_clients = [
-            c for c in self.anchors.values()
-            if c.last_output_frame is not None and c.anchor_num in self.config.preferred_cameras
-        ]
-        if not valid_anchor_clients:
-            return None
-
-        img_tensors = [
-            torch.from_numpy(cv2.resize(c.last_output_frame, HM_IMAGE_RES, interpolation=cv2.INTER_AREA))
-                 .permute(2, 0, 1).float() / 255.0
-            for c in valid_anchor_clients
-        ]
-        batch = torch.stack(img_tensors).to(self._device)
-
-        def infer_sync():
-            with torch.no_grad():
-                return self.target_model(batch).squeeze(1).cpu().numpy()
-
-        # the ortho worker picks these up and warps them onto the floor
-        self.last_heatmaps_np = await asyncio.to_thread(infer_sync)
-
-        ortho_heatmap = self.last_ortho_heatmap
-        if ortho_heatmap is None:
-            return None
-
-        results = extract_targets_from_heatmap(ortho_heatmap)
-        if len(results) == 0:
-            return []
-        targets2d = (results[:, :2] + np.array([-0.5, -0.5])) * extent
-        return [t for t in (self._floor_target(p[0], p[1]) for p in targets2d) if t is not None]
 
     async def pick_and_place_loop(self):
         """
@@ -4951,20 +4876,16 @@ class AsyncObserver:
         ):
             self.centering_model = await asyncio.to_thread(load_sync)
 
-    def _set_target_model(self, model, kind=None):
+    def _set_target_model(self, model):
         """Set self.target_model, notifying the UI via auto_targeting_state whenever
         whether a model is loaded (not the model itself) changes."""
         was_loaded = self.target_model is not None
         self.target_model = model
-        self.target_model_kind = kind if model is not None else None
-        if model is None:
-            # the ortho worker skips all heatmap warping while these are None
-            self.last_heatmaps_np = None
         if (model is not None) != was_loaded:
             self.send_ui(auto_targeting_state=telemetry.AutoTargetingState(enabled=model is not None, present=True))
 
-    async def _load_target_model(self, kind):
-        """Load the 'ortho' or 'heatmap' target model and make it the active one."""
+    async def _load_target_model(self):
+        """Load the ortho target model and make it the active one."""
         import torch
         from huggingface_hub import hf_hub_download
         DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -4980,56 +4901,40 @@ class AsyncObserver:
             ))
             return
 
-        def resolve(repo_id, filename):
-            return f"models/{filename}" if self.local_models else hf_hub_download(repo_id=repo_id, filename=filename)
-
-        def load_ortho():
+        def load_sync():
             from nf_robot.ml import ortho_target
-            path = resolve(ortho_target.TARGETING_MODEL_REPOID, ortho_target.TARGETING_MODEL_FILENAME)
+            filename = ortho_target.TARGETING_MODEL_FILENAME
+            path = (f"models/{filename}" if self.local_models
+                    else hf_hub_download(repo_id=ortho_target.TARGETING_MODEL_REPOID, filename=filename))
             logger.info(f"Loading ortho target model from {path}...")
             model, _ = ortho_target.load_checkpoint(path, DEVICE)
             return model
 
-        def load_heatmap():
-            from nf_robot.ml.target_heatmap import TargetHeatmapNet
-            path = resolve("naavox/targeting", "target_heatmap.pth")
-            logger.info(f"Loading heatmap target model from {path}...")
-            t_model = TargetHeatmapNet().to(DEVICE)
-            t_model.load_state_dict(torch.load(path, map_location=DEVICE))
-            t_model.eval()
-            return t_model
-
-        load_sync = load_ortho if kind == "ortho" else load_heatmap
         # The checkpoint fetch and torch import inside load_sync report nothing, so the
         # bar is on a 5s timer; it holds at 99% for as long as the load actually takes.
         async with FakeProgress(
             self.send_ui,
             name="Target Model",
-            current_action=f"Loading {kind} target model...",
-            done_action=f"{kind} target model ready",
-            failed_action=f"Could not load the {kind} target model",
+            current_action="Loading target model...",
+            done_action="Target model ready",
+            failed_action="Could not load the target model",
             expected_s=5.0,
             interval_s=0.2,
             suppress_completion_popup=True,
         ):
             model = await asyncio.to_thread(load_sync)
-        self._set_target_model(model, kind)
+        self._set_target_model(model)
 
     async def _handle_set_target_model(self, item: control.SetTargetModel):
-        # DEFAULT is ortho; the heatmap model is only loaded when asked for by name.
-        kinds = {
-            control.TargetModelAction.TARGET_MODEL_ENABLE_DEFAULT: "ortho",
-            control.TargetModelAction.TARGET_MODEL_ENABLE_ORTHO: "ortho",
-            control.TargetModelAction.TARGET_MODEL_ENABLE_HEATMAP: "heatmap",
-        }
+        # ortho_target is the only target model; every enable action loads it. The enum
+        # still carries the retired per-model choices, which are all treated as the default.
         if item.action == control.TargetModelAction.TARGET_MODEL_DISABLE:
             self._set_target_model(None)
             logger.info('Target model disabled')
-        elif item.action in kinds:
-            kind = kinds[item.action]
-            logger.info(f'Loading {kind} target model...')
-            await self._load_target_model(kind)
-            logger.info(f'{kind} target model ready')
+        elif item.action != control.TargetModelAction.TARGET_MODEL_ACTION_UNUSED:
+            logger.info('Loading target model...')
+            await self._load_target_model()
+            logger.info('Target model ready')
 
     async def check_lerobot_session_connected(self, timeout=2) -> bool:
         """
@@ -5107,7 +5012,6 @@ def main():
         )
     parser.add_argument("--prod", action="store_true", help="Shorthand for --telemetry_env=production")
     parser.add_argument("--no_ortho", action="store_true", help="Disable orthographic floor projection and its video streams")
-    parser.add_argument("--stream_heatmap", action="store_true", help="Generate and stream the target heatmap video feed (off by default)")
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     parser.add_argument(
@@ -5176,7 +5080,6 @@ def main():
             args.config,
             telemetry_env=args.telemetry_env,
             run_ortho=(not args.no_ortho),
-            stream_heatmap=args.stream_heatmap,
             auto_start=args.auto_start,
             local_models=args.local_models,
             debug=args.debug,

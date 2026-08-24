@@ -1433,8 +1433,6 @@ initTargetRoutePickers();
 //   1: first preferred anchor camera
 //   2: second preferred anchor camera
 //   3: reprojected floor image (handled by floorProjection below)
-//   4: heatmap overlay, transmitted only in debug builds and unused by the UI
-//      (falls through to the unknown-feed guard and is ignored)
 async function handleVideoReady(data: nf.telemetry.IVideoReady) {
   const feedNumber = data.feedNumber!;
 

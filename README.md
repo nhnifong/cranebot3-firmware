@@ -70,7 +70,6 @@ options:
     --telemetry_env {local,staging,production}
                             The cloud telemetry server to connect to (choices: local, staging, production) The default is None, which allows local connections on port 4245 only
     --no_ortho            Disable orthographic floor projection and its video streams
-    --stream_heatmap      Generate and stream the target heatmap video feed (off by default)
     --auto_start          Automatically unpark and start cleaning when all components connect (experimental)
     --local_models        Use local models from models/ for the targeting and centering models rather than downloading the production models from huggingface
     --debug               Enable DEBUG level logging

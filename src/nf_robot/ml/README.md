@@ -438,19 +438,14 @@ python -m nf_robot.ml.stringman_lerobot eval \
 
 # Targeting & centering models
 
-These are **not** lerobot policies — they're standalone heatmap/regression models with
-their own training and label tooling.
-
-Label target data:
-
-```bash
-python -m nf_robot.ml.target_heatmap label
-```
+These are **not** lerobot policies — they're standalone regression models with their own
+training tooling. Targeting is `ortho_target`, which reads the orthographic floor
+projection; see its module docstring for the distill/train/evaluate workflow.
 
 Push trained weights to the Hub (PUSH TO PROD):
 
 ```bash
-hf upload naavox/targeting models/target_heatmap.pth target_heatmap.pth
+hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 hf upload naavox/centering models/square_centering.pth square_centering.pth
 ```
 
