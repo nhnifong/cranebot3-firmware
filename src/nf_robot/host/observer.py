@@ -81,6 +81,12 @@ NUDGE_VELOCITY_KEY = 'centering'
 # heartbeat, so in normal running the nearest record is milliseconds away; this only fires
 # across a telemetry gap, where the honest move is to skip the correction.
 TRIM_SPEED_MPS = 0.08 # altitude trim moves slower than a lateral nudge; it is closing centimeters
+# (seconds) typical delay between a camera capturing a frame and its detections landing here.
+# Frames carry their capture time, so this is not an offset to correct for: it is how long a
+# step that wants a view of what it just did has to wait before the first such frame can arrive,
+# and the margin by which a cutoff is pushed into the future so clock skew between the host and
+# a component cannot let a frame from before the step slip past the filter.
+VIDEO_LATENCY_S = 0.25
 
 # Capture runs for the synthetic visual servoing dataset; see ml/visual_servoing/readme.md.
 PLATE_OUTPUT_DIR = 'plates'
@@ -1711,33 +1717,28 @@ class AsyncObserver:
                 # print(f'anchor {client.anchor_num} has {len(raw_obs[marker][client.anchor_num])} observations of {marker}')
         return dict(raw_obs)
 
-    async def snapshot_tag_observations_still(self, settle_s=3.0, min_dets=6,
-                                              max_spread_m=0.04, timeout_s=12.0):
-        """snapshot_tag_observations with the gantry sightings taken from a window in which the
-        gantry was standing still.
+    async def await_still_gantry_window(self, min_dets=6, max_spread_m=0.04, timeout_s=12.0,
+                                        what='measurement'):
+        """Wait until the anchor cameras have delivered a batch of gantry sightings, all captured
+        after this call, in which the gantry was standing still. Returns the capture time the
+        batch starts at, or None if no settled batch turned up within timeout_s.
 
-        The gantry batch is the only one the consistency residual can be badly wrong about: the
-        cards do not move, but the gantry buffer keeps filling while the machine flies around, and
-        a batch spanning a move scatters far enough to dominate the whole cost function.
+        This is what waiting for the machine to settle should cost: no longer than it takes the
+        evidence to arrive. A fixed sleep has to be as long as the worst case swing and is still
+        only a guess, whereas the sightings say directly both that the frames are new enough
+        (captured after the cutoff, so they show the machine after whatever it was just asked to
+        do) and that the gantry was holding still while they were taken.
 
-        Stops the spools, settles, then collects a fresh batch and checks the batch itself is
-        tight - a clock alone is not enough, since min_dets can be met while the gantry is still
-        coasting. A settled batch reads about 1 cm by _robust_spread, so the default
-        max_spread_m leaves 4x headroom and still rejects drift above roughly 0.3 m/s over the
-        ~0.4s a six-frame window spans. A failed window is discarded and a new one opened,
-        starting that much later into the settle.
+        A settled batch reads about 1 cm by _robust_spread, so the default max_spread_m leaves 4x
+        headroom and still rejects drift above roughly 0.3 m/s over the ~0.4s a six-frame window
+        spans. A failed window is discarded and a new one opened, starting that much later.
 
         min_dets is required from one anchor rather than all: the gantry tag faces one way, so a
-        camera seeing none of it is a normal geometry, not a reason to wait. Falls back to the
-        unfiltered buffer on timeout, since a noisy estimate beats none."""
-        # Capture times come from the bot's clock, so start each window slightly in the future
-        # to keep skew from letting a frame from before the stop through.
-        VIDEO_LATENCY_MARGIN_S = 0.5
-
-        self.slow_stop_all_spools()
-        await asyncio.sleep(settle_s)
+        camera seeing none of it is a normal geometry, not a reason to wait."""
         deadline = time.time() + timeout_s
-        window_start = time.time() + VIDEO_LATENCY_MARGIN_S
+        # Capture times come from the bot's clock, so start the window slightly in the future to
+        # keep skew from letting a frame taken before this call through.
+        window_start = time.time() + VIDEO_LATENCY_S
 
         while True:
             batches = {
@@ -1752,26 +1753,47 @@ class AsyncObserver:
             if spreads:
                 if max(spreads.values()) <= max_spread_m:
                     logger.info(
-                        f'Settled gantry window: {counts} sightings per anchor, camera-frame '
-                        f'spread {({n: round(s * 100, 1) for n, s in spreads.items()})} cm'
+                        f'Settled gantry window for {what} after '
+                        f'{timeout_s - (deadline - time.time()):.1f}s: {counts} sightings per '
+                        f'anchor, camera-frame spread '
+                        f'{({n: round(s * 100, 1) for n, s in spreads.items()})} cm'
                     )
-                    return self.snapshot_tag_observations(gantry_since=window_start)
+                    return window_start
                 logger.info(
                     f'Gantry still moving (camera-frame spread '
                     f'{({n: round(s * 100, 1) for n, s in spreads.items()})} cm '
                     f'> {max_spread_m * 100:.0f} cm); discarding this window, '
                     f'{deadline - time.time():.0f}s left before giving up.'
                 )
-                window_start = time.time() + VIDEO_LATENCY_MARGIN_S
+                window_start = time.time() + VIDEO_LATENCY_S
 
             if time.time() >= deadline:
                 logger.warning(
-                    f'No settled gantry window within {timeout_s:.0f}s (last counts {counts}, '
-                    f'wanted {min_dets} from at least one anchor under {max_spread_m * 100:.0f} cm '
-                    f'spread); falling back to the unfiltered buffer.'
+                    f'No settled gantry window for {what} within {timeout_s:.0f}s (last counts '
+                    f'{counts}, wanted {min_dets} from at least one anchor under '
+                    f'{max_spread_m * 100:.0f} cm spread).'
                 )
-                return self.snapshot_tag_observations()
-            await asyncio.sleep(0.25)
+                return None
+            await asyncio.sleep(0.05)
+
+    async def snapshot_tag_observations_still(self, min_dets=6, max_spread_m=0.04, timeout_s=12.0):
+        """snapshot_tag_observations with the gantry sightings taken from a window in which the
+        gantry was standing still.
+
+        The gantry batch is the only one the consistency residual can be badly wrong about: the
+        cards do not move, but the gantry buffer keeps filling while the machine flies around, and
+        a batch spanning a move scatters far enough to dominate the whole cost function.
+
+        Stops the spools, then waits out the settle on the sightings themselves. Falls back to the
+        unfiltered buffer on timeout, since a noisy estimate beats none."""
+        self.slow_stop_all_spools()
+        window_start = await self.await_still_gantry_window(
+            min_dets=min_dets, max_spread_m=max_spread_m, timeout_s=timeout_s,
+            what='tag observation snapshot')
+        if window_start is None:
+            logger.warning('Falling back to the unfiltered gantry buffer.')
+            return self.snapshot_tag_observations()
+        return self.snapshot_tag_observations(gantry_since=window_start)
 
     def save_poses_arp(self, anchor_poses, eyelet_positions):
         # Use the optimization output to update anchor poses and spool params
@@ -1915,6 +1937,34 @@ class AsyncObserver:
                     )
                 return reason
 
+            async def observe_corner(label):
+                """Record this corner's gantry sightings once the anchor cameras have shown it
+                standing still there. The corner is only reached when the lines stop, and the
+                buffer still holds sightings from the move, so the batch has to be cut to frames
+                captured after the move ended. await_still_gantry_window both makes that cut and
+                waits for the swing to die down, in whatever time that actually takes."""
+                # A corner is one point in the fit, so it wants a batch behind it rather than the
+                # bare minimum that proves stillness; raw_gant_poses holds 24. The timeout is
+                # short because the old fixed wait was 5s: a corner that will not settle should
+                # cost about what it used to, not four times more.
+                reached = time.time() + VIDEO_LATENCY_S
+                since = await self.await_still_gantry_window(
+                    min_dets=12, timeout_s=6.0, what=f'diamond {label}')
+                if since is None:
+                    # Nothing settled in time, but frames captured since the corner was reached
+                    # are still the right ones, just fewer or more scattered than wanted.
+                    since = reached
+                    logger.warning(f'Diamond {label}: no settled window; measuring on whatever '
+                                   f'arrived since the move ended.')
+                batch = self.snapshot_tag_observations(gantry_since=since)['gantry']
+                if not any(len(b) for b in batch):
+                    # An empty corner would take a point out of the fit entirely, so a batch that
+                    # spans the move is still the better of the two bad options.
+                    logger.warning(f'Diamond {label}: no gantry sightings at all since the move '
+                                   f'ended; falling back to the unfiltered buffer.')
+                    batch = self.snapshot_tag_observations()['gantry']
+                results[label] = batch
+
             # hand the direct lines to the onboard tension loop to hold at the target.
             # this runs at the component's loop rate with no wifi round trip, replacing the
             # host-side regulator that suffered from latency.
@@ -1928,11 +1978,10 @@ class AsyncObserver:
                 name="Calibration",
                 current_action="Observe diamond bottom",
             ))
-            logger.info('This position is the bottom of the diamond. Observe gantry for 2 seconds')
+            logger.info('This position is the bottom of the diamond. Observe the gantry here')
             # regulate the anchor lines to the target tension and wait for everything to settle before measuring
             await move_to_diamond_point()
-            await asyncio.sleep(5)
-            results['bottom'] = self.snapshot_tag_observations()['gantry']
+            await observe_corner('bottom')
 
             # Now that the gantry has settled at the bottom point, size the diamond's vertical
             # extent. Bottom is fixed (the gantry is here, with the fingers held off the floor by
@@ -1972,8 +2021,7 @@ class AsyncObserver:
             l1_after, l3_after = get_eyelet_lengths()
             line_deltas['bot_to_rig'] = (l1_after - l1_before, l3_after - l3_before)
             logger.info(f'bot_to_rig actual deltas: line1={line_deltas["bot_to_rig"][0]:.4f}, line3={line_deltas["bot_to_rig"][1]:.4f}')
-            await asyncio.sleep(5)
-            results['right'] = self.snapshot_tag_observations()['gantry'] # it is to the right from the perspective of camera 0
+            await observe_corner('right') # it is to the right from the perspective of camera 0
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=12.0,
@@ -1987,8 +2035,7 @@ class AsyncObserver:
             l1_after, l3_after = get_eyelet_lengths()
             line_deltas['rig_to_top'] = (l1_after - l1_before, l3_after - l3_before)
             logger.info(f'rig_to_top actual deltas: line1={line_deltas["rig_to_top"][0]:.4f}, line3={line_deltas["rig_to_top"][1]:.4f}')
-            await asyncio.sleep(5)
-            results['top'] = self.snapshot_tag_observations()['gantry']
+            await observe_corner('top')
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=17.0,
@@ -2002,8 +2049,7 @@ class AsyncObserver:
             l1_after, l3_after = get_eyelet_lengths()
             line_deltas['top_to_lef'] = (l1_after - l1_before, l3_after - l3_before)
             logger.info(f'top_to_lef actual deltas: line1={line_deltas["top_to_lef"][0]:.4f}, line3={line_deltas["top_to_lef"][1]:.4f}')
-            await asyncio.sleep(5)
-            results['left'] = self.snapshot_tag_observations()['gantry']
+            await observe_corner('left')
 
             # release the direct lines back to the normal tension floor
             await self.set_line_tension_target(0, None)
@@ -2065,7 +2111,10 @@ class AsyncObserver:
                                                   # a wider baseline recovers more of a bad pass-2 - but
                                                   # each height is clamped under the work-area ceiling.
         SETTLE_S = 4.0                # let swing cancellation settle the gripper before measuring
-        MEASURE_WINDOW_S = 3.0        # average camera + line readings over this window
+        # How many views of the card to average the measurement over. A count, not a duration:
+        # the averaging wants frames, and waiting on a clock only buys frames indirectly, at
+        # whatever rate the gripper stream happens to be running.
+        MEASURE_MIN_SAMPLES = 20
         MEASURE_TIMEOUT_S = 6.0       # give up on a card if the gripper never sees it
         SEEK_TIMEOUT_S = 20.0         # cap the move to each hover altitude
         TOP_MARGIN = 0.5              # meters under the top of the work area to keep gantry below
@@ -2096,18 +2145,23 @@ class AsyncObserver:
             await self._center_card_in_view(name)
             # the seek only gets the altitude approximately right; the rangefinder gets it exact
             camera_height = await self._trim_altitude_to_range(target_range_m, ceiling_z=upper_z)
-            await asyncio.sleep(1.5)
-            # let sightings accumulate in the gripper client's buffer, then take the
-            # whole window at once.
-            start = time.time()
+            # Let sightings accumulate in the gripper client's buffer, then take the whole window
+            # at once. The cutoff sits a video latency ahead of now so nothing captured during the
+            # trim can be counted; from there it is only a question of how long the stream takes
+            # to deliver MEASURE_MIN_SAMPLES frames, which is as short as this step can honestly be.
+            start = time.time() + VIDEO_LATENCY_S
             deadline = start + MEASURE_TIMEOUT_S
-            while time.time() < deadline:
+            while True:
                 samples = self.gripper_client.get_route_tag_samples(name, since=start)
-                if samples and time.time() - samples[0][0] >= MEASURE_WINDOW_S:
+                if len(samples) >= MEASURE_MIN_SAMPLES:
                     break
-                await asyncio.sleep(0.05)
+                if time.time() >= deadline:
+                    logger.info(f'Card survey: only {len(samples)} views of {name} in '
+                                f'{MEASURE_TIMEOUT_S:.0f}s, wanted {MEASURE_MIN_SAMPLES}; '
+                                f'measuring on what arrived')
+                    break
+                await asyncio.sleep(0.02)
 
-            samples = self.gripper_client.get_route_tag_samples(name, since=start)
             if not samples:
                 return None
             # every quantity is evaluated at the frame's capture time, so the card pose,
@@ -2786,7 +2840,7 @@ class AsyncObserver:
             current_action="Observing markers",
         ))
         finger_task = None
-        DETECTION_WAIT_S = 1.0 # seconds
+        DETECTION_WAIT_S = 0.1 # how often to recount the origin card detections
         # how far above the floor to hold the gripper fingertips at the diamond's bottom point
         floor_clearance_m = self.diamond_size[2]
         self.tension_over_limit = False  # clear any stale trip from a previous run
@@ -2808,7 +2862,6 @@ class AsyncObserver:
             #   it is only necessary to ensure enough have been collected from each client and average them.
             for a in self.anchors.values():
                 a.save_raw = True
-            num_o_dets = []
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=0.0,
                 name="Calibration",
@@ -2816,11 +2869,19 @@ class AsyncObserver:
             ))
             ORIGIN_VISIBILITY_TIMEOUT_S = 30.0 # give up if some anchor camera never sees the origin card
             detecting_start = time.time()
-            while len(num_o_dets) == 0 or min(num_o_dets) < max_origin_detections:
+            seeing = None
+            for client in self.anchors.values():
+                client.origin_poses['origin'].clear()
+            while True:
+                num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
+                # only anchor nums which see the origin card
+                now_seeing = [anum for anum, count in enumerate(num_o_dets) if count > 0]
+                if now_seeing != seeing:
+                    seeing = now_seeing
+                    self.send_ui(visibility_states=telemetry.VisibilityStates(anchors_seeing_origin_card=seeing))
+                if num_o_dets and min(num_o_dets) >= max_origin_detections:
+                    break
                 logger.debug(f'Waiting for enough origin card detections from every anchor camera {num_o_dets}')
-                self.send_ui(visibility_states=telemetry.VisibilityStates(anchors_seeing_origin_card=list(
-                    [anum for anum, count in enumerate(num_o_dets) if count > 0] # only anchor nums which see the origin card
-                )))
 
                 if time.time() - detecting_start >= ORIGIN_VISIBILITY_TIMEOUT_S:
                     self.slow_stop_all_spools()
@@ -2832,8 +2893,8 @@ class AsyncObserver:
                     raise RuntimeError('Origin card not visible to all anchor cameras within timeout')
 
                 await asyncio.sleep(DETECTION_WAIT_S)
-                num_o_dets = [len(client.origin_poses['origin']) for client in self.anchors.values()]
-            logger.info(f'Collected enough observations {num_o_dets}')
+            logger.info(f'Collected enough observations {num_o_dets} in '
+                        f'{time.time() - detecting_start:.1f}s')
             self.send_ui(visibility_states=telemetry.VisibilityStates(anchors_seeing_origin_card=list(
                 [anum for anum, count in enumerate(num_o_dets) if count > 0] # only anchor nums which see the origin card
             )))
