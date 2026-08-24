@@ -347,10 +347,16 @@ def upload_dataset(root: Path, repo_id: str, what="the recovered spin field"):
         logging.warning(f"no videos under {root}; the upload will not be mineable. "
                         f"Recover again with --videos to fetch them.")
 
+    # The tag is moved, not just created when absent. LeRobotDataset resolves a repo by
+    # this tag rather than by main, so a tag left on an older commit means every reader
+    # keeps getting the old dataset while the new one sits on main, unread - which is
+    # silent, because the repo id and the episode count both look like whatever the tag
+    # points at.
     tags = [t.name for t in api.list_repo_refs(repo_id, repo_type="dataset").tags]
-    if version not in tags:
-        api.create_tag(repo_id, tag=version, repo_type="dataset",
-                       tag_message="lerobot codebase version, matching meta/info.json")
+    if version in tags:
+        api.delete_tag(repo_id, tag=version, repo_type="dataset")
+    api.create_tag(repo_id, tag=version, repo_type="dataset",
+                   tag_message="lerobot codebase version, matching meta/info.json")
     logging.info(f"uploaded to https://huggingface.co/datasets/{repo_id} (tag {version})")
 
 
