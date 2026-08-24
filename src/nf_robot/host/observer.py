@@ -27,6 +27,7 @@ import traceback
 import cv2
 import pickle
 import inspect
+import itertools
 from collections import deque, defaultdict
 import uuid
 from functools import partial
@@ -87,6 +88,9 @@ TRIM_SPEED_MPS = 0.08 # altitude trim moves slower than a lateral nudge; it is c
 # and the margin by which a cutoff is pushed into the future so clock skew between the host and
 # a component cannot let a frame from before the step slip past the filter.
 VIDEO_LATENCY_S = 0.25
+# Motion tasks that turn sightings of the gantry marker into stored geometry, so a marker
+# fault does not degrade them, it gets fitted. monitor_gantry_visibility aborts these.
+MARKER_DEPENDENT_TASKS = ('full_auto_calibration',)
 
 # Capture runs for the synthetic visual servoing dataset; see ml/visual_servoing/readme.md.
 PLATE_OUTPUT_DIR = 'plates'
@@ -168,6 +172,12 @@ def _robust_spread(points):
     are, unmoved by the one bad detection a standard deviation would let dominate."""
     P = np.asarray(points, dtype=float)
     return float(np.median(np.linalg.norm(P - np.median(P, axis=0), axis=1)))
+
+
+def _widest_gap(points):
+    """The largest distance between any two of these positions."""
+    P = np.asarray(points, dtype=float)
+    return float(max(np.linalg.norm(a - b) for a, b in itertools.combinations(P, 2)))
 
 class TelemetryLogHandler(logging.Handler):
     """Forwards log records to the telemetry stream via send_ui."""
@@ -274,6 +284,14 @@ class AsyncObserver:
         # true while swing latency cal is running, so passive_safety recovers instead of
         # aborting on a tension trip during that step.
         self.swing_cal_in_progress = False
+        # set by monitor_gantry_visibility to the phrase describing why it aborted a running
+        # calibration, so the calibration's own cancel handler can report the real reason.
+        self.gantry_marker_fault = None
+        # which gantry marker faults have already been reported, so a standing fault is not a
+        # repeating popup. A key is dropped when its condition clears, and the whole set is
+        # cleared when a calibration starts, so a re-run of a calibration that was aborted by
+        # a fault says so again instead of proceeding quietly.
+        self._gantry_marker_warned = set()
         # only used for integration test only to allow some code to run right after sending the gantry to a goal point
         self.test_gantry_goal_callback = None
         # event used to notify tasks that gripper is connected.
@@ -308,6 +326,7 @@ class AsyncObserver:
         self.any_anchor_connected = asyncio.Event() # fires as soon as first anchor connects, starting pe
         self.gip_task = None
         self.passive_safety_task = None
+        self.gantry_visibility_task = None
         # last attempt to connect, keyed by service name
         self.connection_tasks: dict[str, asyncio.Task] = {}
         self.time_last_grip_sensors_retain_key = 0
@@ -1536,6 +1555,122 @@ class AsyncObserver:
                 finally:
                     self._torque_reports_suppressed = False
             await asyncio.sleep(0.2)
+
+    def _report_gantry_marker_fault(self, key, phrase, message, detail):
+        """Show the operator a gantry marker fault once, and abort a running calibration.
+
+        Calibration is what cannot survive one of these: it reads a batch of sightings as
+        repeated looks at one point and writes the result out as room geometry, so a marker
+        seen in two places, or last seen minutes ago, is fitted rather than rejected and the
+        run finishes 'successfully' on a room that does not exist. Everything else that uses
+        the marker is a live estimate that recovers on the next good frame."""
+        if key in self._gantry_marker_warned:
+            return
+        self._gantry_marker_warned.add(key)
+        logger.warning(f'Gantry marker fault: {detail}')
+        self.send_ui(pop_message=telemetry.Popup(message=message))
+        if (self.motion_task is not None and not self.motion_task.done()
+                and self.motion_task.get_name() in MARKER_DEPENDENT_TASKS):
+            logger.warning(f'Gantry marker fault during motion task '
+                           f'"{self.motion_task.get_name()}" - aborting it')
+            self.gantry_marker_fault = phrase
+            self.motion_task.cancel()
+
+    async def monitor_gantry_visibility(self):
+        """Watch how the anchor cameras see the gantry marker for the two faults that produce
+        confident, wrong observations rather than an obvious absence of them:
+
+        1. one camera seeing the marker in several places at once, which means there is a
+           second robot tag in the room or a mirror showing it this one, and
+        2. no camera having seen it for a while. Losing it from one camera is a normal
+           consequence of which way the tag faces; losing it from both is not.
+
+        Cheap enough to leave running: once a second it reads the position buffer the detection
+        callback already fills, and the only measurement it takes is between sightings that
+        share a capture time, of which there is normally at most one per frame.
+        """
+        POLL_S = 1.0
+        # Every detection from one frame is filed under that frame's capture time, so sightings
+        # sharing a timestamp are one camera's account of one instant. Two of them this far
+        # apart is two tags: the gantry cannot be in both places, and unlike a spread measured
+        # across time this says nothing about how fast the real one was moving.
+        SPLIT_LIMIT_M = 0.75
+        # Detection runs on crops around the last known position of each tag, with a full frame
+        # scan once a second, so a duplicate is not seen every frame. Keep enough history for
+        # several of those scans, and require more than one to have split before calling it.
+        HISTORY_S = 10.0
+        MIN_SPLIT_FRAMES = 2
+        UNSEEN_LIMIT_S = 10.0
+
+        await self.any_anchor_connected.wait()
+        history = {}                # anchor num -> its recent rows, older than the buffer holds
+        newest_per_anchor = {}      # anchor num -> newest capture time already taken from it
+        # host clock, so a component whose clock is skewed cannot fake staleness
+        last_advance = time.time()
+
+        while self.run_command_loop:
+            await asyncio.sleep(POLL_S)
+            advanced = False        # did any camera deliver a sighting it had not before
+            # The live array, not deepCopy: nothing here depends on row order, and an insert
+            # racing this read can only replace one row of the several being weighed.
+            rows = self.datastore.gantry_pos.asNpa()
+            rows = rows[rows[:, 0] > 0]  # rows never written hold zeros
+
+            # ---- 1. the marker in more than one place at once, per camera
+            for anchor_num in {int(n) for n in rows[:, 1]}:
+                mine = rows[rows[:, 1] == anchor_num]
+                newest = float(mine[:, 0].max())
+                # Nothing new from this camera. Its old sightings are still in the buffer and
+                # would otherwise be re-judged, and re-reported, forever.
+                if newest <= newest_per_anchor.get(anchor_num, 0.0):
+                    continue
+                advanced = True
+                # The datastore's buffer is only a second or two deep and is shared between the
+                # anchors, which is too little to catch a duplicate that shows up on the once-a-
+                # second full scans, so keep our own window of what it has held.
+                fresh = mine[mine[:, 0] > newest_per_anchor.get(anchor_num, 0.0)]
+                kept = history.get(anchor_num)
+                window = fresh if kept is None else np.concatenate([kept, fresh])
+                window = window[window[:, 0] > newest - HISTORY_S]
+                history[anchor_num] = window
+                newest_per_anchor[anchor_num] = newest
+
+                times, counts = np.unique(window[:, 0], return_counts=True)
+                gaps = [_widest_gap(window[window[:, 0] == t][:, 2:]) for t in times[counts > 1]]
+                split = [g for g in gaps if g > SPLIT_LIMIT_M]
+                if len(split) >= MIN_SPLIT_FRAMES:
+                    self._report_gantry_marker_fault(
+                        ('duplicate', anchor_num),
+                        f'the gripper marker was seen in more than one place by anchor {anchor_num}',
+                        f"The gripper's marker tag appears to anchor {anchor_num} in multiple "
+                        f"places. Please check the room for other robot tags, or mirrors which "
+                        f"are visible to this anchor, and cover them.",
+                        f'anchor {anchor_num} saw the gantry marker in two places at once in '
+                        f'{len(split)} of the last {len(times)} frames, up to {max(split):.2f} m '
+                        f'apart',
+                    )
+                else:
+                    self._gantry_marker_warned.discard(('duplicate', anchor_num))
+
+            # ---- 2. no camera seeing the marker at all. Judged on whether any one camera's
+            # own newest sighting moved on, so two components whose clocks disagree cannot
+            # leave the slower one's fresh sightings looking older than the faster one's.
+            if advanced:
+                last_advance = time.time()
+                self._gantry_marker_warned.discard('unseen')
+            elif not self.anchors:
+                # nothing is looking, which is a connection problem and reported as one
+                last_advance = time.time()
+            elif time.time() - last_advance > UNSEEN_LIMIT_S:
+                self._report_gantry_marker_fault(
+                    'unseen',
+                    f'the gripper marker has not been seen for {UNSEEN_LIMIT_S:.0f} seconds',
+                    f"The gripper's marker tag hasn't been detected in {UNSEEN_LIMIT_S:.0f} "
+                    f"seconds. Please confirm the carabiners are attached such that the markers "
+                    f"face the anchor cameras and that nothing is obscuring it",
+                    f'no anchor camera has seen the gantry marker in '
+                    f'{time.time() - last_advance:.0f}s',
+                )
 
     def update_avg_named_pos(self, key: str, position: np.ndarray):
         """Update the running average of the named position, keeping self.config.named_positions
@@ -2844,6 +2979,10 @@ class AsyncObserver:
         # how far above the floor to hold the gripper fingertips at the diamond's bottom point
         floor_clearance_m = self.diamond_size[2]
         self.tension_over_limit = False  # clear any stale trip from a previous run
+        self.gantry_marker_fault = None
+        # re-arm the marker monitor, so a fault that is still standing after an aborted run
+        # aborts this one too rather than being counted as already reported
+        self._gantry_marker_warned.clear()
         if self.rec_diagnostics:
             self._calibration_diagnostics = []  # clear any stale data from a previous run
         try:
@@ -3147,8 +3286,15 @@ class AsyncObserver:
             if finger_task is not None:
                 finger_task.cancel()
                 await finger_task
-            if self.tension_over_limit:
-                self.tension_over_limit = False
+            # read and clear both, so whichever did not cause this abort cannot go on to
+            # mislabel the next one
+            marker_fault, self.gantry_marker_fault = self.gantry_marker_fault, None
+            tension_trip, self.tension_over_limit = self.tension_over_limit, False
+            if marker_fault is not None:
+                # a bad marker makes the lines go where the geometry isn't, so it can trip the
+                # tension limit on its way out; it is the reason, and the trip is the symptom
+                current_action = f'Aborted: {marker_fault}'
+            elif tension_trip:
                 current_action = "Aborted: line tension exceeded the safe limit"
             else:
                 current_action = "Cancelled by user"
@@ -3868,6 +4014,7 @@ class AsyncObserver:
             self.loop_monitor.start()
 
         self.passive_safety_task = asyncio.create_task(self.passive_safety())
+        self.gantry_visibility_task = asyncio.create_task(self.monitor_gantry_visibility())
 
         self.telemetry.start_cloud_link()
 
@@ -4026,6 +4173,9 @@ class AsyncObserver:
         if self.passive_safety_task is not None:
             self.passive_safety_task.cancel()
             tasks.append(self.passive_safety_task)
+        if self.gantry_visibility_task is not None:
+            self.gantry_visibility_task.cancel()
+            tasks.append(self.gantry_visibility_task)
 
         try:
             result = await asyncio.gather(*tasks)
