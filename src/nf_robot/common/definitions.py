@@ -30,12 +30,12 @@ gripper_grommet = (np.array([0,0,0], dtype=float), np.array([0,0.115,0.013], dty
 # position of the gripper center of gravity in the gripper reference frame. rotation is irrelevant
 gripper_cog = (np.array([0,0,0], dtype=float), np.array([0,0.055,0.011], dtype=float))
 
-# The two poles the gripper can hang on, as (effective pendulum length, gantry origin down
-# to gripper origin) in meters. PoleGeometry below says what each is for; a robot's pole is
-# in config.gripper.pole_type.
+# Effective length of pole based on measured swing with 'polecal'
 pole_length_abs500 = 0.4526
+pole_length_carbon400 = 0.4389
+
+# distance between gantry origin (where lines meet) and gripper origin
 pole_offset_abs500 = 0.5334
-pole_length_carbon400 = 0.4350
 pole_offset_carbon400 = 0.5757
 
 # z offset of the gripper laser rangefinder from the origin of the gantry when the winch is zeroed.

@@ -14,6 +14,7 @@ Reads calibration_diagnostics.pkl (written by Observer._record_calibration_diagn
   - whether the diamond and gripper terms agree about room scale. They see the same encoders
     through the same cameras, so a disagreement is tag-specific rather than camera-wide
   - the resulting pull-point geometry, its coplanarity and its pairwise distances
+  - why the run stopped and the step it was on, when it did not finish
 
   python experiments/calibration_diagnosis.py
   python experiments/calibration_diagnosis.py --pickle other_run.pkl --rerun
@@ -304,11 +305,29 @@ def main(argv=None):
 
     with open(opts.pickle, 'rb') as fh:
         records = pickle.load(fh)
-    print(f'{opts.pickle}: {len(records)} pass(es)\n')
+    n_aborts = sum(1 for r in records if 'abort' in r)
+    print(f'{opts.pickle}: {len(records) - n_aborts} pass(es)'
+          f'{", aborted" if n_aborts else ""}\n')
 
     outputs = {}  # pass name -> (anchors, eyelets) in the solver frame
 
     for idx, record in enumerate(records):
+        # the run recorded why it stopped and what it was doing, rather than another pass
+        if 'abort' in record:
+            print('=' * 78)
+            print('DID NOT FINISH')
+            print('=' * 78)
+            # the reason is the line the operator was shown, so it carries its own wording
+            print(f'  reason: {record["abort"]}')
+            print(f'  stopped during: {record["step"]} ({record["percent_complete"]:.0f}% '
+                  f'complete)')
+            print('  everything above is what it got through before that.')
+            if record.get('error'):
+                print()
+                print('  ' + record['error'].rstrip().replace('\n', '\n  '))
+            print()
+            continue
+
         args = dict(record['args'])
         name = record['pass']
         fit = record.get('fit_info')

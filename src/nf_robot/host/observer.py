@@ -258,6 +258,11 @@ class AsyncObserver:
         # (Arpeggio hardware only) to calibration_diagnostics.pkl for offline analysis.
         self.rec_diagnostics = rec_diagnostics
         self._calibration_diagnostics = []
+        # (percent_complete, current_action) of the last calibration step reported to the UI,
+        # captured in send_ui so that every step counts, including the ones sent from the
+        # helpers calibration calls rather than from full_auto_calibration itself. Read only
+        # when a run aborts, to record what it was doing at the time.
+        self._calibration_step = (0.0, None)
         self.stat = StatCounter(self)
         self.enable_shape_tracking = False
         self.shape_tracker = None
@@ -2919,6 +2924,30 @@ class AsyncObserver:
             f'({len(self._calibration_diagnostics)} pass(es) so far) to calibration_diagnostics.pkl'
         )
 
+    def _record_calibration_abort(self, reason, error=None):
+        """Append why a calibration run stopped, and the step it was on, to the diagnostics
+        pickle.
+
+        The passes already in the file say what the optimizer was given; they cannot say that
+        the run never reached the next one, or why. Offline that difference is the whole
+        question: a file holding two passes reads the same whether the third was skipped for
+        want of gripper card views or the run was killed on its way there.
+
+        Carries 'abort' rather than 'pass', so a reader can tell the two apart."""
+        if not self.rec_diagnostics:
+            return
+        percent, step = self._calibration_step
+        self._calibration_diagnostics.append({
+            'abort': reason,
+            'step': step,
+            'percent_complete': percent,
+            'timestamp': time.time(),
+            'error': error,
+        })
+        self._flush_calibration_diagnostics()
+        logger.info(f'Saved calibration abort ({reason}) during step "{step}" '
+                    f'to calibration_diagnostics.pkl')
+
     def _record_calibration_fitness(self, pass_name, fit_info):
         """Attach fit_info to this pass's diagnostics record, and compare its total_cost
         against the best (lowest) cost ever recorded for this pass name, so a regression is
@@ -2983,6 +3012,7 @@ class AsyncObserver:
         # re-arm the marker monitor, so a fault that is still standing after an aborted run
         # aborts this one too rather than being counted as already reported
         self._gantry_marker_warned.clear()
+        self._calibration_step = (0.0, 'Starting')
         if self.rec_diagnostics:
             self._calibration_diagnostics = []  # clear any stale data from a previous run
         try:
@@ -3298,6 +3328,8 @@ class AsyncObserver:
                 current_action = "Aborted: line tension exceeded the safe limit"
             else:
                 current_action = "Cancelled by user"
+            # before the send_ui below, which reports the abort itself as the current step
+            self._record_calibration_abort(current_action)
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
                 name="Calibration",
@@ -3308,6 +3340,7 @@ class AsyncObserver:
             self._calibration_abort_cleanup()
             if finger_task is not None:
                 finger_task.cancel()
+            self._record_calibration_abort(f'Failed: {e!r}', error=traceback.format_exc())
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=100.0,
                 name="Calibration",
@@ -3993,6 +4026,11 @@ class AsyncObserver:
         status = getattr(kwargs.get('episode_control'), 'status', None)
         if status is not None:
             self.last_ep_ctrl_status = status
+        # remember which calibration step is on screen, so an abort can record the step it
+        # stopped on. An empty action carries no step and would only erase the last real one.
+        progress = kwargs.get('operation_progress')
+        if progress is not None and progress.name == 'Calibration' and progress.current_action:
+            self._calibration_step = (progress.percent_complete, progress.current_action)
         self.telemetry.send(**kwargs)
 
     async def flush_tele_buffer(self):
