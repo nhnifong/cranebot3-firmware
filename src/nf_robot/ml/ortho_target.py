@@ -44,7 +44,7 @@ is a LeRobot dataset and the result is not:
        python -m nf_robot.ml.ortho_target distill \
            --repo_id naavox/combined_targets_train --split train --upload
 
-  3. `train` fits the model, saving the best checkpoint by recall@20cm to
+  3. `train` fits the model, saving the best checkpoint by top5@20cm to
      models/ortho_target.pth:
 
        python -m nf_robot.ml.ortho_target train
@@ -303,8 +303,26 @@ def annotate(bgr, u, v):
     return out
 
 
-def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit, annotate_dir):
-    """One sample per episode: its early ortho frame and the contact pixel.
+def episode_frame_offsets(contact_index, frame_offset, count, stride):
+    """Which frames of an episode to distil, as offsets from its start.
+
+    Every frame before the grasp shows the same floor with the target in the same place,
+    so one episode is worth `count` samples rather than one - the ortho view is a room
+    frame projection, so the label does not move as the gantry does. What changes is
+    where the robot is, what it occludes and how the light falls, which is exactly the
+    variation the model has to be robust to and none of it is free from augmentation.
+
+    Frames are taken from frame_offset forward, stopping before contact: after the grasp
+    the object is in the jaws and the floor no longer holds it.
+    """
+    last = contact_index - 1
+    offsets = [frame_offset + i * stride for i in range(count)]
+    return [o for o in offsets if o <= last]
+
+
+def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit,
+                  annotate_dir, frames_per_episode=1, frame_stride=1):
+    """Samples from each episode: ortho frames before the grasp, and the contact pixel.
 
     Returns (samples, images, skipped) where `images` maps file name -> BGR frame and
     `skipped` counts why episodes were dropped.
@@ -341,35 +359,48 @@ def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit
             continue
 
         contact = rows[contact_index]
-        bgr = frame_to_bgr(dataset[meta["start"] + frame_offset][ortho_key()])
-        height, width = bgr.shape[:2]
-
-        if coverage_fraction(bgr) < min_coverage:
-            skipped["blank_frame"] += 1
+        offsets = episode_frame_offsets(contact_index, frame_offset,
+                                        frames_per_episode, frame_stride)
+        if not offsets:
+            skipped["too_short"] += 1
             continue
 
         x_m, y_m, z_m = contact["gripper_pos"]
-        u, v = room_to_ortho_px(x_m, y_m, width, height)
-        if not (0 <= u < width and 0 <= v < height):
-            skipped["off_map"] += 1
-            continue
+        for n, offset in enumerate(offsets):
+            bgr = frame_to_bgr(dataset[meta["start"] + offset][ortho_key()])
+            height, width = bgr.shape[:2]
 
-        file_name = f"ep{ep:06d}.jpg"
-        images[file_name] = bgr
-        samples.append({
-            "file_name": file_name,
-            # "points" (a list, of one) rather than a bare pair, so this dataset has
-            # the same row shape as the hand-labelled target_heatmap one
-            "points": [[round(u, 2), round(v, 2)]],
-            "contact_m": [round(c, 4) for c in (x_m, y_m, z_m)],
-            "episode_index": ep,
-            "contact_frame_index": contact["frame_index"],
-            "contact_time_s": round(contact["timestamp"], 3),
-            "task": meta["task"],
-        })
+            if coverage_fraction(bgr) < min_coverage:
+                skipped["blank_frame"] += 1
+                continue
 
-        if annotate_dir:
-            cv2.imwrite(os.path.join(annotate_dir, file_name), annotate(bgr, u, v))
+            u, v = room_to_ortho_px(x_m, y_m, width, height)
+            if not (0 <= u < width and 0 <= v < height):
+                skipped["off_map"] += 1
+                # the label is a property of the episode, not of the frame, so if it is
+                # off the map for one frame it is off it for all of them
+                break
+
+            # One file per frame, still sorted by episode. Frames of an episode are near
+            # duplicates, so they have to travel together into one split - which they do,
+            # because the split is chosen upstream by episode.
+            file_name = f"ep{ep:06d}.jpg" if frames_per_episode == 1 else f"ep{ep:06d}_{n:02d}.jpg"
+            images[file_name] = bgr
+            samples.append({
+                "file_name": file_name,
+                # "points" (a list, of one) rather than a bare pair, so this dataset has
+                # the same row shape as the hand-labelled target_heatmap one
+                "points": [[round(u, 2), round(v, 2)]],
+                "contact_m": [round(c, 4) for c in (x_m, y_m, z_m)],
+                "episode_index": ep,
+                "frame_offset": offset,
+                "contact_frame_index": contact["frame_index"],
+                "contact_time_s": round(contact["timestamp"], 3),
+                "task": meta["task"],
+            })
+
+            if annotate_dir:
+                cv2.imwrite(os.path.join(annotate_dir, file_name), annotate(bgr, u, v))
 
     return samples, images, skipped
 
@@ -459,6 +490,8 @@ def distill(args):
         min_coverage=args.min_coverage,
         limit=args.limit,
         annotate_dir=args.annotate_dir,
+        frames_per_episode=args.frames_per_episode,
+        frame_stride=args.frame_stride,
     )
     if not samples:
         raise ValueError(f"No usable episodes found. Skipped: {skipped}")
@@ -506,6 +539,37 @@ def dihedral_point(u, v, t: int, size: int):
     return u, v
 
 
+def translate(img, u, v, max_px: int, rng):
+    """Shift the map and its label together by up to max_px in each axis.
+
+    Valid because the ortho view is a metric projection of the floor: a shifted map is
+    the same floor with the window moved, which is a view the robot really can have. It
+    is also the antidote to the strongest shortcut in this dataset - the labels cluster
+    near the middle of the map, so a model can score respectably by ignoring the image
+    and predicting the mean. Shifting breaks the tie between "where the target is" and
+    "where targets usually are".
+
+    Vacated edges are filled with black, which is what unobserved floor already looks
+    like in these maps, so it introduces nothing the model has not seen.
+    """
+    # Bounded so the label cannot leave the map: location_loss clamps an out-of-range
+    # target to an edge cell, which would teach the edge as the answer.
+    height, width = img.shape[-2:]
+    lo_x, hi_x = int(math.ceil(-u)), int(math.floor(width - 1 - u))
+    lo_y, hi_y = int(math.ceil(-v)), int(math.floor(height - 1 - v))
+    dx = int(torch.randint(max(-max_px, lo_x), min(max_px, hi_x) + 1, (1,), generator=rng).item())
+    dy = int(torch.randint(max(-max_px, lo_y), min(max_px, hi_y) + 1, (1,), generator=rng).item())
+    if dx == 0 and dy == 0:
+        return img, u, v
+    out = torch.zeros_like(img)
+    src_x0, dst_x0 = max(0, -dx), max(0, dx)
+    src_y0, dst_y0 = max(0, -dy), max(0, dy)
+    w = width - abs(dx)
+    h = height - abs(dy)
+    out[..., dst_y0:dst_y0 + h, dst_x0:dst_x0 + w] = img[..., src_y0:src_y0 + h, src_x0:src_x0 + w]
+    return out, u + dx, v + dy
+
+
 def inverse_dihedral_map(m, t: int):
     """Undo dihedral_image on a spatial map, so predictions can be averaged."""
     if t >= 4:
@@ -544,7 +608,8 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 class OrthoTargetDataset(torch.utils.data.Dataset):
     """Distilled ortho frames and their contact point, as (image, uv) pairs."""
 
-    def __init__(self, root: Path, split: str, image_size: int, augment: bool, seed: int = 0):
+    def __init__(self, root: Path, split: str, image_size: int, augment: bool, seed: int = 0,
+                 translate_px: int = 0):
         self.dir = Path(root) / split
         meta_path = self.dir / "metadata.jsonl"
         if not meta_path.exists():
@@ -553,6 +618,7 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
         self.image_size = image_size
         self.augment = augment
         self.seed = seed
+        self.translate_px = translate_px
 
     def __len__(self):
         return len(self.samples)
@@ -589,6 +655,8 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
             t = int(torch.randint(0, 8, (1,), generator=rng).item())
             img = dihedral_image(img, t)
             u, v = dihedral_point(u, v, t, self.image_size)
+            if self.translate_px:
+                img, u, v = translate(img, u, v, self.translate_px, rng)
             img = photometric_jitter(img, rng)
 
         img = (img - torch.tensor(IMAGENET_MEAN).view(3, 1, 1)) / torch.tensor(IMAGENET_STD).view(3, 1, 1)
@@ -605,6 +673,17 @@ DEFAULT_BACKBONE = "facebook/dinov2-with-registers-base"
 DEFAULT_IMAGE_SIZE = 448
 DEFAULT_GRID = 128
 DEFAULT_MODEL_PATH = "models/ortho_target.pth"
+# (cells) width of the Gaussian the cell head is trained against. 1.5 cells is about 6cm
+# of floor at the default grid, which is well inside "the operator would have grabbed
+# that". Matches visual_servoing/train.py, which has the same head and the same problem.
+CELL_SIGMA = 1.5
+# Probability mass spread evenly over every cell, so no cell is pushed to zero. See
+# cell_target: the other objects in frame are unlabelled, not absent.
+LABEL_SMOOTHING = 0.05
+# Which metric picks the saved checkpoint. top5 rather than the single-answer recall,
+# because the job is to land on something a person would have picked and there is
+# usually more than one such thing in frame; recall@20cm scores those as failures.
+SELECTION_METRIC = "top5@20cm"
 
 
 class OrthoTargetNet(SharedTrunkMixin, nn.Module):
@@ -674,15 +753,48 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
         return self
 
 
-def location_loss(logits, offsets, target_uv, image_size, grid, offset_weight=1.0):
-    """Cross-entropy over cells, plus L1 on the sub-cell offset of the true cell."""
+def cell_target(cell, grid, sigma, smoothing):
+    """A soft distribution over cells for one batch of continuous cell coordinates.
+
+    Two departures from a one-hot target, both aimed at a signal that is otherwise one
+    right answer and grid**2 - 1 wrong ones:
+
+    A Gaussian around the true point, because the cells are 3.9cm of floor and a
+    prediction one cell out is very nearly right. One-hot scores it exactly as wrong as
+    the other side of the room, which is most of the gradient spent on a distinction
+    nobody cares about.
+
+    Then a uniform floor under the whole map. Every other graspable thing in the frame is
+    labelled a negative here - there is only ever one contact per episode - so a target
+    that drives every non-contact cell to zero is training against the one behaviour that
+    matters, which is landing on something. The floor bounds how hard any of them is
+    pushed down. It cannot know *which* cells hold the other objects; masking those needs
+    a detector, and that is a bigger change.
+    """
+    batch = cell.shape[0]
+    axis = torch.arange(grid, device=cell.device, dtype=cell.dtype)
+    # cell centres are at +0.5, and the label is a continuous cell coordinate
+    dx = axis[None, :] - (cell[:, 0:1] - 0.5)
+    dy = axis[None, :] - (cell[:, 1:2] - 0.5)
+    gauss = torch.exp(-(dy[:, :, None] ** 2 + dx[:, None, :] ** 2) / (2 * sigma ** 2))
+    gauss = gauss.reshape(batch, -1)
+    gauss = gauss / gauss.sum(1, keepdim=True).clamp_min(1e-12)
+    if smoothing <= 0:
+        return gauss
+    return (1 - smoothing) * gauss + smoothing / (grid * grid)
+
+
+def location_loss(logits, offsets, target_uv, image_size, grid, offset_weight=1.0,
+                  cell_sigma=CELL_SIGMA, label_smoothing=LABEL_SMOOTHING):
+    """Soft cross-entropy over cells, plus L1 on the sub-cell offset of the true cell."""
     scale = image_size / grid
     cell = target_uv / scale
     cx = cell[:, 0].floor().clamp(0, grid - 1).long()
     cy = cell[:, 1].floor().clamp(0, grid - 1).long()
     index = cy * grid + cx
 
-    ce = F.cross_entropy(logits.flatten(1), index)
+    target = cell_target(cell, grid, cell_sigma, label_smoothing)
+    ce = -(target * F.log_softmax(logits.flatten(1), dim=1)).sum(1).mean()
 
     frac = cell - torch.stack([cx, cy], dim=1).float()
     picked = offsets.flatten(2).gather(2, index[:, None, None].expand(-1, 2, -1)).squeeze(-1)
@@ -891,7 +1003,8 @@ def train(args):
     torch.manual_seed(args.seed)
 
     data_root = resolve_data_root(args)
-    train_set = OrthoTargetDataset(data_root, "train", args.image_size, augment=True, seed=args.seed)
+    train_set = OrthoTargetDataset(data_root, "train", args.image_size, augment=True,
+                                   seed=args.seed, translate_px=args.translate_px)
     eval_set = OrthoTargetDataset(data_root, "eval", args.image_size, augment=False)
     logging.info(f"train {len(train_set)} sample(s) | eval {len(eval_set)} sample(s) from {data_root}")
 
@@ -941,6 +1054,7 @@ def train(args):
                 loss, ce, l1 = location_loss(
                     logits.float(), offsets.float(), target_uv,
                     args.image_size, args.grid, args.offset_weight,
+                    cell_sigma=args.cell_sigma, label_smoothing=args.label_smoothing,
                 )
             loss.backward()
             optimizer.step()
@@ -953,7 +1067,7 @@ def train(args):
         if (epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs:
             metrics = evaluate_model(model, eval_loader, device, top_k=args.top_k)
             logging.info(f"{line} | {_format_metrics(metrics)}")
-            score = metrics["recall@20cm"]
+            score = metrics[args.select_metric]
             if score > best:
                 best = score
                 torch.save({
@@ -968,11 +1082,11 @@ def train(args):
                     "metrics": metrics,
                     "epoch": epoch + 1,
                 }, args.model_path)
-                logging.info(f"saved {args.model_path} (recall@20cm {score:.3f})")
+                logging.info(f"saved {args.model_path} ({args.select_metric} {score:.3f})")
         else:
             logging.info(line)
 
-    logging.info(f"done; best eval recall@20cm {best:.3f}, checkpoint at {args.model_path}")
+    logging.info(f"done; best eval {args.select_metric} {best:.3f}, checkpoint at {args.model_path}")
 
 
 def load_checkpoint(path, device):
@@ -1059,6 +1173,12 @@ def main():
                                 help="finger_pressure above which an episode counts as having made contact")
     distill_parser.add_argument("--frame_offset", type=int, default=0,
                                 help="which frame of each episode to keep, counted from its start")
+    distill_parser.add_argument("--frames_per_episode", type=int, default=8,
+                                help="ortho frames to take from each episode. They share the "
+                                     "episode's one label, which is valid for every frame "
+                                     "before the grasp because the target does not move")
+    distill_parser.add_argument("--frame_stride", type=int, default=4,
+                                help="frames between them; too small and they are the same picture")
     distill_parser.add_argument("--min_coverage", type=float, default=0.02,
                                 help="skip frames where less than this fraction of the ortho map was "
                                      "painted by any camera")
@@ -1093,6 +1213,17 @@ def main():
     train_parser.add_argument("--lr", type=float, default=6e-4)
     train_parser.add_argument("--weight_decay", type=float, default=0.05)
     train_parser.add_argument("--offset_weight", type=float, default=1.0)
+    train_parser.add_argument("--cell_sigma", type=float, default=CELL_SIGMA,
+                              help="width in cells of the Gaussian the cell head is trained "
+                                   "against; 0 restores a one-hot target")
+    train_parser.add_argument("--label_smoothing", type=float, default=LABEL_SMOOTHING,
+                              help="probability mass spread over every cell, so the other "
+                                   "graspable things in frame are not driven to zero")
+    train_parser.add_argument("--select_metric", default=SELECTION_METRIC,
+                              help="eval metric that picks the saved checkpoint")
+    train_parser.add_argument("--translate_px", type=int, default=48,
+                              help="max random shift of the map and its label, in model "
+                                   "pixels; 0 disables it")
     train_parser.add_argument("--eval_every", type=int, default=2)
     train_parser.add_argument("--seed", type=int, default=0)
     train_parser.add_argument("--unfreeze_backbone", action="store_true",
