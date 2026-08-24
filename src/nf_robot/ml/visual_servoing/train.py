@@ -57,6 +57,10 @@ DEFAULT_DATASET_ID = "naavox/visual_servoing_dataset"
 DEFAULT_MODEL_ID = "naavox/visual_servo"
 # Relative weights. Position is the point of the model; the flags are easy and would
 # otherwise dominate a sum of raw losses simply by being confidently right.
+# The eval number reported each epoch, and the one --select_best selects on when it is
+# passed. Measured on rows whose target is inside the frame, because a split's blind rows
+# are a constant nobody can predict away and they otherwise swamp the figure.
+SELECTION_METRIC = "onscreen_recall@25px"
 DEFAULT_WEIGHTS = {
     "cell": 1.0, "offset": 1.0, "distance": 0.5,
     "axis": 0.5, "finger": 0.5, "present": 0.2, "holding": 0.2,
@@ -444,11 +448,13 @@ def train(args):
     data_root = resolve_data_root(args)
     logging.info(f"dataset at {data_root}")
 
-    # Only the train split. Scoring a held-out room is what evaluate.py is for, and it is
-    # a separate command on purpose: it takes a finished checkpoint and says how it did,
-    # rather than getting a vote in what the checkpoint is.
     train_set = VisualServoDataset(data_root, "train", augment=True)
-    logging.info(f"train {len(train_set)} row(s)")
+    eval_set = (VisualServoDataset(data_root, "eval", augment=False)
+                if (data_root / "eval").exists() else None)
+    logging.info(f"train {len(train_set)} row(s) | "
+                 f"eval {len(eval_set) if eval_set else 'none built'}")
+    if args.select_best and eval_set is None:
+        raise SystemExit(f"--select_best needs an eval split and {data_root}/eval is not built")
 
     axis_bin_weight = None
     if args.axis_balance:
@@ -461,10 +467,18 @@ def train(args):
                      f"{weights_np.min():.2f}-{weights_np.max():.2f}")
 
     image_size = tuple(args.image_size)
+    if eval_set:
+        baseline = constant_baseline(train_set, eval_set, image_size)
+        if baseline:
+            logging.info(f"constant-prediction baseline: {_format(baseline)}")
+
     loader_kwargs = dict(num_workers=args.workers, pin_memory=device.type == "cuda")
     train_loader = torch.utils.data.DataLoader(
         train_set, batch_size=args.batch_size, shuffle=True,
         drop_last=len(train_set) > args.batch_size, **loader_kwargs)
+    eval_loader = (torch.utils.data.DataLoader(
+        eval_set, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
+        if eval_set else None)
 
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
@@ -490,6 +504,7 @@ def train(args):
                               enabled=device.type == "cuda")
 
     os.makedirs(os.path.dirname(args.model_path) or ".", exist_ok=True)
+    best, best_epoch = -1.0, None
     for epoch in range(args.epochs):
         model.train()
         totals, seen = {}, 0
@@ -512,12 +527,37 @@ def train(args):
 
         line = f"epoch {epoch + 1}/{args.epochs} " + _format({k: v / max(seen, 1) for k, v in totals.items()})
 
-        logging.info(line)
-        # Written every epoch, always the newest weights. Nothing here judges a checkpoint
-        # and nothing here discards one.
-        torch.save(checkpoint_payload(model, args, {}, epoch + 1), args.model_path)
+        # The eval split is scored and reported whether or not it decides anything. The
+        # number is worth seeing every epoch; what it should not do by default is pick the
+        # checkpoint, because it is one held-out room measured on a position proxy that
+        # the axis, finger and flag heads never enter - a run once kept epoch 1 on it and
+        # discarded nineteen epochs that were better on the robot.
+        metrics = {}
+        due = (epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs
+        if due and eval_loader is not None:
+            metrics = evaluate(model, eval_loader, device, image_size)
+            logging.info(f"{line} | {_format(metrics)}")
+        else:
+            logging.info(line)
 
-    logging.info(f"done; {args.epochs} epoch(s), checkpoint at {args.model_path}")
+        if not args.select_best:
+            torch.save(checkpoint_payload(model, args, metrics, epoch + 1), args.model_path)
+        elif metrics:
+            score = metrics.get(SELECTION_METRIC, -1.0)
+            if score > best:
+                best, best_epoch = score, epoch + 1
+                torch.save(checkpoint_payload(model, args, metrics, epoch + 1),
+                           args.model_path)
+                logging.info(f"saved {args.model_path} ({SELECTION_METRIC} {score:.3f})")
+
+    if args.select_best:
+        # Loud on purpose: the whole hazard of selecting is a file that is quietly older
+        # than the run that produced it.
+        logging.info(f"done; kept epoch {best_epoch} of {args.epochs} by "
+                     f"{SELECTION_METRIC} {best:.3f}, checkpoint at {args.model_path}")
+    else:
+        logging.info(f"done; {args.epochs} epoch(s), last one kept, "
+                     f"checkpoint at {args.model_path}")
 
     if args.upload:
         if not Path(args.model_path).exists():
@@ -538,6 +578,14 @@ def main():
     parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
                         help="Mined dataset on the hub, used when --data_root is absent")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--eval_every", type=int, default=1,
+                        help="Score the eval split every N epochs (and always on the last)")
+    parser.add_argument("--select_best", action="store_true",
+                        help=f"Keep the epoch that scores best on {SELECTION_METRIC} "
+                             f"instead of the last one. Off by default: the eval split is "
+                             f"one held-out room measured on a position proxy, and the "
+                             f"heads it cannot see are still learning after it stops "
+                             f"improving.")
     parser.add_argument("--axis_loss", default="vonmises", choices=["vonmises", "mse"],
                         help="Objective for the grasp axis head. vonmises trains the "
                              "output's length as a confidence and charges for hedging; "

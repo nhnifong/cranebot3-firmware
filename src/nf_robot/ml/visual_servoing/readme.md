@@ -566,7 +566,7 @@ grasp axis is a constant zero.
 
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing_252 \
-        --epochs 40 \
+        --epochs 14 \
         --batch_size 400
 
 The whole `train/` split trains. The checkpoint written after every epoch is always the
