@@ -377,8 +377,11 @@ def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit
 def write_split(output_root: Path, split: str, samples, images) -> int:
     """Replace one split of the image folder, leaving the other one alone.
 
-    train and eval come from separate recipes and so from separate distill runs, which
-    is what keeps a whole room out of training; each run owns its own split directory.
+    Which episodes are in a split is decided before this, by lerobot_split_dataset: a
+    distill run takes every episode of the dataset it is pointed at, and --split only
+    names the directory it writes them to. So the two runs have to be pointed at
+    <repo_id>_train and <repo_id>_eval respectively - nothing here can check that they
+    were, and the halves only stay disjoint while both come from one split run.
     """
     split_dir = output_root / split
     if split_dir.exists():
@@ -429,7 +432,13 @@ def distill(args):
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     root = Path(args.root) if args.root else None
-    dataset = LeRobotDataset(repo_id=args.repo_id, root=root)
+    # A repo id and no --root means the hub's copy, so re-sync before reading: without
+    # this, LeRobotDataset serves whatever is in the LeRobot home and a name that has
+    # since been rebuilt on the hub silently distills the old dataset. That is not
+    # hypothetical - it is how an eval split of one room outlived the recipe that made
+    # it, and the numbers it produced looked fine. --root is the way to say "this copy,
+    # whatever the hub has".
+    dataset = LeRobotDataset(repo_id=args.repo_id, root=root, force_cache_sync=root is None)
     key = ortho_key()
     if key not in dataset.meta.video_keys:
         raise ValueError(
@@ -437,9 +446,11 @@ def distill(args):
             f"Build it with recipes/ortho_target.yaml. Present: {list(dataset.meta.video_keys)}"
         )
 
+    # The resolved root is logged because a stale one is invisible otherwise: the repo id
+    # in the command says nothing about which copy of it answered.
     logging.info(
         f"Distilling {dataset.meta.total_episodes} episode(s) of '{args.repo_id}' "
-        f"({dataset.meta.total_frames} frames)"
+        f"({dataset.meta.total_frames} frames) from {dataset.root}"
     )
     samples, images, skipped = build_samples(
         dataset,
@@ -840,13 +851,20 @@ def constant_baseline(train_set, eval_set, image_size, radii_cm=(10, 20, 50)):
 
 
 def resolve_data_root(args) -> Path:
-    """Local distilled dataset, downloading it from the hub if no local copy was named."""
+    """Local distilled dataset, or the hub's copy when no local one was named.
+
+    A repo id on its own - typed or defaulted - means the hub's current version, so this
+    syncs rather than serving whatever was downloaded last time. snapshot_download does
+    that already; the path is logged because otherwise nothing in the run says which copy
+    of a name answered.
+    """
     if args.data_root:
         return Path(args.data_root)
     from huggingface_hub import snapshot_download
 
-    logging.info(f"Downloading {args.dataset_id}")
-    return Path(snapshot_download(repo_id=args.dataset_id, repo_type="dataset"))
+    root = Path(snapshot_download(repo_id=args.dataset_id, repo_type="dataset"))
+    logging.info(f"Using {args.dataset_id} from the hub at {root}")
+    return root
 
 
 def resolve_model_path(model_path) -> str:
@@ -863,8 +881,9 @@ def resolve_model_path(model_path) -> str:
         raise FileNotFoundError(f"No checkpoint at {model_path}")
     from huggingface_hub import hf_hub_download
 
-    logging.info(f"No {model_path}; downloading {TARGETING_MODEL_REPOID}/{TARGETING_MODEL_FILENAME}")
-    return hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename=TARGETING_MODEL_FILENAME)
+    path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename=TARGETING_MODEL_FILENAME)
+    logging.info(f"No {model_path}; using {TARGETING_MODEL_REPOID}/{TARGETING_MODEL_FILENAME} at {path}")
+    return path
 
 
 def train(args):
