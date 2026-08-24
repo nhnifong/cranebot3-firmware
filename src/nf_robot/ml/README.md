@@ -459,8 +459,3 @@ so. Nothing to pass.
 
 They share one frozen trunk in the observer (`dino_trunk.py`), keyed by backbone id, so
 running two models on different backbones costs a second copy of it.
-
-A checkpoint records its own `backbone_id` and `image_size` and rebuilds from them, so
-older DINOv3 checkpoints keep working - but fetching their trunk still needs gated
-access. The published `naavox/targeting` and `naavox/visual_servo` copies are DINOv3
-until they are retrained and republished. Each model's own docs carry a DINOv3 footnote.
