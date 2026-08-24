@@ -509,8 +509,15 @@ def main():
     if args.list:
         for entry in runs:
             minutes = (entry["finished_at"] - entry["started_at"]) / 60
-            print(f"{entry['run_id']}  {entry['kind']:12s} {entry['frames']:5d} frames  "
-                  f"{entry['width']}x{entry['height']}  {minutes:.1f} min  {entry.get('notes', '')}")
+            # video runs count encoded packets and carry no frame size; parquet runs count rows
+            if entry.get("storage") == "video":
+                detail = (f"{entry.get('packets', 0):5d} packets "
+                          f"{entry.get('samples', 0):5d} samples")
+            else:
+                detail = (f"{entry.get('frames', 0):5d} frames  "
+                          f"{entry.get('width', 0)}x{entry.get('height', 0)}")
+            print(f"{entry['run_id']}  {entry['kind']:12s} {detail:30s}  "
+                  f"{minutes:.1f} min  {entry.get('notes', '')}")
         return
 
     run_id = args.run_id or runs[-1]["run_id"]

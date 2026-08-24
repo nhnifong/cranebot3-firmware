@@ -1908,6 +1908,20 @@ function initRunMenu() {
   initMenuToggle('action-toggle-tension-reg', 'toggle-tension-reg-indicator',
     Command.COMMAND_ENABLE_TENSION_REG, Command.COMMAND_DISABLE_TENSION_REG);
 
+  // Purely a view setting, so it isn't an initMenuToggle: there is no robot state
+  // to wait for and the knob follows the click directly.
+  const propsToggle = document.getElementById('action-toggle-props');
+  const propsKnob = document.getElementById('toggle-props-indicator');
+  if (propsToggle && propsKnob) {
+    propsToggle.addEventListener('click', (e) => {
+      // Keep the menu open: the document-level handler closes it on any click.
+      e.stopPropagation();
+      const visible = !room.getPropsVisible();
+      room.setPropsVisible(visible);
+      propsKnob.classList.toggle('status-offline', !visible);
+    });
+  }
+
   document.getElementById('action-get-ticket')?.addEventListener('click', () => {
     maintMenu?.classList.remove('show');
     handleGetTicket();

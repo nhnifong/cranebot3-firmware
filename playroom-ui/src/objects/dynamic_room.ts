@@ -16,6 +16,9 @@ export class DynamicRoom {
   private toybox: THREE.Object3D | undefined;
   private trash_can: THREE.Object3D | undefined;
 
+  // Applied again once the model finishes loading, since it can be set before then.
+  private propsVisible = true;
+
   // moving walls
   mesh: THREE.Mesh;
   private geometry: THREE.BufferGeometry;
@@ -88,6 +91,7 @@ export class DynamicRoom {
           this.reticule?.scale.multiplyScalar(0.5);
           this.toybox = clonedScene.getObjectByName('toybox');
           this.trash_can = clonedScene.getObjectByName('trash_can');
+          this.applyPropsVisibility();
 
       } catch (error) {
           console.error('Error loading decor.glb:', error);
@@ -117,6 +121,22 @@ export class DynamicRoom {
           (position.z ?? 0),
           -(position.y ?? 0)
       );
+    }
+  }
+
+  /** Show or hide the four room props (trash can, toybox, gamepad, hamper). */
+  public setPropsVisible(visible: boolean) {
+    this.propsVisible = visible;
+    this.applyPropsVisibility();
+  }
+
+  public getPropsVisible(): boolean {
+    return this.propsVisible;
+  }
+
+  private applyPropsVisibility() {
+    for (const prop of [this.trash_can, this.toybox, this.userPers, this.hamper]) {
+      if (prop) prop.visible = this.propsVisible;
     }
   }
 

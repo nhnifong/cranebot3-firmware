@@ -130,6 +130,9 @@ class ArpeggioAnchorClient(ComponentClient):
                 ]))
                 position = pose.reshape(6)[3:]
                 self.ob.update_avg_named_pos(detection['n'], position)
+                # sometimes you forget your gamepad tag
+                # if detection['n'] == 'trash':
+                #     self.ob.update_avg_named_pos('gamepad', position)
 
 
     def process_frame(self, frame_to_encode):

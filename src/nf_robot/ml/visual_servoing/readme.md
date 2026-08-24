@@ -451,6 +451,12 @@ Runs already in the destination are skipped by run id, so merging the same sourc
 is harmless and an interrupted merge can be rerun. `--list` groups by the robot id and
 hostname that captured each run.
 
+Publish a collection's raw captures to a hub dataset, adding whatever runs it does not
+already have:
+
+    python -m nf_robot.ml.visual_servoing.merge_plates --into plates \
+        --upload naavox/plates-macbook
+
 ## 2. Extract the pieces
 
 Fingers, as one RGBA plate per aperture:

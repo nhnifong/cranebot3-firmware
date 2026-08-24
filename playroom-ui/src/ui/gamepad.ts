@@ -3,6 +3,12 @@ import { nf } from '../generated/proto_bundle.js';
 import { TargetListManager } from './target_list_manager.js';
 import { Say } from '../utils.ts';
 
+// Own slot in the motion controller's velocity mix. An unset source_key lands in
+// 'default', which every autonomous mover (visual servo, goto, homing) also writes,
+// so a released stick would overwrite an in-progress move with zero instead of
+// adding zero to it.
+const UI_SOURCE_KEY = 'ui';
+
 export class GamepadController {
     private gamepadIndex: number | null = null;
 
@@ -521,6 +527,7 @@ export class GamepadController {
                     fingerSpeed: fingerChange,
                     wristSpeed: wristChange,
                     directionIsInGripperFrame: !this.seatOrbitMode,
+                    sourceKey: UI_SOURCE_KEY,
                 }
             }));
 
