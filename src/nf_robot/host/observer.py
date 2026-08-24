@@ -1582,8 +1582,8 @@ class AsyncObserver:
 
         1. one camera seeing the marker in several places at once, which means there is a
            second robot tag in the room or a mirror showing it this one, and
-        2. no camera having seen it for a while. Losing it from one camera is a normal
-           consequence of which way the tag faces; losing it from both is not.
+        2. no camera having seen it for a while. Losing it from one camera is normal,
+           losing it from both means that its in a blind spot or it's mounted wrong.
 
         Cheap enough to leave running: once a second it reads the position buffer the detection
         callback already fills, and the only measurement it takes is between sightings that
