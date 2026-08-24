@@ -120,7 +120,6 @@ RECORDING_CLOSE_S = 1.0
 # fully open; anything the camera can see would be composited into every synthetic frame
 # built from these plates.
 PLATE_FINGERS_RETRACTED = -90.0
-UNPROCESSED_DIR = "square_centering_data_unlabeled"
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
 
@@ -202,7 +201,7 @@ class AsyncObserver:
     Since this class serves as the coordination center of all the robot compnents, it also contains methods to perform
     various actions like calibration and the pick and place routine.
     """
-    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE, visual_servo=False) -> None:
+    def __init__(self, terminate_with_ui, config_path, telemetry_env=None, run_ortho=True, auto_start=False, local_models=False, port=4245, debug=False, bind_address="127.0.0.1", rec_diagnostics=False, serve_ui=True, ui_port=8090, diamond_size=DIAMOND_SIZE, lerobot_grasp=False) -> None:
         self.port = port
         # (half height, half width, floor clearance) of the calibration diamond, in meters.
         # Overridable with --diamond_size. Consumed both by the physical diamond motion in
@@ -277,13 +276,11 @@ class AsyncObserver:
         # last known positions of named tags/objects live in self.config.named_positions
         # (the single source of truth). It's written to disk on shutdown, in async_close.
         self.target_model = None
-        self.centering_model = None
-        # the visual servoing grasp's network, loaded on first use when --visual_servo is set
-        self.visual_servo = visual_servo
-        # Runs the visual servoing model against this robot; holds the checkpoint.
-        # self.visual_servo above is the flag that says to use it for grasping.
+        # Grasps with the visual servoing model, which is how grasping works unless
+        # --lerobot_grasp hands it to a policy instead. Holds the checkpoint, loaded on
+        # first use.
         self.servo = VisualServo(self)
-        self.predicted_lateral_vector = None
+        self.use_lerobot_grasp = lerobot_grasp
         self.perception_task = None
         self.webui_server = None
         # targets
@@ -335,7 +332,6 @@ class AsyncObserver:
         # futures awaiting a PopupAck, keyed by the Popup.id they were sent with
         self.pending_popup_acks: dict[int, asyncio.Future] = {}
         self._next_popup_id = 1
-        self.grip_angle = 0
         # source and destination for pick and place. self.config is the source of truth;
         # these are kept in sync with self.config.last_route_source/last_route_destination.
         self.pnp_src = self.config.last_route_source
@@ -1006,8 +1002,8 @@ class AsyncObserver:
             r = await self.invoke_motion_task(self._center_card_in_view('origin'))
         if item.action == 'servograsp':
             # One visual servoing grasp from wherever the gripper is now, without the
-            # pick and place loop or the --visual_servo flag. Park it over the object
-            # first, roughly - closing the rest is the model's job.
+            # pick and place loop. Park it over the object first, roughly - closing the
+            # rest is the model's job.
             async def servo_grasp_once():
                 if not await self.servo.ensure_model():
                     return
@@ -4525,26 +4521,22 @@ class AsyncObserver:
         LOOP_DELAY = ppc.loop_delay
         END_LOOP_TIMEOUT = ppc.end_loop_timeout
 
-        if not self.visual_servo and not await self.check_lerobot_session_connected():
-            import torch
-            has_acceleration = torch.cuda.is_available() or torch.backends.mps.is_available()
-            if not has_acceleration:
-                await self.send_popup_and_await_answer(
-                    "No hardware acceleration (CUDA or MPS) detected; grasping will use "
-                    "manual targets and hardcoded behaviors."
-                )
-            else:
-                answer = await self.send_popup_and_await_answer(
-                    "Start a subprocess of stringman-headless to run grasping model?",
-                    buttons=["Yes", "No"],
-                )
-                if answer == 0:
-                    self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(
-                        control.ManageLerobotSession(
-                            action=control.LerobotSessionAction.START_EVAL,
-                            repo_id="naavox/dit-grasp-3",
-                        )
-                    ))
+        # Only --lerobot_grasp needs a session; the default servoing grasp does not, and
+        # execute_grasp falls back to it anyway, so there is nothing to prompt about.
+        if self.use_lerobot_grasp and not await self.check_lerobot_session_connected():
+            answer = await self.send_popup_and_await_answer(
+                "--lerobot_grasp is set but no session is connected. Start a subprocess of "
+                "stringman-headless to run the grasping model? Answering No grasps with the "
+                "visual servoing model instead.",
+                buttons=["Yes", "No"],
+            )
+            if answer == 0:
+                self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(
+                    control.ManageLerobotSession(
+                        action=control.LerobotSessionAction.START_EVAL,
+                        repo_id="naavox/dit-grasp-3",
+                    )
+                ))
 
         drop_point = np.zeros(3)
         target_seen_t = time.time()
@@ -4665,216 +4657,19 @@ class AsyncObserver:
 
     async def execute_grasp(self):
         """Try to grasp whatever is directly below the gripper"""
-        if self.visual_servo:
-            # --visual_servo takes the grasp away from both the lerobot policy and the
-            # centering model. It is a deliberate override rather than another fallback.
-            if not await self.servo.ensure_model():
-                logger.warning('No visual servoing model loaded; cannot grasp')
-                return False
-            return await self.servo.run(mode=SERVO_MODE_GRASP)
-        # A lerobot session may be driving from our own subprocess or connected remotely
-        # through the prod telemetry relay, so we can't tell locally if one is present.
-        # lerobot_grasp broadcasts the eval-start and returns None if no session answers,
-        # in which case we fall back to the older centering model.
-        result = await self.lerobot_grasp()
-        if result is not None:
-            return result
-        if self.centering_model is None:
-            await self._load_centering_model()
-        return await self.arp_execute_grasp()
-
-    async def arp_execute_grasp(self):
-        """Try to grasp whatever is directly below the gripper"""
-        FINGER_LENGTH = 0.1 # length between rangefinder and floor when fingers touch in meters
-        FLOOR_GRIPPER_HEIGHT = 0.11 # distance above floor (gripper origin) when grasp should be started
-        RANGE_ITEM = 0.04 # range to item below which grip should be started
-        # the gripper stream is the raw full-sensor wide FOV; there is no longer a stabilization
-        # zoom factor applied on top of it.
-        HALF_VIRTUAL_FOV = model_constants.rpi_cam_3_wide_fov / 2 * (np.pi/180)
-        DOWNWARD_SPEED = -0.07
-        VISUAL_CONF_THRESHOLD = 0.1 # level below which we give up on the target
-        COMMIT_HEIGHT = 0.3 # height below which giving up due to visual disconfidence is not allowed.
-        LAT_TRAVEL_FRACTION = 0.75 # try to finish lateral travel by this fraction of the time spent travelling downwards
-        LAT_SPEED_ADJUSTMENT = 5.00 # final adjustment to lateral speed. so huge because network outputs small values (why?)
-        LOOP_DELAY = 0.1
-        PRESSURE_SENSE_WAIT = 10.0
-        NUM_ATTEMPTS = 3
-        CLOSING_FINGER_SPEED = 30
-        WRIST_SMOOTH_FACTOR = 0.9
-
-        smooth_grip_angle = self.grip_angle
-
-        try:
-            attempts = NUM_ATTEMPTS
-            while not self.pe.holding and attempts > 0 and self.run_command_loop:
-                attempts -= 1
-                logger.debug(f'Open fingers to {OPEN} to clear camera')
-                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-
-                # move laterally until target is centered
-                # at the same time, move downward until tip is detected.
-
-                nothing_seen_countdown = 15
-                approach_timeout = time.time()+10
-                self.pe.tip_over.clear()
-                while (self.predicted_lateral_vector is not None and not self.pe.tip_over.is_set() and time.time() < approach_timeout):
-                    range_to_target = self.datastore.range_record.getLast()[1]
-                    # compare this rangefinder distance to the distance estimated from other methods
-                    gripper_height = self.pe.grip_pose[1][2]
-
-                    # for bulky objects, we want to close range_to_target to about zero to get the fingers all the way around
-                    # for small objects, we don't want to, we can't get that low, the fingers would touch the floor and the object
-                    # would still be a few cm away from the rangefinder. 
-
-                    logger.debug(f'range_to_target {range_to_target} gripper_height = {gripper_height}')
-                    if range_to_target < RANGE_ITEM or gripper_height < FLOOR_GRIPPER_HEIGHT:
-                        logger.debug(f'Reached target at height {gripper_height} and range {range_to_target}')
-                        break
-
-                    if self.gripper_sees_target < VISUAL_CONF_THRESHOLD and range_to_target > COMMIT_HEIGHT:
-                        nothing_seen_countdown -= 1
-                        if nothing_seen_countdown == 0:
-                            logger.debug('Nothing seen during centering loop')
-                            break
-                    else:
-                        nothing_seen_countdown = 15
-
-                    # calculate eta to the floor using laser range, we want to finish lateral travel at 0.75 of that eta
-                    lat_travel_seconds = (range_to_target-FINGER_LENGTH)/(-DOWNWARD_SPEED)*LAT_TRAVEL_FRACTION
-                    lateral_vector = np.zeros(2)
-                    if lat_travel_seconds > 0:
-                        # determine which direction we'd have to move laterally to center the object
-                        # you get a normalized u,v coordinate in the [-1,1] range
-                        # for now assume that the up direction in the gripper image is -Y in world space
-                        # the direction in world space depends on how the user placed the origin card on the ground
-                        # we need to capture a number during calibration to relate these two.
-                        # +1 is the edge of the image. how far laterally that would be depends on how far from the ground the gripper is.
-                        pred_vector = self.predicted_lateral_vector
-                        pred_vector[1] *= -1
-                        # lateral distance to object
-                        lateral_vector = np.sin(pred_vector * HALF_VIRTUAL_FOV) * range_to_target
-                        # lateral distance in meters
-                        lateral_distance = np.linalg.norm(lateral_vector)
-                        # speed to travel that lateral distance in lat_travel_seconds
-                        lateral_speed = lateral_distance / lat_travel_seconds * LAT_SPEED_ADJUSTMENT
-                    else:
-                        # once we get too close, go straight down, stop relying on the camera
-                        lateral_speed = 0
-                    lateral_vector *= lateral_speed
-
-                    # rotate later component of direction from gripper frame into room frame
-                    lateral_vector = rotate_vector(lateral_vector, -self.gripper_client.get_spin())
-
-                    await self.move_direction_speed([lateral_vector[0],lateral_vector[1],DOWNWARD_SPEED])
-
-                    # move wrist to predicted grip angle with smoothing
-                    smooth_grip_angle = smooth_grip_angle*WRIST_SMOOTH_FACTOR + self.grip_angle*(1-WRIST_SMOOTH_FACTOR)
-                    await self.gripper_client.send_commands({'set_wrist_angle': smooth_grip_angle/np.pi*180})
-
-                    try:
-                        # the normal sleep on this loop would be LOOP_DELAY s, but if tip is detected
-                        # we want to stop immediately.
-                        await asyncio.wait_for(self.pe.tip_over.wait(), LOOP_DELAY)
-                        logger.debug('Detected tip over, must be floor')
-                        break
-                    except TimeoutError:
-                        pass
-
-                self.slow_stop_all_spools()
-                self.pe.tip_over.clear()
-
-                if nothing_seen_countdown == 0:
-                    logger.debug('Nothing seen')
-                    continue # find new target?
-
-                logger.info('Close gripper')
-                end_time = time.time() + PRESSURE_SENSE_WAIT
-                self.pe.finger_pressure_rising.clear()
-
-                await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
-                # finger speed commands take effect for 200ms only. they must be sent repeatedly.
-                t, angle, pressure = self.datastore.finger.getLast()
-                while time.time() < end_time and not self.pe.finger_pressure_rising.is_set() and angle < CLOSED:
-                    await asyncio.sleep(0.03)
-                    await self.gripper_client.send_commands({'set_finger_speed': CLOSING_FINGER_SPEED})
-                    t, angle, pressure = self.datastore.finger.getLast()
-                logger.debug(f'End grip finger_pressure_rising={self.pe.finger_pressure_rising.is_set()} angle={self.datastore.finger.getLast()[1]}')
-                await self.gripper_client.send_commands({'set_finger_speed': 0})
-
-                if not self.pe.finger_pressure_rising.is_set():
-                    pressure = self.datastore.finger.getLast()[2]
-                    logger.debug(f'Did not detect a successful hold, pressure=({pressure}) open and go back up high enough to get a view of the object')
-                    # move up slowly at first, till fingers just touch ground and we are veritical. this keeps unwanted swinging to a minimum
-                    await self.move_direction_speed([0,0,0.06])
-                    await asyncio.sleep(1.0)
-                    asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': OPEN}))
-                    # now move up a little faster in a slightly random direction
-                    direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
-                    await self.move_direction_speed(direction)
-                    await asyncio.sleep(2.0)
-                    self.slow_stop_all_spools()
-                    continue
-
-                self.pe.finger_pressure_rising.clear()
-                logger.info('Successful grasp')
-                # slowly at first
-                await self.move_direction_speed(np.array([0,0,0.05]))
-                await asyncio.sleep(1.0)
-                # and then all at once
-                await self.move_direction_speed(np.array([0,0,0.15]))
-                await asyncio.sleep(2.0)
-                logger.info('Stop moving')
-                self.slow_stop_all_spools()
-                return True
-            logger.info(f'Gave up on grasp after {NUM_ATTEMPTS-attempts} attempts. self.pe.holding={self.pe.holding}')
+        if self.use_lerobot_grasp:
+            # A lerobot session may be driving from our own subprocess or connected
+            # remotely through the prod telemetry relay, so we can't tell locally if one
+            # is present. lerobot_grasp broadcasts the eval-start and returns None if no
+            # session answers, which is recoverable: servoing needs nothing but the robot.
+            result = await self.lerobot_grasp()
+            if result is not None:
+                return result
+            logger.warning('--lerobot_grasp is set but no session answered; servoing instead')
+        if not await self.servo.ensure_model():
+            logger.warning('No visual servoing model loaded; cannot grasp')
             return False
-
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self.slow_stop_all_spools()
-
-    async def _load_centering_model(self):
-        import torch
-        from huggingface_hub import hf_hub_download
-        from nf_robot.ml.centering import CenteringNet
-        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-        self._device = DEVICE
-        CENTERING_MODEL_REPOID = "naavox/centering"
-
-        if DEVICE == "cpu":
-            logger.warning("Refusing to load centering model on CPU; hardware acceleration required.")
-            self.centering_model = None
-            self.send_ui(pop_message=telemetry.Popup(
-                message="The arp grasp (centering model) cannot be used without some kind of "
-                        "hardware acceleration. Loading was aborted because the torch device is CPU."
-            ))
-            return
-
-        def load_sync():
-            if self.local_models:
-                center_path = "models/square_centering.pth"
-            else:
-                center_path = hf_hub_download(repo_id=CENTERING_MODEL_REPOID, filename="square_centering.pth")
-            logger.info(f"Loading centering model from {center_path}...")
-            c_model = CenteringNet().to(DEVICE)
-            c_model.load_state_dict(torch.load(center_path, map_location=DEVICE))
-            c_model.eval()
-            return c_model
-
-        # Same clock-driven bar as the target model: the download and the torch import
-        # inside load_sync report nothing, so it holds at 99% until this returns.
-        async with FakeProgress(
-            self.send_ui,
-            name="Centering Model",
-            current_action="Loading centering model...",
-            done_action="Centering model ready",
-            failed_action="Could not load the centering model",
-            expected_s=5.0,
-            interval_s=0.2,
-            suppress_completion_popup=True,
-        ):
-            self.centering_model = await asyncio.to_thread(load_sync)
+        return await self.servo.run(mode=SERVO_MODE_GRASP)
 
     def _set_target_model(self, model):
         """Set self.target_model, notifying the UI via auto_targeting_state whenever
@@ -4957,7 +4752,7 @@ class AsyncObserver:
         A grasp condition is a certain amount of force being exerted by the fingers while being at a certain altitude off the floor.
 
         Returns True/False for grasp success once a session takes over, or None if no session
-        answered the ping (so the caller can fall back to the centering model).
+        answered the ping (so the caller can fall back to the visual servoing model).
 
         A seperate process must be connected to the telemetry stream to manage the act policy at this time. It can be started with
 
@@ -5015,11 +4810,11 @@ def main():
     parser.add_argument("--auto_start", action="store_true", help="Automatically unpark and start cleaning when all components connect")
     parser.add_argument("--local_models", action="store_true", help="Use local models from models/ rather than downloading the production models from huggingface")
     parser.add_argument(
-        "--visual_servo",
+        "--lerobot_grasp",
         action="store_true",
-        help="Grasp with the visual servoing model (see ml/visual_servoing/readme.md) instead "
-             "of a lerobot policy or the centering model. Also available as the 'servograsp' "
-             "debug command, which runs one grasp where the gripper is now."
+        help="Grasp with a connected lerobot policy session rather than the visual servoing "
+             "model (see ml/visual_servoing/readme.md), which is the default. Falls back to "
+             "servoing if no session answers."
     )
     parser.add_argument("--debug", action="store_true", help="Enable DEBUG level logging")
     parser.add_argument(
@@ -5088,7 +4883,7 @@ def main():
             serve_ui=(not args.no_serve_ui),
             ui_port=args.ui_port,
             diamond_size=tuple(args.diamond_size),
-            visual_servo=args.visual_servo,
+            lerobot_grasp=args.lerobot_grasp,
         )
 
         # Idempotent stop trigger. Runs as a signal-handler callback on the event

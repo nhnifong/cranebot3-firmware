@@ -292,9 +292,8 @@ class VisualServo:
                                          else "mps" if torch.backends.mps.is_available() else "cpu")
             if device == "cpu":
                 return None, device, (
-                    "The visual servoing grasp (--visual_servo) cannot be used without some "
-                    "kind of hardware acceleration. Loading was aborted because the torch "
-                    "device is CPU.")
+                    "The visual servoing grasp cannot be used without some kind of hardware "
+                    "acceleration. Loading was aborted because the torch device is CPU.")
 
             model, checkpoint = servo.load_model(device, local_models=self.ob.local_models)
             logger.info(f"Visual servoing model ready: epoch {checkpoint.get('epoch')}, "

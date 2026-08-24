@@ -71,7 +71,9 @@ options:
                             The cloud telemetry server to connect to (choices: local, staging, production) The default is None, which allows local connections on port 4245 only
     --no_ortho            Disable orthographic floor projection and its video streams
     --auto_start          Automatically unpark and start cleaning when all components connect (experimental)
-    --local_models        Use local models from models/ for the targeting and centering models rather than downloading the production models from huggingface
+    --local_models        Use local models from models/ for the targeting and grasping models rather than downloading the production models from huggingface
+    --lerobot_grasp       Grasp with a connected lerobot policy session rather than the visual servoing model,
+                            which is the default. Falls back to servoing if no session answers.
     --debug               Enable DEBUG level logging
     --rec_diagnostics     Record the arguments of every optimize_arp_anchors call during full_auto_calibration
                             to calibration_diagnostics.pkl, for offline analysis. Arpeggio hardware only.

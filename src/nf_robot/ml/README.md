@@ -2,7 +2,7 @@
 
 Practical, copy-pasteable commands for the machine-learning side of the project.
 The bulk of this concerns **lerobot** (dataset recording, policy training locally and
-on Modal, and evaluation). The **targeting & centering** models at the bottom are a
+on Modal, and evaluation). The **targeting & visual servoing** models at the bottom are a
 separate, non-lerobot pipeline.
 
 > Older scratch notes live in [useful_commands.md](useful_commands.md). Prefer this file;
@@ -436,18 +436,21 @@ python -m nf_robot.ml.stringman_lerobot eval \
 
 ---
 
-# Targeting & centering models
+# Targeting & visual servoing models
 
 These are **not** lerobot policies — they're standalone regression models with their own
 training tooling. Targeting is `ortho_target`, which reads the orthographic floor
-projection; see its module docstring for the distill/train/evaluate workflow.
+projection; grasping is `visual_servoing`, which drives the gripper down onto an object.
+See each module's docs for its distill/train/evaluate workflow.
 
 Push trained weights to the Hub (PUSH TO PROD):
 
 ```bash
 hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
-hf upload naavox/centering models/square_centering.pth square_centering.pth
 ```
+
+Publishing the servoing checkpoint is covered in
+[visual_servoing/readme.md](visual_servoing/readme.md), which owns that repo id.
 
 ## Backbone
 

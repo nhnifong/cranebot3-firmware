@@ -22,7 +22,7 @@ target resolution and framerate for gripper camera
 summary of gripper video pipeline
  1. start with half res stream from raspi
  2. every 6th frame, resize to a square 384x384 image at 5fps
- 3. send to both UI and centering model
+ 3. send to both UI and visual servoing model
 
 
 These are low enough rates that it would probably be fine to drop jpegs on the existing telemetry websocket connection, but I'm strongly skeptical of it

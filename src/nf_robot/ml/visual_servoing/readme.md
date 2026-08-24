@@ -607,11 +607,11 @@ joined by a line.
 
 ## 7. Grasp with it
 
-    python -m nf_robot.host.observer --visual_servo --local_models
+    python -m nf_robot.host.observer --local_models
 
-`--visual_servo` makes `execute_grasp` run `host/visual_servo.py` instead of asking a
-lerobot session or falling back to the centering model. It is an override, not another
-fallback: a silent fall back to something else would hide how this one does.
+`execute_grasp` runs `host/visual_servo.py` by default; there is no flag to turn it on.
+`--lerobot_grasp` is what hands the grasp to a policy session instead, and that one does
+fall back here when no session answers.
 
 `--local_models` reads `models/visual_servo.pth`; without it the checkpoint comes from
 `naavox/visual-servo` on the hub, which has to have been published there first:

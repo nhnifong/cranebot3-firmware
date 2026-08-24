@@ -1,5 +1,5 @@
 > **Looking for a curated guide?** See [README.md](README.md) for a proper, organized
-> walkthrough (lerobot training/Modal/eval, plus the targeting & centering models). This
+> walkthrough (lerobot training/Modal/eval, plus the targeting & visual servoing models). This
 > file is the raw scratch dump kept for reference.
 
 Currently this torch version seems to work with nvidia driver 580 and the RTX 5090
@@ -39,7 +39,6 @@ Playback
 When ready to upload models ( PUSH TO PROD )
 
     hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
-    hf upload naavox/centering models/square_centering.pth square_centering.pth
 
 Example record command
 
