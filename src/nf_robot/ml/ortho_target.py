@@ -405,6 +405,79 @@ def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit
     return samples, images, skipped
 
 
+SHARD_TARGET_BYTES = 256 * 1024 * 1024
+# Columns beside the JPEG bytes. Read without the image column, they are the whole label
+# table, which is what lets the baseline and the split statistics be computed without
+# decoding a single frame.
+LABEL_COLUMNS = ("file_name", "u", "v", "contact_m", "episode_index", "frame_offset",
+                 "contact_frame_index", "contact_time_s", "task")
+
+
+def shard_schema():
+    import pyarrow as pa
+
+    return pa.schema([
+        pa.field("file_name", pa.string()),
+        pa.field("image", pa.binary()),
+        pa.field("u", pa.float64()),
+        pa.field("v", pa.float64()),
+        pa.field("contact_m", pa.list_(pa.float64())),
+        pa.field("episode_index", pa.int32()),
+        pa.field("frame_offset", pa.int32()),
+        pa.field("contact_frame_index", pa.int32()),
+        pa.field("contact_time_s", pa.float64()),
+        pa.field("task", pa.string()),
+    ])
+
+
+def write_shards(split_dir: Path, samples, images, target_bytes=SHARD_TARGET_BYTES) -> int:
+    """Write the split as parquet shards of JPEG bytes plus their labels.
+
+    One file per sample is what this used to be, and it does not survive the hub: at
+    eight frames an episode the dataset is 6,500 loose jpegs, and the download asks for a
+    read token per file until it is rate limited. Shards make that a handful of files,
+    which is the same reason visual_servoing's miner writes them.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    schema = shard_schema()
+    written, shard, rows, pending = 0, 0, [], 0
+
+    def flush():
+        nonlocal shard, rows, pending
+        if not rows:
+            return
+        table = pa.Table.from_pylist(rows, schema=schema)
+        pq.write_table(table, split_dir / f"shard-{shard:04d}.parquet")
+        shard, rows, pending = shard + 1, [], 0
+
+    for sample in sorted(samples, key=lambda s: s["file_name"]):
+        ok, buf = cv2.imencode(".jpg", images[sample["file_name"]])
+        if not ok:
+            raise ValueError(f"could not encode {sample['file_name']}")
+        blob = buf.tobytes()
+        (u, v), = sample["points"]
+        rows.append({
+            "file_name": sample["file_name"],
+            "image": blob,
+            "u": u,
+            "v": v,
+            "contact_m": sample["contact_m"],
+            "episode_index": int(sample["episode_index"]),
+            "frame_offset": int(sample.get("frame_offset", 0)),
+            "contact_frame_index": int(sample["contact_frame_index"]),
+            "contact_time_s": float(sample["contact_time_s"]),
+            "task": sample.get("task") or "",
+        })
+        pending += len(blob)
+        written += 1
+        if pending >= target_bytes:
+            flush()
+    flush()
+    return written
+
+
 def write_split(output_root: Path, split: str, samples, images) -> int:
     """Replace one split of the image folder, leaving the other one alone.
 
@@ -419,17 +492,14 @@ def write_split(output_root: Path, split: str, samples, images) -> int:
         shutil.rmtree(split_dir)
     split_dir.mkdir(parents=True)
 
-    with open(split_dir / "metadata.jsonl", "w") as f:
-        for sample in sorted(samples, key=lambda s: s["file_name"]):
-            cv2.imwrite(str(split_dir / sample["file_name"]), images[sample["file_name"]])
-            f.write(json.dumps(sample) + "\n")
+    written = write_shards(split_dir, samples, images)
 
     lines = ["---", "configs:", "- config_name: default", "  data_files:"]
     for name, dirname in (("train", "train"), ("test", "eval")):
-        if (output_root / dirname / "metadata.jsonl").exists():
-            lines += [f"  - split: {name}", f"    path: {dirname}/metadata.jsonl"]
+        if any((output_root / dirname).glob("*.parquet")):
+            lines += [f"  - split: {name}", f"    path: {dirname}/*.parquet"]
     (output_root / "README.md").write_text("\n".join(lines) + "\n---\n")
-    return len(samples)
+    return written
 
 
 def upload_dataset(output_root: Path, dataset_id: str):
@@ -441,12 +511,12 @@ def upload_dataset(output_root: Path, dataset_id: str):
     """
     from huggingface_hub import HfApi, create_repo
 
-    missing = [s for s in ("train", "eval") if not (output_root / s / "metadata.jsonl").exists()]
+    missing = [s for s in ("train", "eval") if not any((output_root / s).glob("*.parquet"))]
     if missing:
         raise ValueError(
             f"{output_root} has no {missing} split yet. The upload prunes hub files that are "
-            f"absent locally, so uploading now would delete the other split's images. Distill "
-            f"both recipes into this directory first."
+            f"absent locally, so uploading now would delete the other split's shards. Distill "
+            f"both splits into this directory first."
         )
 
     create_repo(dataset_id, repo_type="dataset", exist_ok=True)
@@ -454,7 +524,9 @@ def upload_dataset(output_root: Path, dataset_id: str):
         folder_path=str(output_root),
         repo_id=dataset_id,
         repo_type="dataset",
-        delete_patterns=["*.jpg"],
+        # *.jpg clears the loose frames of the pre-shard layout, which are otherwise left
+        # behind on the hub for as long as the repo lives.
+        delete_patterns=["*.jpg", "*.parquet", "*/metadata.jsonl"],
     )
     logging.info(f"Uploaded to {dataset_id}")
 
@@ -611,20 +683,47 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
     def __init__(self, root: Path, split: str, image_size: int, augment: bool, seed: int = 0,
                  translate_px: int = 0):
         self.dir = Path(root) / split
-        meta_path = self.dir / "metadata.jsonl"
-        if not meta_path.exists():
-            raise FileNotFoundError(f"No {split} split at {meta_path}")
-        self.samples = [json.loads(line) for line in open(meta_path) if line.strip()]
+        shards = sorted(self.dir.glob("*.parquet"))
+        if not shards:
+            raise FileNotFoundError(
+                f"No parquet shards at {self.dir}. A distilled dataset from before this was "
+                f"sharded holds loose jpegs and a metadata.jsonl; re-run distill to convert it.")
+
+        # Frames are held as their JPEG bytes rather than decoded: a split is a few
+        # hundred MB compressed and several GB decoded, and every one of them is about to
+        # be resized and augmented anyway.
+        self.images: list[bytes] = []
+        self.samples: list[dict] = []
+        for shard in shards:
+            table = pq.read_table(shard)
+            blobs = table.column("image").to_pylist()
+            labels = table.select(list(LABEL_COLUMNS)).to_pylist()
+            for blob, row in zip(blobs, labels):
+                self.images.append(blob)
+                # "points" (a list, of one) is the shape target_heatmap's hand-labelled
+                # rows have, and what the previews and the baseline read.
+                self.samples.append({**row, "points": [[row["u"], row["v"]]]})
+
         self.image_size = image_size
         self.augment = augment
         self.seed = seed
         self.translate_px = translate_px
+        total = sum(len(b) for b in self.images)
+        logging.info(f"{self.dir}: {len(self.samples)} samples in {len(shards)} shard(s), "
+                     f"{total / 1e6:.0f} MB of frames in memory")
 
     def __len__(self):
         return len(self.samples)
 
+    def decode(self, idx):
+        """One stored frame as BGR, at whatever size it was written."""
+        bgr = cv2.imdecode(np.frombuffer(self.images[idx], np.uint8), cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise ValueError(f"undecodable frame {self.samples[idx]['file_name']} in {self.dir}")
+        return bgr
+
     def stored_size(self):
-        probe = cv2.imread(str(self.dir / self.samples[0]["file_name"]))
+        probe = self.decode(0)
         return probe.shape[1], probe.shape[0]
 
     def scaled_labels(self):
@@ -635,9 +734,7 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        bgr = cv2.imread(str(self.dir / sample["file_name"]))
-        if bgr is None:
-            raise ValueError(f"Failed to load {self.dir / sample['file_name']}")
+        bgr = self.decode(idx)
 
         (u, v), = sample["points"]
         h, w = bgr.shape[:2]
@@ -1128,8 +1225,7 @@ def _write_previews(model, dataset, device, out_dir: Path, top_k: int, tta: bool
     for i in range(len(dataset)):
         image, target_uv = dataset[i]
         uv, scores = predict(model, image[None].to(device), tta=tta, top_k=top_k)
-        canvas = cv2.imread(str(dataset.dir / dataset.samples[i]["file_name"]))
-        canvas = cv2.resize(canvas, (model.image_size, model.image_size))
+        canvas = cv2.resize(dataset.decode(i), (model.image_size, model.image_size))
         gt = target_uv.numpy()
         cv2.drawMarker(canvas, (int(gt[0]), int(gt[1])), (0, 255, 0), cv2.MARKER_CROSS, 24, 2)
         for rank, ((u, v), score) in enumerate(zip(uv[0].cpu().numpy(), scores[0].cpu().numpy())):
