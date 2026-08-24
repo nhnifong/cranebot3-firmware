@@ -447,10 +447,8 @@ Push trained weights to the Hub (PUSH TO PROD):
 
 ```bash
 hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
+hf upload naavox/visual_servo models/visual_servo.pth visual_servo.pth
 ```
-
-Publishing the servoing checkpoint is covered in
-[visual_servoing/readme.md](visual_servoing/readme.md), which owns that repo id.
 
 ## Backbone
 
@@ -464,5 +462,5 @@ running two models on different backbones costs a second copy of it.
 
 A checkpoint records its own `backbone_id` and `image_size` and rebuilds from them, so
 older DINOv3 checkpoints keep working - but fetching their trunk still needs gated
-access. The published `naavox/targeting` and `naavox/visual-servo` copies are DINOv3
+access. The published `naavox/targeting` and `naavox/visual_servo` copies are DINOv3
 until they are retrained and republished. Each model's own docs carry a DINOv3 footnote.

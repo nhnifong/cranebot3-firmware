@@ -614,9 +614,9 @@ joined by a line.
 fall back here when no session answers.
 
 `--local_models` reads `models/visual_servo.pth`; without it the checkpoint comes from
-`naavox/visual-servo` on the hub, which has to have been published there first:
+`naavox/visual_servo` on the hub, which has to have been published there first:
 
-    hf upload naavox/visual-servo models/visual_servo.pth visual_servo.pth
+    hf upload naavox/visual_servo models/visual_servo.pth visual_servo.pth
 
 Until it is, a run without `--local_models` declines the grasp and says so rather than
 raising.
