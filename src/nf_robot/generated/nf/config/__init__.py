@@ -403,6 +403,13 @@ class StringmanPilotConfig(betterproto2.Message):
     Keyed by the telemetry ws_protocol_and_host such as "wss://neufangled.com"
     """
 
+    swing_cancellation_verified: "bool" = betterproto2.field(25, betterproto2.TYPE_BOOL)
+    """
+    Whether calibration has measured swing cancellation actually damping a test swing on
+    this robot. Only that measurement sets it, so a config written before the field existed
+    reads false.
+    """
+
 
 default_message_pool.register_message(
     "nf.config", "StringmanPilotConfig", StringmanPilotConfig

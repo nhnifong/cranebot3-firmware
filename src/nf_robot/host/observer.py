@@ -28,9 +28,10 @@ import cv2
 import pickle
 import inspect
 import itertools
+from contextlib import asynccontextmanager
 from collections import deque, defaultdict
 import uuid
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 import json
 import re
@@ -178,6 +179,22 @@ def _widest_gap(points):
     """The largest distance between any two of these positions."""
     P = np.asarray(points, dtype=float)
     return float(max(np.linalg.norm(a - b) for a, b in itertools.combinations(P, 2)))
+
+
+def with_swing_cancellation_preferred(func):
+    """Decorate an AsyncObserver coroutine method to run under prefer_swing_cancellation.
+
+    AsyncObserver.prefer_swing_cancellation is the primitive and says what the preference
+    means; this is that primitive applied to a whole method, for the long tasks that want it
+    from their first move to their last and would otherwise have to indent their entire body
+    to say so. Keeps __name__, which is what invoke_motion_task names the motion task by.
+    """
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        async with self.prefer_swing_cancellation():
+            return await func(self, *args, **kwargs)
+    return wrapper
+
 
 class TelemetryLogHandler(logging.Handler):
     """Forwards log records to the telemetry stream via send_ui."""
@@ -567,7 +584,12 @@ class AsyncObserver:
 
         if goal_pos is None:
             return
-        r = await self.invoke_motion_task(self.seek_goal(goal_pos))
+        r = await self.invoke_motion_task(self.seek_goal_where_asked(goal_pos))
+
+    @with_swing_cancellation_preferred
+    async def seek_goal_where_asked(self, goal_pos):
+        """seek_goal but only when someone calls it with go here"""
+        return await self.seek_goal(goal_pos)
 
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
         """Issue a special command to a single component"""
@@ -610,6 +632,34 @@ class AsyncObserver:
             self.swing_cancellation_task.cancel()
         return was_running
 
+    @asynccontextmanager
+    async def prefer_swing_cancellation(self):
+        """Run a block with swing cancellation on, for a robot that has one which works.
+
+        Only a calibration run that watched a test swing actually damp sets
+        swing_cancellation_verified, so a robot whose check failed, or one calibrated before
+        the check existed, is left alone instead. That is the conservative half of the trade:
+        cancellation drives the spools from the gripper's IMU, and where the geometry or the
+        latency is off it pumps the swing rather than damping it, which is worse than the
+        swing it was asked to remove.
+
+        The state on the way in is restored on the way out, so this states a preference for
+        the length of the block without overriding the operator's switch."""
+        if not self.config.swing_cancellation_verified:
+            logger.debug('Swing cancellation not verified on this robot; leaving it as it is')
+            yield
+            return
+        if self.gripper_client is None:
+            # it reads the gripper's IMU, so without one it has nothing to cancel from
+            logger.debug('No gripper connected; leaving swing cancellation as it is')
+            yield
+            return
+        was_running = self.set_swing_cancellation(True)
+        try:
+            yield
+        finally:
+            self.set_swing_cancellation(was_running)
+
     async def _handle_set_swing_cancellation(self, item: control.SetSwingCancellation):
         logger.info(f'Swing cancellation set {item.enabled}')
         if item.enabled:
@@ -635,6 +685,7 @@ class AsyncObserver:
             while self.run_command_loop:
                 if self.gripper_client is None:
                     await asyncio.sleep(1)
+                    continue
                 vel2 = self.gripper_client.compute_swing_correction(time.time() + self.config.swing_latency)
                 if vel2 is not None:
                     await self.move_direction_speed(np.array([vel2[0], vel2[1], 0]), key='swingc', downward_bias=0)
@@ -916,14 +967,24 @@ class AsyncObserver:
             await self._recenter_gantry(center_pos)
 
         if len(all_results) < MIN_TRIALS:
+            # too little to choose a latency from, and equally too little to say anything
+            # about whether cancellation works here, so the stored verdict is left alone
             logger.warning(f'Swing latency calibration got only {len(all_results)} usable trials; keeping existing value')
             self._broadcast_swing_latency(original_latency)
             return None
 
         best = swing.select_min_residual(all_results)
         self._broadcast_swing_latency(best)
+        # The sweep just watched cancellation damp (or fail to) at a spread of latencies, which
+        # is the same measurement the end of full calibration makes. Judge it the same way and
+        # store it, so a robot tuned by the swinglatencycal debug command alone is as much
+        # entitled to prefer_swing_cancellation as one that ran the whole calibration.
+        best_residual = min(r for _, r in all_results)
+        self.config.swing_cancellation_verified = best_residual < swing.DAMPED_RESIDUAL_RAD
         save_config(self.config, self.config_path)
-        logger.info(f'Calibrated swing_latency = {best:.3f}s')
+        logger.info(f'Calibrated swing_latency = {best:.3f}s (best residual '
+                    f'{np.degrees(best_residual):.1f} deg, '
+                    f'{"damps" if self.config.swing_cancellation_verified else "does NOT damp"})')
         return best
 
     async def _handle_debug_command(self, item: control.Debug):
@@ -1037,7 +1098,8 @@ class AsyncObserver:
             async def servo_grasp_once():
                 if not await self.servo.ensure_model():
                     return
-                success = await self.servo.run(mode=SERVO_MODE_GRASP)
+                async with self.prefer_swing_cancellation():
+                    success = await self.servo.run(mode=SERVO_MODE_GRASP)
                 logger.info(f'servograsp succeeded={success}')
             r = await self.invoke_motion_task(servo_grasp_once())
         if item.action == 'servowatch':
@@ -1066,7 +1128,8 @@ class AsyncObserver:
             async def servo_score_loop():
                 if not await self.servo.ensure_model():
                     return
-                await self.servo.score()
+                async with self.prefer_swing_cancellation():
+                    await self.servo.score()
             r = await self.invoke_motion_task(servo_score_loop())
 
     async def set_tension_reg(self, enabled: bool):
@@ -1172,6 +1235,7 @@ class AsyncObserver:
                 chase_task.cancel()
             raise
 
+    @with_swing_cancellation_preferred
     async def ferry(self, source, dest):
         """Carry objectes between one named tag and another.
         Moves to source, attempt auto grasp, move to test, drop, repeat"""
@@ -3288,10 +3352,16 @@ class AsyncObserver:
                         name="Calibration",
                         current_action="Verifying swing cancellation is safe",
                     ))
-                    DAMPING_RESIDUAL_MAX_RAD = 0.15  # a settled swing sits well below this; pumping hits the cap
                     center_pos = np.array(self.pe.gant_pos, dtype=float)
                     residual, aborted = await self._measure_swing_residual(self.config.swing_latency, center_pos)
-                    if residual is not None and residual < DAMPING_RESIDUAL_MAX_RAD:
+                    # The verdict outlives the process: prefer_swing_cancellation reads it to
+                    # decide whether it may turn cancellation on by itself. This is the last
+                    # word on it, taken against the refined geometry, so it overwrites what
+                    # the latency sweep earlier in this run concluded against the old one.
+                    self.config.swing_cancellation_verified = (
+                        residual is not None and residual < swing.DAMPED_RESIDUAL_RAD)
+                    save_config(self.config, self.config_path)
+                    if self.config.swing_cancellation_verified:
                         logger.info(f'Swing cancellation damps with refined geometry (residual {np.degrees(residual):.1f} deg); enabling.')
                         self.set_swing_cancellation(True)
                     else:
@@ -3301,7 +3371,8 @@ class AsyncObserver:
                             message='Swing cancellation did not damp after calibration refinement and was left OFF. Re-check the calibration before running.'))
                 else:
                     logger.warning(f'Only {len(gripper_obs)} of {REQUIRED_GRIPPER_CARDS} gripper card observations; need all four to refine. Skipping 3rd pass.')
-                    # geometry is unchanged, so no damping re-test is needed to restore it
+                    # geometry is unchanged, so no damping re-test is needed to restore it, and
+                    # nothing was measured, so the stored verdict stays whatever it already was
                     self.set_swing_cancellation(sc_was_running)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
@@ -3412,6 +3483,7 @@ class AsyncObserver:
         save_config(self.config, self.config_path)
         self.gripper_client.calibrating_room_spin = False
 
+    @with_swing_cancellation_preferred
     async def linear_height_check_task(self):
         """
         Measure the average deviation from an ideal constant height, as reported by the
@@ -3504,6 +3576,7 @@ class AsyncObserver:
         logger.info(result_message)
         self.send_ui(pop_message=telemetry.Popup(message=f'RMS {np.sqrt((deviations_cm ** 2).mean()):.2f}cm'))
 
+    @with_swing_cancellation_preferred
     async def goalseek_diagnostic_task(self):
         """
         Measure how accurately seek_goal parks the gripper over a route-point tag.
@@ -4758,6 +4831,7 @@ class AsyncObserver:
         targets = [self._floor_target(x, y) for x, y, _ in predictions]
         return [t for t in targets if t is not None]
 
+    @with_swing_cancellation_preferred
     async def pick_and_place_loop(self):
         """
         Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
@@ -4918,7 +4992,10 @@ class AsyncObserver:
         if not await self.servo.ensure_model():
             logger.warning('No visual servoing model loaded; cannot grasp')
             return False
-        return await self.servo.run(mode=SERVO_MODE_GRASP)
+        # the model steers from the palm camera, so a swinging gripper moves the target under
+        # it between the frame it decided on and the descent it decided to make
+        async with self.prefer_swing_cancellation():
+            return await self.servo.run(mode=SERVO_MODE_GRASP)
 
     def _set_target_model(self, model):
         """Set self.target_model, notifying the UI via auto_targeting_state whenever

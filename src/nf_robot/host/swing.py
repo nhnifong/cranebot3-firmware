@@ -33,6 +33,13 @@ MEASURE_PERIODS = 3          # average the swing over this many final periods
 SAFETY_AMP_RAD = 0.4         # stop a trial early if the swing grows past this
 MIN_SAMPLES = 10             # fewer amplitude readings than this is not a settle worth reading
 
+# The residual below which cancellation counts as damping this robot rather than fighting it.
+# A settled swing reads well under this and one that pumps hits SAFETY_AMP_RAD instead, so
+# there is room either side. Both places that judge a robot's cancellation - the latency sweep
+# and the check at the end of calibration - answer the question with this one number, and what
+# they conclude is stored as config.swing_cancellation_verified.
+DAMPED_RESIDUAL_RAD = 0.15
+
 
 class Pendulum:
     """The gripper swinging on one particular pole.
@@ -131,7 +138,7 @@ def integrate_centering(raw_vel, offset, dt):
 # seconds; spread wide enough to bracket the ideal even under heavy loop contention
 COARSE_CANDS = (0.3, 0.0, 0.6)
 # a coarse trial damped this well is worth refining around immediately
-COARSE_GOOD_ENOUGH_RAD = 0.15
+COARSE_GOOD_ENOUGH_RAD = DAMPED_RESIDUAL_RAD
 # fine pass spans +/- this around the coarse best (covers the gap between coarse samples)
 FINE_HALF_WIDTH = 0.15
 FINE_COUNT = 7

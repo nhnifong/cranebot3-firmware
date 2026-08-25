@@ -151,6 +151,11 @@ message StringmanPilotConfig {
   // Credentials to publish telemetry at any cloud relay instance this robot has bound with.
   // Keyed by the telemetry ws_protocol_and_host such as "wss://neufangled.com"
   map<string, nf.common.RelayCreds> relay_credentials = 24;
+
+  // Whether calibration has measured swing cancellation actually damping a test swing on
+  // this robot. Only that measurement sets it, so a config written before the field existed
+  // reads false.
+  bool swing_cancellation_verified = 25;
 }
 
 // Tunable constants used by AsyncObserver.pick_and_place_loop
