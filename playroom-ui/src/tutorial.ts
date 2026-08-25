@@ -12,7 +12,8 @@
 // Add or reorder steps there — the TutorialManager handles the rest.
 // ============================================================
 
-import { isFullyConnected, hasOperationCompleted, isSwingCancellationEnabled } from './main.ts';
+import { isFullyConnected, hasOperationCompleted, isSwingCancellationEnabled,
+         isAutoTargetingEnabled, OVERRIDE_READINESS_GATES } from './main.ts';
 
 export interface TutorialStep {
   /** Stable id, handy for debugging. */
@@ -36,6 +37,7 @@ export interface TutorialStep {
    * Optional predicate. When it returns true the step auto-dismisses and the
    * tutorial advances. Evaluated by polling, so it should be cheap and based
    * on observable state (e.g. reading the DOM). Omit for manual-only steps.
+   * Ignored entirely under OVERRIDE_READINESS_GATES — see stepPredicate.
    */
   dismissWhen?: () => boolean;
 }
@@ -110,6 +112,20 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     message: `Now try the gripper. Press <strong>Space</strong> to close the fingers and hold <strong>Shift</strong> to open them. The <strong>left/right arrow keys</strong> rotate the wrist.<br><br>This bar shows finger pressure. The <strong>green fill</strong> is the pressure actually felt; the <strong>white vertical bar</strong> is the target pressure.<br><br>Once closed on something, holding <strong>Space</strong> raises the target pressure (the white bar). To open, hold <strong>Shift</strong> until the target pressure drops to zero, and then the fingers open.`,
   },
 
+  { // let the model populate the target list
+    id: 'auto-target',
+    highlightId: 'btn-auto-target',
+    message: `Switch on <strong>Auto</strong> to enable automatic target finding. It selects things on the floor which it could pick up.<br><br>This only fills the list. The robot will not move until you give it a task.`,
+    dismissWhen: () => isAutoTargetingEnabled(),
+  },
+
+  { // the main event: run the pick and drop task
+    id: 'pick-and-drop',
+    highlightId: 'action-pick-drop',
+    openMenuId: 'run-menu',
+    message: `You're ready. <strong>"Pick and drop targets"</strong> is what the robot is for: it works down the target list, picks each item up with a grasping model, and drops it at the <strong>hamper</strong>.<br><br>The <strong>From</strong> and <strong>To</strong> pickers under the target list change where items are taken from and where they end up; hamper is just the default destination.`,
+  },
+
 ];
 
 export function isTutorialMode(): boolean {
@@ -133,6 +149,20 @@ class TutorialManager {
     this.steps = steps;
   }
 
+  /**
+   * The predicate that decides when the current step is done, or undefined when
+   * nothing but a manual dismiss can advance it.
+   *
+   * Under OVERRIDE_READINESS_GATES every readiness gate reports satisfied, so a real
+   * predicate would fire on the step's first poll and flash past it. Reporting no
+   * predicate instead makes each panel wait for its ✕, which walks the whole tutorial
+   * — including steps gated on hardware that isn't present — in order.
+   */
+  private stepPredicate(step: TutorialStep | undefined): (() => boolean) | undefined {
+    if (OVERRIDE_READINESS_GATES) return undefined;
+    return step?.dismissWhen;
+  }
+
   start() {
     this.injectEndButton();
     this.index = 0;
@@ -144,7 +174,7 @@ class TutorialManager {
     this.pollTimer = window.setInterval(() => {
       const step = this.steps[this.index];
       if (!step) return; // ran out of steps; tutorial stays active until End.
-      if (step.dismissWhen?.()) {
+      if (this.stepPredicate(step)?.()) {
         this.advance();
       } else if (!this.dismissed) {
         // Re-assert the menu in case a stray click elsewhere closed it.
@@ -218,7 +248,7 @@ class TutorialManager {
    * predicate has nothing to wait on, so a manual dismiss advances it instead.
    */
   private dismissPanel = () => {
-    if (this.steps[this.index]?.dismissWhen) {
+    if (this.stepPredicate(this.steps[this.index])) {
       this.clearPanel();
       this.dismissed = true;
     } else {
