@@ -143,7 +143,7 @@ CLOSE_PRESSURE_TOLERANCE = 0.01
 # for, nothing achieved satisfies any ratio. During teleop carries the median commanded
 # force is 0.11 and 41% of frames ask for nothing at all.
 HOLD_FORCE_FRACTION = 0.8
-HOLD_FORCE_MIN_COMMANDED = 0.15
+HOLD_FORCE_MIN_COMMANDED = 0.02
 #
 # The second way to be loaded needs no reference to what was commanded: a felt force this
 # high that has stopped moving is something solid between the pads. The force loop does
@@ -463,28 +463,17 @@ class VisualServo:
         return speed
 
     async def _drive_fingers_staged(self, prediction):
-        """Hold, then close at one speed until the grip carries the predicted force.
-
-        Three states and one direction of travel through them:
-
-        - **holding still** while the close head is under threshold. Not "closing slowly"
-          and not "following a rate": the fingers stay where the approach put them, which
-          is what keeps them out of the camera and out of the object.
-        - **closing** once it crosses, ramping to CLOSE_SPEED over CLOSE_RAMP_S. The
-          decision does not un-make itself: a close that stuttered on a frame where the
-          probability dipped would be a worse grasp than one that committed, and the
-          approach loop has already stopped the gantry by then.
-        - **arrived** when the commanded force reaches what the model predicted this
-          object needs, at which point the fingers stop pushing and hold what they have.
-
-        The pressure comparison is against the *commanded* force rather than the felt one
-        because that is what the ask is: the gripper converts finger speed into a force
-        ramp on contact, so the commanded value is where the squeeze is being taken to,
-        and the felt value follows it. Whether it followed is holding_now's question.
-        """
+        """Hold, close to the predicted grip force, then stop and let the loop wait for load"""
         now = time.time()
         commanded = float(self.ob.gripper_client.last_target_force)
         target = prediction['grasp_pressure']
+
+        if self.close_arrived:
+            # Terminal: hold the force already commanded. Sending zero speed is what does
+            # that - the firmware only changes desired_force while a speed is commanded,
+            # so zero means "stay here", not "let go".
+            await self.ob.gripper_client.send_commands({'set_finger_speed': 0.0})
+            return 0.0
 
         if self.close_started_at is None:
             if prediction['close'] < CLOSE_PROB_THRESHOLD:
@@ -494,11 +483,12 @@ class VisualServo:
             logger.info(f"Close head says go ({prediction['close']:.2f}); closing to "
                         f"{target:.3f} of grip force")
 
-        if commanded >= target - CLOSE_PRESSURE_TOLERANCE:
-            if not self.close_arrived:
-                self.close_arrived = True
-                logger.info(f'Commanded force {commanded:.3f} reached the predicted '
-                            f'{target:.3f}; holding there')
+        # commanded > 0 is the gripper saying it is in force mode, which is to say the
+        # fingers are on the object rather than still travelling toward it
+        if commanded > 0.0 and commanded >= target - CLOSE_PRESSURE_TOLERANCE:
+            self.close_arrived = True
+            logger.info(f'Commanded force {commanded:.3f} reached the predicted '
+                        f'{target:.3f}; holding there and waiting for the grip to load')
             await self.ob.gripper_client.send_commands({'set_finger_speed': 0.0})
             return 0.0
 
