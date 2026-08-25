@@ -543,8 +543,11 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
         "grasp_axis_rad": (round(wrap_half_pi(winner["axis"]), 5)
                            if winner and winner["axis"] is not None else None),
         # No finger label: what a human does with the fingers is not something the
-        # compositing knows, and teleop is where that signal lives.
+        # compositing knows, and teleop is where that signal lives. Same for when a close
+        # would have started and how hard it would have ended up squeezing.
         "finger": None,
+        "close_now": None,
+        "grasp_pressure": None,
         "target_present": 1 if winner else 0,
         "holding": None,
         "state": {

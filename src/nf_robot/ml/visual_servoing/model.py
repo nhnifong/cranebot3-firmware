@@ -132,7 +132,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
-                 state_dim=STATE_DIM):
+                 state_dim=STATE_DIM, close_heads=False):
         super().__init__()
         trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
@@ -186,14 +186,23 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
         # is a property of the frame: by the time it matters the object usually fills or
         # blinds the camera, and we are aiming at a chunky lump of towel rather than a
         # centred object.
+        #
+        # close_heads adds two more of the same kind, and they replace the finger head's
+        # job rather than joining it. A rate says "how fast to move the fingers now",
+        # which a teleoperator's thumb answers differently every frame; these two say
+        # *when* to start and *how hard to end up squeezing*, which is what a grasp
+        # actually consists of. The finger head stays in the output either way, so one
+        # loader and one deployment path serve both kinds of checkpoint.
+        self.close_heads = close_heads
         global_dim = hidden * 2 + state_dim
+        self.global_outputs = 5 if close_heads else 3
         self.global_head = nn.Sequential(
             # LayerNorm first, and it is load-bearing: the trunk's [CLS] comes out with a
             # large norm, which drives the finger head's tanh straight into saturation
             # where its gradient is zero and it never trains at all. The spatial heads
             # do not have this problem because GroupNorm rescales the trunk for them.
             nn.LayerNorm(global_dim),
-            nn.Linear(global_dim, 256), nn.GELU(), nn.Linear(256, 3))
+            nn.Linear(global_dim, 256), nn.GELU(), nn.Linear(256, self.global_outputs))
 
     def features(self, pixel_values):
         """Fused patch features as a map, plus the global [CLS]/register vector."""
@@ -223,7 +232,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
 
         x = self.decoder(x)
         flags = self.global_head(torch.cat([global_vec, state], dim=-1))
-        return {
+        out = {
             "logits": self.logit_head(x).squeeze(1),
             "offsets": self.offset_head(x),
             "log_distance": self.distance_head(x).squeeze(1),
@@ -232,6 +241,13 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
             "present_logit": flags[:, 1],
             "holding_logit": flags[:, 2],
         }
+        if self.close_heads:
+            # "Should the close have begun by now", as a logit, and the grip force the
+            # operator ended up carrying this object with. The pressure is a softplus so
+            # it cannot be predicted negative, which is not a force the gripper can hold.
+            out["close_logit"] = flags[:, 3]
+            out["grasp_pressure"] = F.softplus(flags[:, 4])
+        return out
 
     def train(self, mode=True):
         super().train(mode)
@@ -290,7 +306,7 @@ def predict(model, images, state, top_k=1):
     model.eval()
     outputs = model(images, state)
     uv, distance, angle, scores, concentration = decode(outputs, model.grid, top_k=top_k)
-    return {
+    result = {
         "uv": uv,
         "distance_m": distance,
         "point_m": camera_point(uv, distance),
@@ -301,15 +317,21 @@ def predict(model, images, state, top_k=1):
         "present": outputs["present_logit"].sigmoid(),
         "holding": outputs["holding_logit"].sigmoid(),
     }
+    if "close_logit" in outputs:
+        result["close"] = outputs["close_logit"].sigmoid()
+        result["grasp_pressure"] = outputs["grasp_pressure"]
+    return result
 
 
 def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     freeze = checkpoint.get("freeze", True)
+    # Absent in every checkpoint written before these heads existed, which is what makes
+    # those checkpoints keep loading: no key, no extra heads, same three outputs.
     model = VisualServoNet(
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],
         fuse_layers=checkpoint["fuse_layers"], attention_layers=checkpoint["attention_layers"],
-        freeze=freeze,
+        freeze=freeze, close_heads=checkpoint.get("close_heads", False),
     ).to(device)
     state = checkpoint["state_dict"]
     if freeze:

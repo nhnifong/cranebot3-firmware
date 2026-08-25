@@ -92,6 +92,10 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
                         synth_frames.AXIS_FROM_WRIST_SIGN, which is where the training
                         labels commit to a direction.
         finger          commanded finger speed in -1..1, positive meaning more grip
+        close           close-heads models only: probability the close should have begun
+                        by this frame
+        grasp_pressure  close-heads models only: the grip force this object turned out to
+                        need, in the finger sensor's own units
         present         probability there is anything graspable in view at all
         holding         probability we are already holding something
         score           the winning cell's share of the position softmax
@@ -122,4 +126,9 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
         "holding": float(out["holding"][0]),
         "score": float(out["score"][0, 0]),
     }
+    # Only a close-heads checkpoint has these, so their absence is how a consumer tells
+    # which kind of model it is holding.
+    if "close" in out:
+        result["close"] = float(out["close"][0])
+        result["grasp_pressure"] = float(out["grasp_pressure"][0])
     return result

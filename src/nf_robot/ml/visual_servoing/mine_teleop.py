@@ -124,6 +124,14 @@ NEGATIVE_PREFIX = "negative"
 # picture; six a second is plenty of variety and keeps an hour of flying from burying the
 # positives it is meant to balance.
 NEGATIVE_STRIDE = 5
+# (frames) how long a pause in the closing command can be and still count as part of the
+# same close. A thumb comes off the trigger for a moment; a third of a second of nothing
+# is a different decision.
+CLOSE_GAP_FRAMES = 10
+# (metres, seconds) what counts as the lift having started: this much climb, still
+# climbing this long later.
+LIFT_ONSET_M = 0.03
+LIFT_CONFIRM_SECONDS = 0.5
 # (metres) minimum distance in front of the camera for a projection to mean anything.
 MIN_DEPTH_M = 0.02
 # Full-scale commanded finger speed, used to normalize the finger label into -1..1.
@@ -181,6 +189,11 @@ def row_schema():
         ("target_range_m", pa.float32()),
         ("grasp_axis_rad", pa.float32()),
         ("finger", pa.float32()),
+        # 1 from the frame the operator began closing on, 0 before it
+        ("close_now", pa.int8()),
+        # the grip force being carried at the moment the lift began, same value on every
+        # frame of the episode: it is a property of the object, not of the frame
+        ("grasp_pressure", pa.float32()),
         ("target_present", pa.int8()),
         ("holding", pa.int8()),
         ("state", pa.struct([
@@ -355,6 +368,53 @@ def grasp_point_room(row):
     return camera_room + np.array([0.0, 0.0, -float(row["laser_rangefinder"])])
 
 
+def close_onset(rows, grasp, gap_frames=CLOSE_GAP_FRAMES):
+    """The frame the operator began the close that ended in this grasp.
+
+    Walks back from the grasp through the run of frames commanding a close, and stops at
+    the first gap longer than `gap_frames`. Backwards rather than forwards because an
+    approach can contain any number of adjustments, half-closes and re-opens; the one
+    that matters is the last one, the one that was still closing when the object was
+    caught. A short gap inside it is a thumb pausing, not a different decision.
+
+    Returns None when the operator was already closing at the start of the window, which
+    means the onset happened before anything mined here and the frames cannot say when.
+    """
+    i, gap = grasp, 0
+    onset = grasp
+    while i >= 0:
+        if rows[i]["finger_speed"] > 0:
+            onset, gap = i, 0
+        else:
+            gap += 1
+            if gap > gap_frames:
+                break
+        i -= 1
+    return None if onset == 0 else onset
+
+
+def lift_pressure(rows, grasp, rise_m, fps):
+    """Felt finger pressure at the moment the gripper started carrying the object up.
+
+    The lift is where a grasp proves itself, so the force being held there is the force
+    that turned out to be enough - which is what a model asked "how hard should I squeeze
+    this" should answer. Read at the first frame after the grasp where the gripper has
+    climbed a centimetre and keeps climbing, rather than at the peak, because a peak is
+    whatever the operator overshot to.
+
+    Returns None if it never rose, though the caller has usually established otherwise.
+    """
+    start_z = rows[grasp]["gripper_pos"][2]
+    settle = max(1, int(round(LIFT_CONFIRM_SECONDS * fps)))
+    for i in range(grasp, len(rows)):
+        if rows[i]["gripper_pos"][2] - start_z < LIFT_ONSET_M:
+            continue
+        later = rows[min(i + settle, len(rows) - 1)]["gripper_pos"][2]
+        if later >= rows[i]["gripper_pos"][2]:
+            return float(rows[i]["pressure"])
+    return None
+
+
 def wrap_pi(radians):
     """Fold an angle into [-pi/2, pi/2), the range a pi-periodic grasp axis lives in."""
     return (radians + math.pi / 2) % math.pi - math.pi / 2
@@ -384,6 +444,8 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
 
     target_room = grasp_point_room(rows[grasp])
     wrist_at_grasp = rows[grasp]["wrist_angle"]
+    onset = close_onset(rows, grasp)
+    pressure_at_lift = lift_pressure(rows, grasp, rise_m, fps)
 
     first = max(0, grasp - int(round(approach_seconds * fps)))
     last = min(len(rows) - 1, grasp + int(round(carry_seconds * fps)))
@@ -399,6 +461,14 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
             "target_range_m": None,
             "grasp_axis_rad": None,
             "finger": round(float(r["finger_speed"]) / FINGER_SPEED_FULL_SCALE, 4),
+            # Whether the close should have begun by the time this frame was taken. A
+            # step rather than a spike on the one onset frame: the question the robot
+            # asks every pass is "should I be closing now", and it never asks again once
+            # the answer is yes. Masked when the onset is outside the mined window, since
+            # those frames cannot say whether it has happened yet.
+            "close_now": None if onset is None else (1 if i >= onset else 0),
+            "grasp_pressure": (None if pressure_at_lift is None
+                               else round(pressure_at_lift, 4)),
             "target_present": 1 if i <= grasp else None,
             "holding": 0 if i < grasp else 1,
             "state": {
@@ -483,6 +553,11 @@ def mine_negative_episode(rows, stride=NEGATIVE_STRIDE):
             "target_range_m": None,
             "grasp_axis_rad": None,
             "finger": round(float(r["finger_speed"]) / FINGER_SPEED_FULL_SCALE, 4),
+            # 0 as a fact, not as a mask: bare floor is exactly where a close should not
+            # begin, and it is the only place that can say so about a real frame.
+            "close_now": 0,
+            # But how hard to squeeze has no answer with nothing to squeeze.
+            "grasp_pressure": None,
             "target_present": 0,
             "holding": 0 if empty else None,
             "state": {
