@@ -37,7 +37,7 @@ const TILT_TEETH_ANGLES = [22.0, 26.0, 30.0, 34.0, 38.0, 42.0];
 const SHOW_ANCHOR_CAMERA_FRUSTUMS = false;
 
 // Debug toggle: report the robot as connected and calibrated regardless of telemetry
-const OVERRIDE_READINESS_GATES = true;
+const OVERRIDE_READINESS_GATES = false;
 
 const urlParams: URLSearchParams = new URLSearchParams(window.location.search);
 // If robotid is set in URL, we force cloud login. Otherwise we start the landing UI.
