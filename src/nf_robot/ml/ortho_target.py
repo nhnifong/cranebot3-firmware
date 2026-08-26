@@ -1103,6 +1103,9 @@ CELL_SIGMA = 1.5
 # Objectness above which a cell is reported as a target. A per-cell probability means
 # the same thing in every frame, so this is a real bar rather than a tuned ratio.
 TARGET_THRESHOLD = 0.5
+# Peaks the scoring counts over. Well above any plausible number of things on a floor, so
+# targets_per_frame measures the head rather than its own ceiling.
+COUNT_K = 64
 # Which metric picks the saved checkpoint. top5 rather than the single-answer recall,
 # because the job is to land on something a person would have picked and there is
 # usually more than one such thing in frame; recall@20cm scores those as failures.
@@ -1369,7 +1372,9 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
     four labels contributes four measurements and a model that finds three of them scores
     as having found three. `targets_per_frame` is the count that clears the threshold,
     which is the number that says whether the head has learned to find several objects or
-    has quietly collapsed onto one.
+    has quietly collapsed onto one. It counts over COUNT_K candidates rather than the
+    `top_k` the ranking metrics use, because a count capped at 5 cannot tell "five objects"
+    from "the whole map is over threshold" - and over is the direction this head fails in.
     """
     model.eval()
     nearest, covered, predicted, total_bce, count = [], [], [], 0.0, 0
@@ -1381,13 +1386,15 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
         total_bce += bce.item() * images.shape[0]
         count += images.shape[0]
 
-        uv, scores = predict(model, images, tta=tta, top_k=top_k)
+        # One decode wide enough for the count, sliced back to top_k for the ranking.
+        uv, scores = predict(model, images, tta=tta, top_k=max(top_k, COUNT_K))
+        predicted.append((scores >= min_probability).sum(dim=1).float().cpu())
+        uv = uv[:, :top_k]
         # (B, labels, k): every label against every decoded candidate.
         distance = (points[:, :, None, :] - uv[:, None, :, :]).norm(dim=-1)
         real = mask > 0
         nearest.append(distance[:, :, 0][real].cpu())
         covered.append(distance.min(dim=2).values[real].cpu())
-        predicted.append((scores >= min_probability).sum(dim=1).float().cpu())
 
     nearest = pixels_to_cm(torch.cat(nearest), model.image_size)
     covered = pixels_to_cm(torch.cat(covered), model.image_size)
@@ -1551,9 +1558,23 @@ def train(args):
     logging.info(f"done; best eval {args.select_metric} {best:.3f}, checkpoint at {args.model_path}")
 
 
+def checkpoint_head(checkpoint):
+    """What this checkpoint's logits mean: "objectness" per cell, or one "softmax" over them.
+
+    Recorded outright by anything trained since the field existed. Older files have to be
+    read from their metrics, because the two heads have identically shaped tensors and a
+    softmax checkpoint would otherwise load in silence and then saturate every cell - the
+    scoring reports bce for the objectness head where it reported nll for the other, and
+    that is the only difference between them that survives into the file.
+    """
+    if "head" in checkpoint:
+        return checkpoint["head"]
+    return "objectness" if "bce" in (checkpoint.get("metrics") or {}) else "softmax"
+
+
 def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
-    if checkpoint.get("head") != "objectness":
+    if checkpoint_head(checkpoint) != "objectness":
         raise ValueError(
             f"{path} predates the objectness head: its logits are one softmax over cells, "
             f"which this reads as independent sigmoids and saturates. Retrain it.")
