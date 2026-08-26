@@ -545,7 +545,8 @@ def write_dataset_readme(output_root: Path):
     (output_root / "README.md").write_text("\n".join(lines) + "\n---\n")
 
 
-def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTHO_EXTENT_M):
+def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTHO_EXTENT_M,
+                      name=None):
     """One row: the ortho frame, and every target the operator placed on it.
 
     The same schema the distilled shards use, but in its own directory and one parquet per
@@ -557,6 +558,10 @@ def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTH
     The frame is written at whatever size the observer renders it (host/observer.py's
     _ortho_worker), which need not be the size the distilled shards hold; merge_user_labels
     handles that.
+
+    `name` fixes the submission's identity, so a caller that can revisit a frame overwrites
+    what it wrote last time instead of leaving both. Left unset, a submission is stamped
+    with the moment it was made, which is what the UI wants: nothing there is ever revised.
 
     Returns (path, target count), or (None, 0) if every target fell outside the map.
     """
@@ -570,7 +575,7 @@ def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTH
         raise ValueError("could not encode the ortho frame")
     blob = buf.tobytes()
 
-    batch = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    batch = name or f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     points, contacts = [], []
     for x_m, y_m, z_m in targets_m:
         u, v = room_to_ortho_px(x_m, y_m, width, height, extent_m)
@@ -690,7 +695,8 @@ def upload_user_labels(source_root, dataset_id=None, private=True):
             f"No label files in {source_root}. The UI's 'Add targets to dataset' action writes "
             f"them there, relative to the directory stringman was started from."
         )
-    rows = sum(pq.read_metadata(f).num_rows for f in files)
+    rows = sum(len(points) for f in files
+               for points in pq.read_table(f, columns=["points"]).column("points").to_pylist())
 
     dataset_id = user_label_dataset_id(dataset_id)
     create_repo(dataset_id, repo_type="dataset", exist_ok=True, private=private)
@@ -1528,6 +1534,10 @@ def train(args):
                     "image_size": args.image_size,
                     "grid": args.grid,
                     "fuse_layers": args.fuse_layers,
+                    # What logits mean. A checkpoint from before the head was per-cell
+                    # objectness has the same tensors and would load in silence, then read
+                    # softmax logits through a sigmoid and saturate at 1.0 everywhere.
+                    "head": "objectness",
                     # Whether the state dict above holds a backbone at all: a frozen one
                     # is left to dino_trunk's shared instance and never written.
                     "freeze": not args.unfreeze_backbone,
@@ -1543,6 +1553,10 @@ def train(args):
 
 def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
+    if checkpoint.get("head") != "objectness":
+        raise ValueError(
+            f"{path} predates the objectness head: its logits are one softmax over cells, "
+            f"which this reads as independent sigmoids and saturates. Retrain it.")
     freeze = checkpoint.get("freeze", True)
     model = OrthoTargetNet(
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],

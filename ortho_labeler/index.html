@@ -1,0 +1,220 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ortho Target Labeler</title>
+<style>
+  :root { --amber:#e8a33d; --green:#4ade80; }
+  body { background:#111; color:#eee; font-family:system-ui, sans-serif; margin:0; padding:18px; }
+  h2 { margin:0 0 12px; font-size:18px; font-weight:600; }
+  #stage { position:relative; display:inline-block; border:2px solid #444; line-height:0; }
+  #stage img { display:block; max-width:min(92vw, 84vh); height:auto; cursor:crosshair; }
+  #dots { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+  #dots circle { pointer-events:all; cursor:grab; }
+  #dots text { pointer-events:none; font-size:11px; fill:#ffd; }
+  .controls { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { font-size:14px; padding:7px 14px; cursor:pointer; background:#222; color:#eee;
+           border:1px solid #555; border-radius:4px; }
+  button:hover { background:#2c2c2c; }
+  #status { margin-top:10px; font-size:13px; color:#9c9; min-height:1.2em; }
+  #stats { margin-top:4px; font-size:13px; color:#888; }
+  #help { margin-top:10px; font-size:12px; color:#777; line-height:1.7; }
+  kbd { background:#222; border:1px solid #555; border-radius:3px; padding:1px 5px; font-size:11px; }
+  .tag { font-size:11px; padding:2px 7px; border-radius:9px; border:1px solid #555; color:#bbb; }
+</style>
+</head>
+<body>
+<h2>Ortho Target Labeler <span id="frametag" class="tag"></span></h2>
+<div id="stage">
+  <img id="img" alt="ortho frame">
+  <svg id="dots"></svg>
+</div>
+<div class="controls">
+  <button id="prev">&larr; Prev</button>
+  <button id="save">Save &amp; Next (Space)</button>
+  <button id="skip">Skip (N)</button>
+  <button id="next">Next &rarr;</button>
+  <button id="clear">Clear all</button>
+  <button id="quit">Quit</button>
+</div>
+<div id="status"></div>
+<div id="stats"></div>
+<div id="help">
+  <kbd>click</kbd> empty floor to add &middot;
+  <kbd>drag</kbd> a dot to move it &middot;
+  <kbd>right-click</kbd> a dot to delete &middot;
+  <kbd>Del</kbd> deletes the selected dot &middot;
+  <kbd>Space</kbd> save &amp; next &middot; <kbd>N</kbd> skip &middot; <kbd>&larr;</kbd> <kbd>&rarr;</kbd> move about.
+  Amber dots are the model's guesses with their probability; green are yours.
+</div>
+
+<script>
+const img = document.getElementById('img');
+const dots = document.getElementById('dots');
+const statusEl = document.getElementById('status');
+const statsEl = document.getElementById('stats');
+const frametag = document.getElementById('frametag');
+
+let frames = [];
+let at = 0;
+let points = [];      // {u, v, p}  p is null once a point is yours
+let selected = -1;
+let dragging = -1;
+
+function formatDuration(s) {
+  return s < 60 ? Math.round(s) + 's' : Math.round(s / 60) + ' min';
+}
+
+function renderStats(p) {
+  if (!p) return;
+  let text = `${p.saved} saved, ${p.skipped} skipped, ${p.total} total`;
+  if (p.eta_seconds) text += ` — ~${formatDuration(p.eta_seconds)} left at this rate`;
+  statsEl.textContent = text;
+}
+
+function toImage(event) {
+  const rect = img.getBoundingClientRect();
+  return {
+    u: (event.clientX - rect.left) / rect.width * img.naturalWidth,
+    v: (event.clientY - rect.top) / rect.height * img.naturalHeight,
+  };
+}
+
+function render() {
+  dots.innerHTML = '';
+  points.forEach((pt, i) => {
+    const cx = pt.u / img.naturalWidth * 100;
+    const cy = pt.v / img.naturalHeight * 100;
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', cx + '%');
+    circle.setAttribute('cy', cy + '%');
+    circle.setAttribute('r', i === selected ? 9 : 7);
+    circle.setAttribute('fill', pt.p === null ? 'var(--green)' : 'var(--amber)');
+    circle.setAttribute('stroke', i === selected ? '#fff' : '#000');
+    circle.setAttribute('stroke-width', i === selected ? 2.5 : 1.5);
+    circle.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      selected = i; dragging = i; render();
+    });
+    circle.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      points.splice(i, 1); selected = -1; render();
+    });
+    dots.appendChild(circle);
+    if (pt.p !== null) {
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', cx + '%');
+      text.setAttribute('y', cy + '%');
+      text.setAttribute('dx', 11);
+      text.setAttribute('dy', 4);
+      text.textContent = pt.p.toFixed(2);
+      dots.appendChild(text);
+    }
+  });
+  const frame = frames[at];
+  frametag.textContent = frame ? `${at + 1}/${frames.length} · ${frame.id} · ${frame.status}` : '';
+  statusEl.textContent = `${points.length} target${points.length === 1 ? '' : 's'}`;
+}
+
+img.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  const { u, v } = toImage(e);
+  points.push({ u, v, p: null });
+  selected = points.length - 1;
+  dragging = selected;
+  render();
+});
+
+window.addEventListener('pointermove', (e) => {
+  if (dragging < 0) return;
+  const { u, v } = toImage(e);
+  // Moving a seed makes it yours: its probability described where the model put it,
+  // not where you did.
+  points[dragging] = { u, v, p: null };
+  render();
+});
+
+window.addEventListener('pointerup', () => { dragging = -1; });
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'BUTTON') return;
+  if (e.code === 'Space') { e.preventDefault(); save(); }
+  else if (e.key === 'n' || e.key === 'N') { skip(); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    if (selected >= 0) { points.splice(selected, 1); selected = -1; render(); }
+  }
+  else if (e.key === 'ArrowRight') { go(at + 1); }
+  else if (e.key === 'ArrowLeft') { go(at - 1); }
+});
+
+async function load() {
+  const frame = frames[at];
+  if (!frame) return;
+  selected = -1; dragging = -1;
+  img.src = `/api/frames/${frame.id}/image`;
+  const res = await fetch(`/api/frames/${frame.id}/targets`);
+  const data = await res.json();
+  points = data.targets.map(t => ({ u: t.u, v: t.v, p: t.p }));
+  frame.status = data.status;
+  if (img.complete && img.naturalWidth) render();
+}
+
+img.addEventListener('load', render);
+
+function go(index) {
+  if (index < 0 || index >= frames.length) return;
+  at = index;
+  load();
+}
+
+async function save() {
+  const frame = frames[at];
+  if (!frame) return;
+  if (!points.length) {
+    statusEl.textContent = 'a saved frame needs at least one target — press N to skip instead';
+    return;
+  }
+  const res = await fetch(`/api/frames/${frame.id}/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ points: points.map(p => [p.u, p.v]) }),
+  });
+  const data = await res.json();
+  if (data.error) { statusEl.textContent = data.error; return; }
+  frame.status = 'saved';
+  renderStats(data.progress);
+  go(at + 1);
+}
+
+async function skip() {
+  const frame = frames[at];
+  if (!frame) return;
+  const res = await fetch(`/api/frames/${frame.id}/skip`, { method: 'POST' });
+  frame.status = 'skipped';
+  renderStats((await res.json()).progress);
+  go(at + 1);
+}
+
+document.getElementById('save').onclick = save;
+document.getElementById('skip').onclick = skip;
+document.getElementById('next').onclick = () => go(at + 1);
+document.getElementById('prev').onclick = () => go(at - 1);
+document.getElementById('clear').onclick = () => { points = []; selected = -1; render(); };
+document.getElementById('quit').onclick = async () => {
+  await fetch('/api/quit', { method: 'POST' });
+  document.body.innerHTML = '<h2>Labeler stopped. You can close this tab.</h2>';
+};
+
+(async () => {
+  const data = await (await fetch('/api/frames')).json();
+  frames = data.frames;
+  renderStats(data.progress);
+  // Resume where the work is rather than at the top, so a restart does not walk back
+  // through everything already done.
+  const first = frames.findIndex(f => f.status === 'todo');
+  go(first < 0 ? 0 : first);
+})();
+</script>
+</body>
+</html>
