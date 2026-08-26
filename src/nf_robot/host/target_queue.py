@@ -289,6 +289,14 @@ class TargetQueue:
         return np.array(targets)
 
 
+    def get_user_targets(self) -> List[Target]:
+        """
+        Every target the operator placed by hand, in queue order.
+        A new list, so callers can read it after releasing the lock.
+        """
+        with self._lock:
+            return [t for t in self._queue if t.source == 'user']
+
     def get_target_info(self, target_id: str) -> Optional[telemetry.OneTarget]:
         """
         Robot may query this to check if a target it was pursuing was deleted from the queue.

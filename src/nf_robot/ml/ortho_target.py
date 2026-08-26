@@ -139,6 +139,8 @@ import logging
 import math
 import os
 import shutil
+import time
+import uuid
 from pathlib import Path
 
 import cv2
@@ -498,6 +500,69 @@ def write_split(output_root: Path, split: str, samples, images) -> int:
             lines += [f"  - split: {name}", f"    path: {dirname}/*.parquet"]
     (output_root / "README.md").write_text("\n".join(lines) + "\n---\n")
     return written
+
+
+USER_LABEL_ROOT = "ortho_target_user_labels"
+
+
+def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTHO_EXTENT_M):
+    """One row per operator-placed target, all sharing the ortho frame they were placed on.
+
+    The same schema the distilled shards use, but in its own directory and one parquet per
+    submission, because these labels are not quite the same thing as the teleop ones:
+    nobody reached for them, so nothing confirms the object was really there or that it
+    could be grasped. Whether a pile of them is worth training on is a decision to make
+    later, and acting on it is a matter of moving these files into a split directory.
+
+    Two things to know before merging them:
+      - the frame is written at whatever size the observer renders it (host/observer.py's
+        _ortho_worker), which need not be the size the distilled shards hold. Training
+        scales every label by its own frame, but OrthoTargetDataset.scaled_labels - so
+        constant_baseline - probes one sample for the whole split.
+      - rows of one submission share a `user-<batch>-` file name and are the same frame,
+        so a split has to keep them on one side the way it keeps an episode's frames
+        together.
+
+    Returns (path, row count), or (None, 0) if every target fell outside the map.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    bgr = cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR)
+    height, width = bgr.shape[:2]
+    ok, buf = cv2.imencode(".jpg", bgr)
+    if not ok:
+        raise ValueError("could not encode the ortho frame")
+    blob = buf.tobytes()
+
+    batch = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    rows = []
+    for x_m, y_m, z_m in targets_m:
+        u, v = room_to_ortho_px(x_m, y_m, width, height, extent_m)
+        if not (0 <= u < width and 0 <= v < height):
+            continue
+        rows.append({
+            "file_name": f"user-{batch}-{len(rows):02d}.jpg",
+            "image": blob,
+            "u": round(float(u), 2),
+            "v": round(float(v), 2),
+            "contact_m": [round(float(c), 4) for c in (x_m, y_m, z_m)],
+            # Nobody reached for these, so every field that indexes into an episode is -1
+            # - which is also what tells them apart from distilled rows after a merge.
+            "episode_index": -1,
+            "frame_offset": 0,
+            "contact_frame_index": -1,
+            "contact_time_s": 0.0,
+            "task": "user target",
+        })
+    if not rows:
+        return None, 0
+
+    out_dir = Path(output_root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"user-{batch}.parquet"
+    pq.write_table(pa.Table.from_pylist(rows, schema=shard_schema()), path)
+    return path, len(rows)
 
 
 def upload_dataset(output_root: Path, dataset_id: str):

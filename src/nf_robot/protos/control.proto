@@ -32,8 +32,8 @@ enum Command {
   COMMAND_UNPARK = 11;
   // Execute an automated grasp at the current position.
   COMMAND_GRASP = 12;
-  // Take the current set of targets as complete and correct and add entries to dataset
-  COMMAND_SUBMIT_TARGETS_TO_DATASET = 13; // deprecated
+  // Save the ortho floor view and every user-placed target as ortho_target training rows.
+  COMMAND_SUBMIT_TARGETS_TO_DATASET = 13;
   // Reel every line until tight (by switch)
   COMMAND_TIGHTEN_LINES = 16;
   // Disable motor torque on arpeggio anchors (pauses tracking loop and disables motors)

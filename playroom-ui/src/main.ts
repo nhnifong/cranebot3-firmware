@@ -1903,6 +1903,7 @@ function initRunMenu() {
   });
   bindCommand('action-half-cal',       Command.COMMAND_HALF_CAL);
   bindCommand('action-grasp',          Command.COMMAND_GRASP);
+  bindCommand('action-dataset',        Command.COMMAND_SUBMIT_TARGETS_TO_DATASET);
   bindCommand('action-update-firmware', Command.COMMAND_UPDATE_FIRMWARE);
   bindCommand('action-record-park',    Command.COMMAND_RECORD_PARK);
   bindCommand('action-shutdown-components', Command.COMMAND_SAFE_COMPONENT_SHUTDOWN);

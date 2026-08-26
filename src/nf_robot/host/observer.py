@@ -1371,6 +1371,48 @@ class AsyncObserver:
         self.target_queue.add_user_target((item.x, item.y), dropoff='hamper')
         self.send_tq_to_ui()
 
+    async def _handle_submit_targets_to_dataset(self):
+        """Save the ortho floor view and every user-placed target as ortho_target rows.
+
+        The ortho target model's labels normally come from teleop: wherever an operator's
+        grasp landed is by construction a place worth reaching for. A target placed by hand
+        in the UI says the same thing about the same projection without anyone having to
+        drive there, so it goes to the same row format - into ortho_target.USER_LABEL_ROOT,
+        which nothing trains on until someone decides these labels are worth merging.
+
+        One row per user target, all carrying the frame they were placed on; AI targets are
+        the model's own output and would only teach it what it already believes.
+        """
+        frame = self.last_ortho_rgb
+        if frame is None:
+            logger.warning('No orthographic floor view to label yet'
+                           + ('; --no_ortho disables it' if not self.run_ortho else ''))
+            return
+        # the ortho worker replaces this on every anchor frame, so take the pixels now
+        frame = frame.copy()
+
+        targets = [t.position for t in self.target_queue.get_user_targets()]
+        if not targets:
+            logger.warning('No user-placed targets to save; click the floor to add one first')
+            return
+
+        def save():
+            # imported in the thread: it pulls torch, and this is the only thing on the
+            # host that wants it before a target model is loaded
+            from nf_robot.ml import ortho_target
+            return ortho_target.write_user_labels(frame, targets)
+
+        try:
+            path, written = await asyncio.to_thread(save)
+        except Exception:
+            logger.exception('Could not save targets to the ortho target dataset')
+            return
+
+        if written:
+            logger.info(f'Saved {written} target label(s) on the ortho frame to {path}')
+        else:
+            logger.warning(f'None of the {len(targets)} targets are inside the ortho map; nothing saved')
+
     def _handle_scale_room(self, item: control.ScaleRoom):
         # not implemented for arpeggio anchor
         if item.scale:
@@ -1424,6 +1466,8 @@ class AsyncObserver:
                 r = await self.invoke_motion_task(self.unpark())
             case control.Command.GRASP:
                 r = await self.invoke_motion_task(self.execute_grasp())
+            case control.Command.SUBMIT_TARGETS_TO_DATASET:
+                await self._handle_submit_targets_to_dataset()
             case control.Command.UPDATE_FIRMWARE:
                 r = await self._handle_update_firmware()
             case control.Command.DISABLE_TORQUE:
@@ -1676,6 +1720,9 @@ class AsyncObserver:
         newest_per_anchor = {}      # anchor num -> newest capture time already taken from it
         # host clock, so a component whose clock is skewed cannot fake staleness
         last_advance = time.time()
+
+        # Warmup time. Seconds until this task becomes active
+        await time.sleep(30)
 
         while self.run_command_loop:
             await asyncio.sleep(POLL_S)

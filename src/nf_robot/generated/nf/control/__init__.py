@@ -96,9 +96,7 @@ class Command(betterproto2.Enum):
 
     SUBMIT_TARGETS_TO_DATASET = 13
     """
-    Take the current set of targets as complete and correct and add entries to dataset
-
-    deprecated
+    Save the ortho floor view and every user-placed target as ortho_target training rows.
     """
 
     TIGHTEN_LINES = 16
