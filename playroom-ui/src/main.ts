@@ -36,9 +36,8 @@ const TILT_TEETH_ANGLES = [22.0, 26.0, 30.0, 34.0, 38.0, 42.0];
 // Debug toggle: show wireframe frustum helpers for the anchor cameras used in floor-projection raycasting
 const SHOW_ANCHOR_CAMERA_FRUSTUMS = false;
 
-// Debug toggle: report the robot as connected and calibrated regardless of telemetry.
-// The tutorial also reads this and drops its dismissWhen predicates when it is on, since
-// the gates they poll would all report satisfied and skip every step on its first frame.
+// Debug toggle: report the robot as connected and calibrated regardless of telemetry
+// And allow all tutorial messages to proceed by just closing them.
 export const OVERRIDE_READINESS_GATES = false;
 
 const urlParams: URLSearchParams = new URLSearchParams(window.location.search);
@@ -346,6 +345,20 @@ function showLogPanel() {
 
 function hideLogPanel() {
   document.getElementById('ui-layer')?.classList.remove('logs-open');
+}
+
+function isLogPanelOpen(): boolean {
+  return document.getElementById('ui-layer')?.classList.contains('logs-open') ?? false;
+}
+
+// Log forwarding is per-observer-process state (a handler on the robot's logger), so a
+// robot restart silently drops it while the panel stays open and empty. Re-ask on every
+// offline->online edge. Harmless when the robot never restarted: the robot side of this
+// command is idempotent.
+function resumeLogForwardingIfOpen() {
+  if (isLogPanelOpen()) {
+    simpleCommand(nf.control.Command.COMMAND_DEBUG_LOG_OVER_T);
+  }
 }
 
 function toggleLogPanel() {
@@ -1627,7 +1640,15 @@ function handleAutoTargetingState(data: nf.telemetry.IAutoTargetingState) {
   btn?.classList.toggle('active', autoTargetEnabled);
 }
 
+// Tracks the last reported state so callers can spot the offline->online edge. Cloud mode
+// reports online on every uplinkStatus tick, so acting on `online` alone would re-send
+// per-tick rather than per-reconnect.
+let wasOnline = false;
+
 function updateOnlineStatus(online: boolean) {
+  const cameOnline = online && !wasOnline;
+  wasOnline = online;
+
   const statusDot = document.getElementById('status-dot-el');
   const statusText = document.getElementById('status-text');
   const runBtn = document.getElementById('run-btn');
@@ -1658,6 +1679,9 @@ function updateOnlineStatus(online: boolean) {
       updateComponentStatusUI();
     }
   }
+
+  // Outside the DOM guard: re-arming the robot doesn't depend on the status elements.
+  if (cameOnline) resumeLogForwardingIfOpen();
 }
 
 // Function called when mode changes
