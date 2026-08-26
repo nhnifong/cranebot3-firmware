@@ -19,6 +19,12 @@ is a LeRobot dataset and the result is not:
            --temp_dir /home/nhn/data_scratch \
            --output_root /home/nhn/data_scratch/combined_targets
 
+     combined_targets_reblend.yaml is the same build with the ortho feed re-rendered
+     under today's floor_view blend instead of whatever each recording was made with
+     (see lerobot_reblend_ortho.py). It holds only the sources whose anchor camera
+     calibration can be recovered, so it is a subset - the price of a composite that
+     matches what the robot renders live now.
+
      Then hold an eval set out of it. The two halves come out named after their splits
      - naavox/combined_targets_train and naavox/combined_targets_eval - in the LeRobot
      home, so everything below finds them by repo id alone:

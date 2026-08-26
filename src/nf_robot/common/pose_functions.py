@@ -60,6 +60,26 @@ def compose_poses(poses):
     rvec_global, _ = cv2.Rodrigues(R_global)
     return rvec_global.reshape((3,)), tvec_global
 
+# Tilt the arpeggio anchor model has its camera at. A config's cam_tilt records what
+# the anchor was actually set to, and the difference rotates the modelled camera onto it.
+ARP_CAMERA_MODEL_TILT_DEG = 22.0
+
+
+def arp_anchor_camera_pose(anchor_pose, cam_tilt=ARP_CAMERA_MODEL_TILT_DEG):
+    """Room pose of an arpeggio anchor's camera, given the anchor's own room pose.
+
+    An anchor's config records where the anchor is, not where its camera looks from;
+    everything that projects that camera's pixels - the floor view live, and the offline
+    re-render of it - has to compose the mount and the tilt on top the same way.
+    """
+    extra_tilt = (ARP_CAMERA_MODEL_TILT_DEG - cam_tilt) / 180 * np.pi
+    return np.array(compose_poses([
+        anchor_pose,
+        model_constants.arp_anchor_camera,
+        (np.array([extra_tilt, 0, 0], dtype=float), np.zeros(3, dtype=float)),
+    ]))
+
+
 def homogenize_types(poses):
     """Ensures all pose elements are float numpy arrays."""
     return [

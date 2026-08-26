@@ -1,0 +1,141 @@
+# combined_targets, but with the ortho floor view re-rendered rather than kept.
+#
+# The ortho feed every source carries was blended by whatever host/floor_view.py did on
+# the day it was recorded: overlaps resolved abruptly, so the composite is crossed by
+# hard seams and dark wedges. Today's blend weights each camera by how far its pixels
+# sit from the room's background color and feathers the rim of every footprint, and
+# `reblend_ortho` rebuilds each recording's view with it from the anchor camera videos
+# the recording still has. See lerobot_reblend_ortho.py.
+#
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/combined_targets_reblend.yaml \
+#     --temp_dir /home/nhn/data_scratch \
+#     --output_root /home/nhn/data_scratch/combined_targets_reblend \
+#     --upload
+
+output_repo_id: naavox/combined_targets_reblend
+camera_mode: gripper_ortho
+center_crop: false
+pad_clamp: false
+
+# Rebuilding the view needs to know where each anchor camera was, so this is the
+# intersection of combined_targets with the sources whose calibration is recoverable:
+# the ones move_clutter_camera_goal pairs with a checked config file, plus everything
+# recorded after the anchor_poses feature landed, which carries its own. combined_targets
+# sources older than August 2026 and without a config are simply absent - there is
+# nothing to re-render them from.
+#
+# Where an anchor's camera tilt is unknown (the recorded anchor_poses say where the
+# anchor is, not how far its camera is tilted off it) it is recovered per source by
+# matching the re-render against the ortho video the recording already holds; a few
+# degrees out would move the floor by tens of centimetres and misalign every label.
+reblend_ortho:
+  enabled: true
+
+merge:
+  # Episodes whose recorded frameRoomSpin matches a config exactly, so that config's
+  # anchor poses describe the same room frame the recording does. See
+  # ml/calibrations/readme.md and experiments/check_dataset_robots.py.
+  - repo_id: naavox/move_clutter_2
+    include_episodes: ["71-72", "106-152"]
+    anchor_config: ../calibrations/conf_playroom.json
+
+  - repo_id: naavox/move_clutter_2
+    include_episodes: ["153-187"]
+    anchor_config: ../calibrations/conf_bedroom_move_clutter_2.json
+
+  - repo_id: naavox/move_clutter_nick_2
+    include_episodes: ["48-56"]
+    anchor_config: ../calibrations/conf_nick_move_clutter_nick_2.json
+
+  - repo_id: justink04/laundry-in-hamper-7-19-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper-7-23-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/trash-in-trashcan-7-23-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/trash-in-trashcan-7-24-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper-8-1-26
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper2-8-1-26
+    exclude_episodes: ["41-60"]
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/laundry-in-hamper3-8-1-26
+    exclude_episodes: ['48-99']
+    anchor_config: ../calibrations/justin.json
+
+  - repo_id: justink04/cranebot-ethernet-test-02
+    anchor_config: ../calibrations/justin.json
+
+  # episode 13's gripper_camera video came out of our own AV1 re-encode with undecodable
+  # packets in the middle, as it did in move_clutter_camera_goal; the source decodes clean.
+  - repo_id: justink04/laundry-in-hamper4-8-1-26
+    exclude_episodes: [13]
+    anchor_config: ../calibrations/justin.json
+
+  # From here on every source carries the anchor poses of the robot that recorded it, so
+  # no config file is needed or kept.
+  - naavox/nick-clutter-aug3
+
+  - naavox/playroom-clutter-aug4
+
+  - naavox/bedroom-laundry-aug5
+
+  - naavox/toys-79west
+
+  - naavox/playroom-aug6
+
+  - naavox/bedroom-laundry-aug7-2
+
+  - naavox/bedroom-laundry-Aug16
+
+  - naavox/79west-toys-aug17
+
+  - naavox/playroom-aug23
+
+  - naavox/nick-aug23
+
+  - naavox/79west-stuff
+
+# Exactly mine_teleop.STATE_NEEDED, and nothing else.
+keep_state_features:
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+
+# Only the sources recorded after the feature landed carry anchor_poses, and the merge
+# demands identical feature sets - which combined_targets settles by dropping the feature
+# everywhere. It can go the other way here: every source without it has an anchor_config,
+# so the older ones gain the feature filled from that config instead. The merged dataset
+# then documents where each episode's anchor cameras were, which is what a later
+# camera_goal conversion or another re-render would otherwise have to be told again.
+#
+# It records the anchor poses, not the camera poses - same as a recording does - so the
+# camera tilt composed on top of them still is not in there. The tilts this build resolved
+# are in its log, and can be pinned back into reblend_ortho's cam_tilt.
+backfill_anchor_poses: true
+
+normalize_tasks: move_clutter_rect_tasks.yaml
+
+# rotate_contact_vec must stay false: the ortho projection is defined in the room
+# frame, and rotating contact_vec into the gripper's frame would put the labels in a
+# space the floor view knows nothing about.
+label_contact_actions:
+  enabled: true
+  pressure_threshold: 0.1
+  episode_end_seconds: 1.0
+  blend_seconds: 0.5
+  rotate_contact_vec: false
