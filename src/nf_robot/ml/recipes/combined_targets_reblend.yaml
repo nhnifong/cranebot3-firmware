@@ -36,14 +36,6 @@ merge:
   # Episodes whose recorded frameRoomSpin matches a config exactly, so that config's
   # anchor poses describe the same room frame the recording does. See
   # ml/calibrations/readme.md and experiments/check_dataset_robots.py.
-  - repo_id: naavox/move_clutter_2
-    include_episodes: ["71-72", "106-152"]
-    anchor_config: ../calibrations/conf_playroom.json
-
-  - repo_id: naavox/move_clutter_2
-    include_episodes: ["153-187"]
-    anchor_config: ../calibrations/conf_bedroom_move_clutter_2.json
-
   - repo_id: naavox/move_clutter_nick_2
     include_episodes: ["48-56"]
     anchor_config: ../calibrations/conf_nick_move_clutter_nick_2.json

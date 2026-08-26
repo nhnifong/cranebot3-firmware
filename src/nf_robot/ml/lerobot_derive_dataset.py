@@ -70,6 +70,39 @@ from nf_robot.ml.lerobot_resize_video_feature import resize_video
 from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, _FEED_NAMES
 
 
+def target_camera_keys(camera_mode: str) -> dict[str, tuple[int, int]]:
+    """{video feature key: (width, height)} a camera_mode asks for."""
+    if camera_mode not in _CAMERA_MODES:
+        raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
+    return {
+        f"observation.images.{_FEED_NAMES[feed]}": (width, height)
+        for feed, (width, height) in _CAMERA_MODES[camera_mode].items()
+    }
+
+
+def camera_mode_problems(features: dict, camera_mode: str, pad_clamp: bool = False) -> list[str]:
+    """Why a dataset with these features cannot be converted to camera_mode, if it cannot.
+
+    Takes a plain meta/info.json features dict rather than a loaded dataset, so a recipe
+    can put every source through this from Hub metadata alone - which is the difference
+    between hearing about an unusable source now and hearing about it hours into a build,
+    one source at a time.
+    """
+    problems = []
+    available = sorted(k for k, f in features.items() if f.get("dtype") == "video")
+    for key, (target_w, target_h) in target_camera_keys(camera_mode).items():
+        if key not in features:
+            problems.append(f"it has no '{key}' (only {available})")
+            continue
+        src_h, src_w = features[key]["shape"][:2]
+        if not pad_clamp and (target_w > src_w or target_h > src_h):
+            problems.append(
+                f"its '{key}' is {src_w}x{src_h}, smaller than the {target_w}x{target_h} "
+                f"'{camera_mode}' wants (pad_clamp would centre and pad it instead of failing)"
+            )
+    return problems
+
+
 def _drop_removed_feature_stats(root: Path, removed_keys: list[str]) -> None:
     """Drop per-episode and global stats for features that were removed.
 
@@ -218,27 +251,14 @@ def derive_dataset(
     # below is generally about to drop, so it needs the recording rather than the result.
     source_root = Path(dataset.root)
 
-    target_specs = _CAMERA_MODES[camera_mode]
-    target_keys = {
-        f"observation.images.{_FEED_NAMES[feed]}": (width, height)
-        for feed, (width, height) in target_specs.items()
-    }
+    target_keys = target_camera_keys(camera_mode)
 
-    missing = [key for key in target_keys if key not in dataset.meta.video_keys]
-    if missing:
+    problems = camera_mode_problems(dataset.meta.features, camera_mode, pad_clamp)
+    if problems:
         raise ValueError(
-            f"Source dataset is missing camera feature(s) required for camera_mode "
-            f"'{camera_mode}': {missing}. Available: {dataset.meta.video_keys}"
+            f"'{repo_id}' cannot be converted to camera_mode '{camera_mode}': "
+            + "; ".join(problems)
         )
-
-    for key, (target_w, target_h) in target_keys.items():
-        src_h, src_w = dataset.meta.features[key]["shape"][:2]
-        if not pad_clamp and (target_w > src_w or target_h > src_h):
-            raise ValueError(
-                f"Cannot derive camera_mode '{camera_mode}': target resolution "
-                f"{target_w}x{target_h} for '{key}' exceeds source resolution {src_w}x{src_h}. "
-                f"Pass pad_clamp=True to center and pad the smaller axis instead of failing."
-            )
 
     features_to_remove = [key for key in dataset.meta.video_keys if key not in target_keys]
 
