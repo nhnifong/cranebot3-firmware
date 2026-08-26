@@ -155,9 +155,7 @@ and the grid has to stay a power-of-two multiple of the token grid: 512/16 and 4
 both give 32x32 tokens and a 128 grid, so nothing downstream of the trunk changes.
 
 A checkpoint carries its own backbone_id and image_size, so anything already trained
-keeps loading and running as it was - including the copy published at naavox/targeting,
-which is a DINOv3 model and still needs gated access to fetch its trunk. Retraining and
-republishing is what actually removes the gate for anyone downloading it.
+keeps loading and running as it was.
 """
 
 import argparse
