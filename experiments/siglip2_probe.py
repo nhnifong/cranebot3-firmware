@@ -114,7 +114,8 @@ def load_frames(root: Path, split: str, count: int, seed: int):
     for idx in sorted(int(i) for i in picks):
         bgr = dataset.decode(idx)
         height, width = bgr.shape[:2]
-        (u, v), = dataset.samples[idx]["points"]
+        # A frame may carry several labels; the probe scores against the first.
+        (u, v) = dataset.samples[idx]["points"][0]
         u, v = u * FRAME_SIZE / width, v * FRAME_SIZE / height
         frames.append((cv2.resize(bgr, (FRAME_SIZE, FRAME_SIZE), interpolation=cv2.INTER_AREA),
                        (u, v), dataset.samples[idx]["file_name"]))

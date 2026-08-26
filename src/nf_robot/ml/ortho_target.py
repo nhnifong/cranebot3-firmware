@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 
-"""Predict where the robot should reach next, in the ortho floor view's pixel space.
+"""Predict everywhere the robot could reach next, in the ortho floor view's pixel space.
+
+The map is one independent objectness per cell, so a frame holding four graspable things
+can report four of them and the scores mean the same in every frame; see OrthoTargetNet
+and objectness_loss, which carries the consequence of labelling only one of those four.
 
 The labels come from teleop recordings: wherever an operator actually grasped something
 is by construction a place worth reaching for, so every episode donates one label for
@@ -71,9 +75,12 @@ is a LeRobot dataset and the result is not:
 
        hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 
-Labels can also come from the UI instead of a recording. The RUN menu's "Add targets to
-dataset" saves the ortho frame the robot is looking at and every target placed on it by
-hand, one row per target in exactly the format step 2 writes, into
+Labels can also come from the UI instead of a recording. These are the only frames where
+every target is marked, so the rows of one submission are loaded back as a single sample
+carrying all of them rather than as one sample each - which is the shape the head wants
+and the teleop labels cannot supply. The RUN menu's "Add targets to dataset" saves the
+ortho frame the robot is looking at and every target placed on it by hand, one row per
+target in exactly the format step 2 writes, into
 ortho_target_user_labels/ - relative to the directory stringman was started from. Nothing
 trains on them until they are merged, which is the point of keeping them apart: nobody
 reached for these, so nothing confirms the object was really there or could be picked up.
@@ -904,7 +911,7 @@ def dihedral_point(u, v, t: int, size: int):
 
 
 def translate(img, u, v, max_px: int, rng):
-    """Shift the map and its label together by up to max_px in each axis.
+    """Shift the map and its labels together by up to max_px in each axis.
 
     Valid because the ortho view is a metric projection of the floor: a shifted map is
     the same floor with the window moved, which is a view the robot really can have. It
@@ -916,11 +923,12 @@ def translate(img, u, v, max_px: int, rng):
     Vacated edges are filled with black, which is what unobserved floor already looks
     like in these maps, so it introduces nothing the model has not seen.
     """
-    # Bounded so the label cannot leave the map: location_loss clamps an out-of-range
-    # target to an edge cell, which would teach the edge as the answer.
+    # Bounded by the outermost label on each axis, so none of them can leave the map:
+    # objectness_loss clamps an out-of-range target to an edge cell, which would teach
+    # the edge as the answer.
     height, width = img.shape[-2:]
-    lo_x, hi_x = int(math.ceil(-u)), int(math.floor(width - 1 - u))
-    lo_y, hi_y = int(math.ceil(-v)), int(math.floor(height - 1 - v))
+    lo_x, hi_x = int(math.ceil(-u.min())), int(math.floor(width - 1 - u.max()))
+    lo_y, hi_y = int(math.ceil(-v.min())), int(math.floor(height - 1 - v.max()))
     dx = int(torch.randint(max(-max_px, lo_x), min(max_px, hi_x) + 1, (1,), generator=rng).item())
     dy = int(torch.randint(max(-max_px, lo_y), min(max_px, hi_y) + 1, (1,), generator=rng).item())
     if dx == 0 and dy == 0:
@@ -969,8 +977,18 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
+# Labels kept per frame. Teleop frames carry one; a hand-labelled frame carries as many
+# as the operator placed, and the padding this fixes lets the default collate stack them.
+MAX_TARGETS = 16
+
+
 class OrthoTargetDataset(torch.utils.data.Dataset):
-    """Distilled ortho frames and their contact point, as (image, uv) pairs."""
+    """Distilled ortho frames and their targets, as (image, points, mask) triples.
+
+    `points` is MAX_TARGETS rows of pixel coordinates and `mask` says how many of them
+    are real, so a frame labelled with four objects and one labelled with one both come
+    out of the loader as the same shape.
+    """
 
     def __init__(self, root: Path, split: str, image_size: int, augment: bool, seed: int = 0,
                  translate_px: int = 0):
@@ -986,23 +1004,30 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
         # be resized and augmented anyway.
         self.images: list[bytes] = []
         self.samples: list[dict] = []
+        # Rows are one per target, and write_user_labels gives every target of one frame
+        # the same JPEG, so grouping on the bytes is what turns a hand-labelled frame into
+        # a single multi-target sample instead of N contradictory single-target ones.
+        by_frame: dict[bytes, dict] = {}
         for shard in shards:
             table = pq.read_table(shard)
             blobs = table.column("image").to_pylist()
             labels = table.select(list(LABEL_COLUMNS)).to_pylist()
             for blob, row in zip(blobs, labels):
-                self.images.append(blob)
-                # "points" (a list, of one) is the row shape build_samples writes, and
-                # what the previews and the baseline read.
-                self.samples.append({**row, "points": [[row["u"], row["v"]]]})
+                sample = by_frame.get(blob)
+                if sample is None:
+                    sample = by_frame[blob] = {**row, "points": []}
+                    self.images.append(blob)
+                    self.samples.append(sample)
+                sample["points"].append([row["u"], row["v"]])
 
         self.image_size = image_size
         self.augment = augment
         self.seed = seed
         self.translate_px = translate_px
         total = sum(len(b) for b in self.images)
-        logging.info(f"{self.dir}: {len(self.samples)} samples in {len(shards)} shard(s), "
-                     f"{total / 1e6:.0f} MB of frames in memory")
+        targets = sum(len(s["points"]) for s in self.samples)
+        logging.info(f"{self.dir}: {len(self.samples)} samples ({targets} targets) in "
+                     f"{len(shards)} shard(s), {total / 1e6:.0f} MB of frames in memory")
 
     def __len__(self):
         return len(self.samples)
@@ -1019,7 +1044,11 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
         return probe.shape[1], probe.shape[0]
 
     def scaled_labels(self):
-        """Every label in the model's pixel space, without decoding the images."""
+        """Each sample's first label in the model's pixel space, without decoding images.
+
+        First rather than all, because the baseline it feeds predicts one point and is
+        only meaningful against one.
+        """
         width, height = self.stored_size()
         scale = np.array([self.image_size / width, self.image_size / height])
         return np.array([s["points"][0] for s in self.samples], dtype=np.float64) * scale
@@ -1028,11 +1057,10 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
         sample = self.samples[idx]
         bgr = self.decode(idx)
 
-        (u, v), = sample["points"]
+        points = np.asarray(sample["points"], dtype=np.float64)
         h, w = bgr.shape[:2]
         if (w, h) != (self.image_size, self.image_size):
-            u *= self.image_size / w
-            v *= self.image_size / h
+            points = points * [self.image_size / w, self.image_size / h]
             bgr = cv2.resize(bgr, (self.image_size, self.image_size), interpolation=cv2.INTER_AREA)
 
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
@@ -1043,13 +1071,20 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
             rng = torch.Generator().manual_seed(torch.randint(0, 2**31 - 1, (1,)).item())
             t = int(torch.randint(0, 8, (1,), generator=rng).item())
             img = dihedral_image(img, t)
-            u, v = dihedral_point(u, v, t, self.image_size)
+            u, v = dihedral_point(points[:, 0], points[:, 1], t, self.image_size)
             if self.translate_px:
                 img, u, v = translate(img, u, v, self.translate_px, rng)
+            points = np.stack([u, v], axis=1)
             img = photometric_jitter(img, rng)
 
         img = (img - torch.tensor(IMAGENET_MEAN).view(3, 1, 1)) / torch.tensor(IMAGENET_STD).view(3, 1, 1)
-        return img, torch.tensor([u, v], dtype=torch.float32)
+
+        kept = min(len(points), MAX_TARGETS)
+        padded = np.zeros((MAX_TARGETS, 2), dtype=np.float32)
+        padded[:kept] = points[:kept]
+        mask = np.zeros(MAX_TARGETS, dtype=np.float32)
+        mask[:kept] = 1.0
+        return img, torch.from_numpy(padded), torch.from_numpy(mask)
 
 
 # ==========================================
@@ -1066,9 +1101,9 @@ DEFAULT_MODEL_PATH = "models/ortho_target.pth"
 # of floor at the default grid, which is well inside "the operator would have grabbed
 # that". Matches visual_servoing/train.py, which has the same head and the same problem.
 CELL_SIGMA = 1.5
-# Probability mass spread evenly over every cell, so no cell is pushed to zero. See
-# cell_target: the other objects in frame are unlabelled, not absent.
-LABEL_SMOOTHING = 0.05
+# Objectness above which a cell is reported as a target. A per-cell probability means
+# the same thing in every frame, so this is a real bar rather than a tuned ratio.
+TARGET_THRESHOLD = 0.5
 # Which metric picks the saved checkpoint. top5 rather than the single-answer recall,
 # because the job is to land on something a person would have picked and there is
 # usually more than one such thing in frame; recall@20cm scores those as failures.
@@ -1076,15 +1111,18 @@ SELECTION_METRIC = "top5@20cm"
 
 
 class OrthoTargetNet(SharedTrunkMixin, nn.Module):
-    """Frozen DINOv2 patch features -> one softmax over floor locations.
+    """Frozen DINOv2 patch features -> an independent objectness per floor location.
 
-    The output is a single categorical distribution over grid x grid cells.
-    Several objects on the floor are all plausible
-    next targets and the operator picked one, so the honest output is a distribution
-    with a mode per candidate; a softmax over locations gives that, needs no
-    threshold to decode, and spends none of its loss on the 99.8% of pixels that are
-    background. The offset head then places the point inside the winning cell, which
-    is what keeps precision finer than the cell size.
+    Every cell of the grid x grid map gets its own sigmoid: "is there something here
+    worth reaching for". Several objects on the floor are all plausible next targets and
+    a frame may hold any number of them, so they must be able to score high at the same
+    time - which one softmax over locations cannot do, because its cells compete for a
+    fixed unit of mass and a peak's height then says as much about how crowded the frame
+    is as about the object under it. Independent cells also make the score comparable
+    between frames, so callers threshold it instead of ranking peaks against each other.
+
+    The offset head then places the point inside each winning cell, which is what keeps
+    precision finer than the cell size.
     """
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
@@ -1142,63 +1180,87 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
         return self
 
 
-def cell_target(cell, grid, sigma, smoothing):
-    """A soft distribution over cells for one batch of continuous cell coordinates.
+def target_map(cells, mask, grid, sigma):
+    """Per-cell objectness target for a batch of labels in continuous cell coordinates.
 
-    Two departures from a one-hot target, both aimed at a signal that is otherwise one
-    right answer and grid**2 - 1 wrong ones:
+    A Gaussian around each label rather than a single hot cell, because the cells are
+    3.9cm of floor and a prediction one cell out is very nearly right; one-hot scores that
+    exactly as wrong as the other side of the room.
 
-    A Gaussian around the true point, because the cells are 3.9cm of floor and a
-    prediction one cell out is very nearly right. One-hot scores it exactly as wrong as
-    the other side of the room, which is most of the gradient spent on a distinction
-    nobody cares about.
-
-    Then a uniform floor under the whole map. Every other graspable thing in the frame is
-    labelled a negative here - there is only ever one contact per episode - so a target
-    that drives every non-contact cell to zero is training against the one behaviour that
-    matters, which is landing on something. The floor bounds how hard any of them is
-    pushed down. It cannot know *which* cells hold the other objects; masking those needs
-    a detector, and that is a bigger change.
+    The bumps combine with a max, not a sum: two labels a few cells apart would otherwise
+    build a taller peak in the gap between them than either object has on its own, and the
+    decoder would then report the empty floor between two socks.
     """
-    batch = cell.shape[0]
-    axis = torch.arange(grid, device=cell.device, dtype=cell.dtype)
-    # cell centres are at +0.5, and the label is a continuous cell coordinate
-    dx = axis[None, :] - (cell[:, 0:1] - 0.5)
-    dy = axis[None, :] - (cell[:, 1:2] - 0.5)
-    gauss = torch.exp(-(dy[:, :, None] ** 2 + dx[:, None, :] ** 2) / (2 * sigma ** 2))
-    gauss = gauss.reshape(batch, -1)
-    gauss = gauss / gauss.sum(1, keepdim=True).clamp_min(1e-12)
-    if smoothing <= 0:
-        return gauss
-    return (1 - smoothing) * gauss + smoothing / (grid * grid)
+    axis = torch.arange(grid, device=cells.device, dtype=cells.dtype)
+    # cell centres are at +0.5, and a label is a continuous cell coordinate
+    dx = axis[None, None, :] - (cells[..., 0:1] - 0.5)
+    dy = axis[None, None, :] - (cells[..., 1:2] - 0.5)
+    gauss = torch.exp(-(dy[..., :, None] ** 2 + dx[..., None, :] ** 2) / (2 * sigma ** 2))
+    return (gauss * mask[..., None, None]).amax(dim=1)
 
 
-def location_loss(logits, offsets, target_uv, image_size, grid, offset_weight=1.0,
-                  cell_sigma=CELL_SIGMA, label_smoothing=LABEL_SMOOTHING):
-    """Soft cross-entropy over cells, plus L1 on the sub-cell offset of the true cell."""
+def balanced_pos_weight(grid, cell_sigma):
+    """Cells in the map per cell inside one label's bump.
+
+    The weight at which a frame's one labelled object counts for as much as all of its
+    background, which is the usual starting point for a dense head with a handful of
+    positives among thousands of cells.
+    """
+    return grid * grid / max(2.0 * math.pi * cell_sigma ** 2, 1.0)
+
+
+def objectness_loss(logits, offsets, points, mask, image_size, grid, offset_weight=1.0,
+                    cell_sigma=CELL_SIGMA, pos_weight=None):
+    """Per-cell binary objectness, plus L1 on the sub-cell offset of each label's cell.
+
+    The difficulty this head has to survive: a teleop frame labels the one object the
+    operator reached for and says nothing about the others, so every other graspable thing
+    in the frame is unlabelled rather than absent. A plain BCE reads them as negatives and
+    trains the model to deny exactly the objects it is supposed to find.
+
+    `pos_weight` is the correction, and it is the knob worth understanding. Weighting the
+    positive term by w moves the equilibrium for a cell whose appearance is the operator's
+    pick in a fraction f of the frames it appears in from f to f*w / (1 + f*w) - so
+    anything that gets grabbed sometimes rises well clear of floor that never does, and
+    the threshold separates "an object" from "not an object" rather than "the object the
+    operator happened to pick" from everything else. Raising w finds more and admits more
+    false positives; the default balances one bump against a whole map of background.
+
+    Frames that really do carry several labels - the hand-labelled ones - need none of
+    this: their positives are all marked, and the same loss handles them unchanged.
+    """
     scale = image_size / grid
-    cell = target_uv / scale
-    cx = cell[:, 0].floor().clamp(0, grid - 1).long()
-    cy = cell[:, 1].floor().clamp(0, grid - 1).long()
+    cells = points / scale
+    # Only as many target slots as this batch actually uses: the padding is masked out
+    # anyway, and the Gaussians are the largest tensor here.
+    used = max(1, int(mask.sum(1).max().item()))
+    cells, mask = cells[:, :used], mask[:, :used]
+
+    if pos_weight is None:
+        pos_weight = balanced_pos_weight(grid, cell_sigma)
+    target = target_map(cells, mask, grid, cell_sigma)
+    bce = F.binary_cross_entropy_with_logits(
+        logits, target, pos_weight=torch.tensor(pos_weight, device=logits.device, dtype=logits.dtype))
+
+    cx = cells[..., 0].floor().clamp(0, grid - 1).long()
+    cy = cells[..., 1].floor().clamp(0, grid - 1).long()
     index = cy * grid + cx
-
-    target = cell_target(cell, grid, cell_sigma, label_smoothing)
-    ce = -(target * F.log_softmax(logits.flatten(1), dim=1)).sum(1).mean()
-
-    frac = cell - torch.stack([cx, cy], dim=1).float()
-    picked = offsets.flatten(2).gather(2, index[:, None, None].expand(-1, 2, -1)).squeeze(-1)
-    l1 = F.l1_loss(picked.sigmoid(), frac.clamp(0.0, 1.0))
-    return ce + offset_weight * l1, ce.detach(), l1.detach()
+    frac = cells - torch.stack([cx, cy], dim=-1).to(cells.dtype)
+    # (B, 2, T) out of the gather, one offset pair per label, back to (B, T, 2).
+    picked = offsets.flatten(2).gather(2, index[:, None, :].expand(-1, 2, -1)).permute(0, 2, 1)
+    per_label = F.l1_loss(picked.sigmoid(), frac.clamp(0.0, 1.0), reduction="none").mean(-1)
+    l1 = (per_label * mask).sum() / mask.sum().clamp_min(1.0)
+    return bce + offset_weight * l1, bce.detach(), l1.detach()
 
 
-def decode(logits, offsets, image_size, grid, top_k=1, nms_radius=2):
-    """Peak cells plus their offsets, as (B, k, 2) pixel coordinates and (B, k) scores.
+def decode(probs, offsets, image_size, grid, top_k=1, nms_radius=2):
+    """Peak cells plus their offsets, as (B, k, 2) pixel coordinates and (B, k) probabilities.
 
     Peaks, not the expectation over the map: averaging two candidate objects would
     land the prediction on the empty floor between them.
     """
     scale = image_size / grid
-    prob = logits.flatten(1).softmax(1).view(-1, 1, grid, grid)
+    prob = probs.view(-1, 1, grid, grid)
 
     if top_k > 1:
         # Suppress everything that is not a local maximum so the k results are k
@@ -1220,18 +1282,21 @@ def decode(logits, offsets, image_size, grid, top_k=1, nms_radius=2):
 
 
 def predict(model, images, tta=False, top_k=1):
-    """Model outputs for a batch, optionally averaged over the 8 square symmetries."""
+    """Model outputs for a batch, optionally averaged over the 8 square symmetries.
+
+    Averaged as probabilities, which is also what comes back, so a caller can threshold
+    the result whether or not TTA ran. Offsets stay from the untransformed pass, being
+    sub-cell either way.
+    """
     logits, offsets = model(images)
+    probs = logits.sigmoid()
     if tta:
-        acc = torch.zeros_like(logits)
-        for t in range(8):
+        acc = probs
+        for t in range(1, 8):
             transformed, _ = model(dihedral_image(images, t))
-            prob = transformed.flatten(1).softmax(1).view_as(transformed)
-            acc += inverse_dihedral_map(prob, t)
-        # Averaged in probability space; back to logits so decode can treat it uniformly.
-        # Offsets stay from the untransformed pass, being sub-cell either way.
-        logits = (acc / 8).clamp_min(1e-12).log()
-    return decode(logits, offsets, model.image_size, model.grid, top_k=top_k)
+            acc = acc + inverse_dihedral_map(transformed.sigmoid(), t)
+        probs = acc / 8
+    return decode(probs, offsets, model.image_size, model.grid, top_k=top_k)
 
 
 # ==========================================
@@ -1261,35 +1326,25 @@ def prepare_ortho_image(rgb, image_size, device):
 
 @torch.no_grad()
 def predict_room_targets(model, rgb, device, top_k=1, tta=False,
-                         min_score_over_chance=None, min_score_ratio=None):
-    """Best target(s) for one ortho frame, as [(x_m, y_m, score)] in the room frame.
+                         min_probability=TARGET_THRESHOLD):
+    """Every target in one ortho frame, as [(x_m, y_m, probability)] in the room frame.
 
-    A score is one cell's share of a single softmax over all grid*grid cells, so it has
-    no fixed scale: chance level is 1/cells, and every extra object in frame divides the
-    mass again. Two gates, either of which may be None to disable it:
+    A probability is one cell's own objectness, decided independently of every other cell,
+    so one absolute bar works on a bare floor and on a crowded one alike - no comparison
+    against the best peak, and no multiple of chance, because the number does not shrink
+    when a second object enters the frame.
 
-    `min_score_ratio` keeps only peaks worth at least that fraction of the best peak. It
-    is the gate that adapts to the scene, because it asks whether a peak is a rival to
-    the best one rather than whether it clears some absolute bar. A busy floor flattens
-    every score together and the real objects stay comparable; an empty floor concentrates
-    the mass on the one object and leaves the ripple far below it.
-
-    `min_score_over_chance` is a multiple of chance, and only decides whether anything at
-    all is here: it drops the whole frame's worth of peaks, the best one included, when
-    the map is flat enough that even the winner is barely above uniform.
+    `top_k` bounds how many peaks are considered at all, so it has to be at least as large
+    as the number of objects worth reporting; the threshold does the rest of the work.
+    Results come back in descending probability.
     """
     batch = prepare_ortho_image(rgb, model.image_size, device)
     uv, scores = predict(model, batch, tta=tta, top_k=top_k)
     uv, scores = uv[0].cpu().numpy(), scores[0].cpu().numpy()
 
-    floor = 0.0 if min_score_over_chance is None else min_score_over_chance / (model.grid ** 2)
-    if min_score_ratio is not None and len(scores):
-        # topk sorts descending, so the first score is the best peak.
-        floor = max(floor, min_score_ratio * float(scores[0]))
-
     out = []
     for (u, v), score in zip(uv, scores):
-        if score < floor:
+        if score < min_probability:
             continue
         x_m, y_m = ortho_px_to_room(float(u), float(v), model.image_size, model.image_size)
         out.append((x_m, y_m, float(score)))
@@ -1307,32 +1362,45 @@ def pixels_to_cm(pixels, image_size):
 
 
 @torch.no_grad()
-def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 50)):
-    """Distance error and hit rates, plus the top-k rate that measures 'picked something'."""
+def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 50),
+                   min_probability=TARGET_THRESHOLD):
+    """Score a checkpoint against every label, not just one per frame.
+
+    Distances are measured from each label to its nearest prediction, so a frame with
+    four labels contributes four measurements and a model that finds three of them scores
+    as having found three. `targets_per_frame` is the count that clears the threshold,
+    which is the number that says whether the head has learned to find several objects or
+    has quietly collapsed onto one.
+    """
     model.eval()
-    errors, best_of_k, nll, count = [], [], 0.0, 0
-    for images, target_uv in loader:
-        images, target_uv = images.to(device), target_uv.to(device)
+    nearest, covered, predicted, total_bce, count = [], [], [], 0.0, 0
+    for images, points, mask in loader:
+        images = images.to(device)
+        points, mask = points.to(device), mask.to(device)
         logits, offsets = model(images)
-        _, ce, _ = location_loss(logits, offsets, target_uv, model.image_size, model.grid)
-        nll += ce.item() * images.shape[0]
+        _, bce, _ = objectness_loss(logits, offsets, points, mask, model.image_size, model.grid)
+        total_bce += bce.item() * images.shape[0]
         count += images.shape[0]
 
-        uv, _ = predict(model, images, tta=tta, top_k=top_k)
-        distance = (uv - target_uv[:, None, :]).norm(dim=-1)
-        errors.append(distance[:, 0].cpu())
-        best_of_k.append(distance.min(dim=1).values.cpu())
+        uv, scores = predict(model, images, tta=tta, top_k=top_k)
+        # (B, labels, k): every label against every decoded candidate.
+        distance = (points[:, :, None, :] - uv[:, None, :, :]).norm(dim=-1)
+        real = mask > 0
+        nearest.append(distance[:, :, 0][real].cpu())
+        covered.append(distance.min(dim=2).values[real].cpu())
+        predicted.append((scores >= min_probability).sum(dim=1).float().cpu())
 
-    errors = pixels_to_cm(torch.cat(errors), model.image_size)
-    best_of_k = pixels_to_cm(torch.cat(best_of_k), model.image_size)
+    nearest = pixels_to_cm(torch.cat(nearest), model.image_size)
+    covered = pixels_to_cm(torch.cat(covered), model.image_size)
     metrics = {
-        "nll": nll / max(count, 1),
-        "median_cm": errors.median().item(),
-        "mean_cm": errors.mean().item(),
+        "bce": total_bce / max(count, 1),
+        "median_cm": nearest.median().item(),
+        "mean_cm": nearest.mean().item(),
+        "targets_per_frame": torch.cat(predicted).mean().item(),
     }
     for radius in radii_cm:
-        metrics[f"recall@{radius}cm"] = (errors <= radius).float().mean().item()
-    metrics[f"top{top_k}@20cm"] = (best_of_k <= 20).float().mean().item()
+        metrics[f"recall@{radius}cm"] = (nearest <= radius).float().mean().item()
+    metrics[f"top{top_k}@20cm"] = (covered <= 20).float().mean().item()
     return metrics
 
 
@@ -1396,6 +1464,7 @@ def train(args):
                                    seed=args.seed, translate_px=args.translate_px)
     eval_set = OrthoTargetDataset(data_root, "eval", args.image_size, augment=False)
     logging.info(f"train {len(train_set)} sample(s) | eval {len(eval_set)} sample(s) from {data_root}")
+    logging.info(f"objectness pos_weight {args.pos_weight or balanced_pos_weight(args.grid, args.cell_sigma):.0f}")
 
     baseline = constant_baseline(train_set, eval_set, args.image_size)
     logging.info(f"constant-prediction baseline: {_format_metrics(baseline)}")
@@ -1435,23 +1504,24 @@ def train(args):
     for epoch in range(args.epochs):
         model.train()
         totals = np.zeros(3)
-        for images, target_uv in train_loader:
-            images, target_uv = images.to(device, non_blocking=True), target_uv.to(device, non_blocking=True)
+        for images, points, mask in train_loader:
+            images = images.to(device, non_blocking=True)
+            points, mask = points.to(device, non_blocking=True), mask.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
             with autocast:
                 logits, offsets = model(images)
-                loss, ce, l1 = location_loss(
-                    logits.float(), offsets.float(), target_uv,
+                loss, bce, l1 = objectness_loss(
+                    logits.float(), offsets.float(), points, mask,
                     args.image_size, args.grid, args.offset_weight,
-                    cell_sigma=args.cell_sigma, label_smoothing=args.label_smoothing,
+                    cell_sigma=args.cell_sigma, pos_weight=args.pos_weight or None,
                 )
             loss.backward()
             optimizer.step()
             schedule.step()
-            totals += [loss.item(), ce.item(), l1.item()]
+            totals += [loss.item(), bce.item(), l1.item()]
 
         totals /= max(1, len(train_loader))
-        line = f"epoch {epoch + 1}/{args.epochs} loss {totals[0]:.4f} (ce {totals[1]:.4f} off {totals[2]:.4f})"
+        line = f"epoch {epoch + 1}/{args.epochs} loss {totals[0]:.4f} (bce {totals[1]:.4f} off {totals[2]:.4f})"
 
         if (epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs:
             metrics = evaluate_model(model, eval_loader, device, top_k=args.top_k)
@@ -1515,11 +1585,11 @@ def _write_previews(model, dataset, device, out_dir: Path, top_k: int, tta: bool
     """Ground truth in green, ranked predictions in red, for looking at with your eyes."""
     out_dir.mkdir(parents=True, exist_ok=True)
     for i in range(len(dataset)):
-        image, target_uv = dataset[i]
+        image, points, mask = dataset[i]
         uv, scores = predict(model, image[None].to(device), tta=tta, top_k=top_k)
         canvas = cv2.resize(dataset.decode(i), (model.image_size, model.image_size))
-        gt = target_uv.numpy()
-        cv2.drawMarker(canvas, (int(gt[0]), int(gt[1])), (0, 255, 0), cv2.MARKER_CROSS, 24, 2)
+        for (gx, gy) in points[mask > 0].numpy():
+            cv2.drawMarker(canvas, (int(gx), int(gy)), (0, 255, 0), cv2.MARKER_CROSS, 24, 2)
         for rank, ((u, v), score) in enumerate(zip(uv[0].cpu().numpy(), scores[0].cpu().numpy())):
             cv2.circle(canvas, (int(u), int(v)), 10, (0, 0, 255), 2 if rank == 0 else 1)
             cv2.putText(canvas, f"{score:.2f}", (int(u) + 12, int(v)),
@@ -1633,9 +1703,11 @@ def main():
     train_parser.add_argument("--cell_sigma", type=float, default=CELL_SIGMA,
                               help="width in cells of the Gaussian the cell head is trained "
                                    "against; 0 restores a one-hot target")
-    train_parser.add_argument("--label_smoothing", type=float, default=LABEL_SMOOTHING,
-                              help="probability mass spread over every cell, so the other "
-                                   "graspable things in frame are not driven to zero")
+    train_parser.add_argument("--pos_weight", type=float, default=0,
+                              help="weight on the objectness positives; 0 uses the balanced "
+                                   "value for --grid and --cell_sigma. Raising it finds more "
+                                   "of the objects nobody labelled, at more false positives. "
+                                   "See objectness_loss")
     train_parser.add_argument("--select_metric", default=SELECTION_METRIC,
                               help="eval metric that picks the saved checkpoint")
     train_parser.add_argument("--translate_px", type=int, default=48,

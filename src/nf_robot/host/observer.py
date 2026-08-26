@@ -4865,14 +4865,11 @@ class AsyncObserver:
         """
         from nf_robot.ml import ortho_target
 
-        # Scores have no absolute scale - the softmax mass is split across every cell and
-        # split again by every object in frame - so a second target is recognised by being
-        # a rival to the best peak, not by clearing a fixed bar. Logged crowded frames put
-        # the real objects at 0.020-0.05 of the winner and the noise at 0.004, so the
-        # ratio sits between with roughly 2x margin either way. Chance is only the "is
-        # anything here" bar, low enough that a lone object never trips it.
-        ORTHO_SCORE_RATIO = 0.038
-        ORTHO_SCORE_OVER_CHANCE = 4.0
+        # Each cell carries its own objectness, decided without reference to the rest of
+        # the map, so one absolute bar holds on a bare floor and a crowded one alike and a
+        # second object does not dilute the first. Raising it trades found objects for
+        # false ones; ortho_target's --pos_weight is the other end of the same trade.
+        ORTHO_MIN_PROBABILITY = 0.5
         ORTHO_MAX_CANDIDATES = 16  # NMS peaks to consider before thresholding
 
         ortho_frame = self.last_ortho_rgb
@@ -4883,8 +4880,7 @@ class AsyncObserver:
 
         predictions = await asyncio.to_thread(
             partial(ortho_target.predict_room_targets, self.target_model, ortho_frame, self._device,
-                    top_k=ORTHO_MAX_CANDIDATES, min_score_over_chance=ORTHO_SCORE_OVER_CHANCE,
-                    min_score_ratio=ORTHO_SCORE_RATIO),
+                    top_k=ORTHO_MAX_CANDIDATES, min_probability=ORTHO_MIN_PROBABILITY),
         )
         targets = [self._floor_target(x, y) for x, y, _ in predictions]
         return [t for t in targets if t is not None]
