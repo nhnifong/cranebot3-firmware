@@ -982,6 +982,22 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 MAX_TARGETS = 16
 
 
+def frame_key(row):
+    """What makes two rows the same frame, for collecting a frame's targets together.
+
+    Not the image bytes, tempting as that is: a still scene re-encodes to byte-identical
+    JPEGs across consecutive frame offsets of one episode, and those are two frames that
+    look alike rather than one frame labelled twice. Keying on them merged an eighth of
+    the distilled rows and shrank the training set.
+
+    A distilled row's file name already names its episode and offset, so it is unique per
+    frame. write_user_labels marks its rows with episode_index -1 and names them
+    user-{batch}-{NN}.jpg, all targets of one submission sharing the batch, so dropping
+    that trailing index is what collects them.
+    """
+    return row["file_name"] if row["episode_index"] >= 0 else row["file_name"].rsplit("-", 1)[0]
+
+
 class OrthoTargetDataset(torch.utils.data.Dataset):
     """Distilled ortho frames and their targets, as (image, points, mask) triples.
 
@@ -1004,18 +1020,19 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
         # be resized and augmented anyway.
         self.images: list[bytes] = []
         self.samples: list[dict] = []
-        # Rows are one per target, and write_user_labels gives every target of one frame
-        # the same JPEG, so grouping on the bytes is what turns a hand-labelled frame into
-        # a single multi-target sample instead of N contradictory single-target ones.
-        by_frame: dict[bytes, dict] = {}
+        # Rows are one per target, so the rows of one hand-labelled frame have to be
+        # collected into a single multi-target sample rather than N contradictory
+        # single-target ones. See frame_key for why that is not keyed on the image.
+        by_frame: dict[str, dict] = {}
         for shard in shards:
             table = pq.read_table(shard)
             blobs = table.column("image").to_pylist()
             labels = table.select(list(LABEL_COLUMNS)).to_pylist()
             for blob, row in zip(blobs, labels):
-                sample = by_frame.get(blob)
+                key = frame_key(row)
+                sample = by_frame.get(key)
                 if sample is None:
-                    sample = by_frame[blob] = {**row, "points": []}
+                    sample = by_frame[key] = {**row, "points": []}
                     self.images.append(blob)
                     self.samples.append(sample)
                 sample["points"].append([row["u"], row["v"]])
