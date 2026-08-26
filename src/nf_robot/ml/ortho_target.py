@@ -71,6 +71,33 @@ is a LeRobot dataset and the result is not:
 
        hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 
+Labels can also come from the UI instead of a recording. The RUN menu's "Add targets to
+dataset" saves the ortho frame the robot is looking at and every target placed on it by
+hand, one row per target in exactly the format step 2 writes, into
+ortho_target_user_labels/ - relative to the directory stringman was started from. Nothing
+trains on them until they are merged, which is the point of keeping them apart: nobody
+reached for these, so nothing confirms the object was really there or could be picked up.
+
+  Back them up, or gather several robots' worth in one place, on your own account. The
+  repo is created private, since these are pictures of your floor:
+
+      python -m nf_robot.ml.ortho_target upload_labels
+
+  Fold them into the distilled dataset - from that directory, or from any hub repo full
+  of them - and train on the result by pointing --data_root at it rather than letting it
+  download the published copy:
+
+      python -m nf_robot.ml.ortho_target merge_labels
+      python -m nf_robot.ml.ortho_target merge_labels --repo_id you/ortho-target-user-labels
+
+      python -m nf_robot.ml.ortho_target train --data_root ortho_target_data
+
+  Merged files keep the names they arrived under, so `rm ortho_target_data/train/user-*.parquet`
+  undoes it and merging twice overwrites rather than duplicates. Step 2 rewrites a split
+  directory from scratch, so a re-distill drops them and the merge has to run again after
+  it. They join the train split unless --split eval says otherwise; see merge_user_labels
+  for why that is a different measurement rather than a bigger one.
+
 Train with the backbone frozen, which is what step 3 does by default. --unfreeze_backbone
 exists but is not the supported path, for three reasons that all point the same way: a
 few thousand samples is far too few to move an 86M-parameter trunk without memorising
@@ -180,6 +207,12 @@ ORTHO_EXTENT_M = 5.0
 DEFAULT_SOURCE_REPO_ID = "naavox/combined_targets"
 DEFAULT_DATASET_ID = "naavox/ortho-target-dataset"
 LOCAL_DATASET_ROOT = "ortho_target_data"
+
+# Labels the UI's "Add targets to dataset" writes, and the hub repo upload_labels puts
+# them in - under the uploader's own account, not naavox's, since they are one operator's
+# floor labelled by that operator. See write_user_labels.
+USER_LABEL_ROOT = "ortho_target_user_labels"
+USER_LABEL_DATASET_NAME = "ortho-target-user-labels"
 
 STATE_COMPONENTS = ("gripper_pos_x", "gripper_pos_y", "gripper_pos_z", "finger_pressure")
 
@@ -494,15 +527,17 @@ def write_split(output_root: Path, split: str, samples, images) -> int:
 
     written = write_shards(split_dir, samples, images)
 
+    write_dataset_readme(output_root)
+    return written
+
+
+def write_dataset_readme(output_root: Path):
+    """The hub's dataset config block, naming whichever splits are actually present."""
     lines = ["---", "configs:", "- config_name: default", "  data_files:"]
     for name, dirname in (("train", "train"), ("test", "eval")):
         if any((output_root / dirname).glob("*.parquet")):
             lines += [f"  - split: {name}", f"    path: {dirname}/*.parquet"]
     (output_root / "README.md").write_text("\n".join(lines) + "\n---\n")
-    return written
-
-
-USER_LABEL_ROOT = "ortho_target_user_labels"
 
 
 def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTHO_EXTENT_M):
@@ -514,14 +549,11 @@ def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTH
     could be grasped. Whether a pile of them is worth training on is a decision to make
     later, and acting on it is a matter of moving these files into a split directory.
 
-    Two things to know before merging them:
-      - the frame is written at whatever size the observer renders it (host/observer.py's
-        _ortho_worker), which need not be the size the distilled shards hold. Training
-        scales every label by its own frame, but OrthoTargetDataset.scaled_labels - so
-        constant_baseline - probes one sample for the whole split.
-      - rows of one submission share a `user-<batch>-` file name and are the same frame,
-        so a split has to keep them on one side the way it keeps an episode's frames
-        together.
+    The frame is written at whatever size the observer renders it (host/observer.py's
+    _ortho_worker), which need not be the size the distilled shards hold, and the rows of
+    one submission are all the same frame - so a split cannot cut through them the way it
+    cannot cut through an episode. merge_user_labels handles both; a hand-rolled merge has
+    to handle them itself.
 
     Returns (path, row count), or (None, 0) if every target fell outside the map.
     """
@@ -592,6 +624,205 @@ def upload_dataset(output_root: Path, dataset_id: str):
         delete_patterns=["*.jpg", "*.parquet", "*/metadata.jsonl"],
     )
     logging.info(f"Uploaded to {dataset_id}")
+
+
+USER_LABEL_README = """---
+configs:
+- config_name: default
+  data_files:
+  - split: train
+    path: "*.parquet"
+---
+
+Targets placed by hand in the stringman UI, on the orthographic floor view the robot was
+looking at when they were placed. One row per target, one file per submission, in the same
+schema as naavox/ortho-target-dataset - so `ortho_target.py merge_labels --repo_id <this>`
+folds them into a distilled dataset. See nf_robot/ml/ortho_target.py.
+"""
+
+
+def user_label_dataset_id(dataset_id=None):
+    """Where this account's user labels live on the hub.
+
+    The distilled dataset has one canonical copy under naavox/ because it is a
+    deterministic function of teleop recordings anyone can rebuild. These are not that:
+    they are pictures of one person's floor, labelled by that person's own judgement of
+    what is worth picking up. So the default repo belongs to whoever `hf auth login`
+    left logged in, and upload_user_labels creates it private.
+    """
+    if dataset_id:
+        return dataset_id
+    from huggingface_hub import HfApi
+
+    try:
+        account = HfApi().whoami()["name"]
+    except Exception as e:
+        raise ValueError(
+            "Not logged in to Hugging Face, so there is no account to upload to. Run "
+            "`hf auth login`, or name the repo yourself with --dataset_id."
+        ) from e
+    return f"{account}/{USER_LABEL_DATASET_NAME}"
+
+
+def upload_user_labels(source_root, dataset_id=None, private=True):
+    """Add locally saved user labels to a hub dataset, disturbing nothing already there.
+
+    The opposite policy to upload_dataset, which prunes. A distilled dataset can be
+    rebuilt from the recordings at will, so replacing it wholesale loses nothing; a user
+    label is one click on a frame of a room that has since been tidied, so the copy on
+    the hub is the only copy and pruning would be deleting it. Files are named for the
+    submission that produced them, so several robots can fill one repo without colliding
+    and re-uploading the same directory is a no-op.
+
+    Returns (dataset_id, files, rows).
+    """
+    from huggingface_hub import HfApi, create_repo
+
+    source_root = Path(source_root)
+    files = sorted(source_root.glob("*.parquet"))
+    if not files:
+        raise FileNotFoundError(
+            f"No label files in {source_root}. The UI's 'Add targets to dataset' action writes "
+            f"them there, relative to the directory stringman was started from."
+        )
+    rows = sum(pq.read_metadata(f).num_rows for f in files)
+
+    dataset_id = user_label_dataset_id(dataset_id)
+    create_repo(dataset_id, repo_type="dataset", exist_ok=True, private=private)
+    api = HfApi()
+    api.upload_folder(
+        folder_path=str(source_root),
+        repo_id=dataset_id,
+        repo_type="dataset",
+        allow_patterns=["*.parquet"],
+    )
+    api.upload_file(
+        path_or_fileobj=USER_LABEL_README.encode(),
+        path_in_repo="README.md",
+        repo_id=dataset_id,
+        repo_type="dataset",
+    )
+    logging.info(f"Uploaded {len(files)} submission(s), {rows} label(s), to {dataset_id}")
+    return dataset_id, len(files), rows
+
+
+def first_stored_size(path: Path):
+    """(width, height) of the first frame in a shard, without decoding the rest of it."""
+    batch = next(pq.ParquetFile(path).iter_batches(batch_size=1, columns=["image"]))
+    bgr = cv2.imdecode(np.frombuffer(batch.column("image")[0].as_py(), np.uint8), cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise ValueError(f"undecodable first frame in {path}")
+    return bgr.shape[1], bgr.shape[0]
+
+
+def split_stored_size(split_dir: Path):
+    """The size a split's distilled frames are stored at, or None if it holds none yet.
+
+    Merged labels are skipped, so the answer is the size the split is trying to be rather
+    than whatever the last merge happened to put in it.
+    """
+    for shard in sorted(split_dir.glob("*.parquet")):
+        if not shard.name.startswith("user-"):
+            return first_stored_size(shard)
+    return None
+
+
+def resize_rows(rows, size):
+    """Rows re-encoded at (width, height), with their labels scaled to match.
+
+    Rows of one submission share a frame - the same bytes object, read from one column -
+    so the cache decodes and re-encodes it once however many labels were placed on it.
+    """
+    width, height = size
+    cache, out = {}, []
+    for row in rows:
+        blob = row["image"]
+        if blob not in cache:
+            bgr = cv2.imdecode(np.frombuffer(blob, np.uint8), cv2.IMREAD_COLOR)
+            if bgr is None:
+                raise ValueError(f"undecodable frame {row['file_name']}")
+            h, w = bgr.shape[:2]
+            if (w, h) == (width, height):
+                cache[blob] = (blob, 1.0, 1.0)
+            else:
+                interp = cv2.INTER_AREA if width < w else cv2.INTER_LINEAR
+                ok, buf = cv2.imencode(".jpg", cv2.resize(bgr, (width, height), interpolation=interp))
+                if not ok:
+                    raise ValueError(f"could not re-encode {row['file_name']}")
+                cache[blob] = (buf.tobytes(), width / w, height / h)
+        blob, su, sv = cache[blob]
+        out.append({**row, "image": blob,
+                    "u": round(row["u"] * su, 2), "v": round(row["v"] * sv, 2)})
+    return out
+
+
+def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train", resize=True):
+    """Copy user labels into a distilled dataset's split, so training sees them.
+
+    They stay in their own files, named for the submission that made them, which is what
+    makes this reversible: `rm ortho_target_data/train/user-*.parquet` unmerges it, and
+    merging twice overwrites rather than duplicates. OrthoTargetDataset globs the split
+    directory, so nothing downstream has to know they are there.
+
+    Two things this handles rather than leaving to whoever runs it:
+      - Frames are re-encoded at the size the split's distilled shards already use.
+        Training scales every label by its own frame, so mixed sizes do train correctly,
+        but scaled_labels - and so constant_baseline - probes one sample for the whole
+        split and would be quietly wrong about the rest. resize=False keeps the pixels.
+      - One submission's rows share one frame, so they must not land on both sides of a
+        train/eval cut. A file is a submission and goes to one split, which keeps that
+        true for free.
+
+    Mind the order: `distill` rewrites a split directory from scratch (write_split), so
+    re-distilling drops merged labels and this has to run again afterwards.
+
+    Returns (files, rows).
+    """
+    import pyarrow as pa
+
+    source_root = Path(source_root)
+    files = sorted(source_root.glob("*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"No label files in {source_root}")
+
+    output_root = Path(output_root)
+    split_dir = output_root / split
+    split_dir.mkdir(parents=True, exist_ok=True)
+
+    target_size = split_stored_size(split_dir) if resize else None
+    if resize and target_size is None:
+        logging.info(f"{split_dir} holds no distilled shards to match, so frames are merged as they are")
+
+    schema = shard_schema()
+    merged = 0
+    for path in files:
+        # cast rather than trust: a file from the hub was written by some other machine's
+        # version of this module, and a column that has drifted should stop the merge
+        # rather than reach training as a silently wrong label.
+        rows = pq.read_table(path).cast(schema).to_pylist()
+        if target_size:
+            rows = resize_rows(rows, target_size)
+        # the prefix is what unmerges and split_stored_size both key on, so enforce it
+        name = path.name if path.name.startswith("user-") else f"user-{path.name}"
+        pq.write_table(pa.Table.from_pylist(rows, schema=schema), split_dir / name)
+        merged += len(rows)
+
+    write_dataset_readme(output_root)
+    logging.info(f"Merged {len(files)} submission(s), {merged} label(s), into {split_dir}"
+                 + (f" at {target_size[0]}x{target_size[1]}" if target_size else ""))
+    return len(files), merged
+
+
+def merge_labels(args):
+    source = args.source
+    if args.repo_id:
+        from huggingface_hub import snapshot_download
+
+        source = snapshot_download(repo_id=args.repo_id, repo_type="dataset")
+        logging.info(f"Merging {args.repo_id} from the hub at {source}")
+    merge_user_labels(source, args.output, args.split, resize=not args.no_resize)
+    logging.info(f"Train on the result with: python -m nf_robot.ml.ortho_target train "
+                 f"--data_root {args.output}")
 
 
 def distill(args):
@@ -1346,6 +1577,35 @@ def main():
     distill_parser.add_argument("--annotate_dir", default=None,
                                 help="also write copies with the label drawn on them, to check the projection")
 
+    upload_labels_parser = subparsers.add_parser(
+        "upload_labels", help="push targets saved from the UI to a hub dataset of your own")
+    upload_labels_parser.add_argument("--source", default=USER_LABEL_ROOT,
+                                      help="directory the UI action wrote them to")
+    upload_labels_parser.add_argument("--dataset_id", default=None,
+                                      help=f"hub dataset to add them to "
+                                           f"(default: <your account>/{USER_LABEL_DATASET_NAME})")
+    upload_labels_parser.add_argument("--public", action="store_true",
+                                      help="create the repo public. It is private by default "
+                                           "because these are pictures of your floor")
+
+    merge_labels_parser = subparsers.add_parser(
+        "merge_labels", help="fold targets saved from the UI into the distilled dataset")
+    source = merge_labels_parser.add_mutually_exclusive_group()
+    source.add_argument("--source", default=USER_LABEL_ROOT,
+                        help="local directory of label files to merge")
+    source.add_argument("--repo_id", default=None,
+                        help="merge a hub dataset of label files instead, e.g. one upload_labels wrote")
+    merge_labels_parser.add_argument("--output", default=LOCAL_DATASET_ROOT,
+                                     help="distilled dataset directory to merge them into")
+    merge_labels_parser.add_argument("--split", default="train", choices=["train", "eval"],
+                                     help="which split they join. In eval they stop being training "
+                                          "data and become a measurement of a different thing: "
+                                          "agreement with an operator's click rather than with a "
+                                          "grasp that actually happened")
+    merge_labels_parser.add_argument("--no_resize", action="store_true",
+                                     help="keep the frames at the size they were saved at instead "
+                                          "of matching the split's distilled shards")
+
     def add_data_args(sub):
         sub.add_argument("--dataset_id", default=DEFAULT_DATASET_ID, help="distilled dataset on the hub")
         sub.add_argument("--data_root", default=None,
@@ -1404,6 +1664,10 @@ def main():
         train(args)
     elif args.command == "evaluate":
         evaluate(args)
+    elif args.command == "upload_labels":
+        upload_user_labels(args.source, args.dataset_id, private=not args.public)
+    elif args.command == "merge_labels":
+        merge_labels(args)
 
 
 if __name__ == "__main__":

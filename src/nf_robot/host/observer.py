@@ -1722,7 +1722,7 @@ class AsyncObserver:
         last_advance = time.time()
 
         # Warmup time. Seconds until this task becomes active
-        await time.sleep(30)
+        await asyncio.sleep(30)
 
         while self.run_command_loop:
             await asyncio.sleep(POLL_S)
@@ -3631,38 +3631,48 @@ class AsyncObserver:
 
         Cycles through the four floor tags ("gamepad", "trash", "hamper", "toys"),
         goal-seeking to each one's saved position in turn until every tag has been visited
-        VISITS_PER_TAG times. Flying between tags naturally provides varied approaches, so
-        no random points are generated and the operator is never prompted to move anything.
-        Once parked over a tag, read where it appears in the gripper camera and compare it
-        against the ideal pose it would have if it were directly under the gripper at the
-        correct altitude. The RMS of those deviations across all trials is reported in cm.
+        VISITS_PER_TAG times.
+
+        Once parked over a tag, read where it appears in the gripper camera and work out
+        where the gantry actually is relative to the tag, in room axes. Comparing that
+        against the commanded offset gives the deviation; the RMS across all trials is
+        reported in cm.
         """
         TAG_CYCLE = ['gamepad', 'trash', 'hamper', 'toys']
         VISITS_PER_TAG = 3
         SETTLE_S = 2.0           # let the gripper swing settle before measuring
-        MEASURE_WINDOW_S = 50.0   # average tag readings over this window
+        MEASURE_WINDOW_S = 2.0   # average tag readings over this much of a window
         MEASURE_TIMEOUT_S = 5.0  # give up on a trial if the tag isn't seen in this long
 
+        # where the gantry (the point the support lines meet) is asked to sit above the tag.
+        # The gripper hangs self.pole below that on its pole, so the camera is closer.
         GANTRY_HEIGHT_OVER_TARGET = 0.9
+        IDEAL_GANTRY_OVER_TAG = np.array([0.0, 0.0, GANTRY_HEIGHT_OVER_TARGET])
 
-        # TODO(nathaniel): the gripper camera is tilted, so when the gripper is centered
-        # over the tag at the correct altitude the tag does not appear straight down.
-        IDEAL_TAG_POSITION_IN_CAMERA = np.array([0.0, 0.03, GANTRY_HEIGHT_OVER_TARGET])
+        async def measure_gantry_over_tag(tag_name):
+            """Average room-frame (gantry position - tag position) over a short window, or
+            None if the tag is never seen.
 
-        async def measure_tag_position(tag_name):
-            """Average the tag position seen in the gripper camera over a short window."""
+            Raw sightings are in the camera's own tilted optical frame, which is no use for
+            an altitude comparison: the camera sits below the gantry by the pole, is offset
+            toward the nose, and looks 9.06 degrees back from straight down, on top of
+            whatever heading and swing the gripper has at that instant.
+            measure_gantry_minus_card unwinds all of that, using the gripper's orientation
+            at each sample's capture time, so these averages are in room axes.
+            """
             start = time.time()
             deadline = start + MEASURE_TIMEOUT_S
             while time.time() < deadline:
                 samples = self.gripper_client.get_route_tag_samples(tag_name, since=start)
-                if samples and time.time() - samples[0][0] >= MEASURE_WINDOW_S:
+                if samples and samples[-1][0] - samples[0][0] >= MEASURE_WINDOW_S:
                     break
                 await asyncio.sleep(0.1)
 
             samples = self.gripper_client.get_route_tag_samples(tag_name, since=start)
             if not samples:
                 return None
-            return np.mean([np.array(pose[1]) for _, pose in samples], axis=0)
+            return np.mean([self.gripper_client.measure_gantry_minus_card(pose, timestamp=ts)
+                            for ts, pose in samples], axis=0)
 
         # the order of visits: each tag VISITS_PER_TAG times, cycling through the list
         visit_order = TAG_CYCLE * VISITS_PER_TAG
@@ -3677,17 +3687,18 @@ class AsyncObserver:
             logger.info(f'Goalseek trial {trial + 1}/{num_trials}: seeking to tag "{tag_name}"')
 
             # goal-seek to the tag's saved position
-            goal_pos = tonp(self.config.named_positions[tag_name]) + np.array([0,0,GANTRY_HEIGHT_OVER_TARGET])
+            goal_pos = tonp(self.config.named_positions[tag_name]) + IDEAL_GANTRY_OVER_TAG
             await self.seek_goal(goal_pos, auto_altitude=True)
             await asyncio.sleep(SETTLE_S)
 
-            observed = await measure_tag_position(tag_name)
+            observed = await measure_gantry_over_tag(tag_name)
             if observed is None:
                 logger.warning(f'Goalseek trial {trial + 1}: tag "{tag_name}" not seen in gripper camera, skipping')
                 continue
-            deviation = observed - IDEAL_TAG_POSITION_IN_CAMERA
-            logger.info(f'Goalseek trial {trial + 1}: "{tag_name}" deviation {deviation * 100}cm '
-                        f'(magnitude {np.linalg.norm(deviation) * 100:.2f}cm)\nobserved={observed}')
+            deviation = observed - IDEAL_GANTRY_OVER_TAG
+            logger.info(f'Goalseek trial {trial + 1}: "{tag_name}" deviation {np.round(deviation * 100, 1)}cm '
+                        f'(magnitude {np.linalg.norm(deviation) * 100:.2f}cm)\n'
+                        f'gantry measured {np.round(observed, 3)}m from the tag')
             deviations.append(deviation)
 
         if not deviations:
