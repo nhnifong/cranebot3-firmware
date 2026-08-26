@@ -91,8 +91,8 @@ TARGET_EMA_RESET_M = 0.5
 STUCK_DISTANCE_M = 0.05
 STUCK_TIMEOUT_S = 5.0
 
-APPROACH_TIMEOUT_S = 40.0
-PRESSURE_SENSE_WAIT = 10.0  # (s) how long a close may spend looking for a grip
+APPROACH_TIMEOUT_S = 30.0
+PRESSURE_SENSE_WAIT = 6.0  # (s) how long a close may spend looking for a grip
 NUM_ATTEMPTS = 3            # tries per call, unless a caller says otherwise
 LOOP_DELAY = 0.03           # (s) added to inference time; the loop runs at what that allows
 WATCH_LOG_S = 2.0           # (s) how often the debugging modes print
@@ -119,7 +119,7 @@ CLOSE_CONFIRM_FRAMES = 10
 # the force the model expects this object to need. A rate label is a teleoperator's thumb
 # and is different on every frame of the same situation; when to start and how hard to
 # finish are properties of the object, which is what makes them worth predicting.
-CLOSE_PROB_THRESHOLD = 0.5
+CLOSE_PROB_THRESHOLD = 0.45
 # (normalized finger speed) how fast the close runs once it starts, and how long it takes
 # to get there. The ramp is not politeness: a step to full speed puts a jolt through half
 # a metre of hanging pole at the moment the jaws are arriving at the object.
@@ -144,6 +144,8 @@ CLOSE_PRESSURE_TOLERANCE = 0.01
 # force is 0.11 and 41% of frames ask for nothing at all.
 HOLD_FORCE_FRACTION = 0.8
 HOLD_FORCE_MIN_COMMANDED = 0.02
+# Always hold this much more than the model wants
+HOLD_FORCE_EXTRA = 0.05
 #
 # The second way to be loaded needs no reference to what was commanded: a felt force this
 # high that has stopped moving is something solid between the pads. The force loop does
@@ -444,7 +446,7 @@ class VisualServo:
         exactly as it did.
         """
         if 'close' in prediction:
-            return await self._drive_fingers_staged(prediction)
+            return await self._drive_fingers_staged(prediction) # we are using this one right now
         return await self._drive_fingers_rate(prediction)
 
     async def _drive_fingers_rate(self, prediction):
@@ -466,7 +468,7 @@ class VisualServo:
         """Hold, close to the predicted grip force, then stop and let the loop wait for load"""
         now = time.time()
         commanded = float(self.ob.gripper_client.last_target_force)
-        target = prediction['grasp_pressure']
+        target = prediction['grasp_pressure'] + HOLD_FORCE_EXTRA
 
         if self.close_arrived:
             # Terminal: hold the force already commanded. Sending zero speed is what does
@@ -615,16 +617,38 @@ class VisualServo:
         resting = felt >= HOLD_FORCE_MIN_FELT and settled and commanded > HOLD_FORCE_MIN_COMMANDED
         return tracking or resting, commanded, felt, ratio, spread
 
+    @property
+    def uses_close_heads(self):
+        """Whether the loaded checkpoint carries the close-onset and pressure heads.
+
+        Read from the model rather than sniffed from a prediction, so it still answers on
+        a pass where no frame was available and there is no prediction to look at.
+        """
+        return bool(getattr(self.model, 'close_heads', False))
+
     def holding_now(self, prediction):
-        """This routine's own answer to "we have it, go up", and its evidence."""
+        """This routine's own answer to "we have it, go up", and its evidence.
+        
+        TODO: this predicate has a hard time with paper
+        It often grabs the paper but fails to detect enough pressure.
+        If no pressure is felt but the prediction of holding is high,
+        There's one way to know for sure if you go it. go up.
+        If you do that and the visual holding head still says you have it, then you got it.
+        """
         loaded, commanded, felt, ratio, spread = self.grip_loaded()
         probability = prediction['holding'] if prediction is not None else 0.0
         steadiness = 'too few samples' if spread is None else f'{spread:.3f}'
-        return (loaded and probability > HOLD_PROB_THRESHOLD,
-                f'felt {felt:.3f} of {commanded:.3f} commanded ({ratio:.0%}, needs '
-                f'{HOLD_FORCE_FRACTION:.0%}), spread {steadiness} over {HOLD_FORCE_SETTLE_S}s '
-                f'(needs <{HOLD_FORCE_SETTLE_BAND:.3f} at felt >{HOLD_FORCE_MIN_FELT:.2f}), '
-                f'holding head {probability:.2f}')
+        evidence = (f'felt {felt:.3f} of {commanded:.3f} commanded ({ratio:.0%}, needs '
+                    f'{HOLD_FORCE_FRACTION:.0%}), spread {steadiness} over {HOLD_FORCE_SETTLE_S}s '
+                    f'(needs <{HOLD_FORCE_SETTLE_BAND:.3f} at felt >{HOLD_FORCE_MIN_FELT:.2f}), '
+                    f'holding head {probability:.2f}')
+
+        # A close-heads model has a defined end to its close, so nothing before that end
+        # counts as holding.
+        if self.uses_close_heads and not self.close_arrived:
+            return False, evidence + ', close still running'
+
+        return loaded and probability > HOLD_PROB_THRESHOLD, evidence
 
     # -- the modes ---------------------------------------------------------
 
