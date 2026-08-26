@@ -55,9 +55,9 @@ merge:
   - repo_id: justink04/laundry-in-hamper-8-1-26
     anchor_config: ../calibrations/justin.json
 
-  - repo_id: justink04/laundry-in-hamper2-8-1-26
-    exclude_episodes: ["41-60"]
-    anchor_config: ../calibrations/justin.json
+  # - repo_id: justink04/laundry-in-hamper2-8-1-26
+  #   exclude_episodes: ["41-60"]
+  #   anchor_config: ../calibrations/justin.json
 
   - repo_id: justink04/laundry-in-hamper3-8-1-26
     exclude_episodes: ['48-99']
