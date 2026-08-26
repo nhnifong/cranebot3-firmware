@@ -75,12 +75,12 @@ is a LeRobot dataset and the result is not:
 
        hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 
-Labels can also come from the UI instead of a recording. These are the only frames where
-every target is marked, so the rows of one submission are loaded back as a single sample
-carrying all of them rather than as one sample each - which is the shape the head wants
-and the teleop labels cannot supply. The RUN menu's "Add targets to dataset" saves the
-ortho frame the robot is looking at and every target placed on it by hand, one row per
-target in exactly the format step 2 writes, into
+Labels can also come from the UI instead of a recording, and they are the only frames
+where every target is marked - which is the shape this head wants and the teleop labels
+cannot supply, since an episode confirms one grasp and says nothing about the rest of the
+floor. The RUN menu's "Add targets to dataset" saves the ortho frame the robot is looking
+at and every target placed on it by hand, as one row in exactly the format step 2 writes,
+into
 ortho_target_user_labels/ - relative to the directory stringman was started from. Nothing
 trains on them until they are merged, which is the point of keeping them apart: nobody
 reached for these, so nothing confirms the object was really there or could be picked up.
@@ -138,7 +138,7 @@ Caveats worth knowing before trusting the labels:
 
   - The projection assumes contact happens on the floor plane. An object grasped at
     height z appears displaced in the ortho view by the anchor cameras' parallax, so
-    the label drifts outward from the room centre as z grows. contact_m carries the
+    the label drifts outward from the room centre as z grows. contacts_m carries the
     full 3D position, so samples can be filtered on z later.
   - Contact position is recomputed here from observation.state rather than read from
     the labelled contact_vec_* action components. Both use the same definition (see
@@ -426,10 +426,10 @@ def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit
             images[file_name] = bgr
             samples.append({
                 "file_name": file_name,
-                # "points" (a list, of one) rather than a bare pair, leaving room for
-                # rows that carry more than a single label
+                # Lists of one: a teleop episode confirms the single place someone
+                # actually reached, and says nothing about the rest of the frame.
                 "points": [[round(u, 2), round(v, 2)]],
-                "contact_m": [round(c, 4) for c in (x_m, y_m, z_m)],
+                "contacts_m": [[round(c, 4) for c in (x_m, y_m, z_m)]],
                 "episode_index": ep,
                 "frame_offset": offset,
                 "contact_frame_index": contact["frame_index"],
@@ -447,7 +447,7 @@ SHARD_TARGET_BYTES = 256 * 1024 * 1024
 # Columns beside the JPEG bytes. Read without the image column, they are the whole label
 # table, which is what lets the baseline and the split statistics be computed without
 # decoding a single frame.
-LABEL_COLUMNS = ("file_name", "u", "v", "contact_m", "episode_index", "frame_offset",
+LABEL_COLUMNS = ("file_name", "points", "contacts_m", "episode_index", "frame_offset",
                  "contact_frame_index", "contact_time_s", "task")
 
 
@@ -457,9 +457,11 @@ def shard_schema():
     return pa.schema([
         pa.field("file_name", pa.string()),
         pa.field("image", pa.binary()),
-        pa.field("u", pa.float64()),
-        pa.field("v", pa.float64()),
-        pa.field("contact_m", pa.list_(pa.float64())),
+        # A row is a frame and everything worth reaching for in it, so the image is stored
+        # once however many targets it carries and nothing downstream has to reconstruct
+        # which rows were the same frame. contacts_m runs parallel to points.
+        pa.field("points", pa.list_(pa.list_(pa.float64()))),
+        pa.field("contacts_m", pa.list_(pa.list_(pa.float64()))),
         pa.field("episode_index", pa.int32()),
         pa.field("frame_offset", pa.int32()),
         pa.field("contact_frame_index", pa.int32()),
@@ -495,13 +497,11 @@ def write_shards(split_dir: Path, samples, images, target_bytes=SHARD_TARGET_BYT
         if not ok:
             raise ValueError(f"could not encode {sample['file_name']}")
         blob = buf.tobytes()
-        (u, v), = sample["points"]
         rows.append({
             "file_name": sample["file_name"],
             "image": blob,
-            "u": u,
-            "v": v,
-            "contact_m": sample["contact_m"],
+            "points": sample["points"],
+            "contacts_m": sample["contacts_m"],
             "episode_index": int(sample["episode_index"]),
             "frame_offset": int(sample.get("frame_offset", 0)),
             "contact_frame_index": int(sample["contact_frame_index"]),
@@ -546,21 +546,19 @@ def write_dataset_readme(output_root: Path):
 
 
 def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTHO_EXTENT_M):
-    """One row per operator-placed target, all sharing the ortho frame they were placed on.
+    """One row: the ortho frame, and every target the operator placed on it.
 
     The same schema the distilled shards use, but in its own directory and one parquet per
     submission, because these labels are not quite the same thing as the teleop ones:
     nobody reached for them, so nothing confirms the object was really there or that it
-    could be grasped. Whether a pile of them is worth training on is a decision to make
-    later, and acting on it is a matter of moving these files into a split directory.
+    could be grasped. What they do carry that teleop cannot is completeness - every target
+    in the frame is marked, so the absence of one means the floor really is empty there.
 
     The frame is written at whatever size the observer renders it (host/observer.py's
-    _ortho_worker), which need not be the size the distilled shards hold, and the rows of
-    one submission are all the same frame - so a split cannot cut through them the way it
-    cannot cut through an episode. merge_user_labels handles both; a hand-rolled merge has
-    to handle them itself.
+    _ortho_worker), which need not be the size the distilled shards hold; merge_user_labels
+    handles that.
 
-    Returns (path, row count), or (None, 0) if every target fell outside the map.
+    Returns (path, target count), or (None, 0) if every target fell outside the map.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -573,33 +571,35 @@ def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTH
     blob = buf.tobytes()
 
     batch = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    rows = []
+    points, contacts = [], []
     for x_m, y_m, z_m in targets_m:
         u, v = room_to_ortho_px(x_m, y_m, width, height, extent_m)
         if not (0 <= u < width and 0 <= v < height):
             continue
-        rows.append({
-            "file_name": f"user-{batch}-{len(rows):02d}.jpg",
-            "image": blob,
-            "u": round(float(u), 2),
-            "v": round(float(v), 2),
-            "contact_m": [round(float(c), 4) for c in (x_m, y_m, z_m)],
-            # Nobody reached for these, so every field that indexes into an episode is -1
-            # - which is also what tells them apart from distilled rows after a merge.
-            "episode_index": -1,
-            "frame_offset": 0,
-            "contact_frame_index": -1,
-            "contact_time_s": 0.0,
-            "task": "user target",
-        })
-    if not rows:
+        points.append([round(float(u), 2), round(float(v), 2)])
+        contacts.append([round(float(c), 4) for c in (x_m, y_m, z_m)])
+    if not points:
         return None, 0
+
+    rows = [{
+        "file_name": f"user-{batch}.jpg",
+        "image": blob,
+        "points": points,
+        "contacts_m": contacts,
+        # Nobody reached for these, so every field that indexes into an episode is -1 -
+        # which is also what tells them apart from distilled rows after a merge.
+        "episode_index": -1,
+        "frame_offset": 0,
+        "contact_frame_index": -1,
+        "contact_time_s": 0.0,
+        "task": "user target",
+    }]
 
     out_dir = Path(output_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"user-{batch}.parquet"
     pq.write_table(pa.Table.from_pylist(rows, schema=shard_schema()), path)
-    return path, len(rows)
+    return path, len(points)
 
 
 def upload_dataset(output_root: Path, dataset_id: str):
@@ -757,7 +757,7 @@ def resize_rows(rows, size):
                 cache[blob] = (buf.tobytes(), width / w, height / h)
         blob, su, sv = cache[blob]
         out.append({**row, "image": blob,
-                    "u": round(row["u"] * su, 2), "v": round(row["v"] * sv, 2)})
+                    "points": [[round(u * su, 2), round(v * sv, 2)] for u, v in row["points"]]})
     return out
 
 
@@ -774,9 +774,8 @@ def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train"
         Training scales every label by its own frame, so mixed sizes do train correctly,
         but scaled_labels - and so constant_baseline - probes one sample for the whole
         split and would be quietly wrong about the rest. resize=False keeps the pixels.
-      - One submission's rows share one frame, so they must not land on both sides of a
-        train/eval cut. A file is a submission and goes to one split, which keeps that
-        true for free.
+      - A submission is one row holding one frame and all of its targets, so a
+        train/eval cut cannot land inside it and a file goes wholly to one split.
 
     Mind the order: `distill` rewrites a split directory from scratch (write_split), so
     re-distilling drops merged labels and this has to run again afterwards.
@@ -810,7 +809,7 @@ def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train"
         # the prefix is what unmerges and split_stored_size both key on, so enforce it
         name = path.name if path.name.startswith("user-") else f"user-{path.name}"
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), split_dir / name)
-        merged += len(rows)
+        merged += sum(len(row["points"]) for row in rows)
 
     write_dataset_readme(output_root)
     logging.info(f"Merged {len(files)} submission(s), {merged} label(s), into {split_dir}"
@@ -982,22 +981,6 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 MAX_TARGETS = 16
 
 
-def frame_key(row):
-    """What makes two rows the same frame, for collecting a frame's targets together.
-
-    Not the image bytes, tempting as that is: a still scene re-encodes to byte-identical
-    JPEGs across consecutive frame offsets of one episode, and those are two frames that
-    look alike rather than one frame labelled twice. Keying on them merged an eighth of
-    the distilled rows and shrank the training set.
-
-    A distilled row's file name already names its episode and offset, so it is unique per
-    frame. write_user_labels marks its rows with episode_index -1 and names them
-    user-{batch}-{NN}.jpg, all targets of one submission sharing the batch, so dropping
-    that trailing index is what collects them.
-    """
-    return row["file_name"] if row["episode_index"] >= 0 else row["file_name"].rsplit("-", 1)[0]
-
-
 class OrthoTargetDataset(torch.utils.data.Dataset):
     """Distilled ortho frames and their targets, as (image, points, mask) triples.
 
@@ -1020,22 +1003,15 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
         # be resized and augmented anyway.
         self.images: list[bytes] = []
         self.samples: list[dict] = []
-        # Rows are one per target, so the rows of one hand-labelled frame have to be
-        # collected into a single multi-target sample rather than N contradictory
-        # single-target ones. See frame_key for why that is not keyed on the image.
-        by_frame: dict[str, dict] = {}
         for shard in shards:
             table = pq.read_table(shard)
+            if "points" not in table.column_names:
+                raise ValueError(
+                    f"{shard} predates the one-row-per-frame format: it holds flat u/v "
+                    f"columns and one row per target. Re-run distill to rebuild the split.")
             blobs = table.column("image").to_pylist()
-            labels = table.select(list(LABEL_COLUMNS)).to_pylist()
-            for blob, row in zip(blobs, labels):
-                key = frame_key(row)
-                sample = by_frame.get(key)
-                if sample is None:
-                    sample = by_frame[key] = {**row, "points": []}
-                    self.images.append(blob)
-                    self.samples.append(sample)
-                sample["points"].append([row["u"], row["v"]])
+            self.images.extend(blobs)
+            self.samples.extend(table.select(list(LABEL_COLUMNS)).to_pylist())
 
         self.image_size = image_size
         self.augment = augment
