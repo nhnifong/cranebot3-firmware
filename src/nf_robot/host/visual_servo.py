@@ -91,8 +91,8 @@ TARGET_EMA_RESET_M = 0.5
 STUCK_DISTANCE_M = 0.05
 STUCK_TIMEOUT_S = 5.0
 
-APPROACH_TIMEOUT_S = 40.0
-PRESSURE_SENSE_WAIT = 10.0  # (s) how long a close may spend looking for a grip
+APPROACH_TIMEOUT_S = 30.0
+PRESSURE_SENSE_WAIT = 6.0  # (s) how long a close may spend looking for a grip
 NUM_ATTEMPTS = 3            # tries per call, unless a caller says otherwise
 LOOP_DELAY = 0.03           # (s) added to inference time; the loop runs at what that allows
 WATCH_LOG_S = 2.0           # (s) how often the debugging modes print
@@ -112,6 +112,24 @@ FINGER_DEADBAND = 0.05
 FINGER_CLOSE_THRESHOLD = 0.5
 CLOSE_CONFIRM_FRAMES = 10
 
+# The close-heads program, used when the checkpoint carries a close-onset head.
+#
+# It replaces a per-frame rate with a decision and a target: hold still until the model
+# says the close should have begun, then close at one speed until the grip is carrying
+# the force the model expects this object to need. A rate label is a teleoperator's thumb
+# and is different on every frame of the same situation; when to start and how hard to
+# finish are properties of the object, which is what makes them worth predicting.
+CLOSE_PROB_THRESHOLD = 0.45
+# (normalized finger speed) how fast the close runs once it starts, and how long it takes
+# to get there. The ramp is not politeness: a step to full speed puts a jolt through half
+# a metre of hanging pole at the moment the jaws are arriving at the object.
+CLOSE_SPEED = 0.45
+CLOSE_RAMP_S = 0.3
+# (sensor units) how close the commanded force has to get to the predicted one before the
+# close stops pushing. The gripper turns finger speed into a force ramp once it feels
+# contact, so this is the point where the ask has reached what the model expects to need.
+CLOSE_PRESSURE_TOLERANCE = 0.01
+
 # What it takes to call the object held, and so to lift.
 #
 # The pressure half is a ratio, not a level: the gripper turns a finger speed into a force
@@ -125,7 +143,9 @@ CLOSE_CONFIRM_FRAMES = 10
 # for, nothing achieved satisfies any ratio. During teleop carries the median commanded
 # force is 0.11 and 41% of frames ask for nothing at all.
 HOLD_FORCE_FRACTION = 0.8
-HOLD_FORCE_MIN_COMMANDED = 0.15
+HOLD_FORCE_MIN_COMMANDED = 0.02
+# Always hold this much more than the model wants
+HOLD_FORCE_EXTRA = 0.05
 #
 # The second way to be loaded needs no reference to what was commanded: a felt force this
 # high that has stopped moving is something solid between the pads. The force loop does
@@ -261,6 +281,14 @@ class VisualServo:
         self.ob = observer
         self.model = None
         self.filter = TargetFilter()
+        # Where the staged finger program has got to. Reset per attempt: a close that
+        # began on the last one says nothing about this one.
+        self.close_started_at = None
+        self.close_arrived = False
+
+    def reset_close(self):
+        self.close_started_at = None
+        self.close_arrived = False
 
     # -- model ------------------------------------------------------------
 
@@ -411,14 +439,23 @@ class VisualServo:
     # -- what the robot does about it --------------------------------------
 
     async def drive_fingers(self, prediction):
-        """Put the model's finger speed on the fingers, in the robot's units.
+        """Move the fingers the way this checkpoint's heads say to. Returns the speed sent.
+
+        Two programs, chosen by what the model carries rather than by a flag, so one
+        deployment path serves both kinds of checkpoint and the older one keeps behaving
+        exactly as it did.
+        """
+        if 'close' in prediction:
+            return await self._drive_fingers_staged(prediction) # we are using this one right now
+        return await self._drive_fingers_rate(prediction)
+
+    async def _drive_fingers_rate(self, prediction):
+        """The finger head's rate, straight onto the fingers, in the robot's units.
 
         The head predicts a rate in the same normalized units the teleop labels were
         recorded in, and during a grasp this is the only thing that moves the fingers.
         Nothing else has a better claim: the fixed closing speed it replaces was a
-        constant chosen for a routine with no opinion about fingers, and the point of this
-        model is that it has one - when to close, when to hold, when to squeeze harder,
-        none of which a constant can express.
+        constant chosen for a routine with no opinion about fingers.
         """
         speed = prediction['finger']
         if abs(speed) < FINGER_DEADBAND:
@@ -426,6 +463,54 @@ class VisualServo:
         await self.ob.gripper_client.send_commands(
             {'set_finger_speed': speed * FINGER_SPEED_FULL_SCALE})
         return speed
+
+    async def _drive_fingers_staged(self, prediction):
+        """Hold, close to the predicted grip force, then stop and let the loop wait for load"""
+        now = time.time()
+        commanded = float(self.ob.gripper_client.last_target_force)
+        target = prediction['grasp_pressure'] + HOLD_FORCE_EXTRA
+
+        if self.close_arrived:
+            # Terminal: hold the force already commanded. Sending zero speed is what does
+            # that - the firmware only changes desired_force while a speed is commanded,
+            # so zero means "stay here", not "let go".
+            await self.ob.gripper_client.send_commands({'set_finger_speed': 0.0})
+            return 0.0
+
+        if self.close_started_at is None:
+            if prediction['close'] < CLOSE_PROB_THRESHOLD:
+                await self.ob.gripper_client.send_commands({'set_finger_speed': 0.0})
+                return 0.0
+            self.close_started_at = now
+            logger.info(f"Close head says go ({prediction['close']:.2f}); closing to "
+                        f"{target:.3f} of grip force")
+
+        # commanded > 0 is the gripper saying it is in force mode, which is to say the
+        # fingers are on the object rather than still travelling toward it
+        if commanded > 0.0 and commanded >= target - CLOSE_PRESSURE_TOLERANCE:
+            self.close_arrived = True
+            logger.info(f'Commanded force {commanded:.3f} reached the predicted '
+                        f'{target:.3f}; holding there and waiting for the grip to load')
+            await self.ob.gripper_client.send_commands({'set_finger_speed': 0.0})
+            return 0.0
+
+        ramp = min(1.0, (now - self.close_started_at) / CLOSE_RAMP_S) if CLOSE_RAMP_S else 1.0
+        speed = CLOSE_SPEED * ramp
+        await self.ob.gripper_client.send_commands(
+            {'set_finger_speed': speed * FINGER_SPEED_FULL_SCALE})
+        return speed
+
+    def wants_to_close(self, prediction):
+        """Whether the model is asking for the fingers to close on this frame.
+
+        The two kinds of checkpoint answer it with different heads, and the loop above
+        cares about the answer rather than which head gave it. A rate model says so by
+        commanding a fast close; a close-heads model says so directly, which is the whole
+        reason those heads exist.
+        """
+        if 'close' in prediction:
+            return prediction['close'] > CLOSE_PROB_THRESHOLD
+        return prediction['finger'] > FINGER_CLOSE_THRESHOLD
 
     async def servo_wrist(self, prediction):
         """Turn the wrist toward the predicted grasp axis, if the head means it.
@@ -532,16 +617,38 @@ class VisualServo:
         resting = felt >= HOLD_FORCE_MIN_FELT and settled and commanded > HOLD_FORCE_MIN_COMMANDED
         return tracking or resting, commanded, felt, ratio, spread
 
+    @property
+    def uses_close_heads(self):
+        """Whether the loaded checkpoint carries the close-onset and pressure heads.
+
+        Read from the model rather than sniffed from a prediction, so it still answers on
+        a pass where no frame was available and there is no prediction to look at.
+        """
+        return bool(getattr(self.model, 'close_heads', False))
+
     def holding_now(self, prediction):
-        """This routine's own answer to "we have it, go up", and its evidence."""
+        """This routine's own answer to "we have it, go up", and its evidence.
+        
+        TODO: this predicate has a hard time with paper
+        It often grabs the paper but fails to detect enough pressure.
+        If no pressure is felt but the prediction of holding is high,
+        There's one way to know for sure if you go it. go up.
+        If you do that and the visual holding head still says you have it, then you got it.
+        """
         loaded, commanded, felt, ratio, spread = self.grip_loaded()
         probability = prediction['holding'] if prediction is not None else 0.0
         steadiness = 'too few samples' if spread is None else f'{spread:.3f}'
-        return (loaded and probability > HOLD_PROB_THRESHOLD,
-                f'felt {felt:.3f} of {commanded:.3f} commanded ({ratio:.0%}, needs '
-                f'{HOLD_FORCE_FRACTION:.0%}), spread {steadiness} over {HOLD_FORCE_SETTLE_S}s '
-                f'(needs <{HOLD_FORCE_SETTLE_BAND:.3f} at felt >{HOLD_FORCE_MIN_FELT:.2f}), '
-                f'holding head {probability:.2f}')
+        evidence = (f'felt {felt:.3f} of {commanded:.3f} commanded ({ratio:.0%}, needs '
+                    f'{HOLD_FORCE_FRACTION:.0%}), spread {steadiness} over {HOLD_FORCE_SETTLE_S}s '
+                    f'(needs <{HOLD_FORCE_SETTLE_BAND:.3f} at felt >{HOLD_FORCE_MIN_FELT:.2f}), '
+                    f'holding head {probability:.2f}')
+
+        # A close-heads model has a defined end to its close, so nothing before that end
+        # counts as holding.
+        if self.uses_close_heads and not self.close_arrived:
+            return False, evidence + ', close still running'
+
+        return loaded and probability > HOLD_PROB_THRESHOLD, evidence
 
     # -- the modes ---------------------------------------------------------
 
@@ -636,7 +743,7 @@ class VisualServo:
             asyncio.create_task(
                 self.ob.gripper_client.send_commands({'set_finger_angle': OPEN}))
 
-            reason, held, evidence, last_finger = await self._approach()
+            reason, held, evidence, asked_to_close = await self._approach()
             self.ob.slow_stop_all_spools()
             logger.info(f'Visual servo approach ended: {reason}')
 
@@ -646,13 +753,12 @@ class VisualServo:
             elif reason in ('nothing seen', 'rangefinder reading went stale'):
                 continue # nothing worth closing on; spend another attempt looking
 
-            elif reason == 'stuck' and last_finger <= FINGER_CLOSE_THRESHOLD:
+            elif reason == 'stuck' and not asked_to_close:
                 # Being stuck is not itself a reason to close - the gripper could be hung
                 # up anywhere. But it is often what arriving feels like when the object
                 # stops the descent before the rangefinder reads through it, so the model
                 # gets the casting vote: if it is asking to close, close.
-                logger.info(f'Stuck with the finger head at {last_finger:+.2f}, below '
-                            f'{FINGER_CLOSE_THRESHOLD}; not grasping')
+                logger.info('Stuck and the model is not asking to close; not grasping')
                 continue
 
             else:
@@ -671,7 +777,7 @@ class VisualServo:
     async def _approach(self):
         """Fly to the object and close on it, returning why the approach ended.
 
-        Returns (reason, held, evidence, last_finger). `held` is the grasp completing
+        Returns (reason, held, evidence, asked_to_close). `held` is the grasp completing
         mid-flight, which is the normal way a good attempt ends: the model has the
         fingers, so the grip can be made while this loop is still steering toward it - and
         success switches off the very signal the loop would otherwise wait for, since an
@@ -679,10 +785,11 @@ class VisualServo:
         tested every pass rather than only after the approach ends.
         """
         self.filter.reset()
+        self.reset_close()
         nothing_seen_countdown = NOTHING_SEEN_FRAMES
         close_countdown = CLOSE_CONFIRM_FRAMES
         approach_timeout = time.time() + APPROACH_TIMEOUT_S
-        reason, evidence, last_finger = 'approach timed out', 'no frames', 0.0
+        reason, evidence, asked_to_close = 'approach timed out', 'no frames', False
         still_since = time.time()
         still_at = np.array(self.ob.pe.gant_pos, dtype=float)
 
@@ -695,18 +802,18 @@ class VisualServo:
                 still_at = np.array(self.ob.pe.gant_pos, dtype=float)
                 still_since = time.time()
             elif time.time() - still_since > STUCK_TIMEOUT_S:
-                return 'stuck', False, evidence, last_finger
+                return 'stuck', False, evidence, asked_to_close
 
             range_ts, range_to_target = self.ob.datastore.range_record.getLast()
             if time.time() - range_ts > RANGE_MAX_AGE_S:
                 # the range is both an input to the model and the descent's only sense of
                 # how far there is left to go; flying on a stale one is how the fingers
                 # end up driven into the floor
-                return 'rangefinder reading went stale', False, evidence, last_finger
+                return 'rangefinder reading went stale', False, evidence, asked_to_close
             if range_to_target < RANGE_ITEM:
                 gripper_height = self.ob.pe.grip_pose[1][2]
                 return (f'reached target at height {gripper_height:.3f}m '
-                        f'range {range_to_target:.3f}m'), False, evidence, last_finger
+                        f'range {range_to_target:.3f}m'), False, evidence, asked_to_close
 
             prediction = await self.predict()
             if prediction is None:
@@ -723,7 +830,7 @@ class VisualServo:
                     self.ob.slow_stop_all_spools()
                 nothing_seen_countdown -= 1
                 if nothing_seen_countdown <= 0:
-                    return 'nothing seen', False, evidence, last_finger
+                    return 'nothing seen', False, evidence, asked_to_close
                 await asyncio.sleep(LOOP_DELAY)
                 continue
             nothing_seen_countdown = NOTHING_SEEN_FRAMES
@@ -749,23 +856,24 @@ class VisualServo:
                 await self.servo_wrist(prediction)
 
             last_finger = await self.drive_fingers(prediction)
+            asked_to_close = self.wants_to_close(prediction)
 
             held, evidence = self.holding_now(prediction)
             if held:
-                return 'grip loaded', True, evidence, last_finger
+                return 'grip loaded', True, evidence, asked_to_close
 
             # The close threshold's remaining job is to stop the gantry: once the model is
             # closing, driving on is how the object gets pushed out of the jaws.
-            if prediction['finger'] > FINGER_CLOSE_THRESHOLD:
+            if asked_to_close:
                 close_countdown -= 1
                 if close_countdown <= 0:
-                    return 'model asked to close', False, evidence, last_finger
+                    return 'model asked to close', False, evidence, asked_to_close
             else:
                 close_countdown = CLOSE_CONFIRM_FRAMES
 
             await asyncio.sleep(LOOP_DELAY)
 
-        return reason, False, evidence, last_finger
+        return reason, False, evidence, asked_to_close
 
     async def _close_until_held(self):
         """Hold the gantry still, let the model work the fingers, and wait for a grip.

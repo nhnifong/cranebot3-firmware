@@ -64,6 +64,10 @@ SELECTION_METRIC = "onscreen_recall@25px"
 DEFAULT_WEIGHTS = {
     "cell": 1.0, "offset": 1.0, "distance": 0.5,
     "axis": 0.5, "finger": 0.5, "present": 0.2, "holding": 0.2,
+    # Only ever nonzero for a --close_heads model. The close flag is weighted like the
+    # other two flags; the pressure is a regression in the same units as the sensor, so
+    # its raw magnitude is small and it needs the room.
+    "close": 0.2, "pressure": 1.0,
 }
 # Width, in cells, of the Gaussian the cell head is trained against. Cells are 12px of the
 # 448x256 input (the 1.5x canvas over 56x32 cells), so 1.5 cells is about 18px.
@@ -272,6 +276,18 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
             outputs["holding_logit"], batch["holding"], reduction="none"),
         batch["has_holding"])
 
+    if "close_logit" in outputs:
+        parts["close"], _ = masked_mean(
+            F.binary_cross_entropy_with_logits(
+                outputs["close_logit"], batch["close_now"], reduction="none"),
+            batch["has_close"])
+        # Huber rather than squared error: the pressure label is read off one frame of a
+        # real sensor at the moment of a lift, so its tail is measurement, not signal.
+        parts["pressure"], _ = masked_mean(
+            F.smooth_l1_loss(outputs["grasp_pressure"], batch["grasp_pressure"],
+                             reduction="none", beta=0.05),
+            batch["has_pressure"])
+
     total = sum(weights[k] * v for k, v in parts.items())
     return total, {k: float(v.detach()) for k, v in parts.items()}
 
@@ -439,6 +455,10 @@ def checkpoint_payload(model, args, metrics, epoch):
         # rather than from whichever run log is still around.
         "axis_loss": args.axis_loss,
         "axis_balance": args.axis_balance,
+        # What makes this a close/pressure model rather than a finger-rate one. Absent
+        # from every checkpoint written before the heads existed, which is exactly how
+        # those keep loading.
+        "close_heads": args.close_heads,
     }
 
 
@@ -480,8 +500,13 @@ def train(args):
         eval_set, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
         if eval_set else None)
 
+    if args.close_heads and not train_set.has_close_labels():
+        raise SystemExit(
+            f"--close_heads needs close_now labels and no row in {data_root}/train has "
+            f"one. Re-mine the teleop half: the columns are written by mine_teleop.")
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
+        close_heads=args.close_heads,
         attention_layers=args.attention_layers, freeze=not args.unfreeze_backbone,
     ).to(device)
     head_params = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
@@ -578,6 +603,12 @@ def main():
     parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
                         help="Mined dataset on the hub, used when --data_root is absent")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
+    parser.add_argument(
+        "--close_heads", action="store_true",
+        help="Train the close-onset and grasp-pressure heads instead of relying on the "
+             "finger-rate head alone. The rate head still trains; these two answer *when* "
+             "to start closing and *how hard* to end up squeezing, which is what the "
+             "robot actually needs and what a per-frame rate label describes badly.")
     parser.add_argument("--eval_every", type=int, default=1,
                         help="Score the eval split every N epochs (and always on the last)")
     parser.add_argument("--select_best", action="store_true",

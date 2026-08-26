@@ -116,6 +116,31 @@ captures are photographed already in their ideal grasping orientation.
 
 **3. Finger speed, scalar in [-1, 1], from the global vector.**
 
+A `--close_heads` checkpoint adds two more global heads and deploys from those instead,
+because what a rate label describes is a teleoperator's thumb: on the same situation it
+reads +1 one frame and 0 the next, and 69% of the mined values are exactly zero. What a
+grasp actually consists of is a decision and a target, so those are what get predicted:
+
+  **3a. Probability the close should have begun by this frame.** A step at the close
+  onset, found by walking back from the grasp through the run of frames commanding a
+  close - so it is 0 through the approach and 1 from the moment the operator committed.
+  47% positive on mined rows, against the rate head's 69% zeros. Bare-floor negatives
+  carry 0, which is a fact about them rather than a mask.
+
+  **3b. The grip force the object turned out to need**, read off the finger sensor at the
+  moment the lift began, and the same value on every frame of the episode: it is a
+  property of the object, not of the frame. Softplus, since a negative force is not one
+  the gripper can hold.
+
+Deployment stops being a rate follower and becomes a program: hold the fingers still
+until 3a crosses 0.5, then close at one speed with a short ramp until the *commanded*
+force reaches 3b. The commanded value rather than the felt one, because that is what the
+ask is - the gripper turns finger speed into a force ramp on contact, and whether the
+felt force followed is the holding head's question.
+
+Old checkpoints carry no `close_heads` key, build three global outputs, and drive from
+the rate head exactly as before.
+
 More grip is positive, less grip is negative; scaled to the robot's finger speed units
 downstream, which keeps it compatible with the existing gripper_vel action.
 

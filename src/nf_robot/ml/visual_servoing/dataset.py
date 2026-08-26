@@ -33,7 +33,7 @@ STATE_KEYS = ("laser_rangefinder", "finger_angle", "target_force")
 LABEL_COLUMNS = [
     "split_source", "source_repo_id", "episode_index", "frame_index",
     "seconds_to_grasp", "target_uv", "target_range_m", "grasp_axis_rad",
-    "finger", "target_present", "holding", "state",
+    "finger", "close_now", "grasp_pressure", "target_present", "holding", "state",
 ]
 
 
@@ -57,7 +57,14 @@ class VisualServoDataset(torch.utils.data.Dataset):
         for shard in shards:
             table = pq.read_table(shard)
             images = table.column("image").to_pylist()
-            labels = table.select(LABEL_COLUMNS).to_pylist()
+            # A shard written before a label existed simply does not carry the column,
+            # and that is the same thing as the label being null: mask this head here.
+            present = [c for c in LABEL_COLUMNS if c in table.schema.names]
+            missing = [c for c in LABEL_COLUMNS if c not in present]
+            labels = table.select(present).to_pylist()
+            if missing:
+                for row in labels:
+                    row.update(dict.fromkeys(missing))
             for blob, row in zip(images, labels):
                 if keep is not None and not keep(row):
                     continue
@@ -79,6 +86,10 @@ class VisualServoDataset(torch.utils.data.Dataset):
         """Every present target_uv, for the constant-prediction baseline."""
         return np.array([r["target_uv"] for r in self.rows if r["target_uv"] is not None],
                         dtype=np.float32)
+
+    def has_close_labels(self):
+        """Whether any row carries the close/pressure labels, so training can say so."""
+        return any(r.get("close_now") is not None for r in self.rows)
 
     def labelled_axis(self):
         """Every present grasp_axis_rad, for the loss's angle-bin weights."""
@@ -117,11 +128,15 @@ class VisualServoDataset(torch.utils.data.Dataset):
             "target_range_m": torch.tensor(float(row["target_range_m"] or 0.0)),
             "grasp_axis_rad": torch.tensor(angle, dtype=torch.float32),
             "finger": torch.tensor(float(row["finger"] or 0.0)),
+            "close_now": torch.tensor(float(row["close_now"] or 0.0)),
+            "grasp_pressure": torch.tensor(float(row["grasp_pressure"] or 0.0)),
             "present": torch.tensor(float(row["target_present"] or 0.0)),
             "holding": torch.tensor(float(row["holding"] or 0.0)),
             "has_uv": torch.tensor(float(has_uv)),
             "has_axis": torch.tensor(float(row["grasp_axis_rad"] is not None)),
             "has_finger": torch.tensor(float(row["finger"] is not None)),
+            "has_close": torch.tensor(float(row["close_now"] is not None)),
+            "has_pressure": torch.tensor(float(row["grasp_pressure"] is not None)),
             "has_present": torch.tensor(float(row["target_present"] is not None)),
             "has_holding": torch.tensor(float(row["holding"] is not None)),
         }
