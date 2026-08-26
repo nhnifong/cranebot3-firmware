@@ -1,6 +1,9 @@
 import cv2
+import logging
 import numpy as np
 from collections import OrderedDict
+
+logger = logging.getLogger(__name__)
 
 SIDE_PX = 1000 # width and height of the square output image
 EXTENT_M = 5.0 # Size of the floor area rendered in meters
@@ -21,6 +24,50 @@ _CHANNEL_SUM = np.ones((1, 3), dtype=np.float32)
 # recalibrated, so in steady state every frame reuses the grid built on the first one.
 _MAP_CACHE = OrderedDict()
 _MAP_CACHE_MAX = 8
+
+# How far off axis to look for the distortion model's turning point, as a normalized
+# image radius. 4 is a 152 degree field of view, past anything a rectilinear lens covers.
+_RADIUS_SEARCH_MAX = 4.0
+_RADIUS_SEARCH_STEPS = 8192
+
+
+def _max_valid_radius(K, D):
+    """Largest normalized image radius the distortion model still describes.
+
+    OpenCV's radial polynomial only describes a lens while the distorted radius keeps
+    growing with the true one. Past its turning point the polynomial folds: two
+    directions map to the same pixel, and projectPoints will map floor well outside the
+    lens's field of view onto perfectly plausible looking pixels. Sampling through that
+    lands in the composite as a detached crescent of smeared image, off in a corner the
+    camera cannot see - so the grid has to reject it, which nothing about the pixel
+    coordinates alone would.
+
+    Found by walking the function rather than solving it, so the rational terms of an
+    eight or twelve coefficient calibration are covered on the same footing as a plain
+    five coefficient one.
+    """
+    d = np.zeros(8)
+    flat = np.asarray(D, dtype=np.float64).ravel()
+    d[:min(len(flat), 8)] = flat[:8]
+    r = np.linspace(0.0, _RADIUS_SEARCH_MAX, _RADIUS_SEARCH_STEPS)
+    r2 = r * r
+    with np.errstate(divide="ignore", invalid="ignore"):
+        distorted = r * ((1 + d[0] * r2 + d[1] * r2**2 + d[4] * r2**3)
+                         / (1 + d[5] * r2 + d[6] * r2**2 + d[7] * r2**3))
+    turning = np.flatnonzero(~(np.diff(distorted) > 0))
+    if not len(turning):
+        return np.inf
+    r_max = float(r[turning[0]])
+
+    # The real image has to fit inside the valid radius, or this test would be cropping
+    # pixels the camera genuinely sees rather than fictional ones.
+    corner = np.hypot(K[0, 2] / K[0, 0], K[1, 2] / K[1, 1])
+    if corner > r_max:
+        logger.warning(
+            f"distortion model turns over at r={r_max:.3f}, inside the image corner at "
+            f"r={corner:.3f}; the floor view will be clipped short of the frame edge"
+        )
+    return r_max
 
 
 class _CamMap:
@@ -121,13 +168,21 @@ def _camera_floor_map(camera_pose, K, D, src_w, src_h, map_size_px, map_extent_m
         src_px, _ = cv2.projectPoints(pts, rvec_w2c, tvec_w2c, K, D)
         src_px = src_px.reshape(y1 - y0, x1 - x0, 2)
 
-        # The depth sign has to be tested separately: projectPoints happily maps points
-        # behind the camera onto plausible looking pixels.
+        # Landing on a pixel inside the frame is not enough to mean the camera saw the
+        # point, so where each one really sits in front of the lens is checked directly.
+        # Depth, because projectPoints maps points behind the camera onto plausible
+        # looking pixels; off-axis angle, because past the distortion model's turning
+        # point it does the same for points well outside the field of view.
         R_w2c, _ = cv2.Rodrigues(rvec_w2c)
-        depth = gx * R_w2c[2, 0] + gy * R_w2c[2, 1] + tvec_w2c[2, 0]
+        cam = [gx * R_w2c[i, 0] + gy * R_w2c[i, 1] + tvec_w2c[i, 0] for i in range(3)]
+        depth = cam[2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            radius_sq = (cam[0] / depth) ** 2 + (cam[1] / depth) ** 2
+        r_max = _max_valid_radius(K, D)
 
         sx, sy = src_px[..., 0], src_px[..., 1]
-        mask = ((depth > 1e-6) & (sx >= 0) & (sx <= src_w - 1)
+        mask = ((depth > 1e-6) & (radius_sq <= r_max * r_max)
+                & (sx >= 0) & (sx <= src_w - 1)
                 & (sy >= 0) & (sy <= src_h - 1))
 
         # Tighten to what is really visible; distortion and the depth test both leave
