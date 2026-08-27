@@ -546,7 +546,7 @@ def write_dataset_readme(output_root: Path):
 
 
 def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTHO_EXTENT_M,
-                      name=None):
+                      name=None, allow_empty=False):
     """One row: the ortho frame, and every target the operator placed on it.
 
     The same schema the distilled shards use, but in its own directory and one parquet per
@@ -563,7 +563,13 @@ def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTH
     what it wrote last time instead of leaving both. Left unset, a submission is stamped
     with the moment it was made, which is what the UI wants: nothing there is ever revised.
 
-    Returns (path, target count), or (None, 0) if every target fell outside the map.
+    `allow_empty` lets a caller state that a frame holds nothing worth reaching for, which
+    is a label in its own right and the strongest negative this dataset can carry: the
+    objectness head learns bare floor from frames where every cell is a confirmed no. It
+    is off by default because the ordinary way to get no points is for the targets to have
+    fallen outside the map, which says nothing of the kind.
+
+    Returns (path, target count), or (None, 0) if there was nothing to write.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -576,6 +582,7 @@ def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTH
     blob = buf.tobytes()
 
     batch = name or f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    targets_m = list(targets_m)
     points, contacts = [], []
     for x_m, y_m, z_m in targets_m:
         u, v = room_to_ortho_px(x_m, y_m, width, height, extent_m)
@@ -583,7 +590,8 @@ def write_user_labels(rgb, targets_m, output_root=USER_LABEL_ROOT, extent_m=ORTH
             continue
         points.append([round(float(u), 2), round(float(v), 2)])
         contacts.append([round(float(c), 4) for c in (x_m, y_m, z_m)])
-    if not points:
+    # Deliberately empty is a label; empty because the targets missed the map is a mistake.
+    if not points and (targets_m or not allow_empty):
         return None, 0
 
     rows = [{
@@ -767,7 +775,24 @@ def resize_rows(rows, size):
     return out
 
 
-def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train", resize=True):
+def merged_label_name(path, tag=None):
+    """Destination filename for one submission, namespaced by whoever contributed it.
+
+    The labeller names a file for the frame it labelled, so re-labelling that frame
+    overwrites it instead of leaving both - which is what one person wants, and exactly
+    what two must not share. Two contributors labelling the same dataset produce the same
+    filenames, and merging both would silently keep whichever landed second. A tag
+    separates them, and being stable per contributor it still overwrites on a re-merge
+    rather than piling up copies.
+
+    The `user-` prefix survives either way: unmerging and split_stored_size both key on it.
+    """
+    stem = path.stem[len("user-"):] if path.stem.startswith("user-") else path.stem
+    return f"user-{tag}-{stem}.parquet" if tag else f"user-{stem}.parquet"
+
+
+def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train", resize=True,
+                      tag=None):
     """Copy user labels into a distilled dataset's split, so training sees them.
 
     They stay in their own files, named for the submission that made them, which is what
@@ -782,6 +807,9 @@ def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train"
         split and would be quietly wrong about the rest. resize=False keeps the pixels.
       - A submission is one row holding one frame and all of its targets, so a
         train/eval cut cannot land inside it and a file goes wholly to one split.
+      - `tag` namespaces the merged files, so several contributors' labels of the same
+        dataset land side by side instead of overwriting each other. See
+        merged_label_name.
 
     Mind the order: `distill` rewrites a split directory from scratch (write_split), so
     re-distilling drops merged labels and this has to run again afterwards.
@@ -812,9 +840,8 @@ def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train"
         rows = pq.read_table(path).cast(schema).to_pylist()
         if target_size:
             rows = resize_rows(rows, target_size)
-        # the prefix is what unmerges and split_stored_size both key on, so enforce it
-        name = path.name if path.name.startswith("user-") else f"user-{path.name}"
-        pq.write_table(pa.Table.from_pylist(rows, schema=schema), split_dir / name)
+        pq.write_table(pa.Table.from_pylist(rows, schema=schema),
+                       split_dir / merged_label_name(path, tag))
         merged += sum(len(row["points"]) for row in rows)
 
     write_dataset_readme(output_root)
@@ -825,12 +852,16 @@ def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train"
 
 def merge_labels(args):
     source = args.source
+    # Whose labels these are. Taken from the repo owner so that merging several
+    # contributors' repos into one dataset needs nothing remembered at the command line.
+    tag = args.tag
     if args.repo_id:
         from huggingface_hub import snapshot_download
 
         source = snapshot_download(repo_id=args.repo_id, repo_type="dataset")
+        tag = tag or args.repo_id.split("/")[0]
         logging.info(f"Merging {args.repo_id} from the hub at {source}")
-    merge_user_labels(source, args.output, args.split, resize=not args.no_resize)
+    merge_user_labels(source, args.output, args.split, resize=not args.no_resize, tag=tag)
     logging.info(f"Train on the result with: python -m nf_robot.ml.ortho_target train "
                  f"--data_root {args.output}")
 
@@ -932,8 +963,14 @@ def translate(img, u, v, max_px: int, rng):
     # objectness_loss clamps an out-of-range target to an edge cell, which would teach
     # the edge as the answer.
     height, width = img.shape[-2:]
-    lo_x, hi_x = int(math.ceil(-u.min())), int(math.floor(width - 1 - u.max()))
-    lo_y, hi_y = int(math.ceil(-v.min())), int(math.floor(height - 1 - v.max()))
+    if len(u):
+        lo_x, hi_x = int(math.ceil(-u.min())), int(math.floor(width - 1 - u.max()))
+        lo_y, hi_y = int(math.ceil(-v.min())), int(math.floor(height - 1 - v.max()))
+    else:
+        # A frame labelled as holding nothing has no label to push off the edge, so the
+        # only limit is max_px.
+        lo_x, hi_x = -max_px, max_px
+        lo_y, hi_y = -max_px, max_px
     dx = int(torch.randint(max(-max_px, lo_x), min(max_px, hi_x) + 1, (1,), generator=rng).item())
     dy = int(torch.randint(max(-max_px, lo_y), min(max_px, hi_y) + 1, (1,), generator=rng).item())
     if dx == 0 and dy == 0:
@@ -1046,17 +1083,21 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
         """Each sample's first label in the model's pixel space, without decoding images.
 
         First rather than all, because the baseline it feeds predicts one point and is
-        only meaningful against one.
+        only meaningful against one. Frames labelled as holding nothing are left out
+        entirely: there is no point in them for a one-point baseline to be scored against.
         """
         width, height = self.stored_size()
         scale = np.array([self.image_size / width, self.image_size / height])
-        return np.array([s["points"][0] for s in self.samples], dtype=np.float64) * scale
+        first = [s["points"][0] for s in self.samples if s["points"]]
+        return np.array(first, dtype=np.float64).reshape(-1, 2) * scale
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
         bgr = self.decode(idx)
 
-        points = np.asarray(sample["points"], dtype=np.float64)
+        # reshape, not asarray: a frame labelled as holding nothing comes back as [], and
+        # every line below wants a (n, 2) array of points rather than a flat empty one.
+        points = np.asarray(sample["points"], dtype=np.float64).reshape(-1, 2)
         h, w = bgr.shape[:2]
         if (w, h) != (self.image_size, self.image_size):
             points = points * [self.image_size / w, self.image_size / h]
@@ -1698,6 +1739,10 @@ def main():
                                           "data and become a measurement of a different thing: "
                                           "agreement with an operator's click rather than with a "
                                           "grasp that actually happened")
+    merge_labels_parser.add_argument("--tag", default=None,
+                                     help="name the contributor these labels came from, so "
+                                          "several people's labels of the same dataset do not "
+                                          "overwrite each other (default: the --repo_id owner)")
     merge_labels_parser.add_argument("--no_resize", action="store_true",
                                      help="keep the frames at the size they were saved at instead "
                                           "of matching the split's distilled shards")
