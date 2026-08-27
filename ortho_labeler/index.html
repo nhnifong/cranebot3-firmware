@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Ortho Target Labeler</title>
 <style>
-  :root { --amber:#e8a33d; --green:#4ade80; }
+  :root { --amber:#e8a33d; --green:#4ade80; --carry:#60b8f0; }
   body { background:#111; color:#eee; font-family:system-ui, sans-serif; margin:0; padding:18px; }
   h2 { margin:0 0 12px; font-size:18px; font-weight:600; }
   #stage { position:relative; display:inline-block; border:2px solid #444; line-height:0; }
@@ -21,6 +21,8 @@
   #help { margin-top:10px; font-size:12px; color:#777; line-height:1.7; }
   kbd { background:#222; border:1px solid #555; border-radius:3px; padding:1px 5px; font-size:11px; }
   .tag { font-size:11px; padding:2px 7px; border-radius:9px; border:1px solid #555; color:#bbb; }
+  #skipdone { font-size:13px; color:#bbb; display:flex; align-items:center; gap:6px;
+              margin-left:6px; cursor:pointer; user-select:none; }
 </style>
 </head>
 <body>
@@ -32,10 +34,12 @@
 <div class="controls">
   <button id="prev">&larr; Prev</button>
   <button id="save">Save &amp; Next (Space)</button>
+  <button id="empty">Save as empty (E)</button>
   <button id="skip">Skip (N)</button>
   <button id="next">Next &rarr;</button>
   <button id="clear">Clear all</button>
   <button id="quit">Quit</button>
+  <label id="skipdone"><input type="checkbox" id="skipdonebox"> Skip finished (F)</label>
 </div>
 <div id="status"></div>
 <div id="stats"></div>
@@ -44,8 +48,13 @@
   <kbd>drag</kbd> a dot to move it &middot;
   <kbd>right-click</kbd> a dot to delete &middot;
   <kbd>Del</kbd> deletes the selected dot &middot;
-  <kbd>Space</kbd> save &amp; next &middot; <kbd>N</kbd> skip &middot; <kbd>&larr;</kbd> <kbd>&rarr;</kbd> move about.
-  Amber dots are the model's guesses with their probability; green are yours.
+  <kbd>Space</kbd> save &amp; next &middot; <kbd>E</kbd> save as empty floor &middot;
+  <kbd>N</kbd> skip &middot; <kbd>&larr;</kbd> <kbd>&rarr;</kbd> move about &middot;
+  <kbd>F</kbd> walk past frames already saved or skipped.
+  <br>Skip stores nothing; saving empty states that this floor holds nothing to reach for,
+  which is a label the model learns from.
+  Amber dots are the model's guesses with their probability; blue are carried over from the
+  frame before, jittered; green are yours. Moving any dot makes it green.
 </div>
 
 <script>
@@ -57,9 +66,15 @@ const frametag = document.getElementById('frametag');
 
 let frames = [];
 let at = 0;
-let points = [];      // {u, v, p}  p is null once a point is yours
+let points = [];      // {u, v, p, carried}  p null and carried false once a point is yours
 let selected = -1;
 let dragging = -1;
+let seeded = null;    // 'saved' | 'carried' | 'model' — where the current points came from
+// Walking past frames already dealt with. Remembered because it is a way of working for a
+// whole sitting, not a per-frame choice; storage is unavailable in some browsers, and the
+// toggle is worth having anyway, so a failure to remember it is not worth failing over.
+let skipDone = false;
+try { skipDone = localStorage.getItem('skipDone') === '1'; } catch (e) {}
 
 function formatDuration(s) {
   return s < 60 ? Math.round(s) + 's' : Math.round(s / 60) + ' min';
@@ -89,7 +104,8 @@ function render() {
     circle.setAttribute('cx', cx + '%');
     circle.setAttribute('cy', cy + '%');
     circle.setAttribute('r', i === selected ? 9 : 7);
-    circle.setAttribute('fill', pt.p === null ? 'var(--green)' : 'var(--amber)');
+    circle.setAttribute('fill',
+      pt.carried ? 'var(--carry)' : (pt.p === null ? 'var(--green)' : 'var(--amber)'));
     circle.setAttribute('stroke', i === selected ? '#fff' : '#000');
     circle.setAttribute('stroke-width', i === selected ? 2.5 : 1.5);
     circle.addEventListener('pointerdown', (e) => {
@@ -113,13 +129,17 @@ function render() {
   });
   const frame = frames[at];
   frametag.textContent = frame ? `${at + 1}/${frames.length} · ${frame.id} · ${frame.status}` : '';
-  statusEl.textContent = `${points.length} target${points.length === 1 ? '' : 's'}`;
+  const origin = { carried: 'carried from the last frame — check them',
+                   model: 'seeded by the model',
+                   saved: 'saved earlier' }[seeded];
+  statusEl.textContent = `${points.length} target${points.length === 1 ? '' : 's'}`
+    + (origin ? ` · ${origin}` : '');
 }
 
 img.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   const { u, v } = toImage(e);
-  points.push({ u, v, p: null });
+  points.push({ u, v, p: null, carried: false });
   selected = points.length - 1;
   dragging = selected;
   render();
@@ -128,9 +148,9 @@ img.addEventListener('pointerdown', (e) => {
 window.addEventListener('pointermove', (e) => {
   if (dragging < 0) return;
   const { u, v } = toImage(e);
-  // Moving a seed makes it yours: its probability described where the model put it,
-  // not where you did.
-  points[dragging] = { u, v, p: null };
+  // Moving a seed makes it yours: a probability described where the model put it, and a
+  // carried dot described the previous frame, neither of which is where you put it.
+  points[dragging] = { u, v, p: null, carried: false };
   render();
 });
 
@@ -139,13 +159,15 @@ window.addEventListener('pointerup', () => { dragging = -1; });
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'BUTTON') return;
   if (e.code === 'Space') { e.preventDefault(); save(); }
+  else if (e.key === 'e' || e.key === 'E') { save(true); }
   else if (e.key === 'n' || e.key === 'N') { skip(); }
+  else if (e.key === 'f' || e.key === 'F') { setSkipDone(!skipDone); }
   else if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (selected >= 0) { points.splice(selected, 1); selected = -1; render(); }
   }
-  else if (e.key === 'ArrowRight') { go(at + 1); }
-  else if (e.key === 'ArrowLeft') { go(at - 1); }
+  else if (e.key === 'ArrowRight') { advance(1); }
+  else if (e.key === 'ArrowLeft') { advance(-1); }
 });
 
 async function load() {
@@ -155,8 +177,9 @@ async function load() {
   img.src = `/api/frames/${frame.id}/image`;
   const res = await fetch(`/api/frames/${frame.id}/targets`);
   const data = await res.json();
-  points = data.targets.map(t => ({ u: t.u, v: t.v, p: t.p }));
+  points = data.targets.map(t => ({ u: t.u, v: t.v, p: t.p, carried: !!t.carried }));
   frame.status = data.status;
+  seeded = data.seeded;
   if (img.complete && img.naturalWidth) render();
 }
 
@@ -168,23 +191,40 @@ function go(index) {
   load();
 }
 
-async function save() {
+// "Finished" is anything not still to do: a saved frame is labelled, and a skipped one is
+// a decision not to judge it, which is equally not work waiting to be done.
+const isTodo = (frame) => frame.status === 'todo';
+
+function advance(step) {
+  for (let i = at + step; i >= 0 && i < frames.length; i += step) {
+    if (!skipDone || isTodo(frames[i])) { go(i); return; }
+  }
+  if (skipDone) statusEl.textContent = 'no unfinished frames left in that direction';
+}
+
+async function save(empty = false) {
   const frame = frames[at];
   if (!frame) return;
-  if (!points.length) {
-    statusEl.textContent = 'a saved frame needs at least one target — press N to skip instead';
+  // Saving empty is its own key: space is pressed dozens of times a session, and on a
+  // frame nobody has looked at yet it would otherwise assert that the floor is bare.
+  if (!points.length && !empty) {
+    statusEl.textContent = 'nothing placed — press E to save this as empty floor, or N to skip';
+    return;
+  }
+  if (empty && points.length &&
+      !confirm(`Save this frame as empty floor, discarding the ${points.length} dot(s) on it?`)) {
     return;
   }
   const res = await fetch(`/api/frames/${frame.id}/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ points: points.map(p => [p.u, p.v]) }),
+    body: JSON.stringify({ points: empty ? [] : points.map(p => [p.u, p.v]), empty }),
   });
   const data = await res.json();
   if (data.error) { statusEl.textContent = data.error; return; }
   frame.status = 'saved';
   renderStats(data.progress);
-  go(at + 1);
+  advance(1);
 }
 
 async function skip() {
@@ -193,14 +233,28 @@ async function skip() {
   const res = await fetch(`/api/frames/${frame.id}/skip`, { method: 'POST' });
   frame.status = 'skipped';
   renderStats((await res.json()).progress);
-  go(at + 1);
+  advance(1);
 }
 
-document.getElementById('save').onclick = save;
+document.getElementById('save').onclick = () => save();
+document.getElementById('empty').onclick = () => save(true);
 document.getElementById('skip').onclick = skip;
-document.getElementById('next').onclick = () => go(at + 1);
-document.getElementById('prev').onclick = () => go(at - 1);
+document.getElementById('next').onclick = () => advance(1);
+document.getElementById('prev').onclick = () => advance(-1);
 document.getElementById('clear').onclick = () => { points = []; selected = -1; render(); };
+const skipDoneBox = document.getElementById('skipdonebox');
+
+function setSkipDone(on) {
+  skipDone = on;
+  skipDoneBox.checked = on;
+  try { localStorage.setItem('skipDone', on ? '1' : '0'); } catch (e) {}
+  // Turning it on while parked on a finished frame should move off it, which is the whole
+  // point of the toggle; if everything is finished there is nowhere to go and it says so.
+  if (on && frames[at] && !isTodo(frames[at])) advance(1);
+}
+
+skipDoneBox.onchange = () => setSkipDone(skipDoneBox.checked);
+
 document.getElementById('quit').onclick = async () => {
   await fetch('/api/quit', { method: 'POST' });
   document.body.innerHTML = '<h2>Labeler stopped. You can close this tab.</h2>';
@@ -210,6 +264,7 @@ document.getElementById('quit').onclick = async () => {
   const data = await (await fetch('/api/frames')).json();
   frames = data.frames;
   renderStats(data.progress);
+  skipDoneBox.checked = skipDone;
   // Resume where the work is rather than at the top, so a restart does not walk back
   // through everything already done.
   const first = frames.findIndex(f => f.status === 'todo');
