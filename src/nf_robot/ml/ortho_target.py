@@ -34,8 +34,8 @@ is a LeRobot dataset and the result is not:
      home, so everything below finds them by repo id alone:
 
        python src/nf_robot/ml/lerobot_split_dataset.py \
-           --repo_id naavox/combined_targets \
-           --root /home/nhn/data_scratch/combined_targets
+           --repo_id naavox/combined_targets_reblend \
+           --root /home/nhn/data_scratch/combined_targets_reblend
 
      --eval_fraction defaults to 0.1 and --seed to 0, so the same command twice is the
      same split - which is what lets the two halves be distilled separately without
@@ -48,10 +48,10 @@ is a LeRobot dataset and the result is not:
      distill the eval split first, or upload only on the second run:
 
        python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/combined_targets_eval --split eval
+           --repo_id naavox/combined_targets_reblend_eval --split eval
 
        python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/combined_targets_train --split train --upload
+           --repo_id naavox/combined_targets_reblend_train --split train --upload
 
   3. `train` fits the model, saving the best checkpoint by top5@20cm to
      models/ortho_target.pth:
