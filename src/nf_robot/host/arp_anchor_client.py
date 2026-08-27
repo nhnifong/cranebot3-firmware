@@ -58,13 +58,8 @@ class ArpeggioAnchorClient(ComponentClient):
             self.anchor_pose = pose
         if eye is not None:
             self.eye_pos = eye
-        # the model has the camera tilted 22 degrees; config records what it actually is
-        extratilt = 22 - self.config.anchors[self.anchor_num].indirect_line.cam_tilt
-        self.camera_pose = np.array(compose_poses([
-            self.anchor_pose,
-            model_constants.arp_anchor_camera,
-            (np.array([extratilt/180*np.pi, 0, 0], dtype=float), np.zeros(3, dtype=float)),
-        ]))
+        self.camera_pose = arp_anchor_camera_pose(
+            self.anchor_pose, self.config.anchors[self.anchor_num].indirect_line.cam_tilt)
 
     async def handle_update_from_ws(self, update):
         if 'spool0' in update: # high spool (direct line)

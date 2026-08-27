@@ -236,6 +236,9 @@ class StringmanLeRobot(Robot):
         # anchor camera poses from the observer, needed to place camera_goal
         # predictions back in the room. empty until the observer sends them.
         self.anchor_poses = []
+        # degrees each anchor's camera mount is tilted off the anchor, which the poses
+        # alone do not say. Only arpeggio anchors report it.
+        self.anchor_cam_tilt = []
         self.goal_stabilizer = camera_goal.GoalStabilizer() if config.stabilize_goals else None
 
         self.events = events
@@ -383,6 +386,7 @@ class StringmanLeRobot(Robot):
         self.anchor_poses = [
             (tonp(p.rotation), tonp(p.position)) for p in item.poses
         ]
+        self.anchor_cam_tilt = list(item.tilt or [])
 
     def _handle_pos_estimate(self, item: telemetry.PositionEstimate):
         self.last_observed_vel = tonp(item.gantry_velocity)
@@ -837,6 +841,7 @@ def record_episode(
         frame = {
             **observation_frame, **action_frame,
             camera_goal.ANCHOR_POSES_KEY: camera_goal.pack_anchor_poses(robot.anchor_poses),
+            camera_goal.ANCHOR_CAM_TILT_KEY: camera_goal.pack_anchor_cam_tilt(robot.anchor_cam_tilt),
             "task": robot.last_task_description,
         }
         dataset.add_frame(frame)
@@ -955,8 +960,10 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
         action_features = hw_to_dataset_features(robot.action_features, "action")
         obs_features = hw_to_dataset_features(robot.observation_features, "observation")
         # Recorded so a dataset carries the calibration it was made under; policies
-        # ignore it (it is not an observation.* key) and camera_goal consumes it.
-        dataset_features = {**action_features, **obs_features, **camera_goal.anchor_poses_feature()}
+        # ignore it (it is not an observation.* key), camera_goal consumes the poses and
+        # lerobot_reblend_ortho consumes both.
+        dataset_features = {**action_features, **obs_features,
+                            **camera_goal.recorded_calibration_features()}
 
         dsname = hf_repo_id.split('/')[1]
         root = f"datasets/{dsname}"

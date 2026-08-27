@@ -1,6 +1,9 @@
 import cv2
+import logging
 import numpy as np
 from collections import OrderedDict
+
+logger = logging.getLogger(__name__)
 
 SIDE_PX = 1000 # width and height of the square output image
 EXTENT_M = 5.0 # Size of the floor area rendered in meters
@@ -21,6 +24,50 @@ _CHANNEL_SUM = np.ones((1, 3), dtype=np.float32)
 # recalibrated, so in steady state every frame reuses the grid built on the first one.
 _MAP_CACHE = OrderedDict()
 _MAP_CACHE_MAX = 8
+
+# How far off axis to look for the distortion model's turning point, as a normalized
+# image radius. 4 is a 152 degree field of view, past anything a rectilinear lens covers.
+_RADIUS_SEARCH_MAX = 4.0
+_RADIUS_SEARCH_STEPS = 8192
+
+
+def _max_valid_radius(K, D):
+    """Largest normalized image radius the distortion model still describes.
+
+    OpenCV's radial polynomial only describes a lens while the distorted radius keeps
+    growing with the true one. Past its turning point the polynomial folds: two
+    directions map to the same pixel, and projectPoints will map floor well outside the
+    lens's field of view onto perfectly plausible looking pixels. Sampling through that
+    lands in the composite as a detached crescent of smeared image, off in a corner the
+    camera cannot see - so the grid has to reject it, which nothing about the pixel
+    coordinates alone would.
+
+    Found by walking the function rather than solving it, so the rational terms of an
+    eight or twelve coefficient calibration are covered on the same footing as a plain
+    five coefficient one.
+    """
+    d = np.zeros(8)
+    flat = np.asarray(D, dtype=np.float64).ravel()
+    d[:min(len(flat), 8)] = flat[:8]
+    r = np.linspace(0.0, _RADIUS_SEARCH_MAX, _RADIUS_SEARCH_STEPS)
+    r2 = r * r
+    with np.errstate(divide="ignore", invalid="ignore"):
+        distorted = r * ((1 + d[0] * r2 + d[1] * r2**2 + d[4] * r2**3)
+                         / (1 + d[5] * r2 + d[6] * r2**2 + d[7] * r2**3))
+    turning = np.flatnonzero(~(np.diff(distorted) > 0))
+    if not len(turning):
+        return np.inf
+    r_max = float(r[turning[0]])
+
+    # The real image has to fit inside the valid radius, or this test would be cropping
+    # pixels the camera genuinely sees rather than fictional ones.
+    corner = np.hypot(K[0, 2] / K[0, 0], K[1, 2] / K[1, 1])
+    if corner > r_max:
+        logger.warning(
+            f"distortion model turns over at r={r_max:.3f}, inside the image corner at "
+            f"r={corner:.3f}; the floor view will be clipped short of the frame edge"
+        )
+    return r_max
 
 
 class _CamMap:
@@ -121,13 +168,21 @@ def _camera_floor_map(camera_pose, K, D, src_w, src_h, map_size_px, map_extent_m
         src_px, _ = cv2.projectPoints(pts, rvec_w2c, tvec_w2c, K, D)
         src_px = src_px.reshape(y1 - y0, x1 - x0, 2)
 
-        # The depth sign has to be tested separately: projectPoints happily maps points
-        # behind the camera onto plausible looking pixels.
+        # Landing on a pixel inside the frame is not enough to mean the camera saw the
+        # point, so where each one really sits in front of the lens is checked directly.
+        # Depth, because projectPoints maps points behind the camera onto plausible
+        # looking pixels; off-axis angle, because past the distortion model's turning
+        # point it does the same for points well outside the field of view.
         R_w2c, _ = cv2.Rodrigues(rvec_w2c)
-        depth = gx * R_w2c[2, 0] + gy * R_w2c[2, 1] + tvec_w2c[2, 0]
+        cam = [gx * R_w2c[i, 0] + gy * R_w2c[i, 1] + tvec_w2c[i, 0] for i in range(3)]
+        depth = cam[2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            radius_sq = (cam[0] / depth) ** 2 + (cam[1] / depth) ** 2
+        r_max = _max_valid_radius(K, D)
 
         sx, sy = src_px[..., 0], src_px[..., 1]
-        mask = ((depth > 1e-6) & (sx >= 0) & (sx <= src_w - 1)
+        mask = ((depth > 1e-6) & (radius_sq <= r_max * r_max)
+                & (sx >= 0) & (sx <= src_w - 1)
                 & (sy >= 0) & (sy <= src_h - 1))
 
         # Tighten to what is really visible; distortion and the depth test both leave
@@ -238,150 +293,171 @@ def find_background_color(warps, agreement_threshold=30.0, num_clusters=3, max_s
     background_color = centers[largest_cluster_idx]
     return background_color
 
-# Cache the background color and source image brightness so we only compute it once at startup
-_cached_bg_color = None
-_cached_target_p_low = None
-_cached_target_p_high = None
-_cached_weight_lut = None
-
 # The exposure percentiles only set one global scale factor, and every third row and
 # column of a megapixel map still leaves six figures of samples behind the estimate.
 _PERCENTILE_STRIDE = 3
 
 
+class OrthoBlender:
+    """One floor composite, plus the scene estimates every frame of it reuses.
+
+    The background color and the exposure range describe a room under one lighting
+    setup rather than one frame, so they are measured on the first frame rendered and
+    held after that. reset() is how a caller says the scene changed - which live means
+    a recalibration, and offline means the next recording.
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        """Drop the background and exposure estimates so the next render re-derives them."""
+        self._bg_color = None
+        self._target_p_low = None
+        self._target_p_high = None
+        self._weight_lut = None
+
+    def render(self, views, camera_cal, map_size_px=SIDE_PX, map_extent_meters=EXTENT_M):
+        """Project several camera views onto the floor and blend them into one image.
+
+        views is [(image, camera_pose), ...]: one camera's frame and that camera's pose
+        in the room. camera_cal supplies the intrinsics every one of them was shot
+        through, at the resolution it names; each view's own size rescales them.
+
+        Overlaps are resolved by favoring the color furthest from the background color,
+        so whatever is lying on the floor wins over the floor itself.
+        """
+        # Extract calibration matrices once
+        K = np.array(camera_cal.intrinsic_matrix).reshape((3, 3))
+        D = np.array(camera_cal.distortion_coeff)
+        orig_w = camera_cal.resolution.width
+        orig_h = camera_cal.resolution.height
+
+        # Warp every camera onto the floor up front: the first frame's background estimate
+        # and the blend itself both read these.
+        warps = []
+        for rgb_image, camera_pose in views:
+            h, w = rgb_image.shape[:2]
+
+            # Scale the intrinsic matrix to the resolution this camera actually streams
+            K_scaled = K.copy()
+            K_scaled[0, :] *= w / float(orig_w)
+            K_scaled[1, :] *= h / float(orig_h)
+
+            cam_map = _camera_floor_map(camera_pose, K_scaled, D, w, h,
+                                        map_size_px, map_extent_meters)
+            if cam_map.map1 is None:
+                continue
+            # BORDER_REPLICATE, not a black border: at the footprint rim a constant border
+            # bleeds black into the interpolation, and near-black sits so far from the
+            # background color that it outweighs every real view and draws the seam as a
+            # dark line across the composite.
+            warps.append((cam_map, _warp(cam_map, rgb_image, cv2.BORDER_REPLICATE)))
+
+        if not warps:
+            return np.zeros((map_size_px, map_size_px, 3), dtype=np.uint8)
+
+        if self._bg_color is None:
+            self._bg_color = find_background_color(warps)
+            self._weight_lut = None
+
+            # One-time extraction of target light/dark levels from the first available image
+            first_img = views[0][0]
+            self._target_p_low, self._target_p_high = np.percentile(first_img, (1.0, 99.0))
+
+        if self._weight_lut is None:
+            # Per channel squared distance from the background color, which sums across the
+            # channels to the squared distance the blend weight is built from.
+            levels = np.arange(256, dtype=np.float32)
+            bg = np.asarray(self._bg_color, dtype=np.float32).reshape(3)
+            self._weight_lut = np.stack([(levels - c) ** 2 for c in bg], axis=-1).reshape(256, 1, 3)
+
+        combined_log_sum = np.zeros((map_size_px, map_size_px, 3), dtype=np.float32)
+        weight_sum = np.zeros((map_size_px, map_size_px), dtype=np.float32)
+
+        for cam_map, warped_rgb in warps:
+            roi = (slice(cam_map.y0, cam_map.y1), slice(cam_map.x0, cam_map.x1))
+
+            # Distance squared from background color (avoiding slow np.linalg.norm roots for optimization)
+            sq_dist = cv2.transform(cv2.LUT(warped_rgb, self._weight_lut), _CHANNEL_SUM)
+
+            # Raise the distance to a higher power to make foreground objects stand out more.
+            # sq_dist is already distance^2. Squaring it again (distance^4) strongly penalizes the background.
+            # You can change the exponent here (e.g., ** 1.5, ** 2, ** 3) to tune the contrast.
+            weights = cv2.multiply(sq_dist, sq_dist)
+            weights += 1e-5
+
+            # Fade out at the edge of what this camera covers, and drop to zero past it
+            cv2.multiply(weights, cam_map.feather, weights)
+
+            # Convert rgb to log domain for geometric mean, accumulating the weighted sum in
+            # one pass (np.log1p is the inverse of the np.expm1 further down)
+            cv2.accumulateProduct(cv2.LUT(warped_rgb, _LOG1P_LUT),
+                                  cv2.merge((weights, weights, weights)),
+                                  combined_log_sum[roi])
+            cv2.add(weight_sum[roi], weights, weight_sum[roi])
+
+        # Normalize by total weight (Weighted Geometric Mean). Uncovered pixels divide 0 by
+        # the floor rather than by 0, which keeps them at log 0 instead of NaN.
+        divisor = cv2.max(weight_sum, 1e-20)
+        mean_log = cv2.divide(combined_log_sum, cv2.merge((divisor, divisor, divisor)))
+
+        # Convert back from log space. cv2.exp is the threaded expm1 + 1, and carrying that
+        # + 1 through to the contrast stretch below is cheaper than subtracting it here.
+        combined_exp = cv2.exp(mean_log)
+
+        # --- Lightness Renormalization to Match Source ---
+        # A mask of the pixels that actually received camera data
+        valid_mask = cv2.compare(weight_sum, 0.0, cv2.CMP_GT)
+
+        scale, offset = 1.0, 0.0
+        if np.any(valid_mask):
+            # Take only the colors that were drawn, so the black background cannot skew the
+            # math, and only every few pixels, which is plenty for a percentile
+            s = _PERCENTILE_STRIDE
+            valid_colors = combined_exp[::s, ::s][valid_mask[::s, ::s] > 0]
+
+            # Find the 1st and 99th percentiles of the combined image
+            p_low, p_high = np.percentile(valid_colors, (1.0, 99.0)) - 1.0
+
+            # Stretch the contrast to match the cached original image's dynamic range
+            if p_high > p_low:  # Prevent division by zero
+                scale = (self._target_p_high - self._target_p_low) / (p_high - p_low)
+                offset = self._target_p_low - (p_low * scale)
+
+        # Fold the stretch and the outstanding -1 into one pass, then clip to 0-255 and
+        # convert to uint8. convertScaleAbs saturates at 255 but mirrors negatives, so the
+        # low end is clamped first.
+        stretched = cv2.addWeighted(combined_exp, scale, combined_exp, 0.0, offset - scale)
+        combined_rgb_final = cv2.convertScaleAbs(cv2.max(stretched, 0.0))
+
+        # Ensure the untouched background remains completely black
+        combined_rgb_final = cv2.bitwise_and(combined_rgb_final, combined_rgb_final, mask=valid_mask)
+
+        return combined_rgb_final
+
+
+# The live floor view is one room at a time, so one blender serves the whole process.
+_live_blender = OrthoBlender()
+
+
 def reset_floor_view_cache():
-    """Drop the background and exposure estimates so the next call re-derives them."""
-    global _cached_bg_color, _cached_target_p_low, _cached_target_p_high, _cached_weight_lut
-    _cached_bg_color = None
-    _cached_target_p_low = None
-    _cached_target_p_high = None
-    _cached_weight_lut = None
+    """Drop the live view's background and exposure estimates, e.g. after a recalibration."""
+    _live_blender.reset()
 
 
 def generate_orthographic_floor_maps(
     valid_anchor_clients,
     camera_cal,
-    map_size_px=1800,
-    map_extent_meters=10.0
+    map_size_px=SIDE_PX,
+    map_extent_meters=EXTENT_M
 ):
-    """
-    Reprojects camera images from multiple overhead cameras to a top-down
-    orthographic floor space projection using analytical homography.
+    """Blend the anchor clients' latest frames into the live floor view."""
+    return _live_blender.render(
+        [(client.last_output_frame, client.camera_pose) for client in valid_anchor_clients],
+        camera_cal, map_size_px, map_extent_meters,
+    )
 
-    Uses a custom blending method:
-    Blends overlaps by favoring the color furthest from the dynamically detected background color.
-    """
-    global _cached_bg_color, _cached_target_p_low, _cached_target_p_high, _cached_weight_lut
-
-    # Extract calibration matrices once
-    K = np.array(camera_cal.intrinsic_matrix).reshape((3, 3))
-    D = np.array(camera_cal.distortion_coeff)
-    orig_w = camera_cal.resolution.width
-    orig_h = camera_cal.resolution.height
-
-    # Warp every camera onto the floor up front: the first frame's background estimate
-    # and the blend itself both read these.
-    warps = []
-    for client in valid_anchor_clients:
-        rgb_image = client.last_output_frame
-        h, w = rgb_image.shape[:2]
-
-        # Scale the intrinsic matrix to the resolution this camera actually streams
-        K_scaled = K.copy()
-        K_scaled[0, :] *= w / float(orig_w)
-        K_scaled[1, :] *= h / float(orig_h)
-
-        cam_map = _camera_floor_map(client.camera_pose, K_scaled, D, w, h,
-                                    map_size_px, map_extent_meters)
-        if cam_map.map1 is None:
-            continue
-        # BORDER_REPLICATE, not a black border: at the footprint rim a constant border
-        # bleeds black into the interpolation, and near-black sits so far from the
-        # background color that it outweighs every real view and draws the seam as a
-        # dark line across the composite.
-        warps.append((cam_map, _warp(cam_map, rgb_image, cv2.BORDER_REPLICATE)))
-
-    if not warps:
-        return np.zeros((map_size_px, map_size_px, 3), dtype=np.uint8)
-
-    if _cached_bg_color is None:
-        _cached_bg_color = find_background_color(warps)
-        _cached_weight_lut = None
-
-        # One-time extraction of target light/dark levels from the first available image
-        first_img = valid_anchor_clients[0].last_output_frame
-        _cached_target_p_low, _cached_target_p_high = np.percentile(first_img, (1.0, 99.0))
-
-    if _cached_weight_lut is None:
-        # Per channel squared distance from the background color, which sums across the
-        # channels to the squared distance the blend weight is built from.
-        levels = np.arange(256, dtype=np.float32)
-        bg = np.asarray(_cached_bg_color, dtype=np.float32).reshape(3)
-        _cached_weight_lut = np.stack([(levels - c) ** 2 for c in bg], axis=-1).reshape(256, 1, 3)
-
-    combined_log_sum = np.zeros((map_size_px, map_size_px, 3), dtype=np.float32)
-    weight_sum = np.zeros((map_size_px, map_size_px), dtype=np.float32)
-
-    for cam_map, warped_rgb in warps:
-        roi = (slice(cam_map.y0, cam_map.y1), slice(cam_map.x0, cam_map.x1))
-
-        # Distance squared from background color (avoiding slow np.linalg.norm roots for optimization)
-        sq_dist = cv2.transform(cv2.LUT(warped_rgb, _cached_weight_lut), _CHANNEL_SUM)
-
-        # Raise the distance to a higher power to make foreground objects stand out more.
-        # sq_dist is already distance^2. Squaring it again (distance^4) strongly penalizes the background.
-        # You can change the exponent here (e.g., ** 1.5, ** 2, ** 3) to tune the contrast.
-        weights = cv2.multiply(sq_dist, sq_dist)
-        weights += 1e-5
-
-        # Fade out at the edge of what this camera covers, and drop to zero past it
-        cv2.multiply(weights, cam_map.feather, weights)
-
-        # Convert rgb to log domain for geometric mean, accumulating the weighted sum in
-        # one pass (np.log1p is the inverse of the np.expm1 further down)
-        cv2.accumulateProduct(cv2.LUT(warped_rgb, _LOG1P_LUT),
-                              cv2.merge((weights, weights, weights)),
-                              combined_log_sum[roi])
-        cv2.add(weight_sum[roi], weights, weight_sum[roi])
-
-    # Normalize by total weight (Weighted Geometric Mean). Uncovered pixels divide 0 by
-    # the floor rather than by 0, which keeps them at log 0 instead of NaN.
-    divisor = cv2.max(weight_sum, 1e-20)
-    mean_log = cv2.divide(combined_log_sum, cv2.merge((divisor, divisor, divisor)))
-
-    # Convert back from log space. cv2.exp is the threaded expm1 + 1, and carrying that
-    # + 1 through to the contrast stretch below is cheaper than subtracting it here.
-    combined_exp = cv2.exp(mean_log)
-
-    # --- Lightness Renormalization to Match Source ---
-    # A mask of the pixels that actually received camera data
-    valid_mask = cv2.compare(weight_sum, 0.0, cv2.CMP_GT)
-
-    scale, offset = 1.0, 0.0
-    if np.any(valid_mask):
-        # Take only the colors that were drawn, so the black background cannot skew the
-        # math, and only every few pixels, which is plenty for a percentile
-        s = _PERCENTILE_STRIDE
-        valid_colors = combined_exp[::s, ::s][valid_mask[::s, ::s] > 0]
-
-        # Find the 1st and 99th percentiles of the combined image
-        p_low, p_high = np.percentile(valid_colors, (1.0, 99.0)) - 1.0
-
-        # Stretch the contrast to match the cached original image's dynamic range
-        if p_high > p_low:  # Prevent division by zero
-            scale = (_cached_target_p_high - _cached_target_p_low) / (p_high - p_low)
-            offset = _cached_target_p_low - (p_low * scale)
-
-    # Fold the stretch and the outstanding -1 into one pass, then clip to 0-255 and
-    # convert to uint8. convertScaleAbs saturates at 255 but mirrors negatives, so the
-    # low end is clamped first.
-    stretched = cv2.addWeighted(combined_exp, scale, combined_exp, 0.0, offset - scale)
-    combined_rgb_final = cv2.convertScaleAbs(cv2.max(stretched, 0.0))
-
-    # Ensure the untouched background remains completely black
-    combined_rgb_final = cv2.bitwise_and(combined_rgb_final, combined_rgb_final, mask=valid_mask)
-
-    return combined_rgb_final
 
 # class responsible for combining camera views into a single image on the floor of the room aligned with it's coordinate space.
 class FloorView:

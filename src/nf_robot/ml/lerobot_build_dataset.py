@@ -11,8 +11,9 @@ Pipeline (in order):
      standard HF cache, i.e. $HF_LEROBOT_HOME / $HF_HOME - point those at your
      external drive if space is tight; nothing is re-downloaded if already cached).
   2. Convert each source into the target camera_mode (drop/resize/crop cameras),
-     optionally trimming observation.state and normalizing task strings at the
-     same time. This happens FIRST, before the merge, because it shrinks each
+     optionally re-blending its ortho floor view before the anchor cameras that
+     view is made of are dropped, and optionally trimming observation.state and
+     normalizing task strings at the same time. This happens FIRST, before the merge, because it shrinks each
      source and the merge only needs matching feature sets - and normalizing
      tasks per source is what makes the merged task table canonical.
   3. Drop each source's excluded (bad) episodes, if the recipe lists any.
@@ -56,6 +57,19 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     drop_features:                            # optional; non-video features to drop from every
       - anchor_poses                          # source, for extras that only some sources carry
                                               # (the merge demands identical feature sets)
+    backfill_anchor_poses: true               # optional; the other way to settle that mismatch
+                                              # for anchor_poses - a source recorded before the
+                                              # feature existed gains it from its anchor_config,
+                                              # instead of the sources that have it losing it
+    reblend_ortho:                            # optional; re-render the ortho floor view from
+      enabled: true                           # each source's anchor cameras with today's blend,
+      render_fps: 10                          # instead of keeping the one it was recorded with.
+      cam_tilt: [30, 26]                      # See lerobot_reblend_ortho.py. Every source needs
+                                              # anchor poses, from its own anchor_poses feature
+                                              # or from an anchor_config, exactly as camera_goal
+                                              # does. cam_tilt is optional: it comes from the
+                                              # anchor_config, and where there is none it is
+                                              # recovered from the recorded ortho view.
     action_space: gripper_vel                 # optional; omit to keep the recorded space.
                                               # camera_goal converts; any other named space is a
                                               # subset of the recorded action components and is
@@ -98,11 +112,14 @@ from pathlib import Path
 from lerobot.datasets.dataset_tools import delete_episodes, merge_datasets, recompute_stats
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-from nf_robot.ml.lerobot_derive_dataset import derive_dataset
+from nf_robot.ml.lerobot_derive_dataset import camera_mode_problems, derive_dataset
 from nf_robot.ml.lerobot_label_contact_actions import label_dataset
 from nf_robot.ml import camera_goal
+from nf_robot.ml import lerobot_reblend_ortho as reblend_ortho
 from nf_robot.ml.lerobot_normalize_tasks import load_mapping
-from nf_robot.ml.stringman_lerobot import _ACTION_SPACES, _CAMERA_MODES, camera_mode_from_features
+from nf_robot.ml.stringman_lerobot import (
+    _ACTION_SPACES, _CAMERA_MODES, _FEED_NAMES, camera_mode_from_features,
+)
 from nf_robot.ml.lerobot_repair_episode_meta import repair as repair_episode_meta
 from nf_robot.ml.lerobot_trim_to_grasp import trim_dataset_to_grasp
 
@@ -188,20 +205,32 @@ def resolve_source_revision(repo_id: str) -> str | None:
     return "main"
 
 
-def preflight_sources(sources: list[dict], action_space: str | None = None) -> dict[str, str | None]:
+def preflight_sources(sources: list[dict], action_space: str | None = None,
+                      reblend: bool = False, backfill: bool = False,
+                      camera_mode: str | None = None,
+                      pad_clamp: bool = False) -> dict[str, str | None]:
     """Resolve every source's revision before any conversion work starts.
 
     Conversion takes hours; reaching a broken source at the end wastes all of it.
     These are metadata-only Hub calls, so checking all of them up front is cheap.
 
-    For camera_goal this also settles where each source's anchor poses come from: the
-    dataset's own anchor_poses feature, or an anchor_config naming the calibration the
-    robot was running. A source with neither cannot be converted.
+    For camera_goal, the ortho re-blend and the anchor_poses backfill, this also settles
+    where each source's anchor poses come from: the dataset's own anchor_poses feature, or an anchor_config
+    naming the calibration the robot was running. A source with neither cannot be
+    converted. The re-blend additionally needs the anchor cameras it rebuilds the view
+    out of, which a source recorded with a narrower camera_mode would not have.
+
+    Every source is also checked against the target camera_mode here, and every one that
+    fails is reported together: a recipe with one unusable source among twenty should say
+    so in one go, before the first conversion, rather than after each hour of work.
     """
     from huggingface_hub import hf_hub_download
 
+    needs_poses = reblend or backfill or action_space == camera_goal.ACTION_SPACE_NAME
+
     revisions: dict[str, str | None] = {}
     self_describing = []
+    unusable: list[str] = []
     for spec in sources:
         repo_id = spec["repo_id"]
         try:
@@ -209,20 +238,45 @@ def preflight_sources(sources: list[dict], action_space: str | None = None) -> d
         except Exception as e:
             raise RuntimeError(f"Source dataset '{repo_id}' is not usable: {type(e).__name__}: {e}") from e
 
-        if action_space != camera_goal.ACTION_SPACE_NAME or spec.get("anchor_config"):
-            continue
         info = json.loads(Path(hf_hub_download(
             repo_id=repo_id, filename="meta/info.json", repo_type="dataset",
             revision=revisions[repo_id],
         )).read_text())
+
+        if camera_mode is not None:
+            problems = camera_mode_problems(info["features"], camera_mode, pad_clamp)
+            if problems:
+                unusable.append(f"  {spec['name']} ({repo_id}): " + "; ".join(problems))
+
+        if not needs_poses:
+            continue
+
+        if reblend:
+            missing = [k for k in reblend_ortho.ANCHOR_KEYS + (reblend_ortho.ORTHO_KEY,)
+                       if k not in info["features"]]
+            if missing:
+                raise ValueError(
+                    f"Source '{repo_id}' has no {missing}, so its ortho view cannot be "
+                    f"re-blended. Drop 'reblend_ortho' or drop this source."
+                )
+
+        if spec.get("anchor_config"):
+            continue
         if camera_goal.ANCHOR_POSES_KEY not in info["features"]:
             raise ValueError(
                 f"Source '{repo_id}' has no '{camera_goal.ANCHOR_POSES_KEY}' feature and no "
-                f"'anchor_config' in the recipe, so camera_goal has no anchor poses for it. "
-                f"Datasets recorded before that feature existed need the config of the robot "
-                f"that recorded them."
+                f"'anchor_config' in the recipe, so nothing says where its anchor cameras "
+                f"were. Datasets recorded before that feature existed need the config of "
+                f"the robot that recorded them."
             )
         self_describing.append(repo_id)
+
+    if unusable:
+        raise ValueError(
+            f"{len(unusable)} of {len(sources)} source(s) cannot be converted to "
+            f"camera_mode '{camera_mode}'. Drop them from the recipe's 'merge' list, or "
+            f"change the recipe so they fit:\n" + "\n".join(unusable)
+        )
 
     logging.info(f"Preflight OK: {len(revisions)} source dataset(s) reachable")
     if self_describing:
@@ -392,7 +446,30 @@ def load_recipe(path: Path) -> dict:
             f"Unknown action_space '{action_space}'. Omit it to keep the recorded space, "
             f"or use one of {sorted(_ACTION_SPACES)}"
         )
-    if action_space == camera_goal.ACTION_SPACE_NAME:
+    reblend = recipe.get("reblend_ortho")
+    if reblend is not None and not isinstance(reblend, dict):
+        raise ValueError("'reblend_ortho' must be a mapping if present")
+    if reblend and reblend.get("enabled"):
+        unknown = set(reblend) - {"enabled", "render_fps", "cam_tilt", "check"}
+        if unknown:
+            raise ValueError(f"Unknown keys in 'reblend_ortho': {sorted(unknown)}")
+        if reblend_ortho.ORTHO_KEY not in {
+            f"observation.images.{_FEED_NAMES[feed]}" for feed in _CAMERA_MODES[recipe["camera_mode"]]
+        }:
+            raise ValueError(
+                f"'reblend_ortho' rebuilds '{reblend_ortho.ORTHO_KEY}', which camera_mode "
+                f"'{recipe['camera_mode']}' does not keep"
+            )
+
+    backfill = bool(recipe.get("backfill_anchor_poses", False))
+    if backfill and camera_goal.ANCHOR_POSES_KEY in (recipe.get("drop_features") or []):
+        raise ValueError(
+            f"'backfill_anchor_poses' and dropping '{camera_goal.ANCHOR_POSES_KEY}' in "
+            f"'drop_features' ask for opposite things"
+        )
+
+    # anchor_config supplies the anchor camera poses, and all of these need them.
+    if backfill or action_space == camera_goal.ACTION_SPACE_NAME or (reblend and reblend.get("enabled")):
         # anchor_config is optional: a dataset recorded after the anchor_poses feature
         # was added carries its own calibration, and preflight checks that every source
         # has one source of poses or the other.
@@ -589,6 +666,9 @@ def build(
     keep_state_features = recipe.get("keep_state_features")
     normalize_tasks_spec = recipe.get("normalize_tasks")
     drop_features = recipe.get("drop_features")
+    reblend_cfg = recipe.get("reblend_ortho") or {}
+    do_reblend = bool(reblend_cfg.get("enabled", False))
+    backfill_anchor_poses = bool(recipe.get("backfill_anchor_poses", False))
     trim_cfg = recipe.get("trim_to_grasp") or {}
     label_cfg = recipe.get("label_contact_actions") or {}
     do_label = bool(label_cfg.get("enabled", False))
@@ -601,7 +681,9 @@ def build(
     if output_root.exists():
         raise FileExistsError(f"--output_root {output_root} already exists; remove it or pick another path")
 
-    revisions = preflight_sources(sources, action_space)
+    revisions = preflight_sources(sources, action_space, reblend=do_reblend,
+                                  backfill=backfill_anchor_poses, camera_mode=camera_mode,
+                                  pad_clamp=pad_clamp)
 
     # Step 1 + 2: source each dataset and convert it to the target camera_mode.
     converted: list[tuple[str, Path]] = []
@@ -628,64 +710,75 @@ def build(
                 logging.warning(f"[{name}] existing conversion at {final_root} is unusable ({e}); redoing it")
                 shutil.rmtree(final_root, ignore_errors=True)
 
-        logging.info(f"[{name}] sourcing from Hub cache and converting to '{camera_mode}'")
-        source = LeRobotDataset(  # downloads/caches under HF_LEROBOT_HOME
-            repo_id=repo_id, root=None, revision=revisions[repo_id]
-        )
-
-        if converted_root.exists():
-            shutil.rmtree(converted_root)
-
-        derive_dataset(
-            dataset=source,
-            camera_mode=camera_mode,
-            output_dir=converted_root,
-            repo_id=repo_id,
-            headroom=headroom,
-            center_crop=center_crop,
-            pad_clamp=pad_clamp,
-            keep_state_features=keep_state_features,
-            normalize_tasks_spec=normalize_tasks_spec,
-            # empty tuple still triggers the conversion, and means "the dataset's own
-            # recorded poses are the only source"
-            camera_goal_anchor_poses=(
-                (camera_goal.load_anchor_poses(source_spec["anchor_config"])
-                 if source_spec["anchor_config"] else ())
-                if action_space == camera_goal.ACTION_SPACE_NAME else None
-            ),
-            camera_goal_label_cfg=label_cfg,
-            drop_features=drop_features,
-            # camera_goal rewrites the action space itself; every other named space is
-            # a subset of the recorded components, so it's a trim.
-            keep_action_features=(
-                _ACTION_SPACES[action_space]
-                if action_space and action_space != camera_goal.ACTION_SPACE_NAME else None
-            ),
-        )
-        validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode,
-                         decode_videos=verify_decode)
-
-        # Step 3: drop excluded episodes. Done after conversion so the re-encoding
-        # delete_episodes does on videos straddling kept/dropped episodes works on
-        # the small target-resolution videos rather than the full-size originals.
-        if exclude or include:
-            drop = episodes_to_drop(source.meta.total_episodes, include, exclude)
-            logging.info(
-                f"[{name}] keeping {source.meta.total_episodes - len(drop)} of "
-                f"{source.meta.total_episodes} episodes"
+        # Any failure in here belongs to one named source, and a recipe with twenty of
+        # them should say which - the traceback out of lerobot or ffmpeg never does.
+        try:
+            logging.info(f"[{name}] sourcing from Hub cache and converting to '{camera_mode}'")
+            source = LeRobotDataset(  # downloads/caches under HF_LEROBOT_HOME
+                repo_id=repo_id, root=None, revision=revisions[repo_id]
             )
-            if filtered_root.exists():
-                shutil.rmtree(filtered_root)
-            delete_episodes(
-                dataset=LeRobotDataset(repo_id=repo_id, root=converted_root),
-                episode_indices=drop,
-                output_dir=filtered_root,
+
+            if converted_root.exists():
+                shutil.rmtree(converted_root)
+
+            derive_dataset(
+                dataset=source,
+                camera_mode=camera_mode,
+                output_dir=converted_root,
                 repo_id=repo_id,
+                headroom=headroom,
+                center_crop=center_crop,
+                pad_clamp=pad_clamp,
+                keep_state_features=keep_state_features,
+                normalize_tasks_spec=normalize_tasks_spec,
+                # empty tuple still triggers the conversion, and means "the dataset's own
+                # recorded poses are the only source"
+                camera_goal_anchor_poses=(
+                    (camera_goal.load_anchor_poses(source_spec["anchor_config"])
+                     if source_spec["anchor_config"] else ())
+                    if action_space == camera_goal.ACTION_SPACE_NAME else None
+                ),
+                camera_goal_label_cfg=label_cfg,
+                drop_features=drop_features,
+                reblend_ortho_cfg=reblend_cfg if do_reblend else None,
+                anchor_config=source_spec["anchor_config"],
+                backfill_anchor_poses=backfill_anchor_poses,
+                # camera_goal rewrites the action space itself; every other named space is
+                # a subset of the recorded components, so it's a trim.
+                keep_action_features=(
+                    _ACTION_SPACES[action_space]
+                    if action_space and action_space != camera_goal.ACTION_SPACE_NAME else None
+                ),
             )
-            validate_dataset(repo_id, filtered_root, expected_camera_mode=camera_mode,
+            validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode,
                              decode_videos=verify_decode)
-            shutil.rmtree(converted_root, ignore_errors=True)
-            converted_root = filtered_root
+
+            # Step 3: drop excluded episodes. Done after conversion so the re-encoding
+            # delete_episodes does on videos straddling kept/dropped episodes works on
+            # the small target-resolution videos rather than the full-size originals.
+            if exclude or include:
+                drop = episodes_to_drop(source.meta.total_episodes, include, exclude)
+                logging.info(
+                    f"[{name}] keeping {source.meta.total_episodes - len(drop)} of "
+                    f"{source.meta.total_episodes} episodes"
+                )
+                if filtered_root.exists():
+                    shutil.rmtree(filtered_root)
+                delete_episodes(
+                    dataset=LeRobotDataset(repo_id=repo_id, root=converted_root),
+                    episode_indices=drop,
+                    output_dir=filtered_root,
+                    repo_id=repo_id,
+                )
+                validate_dataset(repo_id, filtered_root, expected_camera_mode=camera_mode,
+                                 decode_videos=verify_decode)
+                shutil.rmtree(converted_root, ignore_errors=True)
+                converted_root = filtered_root
+
+        except Exception as e:
+            raise RuntimeError(
+                f"[{name}] converting '{repo_id}' to '{camera_mode}' failed: {e}"
+            ) from e
 
         converted.append((repo_id, converted_root))
 

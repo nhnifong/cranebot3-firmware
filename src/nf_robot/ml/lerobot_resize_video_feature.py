@@ -45,6 +45,55 @@ from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
 
+def open_encoder(
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    vcodec: str = "libsvtav1",
+    pix_fmt: str = "yuv420p",
+    crf: int = 30,
+    g: int = 2,
+    threads: int | None = None,
+):
+    """Open an mp4 for writing and return (container, video stream), ready to encode.
+
+    Shared by every tool here that writes a dataset video, so the whole pipeline's
+    re-encodes land on identical codec settings - which is what lets the merge's
+    strict feature-equality check pass without reconciling encoder metadata.
+
+    threads caps the encoder's internal thread pool. This matters because SVT-AV1
+    (and most modern encoders) otherwise grab every logical core for a single
+    encode, so parallelizing across worker processes without also capping
+    per-encode threads oversubscribes the CPU. None leaves the encoder at its
+    default (all cores).
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    out = av.open(str(output_path), mode="w")
+    v_out = out.add_stream(vcodec, rate=Fraction(fps).limit_denominator(1000))
+    v_out.width = width
+    v_out.height = height
+    v_out.pix_fmt = pix_fmt
+    v_out.time_base = Fraction(1, int(fps))
+
+    codec_options = {"crf": str(crf), "g": str(g)}
+    if vcodec == "libsvtav1":
+        codec_options = {"crf": str(crf), "preset": "8"}
+    if threads is not None:
+        # Generic FFmpeg thread cap; honored by most encoders.
+        v_out.thread_count = threads
+        # SVT-AV1 ignores thread_count on some builds and instead sizes its thread
+        # pool from `lp` (logical processors); set it explicitly so the cap actually
+        # takes effect. pin=0 avoids core-affinity pinning that would fight the
+        # other worker processes.
+        if vcodec == "libsvtav1":
+            codec_options["svtav1-params"] = f"lp={threads}:pin=0"
+    v_out.options = codec_options
+
+    out.start_encoding()
+    return out, v_out
+
+
 def resize_video(
     input_path: Path,
     output_path: Path,
@@ -72,46 +121,18 @@ def resize_video(
     by replicating the nearest edge pixels (clamp-to-edge). Mutually exclusive
     with center_crop.
 
-    threads caps the encoder's internal thread pool. This matters because
-    SVT-AV1 (and most modern encoders) otherwise grab every logical core for a
-    single encode, so parallelizing across worker processes without also
-    capping per-encode threads oversubscribes the CPU. None leaves the encoder
-    at its default (all cores).
+    threads is passed straight through to open_encoder.
     """
     if center_crop and pad_clamp:
         raise ValueError("center_crop and pad_clamp are mutually exclusive")
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     in_container = av.open(str(input_path))
     if not in_container.streams.video:
         raise ValueError(f"No video stream found in {input_path}")
 
     v_in = in_container.streams.video[0]
-    fps_fraction = Fraction(fps).limit_denominator(1000)
 
-    out = av.open(str(output_path), mode="w")
-    v_out = out.add_stream(vcodec, rate=fps_fraction)
-    v_out.width = width
-    v_out.height = height
-    v_out.pix_fmt = pix_fmt
-    v_out.time_base = Fraction(1, int(fps))
-
-    codec_options = {"crf": str(crf), "g": str(g)}
-    if vcodec == "libsvtav1":
-        codec_options = {"crf": str(crf), "preset": "8"}
-    if threads is not None:
-        # Generic FFmpeg thread cap; honored by most encoders.
-        v_out.thread_count = threads
-        # SVT-AV1 ignores thread_count on some builds and instead sizes its
-        # thread pool from `lp` (logical processors); set it explicitly so the
-        # cap actually takes effect. pin=0 avoids core-affinity pinning that
-        # would fight the other worker processes.
-        if vcodec == "libsvtav1":
-            codec_options["svtav1-params"] = f"lp={threads}:pin=0"
-    v_out.options = codec_options
-
-    out.start_encoding()
+    out, v_out = open_encoder(output_path, width, height, fps, vcodec, pix_fmt, crf, g, threads)
 
     target_aspect = width / height
 

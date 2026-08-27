@@ -9,6 +9,14 @@ target resolution must be the same size or smaller than the source.
 
 Camera modes are defined in nf_robot.ml.stringman_lerobot._CAMERA_MODES.
 
+`reblend_ortho` optionally rebuilds the ortho floor view from the anchor camera
+videos before the camera work drops them, so a dataset recorded under an older
+floor_view blend gets today's; see lerobot_reblend_ortho.py.
+
+`backfill_anchor_poses` gives a source recorded before the anchor_poses and
+anchor_cam_tilt features existed those features, filled from the anchor_config
+supplied for it (or, for the tilt, from whatever the re-render resolved).
+
 Two optional steps run after the camera work, both of which shape a dataset to
 fit a policy's expectations:
 
@@ -57,8 +65,42 @@ from nf_robot.ml import camera_goal
 from nf_robot.ml import lerobot_label_contact_actions as label_contact
 from nf_robot.ml.lerobot_label_contact_actions import label_dataset
 from nf_robot.ml.lerobot_normalize_tasks import load_mapping, normalize_tasks
+from nf_robot.ml.lerobot_reblend_ortho import load_anchor_config, reblend_ortho
 from nf_robot.ml.lerobot_resize_video_feature import resize_video
 from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, _FEED_NAMES
+
+
+def target_camera_keys(camera_mode: str) -> dict[str, tuple[int, int]]:
+    """{video feature key: (width, height)} a camera_mode asks for."""
+    if camera_mode not in _CAMERA_MODES:
+        raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
+    return {
+        f"observation.images.{_FEED_NAMES[feed]}": (width, height)
+        for feed, (width, height) in _CAMERA_MODES[camera_mode].items()
+    }
+
+
+def camera_mode_problems(features: dict, camera_mode: str, pad_clamp: bool = False) -> list[str]:
+    """Why a dataset with these features cannot be converted to camera_mode, if it cannot.
+
+    Takes a plain meta/info.json features dict rather than a loaded dataset, so a recipe
+    can put every source through this from Hub metadata alone - which is the difference
+    between hearing about an unusable source now and hearing about it hours into a build,
+    one source at a time.
+    """
+    problems = []
+    available = sorted(k for k, f in features.items() if f.get("dtype") == "video")
+    for key, (target_w, target_h) in target_camera_keys(camera_mode).items():
+        if key not in features:
+            problems.append(f"it has no '{key}' (only {available})")
+            continue
+        src_h, src_w = features[key]["shape"][:2]
+        if not pad_clamp and (target_w > src_w or target_h > src_h):
+            problems.append(
+                f"its '{key}' is {src_w}x{src_h}, smaller than the {target_w}x{target_h} "
+                f"'{camera_mode}' wants (pad_clamp would centre and pad it instead of failing)"
+            )
+    return problems
 
 
 def _drop_removed_feature_stats(root: Path, removed_keys: list[str]) -> None:
@@ -198,31 +240,25 @@ def derive_dataset(
     camera_goal_label_cfg: dict | None = None,
     drop_features: list[str] | None = None,
     keep_action_features: list[str] | None = None,
+    reblend_ortho_cfg: dict | None = None,
+    anchor_config=None,
+    backfill_anchor_poses: bool = False,
 ) -> LeRobotDataset:
     if camera_mode not in _CAMERA_MODES:
         raise ValueError(f"Unknown camera_mode '{camera_mode}'. Valid: {list(_CAMERA_MODES)}")
 
-    target_specs = _CAMERA_MODES[camera_mode]
-    target_keys = {
-        f"observation.images.{_FEED_NAMES[feed]}": (width, height)
-        for feed, (width, height) in target_specs.items()
-    }
+    # The ortho re-render reads the anchor cameras, which the camera_mode conversion
+    # below is generally about to drop, so it needs the recording rather than the result.
+    source_root = Path(dataset.root)
 
-    missing = [key for key in target_keys if key not in dataset.meta.video_keys]
-    if missing:
+    target_keys = target_camera_keys(camera_mode)
+
+    problems = camera_mode_problems(dataset.meta.features, camera_mode, pad_clamp)
+    if problems:
         raise ValueError(
-            f"Source dataset is missing camera feature(s) required for camera_mode "
-            f"'{camera_mode}': {missing}. Available: {dataset.meta.video_keys}"
+            f"'{repo_id}' cannot be converted to camera_mode '{camera_mode}': "
+            + "; ".join(problems)
         )
-
-    for key, (target_w, target_h) in target_keys.items():
-        src_h, src_w = dataset.meta.features[key]["shape"][:2]
-        if not pad_clamp and (target_w > src_w or target_h > src_h):
-            raise ValueError(
-                f"Cannot derive camera_mode '{camera_mode}': target resolution "
-                f"{target_w}x{target_h} for '{key}' exceeds source resolution {src_w}x{src_h}. "
-                f"Pass pad_clamp=True to center and pad the smaller axis instead of failing."
-            )
 
     features_to_remove = [key for key in dataset.meta.video_keys if key not in target_keys]
 
@@ -255,6 +291,40 @@ def derive_dataset(
         info["repo_id"] = repo_id
         _write_info_json(info, output_dir)
         dataset = LeRobotDataset(repo_id=repo_id, root=output_dir)
+
+    # Both of these rewrite info.json, so they run before the resize loop reads it.
+
+    # The re-render settles a camera tilt per episode on the way, which is one of the two
+    # things the backfill below wants to record, so it goes first.
+    if reblend_ortho_cfg:
+        logging.info("Re-blending the ortho floor view from the anchor cameras")
+        reblend_ortho(
+            source_root=source_root,
+            dest_root=output_dir,
+            anchor_config=anchor_config,
+            headroom=headroom,
+            **{k: v for k, v in reblend_ortho_cfg.items() if k != "enabled"},
+        )
+        dataset = LeRobotDataset(repo_id=repo_id, root=output_dir)
+
+    # A source recorded before the calibration features existed gains them here, filled
+    # from the config that stood in for them, so a merge of old and new recordings sees
+    # one feature set without the new ones having to give theirs up. Each is a no-op on a
+    # dataset that already has it, which is how the recordings that do keep their own.
+    if backfill_anchor_poses:
+        if drop_features and camera_goal.ANCHOR_POSES_KEY in drop_features:
+            raise ValueError(
+                f"backfill_anchor_poses and dropping '{camera_goal.ANCHOR_POSES_KEY}' "
+                f"ask for opposite things"
+            )
+        added = camera_goal.add_anchor_poses_feature(
+            output_dir, camera_goal.load_anchor_poses(anchor_config) if anchor_config else ()
+        )
+        if anchor_config:
+            added |= camera_goal.add_anchor_cam_tilt_feature(
+                output_dir, load_anchor_config(anchor_config)[2])
+        if added:
+            dataset = LeRobotDataset(repo_id=repo_id, root=output_dir)
 
     # lerobot >=0.6 wraps meta.info in a DatasetInfo object (use .to_dict());
     # 0.5.1 exposes a plain dict. Support both so this script survives version switches.
@@ -413,6 +483,22 @@ def main() -> None:
              "camera_goal space; see camera_goal.py",
     )
     parser.add_argument(
+        "--reblend_ortho", action="store_true",
+        help="Re-render the ortho floor view from the anchor cameras with today's blend "
+             "before they are dropped; see lerobot_reblend_ortho.py",
+    )
+    parser.add_argument(
+        "--backfill_anchor_poses", action="store_true",
+        help="Record --anchor_config's anchor poses in the derived dataset as an "
+             "anchor_poses feature, for sources recorded before it existed",
+    )
+    parser.add_argument(
+        "--anchor_config", default=None,
+        help="Robot config file (conf_*.json) supplying anchor poses, camera tilt and "
+             "intrinsics to --reblend_ortho, for datasets recorded before they carried "
+             "their own anchor_poses",
+    )
+    parser.add_argument(
         "--push_to_hub", action="store_true", help="Upload the derived dataset to the Hugging Face Hub"
     )
     args = parser.parse_args()
@@ -450,6 +536,9 @@ def main() -> None:
         camera_goal_anchor_poses=(
             camera_goal.load_anchor_poses(args.camera_goal_anchors) if args.camera_goal_anchors else None
         ),
+        reblend_ortho_cfg={"enabled": True} if args.reblend_ortho else None,
+        anchor_config=args.anchor_config,
+        backfill_anchor_poses=args.backfill_anchor_poses,
     )
 
     if args.push_to_hub:
