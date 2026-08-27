@@ -42,6 +42,7 @@ class StubObserver:
         self.motion_task = motion_task
         self.gantry_marker_fault = None
         self._gantry_marker_warned = set()
+        self._gantry_marker_popped = set()
         self.popups = []
 
     def send_ui(self, **kwargs):
@@ -166,12 +167,24 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         await run_monitor(stub, quiet(30))
         self.assertEqual(len(stub.popups), 1)
 
-    async def test_recovery_rearms_the_unseen_report(self):
+    async def test_a_second_outage_is_not_popped_again(self):
         stub = StubObserver()
         stub.sight(T0, 0, [0, 0, 1.0])
         polls = quiet(13) + [lambda i: stub.sight(T0 + 100, 0, [0, 0, 1.0])] + quiet(13)
         await run_monitor(stub, polls)
-        self.assertEqual(len(stub.popups), 2)
+        self.assertEqual(len(stub.popups), 1)
+
+    async def test_recovery_rearms_the_calibration_abort(self):
+        task = Mock()
+        task.done.return_value = False
+        task.get_name.return_value = 'full_auto_calibration'
+        stub = StubObserver(motion_task=task)
+        stub.sight(T0, 0, [0, 0, 1.0])
+        polls = quiet(13) + [lambda i: stub.sight(T0 + 100, 0, [0, 0, 1.0])] + quiet(13)
+        await run_monitor(stub, polls)
+        # the popup is once a session, the abort is not: the second outage would otherwise let
+        # a re-run of the calibration fit a room out of stale sightings
+        self.assertEqual(task.cancel.call_count, 2)
 
     async def test_no_anchors_connected_is_not_blamed_on_the_marker(self):
         stub = StubObserver()

@@ -314,6 +314,9 @@ class AsyncObserver:
         # cleared when a calibration starts, so a re-run of a calibration that was aborted by
         # a fault says so again instead of proceeding quietly.
         self._gantry_marker_warned = set()
+        # keys whose popup the operator has already seen. Never cleared, so a fault that keeps
+        # coming back still aborts calibration but stops interrupting with the same message.
+        self._gantry_marker_popped = set()
         # only used for integration test only to allow some code to run right after sending the gantry to a goal point
         self.test_gantry_goal_callback = None
         # event used to notify tasks that gripper is connected.
@@ -1669,7 +1672,7 @@ class AsyncObserver:
                     self._torque_reports_suppressed = False
             await asyncio.sleep(0.2)
 
-    def _report_gantry_marker_fault(self, key, phrase, message, detail):
+    def _report_gantry_marker_fault(self, key, phrase, message, detail, once_per_session=False):
         """Show the operator a gantry marker fault once, and abort a running calibration.
 
         Calibration is what cannot survive one of these: it reads a batch of sightings as
@@ -1681,7 +1684,9 @@ class AsyncObserver:
             return
         self._gantry_marker_warned.add(key)
         logger.warning(f'Gantry marker fault: {detail}')
-        self.send_ui(pop_message=telemetry.Popup(message=message))
+        if not (once_per_session and key in self._gantry_marker_popped):
+            self.send_ui(pop_message=telemetry.Popup(message=message))
+        self._gantry_marker_popped.add(key)
         if (self.motion_task is not None and not self.motion_task.done()
                 and self.motion_task.get_name() in MARKER_DEPENDENT_TASKS):
             logger.warning(f'Gantry marker fault during motion task '
@@ -1786,6 +1791,9 @@ class AsyncObserver:
                     f"face the anchor cameras and that nothing is obscuring it",
                     f'no anchor camera has seen the gantry marker in '
                     f'{time.time() - last_advance:.0f}s',
+                    # a marker that keeps dropping out would otherwise pop this every time it
+                    # came back and went away again
+                    once_per_session=True,
                 )
 
     def update_avg_named_pos(self, key: str, position: np.ndarray):
