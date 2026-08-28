@@ -10,8 +10,8 @@ The labels come from teleop recordings: wherever an operator actually grasped so
 is by construction a place worth reaching for, so every episode donates one label for
 free, with no hand labelling.
 
-Build, distill, train, then ship. The first two are separate because the intermediate
-is a LeRobot dataset and the result is not:
+Build, distill, merge, split, train, then ship. Building is separate because the
+intermediate is a LeRobot dataset and the result is not:
 
   1. The recipe merges the teleop datasets, keeping the ortho feed this model needs
      and the gripper feed visual_servoing/mine_teleop.py needs, and runs contact
@@ -19,99 +19,101 @@ is a LeRobot dataset and the result is not:
      excluding episodes and re-encoding video - is identical for each:
 
        python src/nf_robot/ml/lerobot_build_dataset.py \
-           --recipe src/nf_robot/ml/recipes/combined_targets.yaml \
+           --recipe src/nf_robot/ml/recipes/combined_targets_reblend.yaml \
            --temp_dir /home/nhn/data_scratch \
-           --output_root /home/nhn/data_scratch/combined_targets
+           --output_root /home/nhn/data_scratch/combined_targets_reblend
 
-     combined_targets_reblend.yaml is the same build with the ortho feed re-rendered
-     under today's floor_view blend instead of whatever each recording was made with
-     (see lerobot_reblend_ortho.py). It holds only the sources whose anchor camera
-     calibration can be recovered, so it is a subset - the price of a composite that
-     matches what the robot renders live now.
+     combined_targets_reblend.yaml is combined_targets.yaml with the ortho feed
+     re-rendered under today's floor_view blend instead of whatever each recording was
+     made with (see lerobot_reblend_ortho.py). It holds only the sources whose anchor
+     camera calibration can be recovered, so it is a subset - the price of a composite
+     that matches what the robot renders live now.
 
-     Then hold an eval set out of it. The two halves come out named after their splits
-     - naavox/combined_targets_train and naavox/combined_targets_eval - in the LeRobot
-     home, so everything below finds them by repo id alone:
+  2. `distill` reduces that to a handful of samples per episode - ortho frames from
+     before the grasp and the ortho pixel where contact eventually happened - which is a
+     few hundred MB rather than a few hundred GB. One run over the whole dataset, into
+     the pool that step 4 deals from:
 
-       python src/nf_robot/ml/lerobot_split_dataset.py \
-           --repo_id naavox/combined_targets_reblend \
-           --root /home/nhn/data_scratch/combined_targets_reblend
+       python -m nf_robot.ml.ortho_target distill
 
-     --eval_fraction defaults to 0.1 and --seed to 0, so the same command twice is the
-     same split - which is what lets the two halves be distilled separately without
-     overlapping. See the note on the eval split below for what it measures.
+  3. Merge the hand labels into the same pool. They are the only frames where every
+     target is marked, which is what the objectness head needs and what makes the
+     selection metric computable at all:
+     Repeat the repo_id line for each volunteer
 
-  2. `distill` reduces that to one sample per episode - the episode's first ortho
-     frame and the ortho pixel where contact eventually happened - which is a few
-     hundred MB rather than a few hundred GB. One run per split, and --upload needs
-     both splits present locally because it prunes hub files that are absent - so
-     distill the eval split first, or upload only on the second run:
+       python -m nf_robot.ml.ortho_target merge_labels
+       python -m nf_robot.ml.ortho_target merge_labels --repo_id naavox/ortho-target-user-labels
 
-       python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/combined_targets_reblend_eval --split eval
+  4. `split` deals the pool into train and eval, one row at a time and at random:
 
-       python -m nf_robot.ml.ortho_target distill \
-           --repo_id naavox/combined_targets_reblend_train --split train --upload
+       python -m nf_robot.ml.ortho_target split --upload
 
-  3. `train` fits the model, saving the best checkpoint by top5@20cm to
+     The split lands here, downstream of the merge, so that hand labels reach eval in
+     proportion - a split made upstream in LeRobot would put every one of them on one
+     side, because they arrive after it. --eval_fraction and --seed are the only knobs,
+     the same seed deals the same split, and a re-deal costs no re-distilling. See
+     split_pool for what a row-level random cut does and does not measure.
+
+  5. `train` fits the model, saving the best checkpoint by f1@20cm to
      models/ortho_target.pth:
 
-       python -m nf_robot.ml.ortho_target train
+       python -m nf_robot.ml.ortho_target train --data_root ortho_target_data
 
      The dataset resizes to whatever --image_size asks for, and the checkpoint records
-     the backbone id and image size, so `evaluate` needs no flags at all. See the DINOv3
-     footnote at the bottom for the backbone this used to default to.
+     the backbone id, image size and the operating point it scored best at, so `evaluate`
+     and the robot both need no flags. See the DINOv3 footnote for the backbone this used
+     to default to.
 
-  4. `evaluate` scores that checkpoint - or the published one, downloaded, if training
-     has not run on this machine - against the held-out room, and --preview_dir
-     draws what it actually predicted: the label in green, the ranked candidates in
-     red. Numbers say whether it is right, the previews say whether it is right for
-     the right reason, which is the check worth doing before a model reaches a robot:
+  6. `evaluate` scores that checkpoint - or the published one, downloaded, if training
+     has not run on this machine - and --preview_dir draws what it actually predicted:
+     the labels in green, the ranked candidates in red. Numbers say whether it is right,
+     the previews say whether it is right for the right reason, which is the check worth
+     doing before a model reaches a robot:
 
        python -m nf_robot.ml.ortho_target evaluate --tta --preview_dir previews
 
-  5. Try it on a robot before publishing. --local_models makes the observer load
+  7. Try it on a robot before publishing. --local_models makes the observer load
      models/ortho_target.pth - where training just wrote it - instead of the hub
      copy. This is the only target model; the UI's targeting switch loads it:
 
        stringman-headless --local_models
 
-  6. Publish for stringman users. Until this is done, anyone without --local_models
+  8. Publish for stringman users. Until this is done, anyone without --local_models
      is still on the previously published checkpoint:
 
        hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 
 Labels can also come from the UI instead of a recording, and they are the only frames
-where every target is marked - which is the shape this head wants and the teleop labels
+where every target is marked - the shape this head wants, and one the teleop labels
 cannot supply, since an episode confirms one grasp and says nothing about the rest of the
 floor. The RUN menu's "Add targets to dataset" saves the ortho frame the robot is looking
 at and every target placed on it by hand, as one row in exactly the format step 2 writes,
-into
-ortho_target_user_labels/ - relative to the directory stringman was started from. Nothing
-trains on them until they are merged, which is the point of keeping them apart: nobody
-reached for these, so nothing confirms the object was really there or could be picked up.
+into ortho_target_user_labels/ - relative to the directory stringman was started from.
 
   Back them up, or gather several robots' worth in one place, on your own account. The
   repo is created private, since these are pictures of your floor:
 
       python -m nf_robot.ml.ortho_target upload_labels
 
-  Fold them into the distilled dataset - from that directory, or from any hub repo full
-  of them - and train on the result by pointing --data_root at it rather than letting it
-  download the published copy:
+  Merge them from that directory, or from any hub repo full of them:
 
       python -m nf_robot.ml.ortho_target merge_labels
       python -m nf_robot.ml.ortho_target merge_labels --repo_id you/ortho-target-user-labels
 
-      python -m nf_robot.ml.ortho_target train --data_root ortho_target_data
+  Merged files keep the names they arrived under, so `rm ortho_target_data/all/user-*.parquet`
+  undoes it and merging twice overwrites rather than duplicates. Step 2 rewrites the pool
+  from scratch, so a re-distill drops them and the merge has to run again after it - and
+  so does the split, which is downstream of both.
 
-  Merged files keep the names they arrived under, so `rm ortho_target_data/train/user-*.parquet`
-  undoes it and merging twice overwrites rather than duplicates. Step 2 rewrites a split
-  directory from scratch, so a re-distill drops them and the merge has to run again after
-  it. They join the train split unless --split eval says otherwise; see merge_user_labels
-  for why that is a different measurement rather than a bigger one.
+  How much they matter is out of proportion to how many there are. They are where every
+  negative in the dataset comes from: objectness_loss trains a teleop frame's unlabelled
+  cells on nothing at all, because the objects the operator did not reach for are in
+  them, so only a frame somebody marked exhaustively can say where the floor is empty.
+  A dataset with none of them cannot be trained on, and one with none of them in eval
+  cannot be scored - f1@20cm needs frames where an unmatched detection is known to be
+  wrong. train raises rather than proceed in either case.
 
-Train with the backbone frozen, which is what step 3 does by default. --unfreeze_backbone
+Train with the backbone frozen, which is what step 5 does by default. --unfreeze_backbone
 exists but is not the supported path, for three reasons that all point the same way: a
 few thousand samples is far too few to move an 86M-parameter trunk without memorising
 the floors it saw; frozen is what lets the observer serve this model and the visual
@@ -126,19 +128,14 @@ The ortho view is an orthographic projection of the floor plane (host/floor_view
 so room metres map to its pixels analytically - no camera pose is involved, unlike
 camera_goal.py's per-anchor projection.
 
-The eval split is a random sample of episodes, which is what lerobot_split_dataset.py
-makes it. Worth knowing what that measures: consecutive episodes in one recording
-session share a floor and usually most of an object layout - the operator clearing one
-pile item by item - so a random cut lands near duplicates on both sides, and the score
-says how well the model does on more of the rooms it has seen rather than on a room it
-has not. This model used to get the harder measurement from a second recipe holding the
-79west room whole; that recipe is gone and its sources are in combined_targets.yaml with
-everything else.
-
-Note that lerobot-edit-dataset's own fractional split is not a random sample - it takes
-a contiguous range, the last tenth in order, which after a merge is whichever sources
-sit at the bottom of the recipe. lerobot_split_dataset.py shuffles the indices and
-passes them explicitly, which is the whole reason it exists.
+The eval split is a random sample of rows, taken after everything has been merged (see
+split_pool). Worth knowing what that measures: an episode donates eight frames of one
+floor carrying one label and a labelling run donates three, so most eval rows have a near
+duplicate sitting in train, and the score says how well the model does on further frames
+of rooms it has trained on rather than on a room it has not. That is the right comparison
+for choosing between checkpoints of one run and an optimistic one for predicting a new
+room. `split` logs how many eval rows have a same-episode or same-run sibling in train, so
+the size of that effect is on the record for every deal.
 
 Caveats worth knowing before trusting the labels:
 
@@ -215,9 +212,15 @@ ORTHO_CAMERA_MODE = "gripper_ortho"
 # renders with; a recording made with a different extent would need its own value.
 ORTHO_EXTENT_M = 5.0
 
-DEFAULT_SOURCE_REPO_ID = "naavox/combined_targets"
+DEFAULT_SOURCE_REPO_ID = "naavox/combined_targets_reblend"
 DEFAULT_DATASET_ID = "naavox/ortho-target-dataset"
 LOCAL_DATASET_ROOT = "ortho_target_data"
+
+# Where distill and merge_labels put rows, before `split` deals them into train and eval.
+# A directory beside the splits rather than inside one, so OrthoTargetDataset can be
+# pointed at it for inspection and the splits can be re-dealt with a different seed
+# without distilling again.
+POOL_SPLIT = "all"
 
 # Labels the UI's "Add targets to dataset" writes, and the hub repo upload_labels puts
 # them in - under the uploader's own account, not naavox's, since they are one operator's
@@ -245,6 +248,22 @@ def ortho_px_to_room(u, v, width, height, extent_m=ORTHO_EXTENT_M):
     x_m = (u - width / 2.0) * extent_m / width
     y_m = -(v - height / 2.0) * extent_m / height
     return x_m, y_m
+
+
+def is_complete(sample) -> bool:
+    """Whether this row's labels are all of them, or only the one that was reached for.
+
+    Hand-labelled frames are complete by construction - the labeller marks everything in
+    the frame, and a frame marked as holding nothing is the extreme case of that - while
+    a teleop frame confirms the single grasp its episode made and says nothing about the
+    rest of the floor. They are told apart by episode_index, which write_user_labels sets
+    to -1 precisely because no episode stands behind those labels.
+
+    The distinction is what objectness_loss needs to know which cells are safe to train
+    as negatives, and what evaluate_model needs to know which frames can be scored for
+    false positives at all.
+    """
+    return int(sample["episode_index"]) < 0
 
 
 def frame_to_bgr(frame):
@@ -476,8 +495,8 @@ def shard_schema():
     ])
 
 
-def write_shards(split_dir: Path, samples, images, target_bytes=SHARD_TARGET_BYTES) -> int:
-    """Write the split as parquet shards of JPEG bytes plus their labels.
+def write_row_shards(split_dir: Path, rows, target_bytes=SHARD_TARGET_BYTES) -> int:
+    """Write ready-made rows as parquet shards of roughly target_bytes each.
 
     One file per sample is what this used to be, and it does not survive the hub: at
     eight frames an episode the dataset is 6,500 loose jpegs, and the download asks for a
@@ -488,24 +507,36 @@ def write_shards(split_dir: Path, samples, images, target_bytes=SHARD_TARGET_BYT
     import pyarrow.parquet as pq
 
     schema = shard_schema()
-    written, shard, rows, pending = 0, 0, [], 0
+    written, shard, batch, pending = 0, 0, [], 0
 
     def flush():
-        nonlocal shard, rows, pending
-        if not rows:
+        nonlocal shard, batch, pending
+        if not batch:
             return
-        table = pa.Table.from_pylist(rows, schema=schema)
-        pq.write_table(table, split_dir / f"shard-{shard:04d}.parquet")
-        shard, rows, pending = shard + 1, [], 0
+        pq.write_table(pa.Table.from_pylist(batch, schema=schema),
+                       split_dir / f"shard-{shard:04d}.parquet")
+        shard, batch, pending = shard + 1, [], 0
 
-    for sample in sorted(samples, key=lambda s: s["file_name"]):
+    for row in sorted(rows, key=lambda r: r["file_name"]):
+        batch.append(row)
+        pending += len(row["image"])
+        written += 1
+        if pending >= target_bytes:
+            flush()
+    flush()
+    return written
+
+
+def write_shards(split_dir: Path, samples, images, target_bytes=SHARD_TARGET_BYTES) -> int:
+    """Encode each sample's frame and write the lot as shards."""
+    rows = []
+    for sample in samples:
         ok, buf = cv2.imencode(".jpg", images[sample["file_name"]])
         if not ok:
             raise ValueError(f"could not encode {sample['file_name']}")
-        blob = buf.tobytes()
         rows.append({
             "file_name": sample["file_name"],
-            "image": blob,
+            "image": buf.tobytes(),
             "points": sample["points"],
             "contacts_m": sample["contacts_m"],
             "episode_index": int(sample["episode_index"]),
@@ -514,22 +545,14 @@ def write_shards(split_dir: Path, samples, images, target_bytes=SHARD_TARGET_BYT
             "contact_time_s": float(sample["contact_time_s"]),
             "task": sample.get("task") or "",
         })
-        pending += len(blob)
-        written += 1
-        if pending >= target_bytes:
-            flush()
-    flush()
-    return written
+    return write_row_shards(split_dir, rows, target_bytes)
 
 
 def write_split(output_root: Path, split: str, samples, images) -> int:
-    """Replace one split of the image folder, leaving the other one alone.
+    """Replace one directory of the dataset, leaving the others alone.
 
-    Which episodes are in a split is decided before this, by lerobot_split_dataset: a
-    distill run takes every episode of the dataset it is pointed at, and --split only
-    names the directory it writes them to. So the two runs have to be pointed at
-    <repo_id>_train and <repo_id>_eval respectively - nothing here can check that they
-    were, and the halves only stay disjoint while both come from one split run.
+    `distill` writes the pool this way and `split` writes train and eval, so in both
+    cases the directory named is rebuilt from scratch and nothing else is touched.
     """
     split_dir = output_root / split
     if split_dir.exists():
@@ -541,6 +564,76 @@ def write_split(output_root: Path, split: str, samples, images) -> int:
     write_dataset_readme(output_root)
     return written
 
+
+def read_rows(split_dir: Path):
+    """Every row of a directory of shards, images and all."""
+    rows = []
+    for shard in sorted(split_dir.glob("*.parquet")):
+        rows.extend(pq.read_table(shard).cast(shard_schema()).to_pylist())
+    return rows
+
+
+def sample_group(sample):
+    """What a row's near-duplicates share: its episode, or the run it was labelled in.
+
+    Eight frames of one teleop episode are the same floor carrying the same label, and a
+    labelling run's frames are consecutive views of one room being cleared. Only used to
+    report how much of an eval split has a near-duplicate sitting in train.
+    """
+    if not is_complete(sample):
+        return ("episode", int(sample["episode_index"]))
+    # user-<contributor>-<run>-<frame>.jpg, so everything up to the frame is the run
+    return ("run", sample["file_name"].rsplit(".", 1)[0].rsplit("-", 1)[0])
+
+
+def split_pool(output_root, eval_fraction=0.1, seed=0):
+    """Deal the pool into train and eval, one row at a time and at random.
+
+    Dealing here rather than upstream in LeRobot is what lets hand labels reach eval at
+    all: they arrive by merge_labels, long after the teleop episodes were built, and the
+    share of them that lands in eval is what makes f1@20cm computable. It also means one
+    distill run instead of two, and re-dealing with another seed costs no re-distilling.
+
+    Random over rows rather than over episodes or labelling runs, which is what makes the
+    logged leakage worth reading: an episode donates eight frames of the same floor with
+    the same label, and a labelling run three, so most rows have a near-duplicate on the
+    other side of the cut. Eval then measures how well the model does on further frames of
+    rooms it has trained on - the right measurement for choosing between checkpoints of
+    one run, and an optimistic one for predicting a room the robot has never seen. Split
+    by sample_group instead if that second question is the one being asked.
+
+    Returns (train rows, eval rows).
+    """
+    output_root = Path(output_root)
+    rows = read_rows(output_root / POOL_SPLIT)
+    if not rows:
+        raise FileNotFoundError(
+            f"No shards in {output_root / POOL_SPLIT}. Distill into the pool first, then "
+            f"merge any hand labels into it, then split.")
+
+    order = np.random.default_rng(seed).permutation(len(rows))
+    cut = int(round(len(rows) * eval_fraction))
+    picked = {"eval": [rows[i] for i in order[:cut]], "train": [rows[i] for i in order[cut:]]}
+
+    for split, chosen in picked.items():
+        split_dir = output_root / split
+        if split_dir.exists():
+            shutil.rmtree(split_dir)
+        split_dir.mkdir(parents=True)
+        write_row_shards(split_dir, chosen)
+        complete = [r for r in chosen if is_complete(r)]
+        logging.info(
+            f"{split}: {len(chosen)} frame(s), {sum(len(r['points']) for r in chosen)} target(s), "
+            f"{len(complete)} of them complete ({sum(len(r['points']) for r in complete)} target(s))")
+    write_dataset_readme(output_root)
+
+    trained = {sample_group(r) for r in picked["train"]}
+    shared = sum(1 for r in picked["eval"] if sample_group(r) in trained)
+    logging.info(
+        f"{shared} of {len(picked['eval'])} eval frame(s) come from an episode or labelling run "
+        f"that also appears in train, so they are near-duplicates of something trained on; see "
+        f"split_pool for what that makes the eval numbers mean")
+    return len(picked["train"]), len(picked["eval"])
 
 def write_dataset_readme(output_root: Path):
     """The hub's dataset config block, naming whichever splits are actually present."""
@@ -643,6 +736,9 @@ def upload_dataset(output_root: Path, dataset_id: str):
         folder_path=str(output_root),
         repo_id=dataset_id,
         repo_type="dataset",
+        # The pool is the local working copy the splits were dealt from; uploading it too
+        # would double the repo and hand a downloader three copies of every frame.
+        ignore_patterns=[f"{POOL_SPLIT}/*"],
         # *.jpg clears the loose frames of the pre-shard layout, which are otherwise left
         # behind on the hub for as long as the repo lives.
         delete_patterns=["*.jpg", "*.parquet", "*/metadata.jsonl"],
@@ -797,28 +893,32 @@ def merged_label_name(path, tag=None):
     return f"user-{tag}-{stem}.parquet" if tag else f"user-{stem}.parquet"
 
 
-def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split="train", resize=True,
-                      tag=None):
-    """Copy user labels into a distilled dataset's split, so training sees them.
+def merge_user_labels(source_root, output_root=LOCAL_DATASET_ROOT, split=POOL_SPLIT,
+                      resize=True, tag=None):
+    """Copy user labels into the distilled dataset, so training sees them.
+
+    Into the pool by default, before the splits are dealt, which is what gets a share of
+    them into eval: they are the only frames f1@20cm can be scored on, and a split made
+    before they arrived would have none. Naming train or eval instead puts them wholly on
+    one side, which is a way to hold a particular set of them out and not much else.
 
     They stay in their own files, named for the submission that made them, which is what
-    makes this reversible: `rm ortho_target_data/train/user-*.parquet` unmerges it, and
-    merging twice overwrites rather than duplicates. OrthoTargetDataset globs the split
+    makes this reversible: `rm ortho_target_data/all/user-*.parquet` unmerges it, and
+    merging twice overwrites rather than duplicates. OrthoTargetDataset globs the
     directory, so nothing downstream has to know they are there.
 
     Two things this handles rather than leaving to whoever runs it:
-      - Frames are re-encoded at the size the split's distilled shards already use.
+      - Frames are re-encoded at the size the pool's distilled shards already use.
         Training scales every label by its own frame, so mixed sizes do train correctly,
         but scaled_labels - and so constant_baseline - probes one sample for the whole
         split and would be quietly wrong about the rest. resize=False keeps the pixels.
-      - A submission is one row holding one frame and all of its targets, so a
-        train/eval cut cannot land inside it and a file goes wholly to one split.
       - `tag` namespaces the merged files, so several contributors' labels of the same
         dataset land side by side instead of overwriting each other. See
         merged_label_name.
 
-    Mind the order: `distill` rewrites a split directory from scratch (write_split), so
-    re-distilling drops merged labels and this has to run again afterwards.
+    Mind the order: `distill` rewrites the pool from scratch (write_split), so
+    re-distilling drops merged labels and this has to run again afterwards - and so does
+    `split`, which reads what this leaves behind.
 
     Returns (files, rows).
     """
@@ -868,8 +968,24 @@ def merge_labels(args):
         tag = tag or args.repo_id.split("/")[0]
         logging.info(f"Merging {args.repo_id} from the hub at {source}")
     merge_user_labels(source, args.output, args.split, resize=not args.no_resize, tag=tag)
+    if args.split == POOL_SPLIT:
+        logging.info(f"Deal the splits from the pool next: python -m nf_robot.ml.ortho_target "
+                     f"split --data_root {args.output}")
+    else:
+        logging.info(f"Train on the result with: python -m nf_robot.ml.ortho_target train "
+                     f"--data_root {args.output}")
+
+
+def split_dataset(args):
+    train, evaluation = split_pool(args.data_root, args.eval_fraction, args.seed)
+    logging.info(f"Dealt {train + evaluation} pooled frame(s) into train and eval with "
+                 f"seed {args.seed}; re-run with another --seed to re-deal")
+    if args.upload:
+        upload_dataset(Path(args.data_root), args.dataset_id)
+    else:
+        logging.info(f"Not uploading; pass --upload to push to {args.dataset_id}")
     logging.info(f"Train on the result with: python -m nf_robot.ml.ortho_target train "
-                 f"--data_root {args.output}")
+                 f"--data_root {args.data_root}")
 
 
 def distill(args):
@@ -887,7 +1003,7 @@ def distill(args):
     if key not in dataset.meta.video_keys:
         raise ValueError(
             f"'{args.repo_id}' has no '{key}' feature, so it carries no ortho view. "
-            f"Build it with recipes/ortho_target.yaml. Present: {list(dataset.meta.video_keys)}"
+            f"Build it with recipes/combined_targets_reblend.yaml. Present: {list(dataset.meta.video_keys)}"
         )
 
     # The resolved root is logged because a stale one is invisible otherwise: the repo id
@@ -910,18 +1026,15 @@ def distill(args):
         raise ValueError(f"No usable episodes found. Skipped: {skipped}")
 
     output_root = Path(args.output)
-    written = write_split(output_root, args.split, samples, images)
+    written = write_split(output_root, POOL_SPLIT, samples, images)
 
-    logging.info(f"Wrote {written} sample(s) to {output_root / args.split}")
+    logging.info(f"Wrote {written} sample(s) to {output_root / POOL_SPLIT}")
     dropped = ", ".join(f"{reason}={n}" for reason, n in skipped.items() if n)
     logging.info(f"Dropped episodes: {dropped or 'none'}")
     if args.annotate_dir:
         logging.info(f"Annotated previews in {args.annotate_dir}")
-
-    if args.upload:
-        upload_dataset(output_root, args.dataset_id)
-    else:
-        logging.info(f"Not uploading; pass --upload to push to {args.dataset_id}")
+    logging.info("Merge any hand labels into the pool next (merge_labels), then deal the "
+                 "splits from it (split)")
 
 
 # ==========================================
@@ -1035,7 +1148,9 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
 
     `points` is MAX_TARGETS rows of pixel coordinates and `mask` says how many of them
     are real, so a frame labelled with four objects and one labelled with one both come
-    out of the loader as the same shape.
+    out of the loader as the same shape. `complete` says whether the unlabelled cells of
+    this frame are known to hold nothing (see is_complete); the loss and the scoring both
+    turn on it.
     """
 
     def __init__(self, root: Path, split: str, image_size: int, augment: bool, seed: int = 0,
@@ -1130,7 +1245,8 @@ class OrthoTargetDataset(torch.utils.data.Dataset):
         padded[:kept] = points[:kept]
         mask = np.zeros(MAX_TARGETS, dtype=np.float32)
         mask[:kept] = 1.0
-        return img, torch.from_numpy(padded), torch.from_numpy(mask)
+        complete = torch.tensor(float(is_complete(sample)), dtype=torch.float32)
+        return img, torch.from_numpy(padded), torch.from_numpy(mask), complete
 
 
 # ==========================================
@@ -1147,16 +1263,28 @@ DEFAULT_MODEL_PATH = "models/ortho_target.pth"
 # of floor at the default grid, which is well inside "the operator would have grabbed
 # that". Matches visual_servoing/train.py, which has the same head and the same problem.
 CELL_SIGMA = 1.5
-# Objectness above which a cell is reported as a target. A per-cell probability means
-# the same thing in every frame, so this is a real bar rather than a tuned ratio.
+# Fallback objectness above which a cell is reported as a target. Only for checkpoints
+# that carry no threshold of their own: training sweeps for the one that scores best and
+# writes it into the file, because what counts as confident depends on the pos_weight the
+# run trained under. See evaluate_model and load_checkpoint.
 TARGET_THRESHOLD = 0.5
 # Peaks the scoring counts over. Well above any plausible number of things on a floor, so
 # targets_per_frame measures the head rather than its own ceiling.
 COUNT_K = 64
-# Which metric picks the saved checkpoint. top5 rather than the single-answer recall,
-# because the job is to land on something a person would have picked and there is
-# usually more than one such thing in frame; recall@20cm scores those as failures.
-SELECTION_METRIC = "top5@20cm"
+# How near a detection has to land to count as having found a label, and the thresholds
+# the scoring sweeps to find the best operating point. The sweep is dense where a
+# well-balanced head lives and fine at the top because a head trained with a large
+# pos_weight puts everything it believes in above 0.99; see objectness_loss.
+MATCH_RADIUS_CM = 20.0
+THRESHOLD_SWEEP = tuple(round(0.05 * i, 2) for i in range(1, 20)) + (0.975, 0.99, 0.995, 0.999)
+
+# Which metric picks the saved checkpoint: detection F1 on the complete frames, at
+# whichever threshold scores best. It replaced top5@20cm, which could not see this head
+# failing - it asks only whether one of five candidates landed near the frame's single
+# teleop label, so a model that covers the floor in candidates scores well on it while
+# reporting a dozen things that are not there. F1 is the metric that charges for both
+# mistakes at once, and it needs complete frames to charge for the false ones at all.
+SELECTION_METRIC = "f1@20cm"
 
 
 class OrthoTargetNet(SharedTrunkMixin, nn.Module):
@@ -1248,35 +1376,71 @@ def target_map(cells, mask, grid, sigma):
     return (gauss * mask[..., None, None]).amax(dim=1)
 
 
-def balanced_pos_weight(grid, cell_sigma):
-    """Cells in the map per cell inside one label's bump.
+# Objectness target below which a cell of an incomplete frame is left unsupervised. The
+# Gaussian falls to this by a bit over 3 sigma, so what is trained on a teleop frame is
+# the label and the ring of floor around it that is genuinely part of the same object,
+# and nothing else.
+BUMP_FLOOR = 0.01
 
-    The weight at which a frame's one labelled object counts for as much as all of its
-    background, which is the usual starting point for a dense head with a handful of
-    positives among thousands of cells.
+
+def supervision_mask(target, complete, bump_floor=BUMP_FLOOR):
+    """Which cells of the objectness map this batch is allowed to train on.
+
+    A complete frame supervises its whole map: everything the labeller did not mark is
+    marked-as-empty by omission, and that is the only place in this dataset where a
+    negative is actually a negative.
+
+    A teleop frame supervises only its own label's bump. Every other graspable thing in
+    the frame is unlabelled rather than absent, and a plain BCE over the whole map reads
+    those as negatives and trains the model to deny exactly the objects it exists to
+    find. Leaving them out of the loss is the honest reading of what the episode knows:
+    it confirms one grasp and abstains on the rest of the floor.
+
+    This is what pos_weight used to paper over. Weighting the positives by w moved a
+    wrongly-negative cell's equilibrium from 0 up to f*w / (1 + f*w), which does lift real
+    objects clear of floor - but it lifts bare floor by the same rule, and at the w needed
+    to survive one label in six the 0.5 mark ends up meaning "a target once in a thousand
+    frames". Masking removes the pressure instead of counterweighting it.
     """
-    return grid * grid / max(2.0 * math.pi * cell_sigma ** 2, 1.0)
+    return torch.maximum(complete[:, None, None], (target >= bump_floor).to(target.dtype))
 
 
-def objectness_loss(logits, offsets, points, mask, image_size, grid, offset_weight=1.0,
-                    cell_sigma=CELL_SIGMA, pos_weight=None):
+def balanced_pos_weight(dataset, grid, cell_sigma=CELL_SIGMA):
+    """Supervised negative cells per unit of positive mass, over a whole dataset.
+
+    The weight at which the objects counterbalance the background they sit in, which is
+    the usual starting point for a dense head with a handful of positives among thousands
+    of cells. It has to be counted rather than derived now that supervision_mask decides
+    which cells count: only complete frames contribute negatives, so the ratio depends on
+    how many of them the dataset holds, and a formula in grid and sigma alone cannot know.
+
+    A label's Gaussian integrates to 2*pi*sigma^2 cells of positive mass wherever it sits,
+    so the count needs no images - only how many targets each frame carries and whether
+    the frame is complete.
+    """
+    bump = 2.0 * math.pi * cell_sigma ** 2
+    positives = sum(min(len(s["points"]), MAX_TARGETS) for s in dataset.samples) * bump
+    negatives = sum(grid * grid - min(len(s["points"]), MAX_TARGETS) * bump
+                    for s in dataset.samples if is_complete(s))
+    if positives <= 0 or negatives <= 0:
+        raise ValueError(
+            f"cannot balance the objectness loss: {positives / max(bump, 1e-9):.0f} labelled "
+            f"target(s) against {negatives:.0f} supervised background cell(s). Without "
+            f"complete frames (is_complete) nothing in the dataset says where objects are "
+            f"not, and the head has no negatives to learn from.")
+    return negatives / positives
+
+
+def objectness_loss(logits, offsets, points, mask, complete, image_size, grid,
+                    offset_weight=1.0, cell_sigma=CELL_SIGMA, pos_weight=1.0):
     """Per-cell binary objectness, plus L1 on the sub-cell offset of each label's cell.
 
-    The difficulty this head has to survive: a teleop frame labels the one object the
-    operator reached for and says nothing about the others, so every other graspable thing
-    in the frame is unlabelled rather than absent. A plain BCE reads them as negatives and
-    trains the model to deny exactly the objects it is supposed to find.
-
-    `pos_weight` is the correction, and it is the knob worth understanding. Weighting the
-    positive term by w moves the equilibrium for a cell whose appearance is the operator's
-    pick in a fraction f of the frames it appears in from f to f*w / (1 + f*w) - so
-    anything that gets grabbed sometimes rises well clear of floor that never does, and
-    the threshold separates "an object" from "not an object" rather than "the object the
-    operator happened to pick" from everything else. Raising w finds more and admits more
-    false positives; the default balances one bump against a whole map of background.
-
-    Frames that really do carry several labels - the hand-labelled ones - need none of
-    this: their positives are all marked, and the same loss handles them unchanged.
+    Only the cells supervision_mask allows contribute; see it for why most of a teleop
+    frame is not one of them. `pos_weight` then balances what remains - the positives are
+    a few hundred cells against a complete frame's sixteen thousand - and `train` passes
+    the value balanced_pos_weight counts off the training set. The default of 1.0 leaves
+    the loss unweighted, which is what makes the bce that evaluate_model reports mean the
+    same thing from one run to the next.
     """
     scale = image_size / grid
     cells = points / scale
@@ -1285,11 +1449,13 @@ def objectness_loss(logits, offsets, points, mask, image_size, grid, offset_weig
     used = max(1, int(mask.sum(1).max().item()))
     cells, mask = cells[:, :used], mask[:, :used]
 
-    if pos_weight is None:
-        pos_weight = balanced_pos_weight(grid, cell_sigma)
     target = target_map(cells, mask, grid, cell_sigma)
-    bce = F.binary_cross_entropy_with_logits(
-        logits, target, pos_weight=torch.tensor(pos_weight, device=logits.device, dtype=logits.dtype))
+    supervised = supervision_mask(target, complete)
+    weight = torch.where(target >= BUMP_FLOOR,
+                         torch.as_tensor(pos_weight, device=logits.device, dtype=logits.dtype),
+                         torch.ones((), device=logits.device, dtype=logits.dtype))
+    per_cell = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    bce = (per_cell * weight * supervised).sum() / (weight * supervised).sum().clamp_min(1.0)
 
     cx = cells[..., 0].floor().clamp(0, grid - 1).long()
     cy = cells[..., 1].floor().clamp(0, grid - 1).long()
@@ -1412,36 +1578,58 @@ def pixels_to_cm(pixels, image_size):
 
 @torch.no_grad()
 def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 50),
-                   min_probability=TARGET_THRESHOLD):
+                   match_radius_cm=MATCH_RADIUS_CM, thresholds=THRESHOLD_SWEEP):
     """Score a checkpoint against every label, not just one per frame.
 
-    Distances are measured from each label to its nearest prediction, so a frame with
-    four labels contributes four measurements and a model that finds three of them scores
-    as having found three. `targets_per_frame` is the count that clears the threshold,
-    which is the number that says whether the head has learned to find several objects or
-    has quietly collapsed onto one. It counts over COUNT_K candidates rather than the
-    `top_k` the ranking metrics use, because a count capped at 5 cannot tell "five objects"
-    from "the whole map is over threshold" - and over is the direction this head fails in.
+    Two families of number come back, and they answer different questions.
+
+    The detection metrics - f1@20cm and the precision, found and threshold beside it -
+    are the ones that say whether this model is usable, and they are computed on the
+    complete frames alone (is_complete). Only there does an unmatched detection mean
+    something: on a teleop frame the other objects really are present and merely
+    unlabelled, so counting a detection on one as a false positive would score the model
+    down for being right. Every threshold in `thresholds` is scored and the best F1 wins,
+    which makes the operating point an output of the run rather than a constant somebody
+    guessed - the model that separates objects from floor best now wins the comparison,
+    whatever absolute probability it happens to express that at.
+
+    The distance metrics - median_cm, recall@Ncm and top-k - are computed over every
+    frame, complete or not, and measure placement rather than detection: given the model's
+    ranked candidates, how far is a label from the nearest of them. They ignore the
+    threshold entirely, so they stay comparable with every earlier run of this model.
+
+    `targets_per_frame` is how many detections clear the chosen threshold, counted over
+    COUNT_K candidates rather than `top_k`, because a count capped at 5 cannot tell "five
+    objects" from "the whole map is over threshold" - and over is the direction this head
+    fails in.
     """
     model.eval()
-    nearest, covered, predicted, total_bce, count = [], [], [], 0.0, 0
-    for images, points, mask in loader:
+    match_px = match_radius_cm * model.image_size / (ORTHO_EXTENT_M * 100.0)
+    nearest, covered, all_scores, total_bce, count = [], [], [], 0.0, 0
+    ranked, labelled = [], 0  # (score, hit) per candidate of a complete frame; its labels
+
+    for images, points, mask, complete in loader:
         images = images.to(device)
-        points, mask = points.to(device), mask.to(device)
+        points, mask, complete = points.to(device), mask.to(device), complete.to(device)
         logits, offsets = model(images)
-        _, bce, _ = objectness_loss(logits, offsets, points, mask, model.image_size, model.grid)
+        _, bce, _ = objectness_loss(logits, offsets, points, mask, complete,
+                                    model.image_size, model.grid)
         total_bce += bce.item() * images.shape[0]
         count += images.shape[0]
 
         # One decode wide enough for the count, sliced back to top_k for the ranking.
         uv, scores = predict(model, images, tta=tta, top_k=max(top_k, COUNT_K))
-        predicted.append((scores >= min_probability).sum(dim=1).float().cpu())
-        uv = uv[:, :top_k]
+        all_scores.append(scores.cpu())
         # (B, labels, k): every label against every decoded candidate.
-        distance = (points[:, :, None, :] - uv[:, None, :, :]).norm(dim=-1)
+        distance = (points[:, :, None, :] - uv[:, None, :top_k, :]).norm(dim=-1)
         real = mask > 0
         nearest.append(distance[:, :, 0][real].cpu())
         covered.append(distance.min(dim=2).values[real].cpu())
+
+        for i in torch.nonzero(complete > 0).flatten().tolist():
+            labels = points[i][mask[i] > 0].cpu().numpy()
+            labelled += len(labels)
+            ranked.extend(match_frame(labels, uv[i].cpu().numpy(), scores[i].cpu().numpy(), match_px))
 
     nearest = pixels_to_cm(torch.cat(nearest), model.image_size)
     covered = pixels_to_cm(torch.cat(covered), model.image_size)
@@ -1449,12 +1637,76 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
         "bce": total_bce / max(count, 1),
         "median_cm": nearest.median().item(),
         "mean_cm": nearest.mean().item(),
-        "targets_per_frame": torch.cat(predicted).mean().item(),
     }
     for radius in radii_cm:
         metrics[f"recall@{radius}cm"] = (nearest <= radius).float().mean().item()
     metrics[f"top{top_k}@20cm"] = (covered <= 20).float().mean().item()
+
+    best = best_f1(ranked, labelled, thresholds)
+    metrics.update({
+        f"f1@{match_radius_cm:.0f}cm": best["f1"],
+        f"precision@{match_radius_cm:.0f}cm": best["precision"],
+        f"found@{match_radius_cm:.0f}cm": best["found"],
+        "threshold": best["threshold"],
+        "scored_targets": best["frames"],
+    })
+    scores = torch.cat(all_scores)
+    metrics["targets_per_frame"] = (scores >= best["threshold"]).sum(dim=1).float().mean().item()
     return metrics
+
+
+def match_frame(labels, uv, scores, radius_px):
+    """Greedy nearest matching of one frame's ranked candidates to its labels.
+
+    Returns (score, hit) per candidate, where a hit is a candidate that landed within
+    radius_px of a label no better-scoring candidate had already claimed. Candidates
+    arrive in descending score and are matched in that order, which is what lets one pass
+    serve every threshold: the detections any threshold admits are a prefix of this list,
+    so its true positives are a prefix count. A second detection on an object already
+    found is a false positive, which is the right reading - the robot would drive to it
+    twice.
+    """
+    out, taken = [], set()
+    for (u, v), score in zip(uv, scores):
+        hit = False
+        if len(labels):
+            d = np.linalg.norm(labels - np.array([u, v]), axis=1)
+            for j in np.argsort(d):
+                if d[j] > radius_px:
+                    break
+                if j not in taken:
+                    taken.add(int(j))
+                    hit = True
+                    break
+        out.append((float(score), hit))
+    return out
+
+
+def best_f1(ranked, labelled, thresholds=THRESHOLD_SWEEP):
+    """The threshold that scores best on the complete frames, and what it scores.
+
+    `ranked` is every candidate of every complete frame as match_frame returned it, and
+    `labelled` the number of labels those frames held. A threshold's true positives are
+    the hits above it, its false positives the misses above it, and its false negatives
+    whatever labels went unfound - so one sweep of the list scores the lot.
+    """
+    if not ranked or not labelled:
+        return {"f1": 0.0, "precision": 0.0, "found": 0.0,
+                "threshold": TARGET_THRESHOLD, "frames": 0}
+    scores = np.array([s for s, _ in ranked])
+    hits = np.array([h for _, h in ranked])
+    best = {"f1": -1.0}
+    for t in thresholds:
+        above = scores >= t
+        tp = int((above & hits).sum())
+        fp = int((above & ~hits).sum())
+        precision = tp / max(tp + fp, 1)
+        found = tp / labelled
+        f1 = 2 * precision * found / max(precision + found, 1e-9)
+        if f1 > best["f1"]:
+            best = {"f1": f1, "precision": precision, "found": found, "threshold": float(t)}
+    best["frames"] = labelled
+    return best
 
 
 def constant_baseline(train_set, eval_set, image_size, radii_cm=(10, 20, 50)):
@@ -1517,7 +1769,18 @@ def train(args):
                                    seed=args.seed, translate_px=args.translate_px)
     eval_set = OrthoTargetDataset(data_root, "eval", args.image_size, augment=False)
     logging.info(f"train {len(train_set)} sample(s) | eval {len(eval_set)} sample(s) from {data_root}")
-    logging.info(f"objectness pos_weight {args.pos_weight or balanced_pos_weight(args.grid, args.cell_sigma):.0f}")
+
+    complete_eval = sum(1 for sample in eval_set.samples if is_complete(sample))
+    if args.select_metric.startswith("f1") and not complete_eval:
+        raise ValueError(
+            f"{data_root}/eval holds no complete frames, so {args.select_metric} cannot be "
+            f"computed: nothing there can tell a false detection from an object nobody "
+            f"labelled. Merge hand labels into the pool and deal the splits from it - "
+            f"merge_labels then split - or pick a --select_metric from the distance family.")
+    pos_weight = args.pos_weight or balanced_pos_weight(train_set, args.grid, args.cell_sigma)
+    logging.info(f"objectness pos_weight {pos_weight:.0f}; complete frames: "
+                 f"{sum(1 for s in train_set.samples if is_complete(s))} of {len(train_set)} train, "
+                 f"{complete_eval} of {len(eval_set)} eval")
 
     baseline = constant_baseline(train_set, eval_set, args.image_size)
     logging.info(f"constant-prediction baseline: {_format_metrics(baseline)}")
@@ -1557,16 +1820,17 @@ def train(args):
     for epoch in range(args.epochs):
         model.train()
         totals = np.zeros(3)
-        for images, points, mask in train_loader:
+        for images, points, mask, complete in train_loader:
             images = images.to(device, non_blocking=True)
             points, mask = points.to(device, non_blocking=True), mask.to(device, non_blocking=True)
+            complete = complete.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
             with autocast:
                 logits, offsets = model(images)
                 loss, bce, l1 = objectness_loss(
-                    logits.float(), offsets.float(), points, mask,
+                    logits.float(), offsets.float(), points, mask, complete,
                     args.image_size, args.grid, args.offset_weight,
-                    cell_sigma=args.cell_sigma, pos_weight=args.pos_weight or None,
+                    cell_sigma=args.cell_sigma, pos_weight=pos_weight,
                 )
             loss.backward()
             optimizer.step()
@@ -1592,6 +1856,13 @@ def train(args):
                     # objectness has the same tensors and would load in silence, then read
                     # softmax logits through a sigmoid and saturate at 1.0 everywhere.
                     "head": "objectness",
+                    # The operating point evaluate_model scored this checkpoint best at,
+                    # and the weight it trained under. Both travel with the weights because
+                    # they belong to them: what counts as a confident cell depends on the
+                    # pos_weight the run used, so a constant in the caller would be right
+                    # for one model and wrong for the next.
+                    "threshold": metrics["threshold"],
+                    "pos_weight": pos_weight,
                     # Whether the state dict above holds a backbone at all: a frozen one
                     # is left to dino_trunk's shared instance and never written.
                     "freeze": not args.unfreeze_backbone,
@@ -1636,6 +1907,12 @@ def load_checkpoint(path, device):
         # really are the pretrained weights when the checkpoint does not say so itself.
         state = drop_trunk_weights(state, model.trunk, verify="freeze" not in checkpoint)
     model.load_state_dict(state)
+    # What this checkpoint calls confident. It belongs with the weights: what counts as a
+    # confident cell depends on the pos_weight it trained under and on how long it ran, so
+    # one constant in the caller would be right for a single model and wrong for the rest.
+    # Files written before the threshold was swept fall back to the constant they were
+    # effectively read with.
+    model.threshold = float(checkpoint.get("threshold", TARGET_THRESHOLD))
     model.eval()
     return model, checkpoint
 
@@ -1660,7 +1937,7 @@ def _write_previews(model, dataset, device, out_dir: Path, top_k: int, tta: bool
     """Ground truth in green, ranked predictions in red, for looking at with your eyes."""
     out_dir.mkdir(parents=True, exist_ok=True)
     for i in range(len(dataset)):
-        image, points, mask = dataset[i]
+        image, points, mask, _ = dataset[i]
         uv, scores = predict(model, image[None].to(device), tta=tta, top_k=top_k)
         canvas = cv2.resize(dataset.decode(i), (model.image_size, model.image_size))
         for (gx, gy) in points[mask > 0].numpy():
@@ -1690,18 +1967,14 @@ def main():
         "distill", help="reduce an ortho LeRobot dataset to one image + contact point per episode"
     )
     distill_parser.add_argument("--repo_id", default=DEFAULT_SOURCE_REPO_ID,
-                                help="LeRobot dataset built by recipes/ortho_target.yaml")
+                                help="LeRobot dataset built by recipes/combined_targets_reblend.yaml, whole "
+                                     "and unsplit")
     distill_parser.add_argument("--root", default=None,
                                 help="local root of that dataset (default: the HF cache, downloading if needed)")
     distill_parser.add_argument("--output", default=LOCAL_DATASET_ROOT,
-                                help="directory to write the distilled dataset into")
-    distill_parser.add_argument("--split", default="train", choices=["train", "eval"],
-                                help="which split this source becomes; only that directory is "
-                                     "rewritten, so the two recipes can be distilled independently")
-    distill_parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
-                                help="hub repo to upload the distilled dataset to")
-    distill_parser.add_argument("--upload", action="store_true",
-                                help="upload the result, replacing the hub copy")
+                                help=f"directory to write the distilled dataset into. Rows land "
+                                     f"in its {POOL_SPLIT}/ pool; `split` deals them into train "
+                                     f"and eval once the hand labels have been merged in")
     distill_parser.add_argument("--pressure_threshold", type=float, default=0.1,
                                 help="finger_pressure above which an episode counts as having made contact")
     distill_parser.add_argument("--frame_offset", type=int, default=0,
@@ -1740,11 +2013,13 @@ def main():
                         help="merge a hub dataset of label files instead, e.g. one upload_labels wrote")
     merge_labels_parser.add_argument("--output", default=LOCAL_DATASET_ROOT,
                                      help="distilled dataset directory to merge them into")
-    merge_labels_parser.add_argument("--split", default="train", choices=["train", "eval"],
-                                     help="which split they join. In eval they stop being training "
-                                          "data and become a measurement of a different thing: "
-                                          "agreement with an operator's click rather than with a "
-                                          "grasp that actually happened")
+    merge_labels_parser.add_argument("--split", default=POOL_SPLIT,
+                                     choices=[POOL_SPLIT, "train", "eval"],
+                                     help=f"which directory they join. The default is the "
+                                          f"{POOL_SPLIT}/ pool, so `split` decides afterwards how "
+                                          f"many of them land in eval - which is what makes the "
+                                          f"selection metric computable. Naming train or eval "
+                                          f"instead puts them wholly on one side")
     merge_labels_parser.add_argument("--tag", default=None,
                                      help="name the contributor these labels came from, so "
                                           "several people's labels of the same dataset do not "
@@ -1752,6 +2027,21 @@ def main():
     merge_labels_parser.add_argument("--no_resize", action="store_true",
                                      help="keep the frames at the size they were saved at instead "
                                           "of matching the split's distilled shards")
+
+    split_parser = subparsers.add_parser(
+        "split", help="deal the pooled rows into train and eval at random")
+    split_parser.add_argument("--data_root", default=LOCAL_DATASET_ROOT,
+                              help=f"dataset directory holding the {POOL_SPLIT}/ pool")
+    split_parser.add_argument("--eval_fraction", type=float, default=0.1,
+                              help="share of rows held out for eval")
+    split_parser.add_argument("--seed", type=int, default=0,
+                              help="the same seed deals the same split, so a re-deal is "
+                                   "reproducible and a new one is a new number")
+    split_parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
+                              help="hub repo to upload the split dataset to")
+    split_parser.add_argument("--upload", action="store_true",
+                              help="upload the result, replacing the hub copy. The pool stays "
+                                   "local; only train and eval go up")
 
     def add_data_args(sub):
         sub.add_argument("--dataset_id", default=DEFAULT_DATASET_ID, help="distilled dataset on the hub")
@@ -1809,6 +2099,8 @@ def main():
     args = parser.parse_args()
     if args.command == "distill":
         distill(args)
+    elif args.command == "split":
+        split_dataset(args)
     elif args.command == "train":
         train(args)
     elif args.command == "evaluate":

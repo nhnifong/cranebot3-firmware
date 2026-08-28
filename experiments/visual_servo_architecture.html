@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Visual servoing network</title>
+<style>
+  :root {
+    --ink: #14181c;
+    --muted: #77828f;
+    --line: #ccd4dd;
+    --frozen-bg: #eaeef3;
+    --frozen-edge: #a9b5c3;
+    --trained-bg: #fff3e6;
+    --trained-edge: #e5a45f;
+    --io-bg: #ffffff;
+    --accent: #2f6f8f;
+  }
+  @page { size: landscape; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: #fff; color: var(--ink);
+    font: 400 26px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 54px 60px;
+  }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  h1 { font-size: 46px; font-weight: 600; margin: 0 0 40px; letter-spacing: -0.02em; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; flex: 1 1 auto; }
+  .block {
+    flex: 1 1 0; min-width: 0;
+    border: 3px solid var(--line); border-radius: 16px;
+    background: var(--io-bg); padding: 30px 26px;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .block.frozen  { background: var(--frozen-bg);  border-color: var(--frozen-edge); }
+  .block.trained { background: var(--trained-bg); border-color: var(--trained-edge); }
+
+  .title { font-size: 34px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 4px; }
+  .note  { font-size: 23px; color: var(--muted); margin-top: 6px; }
+  .shape { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+           font-size: 20px; color: var(--muted); margin-top: 10px; }
+  .layer { font-size: 25px; margin-top: 12px; }
+  .layer:first-of-type { margin-top: 0; }
+
+  .arrow {
+    flex: 0 0 56px; align-self: center;
+    display: flex; align-items: center; justify-content: center;
+    color: #93a0ae; font-size: 40px; line-height: 1;
+  }
+
+  
+  .group { flex: 1 1 0; }
+  .group .g-title {
+    font-size: 18px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 10px;
+  }
+  .group.global .g-title { color: #a9682f; }
+  .group ul { margin: 0; padding: 0; list-style: none; }
+  .group li { font-size: 24px; padding: 4px 0; }
+
+  .key { display: flex; gap: 34px; margin-top: 34px; font-size: 22px; color: var(--muted); }
+  .key span::before {
+    content: ""; display: inline-block; width: 18px; height: 18px; border-radius: 3px;
+    margin-right: 8px; vertical-align: -2px; border: 2px solid;
+  }
+  .key .f::before { background: var(--frozen-bg);  border-color: var(--frozen-edge); }
+  .key .t::before { background: var(--trained-bg); border-color: var(--trained-edge); }
+</style>
+</head>
+<body>
+
+<h1>Visual servoing network</h1>
+
+<div class="flow">
+
+  <div class="block">
+    <div class="title">Input</div>
+    <div class="layer">Gripper frame</div>
+    <div class="shape">448 &times; 252</div>
+    <div class="layer">Sensors</div>
+    <div class="shape">range &middot; finger &middot; force</div>
+  </div>
+
+  <div class="arrow">&rarr;</div>
+
+  <div class="block frozen">
+    <div class="title">Backbone</div>
+    <div class="note">DINOv2 ViT-B/14</div>
+    <div class="layer">Patch tokens</div>
+    <div class="shape">18 &times; 32</div>
+    <div class="layer">[CLS] + registers</div>
+  </div>
+
+  <div class="arrow">&rarr;</div>
+
+  <div class="block trained">
+    <div class="title">Trunk</div>
+    <div class="layer">Fuse &rarr; 256</div>
+    <div class="layer">FiLM from sensors</div>
+    <div class="layer">Attention &times;3</div>
+    <div class="layer">Upsample</div>
+    <div class="shape">36 &times; 64 cells</div>
+  </div>
+
+  <div class="arrow">&rarr;</div>
+
+  <div class="block trained">
+    <div class="title">Heads</div>
+    <div class="group">
+      <div class="g-title">per cell</div>
+      <ul><li>target &middot; offset</li><li>distance &middot; axis</li></ul>
+    </div>
+    <div class="group global" style="margin-top:18px">
+      <div class="g-title">whole frame</div>
+      <ul><li>present &middot; holding</li><li>close &middot; force</li></ul>
+    </div>
+  </div>
+
+  <div class="arrow">&rarr;</div>
+
+  <div class="block">
+    <div class="title">Output</div>
+    <div class="layer">Where it is</div>
+    <div class="shape">3D point</div>
+    <div class="layer">How to grip it</div>
+    <div class="shape">axis &middot; when &middot; how hard</div>
+  </div>
+
+</div>
+
+<div class="key">
+  <span class="f">frozen &mdash; 86.6M</span>
+  <span class="t">trained &mdash; 4.1M</span>
+</div>
+
+</body>
+</html>

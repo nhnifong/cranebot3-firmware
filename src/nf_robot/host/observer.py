@@ -4875,9 +4875,12 @@ class AsyncObserver:
 
         # Each cell carries its own objectness, decided without reference to the rest of
         # the map, so one absolute bar holds on a bare floor and a crowded one alike and a
-        # second object does not dilute the first. Raising it trades found objects for
-        # false ones; ortho_target's --pos_weight is the other end of the same trade.
-        ORTHO_MIN_PROBABILITY = 0.5
+        # second object does not dilute the first. The bar comes from the checkpoint, which
+        # records the operating point its training run scored best at: what counts as
+        # confident depends on the pos_weight it trained under, so a constant here would be
+        # right for one model and wrong for the next. The fallback is for checkpoints from
+        # before the threshold was swept.
+        ORTHO_MIN_PROBABILITY = getattr(self.target_model, 'threshold', 0.5)
         ORTHO_MAX_CANDIDATES = 16  # NMS peaks to consider before thresholding
 
         ortho_frame = self.last_ortho_rgb
