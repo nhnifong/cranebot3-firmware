@@ -1,0 +1,39 @@
+# Dataset combining reblend dataset with anything newer recorded after that.
+
+# python src/nf_robot/ml/lerobot_build_dataset.py \
+#     --recipe src/nf_robot/ml/recipes/grip_o.yaml \
+#     --temp_dir /home/nhn/data_scratch \
+#     --output_root /home/nhn/data_scratch/grip_o \
+#     --upload --keep_intermediate --resume
+
+output_repo_id: naavox/grip_o
+camera_mode: gripper_ortho
+center_crop: false
+pad_clamp: false
+
+merge:
+  - naavox/combined_targets_reblend
+  - repo_id: naavox/chuck-aug28
+    exclude_episodes: ['14']
+
+# Exactly mine_teleop.STATE_NEEDED, and nothing else.
+keep_state_features:
+  - gripper_pos_x
+  - gripper_pos_y
+  - gripper_pos_z
+  - spin
+  - finger_angle
+  - laser_rangefinder
+  - finger_pressure
+  - wrist_angle
+  - target_force
+
+drop_features:
+  - anchor_poses
+
+label_contact_actions:
+  enabled: true
+  pressure_threshold: 0.1
+  episode_end_seconds: 1.0
+  blend_seconds: 0.5
+  rotate_contact_vec: false
