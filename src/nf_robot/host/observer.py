@@ -70,6 +70,7 @@ arp_anchor_service_name = 'cranebot-anchor-arpeggio-service'
 
 N_ANCHORS = 2
 N_LINES = 4
+DEFAULT_MAX_SAFE_TENSION = 16.0  # newtons, when config.max_safe_tension says nothing
 INPUT_VELOCITY_TTL_S = 2.0 # a commanded velocity keyed by a source expires this long after its last update
 INFO_REQUEST_TIMEOUT_MS = 3000 # milliseconds
 # visual centering nudges. The move is open loop (commanded speed for a computed duration), so
@@ -179,6 +180,21 @@ def _widest_gap(points):
     """The largest distance between any two of these positions."""
     P = np.asarray(points, dtype=float)
     return float(max(np.linalg.norm(a - b) for a, b in itertools.combinations(P, 2)))
+
+
+def _spiral_waypoints(step, max_r):
+    """(x, y) offsets along an Archimedean spiral out to max_r, starting one step from the
+    center. Points sit about step apart along the path and the spiral gains step per turn, so
+    a downward camera whose footprint is step wide sweeps the whole disc as it follows them."""
+    points = []
+    theta = 0.0
+    r = step
+    while r <= max_r:
+        points.append((r * np.cos(theta), r * np.sin(theta)))
+        dtheta = step / r
+        theta += dtheta
+        r += step * dtheta / (2 * np.pi)
+    return points
 
 
 def with_swing_cancellation_preferred(func):
@@ -784,7 +800,11 @@ class AsyncObserver:
         """Set config.swing_latency (in memory) and tell the UI. Does not persist;
         callers save_config only once a value is committed."""
         self.config.swing_latency = float(latency)
-        self.send_ui(new_anchor_poses=telemetry.AnchorPoses(swing_latency=self.config.swing_latency))
+        # calibrated rides along because an omitted enum arrives at the UI as
+        # CALIBRATEDSTATUS_UNSET, indistinguishable from a robot that lost its calibration.
+        self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
+            swing_latency=self.config.swing_latency,
+            calibrated=self.config.calibrated_status))
 
     async def _recenter_gantry(self, center_pos):
         """Drive the gantry back to center_pos and stop."""
@@ -867,7 +887,7 @@ class AsyncObserver:
 
         return self.pendulum.trial_residual(ts, amps, aborted), aborted
 
-    async def calibrate_swing_latency(self, fine_pass=False, progress_range=None):
+    async def calibrate_swing_latency(self, progress_range=None, progress_name='Calibration'):
         """Tune config.swing_latency by finding the value that damps the swing best.
 
         A good latency drives the swing to nothing; a bad one leaves a steady
@@ -882,36 +902,53 @@ class AsyncObserver:
         rather than damp, but the safety amplitude cap stops those early, and whichever
         candidate is nearest the ideal still yields a clean, low residual to lock onto.
 
-        0.3 is tried first because it is usually the answer, and a coarse trial that already
-        damps well is close enough to refine around directly. Stopping there skips the two
-        candidates most likely to pump. Set fine_pass=True to add a second pass that refines
-        around the coarse best; the early stop only applies then, since the fine pass is what
-        supplies the trials MIN_TRIALS wants.
+        0.3 is tried first because it is usually the answer, and a coarse trial under
+        COARSE_GOOD_ENOUGH_RAD is close enough to refine around directly. Stopping there skips
+        the two candidates most likely to pump, and the fine pass that follows supplies the
+        trials MIN_TRIALS wants.
+
+        Either pass ends outright on a trial under EXCELLENT_RESIDUAL_RAD: that is as well as
+        this can damp, so the remaining trials could only tie it, and that latency is taken
+        without waiting for MIN_TRIALS.
         """
         DRIFT_LIMIT_M = 0.6          # recenter between trials once drift exceeds this
         MIN_TRIALS = 3               # need at least this many good trials to choose
         TENSION_BACKOFF_S = 1.1      # wait this long after a tension trip before retrying a trial
         MAX_TENSION_RETRIES = 3      # give up (and abort) if a single trial keeps tripping tension
 
+        def report_progress(pct, action):
+            """Progress for the enclosing operation, or nothing if the caller wants none.
+
+            The end of progress_range doubles as this routine's completion: for a standalone
+            run that is 100, which is what clears the UI's progress bar, and for a run nested
+            in full calibration it is just the next step's starting percentage.
+            """
+            if progress_range is None:
+                return
+            self.send_ui(operation_progress=telemetry.OperationProgress(
+                percent_complete=pct, name=progress_name, current_action=action))
+
+        def finish(action):
+            report_progress(progress_range[1] if progress_range else 0.0, action)
+
         if self.gripper_client is None:
             logger.warning('Swing latency calibration requires a connected gripper')
+            finish('Swing latency tuning needs a connected gripper')
             return None
 
         original_latency = self.config.swing_latency
         center_pos = np.array(self.pe.gant_pos, dtype=float)
         all_results = []      # (latency, residual) from every reliable trial
+        excellent = None      # latency of a trial good enough to end the calibration outright
 
         async def sweep(cands, stop_below=None):
+            nonlocal excellent
             out = []
             for idx,lat in enumerate(cands):
                 if progress_range is not None:
                     start_pct, end_pct = progress_range
                     pct = start_pct + (end_pct - start_pct) * (idx + 1) / (len(cands) + 1)
-                    self.send_ui(operation_progress=telemetry.OperationProgress(
-                        percent_complete=pct,
-                        name="Calibration",
-                        current_action=f"Tuning swing cancellation {idx + 1}/{len(cands)} ({lat})",
-                    ))
+                    report_progress(pct, f"Tuning swing cancellation {idx + 1}/{len(cands)} ({lat})")
 
                 lat = float(lat)
                 # A tension trip during a trial is recoverable: wait for the back-off, move
@@ -939,6 +976,12 @@ class AsyncObserver:
                     out.append((lat, residual))
                     all_results.append((lat, residual))
                     logger.info(f'swing_latency {lat:.3f}s -> residual {residual*1000:.0f} mrad ({np.degrees(residual):.1f} deg){tag}')
+                    if residual < swing.EXCELLENT_RESIDUAL_RAD:
+                        logger.info(f'swing_latency {lat:.3f}s damps to under '
+                                    f'{swing.EXCELLENT_RESIDUAL_RAD*1000:.0f} mrad; taking it and '
+                                    f'skipping the remaining trials')
+                        excellent = lat
+                        return out
                     if stop_below is not None and residual < stop_below:
                         logger.info(f'swing_latency {lat:.3f}s already damps below {stop_below*1000:.0f} mrad; '
                                     f'skipping the remaining coarse candidates and refining around it')
@@ -951,14 +994,21 @@ class AsyncObserver:
         self.tension_over_limit = False  # clear any stale trip so the first trial isn't cut short
         self.swing_cal_in_progress = True  # let passive_safety recover (not abort) on a tension trip here
         try:
-            coarse = await sweep(swing.COARSE_CANDS,
-                                 stop_below=swing.COARSE_GOOD_ENOUGH_RAD if fine_pass else None)
-            if coarse and fine_pass:
+            coarse = await sweep(swing.COARSE_CANDS, stop_below=swing.COARSE_GOOD_ENOUGH_RAD)
+            if coarse and excellent is None:
                 best_coarse = min(coarse, key=lambda r: r[1])[0]
                 # Recenter before the fine pass so the trials we care about start with
                 # full drift headroom and don't get cut short.
                 await self._recenter_gantry(center_pos)
-                await sweep(swing.fine_candidates(best_coarse))
+                # skip latencies the coarse pass already measured; the fine spread is
+                # centered on the winner, so it always lands on it again
+                await sweep(swing.fine_candidates(best_coarse, [lat for lat, _ in all_results]))
+        except asyncio.CancelledError:
+            # Reported here rather than left to the caller: a standalone run has no outer
+            # handler to clear the progress bar for it.
+            finish('Aborted: line tension exceeded the safe limit' if self.tension_over_limit
+                   else 'Swing latency tuning cancelled')
+            raise
         finally:
             # Do not clear tension_over_limit here: on a max-retry abort it must survive to the
             # calibration's CancelledError handler so it can report the tension reason.
@@ -969,11 +1019,24 @@ class AsyncObserver:
             self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=False, present='.'))
             await self._recenter_gantry(center_pos)
 
+        if excellent is not None:
+            # A single trial this good outranks a range picked from mediocre ones, so it
+            # stands on its own without the MIN_TRIALS worth of context they need.
+            best = excellent
+            self._broadcast_swing_latency(best)
+            self.config.swing_cancellation_verified = True
+            save_config(self.config, self.config_path)
+            logger.info(f'Calibrated swing_latency = {best:.3f}s (residual '
+                        f'{min(r for _, r in all_results)*1000:.0f} mrad, damps)')
+            finish(f'Swing latency set to {best:.3f}s')
+            return best
+
         if len(all_results) < MIN_TRIALS:
             # too little to choose a latency from, and equally too little to say anything
             # about whether cancellation works here, so the stored verdict is left alone
             logger.warning(f'Swing latency calibration got only {len(all_results)} usable trials; keeping existing value')
             self._broadcast_swing_latency(original_latency)
+            finish(f'Only {len(all_results)} usable trials; keeping swing latency {original_latency:.3f}s')
             return None
 
         best = swing.select_min_residual(all_results)
@@ -983,11 +1046,13 @@ class AsyncObserver:
         # store it, so a robot tuned by the swinglatencycal debug command alone is as much
         # entitled to prefer_swing_cancellation as one that ran the whole calibration.
         best_residual = min(r for _, r in all_results)
-        self.config.swing_cancellation_verified = best_residual < swing.DAMPED_RESIDUAL_RAD
+        self.config.swing_cancellation_verified = best_residual < swing.VERIFIED_RESIDUAL_RAD
         save_config(self.config, self.config_path)
         logger.info(f'Calibrated swing_latency = {best:.3f}s (best residual '
                     f'{np.degrees(best_residual):.1f} deg, '
                     f'{"damps" if self.config.swing_cancellation_verified else "does NOT damp"})')
+        finish(f'Swing latency set to {best:.3f}s '
+               f'({"damps" if self.config.swing_cancellation_verified else "does NOT damp"})')
         return best
 
     async def _handle_debug_command(self, item: control.Debug):
@@ -1029,9 +1094,10 @@ class AsyncObserver:
             self.config.swing_latency = float(parts[1])
             save_config(self.config, self.config_path)
         if item.action == 'swinglatencycal':
-            # Run the fine pass and emit progress so the debug-triggered run refines around
-            # the coarse best and reports status just like the in-calibration invocation.
-            r = await self.invoke_motion_task(self.calibrate_swing_latency(fine_pass=True, progress_range=(0.0, 100.0)))
+            # Its own operation name, not "Calibration": this run owns the whole progress bar
+            # and its completion must not read as the full calibration having finished.
+            r = await self.invoke_motion_task(self.calibrate_swing_latency(
+                progress_range=(0.0, 100.0), progress_name='Swing Latency'))
         if item.action.startswith('polecal'):
             # 'polecal [seconds]' - how long to record the free decay for
             parts = item.action.split()
@@ -1092,6 +1158,10 @@ class AsyncObserver:
                     r = await self.set_tension_reg(True)
                 else:
                     r = await self.set_tension_reg(False)
+        if item.action == 'findorigin':
+            # The calibration step on its own, so the search can be tuned in the room that breaks
+            # it - low ceiling, origin card up on a bed - without running a whole calibration.
+            r = await self.invoke_motion_task(self.find_origin_card())
         if item.action == 'centerorigin':
             r = await self.invoke_motion_task(self._center_card_in_view('origin'))
         if item.action == 'servograsp':
@@ -1640,15 +1710,26 @@ class AsyncObserver:
 
         self.last_user_move_time = time.time()
 
+    @property
+    def max_safe_tension(self):
+        """Line tension passive_safety sheds torque (and aborts a motion task) over."""
+        if self.config.max_safe_tension is not None:
+            return self.config.max_safe_tension
+        return DEFAULT_MAX_SAFE_TENSION
+
+    def _tension_near_limit(self, frac):
+        """True once the tightest line is within frac of the tension passive_safety trips at.
+        Reading it lets a move back off before the trip; after it, the motion task is gone."""
+        tension = self.pe.tension
+        return tension is not None and float(np.max(tension)) > frac * self.max_safe_tension
+
     async def passive_safety(self):
         """If any line becomes too tight, switch all motors to damped movement for one second.
         If the overload happens while a motion task is running, abort it by cancelling the
         task, since backing off mid-motion corrupts whatever it was doing. The one exception
         is swing latency cal: it sets swing_cal_in_progress so we only raise the
         tension_over_limit flag, which it polls to back off and retry the current trial."""
-        max_safe_tension = 16.0
-        if self.config.max_safe_tension is not None:
-            max_safe_tension = self.config.max_safe_tension
+        max_safe_tension = self.max_safe_tension
 
         ema = np.zeros(4)
         while self.run_command_loop and self.pe.tension is not None:
@@ -2649,6 +2730,126 @@ class AsyncObserver:
             after_ts = await self._nudge_gantry_xy(nudge)
         logger.info(f'Centering {name}: reached max steps')
 
+    async def find_origin_card(self, card_pos=None, upper_z=None):
+        """Park the gripper where its camera can see the origin card, climbing no higher than needed.
+
+        Run after the 2nd optimization pass, where the geometry is good enough to fly to a point
+        but not to trust the altitude it arrives at. Flying straight to a nominal height is what
+        makes this step fragile: too low and the card never enters the narrow gripper FOV, too
+        high and a card up on a bed or table puts the gantry into the ceiling and trips the
+        tension limit, which aborts the whole calibration. So the search starts a hand's width
+        over the card, where a sighting is nearly certain if the position estimate is good, and
+        opens outward from there - upward while there is headroom, then, at the top of the work
+        area, in a horizontal spiral around the card.
+
+        Near the ceiling a poorly calibrated robot's horizontal moves pull the gantry up, so
+        every spiral step carries a downward correction back to the altitude the search settled
+        at, and line tension approaching the safety limit pushes that altitude down.
+
+        Returns the gantry z it finished at, sighting or not: the caller's centering step is
+        what makes use of the sighting, and its own approach altitude follows from this one.
+        This is a motion task."""
+        START_CAM_HEIGHT_M = 0.10    # camera height over the card the search starts at
+        MAX_CAM_HEIGHT_M = 1.3       # highest over the card the card is still worth looking for from
+        RISE_STEP_M = 0.15           # how far one upward search step climbs
+        TOP_MARGIN_M = 0.1           # stay this far under the top of the work area
+        SPIRAL_STEP_M = 0.2          # spacing between horizontal search points
+        SPIRAL_MAX_R_M = 0.6         # widest the spiral searches around the card
+        TENSION_BACKOFF_FRAC = 0.7   # descend once a line passes this fraction of the safe limit
+        BACKOFF_DROP_M = 0.1         # how far to descend when tension says the gantry is too high
+        LOOK_S = 1.5                 # how long to wait for a view taken after a step
+
+        if self.gripper_client is None:
+            logger.warning('Finding the origin card requires a connected gripper')
+            return float(self.pe.gant_pos[2])
+
+        if card_pos is None:
+            # the room frame puts the origin card at (0, 0) by construction; the anchor cameras
+            # are what know how high its perch is, and only if they can see it
+            card_pos = self.card_room_positions().get('origin', np.zeros(3))
+        card_pos = np.asarray(card_pos, dtype=float)
+        if upper_z is None:
+            upper_z = float(np.mean(self.pe.anchor_points[[0, 2], 2]))
+
+        # altitudes here are the gantry's; the camera hangs self.pole[2] under it
+        ceiling_z = upper_z - TOP_MARGIN_M
+        top_z = min(ceiling_z, card_pos[2] + self.pole[2] + MAX_CAM_HEIGHT_M)
+        start_z = min(top_z, card_pos[2] + self.pole[2] + START_CAM_HEIGHT_M)
+
+        async def sighted_since(after_ts):
+            return (await self._await_card_pose('origin', after_ts, timeout=LOOK_S)) is not None
+
+        logger.info(f'Finding origin card: card at {np.round(card_pos, 3)}, starting at gantry z '
+                    f'{start_z:.2f} (ceiling {ceiling_z:.2f}, climbing to at most {top_z:.2f})')
+
+        # Fly to the start, but stop the moment the card appears: the approach can pass over it,
+        # and carrying on would take it back out of the gripper camera's narrow view.
+        seek = asyncio.create_task(self.seek_goal(
+            np.array([card_pos[0], card_pos[1], start_z]), head_turn=False, auto_altitude=False))
+        try:
+            while not seek.done():
+                if self.gripper_client.get_route_tag_pose('origin') is not None:
+                    logger.info('Finding origin card: sighted during the approach')
+                    break
+                await asyncio.sleep(0.03)
+        finally:
+            if not seek.done():
+                seek.cancel()
+                try:
+                    await seek
+                except asyncio.CancelledError:
+                    pass
+        self.slow_stop_all_spools()
+        if self.gripper_client.get_route_tag_pose('origin') is not None:
+            return float(self.pe.gant_pos[2])
+
+        # Climb: a higher camera sees more floor, so the card is likelier to fall inside the view
+        # even where the position estimate has put the gantry off to one side.
+        hold_z = float(self.pe.gant_pos[2])
+        while True:
+            if self._tension_near_limit(TENSION_BACKOFF_FRAC):
+                logger.warning('Finding origin card: line tension near the limit; dropping instead '
+                               'of climbing further')
+                await self._nudge_gantry(np.array([0.0, 0.0, -BACKOFF_DROP_M]), speed=TRIM_SPEED_MPS)
+                hold_z = float(self.pe.gant_pos[2])
+                break
+            headroom = top_z - float(self.pe.gant_pos[2])
+            if headroom < 0.02:
+                break
+            after_ts = await self._nudge_gantry(np.array([0.0, 0.0, min(RISE_STEP_M, headroom)]),
+                                                speed=TRIM_SPEED_MPS)
+            hold_z = float(self.pe.gant_pos[2])
+            logger.info(f'Finding origin card: looking from gantry z {hold_z:.2f} '
+                        f'(camera {hold_z - self.pole[2] - card_pos[2]:.2f} over the card)')
+            if await sighted_since(after_ts):
+                logger.info('Finding origin card: sighted while climbing')
+                return hold_z
+
+        # Out of headroom, so widen the search sideways instead. Every step is a single nudge
+        # combining the horizontal move with whatever descent it takes to undo the climb the last
+        # one caused; the vertical part is never positive, since climbing is what trips tension.
+        for idx, (dx, dy) in enumerate(_spiral_waypoints(SPIRAL_STEP_M, SPIRAL_MAX_R_M)):
+            # start_z is the floor of this: it is a hand's width over the card, and any lower
+            # looks under it rather than at it, so a robot whose tension never settles gives up
+            # altitude only down to there.
+            if self._tension_near_limit(TENSION_BACKOFF_FRAC) and hold_z > start_z:
+                hold_z = max(start_z, hold_z - BACKOFF_DROP_M)
+                logger.warning(f'Finding origin card: line tension near the limit; searching '
+                               f'lower, at gantry z {hold_z:.2f}')
+            delta = np.array([card_pos[0] + dx, card_pos[1] + dy, hold_z]) - self.pe.gant_pos
+            delta[2] = min(0.0, delta[2])
+            logger.info(f'Finding origin card: spiral point {idx} at '
+                        f'{np.round([card_pos[0] + dx, card_pos[1] + dy], 3)}, '
+                        f'moving {np.round(delta, 3)}')
+            after_ts = await self._nudge_gantry(delta)
+            if await sighted_since(after_ts):
+                logger.info(f'Finding origin card: sighted at spiral point {idx}')
+                return float(self.pe.gant_pos[2])
+
+        logger.warning('Finding origin card: not seen from any search position; '
+                       'continuing from where the search ended')
+        return float(self.pe.gant_pos[2])
+
     async def settle_wrist(self, target, tol=2.0, timeout=6.0):
         """Command the wrist to an absolute angle and wait until telemetry agrees."""
         await self.gripper_client.send_commands({'set_wrist_angle': target})
@@ -3294,10 +3495,13 @@ class AsyncObserver:
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=27.0,
                 name="Calibration",
-                current_action="Moving gripper to origin",
+                current_action="Finding the origin card",
             ))
-            gant_z = min(upper_z-0.1, self.pole[2] + 0.8 - floor_z)
-            await self.seek_goal(np.array([0,0,gant_z]), head_turn=False)
+            # The optimizer's frame puts the floor at z=0, so the card sits at -floor_z: its own
+            # height if it is up on a bed or table. Searching from just above it beats flying to a
+            # fixed height the ceiling may not have room for.
+            gant_z = await self.find_origin_card(card_pos=np.array([0.0, 0.0, -floor_z]),
+                                                 upper_z=upper_z)
 
             self.send_ui(operation_progress=telemetry.OperationProgress(
                 percent_complete=29.0,
@@ -3320,9 +3524,9 @@ class AsyncObserver:
                     current_action="Tuning swing cancellation",
                 ))
                 # Perform swing cancellation measurements lower than the spin-measurement
-                SWING_MEASURE_DROP_M = 0.4
+                SWING_MEASURE_DROP_M = 0.3
                 await self.seek_goal(np.array([0, 0, gant_z - SWING_MEASURE_DROP_M]), head_turn=False)
-                await self.calibrate_swing_latency(fine_pass=True, progress_range=(30.0, 61.0))
+                await self.calibrate_swing_latency(progress_range=(30.0, 61.0))
 
             # Refine the pull-point geometry with close-range gripper-camera views of the
             # calibration cards. The cards are still in place at this point (they are only
@@ -3414,7 +3618,7 @@ class AsyncObserver:
                     # word on it, taken against the refined geometry, so it overwrites what
                     # the latency sweep earlier in this run concluded against the old one.
                     self.config.swing_cancellation_verified = (
-                        residual is not None and residual < swing.DAMPED_RESIDUAL_RAD)
+                        residual is not None and residual < swing.VERIFIED_RESIDUAL_RAD)
                     save_config(self.config, self.config_path)
                     if self.config.swing_cancellation_verified:
                         logger.info(f'Swing cancellation damps with refined geometry (residual {np.degrees(residual):.1f} deg); enabling.')

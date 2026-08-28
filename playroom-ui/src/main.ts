@@ -32,6 +32,8 @@ const AuthManager = getAuthBridge();
 const DEFAULT_CAM_TILT = 30.0; // degrees — matches the standard tilt adapter
 // Toothed tilt adapters are set by how many teeth are exposed; index = tooth count, value = degrees.
 const TILT_TEETH_ANGLES = [22.0, 26.0, 30.0, 34.0, 38.0, 42.0];
+// Value of the tilt option added for a configured angle that is not on the toothed scale.
+const CONFIGURED_TILT_OPTION = 'configured';
 
 // Debug toggle: show wireframe frustum helpers for the anchor cameras used in floor-projection raycasting
 const SHOW_ANCHOR_CAMERA_FRUSTUMS = false;
@@ -1078,7 +1080,9 @@ function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
     wallCables.push(new Cable(scene));
     wallCables.push(new Cable(scene));
   }
-  if ((data as any).tilt) {
+  // Only a message that actually carries tilts may replace them: an omitted repeated field
+  // decodes as an empty array, and letting that through erases what setup telemetry sent.
+  if ((data as any).tilt?.length) {
     lastTiltAngles = (data as any).tilt;
     for (let i = 0; i < 2 && i < lastTiltAngles.length; i++) {
       const camera = (corners[i] as ArpAnchor).camera;
@@ -1095,7 +1099,11 @@ function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
     valueDisplay!.textContent = val + 's';
   }
 
-  if (data.calibrated != null) {
+  // A message that leaves `calibrated` out still decodes with the enum's zero value, so only
+  // one that carries a real status may move the readiness gates: otherwise a partial update
+  // (the swing latency broadcast, say) reads as a robot that lost its calibration, and the
+  // controls it gates stay dead until a reload.
+  if (data.calibrated != null && data.calibrated !== nf.common.CalibratedStatus.CALIBRATEDSTATUS_UNSET) {
     lastCalibratedStatus = data.calibrated;
   }
 
@@ -2523,19 +2531,39 @@ function openFullCalOverlay() {
     unavailable?.classList.add('hidden');
     content?.classList.remove('hidden');
   }
-  // A stored angle off the adapter scale (hand-set via component details) has no matching
-  // option, so leave the selection alone rather than silently changing the angle.
-  for (let i = 0; i < 2; i++) {
-    const teeth = lastTiltAngles[i] == null ? -1 : TILT_TEETH_ANGLES.indexOf(lastTiltAngles[i]);
-    if (teeth >= 0) {
-      (document.getElementById(`fullcal-teeth-${i}`) as HTMLSelectElement).value = teeth.toString();
-    }
-  }
+  for (let i = 0; i < 2; i++) showConfiguredTilt(i);
   overlay.classList.remove('hidden');
 }
 
+/**
+ * Preselect the tilt the robot reported for this anchor, so starting calibration without
+ * touching the control keeps the configured angle instead of imposing the markup's default.
+ */
+function showConfiguredTilt(anchorNum: number) {
+  const sel = document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement | null;
+  const configured = lastTiltAngles[anchorNum];
+  if (!sel) return;
+  sel.querySelector(`option[value="${CONFIGURED_TILT_OPTION}"]`)?.remove();
+  if (configured == null) return;
+  // Tolerant match: the angle round-trips through a 32-bit proto float.
+  const teeth = TILT_TEETH_ANGLES.findIndex(a => Math.abs(a - configured) < 0.05);
+  if (teeth >= 0) {
+    sel.value = teeth.toString();
+    return;
+  }
+  // An angle off the adapter scale (hand-set via component details) is still what this robot
+  // is calibrated around, so it gets its own option rather than being rounded onto the scale.
+  const opt = document.createElement('option');
+  opt.value = CONFIGURED_TILT_OPTION;
+  opt.textContent = `${configured.toFixed(1)}° — as configured`;
+  sel.appendChild(opt);
+  sel.value = CONFIGURED_TILT_OPTION;
+}
+
 function readFullCalTiltAngle(anchorNum: number): number {
-  const teeth = parseInt((document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement)?.value ?? '', 10);
+  const sel = document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement | null;
+  if (sel?.value === CONFIGURED_TILT_OPTION) return lastTiltAngles[anchorNum] ?? DEFAULT_CAM_TILT;
+  const teeth = parseInt(sel?.value ?? '', 10);
   return TILT_TEETH_ANGLES[teeth] ?? DEFAULT_CAM_TILT;
 }
 

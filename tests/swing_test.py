@@ -151,6 +151,13 @@ class TestFineCandidates(unittest.TestCase):
         self.assertEqual(len(cands), len(set(cands)))
         self.assertLess(len(cands), swing.FINE_COUNT)
 
+    def test_drops_latencies_the_coarse_pass_already_measured(self):
+        cands = swing.fine_candidates(0.3, [0.3, 0.0, 0.6])
+        self.assertNotIn(0.3, cands)
+        # 0.0 and 0.6 are outside this spread, so nothing else is lost to them
+        self.assertEqual(len(cands), swing.FINE_COUNT - 1)
+        self.assertEqual(cands, swing.fine_candidates(0.3, [0.3]))
+
 
 class TestTrialResidual(unittest.TestCase):
     def setUp(self):

@@ -33,12 +33,11 @@ MEASURE_PERIODS = 3          # average the swing over this many final periods
 SAFETY_AMP_RAD = 0.4         # stop a trial early if the swing grows past this
 MIN_SAMPLES = 10             # fewer amplitude readings than this is not a settle worth reading
 
-# The residual below which cancellation counts as damping this robot rather than fighting it.
-# A settled swing reads well under this and one that pumps hits SAFETY_AMP_RAD instead, so
-# there is room either side. Both places that judge a robot's cancellation - the latency sweep
-# and the check at the end of calibration - answer the question with this one number, and what
-# they conclude is stored as config.swing_cancellation_verified.
-DAMPED_RESIDUAL_RAD = 0.15
+# The residual below which cancellation counts as acceptable for config.swing_cancellation_verified.
+VERIFIED_RESIDUAL_RAD = 0.020
+
+# A residual good enough to immediately stop the search.
+EXCELLENT_RESIDUAL_RAD = 0.010
 
 
 class Pendulum:
@@ -137,8 +136,10 @@ def integrate_centering(raw_vel, offset, dt):
 
 # seconds; spread wide enough to bracket the ideal even under heavy loop contention
 COARSE_CANDS = (0.3, 0.0, 0.6)
-# a coarse trial damped this well is worth refining around immediately
-COARSE_GOOD_ENOUGH_RAD = DAMPED_RESIDUAL_RAD
+# a coarse trial damped this well is near enough the ideal to refine around immediately. Well
+# above VERIFIED_RESIDUAL_RAD: this only says the neighbourhood is right, and the fine pass is
+# what finds the latency that actually damps.
+COARSE_GOOD_ENOUGH_RAD = 0.10
 # fine pass spans +/- this around the coarse best (covers the gap between coarse samples)
 FINE_HALF_WIDTH = 0.15
 FINE_COUNT = 7
@@ -151,15 +152,18 @@ ALTITUDE_HOLD_GAIN = 4.0       # 1/s, proportional gain pulling z back to the st
 ALTITUDE_HOLD_MAX_MPS = 0.15   # cap on the vertical hold speed
 
 
-def fine_candidates(best_coarse):
+def fine_candidates(best_coarse, already_tested=()):
     """Latencies for the fine pass: an even spread around the coarse winner.
 
     Rounded to milliseconds and deduplicated so a spread that clips against the ends of
-    the sane range does not spend trials measuring the same latency twice.
+    the sane range does not spend trials measuring the same latency twice. Latencies in
+    already_tested are dropped for the same reason: the spread is centered on the coarse
+    winner and so always lands on it, and that trial's residual is already in hand.
     """
     fine = np.clip(np.linspace(best_coarse - FINE_HALF_WIDTH, best_coarse + FINE_HALF_WIDTH,
                                FINE_COUNT), *FINE_CLIP)
-    return sorted({float(x) for x in np.round(fine, 3)})
+    tested = {round(float(x), 3) for x in already_tested}
+    return sorted({float(x) for x in np.round(fine, 3)} - tested)
 
 
 def altitude_hold_velocity(z_error):
@@ -174,10 +178,13 @@ def altitude_hold_velocity(z_error):
 def select_min_residual(results):
     """Pick the center of the range of latencies that all damp the swing fully.
 
-    The swing measurement can't read below a small floor (~20 mrad), so every latency that
-    fully damps ties near that floor -- the best isn't a single point but a range. Any
-    latency in that range works; we return its midpoint, which sits farthest from the
-    edges where damping starts to fail and is more repeatable than picking an edge.
+    Every latency that fully damps ties near whatever residual this robot's cancellation
+    bottoms out at (as low as 6 mrad on a good one, higher on others), so the best isn't a
+    single point but a range. Any latency in that range works; we return its midpoint, which
+    sits farthest from the edges where damping starts to fail and is more repeatable than
+    picking an edge. Since the floor is a property of the robot rather than a fixed number,
+    the tie band widens with it: FLOOR_MARGIN is the noise allowance a low floor needs, and
+    the 50% term takes over once the floor is high enough to make it too tight.
 
     results is a list of (latency, residual). Duplicate latencies keep their best reading
     so one bad settle doesn't reject an otherwise-good latency.
