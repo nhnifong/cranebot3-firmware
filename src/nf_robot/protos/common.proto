@@ -126,4 +126,11 @@ enum CalibratedStatus {
 message RelayCreds {
   string robot_id = 1;
   string key = 2;
+  // ws:// or wss:// protocol and host of the control plane that minted these
+  // credentials, e.g. "wss://neufangled.com". The robot files the creds under
+  // this key so a later run started against that control plane finds them.
+  // Binding happens over the LAN control link while the robot may be in LAN
+  // mode, so the robot cannot infer the issuer on its own; when this is empty
+  // (older UI) it falls back to guessing from its own --telemetry_env.
+  string control_plane_host = 3;
 }

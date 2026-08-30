@@ -59,7 +59,7 @@ from nf_robot.host import swing
 from nf_robot.host.visual_servo import VisualServo, SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
-from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL
+from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL, normalize_control_plane_host
 from nf_robot.host.webui_server import WebUiServer
 
 logger = logging.getLogger(__name__)
@@ -1376,7 +1376,7 @@ class AsyncObserver:
             sys.executable,
             '-u', '-c',
             f"from nf_robot.ml.stringman_lerobot import {func_name}; "
-            f"{func_name}('{tele_addr}', '{repo_id}', '{self.config.robot_id}'{up})"
+            f"{func_name}('{tele_addr}', '{repo_id}', '{self.telemetry.cloud_robot_id}'{up})"
         ]
 
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -2974,7 +2974,7 @@ class AsyncObserver:
 
         return writer.close(
             finger_angles=list(finger_angles), wrist_steps=wrist_steps,
-            base_wrist_angle=base_wrist, **provenance(self.config.robot_id),
+            base_wrist_angle=base_wrist, **provenance(self.telemetry.cloud_robot_id),
         )
 
     async def _sweep_wrist_sampling(self, kind, writer, degrees, speed_dps, extra,
@@ -3096,7 +3096,7 @@ class AsyncObserver:
         return writer.close(stream_start_ts or 0.0, packets=packets,
                             target_ranges=list(ranges), sweep_degrees=degrees,
                             sweep_speed_dps=speed_dps, start_wrist_angle=start_wrist,
-                            **provenance(self.config.robot_id), **(run_attrs or {}))
+                            **provenance(self.telemetry.cloud_robot_id), **(run_attrs or {}))
 
     async def collect_floorplates(self, ranges=None, output_dir=PLATE_OUTPUT_DIR,
                                   settle_s=FINGERPLATE_SETTLE_S):
@@ -4322,11 +4322,35 @@ class AsyncObserver:
 
         Keyed by that instance's ws_protocol_and_host so the telemetry manager can look them
         up. Delivered over a control message (from the account bridge) once, so we persist it,
-        then tell the manager to (re)connect with them right away."""
-        host = self.telemetry.control_plane_host
+        then tell the manager to (re)connect with them right away.
+
+        The issuing control plane is whichever one served the page the user bound from, which
+        need not be the one this process was started against: binding is offered in LAN mode,
+        where control_plane_host is only a default. So we key on the host the UI reports and
+        fall back to our own default only when it reports none (older UI)."""
+        host = normalize_control_plane_host(item.control_plane_host)
+        if host is None:
+            if item.control_plane_host:
+                logger.warning(
+                    f'Ignoring unusable control_plane_host {item.control_plane_host!r} in relay '
+                    f'credentials; falling back to this robot\'s own control plane'
+                )
+            host = self.telemetry.control_plane_host
         logger.info(f'Storing relay credentials for {host} (robot id "{item.robot_id}")')
+        # control_plane_host is deliberately not persisted: the map key already carries it,
+        # and a second copy is just something that can disagree with it.
         self.config.relay_credentials[host] = common.RelayCreds(robot_id=item.robot_id, key=item.key)
         save_config(self.config, self.config_path)
+        if host != self.telemetry.control_plane_host:
+            # Bound against a different control plane than this run talks to. The creds are
+            # saved and a run started against that plane will find them, but this session
+            # stays unbound, so say so rather than leaving the user to wonder why the cloud
+            # link never comes up.
+            logger.warning(
+                f'These credentials are for {host}, but this session is running against '
+                f'{self.telemetry.control_plane_host}; restart with a matching --telemetry_env '
+                f'to use them.'
+            )
         self.telemetry.credentials_updated()
 
     def _handle_popup_ack(self, item: control.PopupAck):
@@ -4992,7 +5016,7 @@ class AsyncObserver:
             ortho_floor_vs = NfVideoStreamer(
                 width=1000, height=1000, fps=10,
                 mjpeg_port=8747,
-                stream_path=f'stringman/{self.config.robot_id}/3',
+                stream_path=f'stringman/{self.telemetry.cloud_robot_id}/3',
                 telemetry_env=self.telemetry_env,
                 on_ready=_make_on_ready(3),
                 bind_address=self.bind_address,

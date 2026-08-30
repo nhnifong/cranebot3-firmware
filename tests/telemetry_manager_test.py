@@ -18,10 +18,11 @@ from port_utils import free_port
 
 
 class FakeConfig:
-    """Just the two fields the manager reads out of the real config."""
+    """Just the field the manager reads out of the real config. The robot's id is not a
+    config field of its own: it lives in the credential minted for whichever control plane
+    the manager is running against (see TelemetryManager.cloud_robot_id)."""
 
     def __init__(self):
-        self.robot_id = 'test-robot'
         self.relay_credentials = {}
 
 
@@ -116,6 +117,8 @@ class TestBuffering(TelemetryManagerTestBase):
             self.tm.send(task_status=telemetry.TaskStatus(), logs=telemetry.Logs(line=['a']))
 
     async def test_nothing_is_sent_until_flush(self):
+        self.config.relay_credentials[CONTROL_PLANE_LOCAL] = common.RelayCreds(
+            robot_id='test-robot', key='k')
         sock = FakeSocket()
         self.tm.connected_local_clients.add(sock)
         self.tm.send(logs=telemetry.Logs(line=['before']))
@@ -123,6 +126,8 @@ class TestBuffering(TelemetryManagerTestBase):
 
         await self.tm.flush()
         batch, = sock.batches()
+        # the batch is stamped with the id the control plane minted, so a UI can tell which
+        # robot it is talking to
         self.assertEqual(batch.robot_id, 'test-robot')
         self.assertEqual([u.logs.line[0] for u in batch.updates], ['before'])
 

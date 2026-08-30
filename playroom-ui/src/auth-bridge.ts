@@ -28,6 +28,15 @@ export interface GuestAccess {
 export interface BindV2Result {
   robotId: string;
   key: string;
+  // ws:// or wss:// protocol and host of the control plane that minted these
+  // credentials (e.g. "wss://neufangled.com"), which the robot stores them
+  // under. Only the host knows this: it is the control plane's own telemetry
+  // endpoint, not necessarily this page's origin (a dev site on :5173 fronts a
+  // control plane on :8080), and the robot cannot infer it because binding
+  // happens over the LAN control link. An implementation that omits it leaves
+  // the robot guessing from its own --telemetry_env, which is wrong whenever
+  // the robot was not started against the control plane that bound it.
+  controlPlaneHost?: string;
 }
 
 export interface PlayroomAuthBridge {

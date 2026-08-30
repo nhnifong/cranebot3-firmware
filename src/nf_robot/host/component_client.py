@@ -362,7 +362,10 @@ class ComponentClient:
         """
         if stop is None:
             stop = threading.Event()
-        path = f'stringman/{self.config.robot_id}/{feed_number}'
+        # The media server authorizes a publish by the robot id in this path (it looks up
+        # whether that id has a live telemetry uplink), so it has to be the id the control
+        # plane minted for us, not anything local.
+        path = f'stringman/{self.ob.telemetry.cloud_robot_id}/{feed_number}'
         mjpegport = 4246 if self.anchor_num is None else 4247 + self.anchor_num
 
         bind_address = getattr(self.ob, 'bind_address', '127.0.0.1')

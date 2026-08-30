@@ -552,9 +552,9 @@ async function executeBind() {
     // mints an id + key and returns them. We then hand the key to the robot over
     // its live (LAN) control link via a RelayCreds control message, so it can
     // store the creds and reconnect to the cloud authenticated as its new id.
-    const { robotId, key } = await AuthManager.apiBindRobotV2(nickname, token);
+    const { robotId, key, controlPlaneHost } = await AuthManager.apiBindRobotV2(nickname, token);
     sendControl([nf.control.ControlItem.create({
-      addRelayCreds: nf.common.RelayCreds.create({ robotId, key }),
+      addRelayCreds: nf.common.RelayCreds.create({ robotId, key, controlPlaneHost }),
     })]);
     document.getElementById('landing-layer')?.classList.add('hidden');
     document.getElementById('bind-robot-panel')?.classList.add('hidden');

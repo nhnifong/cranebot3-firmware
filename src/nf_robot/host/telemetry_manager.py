@@ -5,6 +5,7 @@ import logging
 import threading
 from collections import deque
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import websockets
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
@@ -20,6 +21,26 @@ CONTROL_PLANE_LOCAL = "ws://localhost:8080"
 # peer kinds handed to the connect/disconnect callbacks
 LOCAL = 'local'
 CLOUD = 'cloud'
+
+
+def normalize_control_plane_host(host):
+    """Reduce a control plane URL to the "ws(s)://host[:port]" form used as the key into
+    config.relay_credentials, or return None if it is not a usable URL.
+
+    The binding UI reports the control plane that minted a set of credentials (see
+    RelayCreds.control_plane_host), and whatever it sends has to end up byte-identical to
+    the constants above or the creds are filed where no run will look for them. So an
+    http(s) scheme is folded to its websocket equivalent and any path, query or trailing
+    slash is dropped.
+    """
+    if not host:
+        return None
+    parsed = urlparse(host.strip())
+    scheme = {'http': 'ws', 'https': 'wss'}.get(parsed.scheme, parsed.scheme)
+    if scheme not in ('ws', 'wss') or not parsed.netloc:
+        return None
+    return f'{scheme}://{parsed.netloc}'
+
 
 # telemetry items whose retain_key is a constant. The relay resends the most recent item
 # per retain_key to UIs that connect late.
@@ -133,7 +154,7 @@ class TelemetryManager:
         """
         with self._buffer_lock:
             batch = telemetry.TelemetryBatchUpdate(
-                robot_id=self.config.robot_id,
+                robot_id=self.cloud_robot_id,
                 updates=list(self._buffer)
             )
             self._buffer.clear()

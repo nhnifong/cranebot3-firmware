@@ -41,10 +41,10 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     Creates a protobuf configuration object populated with reasonable defaults.
     """
     config = nf_config.StringmanPilotConfig()
-    # Anonymous LAN-mode robots have no id: it stays empty ("") until the robot is bound to a
-    # particular control plane instance, at which point that instance mints an id + key that
-    # are stored per-host in config.relay_credentials (see TelemetryManager).
-    config.robot_id = ""
+    # No robot_id here: an anonymous robot has no id, and binding it to a control plane
+    # instance stores the id that instance mints alongside its key in
+    # config.relay_credentials (see TelemetryManager.cloud_robot_id). The deprecated
+    # config.robot_id field is left unset.
     config.calibrated_status = common.CalibratedStatus.UNCALIBRATED
     config.connect_cloud_telemetry = False
 

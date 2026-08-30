@@ -300,6 +300,12 @@ class StringmanPilotConfig(betterproto2.Message):
     """
 
     robot_id: "str" = betterproto2.field(8, betterproto2.TYPE_STRING)
+    """
+    DEPRECATED. Never populated: an anonymous robot has no id, and the v2 bind flow
+    stores the id the control plane minted alongside its key in relay_credentials.
+    Use TelemetryManager.cloud_robot_id, which reads it from there for the control
+    plane this process is running against.
+    """
 
     has_been_calibrated: "bool" = betterproto2.field(9, betterproto2.TYPE_BOOL)
     """
