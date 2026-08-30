@@ -434,6 +434,45 @@ python -m nf_robot.ml.stringman_lerobot eval \
   --dataset_id=naavox/grasping_dataset
 ```
 
+## Evaluation on Modal
+
+For policies too big for the local GPU. [`lerobot_eval_modal.py`](lerobot_eval_modal.py)
+runs the same `stringman_lerobot eval` loop in a Modal container: the policy loads on a
+cloud GPU, and the container connects **out** to the relay for the control channel and
+pulls the camera feeds over RTSP/TCP from `media.neufangled.com`. Nothing needs to be
+reachable from Modal, so this works exactly like a local remote-relay eval — including
+pressing start from the robot's control panel.
+
+Same prerequisites as a local relay session: the robot bound to your account, running
+with `--telemetry_env=production`, plus a fresh single-use stream ticket.
+
+```bash
+python src/nf_robot/ml/lerobot_eval_modal.py \
+  --policy_id naavox/neu-298-fastwam-test \
+  --server_address wss://neufangled.com \
+  --robot_id YOUR_ROBOT_ID \
+  --remote_stream_token YOUR_STREAM_TICKET
+```
+
+Notes:
+
+- **The local working tree is what runs.** `src/nf_robot` is mounted into the container
+  rather than pip-installed, so edits to `stringman_lerobot.py` take effect on the next
+  launch with no publish step.
+- **GPU sizing.** The default `--gpu_type L40S` (48 GB) is the smallest sensible card for
+  FastWAM: ~26 GB of resident weights (the 12 GB MoT DiT, the 11.4 GB UMT5-XXL text
+  encoder and the 2.8 GB Wan VAE, all bf16), which rules out the 24 GB tier. Latency, not
+  memory, is the reason to go bigger — each action chunk costs 10 denoising steps through
+  a 6B MoT, so try `--gpu_type H100` if the control loop falls behind. Smaller policies
+  (ACT, DiT, SmolVLA) run on `--gpu_type L4`.
+- **First run is slow.** FastWAM pulls ~26 GB of weights on a cold start. They land in the
+  `hf_cache` Modal Volume mounted at `~/.cache/huggingface`, so later runs skip it.
+- **Stream tickets are single-use.** Get a fresh one per launch; a container restart burns
+  the one you passed.
+- `--lerobot_extras` defaults to `dataset,fastwam,multi_task_dit`. Add the extra for your
+  policy type (`xvla`, `smolvla`, `vla_jepa`, …) if you eval one of those; changing it
+  rebuilds the cached image layer.
+
 ---
 
 # Targeting & visual servoing models
