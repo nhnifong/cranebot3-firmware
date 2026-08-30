@@ -97,7 +97,7 @@ _NF_ROBOT_DEPS = [
     "huggingface_hub",
 ]
 
-_REPO_SRC = Path(__file__).resolve().parents[2]  # <repo>/src
+_NF_SRC_MOUNT = "/opt/nf_src"
 
 _EVAL_IMAGE = (
     modal.Image.debian_slim(python_version="3.12")
@@ -106,8 +106,19 @@ _EVAL_IMAGE = (
     .pip_install(_LEROBOT_SPEC)
     # hf_xet deadlocks at "Fetching N files: 0%" inside Modal containers; force plain LFS.
     .env({"HF_HUB_DISABLE_XET": "1"})
-    .add_local_dir(_REPO_SRC / "nf_robot", "/opt/nf_src/nf_robot", ignore=["**/__pycache__"])
 )
+
+# This whole module is re-imported inside the container, where the file lands at
+# /root/lerobot_eval_modal.py and the repo layout does not exist -- so anything that
+# reaches for a local path has to be guarded. The mount is declared locally only; the
+# container receives it from the already-registered function spec.
+if modal.is_local():
+    _REPO_SRC = Path(__file__).resolve().parents[2]  # <repo>/src
+    _EVAL_IMAGE = _EVAL_IMAGE.add_local_dir(
+        _REPO_SRC / "nf_robot",
+        f"{_NF_SRC_MOUNT}/nf_robot",
+        ignore=["**/__pycache__"],
+    )
 
 app = modal.App("lerobot-eval")
 # Persists the HF cache across runs. FastWAM pulls ~26 GB of weights (fastwam_base +
@@ -132,7 +143,7 @@ def run_eval(
     camera_mode: str | None = None,
 ) -> None:
     """Load the policy and drive the robot until it disconnects."""
-    sys.path.insert(0, "/opt/nf_src")
+    sys.path.insert(0, _NF_SRC_MOUNT)
 
     from nf_robot.ml.stringman_lerobot import eval_until_disconnected
 
