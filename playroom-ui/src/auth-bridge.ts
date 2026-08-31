@@ -39,6 +39,41 @@ export interface BindV2Result {
   controlPlaneHost?: string;
 }
 
+// How many people may drive a robot at once, and where the caller stands.
+// Driving means a per-viewer WebRTC feed of every camera, which the media
+// gateway can only serve to a handful of people; spectating is an HLS remux that
+// fans out cheaply. So a robot shared with everyone can entitle far more people
+// to drive than can actually drive, and entitled drivers wait their turn.
+export interface DriverSlot {
+  // Concurrent drivers this robot allows, and how many are driving now.
+  capacity: number;
+  in_use: number;
+  // Whether the caller is one of them.
+  held: boolean;
+  // 1-based place in line, or null when not waiting. Always null from
+  // apiGetMyAccess: asking about a robot doesn't take a place in line, so a real
+  // position only exists once the control socket is open (which is what holds
+  // the place). The live position arrives as DriverSlotStatus telemetry.
+  queue_position: number | null;
+  queue_length: number;
+  // Silence after which a held slot is handed to whoever is waiting.
+  idle_timeout_seconds: number;
+}
+
+export interface MyAccess {
+  // What the caller is entitled to: "owner" | "full" | "limited_driver" | "spectator".
+  access_level: string;
+  // What that entitlement is worth right now. Equal to access_level when a
+  // driver slot is available, "spectator" when every slot is taken. Advisory:
+  // it predicts what connecting would get you, and the control socket's
+  // DriverSlotStatus supersedes it from the moment it opens.
+  effective_access_level: string;
+  // null when the caller needs no slot (spectators) or when slot state could
+  // not be read, in which case treat driving as available and let the control
+  // socket decide.
+  slot: DriverSlot | null;
+}
+
 export interface PlayroomAuthBridge {
   // True for a real cloud-account implementation (nf-main-site's), false for
   // a stub like dev/stub-bridge.ts. main.ts uses this to hide cloud-only UI
@@ -55,7 +90,8 @@ export interface PlayroomAuthBridge {
   apiBindRobotV2(nickname: string, token: string): Promise<BindV2Result>;
   apiGetStreamTicket(robotId: string, token: string): Promise<string>;
   apiUnbindRobot(robotId: string, token: string): Promise<void>;
-  apiGetMyAccess(robotId: string, token: string): Promise<string>;
+  // Resolves both what the caller may do and whether they may do it yet.
+  apiGetMyAccess(robotId: string, token: string): Promise<MyAccess>;
   apiShareRobot(robotId: string, email: string, accessLevel: string, token: string): Promise<void>;
   apiListAuthorized(robotId: string, token: string): Promise<GuestAccess[]>;
 }

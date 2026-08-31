@@ -237,6 +237,37 @@ message UplinkStatus {
   bool online = 1;
 }
 
+// A driver "slot" is permission to actually use a driving access level right
+// now, as opposed to merely holding it. Driving means a per-viewer WebRTC feed
+// of every camera; a robot shared with everyone can have far more people
+// entitled to drive than the media gateway can serve at once, so entitled
+// drivers wait in line and watch the scalable HLS remux until a slot frees.
+//
+// Sent only from the control plane, and unlike every other telemetry item it is
+// addressed to a single UI rather than broadcast to all of a robot's viewers:
+// queue position and slot ownership are per-user. It is therefore never
+// retained (a retained copy would be served to the wrong person on connect).
+message DriverSlotStatus {
+  // What the caller's permissions entitle them to:
+  // "owner" | "full" | "limited_driver" | "spectator".
+  string granted_level = 1;
+  // What they may actually use at this moment: granted_level while they hold a
+  // slot, "spectator" while they wait for one.
+  string effective_level = 2;
+  // True when this UI currently holds a slot.
+  bool held = 3;
+  // Slots this robot allows at once, and how many are taken.
+  uint32 capacity = 4;
+  uint32 in_use = 5;
+  // 1-based place in line. 0 when holding a slot or not waiting for one.
+  uint32 queue_position = 6;
+  uint32 queue_length = 7;
+  // Seconds without control input after which a held slot is handed on.
+  uint32 idle_timeout_seconds = 8;
+  // Seconds of that timeout left. 0 when not holding a slot.
+  uint32 idle_seconds_remaining = 9;
+}
+
 // A message used by Stringman to give progress feedback to the UI on various operations
 // such as calibration, firmware update, and anything else we need.
 message OperationProgress {
@@ -328,6 +359,7 @@ message TelemetryItem {
     TensionRegulationState tension_regulation_state = 24;
     AutoTargetingState auto_targeting_state = 25;
     TorqueState torque_state = 26;
+    DriverSlotStatus driver_slot_status = 27; // only sent from control plane, and only to one UI
   }
 
   // If set, the Control Plane will cache this item using this string as the key.

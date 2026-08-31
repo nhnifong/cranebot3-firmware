@@ -235,9 +235,37 @@ let socket: WebSocket;
 let isLanMode = false;
 let isSimMode = false; // Track simulator mode
 
-// The caller's effective access level for the connected robot. 'owner' until
-// resolved (and always effectively owner in LAN/sim, which have no cloud auth).
+// What the caller is *entitled* to on the connected robot, and what that is
+// worth right now. They differ only in cloud mode, and only because driving is
+// rationed: a driver holds a per-viewer WebRTC feed of every camera, so a robot
+// shared with everyone can entitle far more people to drive than the media
+// gateway can serve at once. Anyone entitled but waiting for a free slot is an
+// effective spectator — the exact degrade the UI already knows how to render.
+//
+// currentAccessLevel is the effective one, because it is what everything below
+// should gate on. Both are 'owner' until resolved, and stay that way in LAN/sim
+// modes, which have no cloud auth and no rationing.
+let grantedAccessLevel: string = 'owner';
 let currentAccessLevel: string = 'owner';
+// Latest DriverSlotStatus from the control plane, or null in LAN/sim mode and
+// before the first one arrives.
+let driverSlot: nf.telemetry.IDriverSlotStatus | null = null;
+
+// Mirrors ACCESS_RANK in the control plane's database.py.
+const ACCESS_RANK: Record<string, number> = {
+  spectator: 0, limited_driver: 1, full: 2, owner: 3,
+};
+
+// TEMP (testing): ?force_access=<level> on the playroom URL lets an owner drive
+// the app as a lesser level without a second account. The control plane enforces
+// this downgrade-only on /control (see main.py), so this is only about starting
+// the UI in the matching state instead of flashing the real level first — and
+// about actually forwarding the parameter, which is the half that has to live
+// here. Remove alongside the server knob once level testing is done.
+function forcedAccessLevel(): string | null {
+  const forced = new URLSearchParams(window.location.search).get('force_access');
+  return forced && forced in ACCESS_RANK ? forced : null;
+}
 // Spectators send nothing; everyone else may send (the backend filters
 // limited_driver, so the UI need only fully block spectators here).
 function canSendControl(): boolean {
@@ -298,8 +326,73 @@ function updateAccessBadge() {
       'padding:2px 8px;border-radius:10px;font-size:11px;text-transform:capitalize;';
     statusText.insertAdjacentElement('afterend', badge);
   }
-  badge.textContent = currentAccessLevel.replace('_', ' ');
-  badge.style.display = currentAccessLevel === 'owner' ? 'none' : 'inline-block';
+  // While queued, the honest label is the entitlement plus why it isn't live —
+  // showing a bare "spectator" to someone the owner made a driver reads as a
+  // permissions bug rather than a queue.
+  const waiting = driverSlot != null && !driverSlot.held && grantedAccessLevel !== 'spectator';
+  badge.textContent = waiting
+    ? `${grantedAccessLevel.replace('_', ' ')} (waiting)`
+    : currentAccessLevel.replace('_', ' ');
+  badge.style.display = currentAccessLevel === 'owner' && !waiting ? 'none' : 'inline-block';
+}
+
+// ============================================================
+//  Driver slots
+//
+//  Being granted a driving level and being able to use it are separate
+//  questions: driving costs a WebRTC feed per camera, spectating is a shared
+//  HLS remux. The control plane rations the former, and says so with
+//  DriverSlotStatus — the one telemetry item addressed to a single UI rather
+//  than broadcast, since queue position is per-user.
+// ============================================================
+
+// The most recent VideoReady per feed. Driving and spectating fetch video by
+// different routes, so being promoted (or dropped) means re-running the feed
+// setup with the same payloads rather than waiting for the robot to re-announce.
+const lastVideoReady = new Map<number, nf.telemetry.IVideoReady>();
+
+function handleDriverSlotStatus(data: nf.telemetry.IDriverSlotStatus) {
+  const wasSpectating = currentAccessLevel === 'spectator';
+  grantedAccessLevel = data.grantedLevel || grantedAccessLevel;
+  currentAccessLevel = data.effectiveLevel || grantedAccessLevel;
+  driverSlot = data;
+
+  applyAccessLevelUI();
+  updateQueueBanner();
+
+  // Only a move across the spectator boundary changes how video is fetched.
+  if (wasSpectating !== (currentAccessLevel === 'spectator')) {
+    console.log(`Driver slot ${data.held ? 'acquired' : 'lost'}; reconnecting video feeds`);
+    for (const ready of lastVideoReady.values()) handleVideoReady(ready);
+  }
+}
+
+// A strip along the top telling a waiting driver where they are in line, and
+// a driving one how much idle time is left before the slot passes on. Created
+// on demand so the shell markup stays shared with LAN mode, which has neither.
+function updateQueueBanner() {
+  let banner = document.getElementById('driver-queue-banner');
+  const waiting = driverSlot != null && !driverSlot.held && grantedAccessLevel !== 'spectator';
+
+  if (!waiting) {
+    banner?.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'driver-queue-banner';
+    // On body rather than #ui-layer: that layer is a named-area grid, and an
+    // extra child would land in an unplaced cell and shove the panels around.
+    document.body.appendChild(banner);
+  }
+
+  const position = driverSlot!.queuePosition ?? 0;
+  const capacity = driverSlot!.capacity ?? 0;
+  const place = position > 0 ? `You are #${position} in line` : 'Waiting for a free spot';
+  banner.innerHTML =
+    `<strong>${place}.</strong> ` +
+    `This robot seats ${capacity} driver${capacity === 1 ? '' : 's'} at a time — ` +
+    `you're watching until one frees up, and you'll take the controls automatically.`;
 }
 
 // Helpers to sync URL
@@ -509,11 +602,32 @@ async function startCloudFlow(robotId: string) {
     const token = await AuthManager.getAuthToken();
 
     // Resolve our access level before connecting so the UI starts in the right
-    // state. A force_access URL param overrides it for local testing.
+    // state. Two answers, not one: what we're entitled to, and whether a driver
+    // slot is free for us to use it. A force_access URL param downgrades both
+    // for local testing (see forcedAccessLevel).
     try {
-      currentAccessLevel = await AuthManager.apiGetMyAccess(robotId, token);
+      const access = await AuthManager.apiGetMyAccess(robotId, token);
+      grantedAccessLevel = access.access_level;
+      currentAccessLevel = access.effective_access_level;
+
+      // Downgrade-only, matching what the server will do with the same value.
+      const forced = forcedAccessLevel();
+      if (forced && ACCESS_RANK[forced] < ACCESS_RANK[grantedAccessLevel]) {
+        grantedAccessLevel = forced;
+        currentAccessLevel = forced;
+      }
+      if (access.slot && !access.slot.held && currentAccessLevel !== grantedAccessLevel) {
+        // Worth saying before the 3D scene loads over it: connecting still
+        // happens either way (spectating is the wait), but the reason the
+        // controls are dead should not be a mystery.
+        console.log(
+          `All ${access.slot.capacity} driver slots on ${robotId} are taken ` +
+          `(${access.slot.queue_length} waiting); connecting as a spectator.`
+        );
+      }
     } catch (e) {
       console.warn('Could not resolve access level, assuming owner:', e);
+      grantedAccessLevel = 'owner';
       currentAccessLevel = 'owner';
     }
     applyAccessLevelUI();
@@ -522,6 +636,10 @@ async function startCloudFlow(robotId: string) {
     document.getElementById('landing-layer')?.classList.add('hidden');
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     let url = `${protocol}//${window.location.host}/control/${robotId}?ticket=${encodeURIComponent(ticket)}`;
+    // Forwarded explicitly: the parameter is on the page URL, and nothing else
+    // carries it through to the control socket.
+    const forcedForSocket = forcedAccessLevel();
+    if (forcedForSocket) url += `&force_access=${encodeURIComponent(forcedForSocket)}`;
     connect(url);
   } catch (error) { console.error("Cloud connection failed:", error); }
 }
@@ -780,6 +898,7 @@ function connect(wsUrl: string) {
         else if (update.namedPosition) handleNamedPosition(update.namedPosition);
         else if (update.videoReady) handleVideoReady(update.videoReady);
         else if (update.uplinkStatus) handleUplinkStatus(update.uplinkStatus);
+        else if (update.driverSlotStatus) handleDriverSlotStatus(update.driverSlotStatus);
         else if (update.gripSensors) handleGripSensors(update.gripSensors);
         else if (update.gripCamPreditions) gripperVideo.setGripperPredictions(update.gripCamPreditions);
         else if (update.operationProgress) handleOperationProgress(update.operationProgress);
@@ -798,6 +917,13 @@ function connect(wsUrl: string) {
   };
 
   socket.onclose = (event) => {
+    // Closing the socket is what gives up our slot (or our place in line), so
+    // the last status we had is stale from here on. Clearing it also takes the
+    // queue banner down over the reconnect, rather than leaving a stale
+    // position sitting on screen.
+    driverSlot = null;
+    updateQueueBanner();
+
     if (event.code === 1008) {
       console.error("Access revoked. Closing video connections.");
       firstOverheadVideo.setOffline();
@@ -1468,6 +1594,8 @@ initTargetRoutePickers();
 //   3: reprojected floor image (handled by floorProjection below)
 async function handleVideoReady(data: nf.telemetry.IVideoReady) {
   const feedNumber = data.feedNumber!;
+  // Kept so a driver-slot change can re-run this without the robot re-announcing.
+  lastVideoReady.set(feedNumber, data);
 
   if (feedNumber === 3) {
     if (isLanMode && data.localUri) {

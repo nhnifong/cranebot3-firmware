@@ -61,25 +61,6 @@ see that script and the root README's "Rebuilding the python module"
 section. stringman-headless falls back to that path only when
 `playroom-ui/dist/` isn't present.
 
-## Developing this package alongside nf-main-site
-
-If you're changing this package's code and want nf-main-site to pick up
-those changes without publishing, check out both repos as siblings (e.g.
-`~/cranebot3-firmware` next to `~/nf-main-site`) and point nf-viz's
-`package.json` at a local path:
-
-    "stringman-ui": "file:../../cranebot3-firmware/playroom-ui"
-
-`npm install` in `nf-viz` symlinks it into `node_modules`, so edits here are
-picked up immediately by `npm run dev`/`npm run build` over there, no
-publish step needed. Re-run `npm run proto` in this directory whenever
-`../src/nf_robot/protos/*.proto` changes; nf-viz doesn't know to do that for
-you.
-
-A `file:` dependency only resolves on a machine with both repos checked out
-side by side, though, it won't resolve in CI or a Docker build. Those need
-a real published version, see Publishing below.
-
 ## Publishing
 
 This package is published on the public npm registry as `stringman-ui`.

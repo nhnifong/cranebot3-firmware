@@ -1611,3 +1611,36 @@ h2 {
 
 /* The "End Tutorial" button keeps the default .header-back-btn styling so it
    matches the other top-bar buttons — no color override needed. */
+
+/* ============================================================
+   DRIVER QUEUE BANNER
+   Shown only in cloud mode, only to someone entitled to drive who is waiting
+   for a free driver slot. Created on demand by main.ts (updateQueueBanner), so
+   it has no markup in app-shell.html — LAN and sim modes ration nothing.
+   ============================================================ */
+#driver-queue-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(720px, 92vw);
+  box-sizing: border-box;
+  padding: 10px 20px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: var(--surface-dark);
+  color: var(--text-light);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  /* Above the panels, below popups and the sign-in overlay. */
+  z-index: 1000;
+  /* Purely informational — never swallow a click meant for the scene. */
+  pointer-events: none;
+}
+
+#driver-queue-banner strong {
+  color: var(--text-bright);
+}

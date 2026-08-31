@@ -10,6 +10,7 @@ __all__ = (
     "CommandedVelocity",
     "ComponentConnStatus",
     "ConnStatus",
+    "DriverSlotStatus",
     "GantrySightings",
     "GripCamPredictions",
     "GripperModel",
@@ -288,6 +289,68 @@ class ComponentConnStatus(betterproto2.Message):
 
 default_message_pool.register_message(
     "nf.telemetry", "ComponentConnStatus", ComponentConnStatus
+)
+
+
+@dataclass(eq=False, repr=False)
+class DriverSlotStatus(betterproto2.Message):
+    """
+    A driver "slot" is permission to actually use a driving access level right
+    now, as opposed to merely holding it. Driving means a per-viewer WebRTC feed
+    of every camera; a robot shared with everyone can have far more people
+    entitled to drive than the media gateway can serve at once, so entitled
+    drivers wait in line and watch the scalable HLS remux until a slot frees.
+
+    Sent only from the control plane, and unlike every other telemetry item it is
+    addressed to a single UI rather than broadcast to all of a robot's viewers:
+    queue position and slot ownership are per-user. It is therefore never
+    retained (a retained copy would be served to the wrong person on connect).
+    """
+
+    granted_level: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+    """
+    What the caller's permissions entitle them to:
+    "owner" | "full" | "limited_driver" | "spectator".
+    """
+
+    effective_level: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    What they may actually use at this moment: granted_level while they hold a
+    slot, "spectator" while they wait for one.
+    """
+
+    held: "bool" = betterproto2.field(3, betterproto2.TYPE_BOOL)
+    """
+    True when this UI currently holds a slot.
+    """
+
+    capacity: "int" = betterproto2.field(4, betterproto2.TYPE_UINT32)
+    """
+    Slots this robot allows at once, and how many are taken.
+    """
+
+    in_use: "int" = betterproto2.field(5, betterproto2.TYPE_UINT32)
+
+    queue_position: "int" = betterproto2.field(6, betterproto2.TYPE_UINT32)
+    """
+    1-based place in line. 0 when holding a slot or not waiting for one.
+    """
+
+    queue_length: "int" = betterproto2.field(7, betterproto2.TYPE_UINT32)
+
+    idle_timeout_seconds: "int" = betterproto2.field(8, betterproto2.TYPE_UINT32)
+    """
+    Seconds without control input after which a held slot is handed on.
+    """
+
+    idle_seconds_remaining: "int" = betterproto2.field(9, betterproto2.TYPE_UINT32)
+    """
+    Seconds of that timeout left. 0 when not holding a slot.
+    """
+
+
+default_message_pool.register_message(
+    "nf.telemetry", "DriverSlotStatus", DriverSlotStatus
 )
 
 
@@ -804,6 +867,13 @@ class TelemetryItem(betterproto2.Message):
     torque_state: "TorqueState | None" = betterproto2.field(
         26, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
     )
+
+    driver_slot_status: "DriverSlotStatus | None" = betterproto2.field(
+        27, betterproto2.TYPE_MESSAGE, optional=True, group="payload"
+    )
+    """
+    only sent from control plane, and only to one UI
+    """
 
     retain_key: "str | None" = betterproto2.field(
         14, betterproto2.TYPE_STRING, optional=True
