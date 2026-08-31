@@ -393,13 +393,23 @@ function initApp() {
       try {
         const token = await AuthManager.getAuthToken();
         userRobots = await AuthManager.apiListRobots(token);
-        // If the robot already detected (LAN), update button now that we have the list
-        refreshRunMenuAuth();
       } catch (e) {
         console.warn("Silent robot list fetch failed:", e);
       }
+    } else {
+      // Signed out: nothing is bound to "us" any more.
+      userRobots = [];
     }
+    // Re-run on every auth change, signed in or out: it decides what the run
+    // menu's account item says and does.
+    refreshRunMenuAuth();
   });
+
+  // Wire that menu item up front too. The auth callback above may not fire (a
+  // host bridge need not call it) and the telemetry path that also refreshes it
+  // only runs once a robot reports an id — which an unbound robot never does,
+  // that being exactly the robot you need "Bind to account" to work for.
+  refreshRunMenuAuth();
 
   // Bind all landing and panel buttons unconditionally
   document.getElementById('btn-lan-mode')?.addEventListener('click', startLanFlow);
