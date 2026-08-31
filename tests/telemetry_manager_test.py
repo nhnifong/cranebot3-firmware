@@ -117,7 +117,7 @@ class TestBuffering(TelemetryManagerTestBase):
             self.tm.send(task_status=telemetry.TaskStatus(), logs=telemetry.Logs(line=['a']))
 
     async def test_nothing_is_sent_until_flush(self):
-        self.config.relay_credentials[CONTROL_PLANE_LOCAL] = common.RelayCreds(
+        self.config.relay_credentials[CONTROL_PLANE_PRODUCTION] = common.RelayCreds(
             robot_id='test-robot', key='k')
         sock = FakeSocket()
         self.tm.connected_local_clients.add(sock)
@@ -270,10 +270,19 @@ class TestLocalServer(TelemetryManagerTestBase):
 class TestControlPlaneSelection(TelemetryManagerTestBase):
 
     async def test_host_per_environment(self):
-        self.assertEqual(self.make_manager(None).control_plane_host, CONTROL_PLANE_LOCAL)
         self.assertEqual(self.make_manager('local').control_plane_host, CONTROL_PLANE_LOCAL)
         self.assertEqual(self.make_manager('staging').control_plane_host, CONTROL_PLANE_STAGING)
         self.assertEqual(self.make_manager('production').control_plane_host, CONTROL_PLANE_PRODUCTION)
+
+    async def test_production_is_the_default(self):
+        # LAN mode opens no cloud link, but it still has to pick a credential to answer as,
+        # and production is the only plane a robot in the field is bound to.
+        self.assertEqual(self.make_manager(None).control_plane_host, CONTROL_PLANE_PRODUCTION)
+
+    async def test_lan_mode_answers_as_the_production_id(self):
+        self.config.relay_credentials[CONTROL_PLANE_PRODUCTION] = common.RelayCreds(
+            robot_id='r9', key='k')
+        self.assertEqual(self.make_manager(None).cloud_robot_id, 'r9')
 
     async def test_cloud_robot_id_is_blank_until_bound(self):
         tm = self.make_manager('production')
@@ -282,7 +291,7 @@ class TestControlPlaneSelection(TelemetryManagerTestBase):
         self.assertEqual(tm.cloud_robot_id, 'r9')
 
     async def test_lan_mode_never_starts_a_cloud_link(self):
-        self.config.relay_credentials[CONTROL_PLANE_LOCAL] = common.RelayCreds(robot_id='r1', key='k')
+        self.config.relay_credentials[CONTROL_PLANE_PRODUCTION] = common.RelayCreds(robot_id='r1', key='k')
         self.tm.start_cloud_link()  # telemetry_env is None
         self.assertIsNone(self.tm._cloud_task)
 

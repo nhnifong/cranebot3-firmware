@@ -101,14 +101,18 @@ class TelemetryManager:
 
     @property
     def control_plane_host(self):
-        """The telemetry ws_protocol_and_host of the control plane this robot connects to,
+        """The telemetry ws_protocol_and_host of the control plane this robot belongs to,
         derived from telemetry_env. This same string is the key into config.relay_credentials
-        (e.g. "wss://neufangled.com"), so binding and connecting agree on which creds to use."""
+        (e.g. "wss://neufangled.com"), so binding and connecting agree on which creds to use.
+
+        Production is the default because it is the only control plane a robot outside a dev
+        enviroment is ever bound to. this decides how a key is stored when binding a robot with
+        a user id on a server"""
         if self.telemetry_env == 'staging':
             return CONTROL_PLANE_STAGING
-        if self.telemetry_env == 'production':
-            return CONTROL_PLANE_PRODUCTION
-        return CONTROL_PLANE_LOCAL
+        if self.telemetry_env == 'local':
+            return CONTROL_PLANE_LOCAL
+        return CONTROL_PLANE_PRODUCTION
 
     @property
     def cloud_robot_id(self):

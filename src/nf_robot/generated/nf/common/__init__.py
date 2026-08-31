@@ -434,15 +434,8 @@ class RelayCreds(betterproto2.Message):
 
     key: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
 
+    # ws:// or wss:// protocol and host of the control plane that minted these credentials
     control_plane_host: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
-    """
-    ws:// or wss:// protocol and host of the control plane that minted these
-    credentials, e.g. "wss://neufangled.com". The robot files the creds under
-    this key so a later run started against that control plane finds them.
-    Binding happens over the LAN control link while the robot may be in LAN
-    mode, so the robot cannot infer the issuer on its own; when this is empty
-    (older UI) it falls back to guessing from its own --telemetry_env.
-    """
 
 
 default_message_pool.register_message("nf.common", "RelayCreds", RelayCreds)
