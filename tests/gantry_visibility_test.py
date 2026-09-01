@@ -4,10 +4,15 @@ cameras see the gantry marker.
 
 The loop is driven directly, bound to a stub carrying only the attributes it touches, so the
 tests can feed a datastore poll by poll without standing up an observer or any hardware. Its
-sleep is replaced by one that advances a fake clock, so a ten second outage costs nothing.
+sleep is replaced by one that advances a fake clock, so an outage costs nothing however long
+the loop's timeout is set.
+
+Nothing here hard codes that timeout, or the loop's cadence or warmup: outages are asked for in
+seconds either side of UNSEEN_LIMIT_S, so changing the constant changes what the tests wait for.
 """
 
 import asyncio
+import math
 import unittest
 from unittest.mock import Mock, patch
 
@@ -15,9 +20,13 @@ import numpy as np
 
 from nf_robot.host import observer as observer_module
 from nf_robot.host.data_store import DataStore
-from nf_robot.host.observer import AsyncObserver, _widest_gap
+from nf_robot.host.observer import (AsyncObserver, UNSEEN_LIMIT_S, VISIBILITY_POLL_S,
+                                    _widest_gap)
 
 T0 = 10_000.0  # any fixed start; the loop only ever measures differences
+# Stamp for a sighting that has to look newer than every other one a test files. The loop only
+# asks whether one camera's newest sighting moved on, never how it compares to the host clock.
+LATE_SIGHTING_T = T0 + 1e6
 
 
 class FakeClock:
@@ -60,14 +69,21 @@ class StubObserver:
 async def run_monitor(stub, polls):
     """Run the monitor for len(polls) turns, calling polls[i](i) before the i'th one.
 
-    Each poll callback takes the turn number and may file sightings; the clock advances one
-    second per turn, matching the loop's own POLL_S.
+    Each poll callback takes the turn number and may file sightings. Every sleep the loop takes
+    advances the clock by what it asked for, so the fake clock stays in step with the loop's own
+    cadence whatever that is set to. The loop's one-off warmup sleep is not a turn: it costs the
+    clock its delay and nothing else, so the length of the warmup cannot shift what a test feeds.
     """
     clock = FakeClock()
     turns = iter(range(len(polls)))
+    warmed_up = False
 
     async def fake_sleep(delay):
+        nonlocal warmed_up
         clock.now += delay
+        if not warmed_up:
+            warmed_up = True
+            return
         try:
             i = next(turns)
         except StopIteration:
@@ -80,9 +96,16 @@ async def run_monitor(stub, polls):
         await stub.monitor_gantry_visibility()
 
 
-def quiet(n):
-    """n polls in which no camera reports anything."""
-    return [lambda i: None] * n
+def quiet(seconds):
+    """Polls covering `seconds` of the loop's own time, in which no camera reports anything."""
+    return [lambda i: None] * max(0, math.ceil(seconds / VISIBILITY_POLL_S))
+
+
+# The loop starts counting the outage from the poll that takes in the sighting already filed, and
+# runs one last turn after the polls are exhausted, so these clear the limit either way by a turn
+# to spare - whatever UNSEEN_LIMIT_S is.
+PAST_THE_LIMIT_S = UNSEEN_LIMIT_S + 3 * VISIBILITY_POLL_S
+SHORT_OF_THE_LIMIT_S = UNSEEN_LIMIT_S - 2 * VISIBILITY_POLL_S
 
 
 class TestWidestGap(unittest.TestCase):
@@ -151,26 +174,27 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
     async def test_unseen_marker_is_reported_after_the_timeout(self):
         stub = StubObserver()
         stub.sight(T0, 0, [0, 0, 1.0])
-        await run_monitor(stub, quiet(13))
+        await run_monitor(stub, quiet(PAST_THE_LIMIT_S))
         self.assertEqual(len(stub.popups), 1)
-        self.assertIn("hasn't been detected in 10 seconds", stub.popups[0])
+        self.assertIn(f"hasn't been detected in {UNSEEN_LIMIT_S:.0f} seconds", stub.popups[0])
 
     async def test_unseen_marker_is_not_reported_before_the_timeout(self):
         stub = StubObserver()
         stub.sight(T0, 0, [0, 0, 1.0])
-        await run_monitor(stub, quiet(8))
+        await run_monitor(stub, quiet(SHORT_OF_THE_LIMIT_S))
         self.assertEqual(stub.popups, [])
 
     async def test_unseen_marker_is_reported_only_once_per_outage(self):
         stub = StubObserver()
         stub.sight(T0, 0, [0, 0, 1.0])
-        await run_monitor(stub, quiet(30))
+        await run_monitor(stub, quiet(3 * UNSEEN_LIMIT_S))
         self.assertEqual(len(stub.popups), 1)
 
     async def test_a_second_outage_is_not_popped_again(self):
         stub = StubObserver()
         stub.sight(T0, 0, [0, 0, 1.0])
-        polls = quiet(13) + [lambda i: stub.sight(T0 + 100, 0, [0, 0, 1.0])] + quiet(13)
+        seen_again = [lambda i: stub.sight(LATE_SIGHTING_T, 0, [0, 0, 1.0])]
+        polls = quiet(PAST_THE_LIMIT_S) + seen_again + quiet(PAST_THE_LIMIT_S)
         await run_monitor(stub, polls)
         self.assertEqual(len(stub.popups), 1)
 
@@ -180,7 +204,8 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         task.get_name.return_value = 'full_auto_calibration'
         stub = StubObserver(motion_task=task)
         stub.sight(T0, 0, [0, 0, 1.0])
-        polls = quiet(13) + [lambda i: stub.sight(T0 + 100, 0, [0, 0, 1.0])] + quiet(13)
+        seen_again = [lambda i: stub.sight(LATE_SIGHTING_T, 0, [0, 0, 1.0])]
+        polls = quiet(PAST_THE_LIMIT_S) + seen_again + quiet(PAST_THE_LIMIT_S)
         await run_monitor(stub, polls)
         # the popup is once a session, the abort is not: the second outage would otherwise let
         # a re-run of the calibration fit a room out of stale sightings
@@ -189,7 +214,7 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
     async def test_no_anchors_connected_is_not_blamed_on_the_marker(self):
         stub = StubObserver()
         stub.anchors = {}
-        await run_monitor(stub, quiet(20))
+        await run_monitor(stub, quiet(2 * UNSEEN_LIMIT_S))
         self.assertEqual(stub.popups, [])
 
     async def test_fault_during_calibration_aborts_it(self):
@@ -198,7 +223,7 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         task.get_name.return_value = 'full_auto_calibration'
         stub = StubObserver(motion_task=task)
         stub.sight(T0, 0, [0, 0, 1.0])
-        await run_monitor(stub, quiet(13))
+        await run_monitor(stub, quiet(PAST_THE_LIMIT_S))
         task.cancel.assert_called_once()
         self.assertIn('has not been seen', stub.gantry_marker_fault)
 
@@ -208,7 +233,7 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         task.get_name.return_value = 'pick_and_place_loop'
         stub = StubObserver(motion_task=task)
         stub.sight(T0, 0, [0, 0, 1.0])
-        await run_monitor(stub, quiet(13))
+        await run_monitor(stub, quiet(PAST_THE_LIMIT_S))
         task.cancel.assert_not_called()
         self.assertIsNone(stub.gantry_marker_fault)
         self.assertEqual(len(stub.popups), 1)  # still told about it

@@ -93,6 +93,10 @@ VIDEO_LATENCY_S = 0.25
 # Motion tasks that turn sightings of the gantry marker into stored geometry, so a marker
 # fault does not degrade them, it gets fitted. monitor_gantry_visibility aborts these.
 MARKER_DEPENDENT_TASKS = ('full_auto_calibration',)
+# monitor_gantry_visibility's cadence, and how long every camera may go without a new sighting
+# of the gantry marker before that is called a fault rather than a gap.
+VISIBILITY_POLL_S = 1.0
+UNSEEN_LIMIT_S = 40.0
 
 # Capture runs for the synthetic visual servoing dataset; see ml/visual_servoing/readme.md.
 PLATE_OUTPUT_DIR = 'plates'
@@ -1788,7 +1792,6 @@ class AsyncObserver:
         callback already fills, and the only measurement it takes is between sightings that
         share a capture time, of which there is normally at most one per frame.
         """
-        POLL_S = 1.0
         # Every detection from one frame is filed under that frame's capture time, so sightings
         # sharing a timestamp are one camera's account of one instant. Two of them this far
         # apart is two tags: the gantry cannot be in both places, and unlike a spread measured
@@ -1799,7 +1802,6 @@ class AsyncObserver:
         # several of those scans, and require more than one to have split before calling it.
         HISTORY_S = 10.0
         MIN_SPLIT_FRAMES = 2
-        UNSEEN_LIMIT_S = 10.0
 
         await self.any_anchor_connected.wait()
         history = {}                # anchor num -> its recent rows, older than the buffer holds
@@ -1811,7 +1813,7 @@ class AsyncObserver:
         await asyncio.sleep(30)
 
         while self.run_command_loop:
-            await asyncio.sleep(POLL_S)
+            await asyncio.sleep(VISIBILITY_POLL_S)
             advanced = False        # did any camera deliver a sighting it had not before
             # The live array, not deepCopy: nothing here depends on row order, and an insert
             # racing this read can only replace one row of the several being weighed.
