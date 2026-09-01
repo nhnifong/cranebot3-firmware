@@ -48,14 +48,15 @@ anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035]
 anchor_wall_corner = (np.array([0,0,0], dtype=float), np.array([0.005978, 0.089425, 0.042], dtype=float))
 
 # rotation and translation vectors of the 'gantry' april tag in the gantry reference frame.
+# the point where the lines meet is the gantry's origin.
 # gantry_april = (np.array([0,pi/2,0], dtype=float), np.array([0.055,0,0.105], dtype=float))
 gantry_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.065, -0.055], dtype=float))
-# flat marker,
+# flat marker
 gantry_flat_april = (np.array([pi/2,0,0], dtype=float), np.array([0, -0.007, -0.0652], dtype=float))
 
 # position in front of a basket marker where objects should be dropped
-basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.10], dtype=float))
-basket_offset_inv = (np.array([0,0,0], dtype=float), np.array([0,0,-0.10], dtype=float))
+basket_offset = (np.array([0,0,0], dtype=float), np.array([0,0,0.20], dtype=float))
+basket_offset_inv = (np.array([0,0,0], dtype=float), np.array([0,0,-0.202], dtype=float))
 
 assumed_full_line_length = 7.5 # meters
 
@@ -92,10 +93,11 @@ damiao_spool_geometry = {
 }
 
 # arp anchor model
-arp_anchor_right_eyelet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
-arp_anchor_left_eyelet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
-# compose_poses([(np.array([0,pi,0], dtype=float), np.array([0.001, -0.039, 0.074], dtype=float)), (np.array([(90-22)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float))])
-arp_anchor_camera = (np.array([0.0, 2.60449835, -1.75675632]), np.array([ 0.001, -0.039,  0.074]))
+# your "right" when looking at it's face. right is direct line
+arp_anchor_right_eyelet = (np.array([0,0,0], dtype=float), np.array([0.031,-0.068,-0.022], dtype=float))
+arp_anchor_left_eyelet = (np.array([0,0,0], dtype=float), np.array([-0.031,-0.068,-0.022], dtype=float))
+# compose_poses([(np.array([0,pi,0], dtype=float), np.array([0.007, -0.033, 0.071], dtype=float)), (np.array([(90-22)/180*pi,0,0], dtype=float), np.array([0,0,0], dtype=float))])
+arp_anchor_camera = (np.array([0.0, 2.60449835, -1.75675632]), np.array([ 0.007, -0.033,  0.071]))
 
 rpi_cam_3_wide_fov = np.array([102, 67])
 
