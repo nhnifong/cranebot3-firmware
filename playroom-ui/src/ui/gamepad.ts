@@ -38,6 +38,7 @@ export class GamepadController {
     private dpadUpWasHeld = false;
     private dpadLeftWasHeld = false;
     private dpadRightWasHeld = false;
+    private dpadDownWasHeld = false;
     private selectWasHeld = false;
     private lclickWasHeld = false;
     private aWasHeld = false
@@ -60,6 +61,9 @@ export class GamepadController {
 
     public toggleSwingC: () => void = () => {};
     public onSetPrompt: () => void = () => {};
+    // Sends whatever debug command went last, so a collection run that is one command repeated
+    // (fly somewhere by hand, take a sample, fly on) needs the maintenance menu only once.
+    public repeatLastDebug: () => void = () => {};
 
     // Optional provider for touch-derived input state (mobile shell).
     // Returns null when not on mobile or no input is being given.
@@ -489,7 +493,11 @@ export class GamepadController {
         }
         this.dpadRightWasHeld = input.buttons.dpadRight;
 
-        // nothing is mapped to dpad down at the moment
+        // D-Pad Down -> repeat the last debug command
+        if (input.buttons.dpadDown && !this.dpadDownWasHeld) {
+            this.repeatLastDebug();
+        }
+        this.dpadDownWasHeld = input.buttons.dpadDown;
 
         // Select/back - stop all.
         // also triggers Lerobot EPCOMMAND_ABANDON

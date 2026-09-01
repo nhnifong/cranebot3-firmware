@@ -2093,10 +2093,7 @@ function initRunMenu() {
     debugSendBtn.addEventListener('click', () => {
       const val = (debugInput as HTMLInputElement).value;
       if (val) {
-        console.log("Sending debug cmd:", val);
-        sendControl([nf.control.ControlItem.create({
-          debug: {action: val}
-        })]);
+        sendDebugAction(val);
         closeMenus();
       }
     });
@@ -2949,6 +2946,30 @@ function initComponentMenu() {
 
 initComponentMenu();
 
+// The last debug command actually sent, so the gamepad can send it again without the menu.
+let lastDebugAction = '';
+
+function sendDebugAction(action: string) {
+  console.log("Sending debug cmd:", action);
+  lastDebugAction = action;
+  sendControl([nf.control.ControlItem.create({
+    debug: {action: action}
+  })]);
+}
+
+function repeatLastDebugAction() {
+  // Nothing sent yet this session falls back to whatever is typed in the debug box, so the
+  // first repeat works after typing a command rather than only after sending one.
+  const typed = (document.getElementById('debug-input') as HTMLInputElement | null)?.value ?? '';
+  const action = lastDebugAction || typed;
+  if (!action) {
+    Say('No debug command to repeat');
+    return;
+  }
+  Say(action);
+  sendDebugAction(action);
+}
+
 function toggleSwingCancellation() {
   if (!isFullyConnected() || !isFullyCalibrated()) return;
   sendControl([nf.control.ControlItem.create({
@@ -2992,6 +3013,7 @@ function initSwingControl() {
   btn?.addEventListener('click', toggleSwingCancellation);
   gamepad.toggleSwingC = toggleSwingCancellation;
   gamepad.onSetPrompt = triggerSetPrompt;
+  gamepad.repeatLastDebug = repeatLastDebugAction;
 
   const slider = document.getElementById('swing-latency-slider') as HTMLInputElement | null;
   const valueDisplay = document.getElementById('swing-latency-value');
