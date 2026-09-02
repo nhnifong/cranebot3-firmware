@@ -512,95 +512,108 @@ with each cutout back where it sat in its capture frame. The mp4 is what shows a
 flickering between neighbouring plates, or an object wandering when it should hold still
 under the wrist turn.
 
-## 3. Split the teleop dataset, then mine both halves
+## 3. Mine the teleop dataset into the pool
 
-Split before mining: everything downstream is per-split, and deciding it later means
-mining twice.
-
-    python src/nf_robot/ml/lerobot_split_dataset.py \
-        --repo_id naavox/combined_targets \
-        --root /home/nhn/data_scratch/combined_targets --upload
-
-Writes `naavox/combined_targets_train` and `naavox/combined_targets_eval` into the
-LeRobot home, which is where the commands below find them by repo id. A random sample of
-episodes, seeded, so rerunning gives the same split. `--upload` pushes both to the hub
-under those same names, replacing whatever is there. `--eval_fraction` (0.1), `--seed`
-(0), `--new_root`, `--dry_run`.
-
-Then mine each half into its own split of the same root:
-simple_grasp_spin can be added here, but can't be merged with naavox/combined_targets
+One run over everything. Every producer writes into the same `all/` pool and the
+train/eval cut happens after all of them.
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/combined_targets_train naavox/simple_grasp_spin \
-        --output_root datasets/visual_servoing_252 \
-        --preview_dir datasets/visual_servoing_252/preview \
+        --repo_id naavox/combined_targets naavox/simple_grasp_spin \
+        --output_root datasets/visual_servoing_pool_252 \
+        --preview_dir datasets/visual_servoing_pool_252/preview \
         --preview_count 100 \
         --approach_seconds 5
 
-    python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/combined_targets_eval \
-        --output_root datasets/visual_servoing_252 \
-        --split eval \
-        --approach_seconds 5
+No split of the LeRobot dataset first: pass the whole thing. `simple_grasp_spin` can be
+added here even though it cannot be merged into `naavox/combined_targets`, because the
+miner takes several sources in one run.
 
-Frames are stored at 448x252, the default, and every split has to keep it: the backbone
-is a /14 DINOv2 and 252 = 14 x 18. Do not pass `--image_size`. A split written at any
-other height is a silent mismatch rather than an error, which is where the `_252` in the
-dataset name comes from.
+Frames are stored at 448x252, the default, and everything in the pool has to keep it: the
+backbone is a /14 DINOv2 and 252 = 14 x 18. Do not pass `--image_size`. Mining into a pool
+that already holds another size raises rather than writing rows that will not collate.
 
-Each run replaces the split it writes, so run these before generating synthetic frames -
-and mine every source of a split in one run, since a second run into the same split
-replaces the first rather than adding to it.
+Each producer replaces its own shards and leaves the others alone, so this can be re-run
+without disturbing the negatives or the synthetic frames - but mine every source of the
+pool in one run, since a second run replaces the first rather than adding to it.
 
 Recordings of flying over empty floor are mined with `--negatives`:
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/combined_negatives --negatives \
-        --output_root datasets/visual_servoing_252 \
-        --preview_dir datasets/visual_servoing_252/negative_preview
+        --output_root datasets/visual_servoing_pool_252 \
+        --preview_dir datasets/visual_servoing_pool_252/negative_preview
 
 Every frame becomes a `target_present = 0` row with no position labels, one frame in five
 by default (`--negative_stride`), written as `negative-*.parquet` beside the positives
 rather than over them.
 
-Nothing here can check that the flight was really over empty floor. You are responsible for making sure they were all over empty floor.
+Nothing here can check that the flight was really over empty floor. You are responsible
+for making sure they were all over empty floor.
 
 ## 4. Generate synthetic frames
 
-Joins the same split as extra shards, drawing simulated heights from the mined rows so
-the two halves cover the same range distribution:
+Joins the same pool as extra shards, drawing simulated heights from the mined rows so the
+two cover the same range distribution:
 
     python -m nf_robot.ml.visual_servoing.synth_frames \
         --plates plates_all \
-        --output_root datasets/visual_servoing_252/ \
-        --ranges_from datasets/visual_servoing_252/train \
+        --output_root datasets/visual_servoing_pool_252/ \
+        --ranges_from datasets/visual_servoing_pool_252/all \
         --count 80000 \
-        --annotate_dir datasets/visual_servoing_252/synth_preview
+        --annotate_dir datasets/visual_servoing_pool_252/synth_preview
 
 Composites at `mine_teleop.IMAGE_SIZE`, the same constant the mining above defaults to,
-so both producers of a split agree without being told. Rerunning replaces only its own
-shards. The annotated frames show the target, the grasp
-axis and the other candidates, which is where a compositing sign error shows up.
+so both producers of the pool agree without being told. Rerunning replaces only its own
+shards. The annotated frames show the target, the grasp axis and the other candidates,
+which is where a compositing sign error shows up.
 
 ## 4b. Audit what was built
 
-    python -m nf_robot.ml.visual_servoing.audit --data_root datasets/visual_servoing_252
+    python -m nf_robot.ml.visual_servoing.audit --data_root datasets/visual_servoing_pool_252
 
-Run after every rebuild. Label columns only, no image decode, so a 4.5GB split reads in
-seconds. Prints what each head has to learn from - coverage, class balance,
-distributions, and a per-producer breakdown of the axis - and exits non-zero when a head
-has labels on only one side of its range. Catches the failures a loss curve cannot: a
-split with no synthetic shards and so no `target_present = 0` anywhere, or cutouts whose
-grasp axis is a constant zero.
+Run after every rebuild, before dealing the pool: whether a head has anything to learn
+from is a property of what was built, not of how it was cut. With no `--split` it audits
+every directory present, so it reads the pool before step 5 and both halves after.
 
-## 5. Train
+Label columns only, no image decode, so a 4.5GB directory reads in seconds. Prints what
+each head has to learn from - coverage, class balance, distributions, and a per-producer
+breakdown of the axis - and exits non-zero when a head has labels on only one side of its
+range. Catches the failures a loss curve cannot: a pool with no synthetic shards and so no
+`target_present = 0` anywhere, or cutouts whose grasp axis is a constant zero.
+
+## 5. Deal the pool into train and eval
+
+    python -m nf_robot.ml.visual_servoing.split_pool \
+        --data_root datasets/visual_servoing_pool_252
+
+Replaces `train/` and `eval/` wholesale from the pool, one row at a time and at random.
+`--eval_fraction` (0.1) and `--seed` (0) are the only knobs; the same seed over the same
+pool deals the same split.
+
+Downstream of every producer, which is the point of the ordering. Cut upstream instead and
+whatever is generated afterwards lands wholly on one side - which is how an eval split ends
+up with no synthetic rows in it, and so no `target_present = 0` anywhere, and so no way to
+grade the head that decides whether there is anything to reach for at all.
+
+Re-run it after anything writes into the pool again. It costs one pass over the pool, not
+a re-mine, so re-dealing with another seed is cheap - but the deal is over all of it, so
+adding to the pool re-deals what was already there, and metrics either side of a rebuild
+are measured on two different eval sets.
+
+The line it prints about near-duplicates is worth reading. The cut is over rows, so an
+episode's run of frames and a plate's composites land on both sides; eval then measures
+how the model does on further frames of scenes it has trained on. That is the right
+question for choosing between checkpoints of one run and an optimistic one for predicting
+an object the robot has never seen.
+
+## 6. Train
 
     python -m nf_robot.ml.visual_servoing.train \
-        --data_root datasets/visual_servoing_252 \
+        --data_root datasets/visual_servoing_pool_252 \
         --epochs 14 \
         --batch_size 400
 
-The whole `train/` split trains. The checkpoint written after every epoch is always the
+The whole `train/` split trains - what step 5 dealt. The checkpoint written after every epoch is always the
 newest one; `eval/` is scored and reported but selects nothing.
 
 Reading the metrics:
@@ -608,27 +621,47 @@ Reading the metrics:
 - `axis_kappa` is the median concentration of the grasp axis head. Near zero means it has
   learned to hedge. The axis term is a log likelihood, so it goes *negative* as the head
   grows confident, bounded below at about -2.9 by `KAPPA_MAX`.
-- `axis_deg_flat` beside `axis_deg` is what "always upright" scores on the same rows. On
-  a teleop-only eval split it is 0.0, meaning the split cannot grade this head.
+- `axis_deg_flat` beside `axis_deg` is what "always upright" scores on the same rows. At
+  0.0 the eval rows carry no axis labels and cannot grade this head - which used to be the
+  normal state of affairs, when eval was mined separately and held teleop rows only. Now
+  that the deal is downstream of every producer it means the pool itself has no synthetic
+  rows in it, and `audit` says so before training does.
 
 `--axis_loss mse` and `--no_axis_balance` turn off the von Mises objective and the
 per-angle-bin row weighting for an A/B; both are on by default.
 
-## 5c. Publishing the dataset
+## 6c. Publishing the dataset
 
-    hf upload naavox/visual_servoing_dataset_252 datasets/visual_servoing_252 \
-        --repo-type dataset
+    hf upload naavox/visual_servoing_dataset_pool_252 datasets/visual_servoing_pool_252 \
+        --repo-type dataset --exclude "all/*"
 
-Train from it with `--dataset_id naavox/visual_servoing_dataset_252` in place of
-`--data_root`. Not over `naavox/visual_servoing_dataset`, which holds 448x256 frames for
-the older DINOv3 checkpoints; that id is still `train.py`'s `DEFAULT_DATASET_ID`.
+Exclude the pool: it holds every row that train/ and eval/ already hold between them, so
+uploading it doubles the transfer and gives the hub a third copy of the data that no
+config in the dataset card names. Keep it locally - it is what a re-deal deals from.
 
-## 6. Evaluate
+Train from it with `--dataset_id naavox/visual_servoing_dataset_pool_252` in place of
+`--data_root`.
+
+A new id rather than a new version of an old one, because each of these names records
+something that would otherwise mismatch in silence:
+
+- `naavox/visual_servoing_dataset` holds 448x256 frames for the older DINOv3 checkpoints.
+  Still `train.py`'s `DEFAULT_DATASET_ID`.
+- `naavox/visual_servoing_dataset_252` is 448x252, cut before mining. Its eval split is
+  teleop rows only - no synthetic frames, no negatives - so the numbers it produced are
+  not comparable with anything measured on a dealt eval split, whatever the model.
+- `naavox/visual_servoing_dataset_pool_252` is 448x252, dealt from the pool. Every
+  producer reaches both sides.
+
+The frames are the same size in the last two and the layout is not, which is the kind of
+difference that survives a download and shows up as a metric that moved for no reason.
+
+## 7. Evaluate
 
     python -m nf_robot.ml.visual_servoing.evaluate \
-        --data_root datasets/visual_servoing_252 \
+        --data_root datasets/visual_servoing_pool_252 \
         --model_path models/visual_servo.pth \
-        --preview_dir datasets/visual_servoing_252/eval_predictions
+        --preview_dir datasets/visual_servoing_pool_252/eval_predictions
 
 Prints the metrics next to the constant-prediction baseline. Beating that baseline is the
 bar: for a centering task "always predict the middle" already scores well.
@@ -636,7 +669,7 @@ bar: for a centering task "always predict the middle" already scores well.
 `--preview_dir` draws the label in green and the prediction in red on the scored frames,
 joined by a line.
 
-## 7. Grasp with it
+## 8. Grasp with it
 
     python -m nf_robot.host.observer --local_models
 
@@ -752,4 +785,4 @@ frame over unresized and 448x256 through a /14 patch embedding floors to the sam
 token grid the model computes for 448x252 - so it trains, the loss falls, the bottom 4
 pixel rows are never seen, and `target_uv` stays normalized over all 256, putting every
 label about 1.6% low against the feature map. It shows up later as an unexplained
-downward bias. Mining into a split that already holds the other size does raise.
+downward bias. Mining into a pool that already holds the other size does raise.

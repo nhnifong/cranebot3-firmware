@@ -21,6 +21,7 @@ import numpy as np
 import torch
 
 from nf_robot.ml.ortho_target import IMAGENET_MEAN, IMAGENET_STD, photometric_jitter
+from nf_robot.ml.visual_servoing.mine_teleop import POOL_SPLIT
 
 # Scales that put each state component roughly in -1..1 before it reaches the FiLM MLP.
 STATE_SCALES = {
@@ -50,7 +51,13 @@ class VisualServoDataset(torch.utils.data.Dataset):
         self.dir = Path(root) / split
         shards = sorted(self.dir.glob("*.parquet"))
         if not shards:
-            raise FileNotFoundError(f"No parquet shards at {self.dir}")
+            # The commonest way to be here is a pool that was built but never dealt, which
+            # looks like an empty dataset rather than a missing step.
+            pool = Path(root) / POOL_SPLIT
+            hint = (f". {pool} holds shards that have not been dealt yet: run "
+                    f"`python -m nf_robot.ml.visual_servoing.split_pool --data_root {root}`"
+                    if any(pool.glob("*.parquet")) else "")
+            raise FileNotFoundError(f"No parquet shards at {self.dir}{hint}")
 
         self.images: list[bytes] = []
         self.rows: list[dict] = []

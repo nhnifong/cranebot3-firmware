@@ -31,6 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
+from nf_robot.ml.visual_servoing.mine_teleop import POOL_SPLIT
+
 # Everything except the image, which is the whole point: parquet is columnar, so leaving
 # `image` out of the read means the bytes are never touched.
 LABEL_COLUMNS = [
@@ -300,18 +302,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data_root", required=True,
-                        help="Dataset root holding train/ and eval/")
-    parser.add_argument("--split", default=None, choices=["train", "eval"],
-                        help="Audit one split; the default does every split present")
+                        help=f"Dataset root holding the {POOL_SPLIT}/ pool, or train/ and eval/")
+    parser.add_argument("--split", default=None, choices=[POOL_SPLIT, "train", "eval"],
+                        help="Audit one split; the default does every one present. Worth "
+                             "running on the pool before dealing it, since a head with "
+                             "nothing to learn from is a property of what was built rather "
+                             "than of how it was cut")
     parser.add_argument("--by_source", action="store_true", default=True,
                         help="Break the axis histogram down by producer (default on)")
     parser.add_argument("--no_by_source", dest="by_source", action="store_false")
     args = parser.parse_args()
 
     root = Path(args.data_root)
-    splits = [args.split] if args.split else [s for s in ("train", "eval") if (root / s).exists()]
+    splits = ([args.split] if args.split
+              else [s for s in (POOL_SPLIT, "train", "eval") if (root / s).exists()])
     if not splits:
-        parser.error(f"no train/ or eval/ split under {root}")
+        parser.error(f"no {POOL_SPLIT}/, train/ or eval/ directory under {root}")
 
     findings = Findings()
     for split in splits:

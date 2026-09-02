@@ -28,9 +28,6 @@ keep_state_features:
   - wrist_angle
   - target_force
 
-drop_features:
-  - anchor_poses
-
 label_contact_actions:
   enabled: true
   pressure_threshold: 0.1

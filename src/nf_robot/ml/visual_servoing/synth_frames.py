@@ -49,10 +49,7 @@ except ImportError:
     resource = None
 
 from nf_robot.ml.visual_servoing.mine_teleop import (
-    CANVAS_SCALE,
-    IMAGE_SIZE,
-    ShardWriter,
-    encode_frame,
+    CANVAS_SCALE, IMAGE_SIZE, POOL_SPLIT, ShardWriter, encode_frame,
 )
 from nf_robot.ml.visual_servoing.object_matte import read_objects
 from nf_robot.ml.visual_servoing.plates import iter_run, read_manifest
@@ -679,13 +676,17 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--plates", default="plates", help="Directory of capture runs")
     parser.add_argument("--output_root", required=True,
-                        help="Mined dataset root; synthetic shards join its split")
-    parser.add_argument("--split", default="train", choices=["train", "eval"])
+                        help="Mined dataset root; synthetic shards join its pool")
+    parser.add_argument("--split", default=POOL_SPLIT, choices=[POOL_SPLIT, "train", "eval"],
+                        help=f"Where the shards land. The default is the {POOL_SPLIT}/ pool "
+                             f"the miner also writes to, which split_pool deals into train "
+                             f"and eval afterwards")
     parser.add_argument("--count", type=int, default=20000)
     parser.add_argument("--object_dir", default=None, help="Cutouts (default <plates>/objects)")
     parser.add_argument("--finger_dir", default=None, help="Finger plates (default <plates>/fingers)")
     parser.add_argument("--ranges_from", default=None,
-                        help="A mined split directory to draw simulated heights from")
+                        help=f"A directory of mined shards to draw simulated heights from, "
+                             f"normally the same {POOL_SPLIT}/ pool these join")
     parser.add_argument("--annotate_dir", default=None,
                         help="Write annotated sample frames here, to check the labels")
     parser.add_argument("--annotate_count", type=int, default=40)

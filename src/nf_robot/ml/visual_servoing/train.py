@@ -24,7 +24,7 @@ Usage:
     backbone's patch size, and nothing checks that it did):
 
     python -m nf_robot.ml.visual_servoing.train \
-        --data_root datasets/visual_servoing_252 \
+        --data_root datasets/visual_servoing_pool_252 \
         --backbone facebook/dinov2-with-registers-base --image_size 448 252 \
         --epochs 40 --batch_size 32
 """

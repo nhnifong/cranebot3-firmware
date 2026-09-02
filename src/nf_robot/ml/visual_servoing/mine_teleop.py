@@ -119,6 +119,12 @@ OFF_SCREEN_MARGIN = 0.10
 # What negative shards are called, so mining an empty-floor recording into a split that
 # already holds positives replaces only its own output.
 NEGATIVE_PREFIX = "negative"
+
+# Every producer writes here, and split_pool deals the result into train/ and eval/
+# afterwards. One pool rather than a split per producer: mining is the expensive step and
+# should run once over everything, and a producer that arrives after the cut would
+# otherwise land wholly on one side of it.
+POOL_SPLIT = "all"
 # Keep one frame in this many when mining negatives. A recording of flying over empty
 # floor is negative in every frame, and at 30fps thirty of them a second are the same
 # picture; six a second is plenty of variety and keeps an hour of flying from burying the
@@ -773,13 +779,19 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
          carry_seconds: float, rise_m: float, limit: int | None,
          negatives: bool = False, stride: int = NEGATIVE_STRIDE,
          image_size=IMAGE_SIZE):
-    """Replace one split of the mined dataset with the given (repo_id, root) sources.
+    """Replace this producer's share of the pool with the given (repo_id, root) sources.
 
     Only this producer's shards go: mining is deterministic given its inputs, so a rerun
     should leave no trace of the previous one - appending instead is how a dataset ends up
     with rows for frames that are no longer produced, or two rows for the same frame. The
-    synthetic compositor writes its own shards into this same split and they are not ours
-    to delete, which emptying the whole directory used to do silently.
+    negatives pass and the synthetic compositor write their own shards into the same pool
+    and they are not ours to delete, which emptying the whole directory used to do
+    silently.
+
+    Writing into the pool rather than into train/ or eval/ is what lets one mining run
+    serve both; split_pool deals them afterwards. Nothing stops `split` naming a split
+    directly, which is occasionally what a one-off comparison wants, but then that mining
+    run only ever reaches the split it was pointed at.
     """
     split_dir = output_root / split
     split_dir.mkdir(parents=True, exist_ok=True)
@@ -817,7 +829,11 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
 
 
 def write_dataset_card(output_root: Path):
-    """The YAML header that makes the parquet files load as a hub dataset."""
+    """The YAML header that makes the parquet files load as a hub dataset.
+
+    Names train and eval only. The pool is the working copy every row is dealt from, not
+    a split anything reads, and listing it would have the hub serve every row twice.
+    """
     lines = ["---", "configs:", "- config_name: default", "  data_files:"]
     for split, name in (("train", "train"), ("eval", "test")):
         if any((output_root / split).glob("*.parquet")):
@@ -976,7 +992,9 @@ def main():
                              "metadata only, so it costs nothing against the hub.")
     parser.add_argument("--output_root", required=False,
                         help="Where the mined dataset is written; its split directory is replaced")
-    parser.add_argument("--split", default="train", choices=["train", "eval"])
+    parser.add_argument("--split", default=POOL_SPLIT, choices=[POOL_SPLIT, "train", "eval"],
+                        help=f"Where the shards land. The default is the {POOL_SPLIT}/ pool, "
+                             f"which split_pool deals into train and eval afterwards")
     parser.add_argument("--preview_dir", default=None, help="Write annotated sample frames here")
     parser.add_argument("--preview_count", type=int, default=100)
     parser.add_argument("--preview_group", type=int, default=20,
