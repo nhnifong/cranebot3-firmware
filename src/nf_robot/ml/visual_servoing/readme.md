@@ -518,7 +518,7 @@ One run over everything. Every producer writes into the same `all/` pool and the
 train/eval cut happens after all of them.
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/combined_targets naavox/simple_grasp_spin \
+        --repo_id naavox/grip_o naavox/simple_grasp_spin \
         --output_root datasets/visual_servoing_pool_252 \
         --preview_dir datasets/visual_servoing_pool_252/preview \
         --preview_count 100 \
