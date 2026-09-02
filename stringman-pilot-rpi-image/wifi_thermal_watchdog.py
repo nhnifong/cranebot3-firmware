@@ -65,10 +65,13 @@ DEFAULT_IFACE = "wlan0"
 
 
 DEFAULT_LOGFILE = "/opt/robot/wifi_thermal_watchdog.log"
-SETTLE_SECONDS = 8  # how long to wait for the link to come back after a step
-PING_COUNT = 2
-PING_TIMEOUT = 3  # seconds per ping
-MIN_UPTIME_S = 60  # don't call a link dead before it has had a chance to associate
+SETTLE_SECONDS = 30  # how long to wait for the link to come back after a step
+PING_COUNT = 4
+PING_TIMEOUT = 5  # seconds per ping
+
+# wait at least this long after boot before allowing wifi recovery to happen
+# First boot takes ~40s to get online if the qr code is visible, second boot takes 10.
+MIN_UPTIME_S = 100
 NM_CONNECTION_DIR = "/etc/NetworkManager/system-connections"
 SYS_NET_DIR = "/sys/class/net"
 ARPHRD_ETHER = "1"  # /sys/class/net/<dev>/type of a wired ethernet link (can0 is 280)
