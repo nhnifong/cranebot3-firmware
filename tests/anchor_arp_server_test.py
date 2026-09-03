@@ -442,19 +442,27 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
 
     # ------------------------------------------------------------------ identify
 
-    async def test_identify_pauses_loop_jogs_motor_then_resumes(self):
-        """identify() pauses the tracking loop, drives the motor, then resumes it."""
-        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
-            await ws.send(json.dumps({'identify': None}))
-            await asyncio.sleep(0.3)  # identify runs ~0.1 s of real time.sleep calls
+    async def test_identify_pauses_loop_sings_address_then_resumes(self):
+        """identify() pauses the tracking loop, sings the address, then resumes it."""
+        # .001 keeps the song to a single honk; the real address would sing for seconds.
+        with patch('nf_robot.robot.anchor_arp_server.get_local_ip', return_value='10.0.0.1'):
+            async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
+                await ws.send(json.dumps({'identify': None}))
 
-            # Default spool_no for identify is 1
-            spool = self.mock_spools[1]
-            motor = self.server.motors[1]
+                # Default spool_no for identify is 1
+                spool = self.mock_spools[1]
+                motor = self.server.motors[1]
 
-            spool.pauseTrackingLoop.assert_called()
-            spool.resumeTrackingLoop.assert_called()
-            motor.send_cmd_vel.assert_called()
+                # the song runs on a worker thread, so wait for it rather than guessing
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    await asyncio.sleep(0.05)
+                    if spool.resumeTrackingLoop.called:
+                        break
+
+                spool.pauseTrackingLoop.assert_called()
+                spool.resumeTrackingLoop.assert_called()
+                motor.send_cmd_vel.assert_called()
 
     # ------------------------------------------------------------------ shutdown
 

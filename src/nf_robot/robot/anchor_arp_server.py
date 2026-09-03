@@ -9,6 +9,7 @@ import argparse
 from damiao_motor import DaMiaoController
 
 import nf_robot.common.definitions as model_constants
+from nf_robot.common.util import get_local_ip
 from nf_robot.robot.component_server import RobotComponentServer
 from nf_robot.robot.spool_dm import DamiaoSpoolController
 from nf_robot.robot.server_conf import read_winding
@@ -28,6 +29,22 @@ default_anchor_conf = {
 # wound harder to sit on the spool without unwinding itself once the motor is disabled.
 STOW_TENSION_N = 1.38
 POWERLINE_STOW_TENSION_N = 3.0
+
+# identify() sings the anchor's address on a motor. Commanding the velocity to flip sign
+# at an audio rate turns the hub into a (bad) loudspeaker, so the toggle rate is the pitch.
+# One note per digit: a C, the G above it, and the C an octave above the first. They sit in
+# the octave below middle C because the note's half period is the deadline for getting a
+# CAN frame out (3.8 ms at the lowest, 1.9 ms at the highest); an octave up halves that
+# budget. If the motors sing cleanly up there, multiply all three by two.
+IDENTIFY_NOTES_HZ = (130.81, 196.00, 261.63)  # C3, G3, C4
+
+# rad/s the note swings between. Loud enough to hear across a room, small enough that the
+# spool does not visibly move.
+IDENTIFY_AMPLITUDE = 0.2
+
+IDENTIFY_TONE_S = 0.10       # length of one honk
+IDENTIFY_HONK_GAP_S = 0.07   # silence between honks of the same digit
+IDENTIFY_DIGIT_GAP_S = 0.40  # silence between digits, and what a zero is made of
 
 # Modes an anchor accepts, its normal one first. A pi 3a+ has the cpu and thermal headroom
 # to hold 1080p30, which the zero 2w does not, so it starts in the faster mode.
@@ -61,6 +78,44 @@ def is_pi_3a_plus():
     # new-style codes (bit 23) put the board type in bits 4-11, 0x0e being the 3a+.
     # old-style codes predate the pi 3, so they are never one.
     return bool(rev & (1 << 23)) and (rev >> 4) & 0xff == 0x0e
+
+
+def identity_digits(ip):
+    """The three digits identify() announces, or None if there is no address to announce.
+
+    The last octet is the only part that differs between components on one subnet, and
+    padding it to three digits keeps every song the same shape, so an operator counting
+    honks always knows which note they are on.
+    """
+    if not ip:
+        return None
+    try:
+        last_octet = int(ip.rsplit('.', 1)[-1])
+    except ValueError:
+        logging.warning(f'cannot read a last octet out of "{ip}"')
+        return None
+    return [int(c) for c in f'{last_octet:03d}']
+
+
+def play_tone(motor, freq_hz, duration_s, amplitude=IDENTIFY_AMPLITUDE):
+    """Hold one note on a motor by flipping its commanded velocity at the note's pitch."""
+    half_period = 0.5 / freq_hz
+    edge = time.perf_counter()
+    end = edge + duration_s
+    sign = 1.0
+    while edge < end:
+        motor.send_cmd_vel(target_velocity=amplitude * sign)
+        sign = -sign
+        edge += half_period
+        # time.sleep overshoots by a few hundred microseconds, which is a sizable fraction
+        # of a half period and would leave the pitch warbling, so sleep most of the way and
+        # spin the last millisecond.
+        remaining = edge - time.perf_counter()
+        if remaining > 0.001:
+            time.sleep(remaining - 0.001)
+        while time.perf_counter() < edge:
+            pass
+    motor.send_cmd_vel(target_velocity=0.0)
 
 
 class AnchorArpServer(RobotComponentServer):
@@ -174,7 +229,9 @@ class AnchorArpServer(RobotComponentServer):
             spool_no = updates['relax']
             tg.create_task(self.relax(spool_no))
         if 'identify' in updates:
-            self.identify()
+            # The song runs for seconds of blocking sleeps, so it goes on a thread rather
+            # than stalling the server's event loop (and its websocket keepalives) for it.
+            tg.create_task(asyncio.to_thread(self.identify))
         if 'two_reference_lengths' in updates:
             ref0, ref1 = updates['two_reference_lengths']
             self.spools[0].setReferenceLength(float(ref0))
@@ -299,17 +356,32 @@ class AnchorArpServer(RobotComponentServer):
         pass
 
     def identify(self, spool_no=1):
-        """Buzz one motor, so an operator can tell which anchor this is."""
-        self.spools[spool_no].pauseTrackingLoop()
-        m = self.motors[spool_no]
+        """Sing this anchor's address on one motor, so an operator can tell which it is.
 
-        m.send_cmd_vel(target_velocity=0.0)
-        for i in range(20):
-            time.sleep(0.005)
-            m.send_cmd_vel(target_velocity=0.2 * (i%2-0.5))
-        m.send_cmd_vel(target_velocity=0.0)
-        
-        self.spools[spool_no].resumeTrackingLoop()
+        The last three digits of the local IP, one note per digit and one honk per count:
+        the low C for the hundreds, the G above it for the tens, the high C for the ones.
+        A zero is just a rest, which reads as a double-length gap. So .107 is one low
+        honk, a long silence, then seven high honks.
+
+        Takes seconds, and busy-waits to hold the pitch, so call it off the event loop.
+        """
+        digits = identity_digits(get_local_ip())
+        m = self.motors[spool_no]
+        self.spools[spool_no].pauseTrackingLoop()
+        try:
+            m.send_cmd_vel(target_velocity=0.0)
+            if digits is None:
+                # Nothing to announce. One long low note still says which anchor is here.
+                play_tone(m, IDENTIFY_NOTES_HZ[0], 0.6)
+                return
+            logging.info(f'identify: singing {"".join(map(str, digits))}')
+            for note_hz, digit in zip(IDENTIFY_NOTES_HZ, digits):
+                for _ in range(digit):
+                    play_tone(m, note_hz, IDENTIFY_TONE_S)
+                    time.sleep(IDENTIFY_HONK_GAP_S)
+                time.sleep(IDENTIFY_DIGIT_GAP_S)
+        finally:
+            self.spools[spool_no].resumeTrackingLoop()
 
     async def process_imu(self, ws):
         """Enable the motors when a client connects.

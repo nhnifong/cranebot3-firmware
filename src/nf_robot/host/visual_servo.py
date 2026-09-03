@@ -173,7 +173,8 @@ WRIST_MIN_KAPPA = 1.5
 WRIST_LOCK_RANGE_M = 0.08   # (m) stop turning the wrist this close in
 # (seconds) how far a wrist record may be from a frame's capture time and still describe
 # where the wrist was when that frame was taken.
-WRIST_ANCHOR_MAX_AGE_S = 0.2
+# take this with a grain of salt, video latency estimates aren't even accurate to 0.1s
+WRIST_ANCHOR_MAX_AGE_S = 0.4
 # The wrist's command range, in degrees from the servo's zero: three revolutions with
 # neutral in the middle. gripper_arp_server.setWrist *clamps* to this, silently, so a
 # setpoint past the end does not turn the wrist a little way and stop - it stops the wrist
