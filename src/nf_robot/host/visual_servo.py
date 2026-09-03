@@ -930,9 +930,9 @@ class VisualServo:
         await self.ob.move_direction_speed([0, 0, 0.06])
         await asyncio.sleep(1.0)
         asyncio.create_task(self.ob.gripper_client.send_commands({'set_finger_angle': OPEN}))
-        direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.12]])
+        direction = np.concatenate([np.random.uniform(-0.025, 0.025, (2)), [0.14]])
         await self.ob.move_direction_speed(direction)
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(2.2)
         self.ob.slow_stop_all_spools()
 
     # -- scoring a checkpoint ----------------------------------------------

@@ -3526,7 +3526,7 @@ class AsyncObserver:
                     current_action="Tuning swing cancellation",
                 ))
                 # Perform swing cancellation measurements lower than the spin-measurement
-                SWING_MEASURE_DROP_M = 0.3
+                SWING_MEASURE_DROP_M = 0.1
                 await self.seek_goal(np.array([0, 0, gant_z - SWING_MEASURE_DROP_M]), head_turn=False)
                 await self.calibrate_swing_latency(progress_range=(30.0, 61.0))
 
