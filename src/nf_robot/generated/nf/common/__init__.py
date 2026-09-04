@@ -246,12 +246,18 @@ class PoleType(betterproto2.Enum):
     400mm carbon pole, attached to the flat marker
     """
 
+    CARBON270 = 3
+    """
+    270mm carbon pole, attached to the flat marker
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
             0: "POLETYPE_UNSPECIFIED",
             1: "POLETYPE_ABS500",
             2: "POLETYPE_CARBON400",
+            3: "POLETYPE_CARBON270",
         }
 
     @classmethod
@@ -260,6 +266,7 @@ class PoleType(betterproto2.Enum):
             "POLETYPE_UNSPECIFIED": 0,
             "POLETYPE_ABS500": 1,
             "POLETYPE_CARBON400": 2,
+            "POLETYPE_CARBON270": 3,
         }
 
 

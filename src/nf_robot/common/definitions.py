@@ -33,10 +33,12 @@ gripper_cog = (np.array([0,0,0], dtype=float), np.array([0,0.055,0.011], dtype=f
 # Effective length of pole based on measured swing with 'polecal'
 pole_length_abs500 = 0.4526
 pole_length_carbon400 = 0.4389
+pole_length_carbon270 = pole_length_carbon400 - 0.13
 
 # distance between gantry origin (where lines meet) and gripper origin
 pole_offset_abs500 = 0.5334
 pole_offset_carbon400 = 0.5757
+pole_offset_carbon270 = pole_offset_carbon400 - 0.13
 
 # z offset of the gripper laser rangefinder from the origin of the gantry when the winch is zeroed.
 laser_offset = 0.14 # meters
@@ -127,6 +129,7 @@ POLE_GEOMETRY = {
     common.PoleType.UNSPECIFIED: PoleGeometry(pole_length_abs500, pole_offset_abs500, gantry_april),
     common.PoleType.ABS500: PoleGeometry(pole_length_abs500, pole_offset_abs500, gantry_april),
     common.PoleType.CARBON400: PoleGeometry(pole_length_carbon400, pole_offset_carbon400, gantry_flat_april),
+    common.PoleType.CARBON270: PoleGeometry(pole_length_carbon270, pole_offset_carbon270, gantry_flat_april),
 }
 
 

@@ -100,6 +100,8 @@ enum PoleType {
   POLETYPE_ABS500 = 1;
   // 400mm carbon pole, attached to the flat marker
   POLETYPE_CARBON400 = 2;
+  // 270mm carbon pole, attached to the flat marker
+  POLETYPE_CARBON270 = 3;
 }
 
 // Points which can be set as the source or destination for auto pick and drop.
