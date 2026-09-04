@@ -698,7 +698,7 @@ export class VideoFeed {
             const barX = w - margin - barW;
             const gap = 30;
 
-            // -- Prob Target In View (Yellow) --
+            // -- present head: is a target in view (Yellow) --
             // Top half of right side
             const pView = Math.max(0, Math.min(1, pred.probTargetInView ?? 0));
             const viewY = cy - barH - (gap / 2);
@@ -716,10 +716,10 @@ export class VideoFeed {
             this.ctx.fillStyle = '#FFF';
             this.ctx.font = '12px monospace';
             this.ctx.textAlign = 'right';
-            this.ctx.fillText("TARGET", barX - 5, viewY + barH/2);
+            this.ctx.fillText("PRESENT", barX - 5, viewY + barH/2);
 
 
-            // -- Prob Holding (Black with White outline) --
+            // -- holding head: is something in the fingers (Black with White outline) --
             // Bottom half of right side
             const pHold = Math.max(0, Math.min(1, pred.probHolding ?? 0));
             const holdY = cy + (gap / 2);
@@ -734,7 +734,7 @@ export class VideoFeed {
 
             // Label
             this.ctx.fillStyle = '#FFF';
-            this.ctx.fillText("GRASP", barX - 5, holdY + barH/2);
+            this.ctx.fillText("HOLDING", barX - 5, holdY + barH/2);
         }
 
         if (this.virtualCamera && this.lastGantryPos) {
