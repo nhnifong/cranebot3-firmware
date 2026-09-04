@@ -206,7 +206,9 @@ def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_want
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # force=True: importing lerobot installs its own root handler, which makes a plain
+    # basicConfig a no-op and silently drops every progress and skip line this prints.
+    logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", required=True, help="A recorded LeRobot dataset directory")

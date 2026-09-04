@@ -610,6 +610,7 @@ an object the robot has never seen.
 
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing_pool_252 \
+        --close_heads \
         --epochs 14 \
         --batch_size 400
 
