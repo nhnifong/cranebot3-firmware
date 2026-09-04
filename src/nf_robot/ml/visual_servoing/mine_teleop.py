@@ -41,7 +41,8 @@ What comes out, per frame, in the row format readme.md describes:
     target_range_m   distance from the camera to the grasp point, the third dimension
     grasp_axis_rad   how much further the wrist turned before grasping, pi-wrapped
     finger           commanded finger speed / 90, in -1..1
-    holding          0 before the grasp, 1 after it
+    holding          1 between the lift and the drop, 0 before the grasp, null in
+                     between - the grip is not proven until it takes the weight
     target_present   1 (an approach always has one)
 
 With --negatives the source is instead a recording of flying over empty floor, and every
@@ -55,6 +56,13 @@ After the grasp the object rides in the jaws, so the static room point stops des
 where it is. Those frames therefore carry only `holding` and `finger`, and every other
 label is null - which the row format spells "mask this head's loss here" rather than
 "the answer is zero".
+
+`holding` runs on the lift rather than on the grasp. Pressure crossing the grasp
+threshold means the jaws closed on something, not that it is held: the grip is unproven
+until it takes the weight, and it ends at the drop, whether the operator opened the jaws
+or the object slipped out of them. Labelling from the grasp instead makes "an object is
+close in frame" sufficient for a positive, which is the cheapest feature in the episode
+and the one the head learns instead of the object being in the hand.
 
 Only successful grasps are mined. A grasp that closed on nothing puts the label
 somewhere the object never was, which is worse than no label at all; the rise test in
@@ -138,6 +146,10 @@ CLOSE_GAP_FRAMES = 10
 # climbing this long later.
 LIFT_ONSET_M = 0.03
 LIFT_CONFIRM_SECONDS = 0.5
+# (normalized 0-1) finger_pressure this low, held for MIN_GRASP_SECONDS, is the object
+# gone rather than a bad reading. Half the grasp threshold because a carry rides right on
+# that threshold: see find_drop for what each level costs.
+RELEASE_PRESSURE = 0.05
 # (metres) minimum distance in front of the camera for a projection to mean anything.
 MIN_DEPTH_M = 0.02
 # Full-scale commanded finger speed, used to normalize the finger label into -1..1.
@@ -399,16 +411,17 @@ def close_onset(rows, grasp, gap_frames=CLOSE_GAP_FRAMES):
     return None if onset == 0 else onset
 
 
-def lift_pressure(rows, grasp, rise_m, fps):
-    """Felt finger pressure at the moment the gripper started carrying the object up.
+def find_lift(rows, grasp, fps):
+    """The frame the gripper started carrying the object up, or None if it never rose.
 
-    The lift is where a grasp proves itself, so the force being held there is the force
-    that turned out to be enough - which is what a model asked "how hard should I squeeze
-    this" should answer. Read at the first frame after the grasp where the gripper has
-    climbed a centimetre and keeps climbing, rather than at the peak, because a peak is
-    whatever the operator overshot to.
+    The first frame after the grasp where the gripper has climbed LIFT_ONSET_M and is
+    still climbing LIFT_CONFIRM_SECONDS later, rather than the top of the climb: the lift
+    is the moment the object leaves what it was resting on, and everything after it is
+    the object being carried rather than merely squeezed.
 
-    Returns None if it never rose, though the caller has usually established otherwise.
+    Both things that need the lift want this instant - the force that turned out to be
+    enough is the one held here, and a grasp only proves itself by taking the weight - so
+    they read the same frame rather than each finding their own.
     """
     start_z = rows[grasp]["gripper_pos"][2]
     settle = max(1, int(round(LIFT_CONFIRM_SECONDS * fps)))
@@ -417,8 +430,69 @@ def lift_pressure(rows, grasp, rise_m, fps):
             continue
         later = rows[min(i + settle, len(rows) - 1)]["gripper_pos"][2]
         if later >= rows[i]["gripper_pos"][2]:
-            return float(rows[i]["pressure"])
+            return i
     return None
+
+
+def find_drop(rows, lift, fps, release_pressure=RELEASE_PRESSURE,
+              min_release_seconds=MIN_GRASP_SECONDS):
+    """The frame the object stopped being held after `lift`, or None if it never did.
+
+    Two ways a carry ends and the earlier one wins, because the label wanted here is the
+    run of frames the grip was beyond doubt:
+
+      the operator commands an open - finger_speed goes negative. The jaws take a few
+      tenths of a second to actually let go, so this is early by that much, which is the
+      right direction to be wrong in for a positive label.
+
+      the pressure collapses and stays collapsed - the object slipped out with nobody
+      asking it to, and no command marks it.
+
+    The sustain is what makes the pressure test usable at all: a carry rides right on the
+    grasp threshold, and over 744 mined grasps 18% of them dip under PRESSURE_THRESHOLD
+    at some point without dropping anything. At RELEASE_PRESSURE held for as long as a
+    grasp must hold, 6.5% trip it, and only 3 of those recover - so what it catches is
+    losses rather than noise.
+    """
+    drop = None
+    for i in range(lift, len(rows)):
+        if rows[i]["finger_speed"] < 0:
+            drop = i
+            break
+
+    hold = max(1, int(round(min_release_seconds * fps)))
+    tail = np.array([r["pressure"] for r in rows[lift:]], dtype=np.float32)
+    if len(tail) >= hold:
+        under = (tail < release_pressure).astype(np.int32)
+        gone = np.convolve(under, np.ones(hold, dtype=np.int32), mode="valid") == hold
+        collapsed = np.flatnonzero(gone)
+        if collapsed.size:
+            slipped = lift + int(collapsed[0])
+            drop = slipped if drop is None else min(drop, slipped)
+    return drop
+
+
+def holding_label(i, grasp, lift, drop):
+    """Whether frame `i` shows an object securely held, or None where nothing can say.
+
+    Positive only between the lift and the drop. The jaws closing on something is not yet
+    holding it - the grip is unproven until it takes the weight - and pressure crossing
+    the grasp threshold is the cheapest thing in the episode to reach, which is why a head
+    trained from that instant learns "an object is close in frame" instead.
+
+    The window between the grasp and the lift is masked rather than negative. Those frames
+    look exactly like the held ones and the object really is between the jaws; all that is
+    missing is the proof, and teaching them as negatives would contradict the frames on
+    either side. Before the grasp is a real negative - an object in view, in reach, and
+    not in the hand is the case the head keeps getting wrong.
+    """
+    if i < grasp:
+        return 0
+    if lift is None or i < lift:
+        return None
+    if drop is not None and i >= drop:
+        return 0
+    return 1
 
 
 def wrap_pi(radians):
@@ -451,7 +525,10 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
     target_room = grasp_point_room(rows[grasp])
     wrist_at_grasp = rows[grasp]["wrist_angle"]
     onset = close_onset(rows, grasp)
-    pressure_at_lift = lift_pressure(rows, grasp, rise_m, fps)
+    lift = find_lift(rows, grasp, fps)
+    drop = None if lift is None else find_drop(rows, lift, fps)
+    # The force that turned out to be enough, read at the frame it proved itself on.
+    pressure_at_lift = None if lift is None else float(rows[lift]["pressure"])
 
     first = max(0, grasp - int(round(approach_seconds * fps)))
     last = min(len(rows) - 1, grasp + int(round(carry_seconds * fps)))
@@ -476,7 +553,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
             "grasp_pressure": (None if pressure_at_lift is None
                                else round(pressure_at_lift, 4)),
             "target_present": 1 if i <= grasp else None,
-            "holding": 0 if i < grasp else 1,
+            "holding": holding_label(i, grasp, lift, drop),
             "state": {
                 "laser_rangefinder": round(float(r["laser_rangefinder"]), 4),
                 "finger_angle": round(float(r["finger_angle"]), 3),
@@ -734,6 +811,9 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
     mined, skipped = 0, {"no_grasp": 0, "no_rise": 0}
     dropped_total, blind_total = 0, 0
     considered = 0
+    # The holding head is the one whose labels are a judgement call rather than a
+    # projection, so the balance it ends up with is worth seeing at mining time.
+    holding_counts = {1: 0, 0: 0, None: 0}
     for n, ep in enumerate(sorted(episodes)):
         if limit and n >= limit:
             break
@@ -759,6 +839,7 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
             sample["episode_index"] = ep
             sample["source_repo_id"] = repo_id
             writer.add(sample)
+            holding_counts[sample["holding"]] += 1
             mined += 1
         if progress is not None:
             progress.set_postfix(frames=writer.total, refresh=False)
@@ -767,7 +848,9 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
                f"{considered - sum(skipped.values())}/{considered} episodes "
                f"(skipped {skipped}), {dropped_total} frames dropped as off-canvas "
                f"or behind the camera, {blind_total} kept with no target in view "
-               f"({blind_total / max(mined, 1) * 100:.0f}% of what was mined)")
+               f"({blind_total / max(mined, 1) * 100:.0f}% of what was mined), "
+               f"holding {holding_counts[1]} held / {holding_counts[0]} empty / "
+               f"{holding_counts[None]} masked")
     if progress is not None:
         progress.write(summary)
     else:
