@@ -15,6 +15,7 @@ merge:
   - naavox/combined_targets_reblend
   - repo_id: naavox/chuck-aug28
     exclude_episodes: ['14']
+  - naavox/79west-sep4
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
 keep_state_features:
