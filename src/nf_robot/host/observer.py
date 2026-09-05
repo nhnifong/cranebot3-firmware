@@ -157,11 +157,16 @@ GRIPPER_FINGER_LEN_M = 0.18
 GRIPPER_HEIGHT_OVER_TARGET = np.array([0,0,0.3])
 
 # mapping from enums to MARKER_NAMES in cv_common
+# The name the drop position is saved under. Not a tag: nothing ever sees it, it is only ever
+# what was recorded there, where the others are re-observed whenever a camera catches the tag.
+DROP_POSITION_NAME = "drop_position"
+
 ROUTE_POINT_TAG_NAMES = {
     common.RoutePoint.HAMPER: "hamper",
     common.RoutePoint.TOYBOX: "toys",
     common.RoutePoint.TRASH: "trash",
     common.RoutePoint.GAMEPAD: "gamepad",
+    common.RoutePoint.DROP_POSITION: DROP_POSITION_NAME,
 }
 
 # feature key -> minimum nf_robot version every connected component must run to use it
@@ -1537,6 +1542,8 @@ class AsyncObserver:
                 self.run_command_loop = False
             case control.Command.RECORD_PARK:
                 r = await self.record_park()
+            case control.Command.RECORD_DROP:
+                self.record_drop_position()
             case control.Command.PARK:
                 r = await self.invoke_motion_task(self.park())
             case control.Command.UNPARK:
@@ -3928,6 +3935,38 @@ class AsyncObserver:
             f'RMS deviation {rms_cm:.2f}cm '
             f'(per-axis x={per_axis_rms_cm[0]:.2f}cm y={per_axis_rms_cm[1]:.2f}cm z={per_axis_rms_cm[2]:.2f}cm)')
 
+    def record_drop_position(self):
+        """Save where the gantry is standing now as the place to drop things, and route there.
+
+        Stored in named_positions beside the hamper and the toybox, so everything that already
+        knows how to fly to a named place can fly to this one.
+
+        Those are positions of things on the floor, and a route hovers the dropoff height above
+        them, so what is stored is the point the gantry is currently that height above. Saving
+        while hovering where you want things to land therefore brings the gantry back to exactly
+        where it was, which is the only behaviour that makes the button mean what it says. On a
+        robot saved lower than the dropoff height that point is under the floor; nothing minds,
+        since it is only ever used as something to hover over and to keep targets away from.
+
+        Saving selects it as the route destination, because recording a place to drop things is
+        how you say that is where things should go.
+        """
+        hover = tonp(self.config.pick_and_place.gantry_height_over_dropoff)
+        gantry = np.array(self.pe.gant_pos, dtype=float)
+        self.config.named_positions[DROP_POSITION_NAME] = fromnp(gantry - hover)
+        self.pnp_dst = common.RoutePoint.DROP_POSITION
+        self.config.last_route_destination = self.pnp_dst
+        save_config(self.config, self.config_path)
+        logger.info(f'Drop position saved: gantry returns to {np.round(gantry, 3)}, '
+                    f'stored as {np.round(gantry - hover, 3)} under it')
+        self.send_ui(named_position=telemetry.NamedObjectPosition(
+            position=fromnp(gantry - hover), name=DROP_POSITION_NAME))
+        # The To: field flipping to the drop position is the confirmation; no popup for a
+        # button that did exactly what it says.
+        self.send_ui(task_status=telemetry.TaskStatus(
+            route_source=self.pnp_src, route_destination=self.pnp_dst,
+        ))
+
     async def record_park(self):
         """Record that the current location is reseted in the parking saddle and save in the config"""
         # confirm we can actually see the parking target in the grip camera
@@ -5244,8 +5283,15 @@ class AsyncObserver:
                         drop_point = tonp(self.config.named_positions[next_target.dropoff])
 
                 elif self.pnp_dst in ROUTE_POINT_TAG_NAMES:
-                    # Typical path
-                    drop_point = tonp(self.config.named_positions[ROUTE_POINT_TAG_NAMES[self.pnp_dst]])
+                    # Typical path. A destination whose tag has never been seen, or a drop
+                    # position never recorded, has nothing saved to fly to; say so rather than
+                    # raising out of the middle of a pick.
+                    saved = self.config.named_positions.get(ROUTE_POINT_TAG_NAMES[self.pnp_dst])
+                    if saved is None:
+                        logger.warning(f'No saved position for the route destination '
+                                       f'{ROUTE_POINT_TAG_NAMES[self.pnp_dst]}; dropping at the origin')
+                    else:
+                        drop_point = tonp(saved)
                 elif self.pnp_dst == common.RoutePoint.ORIGIN:
                     drop_point = np.zeros(3)
 

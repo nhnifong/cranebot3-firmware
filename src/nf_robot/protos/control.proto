@@ -46,6 +46,8 @@ enum Command {
   COMMAND_DISABLE_TENSION_REG = 21;
   // Ask all robot components to safely shut down
   COMMAND_SAFE_COMPONENT_SHUTDOWN = 22;
+  // Save where the gantry is standing now as the drop position, and route to it from now on.
+  COMMAND_RECORD_DROP = 23;
 
   // =====  Commands intended only for diagnostics =====
 

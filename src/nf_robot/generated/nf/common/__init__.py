@@ -291,6 +291,12 @@ class RoutePoint(betterproto2.Enum):
 
     ORIGIN = 7
 
+    DROP_POSITION = 8
+    """
+    The drop position saved with COMMAND_RECORD_DROP, returned to by line length rather
+    than by position. See DropPosition in robot-config.proto.
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -302,6 +308,7 @@ class RoutePoint(betterproto2.Enum):
             5: "ROUTEPOINT_TOYBOX",
             6: "ROUTEPOINT_GAMEPAD",
             7: "ROUTEPOINT_ORIGIN",
+            8: "ROUTEPOINT_DROP_POSITION",
         }
 
     @classmethod
@@ -315,6 +322,7 @@ class RoutePoint(betterproto2.Enum):
             "ROUTEPOINT_TOYBOX": 5,
             "ROUTEPOINT_GAMEPAD": 6,
             "ROUTEPOINT_ORIGIN": 7,
+            "ROUTEPOINT_DROP_POSITION": 8,
         }
 
 

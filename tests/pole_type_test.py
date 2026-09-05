@@ -40,8 +40,10 @@ class TestPoleTypeConfig(unittest.TestCase):
             save_config(create_default_config(), path)
             return json.loads(path.read_text())
 
-    def test_a_new_config_gets_the_carbon_pole(self):
-        self.assertEqual(create_default_config().gripper.pole_type, common.PoleType.CARBON400)
+    def test_a_new_config_gets_the_current_pole(self):
+        # The pole newly built robots carry. Update it here when the build changes, which is
+        # the point of the test: a new config must not quietly inherit an older pole's geometry.
+        self.assertEqual(create_default_config().gripper.pole_type, common.PoleType.CARBON270)
 
     def test_a_config_older_than_the_field_gets_the_abs_pole(self):
         older = self._default_json()
@@ -55,7 +57,7 @@ class TestPoleTypeConfig(unittest.TestCase):
 
     def test_a_recorded_pole_type_survives_a_load(self):
         saved = self._default_json()
-        self.assertEqual(self._load_written(saved).gripper.pole_type, common.PoleType.CARBON400)
+        self.assertEqual(self._load_written(saved).gripper.pole_type, common.PoleType.CARBON270)
 
     @needs_firmware
     def test_the_gripper_boots_on_the_older_pole(self):
@@ -68,15 +70,16 @@ class TestObserverUsesTheConfiguredPole(unittest.TestCase):
 
     def test_hang_distance_comes_from_the_pole(self):
         for pole_type, offset in ((common.PoleType.ABS500, model_constants.pole_offset_abs500),
-                                  (common.PoleType.CARBON400, model_constants.pole_offset_carbon400)):
+                                  (common.PoleType.CARBON400, model_constants.pole_offset_carbon400),
+                                  (common.PoleType.CARBON270, model_constants.pole_offset_carbon270)):
             with self.subTest(pole_type=pole_type):
                 geom = model_constants.POLE_GEOMETRY[pole_type]
                 self.assertAlmostEqual(geom.gantry_to_gripper, offset)
 
-    def test_a_default_robot_hangs_at_the_carbon_offset(self):
+    def test_a_default_robot_hangs_at_the_current_pole_offset(self):
         ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=0)
-        np.testing.assert_allclose(ob.pole, [0, 0, model_constants.pole_offset_carbon400])
-        self.assertAlmostEqual(ob.pendulum.length, model_constants.pole_length_carbon400)
+        np.testing.assert_allclose(ob.pole, [0, 0, model_constants.pole_offset_carbon270])
+        self.assertAlmostEqual(ob.pendulum.length, model_constants.pole_length_carbon270)
 
     def test_the_carbon_pole_carries_the_flat_marker(self):
         ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=0)

@@ -34,10 +34,10 @@ class TestPoleTypes(unittest.TestCase):
             gripper=nf_config.Gripper(pole_type=common.PoleType.CARBON400))
         self.assertEqual(swing.pendulum_for(cfg).length, model_constants.pole_length_carbon400)
 
-    def test_a_new_default_config_has_carbon_pole(self):
+    def test_a_new_default_config_has_the_current_pole(self):
         cfg = create_default_config()
-        self.assertEqual(cfg.gripper.pole_type, common.PoleType.CARBON400)
-        self.assertEqual(swing.pendulum_for(cfg).length, model_constants.pole_length_carbon400)
+        self.assertEqual(cfg.gripper.pole_type, common.PoleType.CARBON270)
+        self.assertEqual(swing.pendulum_for(cfg).length, model_constants.pole_length_carbon270)
 
     def test_an_unset_pole_type_falls_back_to_the_older_pole(self):
         """Matches the length config_loader backfills, so both paths agree."""

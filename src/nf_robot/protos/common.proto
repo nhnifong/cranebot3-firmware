@@ -114,6 +114,9 @@ enum RoutePoint {
   ROUTEPOINT_TOYBOX = 5;
   ROUTEPOINT_GAMEPAD = 6;
   ROUTEPOINT_ORIGIN = 7;
+  // The drop position saved with COMMAND_RECORD_DROP, returned to by line length rather
+  // than by position. See DropPosition in robot-config.proto.
+  ROUTEPOINT_DROP_POSITION = 8;
 }
 
 enum CalibratedStatus {

@@ -129,6 +129,11 @@ class Command(betterproto2.Enum):
     Ask all robot components to safely shut down
     """
 
+    RECORD_DROP = 23
+    """
+    Save where the gantry is standing now as the drop position, and route to it from now on.
+    """
+
     HORIZONTAL_CHECK = 6
     """
     =====  Commands intended only for diagnostics =====
@@ -179,6 +184,7 @@ class Command(betterproto2.Enum):
             20: "COMMAND_ENABLE_TENSION_REG",
             21: "COMMAND_DISABLE_TENSION_REG",
             22: "COMMAND_SAFE_COMPONENT_SHUTDOWN",
+            23: "COMMAND_RECORD_DROP",
             6: "COMMAND_HORIZONTAL_CHECK",
             7: "COMMAND_COLLECT_GRIPPER_IMAGES",
             8: "COMMAND_SHUTDOWN",
@@ -207,6 +213,7 @@ class Command(betterproto2.Enum):
             "COMMAND_ENABLE_TENSION_REG": 20,
             "COMMAND_DISABLE_TENSION_REG": 21,
             "COMMAND_SAFE_COMPONENT_SHUTDOWN": 22,
+            "COMMAND_RECORD_DROP": 23,
             "COMMAND_HORIZONTAL_CHECK": 6,
             "COMMAND_COLLECT_GRIPPER_IMAGES": 7,
             "COMMAND_SHUTDOWN": 8,

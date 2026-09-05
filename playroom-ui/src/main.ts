@@ -285,6 +285,7 @@ const CONTROL_MENU_ITEMS: Record<string, string[]> = {
   'action-pick-drop':         ['owner', 'full'],
   'action-half-cal':          ['owner', 'full', 'limited_driver'],
   'action-record-park':       ['owner', 'full'],
+  'action-record-drop':       ['owner', 'full'],
   'action-grasp':             ['owner', 'full', 'limited_driver'],
   'action-full-cal':          ['owner', 'full'],
   'action-dataset':           ['owner', 'full'],
@@ -1530,7 +1531,7 @@ function handleNamedPosition(data: nf.telemetry.INamedObjectPosition) {
 
 const TARGET_ROUTE_SOURCE_OPTIONS = ['All targets', 'User targets', 'Toybox', 'Hamper', 'Trash', 'Gamepad', 'Origin'];
 // "All targets" and "User targets" describe groups of targets, not a single named location — only valid as a source.
-const TARGET_ROUTE_DESTINATION_OPTIONS = ['Toybox', 'Hamper', 'Trash', 'Gamepad', 'Origin'];
+const TARGET_ROUTE_DESTINATION_OPTIONS = ['Toybox', 'Hamper', 'Trash', 'Gamepad', 'Origin', 'Drop position'];
 
 const ROUTE_POINT_BY_LABEL: Record<string, nf.common.RoutePoint> = {
   'All targets': nf.common.RoutePoint.ROUTEPOINT_ALL_TARGETS,
@@ -1540,6 +1541,8 @@ const ROUTE_POINT_BY_LABEL: Record<string, nf.common.RoutePoint> = {
   'Trash': nf.common.RoutePoint.ROUTEPOINT_TRASH,
   'Gamepad': nf.common.RoutePoint.ROUTEPOINT_GAMEPAD,
   'Origin': nf.common.RoutePoint.ROUTEPOINT_ORIGIN,
+  // Set from the run menu rather than picked here, but it needs a label like any other
+  'Drop position': nf.common.RoutePoint.ROUTEPOINT_DROP_POSITION,
 };
 
 const ROUTE_POINT_LABELS: Record<number, string> = Object.fromEntries(
@@ -2076,6 +2079,7 @@ function initRunMenu() {
   bindCommand('action-dataset',        Command.COMMAND_SUBMIT_TARGETS_TO_DATASET);
   bindCommand('action-update-firmware', Command.COMMAND_UPDATE_FIRMWARE);
   bindCommand('action-record-park',    Command.COMMAND_RECORD_PARK);
+  bindCommand('action-record-drop',    Command.COMMAND_RECORD_DROP);
   bindCommand('action-shutdown-components', Command.COMMAND_SAFE_COMPONENT_SHUTDOWN);
   // Park / UnPark temporarily removed from the menu — feature is unstable and unrecommended.
   // State toggles. Both show what the robot reports (torque_state and

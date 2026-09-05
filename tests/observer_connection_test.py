@@ -18,7 +18,7 @@ from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.arp_gripper_client import ArpeggioGripperClient
 
-from port_utils import free_port
+from port_utils import free_ports
 
 # Todo, automate the following tests
 # with a blank config, start observer, allow it to discover the bots, assert it wrote the addresses in the config.
@@ -106,10 +106,16 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
 
         # An ephemeral port instead of the default 4245, since a real observer/robot may
         # already be running on this machine and holding it.
-        self.ui_port = free_port()
+        # Every port the observer binds has to be one nothing else holds: a robot running on
+        # this machine already has the web UI on 8090, and the floor projection's mjpeg stream
+        # on 8747, both of which are fixed rather than derived from --port. run_ortho is off
+        # both because that is the 8747 one and because these tests are about connecting to
+        # components, not about video.
+        self.port, self.ui_port = free_ports(2)
 
         # Create observer with test default config (no components are known)
-        self.ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=self.ui_port)
+        self.ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=self.port,
+                                ui_port=self.ui_port, run_ortho=False)
         # before running main, set it's zeroconf instance to a mock
         self.zc = MagicMock()
         self.zc.async_close = self.instant_nothing
@@ -207,7 +213,9 @@ class TestObserver(unittest.IsolatedAsyncioTestCase):
     async def test_observer_accepts_local_ui_connection(self):
         """observer should listen for local UI on localhost"""
         await self.start_observer()
-        async with websockets.connect(f"ws://127.0.0.1:{self.ui_port}") as ws:
+        # the telemetry socket a UI connects to, which is --port; ui_port is the separate
+        # http server that serves the page
+        async with websockets.connect(f"ws://127.0.0.1:{self.port}") as ws:
             await asyncio.sleep(0.01)
             self.assertFalse(self.ob_task.done(), "Server should still be running after getting a connection")
             await ws.close()
