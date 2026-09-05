@@ -40,6 +40,7 @@ import torch
 import torch.nn.functional as F
 
 from nf_robot.ml.visual_servoing.dataset import VisualServoDataset
+from nf_robot.ml.visual_servoing.mine_teleop import FINGER_ANGLE_FULL_SCALE
 from nf_robot.ml.visual_servoing.model import (
     DEFAULT_BACKBONE,
     DEFAULT_IMAGE_SIZE,
@@ -64,10 +65,12 @@ SELECTION_METRIC = "onscreen_recall@25px"
 DEFAULT_WEIGHTS = {
     "cell": 1.0, "offset": 1.0, "distance": 0.5,
     "axis": 0.5, "finger": 0.5, "present": 0.2, "holding": 0.2,
-    # Only ever nonzero for a --close_heads model. The close flag is weighted like the
-    # other two flags; the pressure is a regression in the same units as the sensor, so
-    # its raw magnitude is small and it needs the room.
+    # Zero for a --no_close_heads model, which has neither head. The close flag is
+    # weighted like the other two flags; the pressure is a regression in the same units as
+    # the sensor, so its raw magnitude is small and it needs the room.
     "close": 0.2, "pressure": 1.0,
+    # The open angle is normalized the way the finger rate is, so it is weighted the same.
+    "open": 0.5,
 }
 # Width, in cells, of the Gaussian the cell head is trained against. Cells are 12px of the
 # 448x256 input (the 1.5x canvas over 56x32 cells), so 1.5 cells is about 18px.
@@ -288,6 +291,13 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
                              reduction="none", beta=0.05),
             batch["has_pressure"])
 
+    if "open_angle" in outputs:
+        # Huber again, and for the same reason: one operator opening wider than they
+        # needed to is a fact about that episode, not about the object.
+        parts["open"], _ = masked_mean(
+            F.smooth_l1_loss(outputs["open_angle"], batch["open_angle"], reduction="none"),
+            batch["has_open"])
+
     total = sum(weights[k] * v for k, v in parts.items())
     return total, {k: float(v.detach()) for k, v in parts.items()}
 
@@ -306,7 +316,7 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
 
     errors, axis_errors, range_ratio, axis_kappa, axis_labels = [], [], [], [], []
     onscreen = []
-    finger_abs, present_ok, holding_ok = [], [], []
+    finger_abs, present_ok, holding_ok, open_abs = [], [], [], []
     for batch in loader:
         batch = {k: v.to(device) for k, v in batch.items()}
         outputs = model(batch["image"], batch["state"])
@@ -334,6 +344,10 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         has_finger = batch["has_finger"] > 0.5
         if has_finger.any():
             finger_abs.append((outputs["finger"][has_finger] - batch["finger"][has_finger]).abs().cpu())
+        has_open = batch["has_open"] > 0.5
+        if "open_angle" in outputs and has_open.any():
+            open_abs.append((outputs["open_angle"][has_open]
+                             - batch["open_angle"][has_open]).abs().cpu())
         has_present = batch["has_present"] > 0.5
         if has_present.any():
             predicted = (outputs["present_logit"][has_present] > 0).float()
@@ -375,6 +389,10 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         metrics["axis_kappa"] = torch.cat(axis_kappa).median().item()
     if finger_abs:
         metrics["finger_mae"] = torch.cat(finger_abs).mean().item()
+    if open_abs:
+        # In degrees, which is what the robot sends the gripper, so the number says
+        # directly how far off the jaws would be spread.
+        metrics["open_deg"] = torch.cat(open_abs).median().item() * FINGER_ANGLE_FULL_SCALE
     if present_ok:
         metrics["present_acc"] = torch.cat(present_ok).mean().item()
     if holding_ok:
@@ -459,6 +477,9 @@ def checkpoint_payload(model, args, metrics, epoch):
         # from every checkpoint written before the heads existed, which is exactly how
         # those keep loading.
         "close_heads": args.close_heads,
+        # And whether it can say how wide to open, which is a separate head and a separate
+        # key for the same reason.
+        "open_head": args.open_head,
     }
 
 
@@ -502,11 +523,17 @@ def train(args):
 
     if args.close_heads and not train_set.has_close_labels():
         raise SystemExit(
-            f"--close_heads needs close_now labels and no row in {data_root}/train has "
-            f"one. Re-mine the teleop half: the columns are written by mine_teleop.")
+            f"The close and pressure heads need close_now labels and no row in "
+            f"{data_root}/train has one. Re-mine the teleop half - the columns are written "
+            f"by mine_teleop - or pass --no_close_heads to train the rate head alone.")
+    if args.open_head and not train_set.has_open_labels():
+        raise SystemExit(
+            f"The open-angle head needs open_angle labels and no row in {data_root}/train "
+            f"has one. Re-mine the teleop half - the column is written by mine_teleop - or "
+            f"pass --no_open_head.")
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
-        close_heads=args.close_heads,
+        close_heads=args.close_heads, open_head=args.open_head,
         attention_layers=args.attention_layers, freeze=not args.unfreeze_backbone,
     ).to(device)
     head_params = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
@@ -604,11 +631,19 @@ def main():
                         help="Mined dataset on the hub, used when --data_root is absent")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
     parser.add_argument(
-        "--close_heads", action="store_true",
-        help="Train the close-onset and grasp-pressure heads instead of relying on the "
-             "finger-rate head alone. The rate head still trains; these two answer *when* "
-             "to start closing and *how hard* to end up squeezing, which is what the "
-             "robot actually needs and what a per-frame rate label describes badly.")
+        "--no_close_heads", dest="close_heads", action="store_false",
+        help="Build three global outputs and rely on the finger-rate head alone, the way "
+             "checkpoints written before these heads existed do. The close-onset and "
+             "grasp-pressure heads are on otherwise: the rate head trains either way, but "
+             "those two answer *when* to start closing and *how hard* to end up squeezing, "
+             "which is what the robot needs and what a per-frame rate label describes badly.")
+    parser.add_argument(
+        "--no_open_head", dest="open_head", action="store_false",
+        help="Leave off the head that predicts how wide the operator opened the jaws "
+             "before the grasp. On otherwise: it is the one thing about the object the "
+             "model can answer from far out, and the robot spreads the fingers to it "
+             "during the approach so the jaws are already around the object when the "
+             "close begins.")
     parser.add_argument("--eval_every", type=int, default=1,
                         help="Score the eval split every N epochs (and always on the last)")
     parser.add_argument("--select_best", action="store_true",

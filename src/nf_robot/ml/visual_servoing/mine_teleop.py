@@ -41,6 +41,10 @@ What comes out, per frame, in the row format readme.md describes:
     target_range_m   distance from the camera to the grasp point, the third dimension
     grasp_axis_rad   how much further the wrist turned before grasping, pi-wrapped
     finger           commanded finger speed / 90, in -1..1
+    open_angle       the widest the operator opened the jaws during the approach, / 90,
+                     so a number in -1..0. One value for the whole episode: how far the
+                     jaws have to be spread to go around this object is a property of the
+                     object, the same way grasp_pressure is
     holding          1 between the lift and the drop, 0 before the grasp, null in
                      between - the grip is not proven until it takes the weight
     target_present   1 (an approach always has one)
@@ -154,6 +158,11 @@ RELEASE_PRESSURE = 0.05
 MIN_DEPTH_M = 0.02
 # Full-scale commanded finger speed, used to normalize the finger label into -1..1.
 FINGER_SPEED_FULL_SCALE = 90.0
+# Full-scale finger angle, used the same way on the open_angle label. The gripper clamps
+# angle commands to -90..90, where -90 is fully open and 90 is shut. Matches
+# dataset.STATE_SCALES["finger_angle"], so the label and the state input the model reads
+# it beside are in one unit; dataset imports from here, so the constant cannot go there.
+FINGER_ANGLE_FULL_SCALE = 90.0
 # Frames are stored at the model's input resolution. Labels are normalized coordinates,
 # so they survive the resize untouched, and the stored frame is then exactly what the
 # model sees - nothing is gained by keeping pixels the training loader would throw away.
@@ -212,6 +221,9 @@ def row_schema():
         # the grip force being carried at the moment the lift began, same value on every
         # frame of the episode: it is a property of the object, not of the frame
         ("grasp_pressure", pa.float32()),
+        # the widest the jaws were opened during the approach, over FINGER_ANGLE_FULL_SCALE
+        # and so negative; a property of the object like the pressure above it
+        ("open_angle", pa.float32()),
         ("target_present", pa.int8()),
         ("holding", pa.int8()),
         ("state", pa.struct([
@@ -411,6 +423,24 @@ def close_onset(rows, grasp, gap_frames=CLOSE_GAP_FRAMES):
     return None if onset == 0 else onset
 
 
+def widest_open(rows, first, grasp):
+    """How far the operator spread the jaws on the way in to this grasp.
+
+    The minimum finger angle over the approach, because the gripper's scale runs from -90
+    fully open to 90 shut, so the widest opening is the smallest number.
+
+    Over the mined window rather than the whole recording: those are the frames a model
+    trained on this label will be looking at, and an opening from before the window
+    belongs to whatever the operator was doing beforehand - dropping the last object,
+    most often, which is the widest the jaws ever go and has nothing to do with this one.
+
+    One number for the whole episode, like grasp_pressure. How far the jaws have to spread
+    to go around a thing is a property of the thing, and the frame the operator happened
+    to reach it on is not special.
+    """
+    return min(float(rows[i]["finger_angle"]) for i in range(first, grasp + 1))
+
+
 def find_lift(rows, grasp, fps):
     """The frame the gripper started carrying the object up, or None if it never rose.
 
@@ -532,6 +562,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
 
     first = max(0, grasp - int(round(approach_seconds * fps)))
     last = min(len(rows) - 1, grasp + int(round(carry_seconds * fps)))
+    open_angle = widest_open(rows, first, grasp)
 
     out, dropped, blind = [], 0, 0
     for i in range(first, last + 1):
@@ -552,6 +583,9 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
             "close_now": None if onset is None else (1 if i >= onset else 0),
             "grasp_pressure": (None if pressure_at_lift is None
                                else round(pressure_at_lift, 4)),
+            # Same on every frame, including the ones after the grasp: it describes the
+            # object in the jaws, not what the fingers are doing in this picture.
+            "open_angle": round(open_angle / FINGER_ANGLE_FULL_SCALE, 4),
             "target_present": 1 if i <= grasp else None,
             "holding": holding_label(i, grasp, lift, drop),
             "state": {
@@ -639,8 +673,10 @@ def mine_negative_episode(rows, stride=NEGATIVE_STRIDE):
             # 0 as a fact, not as a mask: bare floor is exactly where a close should not
             # begin, and it is the only place that can say so about a real frame.
             "close_now": 0,
-            # But how hard to squeeze has no answer with nothing to squeeze.
+            # But how hard to squeeze has no answer with nothing to squeeze, and neither
+            # does how wide to open for it.
             "grasp_pressure": None,
+            "open_angle": None,
             "target_present": 0,
             "holding": 0 if empty else None,
             "state": {
@@ -1032,7 +1068,11 @@ def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
             (f"axis {math.degrees(theta):+.1f}deg  " if has_target else "")
             + f"finger {sample['finger']:+.2f}  holding {sample['holding']}",
             f"laser {sample['state']['laser_rangefinder']:.3f}  fingerang {sample['state']['finger_angle']:.1f}"
-            f"  force {sample['state']['target_force']:.3f}",
+            f"  force {sample['state']['target_force']:.3f}"
+            # In degrees, next to the frame's own finger angle: the two together are what
+            # show whether the widest opening found is the one in the pictures.
+            + ("" if sample.get("open_angle") is None else
+               f"  open {sample['open_angle'] * FINGER_ANGLE_FULL_SCALE:.0f}deg"),
         ]
         for i, line in enumerate(lines):
             y = 26 + i * 26

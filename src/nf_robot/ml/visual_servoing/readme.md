@@ -116,7 +116,7 @@ captures are photographed already in their ideal grasping orientation.
 
 **3. Finger speed, scalar in [-1, 1], from the global vector.**
 
-A `--close_heads` checkpoint adds two more global heads and deploys from those instead,
+Two more global heads come with this one by default, and deployment drives from those,
 because what a rate label describes is a teleoperator's thumb: on the same situation it
 reads +1 one frame and 0 the next, and 69% of the mined values are exactly zero. What a
 grasp actually consists of is a decision and a target, so those are what get predicted:
@@ -132,14 +132,23 @@ grasp actually consists of is a decision and a target, so those are what get pre
   property of the object, not of the frame. Softplus, since a negative force is not one
   the gripper can hold.
 
-Deployment stops being a rate follower and becomes a program: hold the fingers still
-until 3a crosses 0.5, then close at one speed with a short ramp until the *commanded*
-force reaches 3b. The commanded value rather than the felt one, because that is what the
+  **3c. How wide the jaws have to spread to go around it**, the widest angle the operator
+  opened to on the way in, in -1..1 of the gripper's full finger travel and negative for
+  open. Also one value for the whole episode, and the only one of the three that can be
+  answered from far out: the close decision needs the object between the jaws, and the
+  force needs contact, but how big a thing is is legible from half a metre up. tanh,
+  because that travel is what the gripper has and an angle outside it is not one it can
+  be sent to. `--no_open_head` leaves it off.
+
+Deployment stops being a rate follower and becomes a program: spread the jaws to 3c while
+the approach is settled and above the commit range, hold them there until 3a crosses 0.5,
+then close at one speed with a short ramp until the *commanded* force reaches 3b. The commanded value rather than the felt one, because that is what the
 ask is - the gripper turns finger speed into a force ramp on contact, and whether the
 felt force followed is the holding head's question.
 
-Old checkpoints carry no `close_heads` key, build three global outputs, and drive from
-the rate head exactly as before.
+`--no_close_heads` builds three global outputs and drives from the rate head instead;
+old checkpoints carry no `close_heads` key, so they do that on their own and keep
+loading exactly as before.
 
 More grip is positive, less grip is negative; scaled to the robot's finger speed units
 downstream, which keeps it compatible with the existing gripper_vel action.
@@ -241,6 +250,7 @@ uses; write_split and upload_dataset there can be reused as they are. One row pe
      "target_range_m": float | null,    # third dimension of the 3D target
      "grasp_axis_rad": float | null,    # pi-periodic
      "finger": float | null,            # -1..1
+     "open_angle": float | null,        # widest the jaws were opened / 90, so -1..0
      "target_present": 0 | 1,
      "holding": 0 | 1 | null,           # null = unlabelled, loss masked
      "state": {"laser_rangefinder": ..., "finger_angle": ..., "target_force": ...}}
@@ -440,6 +450,12 @@ Then the labels fall out per head:
 - **finger**: the recorded finger_speed at t, divided by 90. Direct, no rule fitting
   needed; the parametrised close rule is only for synthetic frames, and teleop is what
   it gets fitted against.
+- **open_angle**: the minimum finger_angle over the approach window, divided by 90 -
+  minimum because the gripper's scale runs -90 fully open to 90 shut. One value on every
+  frame of the episode, including the ones after the grasp: how far the jaws have to
+  spread to go around a thing is a property of the thing. Taken over the mined window
+  rather than the whole recording, so the widest the jaws ever go - the drop of the
+  *previous* object, at the top of the episode - cannot be mistaken for this grasp's.
 - **target_present**: 1 throughout the mined window. Do not emit 0 for other frames -
   we do not know that nothing graspable was visible, and the honest label is null.
   Negatives come from synthetic bare-floor frames.
@@ -623,7 +639,6 @@ an object the robot has never seen.
 
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing_pool_252 \
-        --close_heads \
         --epochs 14 \
         --batch_size 400
 
@@ -642,7 +657,9 @@ Reading the metrics:
   rows in it, and `audit` says so before training does.
 
 `--axis_loss mse` and `--no_axis_balance` turn off the von Mises objective and the
-per-angle-bin row weighting for an A/B; both are on by default.
+per-angle-bin row weighting for an A/B; both are on by default. So are the close-onset
+and grasp-pressure heads - `--no_close_heads` trains the finger-rate head alone, and
+training refuses to start if the pool carries no `close_now` labels to fit them against.
 
 ## 6c. Publishing the dataset
 
@@ -747,16 +764,35 @@ The loop is the downstream half the model was shaped for. Each pass:
   holds. The grasp axis is pi-periodic, so the same jaw line is always reachable 180
   degrees away; the choice weighs travel against distance from the neutral 540, which
   keeps a long run off the ends without spending half turns chasing the middle
-- the fingers are driven by the finger head, every pass, and by nothing else - the
-  prediction is a rate in the units the teleop labels were recorded in, so deploying it is
-  a multiply by 90 and no more. That includes the commit at the end: the gantry stops, the
-  model keeps the fingers, and a pressure rise is what makes the routine report success.
-  A fixed closing speed would be a constant standing in for the one part of the approach
-  the head has the most evidence about, since the frames where a teleoperator ever
-  commanded a close are frames with the object already between the jaws
-- the close threshold no longer starts the close - the fingers are already following the
-  head - it decides when to stop the gantry, because driving on once the model is closing
-  is how an object gets pushed out of the jaws
+- the fingers run heads 3a, 3b and 3c as a program, every pass and by nothing else: the
+  jaws are spread to the predicted open angle, held there until the close head clears
+  0.45, then closed at one speed with a short ramp until the *commanded* force reaches the
+  predicted grip pressure, then zero speed - which holds that force rather than letting
+  go, since the firmware only moves desired_force while a speed is commanded. That
+  includes the commit at the end: the gantry stops, the model keeps the fingers, and a
+  pressure rise is what makes the routine report success
+- the pre-open is gated on the approach being settled - the commanded lateral speed under
+  0.02 m/s and the predicted wrist correction under 8 degrees - and on being above the
+  commit range. A finger angle command is a move the loop cannot see the end of, so it is
+  only worth issuing when the picture it was predicted from will still be true when the
+  jaws arrive, and only while there is descent left to make it in. An unsure axis head
+  counts as settled: below its kappa gate it is not turning the wrist at all. While the
+  move is running the loop commands nothing about the fingers rather than the usual zero
+  speed, which would stop it partway; speed commands expire on their own in 200ms
+- the pre-open only ever spreads the jaws wider than the OPEN the approach starts at, not
+  narrower. OPEN is the angle chosen to keep the fingers out of the camera's view, and
+  closing past it during a descent trades the picture every other head reads for jaws
+  that were already close enough (`PREOPEN_MAX_DEG`)
+- a checkpoint without those heads drives the fingers from the rate head instead, the
+  prediction being a rate in the units the teleop labels were recorded in, so deploying it
+  is a multiply by 90 and no more. Which program runs is chosen by what the prediction
+  carries rather than by a flag, so an old checkpoint behaves exactly as it did. Either
+  way a fixed closing speed would be a constant standing in for the one part of the
+  approach the heads have the most evidence about, since the frames where a teleoperator
+  ever commanded a close are frames with the object already between the jaws
+- the close head also decides when to stop the gantry, because driving on once the model
+  is closing is how an object gets pushed out of the jaws. A rate model answers that same
+  question by commanding a fast close
 
 After the close it logs the holding head beside the pressure verdict. The two disagreeing
 is the informative case (readme head 5), and having it in the log is what makes the

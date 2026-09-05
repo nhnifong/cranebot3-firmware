@@ -111,6 +111,34 @@ FINGER_DEADBAND = 0.05
 # of asking it takes to stop the gantry - so one noisy frame cannot end an approach.
 FINGER_CLOSE_THRESHOLD = 0.5
 CLOSE_CONFIRM_FRAMES = 10
+# The open head is trained against the operator's finger angle divided by 90, the same
+# scale the gripper clamps angle commands to, so this undoes that and nothing else.
+FINGER_ANGLE_FULL_SCALE = 90.0
+
+# The pre-open, from the open-angle head.
+#
+# The model says how wide a human opened the jaws coming in to an object like this one,
+# which is the one thing about the object worth knowing while there is still half a metre
+# of descent left. Spreading the fingers to it during the approach is what makes the jaws
+# arrive *around* the object instead of reaching it half shut and pushing it away.
+#
+# Gated on the approach having settled, because a finger angle command is a move the loop
+# cannot see the end of, and one issued mid-correction is predicted from a picture that is
+# about to be wrong. With the gantry and the wrist both nearly still, it is not.
+PREOPEN_LATERAL_MAX = 0.02      # (m/s) commanded lateral speed that counts as settled
+PREOPEN_WRIST_MAX_DEG = 8.0     # (deg) predicted axis correction that counts as the same
+# (deg) how much wider than the model asked for. Being a little too wide costs nothing;
+# being too narrow is how an object gets shouldered aside on the way in.
+PREOPEN_MARGIN_DEG = 5.0
+# (deg) how far the prediction has to move before the fingers are sent somewhere new. The
+# head wobbles a degree or two frame to frame and the jaws should not chase it.
+PREOPEN_MIN_CHANGE_DEG = 4.0
+# (deg) close enough to the commanded angle to call the move done and go back to holding.
+PREOPEN_TOLERANCE_DEG = 3.0
+# (deg) the wide end of the gripper's travel, kept off the hard stop.
+PREOPEN_MIN_DEG = -85.0
+# Model may narrow the fingers up to this amount if it chooes to
+PREOPEN_MAX_DEG = 60
 
 # The close-heads program, used when the checkpoint carries a close-onset head.
 #
@@ -286,10 +314,14 @@ class VisualServo:
         # began on the last one says nothing about this one.
         self.close_started_at = None
         self.close_arrived = False
+        # The angle the jaws were last sent to by the pre-open, or None if they have not
+        # been. Reset per attempt for the same reason the close state is.
+        self.preopen_deg = None
 
     def reset_close(self):
         self.close_started_at = None
         self.close_arrived = False
+        self.preopen_deg = None
 
     # -- model ------------------------------------------------------------
 
@@ -439,15 +471,21 @@ class VisualServo:
 
     # -- what the robot does about it --------------------------------------
 
-    async def drive_fingers(self, prediction):
+    async def drive_fingers(self, prediction, may_preopen=False):
         """Move the fingers the way this checkpoint's heads say to. Returns the speed sent.
 
         Two programs, chosen by what the model carries rather than by a flag, so one
         deployment path serves both kinds of checkpoint and the older one keeps behaving
         exactly as it did.
+
+        `may_preopen` is the caller saying the approach is settled enough to spend the
+        time on a finger angle move. Only the staged program can use it: a rate model is
+        commanding finger speeds every pass, and an angle command dropped in among them
+        would be fighting the head that is meant to be driving.
         """
         if 'close' in prediction:
-            return await self._drive_fingers_staged(prediction) # we are using this one right now
+            # we are using this one right now
+            return await self._drive_fingers_staged(prediction, may_preopen)
         return await self._drive_fingers_rate(prediction)
 
     async def _drive_fingers_rate(self, prediction):
@@ -465,8 +503,8 @@ class VisualServo:
             {'set_finger_speed': speed * FINGER_SPEED_FULL_SCALE})
         return speed
 
-    async def _drive_fingers_staged(self, prediction):
-        """Hold, close to the predicted grip force, then stop and let the loop wait for load"""
+    async def _drive_fingers_staged(self, prediction, may_preopen=False):
+        """Pre-open, hold, close to the predicted grip force, then stop and wait for load"""
         now = time.time()
         commanded = float(self.ob.gripper_client.last_target_force)
         target = prediction['grasp_pressure'] + HOLD_FORCE_EXTRA
@@ -480,8 +518,7 @@ class VisualServo:
 
         if self.close_started_at is None:
             if prediction['close'] < CLOSE_PROB_THRESHOLD:
-                await self.ob.gripper_client.send_commands({'set_finger_speed': 0.0})
-                return 0.0
+                return await self._hold_or_preopen(prediction, may_preopen)
             self.close_started_at = now
             logger.info(f"Close head says go ({prediction['close']:.2f}); closing to "
                         f"{target:.3f} of grip force")
@@ -500,6 +537,60 @@ class VisualServo:
         await self.ob.gripper_client.send_commands(
             {'set_finger_speed': speed * FINGER_SPEED_FULL_SCALE})
         return speed
+
+    def preopen_target(self, prediction):
+        """The finger angle the open head is asking for, in degrees, or None.
+
+        None when the checkpoint has no such head, which is how an older one goes on
+        approaching with the fingers wherever _grasp parked them.
+        """
+        if 'open_angle' not in prediction:
+            return None
+        widest = prediction['open_angle'] * FINGER_ANGLE_FULL_SCALE
+        return clamp(widest - PREOPEN_MARGIN_DEG, PREOPEN_MIN_DEG, PREOPEN_MAX_DEG)
+
+    def approach_is_settled(self, prediction, lateral_speed):
+        """Whether the gantry and the wrist have both nearly stopped asking for anything.
+
+        The wrist half reads the prediction rather than what was commanded, because an
+        axis head below its kappa gate is not turning anything: no opinion about
+        orientation is the same stillness as a confident zero, and both mean the picture
+        an angle is predicted from will still be the picture when the fingers arrive.
+        """
+        if lateral_speed > PREOPEN_LATERAL_MAX:
+            return False
+        if prediction['axis_concentration'] < WRIST_MIN_KAPPA:
+            return True
+        return abs(np.degrees(prediction['grasp_axis_rad'])) < PREOPEN_WRIST_MAX_DEG
+
+    def preopen_arrived(self):
+        """Whether the jaws have reached the angle the pre-open sent them to."""
+        if self.preopen_deg is None:
+            return True
+        angle = float(self.ob.datastore.finger.getLast()[1])
+        return abs(angle - self.preopen_deg) <= PREOPEN_TOLERANCE_DEG
+
+    async def _hold_or_preopen(self, prediction, may_preopen):
+        """The fingers before the close: spread to the open head's angle, or held still.
+
+        One branch because the two share a command slot. A zero finger speed is what tells
+        the gripper to stay where it is, and sending one on top of an angle move would
+        stop that move partway - so while a pre-open is still travelling this commands
+        nothing at all and lets the angle controller finish. Nothing is a safe thing to
+        send: speed commands expire on their own after 200ms.
+        """
+        target = self.preopen_target(prediction) if may_preopen else None
+        moved_enough = target is not None and (
+            self.preopen_deg is None or abs(target - self.preopen_deg) > PREOPEN_MIN_CHANGE_DEG)
+        if moved_enough:
+            logger.info(f'Pre-opening the jaws to {target:.0f} deg for what the model sees')
+            self.preopen_deg = target
+            await self.ob.gripper_client.send_commands({'set_finger_angle': target})
+            return 0.0
+        if not self.preopen_arrived():
+            return 0.0
+        await self.ob.gripper_client.send_commands({'set_finger_speed': 0.0})
+        return 0.0
 
     def wants_to_close(self, prediction):
         """Whether the model is asking for the fingers to close on this frame.
@@ -728,10 +819,13 @@ class VisualServo:
 
     def _describe(self, prediction):
         """The model's answer as one line, for the logs."""
+        opened = prediction.get('open_angle')
         return (f"uv {np.round(prediction['uv'], 3)} range {prediction['range_m']:.3f}m "
                 f"present {prediction['present']:.2f} holding {prediction['holding']:.2f} "
                 f"finger {prediction['finger']:+.2f} "
-                f"axis {np.degrees(prediction['grasp_axis_rad']):+.0f}deg "
+                + ("" if opened is None else
+                   f"open {opened * FINGER_ANGLE_FULL_SCALE:+.0f}deg ")
+                + f"axis {np.degrees(prediction['grasp_axis_rad']):+.0f}deg "
                 f"k{prediction['axis_concentration']:.1f} "
                 f"lat {self.ob.gripper_client.video_latency(float('nan')):.02f}s")
 
@@ -856,7 +950,13 @@ class VisualServo:
             if range_to_target > WRIST_LOCK_RANGE_M:
                 await self.servo_wrist(prediction)
 
-            last_finger = await self.drive_fingers(prediction)
+            # The pre-open is only worth spending on a settled approach with room left
+            # to spend it in: still steering means the angle would be predicted from a
+            # picture that is about to change, and inside the commit range there is no
+            # longer time for the jaws to travel before the close.
+            may_preopen = (range_to_target > COMMIT_RANGE_M
+                           and self.approach_is_settled(prediction, lateral_speed))
+            last_finger = await self.drive_fingers(prediction, may_preopen)
             asked_to_close = self.wants_to_close(prediction)
 
             held, evidence = self.holding_now(prediction)

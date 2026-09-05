@@ -96,6 +96,10 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
                         by this frame
         grasp_pressure  close-heads models only: the grip force this object turned out to
                         need, in the finger sensor's own units
+        open_angle      open-head models only: how wide the operator opened the jaws
+                        coming in to a grasp like this one, in -1..1 of the gripper's full
+                        finger travel and negative for open. Multiply by 90 for the
+                        degrees set_finger_angle takes
         present         probability there is anything graspable in view at all
         holding         probability we are already holding something
         score           the winning cell's share of the position softmax
@@ -131,4 +135,6 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
     if "close" in out:
         result["close"] = float(out["close"][0])
         result["grasp_pressure"] = float(out["grasp_pressure"][0])
+    if "open_angle" in out:
+        result["open_angle"] = float(out["open_angle"][0])
     return result

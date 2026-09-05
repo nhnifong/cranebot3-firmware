@@ -34,7 +34,8 @@ STATE_KEYS = ("laser_rangefinder", "finger_angle", "target_force")
 LABEL_COLUMNS = [
     "split_source", "source_repo_id", "episode_index", "frame_index",
     "seconds_to_grasp", "target_uv", "target_range_m", "grasp_axis_rad",
-    "finger", "close_now", "grasp_pressure", "target_present", "holding", "state",
+    "finger", "close_now", "grasp_pressure", "open_angle", "target_present", "holding",
+    "state",
 ]
 
 
@@ -98,6 +99,10 @@ class VisualServoDataset(torch.utils.data.Dataset):
         """Whether any row carries the close/pressure labels, so training can say so."""
         return any(r.get("close_now") is not None for r in self.rows)
 
+    def has_open_labels(self):
+        """The same question for the open-angle label, which only teleop rows carry."""
+        return any(r.get("open_angle") is not None for r in self.rows)
+
     def labelled_axis(self):
         """Every present grasp_axis_rad, for the loss's angle-bin weights."""
         return np.array([r["grasp_axis_rad"] for r in self.rows
@@ -137,6 +142,7 @@ class VisualServoDataset(torch.utils.data.Dataset):
             "finger": torch.tensor(float(row["finger"] or 0.0)),
             "close_now": torch.tensor(float(row["close_now"] or 0.0)),
             "grasp_pressure": torch.tensor(float(row["grasp_pressure"] or 0.0)),
+            "open_angle": torch.tensor(float(row["open_angle"] or 0.0)),
             "present": torch.tensor(float(row["target_present"] or 0.0)),
             "holding": torch.tensor(float(row["holding"] or 0.0)),
             "has_uv": torch.tensor(float(has_uv)),
@@ -144,6 +150,7 @@ class VisualServoDataset(torch.utils.data.Dataset):
             "has_finger": torch.tensor(float(row["finger"] is not None)),
             "has_close": torch.tensor(float(row["close_now"] is not None)),
             "has_pressure": torch.tensor(float(row["grasp_pressure"] is not None)),
+            "has_open": torch.tensor(float(row["open_angle"] is not None)),
             "has_present": torch.tensor(float(row["target_present"] is not None)),
             "has_holding": torch.tensor(float(row["holding"] is not None)),
         }

@@ -541,10 +541,12 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
                            if winner and winner["axis"] is not None else None),
         # No finger label: what a human does with the fingers is not something the
         # compositing knows, and teleop is where that signal lives. Same for when a close
-        # would have started and how hard it would have ended up squeezing.
+        # would have started, how hard it would have ended up squeezing, and how wide the
+        # jaws would have been spread to go around the object.
         "finger": None,
         "close_now": None,
         "grasp_pressure": None,
+        "open_angle": None,
         "target_present": 1 if winner else 0,
         "holding": None,
         "state": {

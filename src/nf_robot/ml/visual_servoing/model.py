@@ -19,8 +19,26 @@ observer.py's _center_card_in_view already does.
     heads   1. target position, 3D, in the gripper camera frame
             2. grasp axis, 2 channels, read from the winning cell
             3. finger speed, scalar in [-1, 1], from the global vector
+              a. probability the close should have begun by this frame
+              b. grip force this object needs, softplus, in sensor units
+              c. how wide to spread the jaws for it, tanh, in -1..1 of full travel
             4. probability any graspable target is present
             5. probability we are currently holding something
+
+Heads 1 and 2 read the decoder's cells; 3, 3a, 3b, 3c, 4 and 5 read the global vector.
+
+3a and 3b are what the fingers are actually driven from: a decision and a target, rather
+than the per-frame rate a teleoperator's thumb answers differently every frame. They are
+on by default (`close_heads`), and head 3 trains and is emitted either way, so one loader
+and one deployment path serve both kinds of checkpoint. `close_heads=False` - train.py's
+`--no_close_heads`, and every checkpoint written before these heads existed - builds the
+three-output global head instead.
+
+3c is the other half of the same idea and independent of them (`open_head`): the widest
+the operator opened the jaws on the way in to a grasp, which says how big the thing is
+before the robot is close enough for anything else to. The robot spreads the fingers to
+it while the approach is otherwise settled, so the jaws are already around the object by
+the time 3a fires.
 
 The self-attention blocks are the one real addition over OrthoTargetNet in
 ortho_target.py, whose decoder this otherwise follows.
@@ -132,7 +150,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
-                 state_dim=STATE_DIM, close_heads=False):
+                 state_dim=STATE_DIM, close_heads=True, open_head=True):
         super().__init__()
         trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
@@ -187,15 +205,25 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
         # blinds the camera, and we are aiming at a chunky lump of towel rather than a
         # centred object.
         #
-        # close_heads adds two more of the same kind, and they replace the finger head's
-        # job rather than joining it. A rate says "how fast to move the fingers now",
-        # which a teleoperator's thumb answers differently every frame; these two say
-        # *when* to start and *how hard to end up squeezing*, which is what a grasp
-        # actually consists of. The finger head stays in the output either way, so one
-        # loader and one deployment path serve both kinds of checkpoint.
+        # close_heads, on by default, adds two more of the same kind, and they replace the
+        # finger head's job rather than joining it. A rate says "how fast to move the
+        # fingers now", which a teleoperator's thumb answers differently every frame;
+        # these two say *when* to start and *how hard to end up squeezing*, which is what
+        # a grasp actually consists of. The finger head stays in the output either way, so
+        # one loader and one deployment path serve both kinds of checkpoint.
+        #
+        # open_head is one more, and independent of the close pair: how wide the jaws
+        # should be spread for whatever is down there. It is the same kind of question -
+        # a property of the object rather than of the frame - and it can be answered from
+        # much further out than either of them, which is the point of asking it.
         self.close_heads = close_heads
+        self.open_head = open_head
         global_dim = hidden * 2 + state_dim
         self.global_outputs = 5 if close_heads else 3
+        # Appended after whichever layout the close flag chose, so adding it to a
+        # checkpoint of either kind leaves every other head reading the slot it always did.
+        self.open_slot = self.global_outputs
+        self.global_outputs += 1 if open_head else 0
         self.global_head = nn.Sequential(
             # LayerNorm first, and it is load-bearing: the trunk's [CLS] comes out with a
             # large norm, which drives the finger head's tanh straight into saturation
@@ -247,6 +275,11 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
             # it cannot be predicted negative, which is not a force the gripper can hold.
             out["close_logit"] = flags[:, 3]
             out["grasp_pressure"] = F.softplus(flags[:, 4])
+        if self.open_head:
+            # In the same -1..1 of full finger travel the state's finger_angle arrives in,
+            # negative being open. tanh because that travel is what the gripper has and a
+            # prediction outside it is not an angle it can be sent to.
+            out["open_angle"] = torch.tanh(flags[:, self.open_slot])
         return out
 
     def train(self, mode=True):
@@ -320,6 +353,8 @@ def predict(model, images, state, top_k=1):
     if "close_logit" in outputs:
         result["close"] = outputs["close_logit"].sigmoid()
         result["grasp_pressure"] = outputs["grasp_pressure"]
+    if "open_angle" in outputs:
+        result["open_angle"] = outputs["open_angle"]
     return result
 
 
@@ -327,11 +362,13 @@ def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     freeze = checkpoint.get("freeze", True)
     # Absent in every checkpoint written before these heads existed, which is what makes
-    # those checkpoints keep loading: no key, no extra heads, same three outputs.
+    # those checkpoints keep loading: no key, no extra heads, same three outputs. Hence
+    # False here where a fresh model defaults to True - the file decides, not the default.
     model = VisualServoNet(
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],
         fuse_layers=checkpoint["fuse_layers"], attention_layers=checkpoint["attention_layers"],
         freeze=freeze, close_heads=checkpoint.get("close_heads", False),
+        open_head=checkpoint.get("open_head", False),
     ).to(device)
     state = checkpoint["state_dict"]
     if freeze:
