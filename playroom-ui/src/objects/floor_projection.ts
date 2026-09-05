@@ -31,11 +31,12 @@ export class FloorProjection {
     private hls: Hls | null = null;
     private isLocalMode = false;
 
-    // Flat rings floating just above the projected image, mirroring the target
-    // circles the 2D overlays draw on the anchor cam feeds. Each marker is a ring
-    // (status colour) plus a disc underneath it that only shows when the target is
-    // hovered or selected. Markers are pooled and hidden rather than destroyed,
-    // since the target list churns on every update.
+    // Flat rings floating just above the projected image, mirroring the target circles
+    // the 2D overlays draw on the anchor cam feeds - except for the unqueued colour,
+    // which comes off seenOnFloor because white vanishes into the lit floor. Each marker
+    // is a ring (status colour) plus a disc underneath it that only shows when the
+    // target is hovered or selected. Markers are pooled and hidden rather than
+    // destroyed, since the target list churns on every update.
     private targetsRoot: THREE.Group;
     private ringGeometry: THREE.RingGeometry;
     private discGeometry: THREE.CircleGeometry;
@@ -147,7 +148,7 @@ export class FloorProjection {
             const { ring, disc } = this.markerPool[i];
 
             // Ring colour tracks the target's status in the robot's queue.
-            let color = TargetColors.seen;
+            let color = TargetColors.seenOnFloor;
             if (target.status == nf.telemetry.TargetStatus.TARGETSTATUS_SELECTED) {
                 color = TargetColors.movingTo;
             } else if (target.status == nf.telemetry.TargetStatus.TARGETSTATUS_PICKED_UP) {

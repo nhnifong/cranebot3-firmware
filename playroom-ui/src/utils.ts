@@ -39,6 +39,10 @@ export const TargetColors = {
     'seen':      '#FFFFFF', // white
     'movingTo': '#007fff', // blue
     'grasped':   '#ffd700', // gold
+    // 'seen' on the floor projection. Black rather than the white the anchor cam
+    // overlays use: the projection is a downward view of a lit floor, which is the one
+    // background a white ring disappears into.
+    'seenOnFloor': '#000000', // black
 };
 
 /**
