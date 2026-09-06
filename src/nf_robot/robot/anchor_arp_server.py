@@ -32,15 +32,22 @@ POWERLINE_STOW_TENSION_N = 3.0
 
 # identify() sings the anchor's address on a motor. Commanding the velocity to flip sign
 # at an audio rate turns the hub into a (bad) loudspeaker, so the toggle rate is the pitch.
-# One note per digit: a C, the G above it, and the C an octave above the first. They sit in
-# the octave below middle C because the note's half period is the deadline for getting a
-# CAN frame out (3.8 ms at the lowest, 1.9 ms at the highest); an octave up halves that
-# budget. If the motors sing cleanly up there, multiply all three by two.
-IDENTIFY_NOTES_HZ = (130.81, 196.00, 261.63)  # C3, G3, C4
+# One note per digit: a C, the G above it, and the C an octave above the first. They sit two
+# octaves below middle C because the note's half period is the deadline for getting a CAN
+# frame out (7.6 ms at the lowest, 3.8 ms at the highest); an octave up halves that budget.
+IDENTIFY_NOTES_HZ = (65.41, 98.00, 130.81)  # C2, G2, C3
 
 # rad/s the note swings between. Loud enough to hear across a room, small enough that the
-# spool does not visibly move.
+# spool does not visibly move: a half period at the highest note is only a couple of
+# milliseconds, so the swing covers a thousandth of a radian.
 IDENTIFY_AMPLITUDE = 0.2
+
+# rad/s^2 to let the motor ramp at while it sings. VEL mode obeys the ACC register, which
+# the tracking loop pins at MAX_ACCEL to keep spooling smooth; that low a limit buys almost
+# no velocity across a half period, so the note never reaches the amplitude above and the
+# amplitude stops being a volume knob at all. Break-even is one full ramp per half period,
+# so ask for twice that and the amplitude is what bounds the swing again.
+IDENTIFY_ACCEL = 4 * IDENTIFY_AMPLITUDE * max(IDENTIFY_NOTES_HZ)
 
 IDENTIFY_TONE_S = 0.10       # length of one honk
 IDENTIFY_HONK_GAP_S = 0.07   # silence between honks of the same digit
@@ -369,6 +376,8 @@ class AnchorArpServer(RobotComponentServer):
         m = self.motors[spool_no]
         self.spools[spool_no].pauseTrackingLoop()
         try:
+            m.set_acceleration(IDENTIFY_ACCEL)
+            m.set_deceleration(-IDENTIFY_ACCEL)
             m.send_cmd_vel(target_velocity=0.0)
             if digits is None:
                 # Nothing to announce. One long low note still says which anchor is here.
@@ -381,6 +390,10 @@ class AnchorArpServer(RobotComponentServer):
                     time.sleep(IDENTIFY_HONK_GAP_S)
                 time.sleep(IDENTIFY_DIGIT_GAP_S)
         finally:
+            # the tracking loop only resends these when MAX_ACCEL changes, so it will not
+            # undo the singing limit on its own.
+            m.set_acceleration(self.conf['MAX_ACCEL'])
+            m.set_deceleration(-self.conf['MAX_ACCEL'])
             self.spools[spool_no].resumeTrackingLoop()
 
     async def process_imu(self, ws):
