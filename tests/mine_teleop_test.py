@@ -12,7 +12,8 @@ import unittest
 import numpy as np
 
 from nf_robot.ml.visual_servoing.mine_teleop import (
-    CANVAS_SCALE, OFF_SCREEN_MARGIN, ShardWriter, in_view, mine_episode)
+    CANVAS_SCALE, OFF_SCREEN_MARGIN, ShardWriter, find_lift, holding_label, in_view,
+    mine_episode)
 
 
 def rows_for(offsets, fps=30.0, grasp_at=60, length=90):
@@ -70,6 +71,33 @@ class TestInView(unittest.TestCase):
         self.assertLess(OFF_SCREEN_MARGIN, (CANVAS_SCALE - 1.0) / 2.0)
 
 
+class TestHoldingWindow(unittest.TestCase):
+    """`holding` is positive only where the grip is proven: from the lift to the drop.
+
+    Labelling from the grasp instead makes "an object is close in frame" sufficient for a
+    positive, which is the cheapest feature in the episode and the one the head learns
+    instead of the object being in the hand.
+    """
+
+    def test_before_the_grasp_is_a_negative(self):
+        self.assertEqual(holding_label(5, grasp=10, lift=20, drop=None), 0)
+
+    def test_between_the_grasp_and_the_lift_is_masked(self):
+        self.assertIsNone(holding_label(15, grasp=10, lift=20, drop=None))
+
+    def test_a_grasp_that_never_lifted_is_masked_throughout(self):
+        """Closing on something and never picking it up proves nothing either way."""
+        self.assertIsNone(holding_label(50, grasp=10, lift=None, drop=None))
+
+    def test_from_the_lift_to_the_drop_is_positive(self):
+        self.assertEqual(holding_label(25, grasp=10, lift=20, drop=40), 1)
+
+    def test_the_drop_ends_the_carry(self):
+        """Whether the operator opened the jaws or the object slipped out of them."""
+        self.assertEqual(holding_label(40, grasp=10, lift=20, drop=40), 0)
+        self.assertEqual(holding_label(45, grasp=10, lift=20, drop=40), 0)
+
+
 class TestMineEpisode(unittest.TestCase):
 
     def _mine(self, offsets):
@@ -119,14 +147,43 @@ class TestMineEpisode(unittest.TestCase):
 
     def test_carry_frames_are_unchanged(self):
         """After the grasp the object rides in the jaws; those rows were already unlabelled
-        for position and are not what the new masking is about."""
+        for position and are not what the new masking is about.
+
+        What they do keep is the labels that describe the gripper rather than where the
+        object is. `holding` is one of those but has a window of its own, which
+        TestHoldingWindow covers."""
         result, _, _ = self._mine([0.02] * 90)
         carried = [r for r in result if r["seconds_to_grasp"] < 0]
         self.assertGreater(len(carried), 0)
         for row in carried:
             self.assertIsNone(row["target_uv"])
             self.assertIsNone(row["target_present"])
-            self.assertEqual(row["holding"], 1)
+            self.assertIsNotNone(row["finger"])
+
+    def test_the_carry_is_masked_until_the_grip_takes_the_weight(self):
+        """The grasp is not the lift. Frames between the two look exactly like held ones
+        and the object really is between the jaws, but nothing there proves the grip, so
+        they are masked rather than taught either way."""
+        rows = rows_for([0.02] * 90)
+        result, _, _ = self._mine([0.02] * 90)
+        lift = find_lift(rows, 60, 30.0)
+
+        carried = [r for r in result if r["seconds_to_grasp"] < 0]
+        unproven = [r for r in carried if r["frame_index"] < lift]
+        proven = [r for r in carried if r["frame_index"] >= lift]
+
+        self.assertGreater(len(unproven), 0)
+        self.assertGreater(len(proven), 0)
+        self.assertTrue(all(r["holding"] is None for r in unproven))
+        self.assertTrue(all(r["holding"] == 1 for r in proven))
+
+    def test_everything_before_the_grasp_is_a_negative(self):
+        """An object in view, in reach, and not in the hand is the case the head keeps
+        getting wrong, so those frames are taught rather than masked."""
+        result, _, _ = self._mine([0.02] * 90)
+        approach = [r for r in result if r["seconds_to_grasp"] > 0]
+        self.assertGreater(len(approach), 0)
+        self.assertTrue(all(r["holding"] == 0 for r in approach))
 
     def test_an_episode_with_no_grasp_is_skipped(self):
         rows = rows_for([0.02] * 90)
