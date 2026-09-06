@@ -30,6 +30,14 @@ keep_state_features:
   - wrist_angle
   - target_force
 
+# combined_targets_reblend is built by a recipe that drops anchor_poses, so it has none;
+# the three sources recorded since carry theirs. The merge demands identical feature sets
+# and raises if they differ - after every source has been converted, which is hours of
+# re-encoding to reach the failure. Nothing downstream of this recipe reads anchor_poses,
+# so drop it everywhere rather than let the mismatch through.
+drop_features:
+  - anchor_poses
+
 label_contact_actions:
   enabled: true
   pressure_threshold: 0.1
