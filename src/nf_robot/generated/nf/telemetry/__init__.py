@@ -179,6 +179,15 @@ class AnchorPoses(betterproto2.Message):
         5, betterproto2.TYPE_ENUM, default_factory=lambda: _common__.CalibratedStatus(0)
     )
 
+    pole_type: "_common__.PoleType | None" = betterproto2.field(
+        6, betterproto2.TYPE_ENUM, optional=True
+    )
+    """
+    The pole recorded for this robot, so the UI can show it before a calibration and
+    offer to change it. Optional because an absent enum reads as UNSPECIFIED, which is
+    itself a pole type: a message that does not carry one leaves the UI's value alone.
+    """
+
 
 default_message_pool.register_message("nf.telemetry", "AnchorPoses", AnchorPoses)
 

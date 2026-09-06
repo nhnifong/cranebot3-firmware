@@ -257,6 +257,12 @@ class ComponentAction(betterproto2.Enum):
     Set the angle from horizontal of the camera adapter on Arpeggio anchors.
     """
 
+    SET_POLE_TYPE = 6
+    """
+    Set which pole the gripper hangs from. Like the camera angle, the robot cannot see
+    this for itself; the user reports what is installed.
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -266,6 +272,7 @@ class ComponentAction(betterproto2.Enum):
             3: "COMPONENTACTION_TIGHTEN",
             4: "COMPONENTACTION_RELAX",
             5: "COMPONENTACTION_SET_CAM_ANGLE",
+            6: "COMPONENTACTION_SET_POLE_TYPE",
         }
 
     @classmethod
@@ -277,6 +284,7 @@ class ComponentAction(betterproto2.Enum):
             "COMPONENTACTION_TIGHTEN": 3,
             "COMPONENTACTION_RELAX": 4,
             "COMPONENTACTION_SET_CAM_ANGLE": 5,
+            "COMPONENTACTION_SET_POLE_TYPE": 6,
         }
 
 
@@ -806,6 +814,14 @@ class SingleComponentAction(betterproto2.Message):
     )
     """
     The robot cannot move the camera, this is for the user to inform the system of the installed adapter in order to perform accurate calculations.
+    """
+
+    pole_type: "_common__.PoleType | None" = betterproto2.field(
+        6, betterproto2.TYPE_ENUM, optional=True
+    )
+    """
+    Which pole is installed, for SET_POLE_TYPE. Same reason as cam_angle: nothing on the
+    robot can tell, so the user says.
     """
 
 

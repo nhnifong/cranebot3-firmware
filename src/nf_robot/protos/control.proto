@@ -190,6 +190,9 @@ enum ComponentAction {
   COMPONENTACTION_RELAX = 4;
   // Set the angle from horizontal of the camera adapter on Arpeggio anchors.
   COMPONENTACTION_SET_CAM_ANGLE = 5;
+  // Set which pole the gripper hangs from. Like the camera angle, the robot cannot see
+  // this for itself; the user reports what is installed.
+  COMPONENTACTION_SET_POLE_TYPE = 6;
 }
 
 message SingleComponentAction {
@@ -200,6 +203,9 @@ message SingleComponentAction {
   optional uint32 spool_num = 4;
   // The robot cannot move the camera, this is for the user to inform the system of the installed adapter in order to perform accurate calculations.
   optional float cam_angle = 5;
+  // Which pole is installed, for SET_POLE_TYPE. Same reason as cam_angle: nothing on the
+  // robot can tell, so the user says.
+  optional nf.common.PoleType pole_type = 6;
 }
 
 enum LerobotSessionAction {

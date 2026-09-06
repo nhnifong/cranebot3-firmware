@@ -55,6 +55,11 @@ message AnchorPoses {
   float swing_latency = 4;
 
   nf.common.CalibratedStatus calibrated = 5;
+
+  // The pole recorded for this robot, so the UI can show it before a calibration and
+  // offer to change it. Optional because an absent enum reads as UNSPECIFIED, which is
+  // itself a pole type: a message that does not carry one leaves the UI's value alone.
+  optional nf.common.PoleType pole_type = 6;
 }
 
 enum ConnStatus {

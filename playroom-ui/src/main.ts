@@ -1228,6 +1228,11 @@ function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
       }
     }
   }
+  // Optional on the wire precisely so this test works: an absent pole reads as
+  // UNSPECIFIED, which is a pole type, and would otherwise overwrite the real one.
+  if (data.poleType != null) {
+    lastPoleType = data.poleType;
+  }
   if (data.swingLatency) {
     const slider = document.getElementById('swing-latency-slider') as HTMLInputElement | null;
     const valueDisplay = document.getElementById('swing-latency-value');
@@ -2674,6 +2679,7 @@ function openFullCalOverlay() {
     content?.classList.remove('hidden');
   }
   for (let i = 0; i < 2; i++) showConfiguredTilt(i);
+  showConfiguredPole();
   overlay.classList.remove('hidden');
 }
 
@@ -2709,6 +2715,27 @@ function readFullCalTiltAngle(anchorNum: number): number {
   return TILT_TEETH_ANGLES[teeth] ?? DEFAULT_CAM_TILT;
 }
 
+/**
+ * Preselect the pole the robot reported, the same contract as showConfiguredTilt: opening
+ * the panel and starting without touching the control must keep the configured pole.
+ *
+ * A robot whose config predates the field reports UNSPECIFIED, which the host reads as the
+ * ABS pole every robot shipped with first; the option list says so rather than leaving the
+ * markup's default selected and quietly proposing a different pole.
+ */
+function showConfiguredPole() {
+  const sel = document.getElementById('fullcal-pole') as HTMLSelectElement | null;
+  if (!sel || lastPoleType == null) return;
+  const name = nf.common.PoleType[lastPoleType];
+  sel.value = name === 'POLETYPE_UNSPECIFIED' ? 'POLETYPE_ABS500' : name;
+}
+
+function readFullCalPoleType(): nf.common.PoleType {
+  const sel = document.getElementById('fullcal-pole') as HTMLSelectElement | null;
+  const chosen = (nf.common.PoleType as any)[sel?.value ?? ''];
+  return chosen ?? lastPoleType ?? nf.common.PoleType.POLETYPE_CARBON270;
+}
+
 function initFullCalPanel() {
   const close = () => document.getElementById('fullcal-overlay')?.classList.add('hidden');
   document.getElementById('close-fullcal-panel')?.addEventListener('click', close);
@@ -2728,6 +2755,15 @@ function initFullCalPanel() {
           isGripper: false, anchorNum: 1,
           action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
           camAngle: readFullCalTiltAngle(1),
+        }
+      }),
+      // Ahead of the calibration, since the pole decides the gantry marker and how far
+      // the gripper hangs below it - both of which the calibration measures against.
+      nf.control.ControlItem.create({
+        singleComponentAction: {
+          isGripper: true,
+          action: nf.control.ComponentAction.COMPONENTACTION_SET_POLE_TYPE,
+          poleType: readFullCalPoleType(),
         }
       }),
     ]);
@@ -2917,6 +2953,9 @@ let currentHoverType: string | null = null;
 let currentHoverIndex: number = -1;
 let activeComponentData: { type: string, index: number, name: string } | null = null;
 let lastTiltAngles: number[] = [];
+// The pole the robot says it has, null until setup telemetry arrives. The full calibration
+// panel preselects it so opening and starting cannot silently change the pole.
+let lastPoleType: nf.common.PoleType | null = null;
 // Tracks the tilt angle (degrees) currently applied to each anchor's camera so deltas are correct.
 const appliedCamTilt: (number | null)[] = [null, null];
 

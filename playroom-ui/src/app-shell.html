@@ -705,12 +705,7 @@
           <div class="session-section">
             <div class="fullcal-section-heading">Confirm Camera Tilt</div>
 
-            <p class="fullcal-body">Identify the tilted camera mount on each anchor and determine it's tilt from horizontal.
-              Anchor cameras are mounted on tilt adapters under the anchor cover.
-              The camera tilt can be altered to match the room so the floor is centered in view.
-              For the adjustable type, count the exposed teeth.
-              For the older fixed type, read the angle printed on the adapter.
-              Stringman is shipped at 26° by default.
+            <p class="fullcal-body">Confirm the camera tilt. Two exposed teeth (30°) is the default.
               <span class="help-hint" tabindex="0">
                 <span class="help-hint-icon">?</span>
                 <img class="help-hint-img" src="%VITE_ASSET_BUCKET_URL%/assets/playroom/tilt_adapter.webp" alt="Tilt adapters" />
@@ -739,6 +734,22 @@
                   <option value="5">5 teeth &mdash; 42&deg;</option>
                 </select>
               </div>
+            </div>
+          </div>
+
+          <!-- Section: Gripper Pole -->
+          <div class="session-section">
+            <div class="fullcal-section-heading">Confirm Gripper Pole</div>
+
+            <p class="fullcal-body">Confirm the pole type.
+            </p>
+            <div class="session-input-group" style="margin-bottom:0;">
+              <div class="input-label">Installed pole</div>
+              <select id="fullcal-pole" class="input-text" style="width:100%; box-sizing:border-box;" title="The pole between the gantry and the gripper. The carbon poles mount the flat marker; the ABS pole mounts the box marker.">
+                <option value="POLETYPE_CARBON270">270mm carbon &mdash; flat marker</option>
+                <option value="POLETYPE_CARBON400">400mm carbon &mdash; flat marker</option>
+                <option value="POLETYPE_ABS500">500mm printed ABS &mdash; box marker</option>
+              </select>
             </div>
           </div>
 

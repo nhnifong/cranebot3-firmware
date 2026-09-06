@@ -287,12 +287,7 @@ class AsyncObserver:
         # TODO allow a command line argument to override the config file path
         self.config_path = config_path
         self.config = load_config(config_path)
-        # What the configured pole affects on this robot: how far the gripper hangs below the
-        # gantry, which marker the gantry has, and the pendulum it swings as.
-        self.pole_geometry = model_constants.pole_geometry(self.config)
-        self.pole = np.array([0, 0, self.pole_geometry.gantry_to_gripper])
-        self.gantry_april_inv = invert_pose(self.pole_geometry.gantry_april)
-        self.pendulum = swing.pendulum_for(self.config)
+        self.apply_pole_geometry()
         self.telemetry_env = telemetry_env
         self.debug = debug
         self.loop_monitor = None  # only created in main() when --debug is passed
@@ -412,8 +407,25 @@ class AsyncObserver:
         self.pnp_src = self.config.last_route_source
         self.pnp_dst = self.config.last_route_destination
 
-    async def send_setup_telemetry(self):
-        logger.debug('Sending setup telemetry')
+    def apply_pole_geometry(self):
+        """Re-derive everything the configured pole decides.
+
+        What the pole affects on this robot: how far the gripper hangs below the gantry,
+        which marker the gantry has, and the pendulum it swings as. All four are cached
+        rather than looked up per use, so swapping the pole at runtime has to come back
+        through here or the robot keeps flying the old geometry.
+        """
+        self.pole_geometry = model_constants.pole_geometry(self.config)
+        self.pole = np.array([0, 0, self.pole_geometry.gantry_to_gripper])
+        self.gantry_april_inv = invert_pose(self.pole_geometry.gantry_april)
+        self.pendulum = swing.pendulum_for(self.config)
+
+    def send_anchor_poses(self):
+        """Push the stored poses and the setup values that ride with them.
+
+        Only arpeggio anchors have eyelets and tilt adapters to report. The pole goes in
+        either way: every robot hangs from one.
+        """
         if self.config.anchor_type == common.AnchorType.ARPEGGIO:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
@@ -421,12 +433,18 @@ class AsyncObserver:
                 tilt=[a.indirect_line.cam_tilt for a in self.config.anchors],
                 swing_latency=self.config.swing_latency,
                 calibrated=self.config.calibrated_status,
+                pole_type=self.config.gripper.pole_type,
             ))
         else:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
                 calibrated=self.config.calibrated_status,
+                pole_type=self.config.gripper.pole_type,
             ))
+
+    async def send_setup_telemetry(self):
+        logger.debug('Sending setup telemetry')
+        self.send_anchor_poses()
         if self.config.park_data is not None:
             self.send_ui(named_position=telemetry.NamedObjectPosition(
                 name = 'parking_location',
@@ -644,7 +662,33 @@ class AsyncObserver:
                     eyelets=[a.indirect_line.eyelet_pos for a in self.config.anchors],
                     tilt=[a.indirect_line.cam_tilt for a in self.config.anchors],
                     swing_latency=self.config.swing_latency,
+                    pole_type=self.config.gripper.pole_type,
                 ))
+            elif item.action == control.ComponentAction.SET_POLE_TYPE and item.pole_type is not None:
+                await self.set_pole_type(item.pole_type)
+
+    async def set_pole_type(self, pole_type: common.PoleType):
+        """Record which pole is installed and re-derive everything hanging off it.
+
+        Saved rather than held for the session: the pole is a property of the robot, and
+        the calibration this precedes is stored against the geometry chosen here.
+
+        The gripper fits its own swing model, so it needs the new length too - it is told
+        once on connect and would otherwise keep the old frequency until it reboots.
+        """
+        if self.config.gripper.pole_type == pole_type:
+            return
+        self.config.gripper.pole_type = pole_type
+        save_config(self.config, self.config_path)
+        self.apply_pole_geometry()
+
+        gc = self.gripper_client
+        if gc is not None:
+            gc.pendulum = swing.pendulum_for(self.config)
+            await gc.send_config()
+        logger.info(f'Pole type set to {pole_type.name}, '
+                    f'swing length now {self.pole_geometry.swing_length:.3f}m')
+        self.send_anchor_poses()
 
     def set_swing_cancellation(self, enabled: bool) -> bool:
         """Start or stop the swing cancellation task, idempotently.
