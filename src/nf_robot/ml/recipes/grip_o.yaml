@@ -16,6 +16,7 @@ merge:
   - repo_id: naavox/chuck-aug28
     exclude_episodes: ['14']
   - naavox/79west-sep4
+  - naavox/bedroom-sep6
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
 keep_state_features:
