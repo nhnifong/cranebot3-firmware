@@ -143,7 +143,8 @@ then at this repo's root, run the release build script.
 
     scripts/build_release.sh
 
-Upload the particular version you just built to PyPi
+At the end it asks whether to upload the version it just built to PyPi. Answer `y`
+to upload, anything else to skip. To upload later by hand:
 
     python3 -m twine upload dist/nf_robot-4.0.5*
 
