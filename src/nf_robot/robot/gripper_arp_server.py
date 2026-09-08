@@ -89,7 +89,11 @@ stream_command = [
     "--libav-format", "mpegts",
     "--autofocus-mode", "continuous",
     "--low-latency",
-    "--bitrate", "1200kbps"
+    "--bitrate", "1200kbps",
+    "--denoise", "off",
+    "--sharpness", "0",
+    "--flush",
+
 ]
 
 # Modes a gripper accepts, its normal one first. Both keep the sensor mode above, so

@@ -1460,6 +1460,14 @@ function handleComponentConnStatus(data: nf.telemetry.IComponentConnStatus) {
   });
 
   updateComponentStatusUI();
+
+  // Keep an open detail panel live rather than frozen at the values it was
+  // opened with. Matched on identity, not on the name string: a panel opened
+  // before this component first reported is still holding the placeholder name.
+  const isForOpenPanel = data.isGripper
+    ? activeComponentData?.type === 'Gripper'
+    : activeComponentData?.type === 'Anchor' && activeComponentData.index === data.anchorNum;
+  if (isForOpenPanel) refreshComponentPanel();
 }
 
 function handleTargetList(data: nf.telemetry.ITargetList) {
@@ -3117,7 +3125,25 @@ window.addEventListener('click', (event) => {
   }
 });
 
-function openComponentPanel(type: string, index: number) {
+/** The componentStates key for a component, which for the gripper is whatever
+ * name its telemetry arrived under rather than a fixed string. Resolved on every
+ * render, not just on open, so a panel opened before the gripper ever reported
+ * picks up its real entry once it does. */
+function componentPanelName(type: string, index: number): string {
+  if (type === 'Anchor') return `Anchor ${index}`;
+  for (const key of componentStates.keys()) {
+    if (componentStates.get(key)?.type === 'Gripper') return key;
+  }
+  return "Gripper";
+}
+
+/** Paint the open detail panel's fields from the current componentStates entry.
+ * Split out of openComponentPanel so a ComponentConnStatus arriving while the
+ * panel is open refreshes it in place -- components report their temperature
+ * every second, and without this the panel showed whatever was true when it was
+ * opened. A no-op when no panel is open. */
+function refreshComponentPanel() {
+  if (!activeComponentData) return;
   const overlay = document.getElementById('component-details-overlay');
   const title = document.getElementById('cd-title');
   const ipEl = document.getElementById('cd-ip');
@@ -3125,30 +3151,12 @@ function openComponentPanel(type: string, index: number) {
   const tempEl = document.getElementById('cd-temp');
   const motorTorqueEl = document.getElementById('cd-motor-torque');
   const sensorsEl = document.getElementById('cd-sensors');
-  const anchorActions = document.getElementById('cd-anchor-actions');
 
-  if (!overlay || !title || !ipEl || !statusEl || !tempEl || !motorTorqueEl || !sensorsEl || !anchorActions) return;
+  if (!overlay || !title || !ipEl || !statusEl || !tempEl || !motorTorqueEl || !sensorsEl) return;
 
-  let name = "";
-  if (type === 'Anchor') {
-    name = `Anchor ${index}`;
-    anchorActions.style.display = 'flex';
-    const camInput = document.getElementById('cd-cam-angle-input') as HTMLInputElement | null;
-    if (camInput && lastTiltAngles[index] != null) {
-      camInput.value = lastTiltAngles[index].toString();
-    }
-  } else {
-    name = "Gripper";
-    for (const key of componentStates.keys()) {
-      if (componentStates.get(key)?.type === 'Gripper') {
-        name = key;
-        break;
-      }
-    }
-    anchorActions.style.display = 'none';
-  }
-
-  activeComponentData = { type, index, name };
+  const { type, index } = activeComponentData;
+  const name = componentPanelName(type, index);
+  activeComponentData.name = name;
   title.textContent = `${name} Details`;
 
   const state = componentStates.get(name);
@@ -3179,6 +3187,28 @@ function openComponentPanel(type: string, index: number) {
   actionButtons.forEach(btn => {
     btn.classList.toggle('disabled', !connected);
   });
+}
+
+function openComponentPanel(type: string, index: number) {
+  const overlay = document.getElementById('component-details-overlay');
+  const anchorActions = document.getElementById('cd-anchor-actions');
+
+  if (!overlay || !anchorActions) return;
+
+  if (type === 'Anchor') {
+    anchorActions.style.display = 'flex';
+    // Only on open: refreshComponentPanel() must not overwrite what the user is
+    // partway through typing here.
+    const camInput = document.getElementById('cd-cam-angle-input') as HTMLInputElement | null;
+    if (camInput && lastTiltAngles[index] != null) {
+      camInput.value = lastTiltAngles[index].toString();
+    }
+  } else {
+    anchorActions.style.display = 'none';
+  }
+
+  activeComponentData = { type, index, name: componentPanelName(type, index) };
+  refreshComponentPanel();
 
   overlay.classList.remove('hidden');
 }

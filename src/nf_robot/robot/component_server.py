@@ -40,7 +40,10 @@ stream_command = [
     "--autofocus-mode", "manual",
     "--lens-position", "0.1",
     "--low-latency",
-    "--bitrate", "1000kbps"
+    "--bitrate", "1000kbps",
+    "--denoise", "off",
+    "--sharpness", "0",
+    "--flush",
 ]
 
 # One set of camera settings, under one name. The five fields travel together because
@@ -67,7 +70,7 @@ stream_modes = {
     # slow enough to keep the pi cool
     'anchor_control': StreamMode(1920, 1080, '1000kbps', 15, 0.9786),
     # the gripper's control stream. Small and fast
-    'gripper_control': StreamMode(684, 384, '1200kbps', 60, 0.2032),
+    'gripper_control': StreamMode(684, 384, '1000kbps', 54, 0.2032),
     # the gripper's quality mode, for collecting synthetic dataset ingredients. White
     # balance is pinned: a green backdrop filling the frame drags auto white balance
     # until the sheet photographs blue, which is the one thing the chroma key needs it

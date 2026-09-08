@@ -632,6 +632,11 @@ class ComponentClient:
                     self.nf_robot_v = update['nf_robot_v']
                 if 'temp' in update:
                     self.conn_status.temp = update['temp']
+                    # the component reports this once a second. conn_status is otherwise only
+                    # published on connection and video state changes, so without this the
+                    # temperature the UI shows is frozen at whatever it was when the component
+                    # connected.
+                    self.send_conn_status()
                 if 'torque' in update:
                     if update['torque']:
                         self.conn_status.motor_enabled = telemetry.MotorTorque.ENABLED
