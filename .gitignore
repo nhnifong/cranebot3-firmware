@@ -46,3 +46,5 @@ calibration_fitness_history.json
 plates/
 plates_all/
 previews/
+MUJOCO_LOG.TXT
+

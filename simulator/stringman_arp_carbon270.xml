@@ -82,6 +82,22 @@
     <texture name="gantry_tex" type="2d" file="meshes/gantry_tex.png"/>
     <material name="gantry_mat" texture="gantry_tex" specular="0.1" shininess="0.1"/>
 
+    <!--
+      Floor calibration cards, using the same artwork that gets printed:
+      hardware/boards/*.png, referenced in place rather than copied so there is one
+      source of truth if the boards are ever regenerated. Each is a 2000x2000 tag36h11
+      image that decodes as the id the codebase expects, the id being the index in
+      cv_common.MARKER_NAMES - origin is 0, cal_assist_1..3 are 5..7.
+    -->
+    <texture name="tag_origin" type="2d" file="../hardware/boards/origin.png"/>
+    <texture name="tag_cal_1" type="2d" file="../hardware/boards/cal_assist_1.png"/>
+    <texture name="tag_cal_2" type="2d" file="../hardware/boards/cal_assist_2.png"/>
+    <texture name="tag_cal_3" type="2d" file="../hardware/boards/cal_assist_3.png"/>
+    <material name="mat_tag_origin" texture="tag_origin" specular="0" shininess="0"/>
+    <material name="mat_tag_cal_1" texture="tag_cal_1" specular="0" shininess="0"/>
+    <material name="mat_tag_cal_2" texture="tag_cal_2" specular="0" shininess="0"/>
+    <material name="mat_tag_cal_3" texture="tag_cal_3" specular="0" shininess="0"/>
+
     <mesh name="gripper_shell" file="meshes/gripper_shell.obj"/>
     <mesh name="finger_left"   file="meshes/finger_left.obj"/>
     <mesh name="finger_right"  file="meshes/finger_right.obj"/>
@@ -93,6 +109,29 @@
     <geom name="floor" type="plane" size="6 6 0.05" material="floor"/>
 
     <camera name="room" pos="6.5 -6.5 4.0" xyaxes="0.707 0.707 0 -0.3 0.3 0.9"/>
+
+    <!--
+      CALIBRATION CARDS, lying flat on the floor. cv_common.CAL_MARKER_SIZE is 0.169 m,
+      and that is the black square the detector's corners land on, which is 80% of the
+      board image (width_at_border 8 of tag36h11's 10 cells - the printed boards measure
+      exactly that, black from pixel 200 to 1799 of 2000). The texture covers the whole
+      plate, so the plate is 10/8 of the marker size for the black square to come out at
+      0.169 m:  0.169 * 10/8 = 0.21125, half-extent 0.105625.
+
+      The origin card sits at the room centre, with the three assist cards on a 1.5 m
+      circle around it 120 deg apart.
+
+      Visual only, via class "viz": a 1 mm plate lying on the floor is something for the
+      cameras to see, not something for the gripper to catch an edge on.
+    -->
+    <geom name="card_origin" class="viz" type="box" material="mat_tag_origin"
+          size="0.105625 0.105625 0.0005" pos="0 0 0.0005"/>
+    <geom name="card_cal_assist_1" class="viz" type="box" material="mat_tag_cal_1"
+          size="0.105625 0.105625 0.0005" pos="0 1.5 0.0005"/>
+    <geom name="card_cal_assist_2" class="viz" type="box" material="mat_tag_cal_2"
+          size="0.105625 0.105625 0.0005" pos="-1.29904 -0.75 0.0005"/>
+    <geom name="card_cal_assist_3" class="viz" type="box" material="mat_tag_cal_3"
+          size="0.105625 0.105625 0.0005" pos="1.29904 -0.75 0.0005"/>
 
     <!--
       ANCHOR 0 at (3, 3, 2), yaw -pi/4 (facing the room centre).
@@ -109,8 +148,15 @@
       <!-- definitions.arp_anchor_camera. Its rotation is R(y,pi) @ R(x,68deg), whose
            optical axis comes out 22 deg below horizontal along -y, matching the
            configured camTilt. OpenCV puts +y down the image and MuJoCo puts it up, so
-           the y and z axes are negated on the way in. euler alone had this upside down. -->
-      <camera name="anchor0_cam" pos="0.007 -0.033 0.071" fovy="67"
+           the y and z axes are negated on the way in. euler alone had this upside down.
+
+           fovy is 2*atan(1080/2 / fy) from the config's cameraCal (fy = 1424 at
+           1920x1080), which is what the detection pipeline interprets these frames
+           with, so a render at this FOV and that calibration agree. At 16:9 it gives
+           67.97 deg horizontally, matching the same matrix's fovx. Note that
+           definitions.rpi_cam_3_wide_fov (102 x 67) is the module's datasheet field of
+           view, not the streamed crop's, and nothing in the codebase reads it. -->
+      <camera name="anchor0_cam" pos="0.007 -0.033 0.071" fovy="41.535"
               xyaxes="-1 0 0  0 -0.3746 0.9272"/>
     </body>
 
@@ -123,8 +169,15 @@
       <!-- definitions.arp_anchor_camera. Its rotation is R(y,pi) @ R(x,68deg), whose
            optical axis comes out 22 deg below horizontal along -y, matching the
            configured camTilt. OpenCV puts +y down the image and MuJoCo puts it up, so
-           the y and z axes are negated on the way in. euler alone had this upside down. -->
-      <camera name="anchor1_cam" pos="0.007 -0.033 0.071" fovy="67"
+           the y and z axes are negated on the way in. euler alone had this upside down.
+
+           fovy is 2*atan(1080/2 / fy) from the config's cameraCal (fy = 1424 at
+           1920x1080), which is what the detection pipeline interprets these frames
+           with, so a render at this FOV and that calibration agree. At 16:9 it gives
+           67.97 deg horizontally, matching the same matrix's fovx. Note that
+           definitions.rpi_cam_3_wide_fov (102 x 67) is the module's datasheet field of
+           view, not the streamed crop's, and nothing in the codebase reads it. -->
+      <camera name="anchor1_cam" pos="0.007 -0.033 0.071" fovy="41.535"
               xyaxes="-1 0 0  0 -0.3746 0.9272"/>
     </body>
 
@@ -262,14 +315,21 @@
         <site name="gripper_imu" pos="0.022 0.03 0.029" size="0.005" rgba="0.2 1 0.4 1"/>
         <site name="grommet_gripper" pos="0.0006 0.1167 0.0118" size="0.006" rgba="1 0.8 0.2 1"/>
         <!-- rangefinder empty from gripper.glb, at (0, 0.0025, 0.0502) -->
-        <site name="rangefinder" pos="0 0.0025 0.0502" size="0.004" rgba="1 0 0 1"/>
+        <!-- MuJoCo casts a rangefinder ray along the site's +z, so the site is turned to
+             put that down the gripper frame's -y. -->
+        <site name="rangefinder" pos="0 0.0025 0.0502" size="0.004" rgba="1 0 0 1"
+              euler="1.5707963268 0 0"/>
         <!--
           Wide camera, definitions.gripper_camera: 27 mm toward the nose, aimed down but
           tilted 9.06 deg back toward the hang centreline. MuJoCo cameras look down local
           -z, so -pi/2 puts the axis along -y (straight down) and the extra -9.06 deg
           leans it back: -(pi/2 + radians(9.06)) = -1.728957.
+
+          fovy is 2*atan(384/2 / fy) from the config's cameraCalWide (fy = 493.0 at
+          384x384). gripper_control streams 684x384: the same sensor rows, cropped wider,
+          so the vertical field of view is unchanged and this stays right.
         -->
-        <camera name="gripper_cam" pos="0.0004 0.0026 -0.0261" euler="-1.728957 0 0" fovy="67"/>
+        <camera name="gripper_cam" pos="0.0004 0.0026 -0.0261" euler="-1.728957 0 0" fovy="42.557"/>
 
         <!--
           FINGERS. Two of them, pivoting at x = +/-0.025 and closing side to side - not
@@ -439,6 +499,7 @@
     <actuatorfrc name="tension_3" actuator="spool_3_indirect"/>
     <framepos name="gantry_pos" objtype="site" objname="gantry_origin"/>
     <framepos name="gripper_pos" objtype="body" objname="gripper"/>
+    <rangefinder name="gripper_range" site="rangefinder"/>
     <gyro name="gripper_gyro" site="gripper_imu"/>
     <accelerometer name="gripper_accel" site="gripper_imu"/>
   </sensor>

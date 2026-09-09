@@ -1,0 +1,16 @@
+# Dependencies for the MuJoCo simulator in this directory, on top of nf_robot itself
+# (pip install -e .[host,dev,pi] from the repo root).
+#
+#   pip install -r simulator/requirements.txt
+#
+# ffmpeg is also needed on PATH for the camera streams; it is a system package, not a
+# pip one:  apt install ffmpeg
+
+# physics and offscreen rendering. 3.12 is what the model was built and checked against.
+mujoco>=3.12
+
+# used by the bridge for frame buffers and the model's sensor arrays
+numpy>=1.24
+
+# mDNS advertisement, so the host discovers the simulated components on localhost
+zeroconf>=0.131

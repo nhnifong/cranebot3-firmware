@@ -1,4 +1,14 @@
-# Stringman MuJoCo model
+# Stringman simulator
+
+Everything needed to run Stringman without hardware: the MuJoCo model, the bridge that
+puts it under the real component firmware, and the component simulator itself.
+
+    stringman_arp_carbon270.xml   the model
+    meshes/                       geometry extracted from the playroom GLBs
+    mujoco_bridge.py              MuJoCo-backed stand-ins for the anchor/gripper hardware
+    robot_simulator.py            runs the real servers against it
+    requirements.txt              mujoco, numpy, zeroconf (plus ffmpeg on PATH)
+
 
 `stringman_arp_carbon270.xml` — Stringman in the "Arpeggio" 2-anchor configuration with
 the Arpeggio gripper on the 270 mm carbon pole.
@@ -10,7 +20,7 @@ both, so it works from any directory:
 
 ```sh
 ~/Downloads/mujoco-3.12.0-linux-x86_64/mujoco-3.12.0/bin/simulate \
-    ~/cranebot3-firmware/mujoco/stringman_arp_carbon270.xml
+    ~/cranebot3-firmware/simulator/stringman_arp_carbon270.xml
 ```
 
 `ParseXML: Error opening file` means it could not find the model at all, not that the XML
@@ -62,9 +72,7 @@ The model loads paused at keyframe 0. In the viewer:
 If `simulate` can't find its libraries, run it with
 `LD_LIBRARY_PATH=~/Downloads/mujoco-3.12.0-linux-x86_64/mujoco-3.12.0/lib`.
 
-To poke at it from Python instead, `pip install mujoco` and use
-`mujoco.viewer.launch('mujoco/stringman_arp_carbon270.xml')`. (The repo's own `venv`
-has a broken `mujoco` namespace package shadowing the real one, so use a separate env.)
+To poke at it from Python instead, `mujoco.viewer.launch('simulator/stringman_arp_carbon270.xml')`.
 
 ## What's in the model
 
@@ -91,7 +99,7 @@ layout in `conf_simulator.json`, and the GLB models in
 
 ### Geometry extracted from the GLBs
 
-`mujoco/meshes/` holds four OBJs pulled out of the playroom GLBs by walking the glTF
+`meshes/` holds four OBJs pulled out of the playroom GLBs by walking the glTF
 node hierarchy, baking each node's world transform into the vertices, and welding
 duplicates. They are in metres and already in the frame of the body that uses them.
 
@@ -133,6 +141,85 @@ The pole is *not* taken from the GLB: that file's pole is 0.41 m, which is no co
 pole, so it is drawn from `pole_offset_carbon270` instead.
 
 Colours are cosmetic: copper gripper shell, `#0079b9` fingers.
+
+## Driving it from the real firmware
+
+`robot_simulator.py --mujoco` runs the actual `AnchorArpServer` and
+`GripperArpServer` against this model instead of against constant stubs:
+
+```sh
+venv/bin/python simulator/robot_simulator.py --mujoco
+```
+
+`mujoco_bridge.py` supplies the hardware interfaces the simulator otherwise
+stubs out. Nothing in `nf_robot` changes - the servers cannot tell the difference.
+
+| stub | becomes |
+|---|---|
+| `DaMiaoController` / `DaMiaoMotor` | a spool integrating the velocity commands the real spool loop sends, through the firmware's own `SpiralCalculator`, into a tendon actuator; torque comes back from the tendon's tension |
+| `SimpleSTS3215` | the wrist and finger joints |
+| `MPU6050` | the gripper's gyro / accelerometer sensors |
+| `VL53L1X` | a rangefinder ray cast down from the gripper |
+| `ADS1015` / `AnalogIn` | pad contact force, mapped back onto the FSR's voltage curve |
+
+Two details that are easy to get wrong. The MuJoCo actuators are commanded in **free
+span** while a spool pays out that plus the fixed 5.93 m cross-room run, so the run is
+subtracted on the way in; miss it and the indirect line silently clips to its ctrlrange
+and hangs slack while the other three take its load. And a freshly started spool loop
+has no zero angle, so it believes its whole 7.5 m winding is out - `seed_reference_lengths`
+calls the same `setReferenceLength` the host uses during calibration, so the simulator
+starts consistent instead of reeling in line that was never out.
+
+Physics runs on its own thread paced to the wall clock, because the servers are
+real-time. Verified: brought up with both anchors and the gripper, the gantry holds
+(0, 0, 1.181) with 13.6-14.0 N per line and no drift over 15 s, reeling a spool in
+raises it and hits the 40 N line limit, and the rangefinder reads the gripper's true
+height above the floor.
+
+### Camera feeds
+
+The three video streams are MuJoCo renders of the model's own cameras, h264 over mpegts
+on the same TCP ports the test-pattern streams used, so nothing downstream changes.
+Sizes come from `component_server.stream_modes`, which is what the real components
+produce:
+
+| stream | camera | size | rate |
+|---|---|---|---|
+| anchor 0 / 1 | `anchor0_cam` / `anchor1_cam` | 1920x1080 | 15 fps (`anchor_control`) |
+| gripper | `gripper_cam` | 684x384 | 54 fps (`gripper_control`) |
+
+Field of view is baked into the model's cameras, from the *camera calibration the
+detection pipeline interprets the frames with* rather than the module's datasheet:
+`fovy = 2*atan(h/2 / fy)` gives 41.535 deg for the anchors (`cameraCal`, fy = 1424) and
+42.557 deg for the gripper (`cameraCalWide`, fy = 493). Render and calibration then
+agree, which is the whole point - at 16:9 the anchor figure gives 67.97 deg
+horizontally, matching that same matrix's `fovx`. (`definitions.rpi_cam_3_wide_fov`,
+102 x 67, is the module's full-sensor field of view, not the streamed crop's, and
+nothing in the codebase reads it.)
+
+**End-to-end check:** pull a frame off the live stream, run the codebase's own AprilTag
+detector on it, and it finds the gantry tag; `solvePnP` recovers the camera-to-card
+range to within 1.4-2.4%. That residual is itself right - the object points are
+`DEFAULT_MARKER_SIZE` x `GLOBAL_MARKER_SIZE_BIAS` = 88.8 mm against the model's true
+91.5 mm card, which predicts about 2.9% short.
+
+Three things are hidden from the camera views that the interactive viewer still shows:
+sites (one is a translucent overlay right on the tag), the rangefinder ray, and
+**tendons**. MuJoCo draws a line as an opaque 2.5 mm tube and one of them crosses the
+card from the anchors' viewpoint, cutting the tag's quad in half so nothing detects.
+Real fishing line, close to the lens and far outside its focus, does not do that.
+
+Rendering cost is the thing to watch: 1080p twice over is 1.2 ms/frame on a GPU
+(`MUJOCO_GL=glx` or `egl`) and 85 ms under software rendering (`osmesa`), which cannot
+keep up. The streamer says so once if it falls behind rather than quietly running the
+cameras slow.
+
+**For reinforcement learning this is the wrong shape**, deliberately. It is the fidelity
+check - it exercises the spool tension logic, the swing filter and the whole control
+stack. Training wants no wall-clock pacing and no websockets in the loop, which calls
+for a separate gymnasium `Env` driving `MujocoWorld` directly, with policies trained
+there and then run against this bridge before they touch hardware. See the note at the
+foot of `mujoco_bridge.py`.
 
 ## How trustworthy is it
 

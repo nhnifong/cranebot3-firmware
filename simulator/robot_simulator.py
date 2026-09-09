@@ -96,7 +96,7 @@ GRIPPER_WS_PORT   = 9864
 GRIPPER_VID_PORT  = 9890
 
 
-async def main(no_video=False):
+async def main(no_video=False, mujoco_model=None, realtime=1.0):
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)-8s %(message)s',
@@ -104,6 +104,20 @@ async def main(no_video=False):
 
     # ── patches ────────────────────────────────────────────────────────────────
     patchers = []
+    world = None
+
+    if mujoco_model is not None:
+        # Physics-backed hardware: the same interfaces, driven by the MuJoCo model, so
+        # the servers below run unmodified against a robot that actually swings and goes
+        # slack. See experiments/mujoco_bridge.py.
+        from nf_robot.robot import anchor_arp_server as _aas  # noqa: F401  (patch target)
+        import mujoco_bridge
+        world = mujoco_bridge.MujocoWorld(mujoco_model, realtime=realtime)
+        patchers.extend(mujoco_bridge.make_patchers(world))
+        for p in patchers:
+            p.start()
+        world.start()
+        return await _run_servers(no_video, patchers, world)
 
     # Damiao CAN-bus controller (used by AnchorArpServer)
     patchers.append(patch('nf_robot.robot.anchor_arp_server.DaMiaoController', _StubDaMiaoController))
@@ -137,6 +151,13 @@ async def main(no_video=False):
     for p in patchers:
         p.start()
 
+    return await _run_servers(no_video, patchers, None)
+
+
+async def _run_servers(no_video, patchers, world):
+    """Bring up the anchor and gripper servers. `world` is a mujoco_bridge.MujocoWorld
+    when the simulator is physics-backed, otherwise None."""
+
     # ── zeroconf on localhost only ──────────────────────────────────────────────
     zc = AsyncZeroconf(ip_version=IPVersion.All, interfaces=['127.0.0.1'])
 
@@ -157,8 +178,22 @@ async def main(no_video=False):
 
     # ── launch everything ──────────────────────────────────────────────────────
     tasks = []
+    streamer = None
 
-    if not no_video:
+    if not no_video and world is not None:
+        # Real camera feeds: MuJoCo renders from the model's own cameras, sized from
+        # component_server.stream_modes so they match what the hardware produces, and at
+        # the field of view baked into the model from the config's camera calibration.
+        import mujoco_bridge
+        specs = mujoco_bridge.stream_specs(ANCHOR_VID_PORTS, GRIPPER_VID_PORT)
+        for spec in specs:
+            tasks.append(asyncio.create_task(mujoco_bridge.serve_stream(spec)))
+        # queues are created by serve_stream on this loop, so let those start first
+        await asyncio.sleep(0)
+        streamer = mujoco_bridge.CameraStreamer(world, specs, asyncio.get_running_loop())
+        streamer.start()
+
+    elif not no_video:
         # video streams — anchor: 1920×1080 @ 10 fps / 520 kbps (matches stream_command in anchor_server.py)
         for vid_port in ANCHOR_VID_PORTS:
             tasks.append(asyncio.create_task(_video_stream_loop(vid_port, 1920, 1080, 10, '520k')))
@@ -172,6 +207,14 @@ async def main(no_video=False):
     tasks.append(asyncio.create_task(
         gripper.main(port=GRIPPER_WS_PORT, name='cranebot-gripper-arpeggio-service.sim')
     ))
+
+    if world is not None:
+        # give the spool loops a moment to take their first reading, then tell them how
+        # much line is really out (see mujoco_bridge.seed_reference_lengths)
+        import mujoco_bridge
+        await asyncio.sleep(0.5)
+        mujoco_bridge.seed_reference_lengths(anchors)
+        logging.info('mujoco: gantry at %s', world.gantry_position().round(3))
 
     if no_video:
         logging.info(
@@ -193,6 +236,13 @@ async def main(no_video=False):
 
     await stop.wait()
     logging.info('Shutting down simulator...')
+
+    if streamer is not None:
+        logging.info('camera frames sent/dropped: %s', streamer.stats())
+        streamer.stop()
+
+    if world is not None:
+        world.stop()
 
     for server in anchors:
         server.shutdown()
@@ -216,5 +266,20 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Local robot component simulator.')
     parser.add_argument('--no-video', action='store_true',
                         help='Run without the ffmpeg test-pattern video streams.')
+    parser.add_argument('--mujoco', nargs='?', const=True, default=None, metavar='MODEL.xml',
+                        help='Back the stubbed hardware with the MuJoCo model instead of '
+                             'constants, so the simulated robot actually moves. Optionally '
+                             'takes a path; defaults to mujoco/stringman_arp_carbon270.xml.')
+    parser.add_argument('--realtime', type=float, default=1.0, metavar='X',
+                        help='Physics speed multiplier for --mujoco. The servers are '
+                             'real-time, so values far from 1.0 desynchronise them.')
     args = parser.parse_args()
-    asyncio.run(main(no_video=args.no_video))
+
+    model = None
+    if args.mujoco is not None:
+        import sys, os
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from mujoco_bridge import DEFAULT_MODEL
+        model = DEFAULT_MODEL if args.mujoco is True else args.mujoco
+
+    asyncio.run(main(no_video=args.no_video, mujoco_model=model, realtime=args.realtime))
