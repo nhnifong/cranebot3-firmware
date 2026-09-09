@@ -212,7 +212,7 @@ ORTHO_CAMERA_MODE = "gripper_ortho"
 # renders with; a recording made with a different extent would need its own value.
 ORTHO_EXTENT_M = 5.0
 
-DEFAULT_SOURCE_REPO_ID = "naavox/combined_targets_reblend"
+DEFAULT_SOURCE_REPO_ID = "naavox/grip_o"
 DEFAULT_DATASET_ID = "naavox/ortho-target-dataset"
 LOCAL_DATASET_ROOT = "ortho_target_data"
 

@@ -107,6 +107,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from lerobot.datasets.dataset_tools import delete_episodes, merge_datasets, recompute_stats
@@ -647,6 +648,33 @@ def validate_dataset(
     return ds
 
 
+def confirm_overwrite(path: Path) -> bool:
+    """Ask whether an existing --output_root may be deleted.
+
+    Rebuilding a recipe after adding a source is the ordinary case, and the old refusal
+    made it a two-command dance with an `rm -rf` typed out by hand each time - against a
+    path sitting next to the conversions `--resume` needs, which is the wrong thing to
+    have somebody typing from memory at speed.
+
+    Nobody is asked when nothing can answer: under nohup, from a script or in CI this
+    refuses exactly as it used to, rather than blocking forever on a prompt or reading
+    consent out of a stray newline. Default is no for the same reason - the thing being
+    deleted is hours of encoding.
+    """
+    if not sys.stdin.isatty():
+        return False
+    try:
+        while True:
+            answer = input(f"{path} already exists. Overwrite it? [y/N] ").strip().lower()
+            if answer in ("y", "yes"):
+                return True
+            if answer in ("", "n", "no"):
+                return False
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
 def build(
     recipe: dict,
     temp_dir: Path,
@@ -679,7 +707,23 @@ def build(
     converted_root_base = temp_dir / "converted"
 
     if output_root.exists():
-        raise FileExistsError(f"--output_root {output_root} already exists; remove it or pick another path")
+        # A yes below deletes this path, so refuse the one shape where that would take
+        # the conversions with it. output_root is often nested inside temp_dir, which is
+        # fine - it is only being temp_dir, or holding it, that puts converted/ inside
+        # what is about to be removed.
+        resolved_out, resolved_temp = output_root.resolve(), temp_dir.resolve()
+        if resolved_out == resolved_temp or resolved_out in resolved_temp.parents:
+            raise ValueError(
+                f"--output_root {output_root} contains --temp_dir {temp_dir}; overwriting it would "
+                f"delete the per-source conversions --resume reads. Pick a path beside them instead."
+            )
+        if not confirm_overwrite(output_root):
+            raise FileExistsError(
+                f"--output_root {output_root} already exists; remove it or pick another path")
+        # Only the merged result goes. The conversions live under temp_dir/converted,
+        # so answering yes never costs the re-encoding.
+        logging.info(f"Removing existing {output_root}")
+        shutil.rmtree(output_root)
 
     revisions = preflight_sources(sources, action_space, reblend=do_reblend,
                                   backfill=backfill_anchor_poses, camera_mode=camera_mode,
