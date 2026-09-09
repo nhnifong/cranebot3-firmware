@@ -3,12 +3,13 @@
     Stringman: a 2-anchor "Arpeggio" cable robot with the Arpeggio gripper on a
     270 mm carbon pole.
 
-    Layout matches conf_simulator.json: two powered anchors at (+/-3, 3, 2) and two
-    passive eyelet posts at (+/-3, -3, 2). Each anchor's spool drives TWO lines:
+    Layout: a 4 m square room, two powered anchors in opposite corners at (2, 2, 2)
+    and (-2, -2, 2), and passive eyelet posts in the other two. Each anchor's spool
+    drives TWO lines:
       * a "direct" line, leaving that anchor's own right eyelet straight to the gantry
       * an "indirect" line, leaving the left eyelet, running 6 m across the room to the
         far eyelet post, then down to the gantry
-    so two motors produce four effective support lines at the corners of a 6x6 m square.
+    so two motors produce four effective support lines, one at each corner of the room.
 
     All four lines meet at the gantry origin. Every dimension below is taken from
     src/nf_robot/common/definitions.py; see the comments on each for the source name.
@@ -29,7 +30,7 @@
         model yaw stiffness.
       * The gripper is one moving finger against a fixed jaw, driven by the single
         finger servo. Real travel is 59 deg (gripper_arp_server.FINGER_TRAVEL_DEG),
-        which the firmware reports remapped onto -90..90.
+        which the firmware reports remapped onto a fictitious -90..90 scale.
   -->
 
   <compiler angle="radian" autolimits="true"/>
@@ -40,7 +41,15 @@
     <headlight diffuse="0.6 0.6 0.6" ambient="0.35 0.35 0.35" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
     <global azimuth="140" elevation="-20" offwidth="1920" offheight="1080"/>
-    <map znear="0.02"/>
+    <!--
+      znear and zfar are fractions of the model extent, not metres. The default 0.02 put
+      the near plane 120 mm from the lens, and the gripper's own fingertips sit 41 to 82
+      mm from its camera, so they fell inside it and the palm camera saw straight past
+      its own fingers. mujoco_bridge pins this to a few mm at load so it stays right
+      whatever the room size does to the extent. zfar comes in to keep depth precision
+      reasonable now that the near plane is close.
+    -->
+    <map znear="0.0007" zfar="5"/>
   </visual>
 
   <default>
@@ -49,8 +58,13 @@
     <default class="line">
       <tendon width="0.0025" rgba="0.95 0.95 0.85 1" damping="4"/>
     </default>
+    <!--
+      Anchor and eyelet-post bodies. Placeholder boxes, unlike the gripper and gantry
+      which come from the playroom GLBs. Group 2 so the camera views can leave them out:
+      an anchor's camera sits on its own body and would otherwise see it.
+    -->
     <default class="structure">
-      <geom type="box" rgba="0.35 0.37 0.4 1"/>
+      <geom type="box" rgba="0.35 0.37 0.4 1" group="2"/>
     </default>
     <!-- viz: mesh geoms extracted from the playroom GLBs. Visual only - MuJoCo would
          collide a mesh by its convex hull, which for a claw fills the whole grasp
@@ -106,9 +120,9 @@
 
   <worldbody>
     <light pos="0 0 4" dir="0 0 -1" directional="true" diffuse="0.5 0.5 0.5"/>
-    <geom name="floor" type="plane" size="6 6 0.05" material="floor"/>
+    <geom name="floor" type="plane" size="2 2 0.05" material="floor"/>
 
-    <camera name="room" pos="6.5 -6.5 4.0" xyaxes="0.707 0.707 0 -0.3 0.3 0.9"/>
+    <camera name="room" pos="4.4 -4.4 3.0" xyaxes="0.707 0.707 0 -0.3 0.3 0.9"/>
 
     <!--
       CALIBRATION CARDS, lying flat on the floor. cv_common.CAL_MARKER_SIZE is 0.169 m,
@@ -134,11 +148,11 @@
           size="0.105625 0.105625 0.0005" pos="1.29904 -0.75 0.0005"/>
 
     <!--
-      ANCHOR 0 at (3, 3, 2), yaw -pi/4 (facing the room centre).
+      ANCHOR 0 at (2, 2, 2), yaw -pi/4 (facing the room centre).
       Eyelet sites are configuration.anchors[].pose composed with
       definitions.arp_anchor_right_eyelet / arp_anchor_left_eyelet, evaluated to world.
     -->
-    <body name="anchor0" pos="3 3 2" euler="0 0 -0.7853981634">
+    <body name="anchor0" pos="2 2 2" euler="0 0 -0.7853981634">
       <geom class="structure" size="0.05 0.045 0.055" pos="0 -0.02 0"/>
       <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
       <!-- right eyelet: the direct line -->
@@ -146,9 +160,16 @@
       <!-- left eyelet: the indirect line, routed to the far post -->
       <site name="a0_indirect" pos="-0.031 -0.068 -0.022" size="0.008" rgba="0.3 0.7 1 1"/>
       <!-- definitions.arp_anchor_camera. Its rotation is R(y,pi) @ R(x,68deg), whose
-           optical axis comes out 22 deg below horizontal along -y, matching the
-           configured camTilt. OpenCV puts +y down the image and MuJoCo puts it up, so
+           optical axis comes out (90 - a) deg below horizontal along -y, where a is the
+           adapter angle. OpenCV puts +y down the image and MuJoCo puts it up, so
            the y and z axes are negated on the way in. euler alone had this upside down.
+
+           The tilt itself is the camera adapter fitted to the anchor: the arp-anchor
+           model carries 22, 26 and 30 degree variants, and this is the 30 degree one.
+           Set by robot_simulator.py's cam-tilt option; y_cam is (0, -sin t, cos t).
+           If you change it, the host's own cam_tilts (config indirectLine.camTilt, and
+           the cam_tilts default in host/eyelet_calibration.py) has to agree or
+           calibration solves against a camera pointing somewhere else.
 
            fovy is 2*atan(1080/2 / fy) from the config's cameraCal (fy = 1424 at
            1920x1080), which is what the detection pipeline interprets these frames
@@ -157,19 +178,26 @@
            definitions.rpi_cam_3_wide_fov (102 x 67) is the module's datasheet field of
            view, not the streamed crop's, and nothing in the codebase reads it. -->
       <camera name="anchor0_cam" pos="0.007 -0.033 0.071" fovy="41.535"
-              xyaxes="-1 0 0  0 -0.3746 0.9272"/>
+              xyaxes="-1 0 0  0 -0.5 0.8660254"/>
     </body>
 
-    <!-- ANCHOR 1 at (-3, -3, 2), diagonally opposite anchor 0, yaw 3pi/4 -->
-    <body name="anchor1" pos="-3 -3 2" euler="0 0 2.3561944902">
+    <!-- ANCHOR 1 at (-2, -2, 2), diagonally opposite anchor 0, yaw 3pi/4 -->
+    <body name="anchor1" pos="-2 -2 2" euler="0 0 2.3561944902">
       <geom class="structure" size="0.05 0.045 0.055" pos="0 -0.02 0"/>
       <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
       <site name="a1_direct" pos="0.031 -0.068 -0.022" size="0.008" rgba="1 0.4 0.2 1"/>
       <site name="a1_indirect" pos="-0.031 -0.068 -0.022" size="0.008" rgba="0.3 0.7 1 1"/>
       <!-- definitions.arp_anchor_camera. Its rotation is R(y,pi) @ R(x,68deg), whose
-           optical axis comes out 22 deg below horizontal along -y, matching the
-           configured camTilt. OpenCV puts +y down the image and MuJoCo puts it up, so
+           optical axis comes out (90 - a) deg below horizontal along -y, where a is the
+           adapter angle. OpenCV puts +y down the image and MuJoCo puts it up, so
            the y and z axes are negated on the way in. euler alone had this upside down.
+
+           The tilt itself is the camera adapter fitted to the anchor: the arp-anchor
+           model carries 22, 26 and 30 degree variants, and this is the 30 degree one.
+           Set by robot_simulator.py's cam-tilt option; y_cam is (0, -sin t, cos t).
+           If you change it, the host's own cam_tilts (config indirectLine.camTilt, and
+           the cam_tilts default in host/eyelet_calibration.py) has to agree or
+           calibration solves against a camera pointing somewhere else.
 
            fovy is 2*atan(1080/2 / fy) from the config's cameraCal (fy = 1424 at
            1920x1080), which is what the detection pipeline interprets these frames
@@ -178,21 +206,21 @@
            definitions.rpi_cam_3_wide_fov (102 x 67) is the module's datasheet field of
            view, not the streamed crop's, and nothing in the codebase reads it. -->
       <camera name="anchor1_cam" pos="0.007 -0.033 0.071" fovy="41.535"
-              xyaxes="-1 0 0  0 -0.3746 0.9272"/>
+              xyaxes="-1 0 0  0 -0.5 0.8660254"/>
     </body>
 
     <!--
       Passive eyelet posts, at the two corners the anchors do not occupy. With the
       anchors diagonally opposite each other, each anchor's indirect line runs along a
       wall to the corner one tick COUNTERCLOCKWISE from it, seen from above: anchor 0
-      (3, 3) to post A (-3, 3), anchor 1 (-3, -3) to post B (3, -3).
+      (2, 2) to post A (-2, 2), anchor 1 (-2, -2) to post B (2, -2).
     -->
-    <body name="eyelet_post_A" pos="-3 3 2">
+    <body name="eyelet_post_A" pos="-2 2 2">
       <geom class="structure" size="0.035 0.035 0.04"/>
       <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
       <site name="eyelet_A" pos="0 0 -0.03" size="0.01" rgba="0.3 0.7 1 1"/>
     </body>
-    <body name="eyelet_post_B" pos="3 -3 2">
+    <body name="eyelet_post_B" pos="2 -2 2">
       <geom class="structure" size="0.035 0.035 0.04"/>
       <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
       <site name="eyelet_B" pos="0 0 -0.03" size="0.01" rgba="0.3 0.7 1 1"/>
@@ -312,7 +340,21 @@
               size="0.0517 0.0522 0.055" pos="0 0.0545 0.0092"/>
 
         <site name="gripper_cog" pos="0 0.055 0.011" size="0.006" rgba="1 0.2 1 1"/>
-        <site name="gripper_imu" pos="0.022 0.03 0.029" size="0.005" rgba="0.2 1 0.4 1"/>
+        <!--
+          IMU, definitions.gripper_imu. The rotation matters as much as the position:
+          MuJoCo reports gyro and accelerometer in the SITE's frame, and the chip is not
+          mounted square to the gripper. That constant's rvec is a pi rotation about
+          (0, -1, -1)/sqrt(2), which maps the IMU's +z onto the gripper's up axis, so a
+          hanging gripper reads az = +9.81 and gripper_arp_server.getAngleFromVertical
+          returns ~0. Leave the site unrotated and the sensors come out in the gripper's
+          own y-up CAD frame instead: az = 0, the angle reads 90 whatever the pose, and
+          observer.ensure_pole_upright ('upright') never sees its 10 deg success
+          condition, so it lifts until it hits its own distance limit. The same rotation
+          puts the gyro's x and y on the two swing axes that
+          gripper_arp_server.process_imu fits its pendulum to.
+        -->
+        <site name="gripper_imu" pos="0.022 0.03 0.029" size="0.005" rgba="0.2 1 0.4 1"
+              axisangle="0 -0.7071067812 -0.7071067812 3.1415926536"/>
         <site name="grommet_gripper" pos="0.0006 0.1167 0.0118" size="0.006" rgba="1 0.8 0.2 1"/>
         <!-- rangefinder empty from gripper.glb, at (0, 0.0025, 0.0502) -->
         <!-- MuJoCo casts a rangefinder ray along the site's +z, so the site is turned to
@@ -340,30 +382,38 @@
 
           gripper.glb has them drawn CLOSED: the tips meet at x = 0. So joint 0 is closed
           and opening swings them outward, over the 59 deg of travel in
-          gripper_arp_server.FINGER_TRAVEL_DEG - about a 200 mm aperture at the tips,
-          which is large but is what a laundry-and-toys gripper wants.
+          gripper_arp_server.FINGER_TRAVEL_DEG. At 0.0195 deg per servo step that is
+          3020.8 steps, which is exactly the span measureFingerContact records between
+          finger_closed_pos and finger_open_pos, so a calibrated robot uses the whole
+          physical range.
 
-          The firmware reports this range remapped onto -90..90, where OPEN = -30 and
-          CLOSED = 90, so its OPEN sits at about -0.687 rad here.
+          The firmware reports position on a fictitious -90..90 scale held over from a
+          servo no longer in the design, mapped onto whatever open/closed step positions
+          its own calibration found. Steps and direction are mujoco_bridge's problem, not
+          this file's.
 
           The two are geared together on one servo, so one actuator drives finger_left
           and an equality constraint carries finger_right with it.
         -->
         <body name="finger_left" pos="0.025 0.041 0.0108">
-          <joint name="finger_left" type="hinge" axis="0 0 -1" range="-1.0297 0"
+          <joint name="finger_left" type="hinge" axis="0 0 -1" range="-1.0297 0.05"
                  damping="0.01" armature="0.0002"/>
           <geom class="viz" type="mesh" mesh="finger_left" mass="0.04" rgba="0.0 0.4745 0.7255 1"/>
           <geom name="pad_left" class="col" type="box" size="0.006 0.030 0.022"
                 pos="-0.019 -0.110 0.002" friction="1.5 0.05 0.001"/>
-          <site name="finger_pad_left" pos="-0.021 -0.12 0.002" size="0.005" rgba="1 0 0 1"/>
+          <!-- the volume the touch sensor sums contact forces over: the pad geom, a
+               little oversized so contacts on its surface fall inside -->
+          <site name="finger_pad_left" type="box" size="0.008 0.032 0.024"
+                pos="-0.019 -0.110 0.002" rgba="1 0 0 0.3"/>
         </body>
         <body name="finger_right" pos="-0.025 0.041 0.0108">
-          <joint name="finger_right" type="hinge" axis="0 0 1" range="-1.0297 0"
+          <joint name="finger_right" type="hinge" axis="0 0 1" range="-1.0297 0.05"
                  damping="0.01" armature="0.0002"/>
           <geom class="viz" type="mesh" mesh="finger_right" mass="0.04" rgba="0.0 0.4745 0.7255 1"/>
           <geom name="pad_right" class="col" type="box" size="0.006 0.030 0.022"
                 pos="0.019 -0.110 0.002" friction="1.5 0.05 0.001"/>
-          <site name="finger_pad_right" pos="0.021 -0.12 0.002" size="0.005" rgba="1 0 0 1"/>
+          <site name="finger_pad_right" type="box" size="0.008 0.032 0.024"
+                pos="0.019 -0.110 0.002" rgba="1 0 0 0.3"/>
         </body>
       </body>
     </body>
@@ -381,15 +431,15 @@
     their far eyelet post, so their tendon length includes the constant ~6 m cross-room
     run, exactly as the real spool sees it.
 
-    assumed_full_line_length = 7.5 m, so a direct line's range is 0..7.5 and an indirect
-    line's is that plus the ~6 m fixed run.
+    assumed_full_line_length = 7.5 m, so a direct line's range is 0..7.5 and an
+    indirect line's is that plus its 3.93 m fixed run.
   -->
   <tendon>
     <spatial name="line_0_direct" class="line" limited="true" range="0 7.5" rgba="1 0.5 0.3 1">
       <site site="a0_direct"/>
       <site site="hook_0"/>
     </spatial>
-    <spatial name="line_1_indirect" class="line" limited="true" range="0 13.5" rgba="0.4 0.75 1 1">
+    <spatial name="line_1_indirect" class="line" limited="true" range="0 11.5" rgba="0.4 0.75 1 1">
       <site site="a0_indirect"/>
       <site site="eyelet_A"/>
       <site site="hook_1"/>
@@ -398,7 +448,7 @@
       <site site="a1_direct"/>
       <site site="hook_2"/>
     </spatial>
-    <spatial name="line_3_indirect" class="line" limited="true" range="0 13.5" rgba="0.4 0.75 1 1">
+    <spatial name="line_3_indirect" class="line" limited="true" range="0 11.5" rgba="0.4 0.75 1 1">
       <site site="a1_indirect"/>
       <site site="eyelet_B"/>
       <site site="hook_3"/>
@@ -418,7 +468,7 @@
 
     For the two direct lines the free span IS the tendon length. The two indirect lines
     also carry a fixed cross-room run from the anchor's left eyelet to the far eyelet
-    post (5.9301 m for both, measured off the model), which is constant and which
+    post (3.9301 m for both, measured off the model), which is constant and which
     the operator never controls, so it is added in the bias below rather than being
     charged to the slider. That way all four sliders mean the same thing and read the
     same at a symmetric pose: hanging at (0, 0, 1.2) the four spans are 4.2221, 4.2875,
@@ -444,49 +494,49 @@
               = kp*((L0 + ctrl) - length) - kv*velocity
     which is an ordinary position servo tracking a commanded length of L0 + ctrl.
 
-    Tension check: hanging at (0,0,1.2) the lines are shallow, ~10.5 deg above
-    horizontal, so ~1.05 kg of gantry+pole+gripper needs ~13 N per line. That sits just
-    under configuration.maxSafeTension = 18 N, which is a good sign the geometry and the
-    mass estimates are in the right neighbourhood.
+    Tension check: hanging at (0,0,1.2) in this 4 m room the lines sit 15.9 deg above
+    horizontal, so ~1.05 kg of gantry+pole+gripper needs ~9.5 N per line, comfortably
+    under configuration.maxSafeTension = 18 N. (The same robot in a 6 m room ran the
+    lines at 10.5 deg and ~13.8 N: a wider room is a harder one, because the flatter the
+    lines the more tension the same weight costs.)
 
-    forcerange caps each line at 40 N, a bit over twice maxSafeTension to leave headroom
-    for dynamics. The cap matters for more than realism: uncapped, commanding four lines
-    shorter than the geometry allows makes them fight at arbitrary force and squeezes the
-    gantry UP through the anchor plane, which is nonsense the real machine forbids too
-    (position_estimator: "the gantry cannot be raised above the lowest anchor"). At 40 N
-    over-reeling just stalls, which is what a tension-limited cable robot really does.
+    forcerange caps each line at 25 N. The cap matters for more than realism: uncapped,
+    commanding four lines shorter than the geometry allows makes them fight at arbitrary
+    force and squeezes the gantry UP through the anchor plane, which is nonsense the real
+    machine forbids too (position_estimator: "the gantry cannot be raised above the
+    lowest anchor"). 25 N is about 2.6x the resting tension, enough headroom for
+    dynamics, and in this room it keeps an over-reel stalling below the anchors where 40
+    N did not. It is an empirical choice, not a proof - the squeeze is a configuration
+    the solver finds, so the relationship to the cap is not monotonic. Re-check it if the
+    room geometry changes again.
   -->
   <actuator>
     <!-- direct line: no fixed run, so bias0 = 0 and ctrl is the tendon length outright -->
-    <general name="spool_0_direct" tendon="line_0_direct" ctrlrange="0 7" forcerange="-40 0"
+    <general name="spool_0_direct" tendon="line_0_direct" ctrlrange="0 7" forcerange="-25 0"
              gainprm="4000 0 0" biastype="affine" biasprm="0 -4000 -80"/>
-    <!-- indirect: RUN = 5.9301 m  ->  bias0 = 4000 * 5.9301 -->
-    <general name="spool_1_indirect" tendon="line_1_indirect" ctrlrange="0 7" forcerange="-40 0"
-             gainprm="4000 0 0" biastype="affine" biasprm="23720.2 -4000 -80"/>
-    <general name="spool_2_direct" tendon="line_2_direct" ctrlrange="0 7" forcerange="-40 0"
+    <!-- indirect: RUN = 3.9301 m  ->  bias0 = 4000 * 3.9301 -->
+    <general name="spool_1_indirect" tendon="line_1_indirect" ctrlrange="0 7" forcerange="-25 0"
+             gainprm="4000 0 0" biastype="affine" biasprm="15720.4 -4000 -80"/>
+    <general name="spool_2_direct" tendon="line_2_direct" ctrlrange="0 7" forcerange="-25 0"
              gainprm="4000 0 0" biastype="affine" biasprm="0 -4000 -80"/>
-    <!-- indirect: RUN = 5.9301 m  ->  bias0 = 4000 * 5.9301 -->
-    <general name="spool_3_indirect" tendon="line_3_indirect" ctrlrange="0 7" forcerange="-40 0"
-             gainprm="4000 0 0" biastype="affine" biasprm="23720.2 -4000 -80"/>
+    <!-- indirect: RUN = 3.9301 m  ->  bias0 = 4000 * 3.9301 -->
+    <general name="spool_3_indirect" tendon="line_3_indirect" ctrlrange="0 7" forcerange="-25 0"
+             gainprm="4000 0 0" biastype="affine" biasprm="15720.4 -4000 -80"/>
 
     <!-- wrist: commanded in radians of spin -->
     <position name="wrist" joint="wrist" kp="1.5" kv="0.08" ctrlrange="-9.42477796 9.42477796" forcerange="-2 2"/>
-    <!-- finger: one servo for both jaws. 0 is closed (tips touching), -1.0297 rad is
-         the far end of the 59 deg of travel. The firmware's OPEN (-30 of -90..90) is
-         about -0.687 rad. finger_right follows through the equality constraint. -->
+    <!-- finger: one servo for both jaws, 0 closed and -1.0297 rad (59 deg) fully open.
+         The range runs a few degrees past 0 so the pads touching is what stops a close,
+         not the joint limit; findTouchPoint has to have something to feel.
+         finger_right follows through the equality constraint. -->
     <position name="finger" joint="finger_left" kp="3.0" kv="0.05"
-              ctrlrange="-1.0297 0" forcerange="-4 4"/>
+              ctrlrange="-1.0297 0.05" forcerange="-4 4"/>
   </actuator>
 
   <!-- the two jaws are geared together on one servo -->
   <equality>
     <joint joint1="finger_right" joint2="finger_left" polycoef="0 1 0 0 0"/>
   </equality>
-
-  <!-- the pads meet at x = 0 when closed; let them pass rather than fight each other -->
-  <contact>
-    <exclude body1="finger_left" body2="finger_right"/>
-  </contact>
 
   <sensor>
     <tendonpos name="len_0" tendon="line_0_direct"/>
@@ -499,6 +549,14 @@
     <actuatorfrc name="tension_3" actuator="spool_3_indirect"/>
     <framepos name="gantry_pos" objtype="site" objname="gantry_origin"/>
     <framepos name="gripper_pos" objtype="body" objname="gripper"/>
+    <!--
+      Finger pad pressure. MuJoCo's touch sensor sums the normal force of every contact
+      falling inside the site's volume, which is what the pads' FSRs measure. Needed for
+      gripper_arp_server.findTouchPoint, and so for the 'fingercal' command: it closes
+      until the pads read pressure, so with no contact to feel it never terminates.
+    -->
+    <touch name="pad_touch_left" site="finger_pad_left"/>
+    <touch name="pad_touch_right" site="finger_pad_right"/>
     <rangefinder name="gripper_range" site="rangefinder"/>
     <gyro name="gripper_gyro" site="gripper_imu"/>
     <accelerometer name="gripper_accel" site="gripper_imu"/>
@@ -515,6 +573,6 @@
   <keyframe>
     <key name="hang"
          qpos="0 0 1.2  0.7071068 0 0 0.7071068   0   -0.687 -0.687   0.25 0 0.03  1 0 0 0"
-         ctrl="4.1889 4.2543 4.1889 4.2543  0  -0.687"/>
+         ctrl="2.8098 2.8730 2.8098 2.8730  0  -0.687"/>
   </keyframe>
 </mujoco>

@@ -3541,7 +3541,7 @@ class AsyncObserver:
             await self.half_auto_calibration()
 
             # open grip enough that we can see an unobstructed view from the palm camera
-            await finger_task
+            r = await finger_task
             asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': -40}))
 
             # move over the origin card
@@ -3562,11 +3562,11 @@ class AsyncObserver:
                 current_action="Measuring spin. Gripper camera must see origin card to complete this step.",
             ))
             # there should be some swing when we get there. 
-            await self.half_auto_calibration()
-            await self._center_card_in_view('origin')
+            r = await self.half_auto_calibration()
+            r = await self._center_card_in_view('origin')
 
             # roomspin
-            await self.calibrate_spin(reset_wrist_first=False) # already did that during diamond to save time
+            r = await self.calibrate_spin(reset_wrist_first=False) # already did that during diamond to save time
 
             # Tune swing_latency by inducing swings and finding the value that damps
             # them best. Requires a connected gripper (IMU-driven swing model).

@@ -96,7 +96,8 @@ GRIPPER_WS_PORT   = 9864
 GRIPPER_VID_PORT  = 9890
 
 
-async def main(no_video=False, mujoco_model=None, realtime=1.0):
+async def main(no_video=False, mujoco_model=None, realtime=1.0,
+               room_side=None, cam_tilt=None):
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)-8s %(message)s',
@@ -112,7 +113,12 @@ async def main(no_video=False, mujoco_model=None, realtime=1.0):
         # slack. See experiments/mujoco_bridge.py.
         from nf_robot.robot import anchor_arp_server as _aas  # noqa: F401  (patch target)
         import mujoco_bridge
-        world = mujoco_bridge.MujocoWorld(mujoco_model, realtime=realtime)
+        kw = {}
+        if room_side is not None:
+            kw['room_side'] = room_side
+        if cam_tilt is not None:
+            kw['cam_tilt_deg'] = cam_tilt
+        world = mujoco_bridge.MujocoWorld(mujoco_model, realtime=realtime, **kw)
         patchers.extend(mujoco_bridge.make_patchers(world))
         for p in patchers:
             p.start()
@@ -269,10 +275,20 @@ if __name__ == '__main__':
     parser.add_argument('--mujoco', nargs='?', const=True, default=None, metavar='MODEL.xml',
                         help='Back the stubbed hardware with the MuJoCo model instead of '
                              'constants, so the simulated robot actually moves. Optionally '
-                             'takes a path; defaults to mujoco/stringman_arp_carbon270.xml.')
+                             'takes a path; defaults to the model beside this script.')
     parser.add_argument('--realtime', type=float, default=1.0, metavar='X',
                         help='Physics speed multiplier for --mujoco. The servers are '
                              'real-time, so values far from 1.0 desynchronise them.')
+    parser.add_argument('--room-side', type=float, default=None, metavar='M',
+                        help='Side length of the square room in metres (default 4). The '
+                             'four corner posts move to match, and the fixed run each '
+                             'indirect line carries is remeasured with them.')
+    parser.add_argument('--cam-tilt', type=float, default=None, metavar='DEG',
+                        help='Anchor camera tilt below horizontal, i.e. which tilt '
+                             'adapter is fitted (default 30; the anchor model also has '
+                             '22 and 26 degree variants). The host must be told the same '
+                             'angle - indirectLine.camTilt in the robot config - or '
+                             'calibration solves against a camera pointing elsewhere.')
     args = parser.parse_args()
 
     model = None
@@ -282,4 +298,8 @@ if __name__ == '__main__':
         from mujoco_bridge import DEFAULT_MODEL
         model = DEFAULT_MODEL if args.mujoco is True else args.mujoco
 
-    asyncio.run(main(no_video=args.no_video, mujoco_model=model, realtime=args.realtime))
+    if model is None and (args.room_side is not None or args.cam_tilt is not None):
+        parser.error('--room-side and --cam-tilt only mean anything with --mujoco')
+
+    asyncio.run(main(no_video=args.no_video, mujoco_model=model, realtime=args.realtime,
+                     room_side=args.room_side, cam_tilt=args.cam_tilt))

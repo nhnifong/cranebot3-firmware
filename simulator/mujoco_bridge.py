@@ -16,7 +16,8 @@ What each stub becomes
     SimpleSTS3215 -> the gripper's wrist and finger joints.
     MPU6050       -> the gripper's gyro/accelerometer sensors.
     VL53L1X       -> a MuJoCo rangefinder ray cast down from the gripper.
-    ADS1015/AnalogIn -> pad contact force, mapped back onto the FSR's voltage curve.
+    ADS1015/AnalogIn -> the right pad's touch sensor, mapped back onto the FSR's
+        voltage curve so findTouchPoint (and so 'fingercal') has something to feel.
     ffmpeg test pattern -> MuJoCo renders from the model's own cameras, at the
         resolution and field of view the real streams have (see CameraStreamer).
 
@@ -49,35 +50,59 @@ from nf_robot.robot.spools import SpiralCalculator
 DEFAULT_MODEL = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'stringman_arp_carbon270.xml')
 
-# Which MuJoCo actuator each (anchor, spool) drives, and how much line sits between the
-# anchor and the far eyelet post on the indirect lines. The MuJoCo actuators are
-# commanded in free span -- eyelet to gantry -- while a spool pays out that plus the
-# fixed cross-room run, so the run is subtracted on the way in. 5.9301 m is measured off
-# the model; see the actuator comments in the XML.
-FIXED_RUN_M = 5.9301
+# Which MuJoCo actuator each (anchor, spool) drives, in (anchor, spool) order.
 LINE_MAP = [
-    # (anchor index, spool index) -> (actuator name, fixed run)
-    ('spool_0_direct',   0.0),          # anchor 0, spool 0, high/direct
-    ('spool_1_indirect', FIXED_RUN_M),  # anchor 0, spool 1, low/indirect
-    ('spool_2_direct',   0.0),          # anchor 1, spool 0
-    ('spool_3_indirect', FIXED_RUN_M),  # anchor 1, spool 1
+    'spool_0_direct',    # anchor 0, spool 0, high/direct
+    'spool_1_indirect',  # anchor 0, spool 1, low/indirect
+    'spool_2_direct',    # anchor 1, spool 0
+    'spool_3_indirect',  # anchor 1, spool 1
 ]
+# The MuJoCo actuators are commanded in free span, eyelet to gantry, while a spool pays
+# out that plus a fixed run along the wall on the indirect lines. That run depends on the
+# room, so it is measured off the compiled model rather than written down here; see
+# MujocoWorld._measure_geometry.
+INDIRECT_LINES = (1, 3)
 
-# The free spans the model's keyframe hangs at. Used to seed each spool's true zero
-# angle so the simulated robot starts where the model does rather than with 7.5 m of
-# line paid out and the gantry on the floor.
-KEYFRAME_SPANS = [4.1889, 4.2543, 4.1889, 4.2543]
+# The room and camera adapter the XML is written for. Passing something else to
+# MujocoWorld reconfigures the compiled model to match.
+DEFAULT_ROOM_SIDE_M = 4.0
+DEFAULT_CAM_TILT_DEG = 30.0
+
+# Bodies that sit in the room's corners, and the sign of the corner each occupies.
+CORNER_BODIES = {
+    'anchor0': (1, 1), 'eyelet_post_A': (-1, 1),
+    'anchor1': (-1, -1), 'eyelet_post_B': (1, -1),
+}
 
 # Gripper servo ids, matching gripper_arp_server.
 FINGER, WRIST = 1, 2
 STEPS_PER_REV = 4096
 
-# The finger joint's travel in the MuJoCo model: 0 closed, -1.0297 rad fully open, which
-# is the 59 deg of gripper_arp_server.FINGER_TRAVEL_DEG.
-FINGER_OPEN_RAD, FINGER_CLOSED_RAD = -1.0297, 0.0
-# Step positions the firmware maps its -90..90 finger angle onto. These come from
-# arp_gripper_state.json; if that file's calibration changes, change these with it.
-FINGER_OPEN_STEPS, FINGER_CLOSED_STEPS = -1000, 1000
+# The finger servo's real scale: 4096 steps to a motor revolution through the 10/45
+# reduction, so one step is 0.0195 deg at the finger. This used to be an invented
+# +/-1000 range spanning the whole travel, which is neither the right resolution nor the
+# right direction.
+GEAR_RATIO = 10.0 / 45.0
+FINGER_RAD_PER_STEP = (2.0 * math.pi / STEPS_PER_REV) * GEAR_RATIO
+
+# INCREASING STEPS OPEN THE FINGER. gripper_arp_server.findTouchPoint closes by
+# decrementing the commanded position, and measureFingerContact then records
+# finger_open_pos = finger_closed_pos + FINGER_TRAVEL_STEPS, so open sits above closed.
+# Having this backwards inverts every finger command, and makes the reported angle run
+# the wrong way over a fraction of its range.
+#
+# Zero on the joint is closed, the pose gripper.glb is drawn in. Where that falls on the
+# encoder is arbitrary -- the firmware finds it by feel and stores it in
+# arp_gripper_state.json -- but it is put low in the single-turn range so the finger can
+# open upward without wrapping.
+FINGER_CLOSED_RAD = 0.0
+FINGER_CLOSED_STEPS = 128.0
+
+# How close to the lens a camera still renders, in metres. MuJoCo expresses the near
+# clipping plane as a fraction of the model extent, so the usable value moves with the
+# room; this is pinned in absolute terms instead. It has to clear the gripper's own
+# fingertips, which come within about 40 mm of its palm camera.
+NEAR_PLANE_M = 0.004
 
 # The DaMiao reports shaft position wrapped into this range, and spool_dm unwraps it.
 # Reproduced here so that unwrapping code is actually exercised.
@@ -94,9 +119,12 @@ class MujocoWorld:
     and the physics thread holds it only while stepping.
     """
 
-    def __init__(self, path=DEFAULT_MODEL, realtime=1.0, min_spool_accel=5.0):
+    def __init__(self, path=DEFAULT_MODEL, realtime=1.0, min_spool_accel=5.0,
+                 room_side=DEFAULT_ROOM_SIDE_M, cam_tilt_deg=DEFAULT_CAM_TILT_DEG):
         self.model = mujoco.MjModel.from_xml_path(path)
         self.data = mujoco.MjData(self.model)
+        self.room_side = float(room_side)
+        self.cam_tilt_deg = float(cam_tilt_deg)
         self.realtime = realtime
         self.min_spool_accel = min_spool_accel
         self.lock = threading.RLock()
@@ -110,7 +138,7 @@ class MujocoWorld:
         mujoco.mj_forward(self.model, self.data)
 
         self._act = {n: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, n)
-                     for n, _ in LINE_MAP}
+                     for n in LINE_MAP}
         self._act['wrist'] = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, 'wrist')
         self._act['finger'] = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, 'finger')
 
@@ -126,9 +154,95 @@ class MujocoWorld:
         self._gyro = sens('gripper_gyro')
         self._accel = sens('gripper_accel')
         self._range = sens('gripper_range')
+        self._touch = {'left': sens('pad_touch_left'), 'right': sens('pad_touch_right')}
 
         self._pad_geoms = {mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, n)
                            for n in ('pad_left', 'pad_right')}
+
+        # extent scales with the room, so express the near plane in metres and convert
+        self.model.vis.map.znear = NEAR_PLANE_M / float(self.model.stat.extent)
+
+        self._set_room_size(self.room_side)
+        self._set_camera_tilt(self.cam_tilt_deg)
+        self._measure_geometry()
+
+    # -- configuring the room ---------------------------------------------------
+
+    def _set_room_size(self, side):
+        """Move the four corner posts onto a square `side` metres across, and match the
+        floor to it. The corner azimuths do not change, so the gantry's resting yaw and
+        the line-to-arm rigging are unaffected."""
+        half = side / 2.0
+        for name, (sx, sy) in CORNER_BODIES.items():
+            b = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
+            self.model.body_pos[b][0] = sx * half
+            self.model.body_pos[b][1] = sy * half
+        f = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, 'floor')
+        self.model.geom_size[f][0] = half
+        self.model.geom_size[f][1] = half
+
+    def _set_camera_tilt(self, deg):
+        """Point both anchor cameras `deg` below horizontal, the angle of the tilt adapter
+        fitted to the anchor.
+
+        MuJoCo cameras look down local -z with +y up, so the frame is
+            x = (-1, 0, 0)      y = (0, -sin t, cos t)      z = (0, cos t, sin t)
+        which is definitions.arp_anchor_camera's rotation with its OpenCV y and z axes
+        negated. The host has to be told the same angle (config indirectLine.camTilt),
+        or calibration solves against a camera pointing somewhere else."""
+        t = math.radians(deg)
+        st, ct = math.sin(t), math.cos(t)
+        mat = np.array([[-1.0, 0.0, 0.0],
+                        [0.0, -st,  ct],
+                        [0.0,  ct,  st]], dtype=np.float64)
+        quat = np.zeros(4)
+        mujoco.mju_mat2Quat(quat, mat.flatten())
+        for name in ('anchor0_cam', 'anchor1_cam'):
+            c = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+            self.model.cam_quat[c] = quat
+
+    def _measure_geometry(self):
+        """Read the run lengths and taut spans this room implies, and push them into the
+        parts of the model that depend on them.
+
+        Everything here used to be a constant written down for one particular room: the
+        fixed cross-room run baked into each indirect actuator's bias, the tendon length
+        limits, and the keyframe's commanded spans. Measuring instead means the room and
+        the camera adapter can move without any of them going quietly stale."""
+        mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+        mujoco.mj_forward(self.model, self.data)
+        site = lambda n: self.data.site_xpos[
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, n)]
+
+        self.fixed_run = [0.0] * len(LINE_MAP)
+        for i, (leave, post) in ((1, ('a0_indirect', 'eyelet_A')),
+                                 (3, ('a1_indirect', 'eyelet_B'))):
+            self.fixed_run[i] = float(np.linalg.norm(site(leave) - site(post)))
+
+        full = model_constants.assumed_full_line_length
+        self.keyframe_spans = []
+        for i, name in enumerate(LINE_MAP):
+            a = self._act[name]
+            total = float(self.data.ten_length[a])
+            self.keyframe_spans.append(total - self.fixed_run[i])
+            # the affine bias is what converts a free-span command into a tendon length
+            kp = float(self.model.actuator_gainprm[a][0])
+            self.model.actuator_biasprm[a][0] = kp * self.fixed_run[i]
+            # a spool holds `full` metres of line, beyond its fixed run
+            self.model.tendon_range[a][0] = 0.0
+            self.model.tendon_range[a][1] = full + self.fixed_run[i]
+            if self.model.nkey:
+                self.model.key_ctrl[0][a] = self.keyframe_spans[i]
+        mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
+        mujoco.mj_forward(self.model, self.data)
+        logger.info('room %.2f m, camera tilt %.1f deg: fixed runs %s, keyframe spans %s',
+                    self.room_side, self.cam_tilt_deg,
+                    [round(r, 4) for r in self.fixed_run],
+                    [round(v, 4) for v in self.keyframe_spans])
+
+    def keyframe_spool_length(self, line_index):
+        """Total line out at the keyframe pose, which is what a spool starts wound to."""
+        return self.keyframe_spans[line_index] + self.fixed_run[line_index]
 
     # -- lifecycle -------------------------------------------------------------
 
@@ -176,23 +290,21 @@ class MujocoWorld:
         cross-room run an indirect line carries comes off here. Getting this wrong is
         silent: the command just clips to the actuator's 0-7 m range and that line hangs
         slack while the others take its share of the load."""
-        name, run = LINE_MAP[line_index]
-        i = self._act[name]
+        i = self._act[LINE_MAP[line_index]]
+        run = self.fixed_run[line_index]
         lo, hi = self.model.actuator_ctrlrange[i]
         with self.lock:
             self.data.ctrl[i] = float(np.clip(metres - run, lo, hi))
 
     def get_line_tension(self, line_index):
         """Newtons, positive. The actuators only ever pull, so force is <= 0."""
-        name, _ = LINE_MAP[line_index]
         with self.lock:
-            return float(-self.data.actuator_force[self._act[name]])
+            return float(-self.data.actuator_force[self._act[LINE_MAP[line_index]]])
 
     def get_line_length(self, line_index):
         """Total line out, the same quantity set_line_length takes."""
-        name, _ = LINE_MAP[line_index]
         with self.lock:
-            return float(self.data.ten_length[self._act[name]])
+            return float(self.data.ten_length[self._act[LINE_MAP[line_index]]])
 
     # -- gripper joints --------------------------------------------------------
 
@@ -242,17 +354,20 @@ class MujocoWorld:
         with self.lock:
             return float(self.data.sensordata[a])
 
-    def get_pad_force(self):
-        """Total contact force on both finger pads, newtons."""
-        total = 0.0
-        buf = np.zeros(6)
+    def get_pad_touch(self, side='right'):
+        """Normal force on one finger pad, newtons, from that pad's touch sensor.
+
+        Only the right pad carries an FSR on the real gripper, so that is the one the
+        pressure sensor reads; the left is here for symmetry and for grasp diagnostics."""
+        a, _ = self._touch[side]
         with self.lock:
-            for i in range(self.data.ncon):
-                c = self.data.contact[i]
-                if c.geom1 in self._pad_geoms or c.geom2 in self._pad_geoms:
-                    mujoco.mj_contactForce(self.model, self.data, i, buf)
-                    total += float(np.linalg.norm(buf[:3]))
-        return total
+            return float(self.data.sensordata[a])
+
+    def get_pad_force(self):
+        """Normal force on both pads together, newtons."""
+        with self.lock:
+            return sum(float(self.data.sensordata[self._touch[s][0]])
+                       for s in ('left', 'right'))
 
     def gantry_position(self):
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, 'gantry_origin')
@@ -425,12 +540,13 @@ class MujocoDaMiaoController:
             self.world, line_index,
             empty_diameter=model_constants.damiao_empty_spool_diameter,
             full_diameter=full_diameter, full_length=full_length,
-            direction=direction, initial_length=KEYFRAME_SPANS[line_index] + LINE_MAP[line_index][1])
+            direction=direction,
+            initial_length=self.world.keyframe_spool_length(line_index))
         m.motor_id = motor_id
         m.feedback_id = feedback_id
         self.motors[motor_id] = m
         logger.info('anchor %d %s spool -> mujoco %s (%.1f m spool, start %.3f m out)',
-                    self.anchor_index, kind, LINE_MAP[line_index][0], full_length,
+                    self.anchor_index, kind, LINE_MAP[line_index], full_length,
                     m.true_length())
         return m
 
@@ -442,9 +558,12 @@ class MujocoDaMiaoController:
 class MujocoServoBus:
     """Stands in for nf_robot.robot.simple_st3215.SimpleSTS3215.
 
-    The finger has a real absolute mapping -- the firmware's -90..90 spans the model's
-    59 deg of travel -- so its steps convert straight to a joint angle. The wrist does
-    not: the server subtracts a boot-time step offset before commanding, so only
+    The finger is modelled as the servo actually is: a step count at a fixed angular
+    resolution, with an encoder reference that reset_encoder_to_midpoint renumbers. The
+    firmware's -90..90 is a fictitious range it maps onto whatever open/closed step
+    positions its own calibration found, so the bridge must not assume that range spans
+    the travel - it only has to turn steps into an angle correctly. The wrist is
+    different: the server subtracts a boot-time step offset before commanding, so only
     *relative* motion is meaningful here. The first commanded position is taken as the
     wrist's zero and everything after is relative to it, which keeps the server's own
     bookkeeping intact.
@@ -455,18 +574,18 @@ class MujocoServoBus:
         self.torque = {FINGER: False, WRIST: False}
         self._wrist_zero_steps = None
         self._wrist_cmd_steps = 0.0
+        # which step count corresponds to which joint angle
+        self._finger_ref_steps = FINGER_CLOSED_STEPS
+        self._finger_ref_rad = FINGER_CLOSED_RAD
 
     # -- conversions -----------------------------------------------------------
 
-    @staticmethod
-    def _finger_steps_to_rad(steps):
-        f = (steps - FINGER_OPEN_STEPS) / float(FINGER_CLOSED_STEPS - FINGER_OPEN_STEPS)
-        return FINGER_OPEN_RAD + f * (FINGER_CLOSED_RAD - FINGER_OPEN_RAD)
+    def _finger_steps_to_rad(self, steps):
+        """Steps up means open, and open is negative on this joint."""
+        return self._finger_ref_rad - (steps - self._finger_ref_steps) * FINGER_RAD_PER_STEP
 
-    @staticmethod
-    def _finger_rad_to_steps(rad):
-        f = (rad - FINGER_OPEN_RAD) / (FINGER_CLOSED_RAD - FINGER_OPEN_RAD)
-        return FINGER_OPEN_STEPS + f * (FINGER_CLOSED_STEPS - FINGER_OPEN_STEPS)
+    def _finger_rad_to_steps(self, rad):
+        return self._finger_ref_steps + (self._finger_ref_rad - rad) / FINGER_RAD_PER_STEP
 
     def _wrist_steps_to_rad(self, steps):
         if self._wrist_zero_steps is None:
@@ -493,7 +612,7 @@ class MujocoServoBus:
         if servo_id == FINGER:
             rad, vel = self.world.get_finger()
             pos = self._finger_rad_to_steps(rad)
-            spd = vel / (FINGER_CLOSED_RAD - FINGER_OPEN_RAD) * (FINGER_CLOSED_STEPS - FINGER_OPEN_STEPS)
+            spd = -vel / FINGER_RAD_PER_STEP
             force = self.world.get_finger_force()
             # the servo reports 0-1000 for load in the closing direction and 1024+ for
             # load the other way; the actuator's forcerange is +/-4 N.m
@@ -522,9 +641,16 @@ class MujocoServoBus:
         pass
 
     def reset_encoder_to_midpoint(self, servo_id):
+        """Renumber the encoder so the current position reads mid-range. Nothing moves;
+        only the numbering changes. findTouchPoint leans on this when a close runs off
+        the bottom of the servo's range."""
         if servo_id == WRIST:
             self._wrist_zero_steps = None
             self._wrist_cmd_steps = 0.0
+        else:
+            rad, _ = self.world.get_finger()
+            self._finger_ref_steps = STEPS_PER_REV / 2.0
+            self._finger_ref_rad = rad
 
     def ping(self, servo_id):
         return True
@@ -588,20 +714,36 @@ class MujocoRangefinder:
 class MujocoPressure:
     """Stands in for adafruit_ads1x15.AnalogIn on the finger pad FSR.
 
-    The real sensor sits at 3.3 V untouched and falls as the pad is pressed, with a
-    logarithmic response the server linearises with a 2.5 exponent. Approximated here as
-    a linear fall to 0 V at FULL_SCALE_N of pad contact force.
+    Only the gripper's RIGHT pad has a sensor. It reads 3.3 V untouched and falls toward
+    0 as the pad is pressed.
+
+    The response is not linear in force: the server flattens it back out with
+    `norm_pressure = ((3.3 - v) / 3.3) ** 2.5`, which says the raw voltage drops steeply
+    under a light touch and barely moves under a hard one. Using the inverse exponent
+    here makes the server's normalised pressure come out linear in pad force, which is
+    the behaviour that curve was written to recover.
+
+    Sensitivity matters for more than realism: findTouchPoint closes until the voltage
+    falls below 2.2, so if a light touch does not move the voltage the fingers keep
+    closing and 'fingercal' never terminates.
+
+    FULL_SCALE_N is set from that threshold rather than from any datasheet. The real
+    pads are urethane foam and press against each other hard enough to read about 2.0 V,
+    which is why 2.2 is the threshold. Pressed together in here the pads develop about
+    0.56 N, so full scale is chosen to put that force at ~1.9 V. At 10 N it read 2.26 and
+    findTouchPoint closed straight past it.
     """
 
-    FULL_SCALE_N = 20.0
+    FULL_SCALE_N = 5.0
+    RESPONSE_EXP = 0.4          # inverse of the server's 2.5
 
     def __init__(self, world, *a, **k):
         self.world = world
 
     @property
     def voltage(self):
-        f = min(self.world.get_pad_force() / self.FULL_SCALE_N, 1.0)
-        return 3.3 * (1.0 - f)
+        f = min(max(self.world.get_pad_touch('right'), 0.0) / self.FULL_SCALE_N, 1.0)
+        return 3.3 * (1.0 - f ** self.RESPONSE_EXP)
 
     @property
     def value(self):
@@ -662,9 +804,6 @@ class CameraStreamer:
     Frames go into a bounded queue per stream and an asyncio task pushes them into
     ffmpeg. If a consumer stalls the queue fills and frames are dropped rather than
     blocking the renderer, because blocking here would stall every other camera too.
-
-    Rendering 1080p twice over is not free. If the render thread cannot keep up it
-    reports the shortfall once rather than silently running the cameras slow.
     """
 
     def __init__(self, world, specs, loop):
@@ -683,6 +822,11 @@ class CameraStreamer:
         self.scene_option = mujoco.MjvOption()
         self.scene_option.sitegroup[:] = 0
         self.scene_option.geomgroup[3] = 0
+        # Group 2 is the anchor and eyelet-post bodies. Those are placeholder boxes, not
+        # geometry extracted from anything, and an anchor's camera is mounted on its own
+        # body, so once the near plane came in the box appeared in that anchor's own
+        # frame.
+        self.scene_option.geomgroup[2] = 0
         self.scene_option.flags[mujoco.mjtVisFlag.mjVIS_RANGEFINDER] = False
         # Tendons off. MuJoCo draws a line as an opaque 2.5 mm tube, and one of them
         # passes right across the marker card from the anchors' point of view, cutting
@@ -783,9 +927,8 @@ class CameraStreamer:
 async def serve_stream(spec, world_streamer=None):
     """Keep an ffmpeg h264/mpegts listener on spec.port fed with rendered frames.
 
-    Mirrors the shape of the test-pattern loop this replaces: ffmpeg exits when its
-    client disconnects, and this restarts it. Raw frames come in on stdin instead of
-    from lavfi.
+    ffmpeg exits when its client disconnects, and this restarts it. Raw frames come in on
+    stdin instead of from lavfi.
     """
     import asyncio
 

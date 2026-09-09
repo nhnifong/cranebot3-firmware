@@ -54,14 +54,15 @@ The model loads paused at keyframe 0. In the viewer:
 
   | spans (line 0, 1, 2, 3) | gantry |
   |---|---|
-  | 4.22, 4.29, 4.22, 4.29 | (0, 0, 1.2) — the keyframe |
-  | 3.86, 3.93, 3.86, 3.93 | (0, 0, 1.5) |
-  | 4.45, 4.51, 4.45, 4.51 | (0, 0, 0.45) — fingertip on the floor |
-  | 1.66, 5.19, 5.12, 7.14 | (2, 2, 1.0) — near the anchor 0 corner |
-  | 5.65, 1.63, 7.85, 5.71 | (2.5, -2.5, 0.5) — needs more than 7 m on line 2 |
+  | 2.81, 2.87, 2.81, 2.87 | (0, 0, 1.2) — the keyframe |
+  | 2.73, 2.80, 2.73, 2.80 | (0, 0, 1.6) |
+  | 3.07, 3.13, 3.07, 3.13 | (0, 0, 0.5) |
+  | 1.39, 3.39, 4.51, 3.39 | (1.2, 1.2, 1.0) |
+  | 3.85, 5.35, 3.89, 1.40 | (1.7, −1.7, 0.6) — near a corner |
 
-  The last row is the point: the far corners genuinely need spans from 1.6 to 7.9 m,
-  which is why the sliders run the full 0–7 and why `assumed_full_line_length` is 7.5 m.
+  The corners are what set the slider range: at 4 m a side the longest span any corner
+  demands is 5.90 m, and a bigger room needs more, so the sliders run the full 0–7 m
+  that `assumed_full_line_length` (7.5 m) allows.
 
 - **backspace** — reset (to qpos0 with ctrl 0; click **Load key** again after)
 - **Rendering** panel → check **Tendon** and **Actuator** to see line tension colouring
@@ -80,11 +81,11 @@ Dimensions come from three places: `src/nf_robot/common/definitions.py`, the anc
 layout in `conf_simulator.json`, and the GLB models in
 `playroom-ui/public/assets/playroom/models/`. Each is named in a comment at its use site.
 
-- Two powered anchors diagonally opposite each other at (3, 3, 2) and (−3, −3, 2),
-  and two passive eyelet posts at the other two corners. Each anchor's indirect line
-  runs along a wall to the corner one tick **counterclockwise** from it, seen from
-  above: anchor 0 (3, 3) → post A (−3, 3), anchor 1 (−3, −3) → post B (3, −3). Both
-  fixed runs are 5.9301 m.
+- A **4 m square room** (`--room-side` to change it). Two powered anchors diagonally
+  opposite each other at (2, 2, 2) and (−2, −2, 2), and passive eyelet posts in the
+  other two corners. Each anchor's indirect line runs along a wall to the corner one
+  tick **counterclockwise** from it, seen from above: anchor 0 (2, 2) → post A (−2, 2),
+  anchor 1 (−2, −2) → post B (2, −2), a 3.9301 m fixed run each.
 - Four support lines as spatial tendons, length-limited, driven by one-sided position
   actuators so they pull but never push and go slack when over-payed. Each anchor
   spool drives one *direct* line to the gantry and one *indirect* line routed through
@@ -113,11 +114,20 @@ coordinates. Shell is 103.4 × 104.4 × 110 mm, deeper behind the origin than in
 The fingers are the correction that mattered most. There are **two**, pivoting at
 x = ±0.025 and closing **side to side** — not one finger against a fixed jaw, which is
 what this model had before. `gripper.glb` draws them closed, tips meeting at x = 0, so
-joint 0 is closed and they swing outward over the 59° of
-`gripper_arp_server.FINGER_TRAVEL_DEG`. That is a **232 mm aperture** at full open,
-large but plausible for a laundry-and-toys gripper. They are geared together on one
-servo, so one actuator drives `finger_left` and an equality constraint carries
-`finger_right`.
+joint 0 is closed and they swing outward over the **59°** of
+`gripper_arp_server.FINGER_TRAVEL_DEG`.
+They are geared together on one servo, so one actuator drives `finger_left` and an
+equality constraint carries `finger_right`.
+
+The servo is modelled at its real resolution — 4096 steps/rev through the 10/45
+reduction, 0.0195° per step — and **increasing steps open the finger**, which is the
+direction `findTouchPoint` and `measureFingerContact` work in. The firmware's −90..90 is
+a fictitious scale mapped onto whatever open/closed step positions its calibration
+found, so the bridge does not assume that range spans the travel.
+
+At 0.0195°/step that travel is 3020.8 steps, exactly the span `measureFingerContact`
+records between `finger_closed_pos` and `finger_open_pos` — so a calibrated robot uses
+the whole physical range.
 
 **Gantry and marker card** (`gantry.glb` → `gantry_body.obj` + `gantry_tex.png`). The
 gantry is essentially the marker-card assembly: a card with a four-arm cross on top that
@@ -158,9 +168,20 @@ stubs out. Nothing in `nf_robot` changes - the servers cannot tell the differenc
 |---|---|
 | `DaMiaoController` / `DaMiaoMotor` | a spool integrating the velocity commands the real spool loop sends, through the firmware's own `SpiralCalculator`, into a tendon actuator; torque comes back from the tendon's tension |
 | `SimpleSTS3215` | the wrist and finger joints |
-| `MPU6050` | the gripper's gyro / accelerometer sensors |
+| `MPU6050` | the gripper's gyro / accelerometer sensors, in the IMU's own mounting frame |
 | `VL53L1X` | a rangefinder ray cast down from the gripper |
 | `ADS1015` / `AnalogIn` | pad contact force, mapped back onto the FSR's voltage curve |
+
+**Sensor frames are part of the model, not the bridge.** MuJoCo reports a gyro or
+accelerometer in its *site's* frame, so a site left unrotated reports in the body's frame
+rather than the chip's. `definitions.gripper_imu` is a pi rotation about
+(0, -1, -1)/sqrt(2) that puts the IMU's +z on the gripper's up axis, and the site carries
+it. Without that rotation a hanging gripper reads `az = 0`, so
+`getAngleFromVertical` returns 90 whatever the pose, `observer.ensure_pole_upright`
+never meets its 10 deg success condition and lifts until it trips its own distance
+limit - and `process_imu` fits its pendulum to a vertical axis instead of the two swing
+axes. Verified after the fix: hanging reads 0.1 deg, and a tilted pole reports its true
+tilt to within 0.1 deg from 0 to 90.
 
 Two details that are easy to get wrong. The MuJoCo actuators are commanded in **free
 span** while a spool pays out that plus the fixed 5.93 m cross-room run, so the run is
@@ -209,6 +230,12 @@ sites (one is a translucent overlay right on the tag), the rangefinder ray, and
 card from the anchors' viewpoint, cutting the tag's quad in half so nothing detects.
 Real fishing line, close to the lens and far outside its focus, does not do that.
 
+**Anchor camera tilt** is the tilt adapter fitted to the anchor: 30° below horizontal by
+default, matching the 30° adapters, with 22° and 26° variants in the anchor model.
+`--cam-tilt` changes it. Whatever you pick, the host has to be told the same angle —
+`indirectLine.camTilt` in the robot config, which `conf_simulator.json` currently has at
+**22** — or calibration solves against a camera pointing somewhere else.
+
 Rendering cost is the thing to watch: 1080p twice over is 1.2 ms/frame on a GPU
 (`MUJOCO_GL=glx` or `egl`) and 85 ms under software rendering (`osmesa`), which cannot
 keep up. The streamer says so once if it falls behind rather than quietly running the
@@ -227,15 +254,13 @@ It compiles, settles, and behaves. Checks that were run:
 
 | check | result |
 |---|---|
-| hangs stable at keyframe 0 | settles at z = 1.181, no drift over 8 s |
-| tension per line | 13.8 N, evenly split — under `maxSafeTension` = 18 N |
-| resting yaw | +89.8°, and a 2 rad/s yaw kick peaks at only 4.5° |
-| reel in one line | gantry moves toward that line's corner and rises |
-| drive to commanded points | 9–19 mm of the target across the room |
-| reach the corners | (±1.5, 1.5, 1.0), (−2, −2, 1.1), (2.5, 0, 0.9) all within the 0–7 m span |
-| over-reel all four | stalls at 1.47 m against the 40 N line limit, no runaway |
-| finger travel | 8.6 mm aperture closed, 232 mm open; the two jaws track to 0.002 rad |
-| grasp | jaws close on the payload and hold it at ~6 N per side |
+| hangs stable at keyframe 0 | settles at z = 1.191, no drift |
+| tension per line | 9.4 N, evenly split — well under `maxSafeTension` = 18 N |
+| resting yaw | +89.7°, and a yaw kick returns to it |
+| drive to commanded points | 4–21 mm of the target, corners included |
+| over-reel all four | stalls at 1.878 m against the 25 N line limit, below the anchors |
+| finger travel | 59°, jaws geared together; increasing servo steps open |
+| gripper hanging | `getAngleFromVertical` reads 0.1°, and tracks true tilt to 0.1° out to 90° |
 
 Driving it is open-loop here: feed each slider the geometric distance from its pull
 point to that line's own hook and the gantry lands within a few centimetres. Compute the
@@ -275,15 +300,15 @@ Known to be wrong or guessed, in rough order of how much it matters:
   Lines act as springs at 4000 N/m, so 13 N of tension is ~3 mm of stretch per line and,
   at these shallow angles, a few centimetres of droop. Real monofilament stretches
   considerably more than that.
-- **Near the corners the geometry goes singular.** At (2, 2, 1.0) one line is short and
-  steep while the other three are nearly flat, and the positioning error grows to
-  ~0.17 m. This is the real conditioning of the cable geometry, not a solver problem.
 - **Spools are modelled as pure length commands.** No spiral spool geometry
   (`damiao_spool_geometry`), no line stretch model, no eyelet friction. Each line is
-  capped at 40 N, a bit over twice `maxSafeTension`; that cap is also what stops an
+  capped at 25 N, about 2.6x the resting tension; that cap is also what stops an
   over-reel from squeezing the gantry up through the anchor plane, which
-  `position_estimator.find_hang_point` forbids on the real machine.
-- **The top of the workspace is tension-limited, and that is real.** With the anchors
-  only 2 m up and 8.5 m apart on the diagonal, lifting near the ceiling needs far more
-  line tension than the machine has. Raise the anchors in the model if you want more
-  usable height.
+  `position_estimator.find_hang_point` forbids on the real machine. It is tuned
+  empirically for this room — the squeeze is a configuration the solver finds, so the
+  relationship to the cap is not monotonic, and 40 N did not hold once the room shrank.
+- **Room size drives how well-conditioned the whole thing is.** The flatter the lines,
+  the more tension the same weight costs and the worse the positioning. At 4 m a side
+  the lines sit 15.9° above horizontal, need 9.4 N, and land within 21 mm everywhere.
+  The same robot at 6 m ran 10.5°, 13.8 N, and 170 mm of error near a corner. Worth
+  remembering before widening `--room-side`.
