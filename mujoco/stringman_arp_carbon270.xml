@@ -1,0 +1,459 @@
+<mujoco model="stringman_arpeggio_carbon270">
+  <!--
+    Stringman: a 2-anchor "Arpeggio" cable robot with the Arpeggio gripper on a
+    270 mm carbon pole.
+
+    Layout matches conf_simulator.json: two powered anchors at (+/-3, 3, 2) and two
+    passive eyelet posts at (+/-3, -3, 2). Each anchor's spool drives TWO lines:
+      * a "direct" line, leaving that anchor's own right eyelet straight to the gantry
+      * an "indirect" line, leaving the left eyelet, running 6 m across the room to the
+        far eyelet post, then down to the gantry
+    so two motors produce four effective support lines at the corners of a 6x6 m square.
+
+    All four lines meet at the gantry origin. Every dimension below is taken from
+    src/nf_robot/common/definitions.py; see the comments on each for the source name.
+
+    Angles in this file are RADIANS (compiler angle="radian") so that keyframe qpos and
+    actuator ctrlrange need no unit guessing. Degrees are given in comments.
+
+    KNOWN INACCURACIES (this is a first-cut model):
+      * Masses and inertias are estimates; none are recorded in the firmware repo.
+      * The swing period is close but not exact. definitions.pole_length_carbon270
+        says the effective pendulum length is 0.3089 m; this model swings at 1.17 s,
+        which is an equivalent length of 0.340 m, ~10% long. The real number is a fit to
+        measured swing decay, while here the period falls out of the geometry and the
+        guessed mass distribution. Lower the gripper's diaginertia to shorten it.
+      * The four lines are attached to the gantry 15 mm apart rather than at one exact
+        point. Physically they do converge, but a single shared point leaves the gantry
+        free to spin about z with nothing to resist it. The spread is what gives the
+        model yaw stiffness.
+      * The gripper is one moving finger against a fixed jaw, driven by the single
+        finger servo. Real travel is 59 deg (gripper_arp_server.FINGER_TRAVEL_DEG),
+        which the firmware reports remapped onto -90..90.
+  -->
+
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.002" integrator="implicitfast" gravity="0 0 -9.81"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.35 0.35 0.35" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="140" elevation="-20" offwidth="1920" offheight="1080"/>
+    <map znear="0.02"/>
+  </visual>
+
+  <default>
+    <geom friction="1.0 0.05 0.001" solimp="0.9 0.95 0.001" condim="4"/>
+    <!-- Lines: thin, only ever in tension. -->
+    <default class="line">
+      <tendon width="0.0025" rgba="0.95 0.95 0.85 1" damping="4"/>
+    </default>
+    <default class="structure">
+      <geom type="box" rgba="0.35 0.37 0.4 1"/>
+    </default>
+    <!-- viz: mesh geoms extracted from the playroom GLBs. Visual only - MuJoCo would
+         collide a mesh by its convex hull, which for a claw fills the whole grasp
+         opening, so collision is carried by the primitives in class "col" instead. -->
+    <default class="viz">
+      <geom contype="0" conaffinity="0" group="1" rgba="0.88 0.89 0.92 1" mass="0"/>
+    </default>
+    <default class="col">
+      <geom group="3" rgba="0.9 0.4 0.2 0.35" mass="0"/>
+    </default>
+  </default>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture name="floortex" type="2d" builtin="checker" rgb1="0.2 0.25 0.28" rgb2="0.28 0.33 0.36"
+             width="512" height="512" mark="edge" markrgb="0.5 0.5 0.5"/>
+    <material name="floor" texture="floortex" texuniform="true" texrepeat="8 8" reflectance="0.05"/>
+
+    <!--
+      Geometry extracted from playroom-ui/public/assets/playroom/models/*.glb by walking
+      the glTF node hierarchy, baking each node's world transform into the vertices and
+      welding duplicates. Metres, and already in the frame of the body that uses them:
+      the gripper meshes in the definitions.py gripper frame, each finger about its own
+      pivot, the gantry body in gantry.glb's own y-up frame (turned upright at its geom).
+    -->
+    <!-- gantry.glb's own texture: it is the AprilTag itself, so the card renders as a
+         readable tag rather than a white square. Matters if you ever point the anchor
+         cameras at it. -->
+    <texture name="gantry_tex" type="2d" file="meshes/gantry_tex.png"/>
+    <material name="gantry_mat" texture="gantry_tex" specular="0.1" shininess="0.1"/>
+
+    <mesh name="gripper_shell" file="meshes/gripper_shell.obj"/>
+    <mesh name="finger_left"   file="meshes/finger_left.obj"/>
+    <mesh name="finger_right"  file="meshes/finger_right.obj"/>
+    <mesh name="gantry_body"   file="meshes/gantry_body.obj"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 4" dir="0 0 -1" directional="true" diffuse="0.5 0.5 0.5"/>
+    <geom name="floor" type="plane" size="6 6 0.05" material="floor"/>
+
+    <camera name="room" pos="6.5 -6.5 4.0" xyaxes="0.707 0.707 0 -0.3 0.3 0.9"/>
+
+    <!--
+      ANCHOR 0 at (3, 3, 2), yaw -pi/4 (facing the room centre).
+      Eyelet sites are configuration.anchors[].pose composed with
+      definitions.arp_anchor_right_eyelet / arp_anchor_left_eyelet, evaluated to world.
+    -->
+    <body name="anchor0" pos="3 3 2" euler="0 0 -0.7853981634">
+      <geom class="structure" size="0.05 0.045 0.055" pos="0 -0.02 0"/>
+      <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
+      <!-- right eyelet: the direct line -->
+      <site name="a0_direct" pos="0.031 -0.068 -0.022" size="0.008" rgba="1 0.4 0.2 1"/>
+      <!-- left eyelet: the indirect line, routed to the far post -->
+      <site name="a0_indirect" pos="-0.031 -0.068 -0.022" size="0.008" rgba="0.3 0.7 1 1"/>
+      <!-- definitions.arp_anchor_camera. Its rotation is R(y,pi) @ R(x,68deg), whose
+           optical axis comes out 22 deg below horizontal along -y, matching the
+           configured camTilt. OpenCV puts +y down the image and MuJoCo puts it up, so
+           the y and z axes are negated on the way in. euler alone had this upside down. -->
+      <camera name="anchor0_cam" pos="0.007 -0.033 0.071" fovy="67"
+              xyaxes="-1 0 0  0 -0.3746 0.9272"/>
+    </body>
+
+    <!-- ANCHOR 1 at (-3, -3, 2), diagonally opposite anchor 0, yaw 3pi/4 -->
+    <body name="anchor1" pos="-3 -3 2" euler="0 0 2.3561944902">
+      <geom class="structure" size="0.05 0.045 0.055" pos="0 -0.02 0"/>
+      <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
+      <site name="a1_direct" pos="0.031 -0.068 -0.022" size="0.008" rgba="1 0.4 0.2 1"/>
+      <site name="a1_indirect" pos="-0.031 -0.068 -0.022" size="0.008" rgba="0.3 0.7 1 1"/>
+      <!-- definitions.arp_anchor_camera. Its rotation is R(y,pi) @ R(x,68deg), whose
+           optical axis comes out 22 deg below horizontal along -y, matching the
+           configured camTilt. OpenCV puts +y down the image and MuJoCo puts it up, so
+           the y and z axes are negated on the way in. euler alone had this upside down. -->
+      <camera name="anchor1_cam" pos="0.007 -0.033 0.071" fovy="67"
+              xyaxes="-1 0 0  0 -0.3746 0.9272"/>
+    </body>
+
+    <!--
+      Passive eyelet posts, at the two corners the anchors do not occupy. With the
+      anchors diagonally opposite each other, each anchor's indirect line runs along a
+      wall to the corner one tick COUNTERCLOCKWISE from it, seen from above: anchor 0
+      (3, 3) to post A (-3, 3), anchor 1 (-3, -3) to post B (3, -3).
+    -->
+    <body name="eyelet_post_A" pos="-3 3 2">
+      <geom class="structure" size="0.035 0.035 0.04"/>
+      <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
+      <site name="eyelet_A" pos="0 0 -0.03" size="0.01" rgba="0.3 0.7 1 1"/>
+    </body>
+    <body name="eyelet_post_B" pos="3 -3 2">
+      <geom class="structure" size="0.035 0.035 0.04"/>
+      <geom class="structure" type="cylinder" size="0.03 1.0" pos="0 0 -1.0" rgba="0.25 0.25 0.28 1"/>
+      <site name="eyelet_B" pos="0 0 -0.03" size="0.01" rgba="0.3 0.7 1 1"/>
+    </body>
+
+    <!--
+      GANTRY + POLE. One rigid body: the four lines converge on the gantry origin and
+      constrain only that point, so gantry, pole and gripper swing together about it as
+      the pendulum that host/swing.py cancels.
+
+      The gantry frame here is definitions.py's gantry frame, which is Z-UP - unlike the
+      gripper frame below, which is y-up. See the marker card note for why.
+
+      The pole runs 0.329 m from the gantry origin to the gripper grommet:
+        pole_offset_carbon270 (0.4457) - grommet height in the gripper mesh (0.1167)
+    -->
+    <body name="gantry" pos="0 0 1.2">
+      <freejoint name="gantry_free"/>
+      <inertial pos="0 0 -0.037" mass="0.35" diaginertia="0.0016 0.0016 0.0016"/>
+
+      <!-- Shape from gantry.glb ("Gripper - hang bar"), which is y-up, hence the 90 deg
+           turn into this z-up frame. Only the body primitive is used; that file's own
+           pole is 0.41 m, which is not the carbon270 pole, so the pole is drawn below
+           from the definitions.py constant instead. -->
+      <geom class="viz" type="mesh" mesh="gantry_body" material="gantry_mat"
+            euler="1.5707963268 0 0"/>
+      <geom name="gantry_collide" class="col" type="box" size="0.0442 0.0445 0.0652" pos="0 0 -0.0369"/>
+
+      <!--
+        MARKER CARD. Part of the gantry mesh above, not a separate geom: gantry.glb
+        carries the AprilTag as a texture on a plate welded into the body, tagged on both
+        faces. Pulled out of that file by selecting the triangles whose UVs land inside
+        the tag square of gantry_tex.png:
+
+          91.5 x 91.5 mm, 14.0 mm thick, dead flat (0.00 mm out of plane)
+          centre 37.0 mm below the gantry origin, on the vertical axis
+          faces normal to +/-(0.707, 0, 0.707) in the GLB frame, i.e. horizontal and at
+            45 deg to that file's axes - so the card looks out along a diagonal
+
+        91.5 mm agrees well with cv_common.DEFAULT_MARKER_SIZE = 94.5 mm, the side length
+        solvePnP is given for this tag (the separate 0.94 GLOBAL_MARKER_SIZE_BIAS is a
+        scale fudge, not a dimension).
+
+        The site below just marks the card's centre and plane for inspection; the tag you
+        see is the mesh.
+
+        DISAGREEMENT WITH definitions.py, worth knowing about: gantry_flat_april puts this
+        card at tvec (0, -0.007, -0.0652), which is 65.2 mm from the gantry origin, while
+        the GLB puts it at 37.0 mm - 28 mm apart. The rotation does agree: rvec
+        (pi/2, 0, 0) turns the tag normal (+z, per cv_common.BASE_MARKER_POINTS) onto -y,
+        which is horizontal exactly as the GLB has it, and which also settles that the
+        definitions gantry frame is z-up while the gripper frame is y-up. Only the offset
+        is in dispute. This model follows the GLB. If definitions.py is the number the
+        vision stack actually calibrates against, that 28 mm is a real bias worth
+        chasing down rather than a modelling detail.
+      -->
+      <site name="gantry_marker" pos="0 0 -0.037" euler="0 0 -0.7853981634"
+            size="0.007 0.04575 0.04575" type="box" rgba="1 0.9 0.2 0.25"/>
+
+      <!-- gantry origin: the nominal point where all four lines meet -->
+      <site name="gantry_origin" pos="0 0 0" size="0.012" rgba="1 0.2 0.2 1"/>
+
+      <!--
+        Line attachment points: the four arms of the cross on top of the marker card,
+        55 mm out from the centre on the diagonals. Both numbers are in gantry.glb - the
+        top component's arms reach r = 0.0563 m and their azimuths cluster at +/-45 and
+        +/-135 deg - so unlike the earlier version of this file, the spread here is real
+        hardware rather than a fudge invented to give the gantry yaw stiffness.
+
+        The card's normal points straight along one of these arms, so which corner the
+        card faces is set by which arm each line is clipped to. That is a rigging choice,
+        and with the anchors diagonally opposite it is the difference between a usable
+        tag and an invisible one:
+
+          line 0 on the card's own arm  -> card faces the anchor diagonal, and BOTH
+                                           anchors see it 11.3 deg off-normal
+          line 0 one arm over           -> card faces the eyelet diagonal, and both
+                                           anchors are 89.8 deg off-normal, edge-on
+
+        This model uses the first. The gantry then rests at yaw 90 deg, which is what the
+        keyframe starts it at. Worth confirming against how the real gantry is clipped up.
+      -->
+      <site name="hook_0" pos="0.0389 -0.0389 0.02" size="0.005" rgba="1 0.4 0.2 1"/>
+      <site name="hook_1" pos="0.0389 0.0389 0.02" size="0.005" rgba="0.3 0.7 1 1"/>
+      <site name="hook_2" pos="-0.0389 0.0389 0.02" size="0.005" rgba="1 0.4 0.2 1"/>
+      <site name="hook_3" pos="-0.0389 -0.0389 0.02" size="0.005" rgba="0.3 0.7 1 1"/>
+
+      <!-- 270 mm carbon tube, ~11 mm OD (the radius gantry.glb draws its pole at) -->
+      <geom name="pole" type="capsule" fromto="0 0 -0.06 0 0 -0.329" size="0.0053"
+            mass="0.045" rgba="0.12 0.12 0.14 1"/>
+      <site name="grommet" pos="0 0 -0.329" size="0.008" rgba="1 0.8 0.2 1"/>
+
+      <!--
+        GRIPPER, geometry taken from playroom-ui gripper.glb. That file's scene frame is
+        exactly definitions.py's gripper frame: its grommet empty lands at
+        (0.0006, 0.1167, 0.0118) against the constant's (0, 0.115, 0.013), and its camera
+        empty at (0.0004, 0.0026, -0.0261) against (0, 0.006, -0.027). So the mesh drops
+        in untransformed and every site below is in raw CAD coordinates.
+
+        That frame is y-up with -z forward (the nose), hence euler="pi/2 0 0" to stand it
+        up. Body origin sits one grommet-height under the pole tip, putting it
+        pole_offset_carbon270 = 0.4457 m below the gantry origin.
+      -->
+      <body name="gripper" pos="-0.0006 0.0118 -0.4457" euler="1.5707963268 0 0">
+        <!-- wrist: rotation about the pole axis (gripper local +y), through the grommet.
+             Firmware spin runs 0..6*pi, i.e. +/-540 deg about the neutral heading. -->
+        <joint name="wrist" type="hinge" pos="0.0006 0.1167 0.0118" axis="0 1 0"
+               range="-9.42477796 9.42477796" damping="0.02" armature="0.0005"/>
+
+        <!-- gripper_cog (0, 0.055, 0.011); mass is still an estimate -->
+        <inertial pos="0 0.055 0.011" mass="0.60" diaginertia="0.0022 0.0011 0.0022"/>
+
+        <!-- shell: 103.4 x 104.4 x 110 mm, spanning y 0.0023..0.1067, z -0.0458..0.0641,
+             so it is deeper behind the origin than in front of it -->
+        <geom class="viz" type="mesh" mesh="gripper_shell" rgba="0.72 0.45 0.20 1"/>
+        <geom name="shell_collide" class="col" type="box"
+              size="0.0517 0.0522 0.055" pos="0 0.0545 0.0092"/>
+
+        <site name="gripper_cog" pos="0 0.055 0.011" size="0.006" rgba="1 0.2 1 1"/>
+        <site name="gripper_imu" pos="0.022 0.03 0.029" size="0.005" rgba="0.2 1 0.4 1"/>
+        <site name="grommet_gripper" pos="0.0006 0.1167 0.0118" size="0.006" rgba="1 0.8 0.2 1"/>
+        <!-- rangefinder empty from gripper.glb, at (0, 0.0025, 0.0502) -->
+        <site name="rangefinder" pos="0 0.0025 0.0502" size="0.004" rgba="1 0 0 1"/>
+        <!--
+          Wide camera, definitions.gripper_camera: 27 mm toward the nose, aimed down but
+          tilted 9.06 deg back toward the hang centreline. MuJoCo cameras look down local
+          -z, so -pi/2 puts the axis along -y (straight down) and the extra -9.06 deg
+          leans it back: -(pi/2 + radians(9.06)) = -1.728957.
+        -->
+        <camera name="gripper_cam" pos="0.0004 0.0026 -0.0261" euler="-1.728957 0 0" fovy="67"/>
+
+        <!--
+          FINGERS. Two of them, pivoting at x = +/-0.025 and closing side to side - not
+          one finger against a fixed jaw, which is what this model used to have. The
+          pivots are the finger_left / finger_right empties in gripper.glb; each finger
+          body carries that file's geared lever, finger and coupler rod baked into one
+          mesh about its own pivot.
+
+          gripper.glb has them drawn CLOSED: the tips meet at x = 0. So joint 0 is closed
+          and opening swings them outward, over the 59 deg of travel in
+          gripper_arp_server.FINGER_TRAVEL_DEG - about a 200 mm aperture at the tips,
+          which is large but is what a laundry-and-toys gripper wants.
+
+          The firmware reports this range remapped onto -90..90, where OPEN = -30 and
+          CLOSED = 90, so its OPEN sits at about -0.687 rad here.
+
+          The two are geared together on one servo, so one actuator drives finger_left
+          and an equality constraint carries finger_right with it.
+        -->
+        <body name="finger_left" pos="0.025 0.041 0.0108">
+          <joint name="finger_left" type="hinge" axis="0 0 -1" range="-1.0297 0"
+                 damping="0.01" armature="0.0002"/>
+          <geom class="viz" type="mesh" mesh="finger_left" mass="0.04" rgba="0.0 0.4745 0.7255 1"/>
+          <geom name="pad_left" class="col" type="box" size="0.006 0.030 0.022"
+                pos="-0.019 -0.110 0.002" friction="1.5 0.05 0.001"/>
+          <site name="finger_pad_left" pos="-0.021 -0.12 0.002" size="0.005" rgba="1 0 0 1"/>
+        </body>
+        <body name="finger_right" pos="-0.025 0.041 0.0108">
+          <joint name="finger_right" type="hinge" axis="0 0 1" range="-1.0297 0"
+                 damping="0.01" armature="0.0002"/>
+          <geom class="viz" type="mesh" mesh="finger_right" mass="0.04" rgba="0.0 0.4745 0.7255 1"/>
+          <geom name="pad_right" class="col" type="box" size="0.006 0.030 0.022"
+                pos="0.019 -0.110 0.002" friction="1.5 0.05 0.001"/>
+          <site name="finger_pad_right" pos="0.021 -0.12 0.002" size="0.005" rgba="1 0 0 1"/>
+        </body>
+      </body>
+    </body>
+
+    <!-- something to pick up -->
+    <body name="payload" pos="0.25 0 0.03">
+      <freejoint name="payload_free"/>
+      <geom name="payload" type="box" size="0.03 0.03 0.03" mass="0.12" rgba="0.8 0.3 0.3 1"/>
+    </body>
+  </worldbody>
+
+  <!--
+    The four support lines. Spatial tendons, length-limited so they can pull but never
+    push and never exceed the line on the spool. The indirect lines are routed through
+    their far eyelet post, so their tendon length includes the constant ~6 m cross-room
+    run, exactly as the real spool sees it.
+
+    assumed_full_line_length = 7.5 m, so a direct line's range is 0..7.5 and an indirect
+    line's is that plus the ~6 m fixed run.
+  -->
+  <tendon>
+    <spatial name="line_0_direct" class="line" limited="true" range="0 7.5" rgba="1 0.5 0.3 1">
+      <site site="a0_direct"/>
+      <site site="hook_0"/>
+    </spatial>
+    <spatial name="line_1_indirect" class="line" limited="true" range="0 13.5" rgba="0.4 0.75 1 1">
+      <site site="a0_indirect"/>
+      <site site="eyelet_A"/>
+      <site site="hook_1"/>
+    </spatial>
+    <spatial name="line_2_direct" class="line" limited="true" range="0 7.5" rgba="1 0.5 0.3 1">
+      <site site="a1_direct"/>
+      <site site="hook_2"/>
+    </spatial>
+    <spatial name="line_3_indirect" class="line" limited="true" range="0 13.5" rgba="0.4 0.75 1 1">
+      <site site="a1_indirect"/>
+      <site site="eyelet_B"/>
+      <site site="hook_3"/>
+    </spatial>
+  </tendon>
+
+  <!--
+    One actuator per spool. forcerange is one-sided (negative only) so a line can pull
+    the gantry toward its anchor but never push: commanding more length than the
+    geometry needs just goes slack, like real string.
+
+    ctrl is the line's FREE SPAN in metres: the straight-line distance from the eyelet
+    the line last leaves to the gantry. Range 0 .. 7 m on all four, which is what it
+    takes to reach the whole work area - a gantry near (2, 2, 1) wants spans of about
+    1.7, 5.2, 5.1 and 7.1 m on the four lines, so anything narrower than this confines
+    the gantry to a blob near the middle of the room.
+
+    For the two direct lines the free span IS the tendon length. The two indirect lines
+    also carry a fixed cross-room run from the anchor's left eyelet to the far eyelet
+    post (5.9301 m for both, measured off the model), which is constant and which
+    the operator never controls, so it is added in the bias below rather than being
+    charged to the slider. That way all four sliders mean the same thing and read the
+    same at a symmetric pose: hanging at (0, 0, 1.2) the four spans are 4.2221, 4.2875,
+    4.2221, 4.2875.
+
+    These are `general` actuators rather than `position` ones so that the fixed run can
+    be baked in. With gain kp and biasprm = (kp*RUN, -kp, -kv):
+        force = kp*ctrl + kp*RUN - kp*length - kv*velocity
+              = kp*((ctrl + RUN) - length) - kv*velocity
+    an ordinary position servo tracking a commanded tendon length of RUN + ctrl. RUN is
+    zero for the direct lines.
+
+    NOTE ON LOADING: `simulate` resets ctrl to 0 and does NOT apply keyframes by itself,
+    so on load all four lines are commanded to zero span, they saturate against their
+    force limit, and the gantry sits stalled near the top of the room. Click "Load key"
+    in the Simulation section of the left panel to get the hanging pose with sliders to
+    match; Reset and backspace go back to ctrl 0, not to the keyframe, so it has to be
+    clicked again after either. See mujoco/README.md.
+
+    These are `general` actuators rather than `position` ones only so that the offset
+    can be baked in. With gain kp and biasprm = (kp*L0, -kp, -kv):
+        force = kp*ctrl + kp*L0 - kp*length - kv*velocity
+              = kp*((L0 + ctrl) - length) - kv*velocity
+    which is an ordinary position servo tracking a commanded length of L0 + ctrl.
+
+    Tension check: hanging at (0,0,1.2) the lines are shallow, ~10.5 deg above
+    horizontal, so ~1.05 kg of gantry+pole+gripper needs ~13 N per line. That sits just
+    under configuration.maxSafeTension = 18 N, which is a good sign the geometry and the
+    mass estimates are in the right neighbourhood.
+
+    forcerange caps each line at 40 N, a bit over twice maxSafeTension to leave headroom
+    for dynamics. The cap matters for more than realism: uncapped, commanding four lines
+    shorter than the geometry allows makes them fight at arbitrary force and squeezes the
+    gantry UP through the anchor plane, which is nonsense the real machine forbids too
+    (position_estimator: "the gantry cannot be raised above the lowest anchor"). At 40 N
+    over-reeling just stalls, which is what a tension-limited cable robot really does.
+  -->
+  <actuator>
+    <!-- direct line: no fixed run, so bias0 = 0 and ctrl is the tendon length outright -->
+    <general name="spool_0_direct" tendon="line_0_direct" ctrlrange="0 7" forcerange="-40 0"
+             gainprm="4000 0 0" biastype="affine" biasprm="0 -4000 -80"/>
+    <!-- indirect: RUN = 5.9301 m  ->  bias0 = 4000 * 5.9301 -->
+    <general name="spool_1_indirect" tendon="line_1_indirect" ctrlrange="0 7" forcerange="-40 0"
+             gainprm="4000 0 0" biastype="affine" biasprm="23720.2 -4000 -80"/>
+    <general name="spool_2_direct" tendon="line_2_direct" ctrlrange="0 7" forcerange="-40 0"
+             gainprm="4000 0 0" biastype="affine" biasprm="0 -4000 -80"/>
+    <!-- indirect: RUN = 5.9301 m  ->  bias0 = 4000 * 5.9301 -->
+    <general name="spool_3_indirect" tendon="line_3_indirect" ctrlrange="0 7" forcerange="-40 0"
+             gainprm="4000 0 0" biastype="affine" biasprm="23720.2 -4000 -80"/>
+
+    <!-- wrist: commanded in radians of spin -->
+    <position name="wrist" joint="wrist" kp="1.5" kv="0.08" ctrlrange="-9.42477796 9.42477796" forcerange="-2 2"/>
+    <!-- finger: one servo for both jaws. 0 is closed (tips touching), -1.0297 rad is
+         the far end of the 59 deg of travel. The firmware's OPEN (-30 of -90..90) is
+         about -0.687 rad. finger_right follows through the equality constraint. -->
+    <position name="finger" joint="finger_left" kp="3.0" kv="0.05"
+              ctrlrange="-1.0297 0" forcerange="-4 4"/>
+  </actuator>
+
+  <!-- the two jaws are geared together on one servo -->
+  <equality>
+    <joint joint1="finger_right" joint2="finger_left" polycoef="0 1 0 0 0"/>
+  </equality>
+
+  <!-- the pads meet at x = 0 when closed; let them pass rather than fight each other -->
+  <contact>
+    <exclude body1="finger_left" body2="finger_right"/>
+  </contact>
+
+  <sensor>
+    <tendonpos name="len_0" tendon="line_0_direct"/>
+    <tendonpos name="len_1" tendon="line_1_indirect"/>
+    <tendonpos name="len_2" tendon="line_2_direct"/>
+    <tendonpos name="len_3" tendon="line_3_indirect"/>
+    <actuatorfrc name="tension_0" actuator="spool_0_direct"/>
+    <actuatorfrc name="tension_1" actuator="spool_1_indirect"/>
+    <actuatorfrc name="tension_2" actuator="spool_2_direct"/>
+    <actuatorfrc name="tension_3" actuator="spool_3_indirect"/>
+    <framepos name="gantry_pos" objtype="site" objname="gantry_origin"/>
+    <framepos name="gripper_pos" objtype="body" objname="gripper"/>
+    <gyro name="gripper_gyro" site="gripper_imu"/>
+    <accelerometer name="gripper_accel" site="gripper_imu"/>
+  </sensor>
+
+  <!--
+    Starting pose: gantry hanging at (0, 0, 1.2) at yaw 90 deg, which is where the cross
+    arms rest given this room's layout and the line-to-arm clipping above.
+
+    The four ctrl values are the free spans the geometry gives at that pose, so loading
+    this key starts the model taut and near-still; it settles to z = 1.181 once the lines take up ~3 mm of stretch each,
+    at an even 13.4 N of tension per line. Load it explicitly - `simulate` will not.
+  -->
+  <keyframe>
+    <key name="hang"
+         qpos="0 0 1.2  0.7071068 0 0 0.7071068   0   -0.687 -0.687   0.25 0 0.03  1 0 0 0"
+         ctrl="4.1889 4.2543 4.1889 4.2543  0  -0.687"/>
+  </keyframe>
+</mujoco>
