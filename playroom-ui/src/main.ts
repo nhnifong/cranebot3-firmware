@@ -235,16 +235,11 @@ let socket: WebSocket;
 let isLanMode = false;
 let isSimMode = false; // Track simulator mode
 
-// What the caller is *entitled* to on the connected robot, and what that is
-// worth right now. They differ only in cloud mode, and only because driving is
-// rationed: a driver holds a per-viewer WebRTC feed of every camera, so a robot
-// shared with everyone can entitle far more people to drive than the media
-// gateway can serve at once. Anyone entitled but waiting for a free slot is an
-// effective spectator — the exact degrade the UI already knows how to render.
-//
-// currentAccessLevel is the effective one, because it is what everything below
-// should gate on. Both are 'owner' until resolved, and stay that way in LAN/sim
-// modes, which have no cloud auth and no rationing.
+// Entitled level vs. effective level. They differ only in cloud mode, where driving is
+// rationed: a driver holds a per-viewer WebRTC feed of every camera, so more people can
+// be entitled to drive than the media gateway can serve. Entitled but queued degrades to
+// spectator. Everything below gates on currentAccessLevel, the effective one. Both are
+// 'owner' until resolved and in LAN/sim modes, which have no cloud auth or rationing.
 let grantedAccessLevel: string = 'owner';
 let currentAccessLevel: string = 'owner';
 // Latest DriverSlotStatus from the control plane, or null in LAN/sim mode and
@@ -256,12 +251,10 @@ const ACCESS_RANK: Record<string, number> = {
   spectator: 0, limited_driver: 1, full: 2, owner: 3,
 };
 
-// TEMP (testing): ?force_access=<level> on the playroom URL lets an owner drive
-// the app as a lesser level without a second account. The control plane enforces
-// this downgrade-only on /control (see main.py), so this is only about starting
-// the UI in the matching state instead of flashing the real level first — and
-// about actually forwarding the parameter, which is the half that has to live
-// here. Remove alongside the server knob once level testing is done.
+// TEMP (testing): ?force_access=<level> runs the UI at a lesser level without a second
+// account. The control plane enforces it downgrade-only on /control (main.py); this
+// starts the UI in the matching state and forwards the parameter. Remove alongside the
+// server knob.
 function forcedAccessLevel(): string | null {
   const forced = new URLSearchParams(window.location.search).get('force_access');
   return forced && forced in ACCESS_RANK ? forced : null;
@@ -296,9 +289,8 @@ const CONTROL_MENU_ITEMS: Record<string, string[]> = {
   'action-debug-send':        ['owner', 'full'],
 };
 
-// Grey out (via the existing `disabled` class, which the menu handlers respect)
-// the controls the current access level can't use, and show a level badge when
-// the caller isn't the owner.
+// Grey out the controls the current access level can't use (the `disabled` class the
+// menu handlers respect) and show a level badge for non-owners.
 function applyAccessLevelUI() {
   for (const [id, allowed] of Object.entries(CONTROL_MENU_ITEMS)) {
     const el = document.getElementById(id);
@@ -327,9 +319,8 @@ function updateAccessBadge() {
       'padding:2px 8px;border-radius:10px;font-size:11px;text-transform:capitalize;';
     statusText.insertAdjacentElement('afterend', badge);
   }
-  // While queued, the honest label is the entitlement plus why it isn't live —
-  // showing a bare "spectator" to someone the owner made a driver reads as a
-  // permissions bug rather than a queue.
+  // Queued shows the entitlement plus why it isn't live: a bare "spectator" for someone
+  // the owner made a driver reads as a permissions bug.
   const waiting = driverSlot != null && !driverSlot.held && grantedAccessLevel !== 'spectator';
   badge.textContent = waiting
     ? `${grantedAccessLevel.replace('_', ' ')} (waiting)`
@@ -340,16 +331,14 @@ function updateAccessBadge() {
 // ============================================================
 //  Driver slots
 //
-//  Being granted a driving level and being able to use it are separate
-//  questions: driving costs a WebRTC feed per camera, spectating is a shared
-//  HLS remux. The control plane rations the former, and says so with
-//  DriverSlotStatus — the one telemetry item addressed to a single UI rather
-//  than broadcast, since queue position is per-user.
+//  Driving costs a WebRTC feed per camera; spectating is a shared HLS remux. The
+//  control plane rations driving and reports it with DriverSlotStatus, the one
+//  telemetry item addressed to a single UI rather than broadcast.
 // ============================================================
 
-// The most recent VideoReady per feed. Driving and spectating fetch video by
-// different routes, so being promoted (or dropped) means re-running the feed
-// setup with the same payloads rather than waiting for the robot to re-announce.
+// Most recent VideoReady per feed. Driving and spectating fetch video by different
+// routes, so a promotion or drop re-runs feed setup from these rather than waiting for
+// the robot to re-announce.
 const lastVideoReady = new Map<number, nf.telemetry.IVideoReady>();
 
 function handleDriverSlotStatus(data: nf.telemetry.IDriverSlotStatus) {
@@ -368,9 +357,8 @@ function handleDriverSlotStatus(data: nf.telemetry.IDriverSlotStatus) {
   }
 }
 
-// A strip along the top telling a waiting driver where they are in line, and
-// a driving one how much idle time is left before the slot passes on. Created
-// on demand so the shell markup stays shared with LAN mode, which has neither.
+// Top strip: queue position for a waiting driver, remaining idle time for an active one.
+// Created on demand so the shell markup stays shared with LAN mode, which has neither.
 function updateQueueBanner() {
   let banner = document.getElementById('driver-queue-banner');
   const waiting = driverSlot != null && !driverSlot.held && grantedAccessLevel !== 'spectator';
@@ -414,9 +402,8 @@ function setUrlParam(id: string | null) {
 const MAX_LOG_LINES = 1000;
 const logLines: string[] = [];
 
-// Append forwarded log lines from telemetry, capping the buffer at
-// MAX_LOG_LINES and keeping the panel scrolled to the bottom if the
-// user was already there.
+// Append forwarded log lines, capped at MAX_LOG_LINES, keeping the panel scrolled to the
+// bottom if it already was.
 function handleLogs(data: nf.telemetry.ILogs) {
   if (!data.line || data.line.length === 0) return;
   logLines.push(...data.line);
@@ -448,9 +435,8 @@ function isLogPanelOpen(): boolean {
 }
 
 // Log forwarding is per-observer-process state (a handler on the robot's logger), so a
-// robot restart silently drops it while the panel stays open and empty. Re-ask on every
-// offline->online edge. Harmless when the robot never restarted: the robot side of this
-// command is idempotent.
+// robot restart drops it while the panel stays open and empty. Re-asked on every
+// offline->online edge; the robot side of this command is idempotent.
 function resumeLogForwardingIfOpen() {
   if (isLogPanelOpen()) {
     simpleCommand(nf.control.Command.COMMAND_DEBUG_LOG_OVER_T);
@@ -469,9 +455,8 @@ function toggleLogPanel() {
 
 // Entry Point
 function initApp() {
-  // No cloud account system (e.g. running this package standalone outside
-  // nf-main-site) -> hide cloud-only UI instead of showing controls that
-  // would just fail when used.
+  // No cloud account system (standalone, outside nf-main-site): hide cloud-only UI
+  // rather than showing controls that would fail when used.
   if (!AuthManager.isCloudAvailable()) {
     document.getElementById('btn-cloud-mode')?.classList.add('hidden');
     document.getElementById('header-link-my-robots')?.classList.add('hidden');
@@ -499,10 +484,8 @@ function initApp() {
     refreshRunMenuAuth();
   });
 
-  // Wire that menu item up front too. The auth callback above may not fire (a
-  // host bridge need not call it) and the telemetry path that also refreshes it
-  // only runs once a robot reports an id — which an unbound robot never does,
-  // that being exactly the robot you need "Bind to account" to work for.
+  // Wired up front: the auth callback above need not fire, and the telemetry path that
+  // also refreshes it waits on a robot id, which an unbound robot never reports.
   refreshRunMenuAuth();
 
   // Bind all landing and panel buttons unconditionally
@@ -532,9 +515,8 @@ function initApp() {
     updateRobotIdUI(currentRobotId);
     startCloudFlow(currentRobotId);
   } else if (!AuthManager.isCloudAvailable()) {
-    // No cloud account system -> LAN is the only real option (Sim mode is
-    // nf-main-site's own FastAPI endpoint, not available standalone), so
-    // skip the landing panel instead of offering choices that don't work.
+    // No cloud account system: LAN is the only working option (Sim mode is
+    // nf-main-site's own FastAPI endpoint), so skip the landing panel.
     startLanFlow();
   } else {
     // No URL param -> Show landing page
@@ -553,17 +535,12 @@ function startLanFlow() {
   // Show the Bind button since we are in LAN mode
   document.getElementById('action-bind')?.classList.remove('hidden');
   
-  // Where the control websocket lives depends on how this page itself was
-  // loaded. When neufangled.com hosts the page, "LAN mode" means the classic
-  // case of a browser and robot on the very same machine, so localhost is
-  // always right there. When this bundle is self-hosted by stringman-headless
-  // (--serve_ui) there's no cloud account bridge (isCloudAvailable() is
-  // false), and the page was fetched from the robot's own LAN address — so
-  // the robot is wherever this page came from, not necessarily localhost.
-  // Deriving the host from window.location also keeps this same-origin with
-  // the page, which avoids mixed-content blocking (an https:// neufangled.com
-  // page can't open ws:// to a non-loopback LAN host; a self-hosted http://
-  // page connecting back to its own origin has no such restriction).
+  // The control websocket's host depends on how this page was loaded. Hosted by
+  // neufangled.com, LAN mode means browser and robot on one machine, so localhost.
+  // Self-hosted by stringman-headless (--serve_ui), the page came from the robot's own
+  // LAN address, so the robot is wherever the page came from. Deriving the host from
+  // window.location also keeps this same-origin, avoiding mixed-content blocking: an
+  // https:// page cannot open ws:// to a non-loopback LAN host.
   const target = AuthManager.isCloudAvailable()
     ? "ws://localhost:4245"
     : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:4245`;
@@ -602,10 +579,8 @@ async function startCloudFlow(robotId: string) {
   try {
     const token = await AuthManager.getAuthToken();
 
-    // Resolve our access level before connecting so the UI starts in the right
-    // state. Two answers, not one: what we're entitled to, and whether a driver
-    // slot is free for us to use it. A force_access URL param downgrades both
-    // for local testing (see forcedAccessLevel).
+    // Resolved before connecting so the UI starts in the right state: the entitled level,
+    // and whether a driver slot is free to use it. force_access downgrades both.
     try {
       const access = await AuthManager.apiGetMyAccess(robotId, token);
       grantedAccessLevel = access.access_level;
@@ -618,9 +593,8 @@ async function startCloudFlow(robotId: string) {
         currentAccessLevel = forced;
       }
       if (access.slot && !access.slot.held && currentAccessLevel !== grantedAccessLevel) {
-        // Worth saying before the 3D scene loads over it: connecting still
-        // happens either way (spectating is the wait), but the reason the
-        // controls are dead should not be a mystery.
+        // Said before the 3D scene loads over it: connecting happens either way, but the
+        // reason the controls are dead should not be a mystery.
         console.log(
           `All ${access.slot.capacity} driver slots on ${robotId} are taken ` +
           `(${access.slot.queue_length} waiting); connecting as a spectator.`
@@ -648,8 +622,8 @@ async function startCloudFlow(robotId: string) {
 // --- Binding Logic ---
 
 async function handleBindAction() {
-  // A previously-anonymous robot has no id to detect: apiBindRobotV2 mints one on bind, so
-  // (unlike the old apiBindRobot flow) we no longer need a robot id from telemetry here.
+  // A previously-anonymous robot has no id to detect: apiBindRobotV2 mints one on bind,
+  // so no robot id from telemetry is needed here.
 
   // Force Login (if not already)
   AuthManager.initAuth();
@@ -677,10 +651,9 @@ async function executeBind() {
   try {
     const token = await AuthManager.getAuthToken();
     await new Promise(r => setTimeout(r, 100));
-    // Binding a previously-anonymous robot needs no client-supplied id: the server
-    // mints an id + key and returns them. We then hand the key to the robot over
-    // its live (LAN) control link via a RelayCreds control message, so it can
-    // store the creds and reconnect to the cloud authenticated as its new id.
+    // Binding an anonymous robot needs no client-supplied id: the server mints an id and
+    // key, which go to the robot over its live LAN control link as RelayCreds, so it can
+    // store them and reconnect authenticated as its new id.
     const { robotId, key, controlPlaneHost } = await AuthManager.apiBindRobotV2(nickname, token);
     sendControl([nf.control.ControlItem.create({
       addRelayCreds: nf.common.RelayCreds.create({ robotId, key, controlPlaneHost }),
@@ -747,6 +720,16 @@ function initConfirmDialog() {
   }
 }
 initConfirmDialog();
+
+// Put a yes/no question in front of the user, running `action` only on yes.
+function askConfirm(message: string, action: () => void) {
+  const overlay = document.getElementById('confirm-overlay');
+  const msg = document.getElementById('confirm-message');
+  if (!overlay || !msg) return;
+  msg.textContent = message;
+  overlay.classList.remove('hidden');
+  pendingConfirmAction = action;
+}
 
 function handleUnbindClick(e: Event, robotId: string) {
   e.stopPropagation(); // prevent selecting the robot
@@ -918,10 +901,8 @@ function connect(wsUrl: string) {
   };
 
   socket.onclose = (event) => {
-    // Closing the socket is what gives up our slot (or our place in line), so
-    // the last status we had is stale from here on. Clearing it also takes the
-    // queue banner down over the reconnect, rather than leaving a stale
-    // position sitting on screen.
+    // Closing the socket gives up the slot or place in line, so the last status is stale
+    // from here. Clearing it also takes the queue banner down over the reconnect.
     driverSlot = null;
     updateQueueBanner();
 
@@ -971,10 +952,9 @@ function handleEpisodeControl(data: nf.common.IEpisodeControl) {
     episodesUntilCheckpoint = status.episodesUntilCheckpoint ?? null;
     lerobotError = status.error ?? null;
 
-    // Errors also render in the LeRobot panel, but the operator is usually
-    // watching the video feeds with that panel closed, so anything that ruins
-    // the data being recorded (a frozen camera, a failed session) has to
-    // interrupt them. Only on a change, so a repeating status doesn't reopen it.
+    // Errors also render in the LeRobot panel, which is usually closed while the operator
+    // watches the feeds, so anything that ruins the recording has to interrupt. Only on a
+    // change, so a repeating status doesn't reopen it.
     if (lerobotError !== poppedLerobotError) {
       poppedLerobotError = lerobotError;
       if (lerobotError) {
@@ -1045,7 +1025,7 @@ function handleOperationProgress(data: nf.telemetry.IOperationProgress) {
   if (percentComplete >= 100) {
     if (data.name) completedOperations[data.name] = true;
     container.classList.add('hidden');
-    // Background work the user never asked for finishes quietly; the bar was the whole story.
+    // Background work the user never asked for finishes quietly.
     if (!data.suppressCompletionPopup) {
       // Use data.name and data.currentAction for the popup
       showPopup({ message: `${data.name ?? 'Operation'} \n${data.currentAction ?? ''}` });
@@ -1123,8 +1103,8 @@ function updateFloatingLabels() {
       const x = (pos.x * halfWidth) + halfWidth;
       const y = -(pos.y * halfHeight) + halfHeight;
 
-            // Apply translation. Subtracting 100% and 10px from Y dynamically ensures the
-            // bottom-left corner of the div tracks the anchor position precisely while hovering above it.
+            // Subtracting 100% and 10px from Y puts the div's bottom-left corner on the
+            // anchor position, hovering just above it.
       labelEl.style.transform = `translate(${x}px, calc(${y}px - 100% - 10px))`;
     }
   }
@@ -1241,10 +1221,9 @@ function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
     valueDisplay!.textContent = val + 's';
   }
 
-  // A message that leaves `calibrated` out still decodes with the enum's zero value, so only
-  // one that carries a real status may move the readiness gates: otherwise a partial update
-  // (the swing latency broadcast, say) reads as a robot that lost its calibration, and the
-  // controls it gates stay dead until a reload.
+  // An omitted `calibrated` still decodes as the enum's zero value, so only a message
+  // carrying a real status may move the readiness gates: a partial update would otherwise
+  // read as a robot that lost its calibration, leaving the controls it gates dead.
   if (data.calibrated != null && data.calibrated !== nf.common.CalibratedStatus.CALIBRATEDSTATUS_UNSET) {
     lastCalibratedStatus = data.calibrated;
   }
@@ -1461,9 +1440,8 @@ function handleComponentConnStatus(data: nf.telemetry.IComponentConnStatus) {
 
   updateComponentStatusUI();
 
-  // Keep an open detail panel live rather than frozen at the values it was
-  // opened with. Matched on identity, not on the name string: a panel opened
-  // before this component first reported is still holding the placeholder name.
+  // Keeps an open detail panel live. Matched on identity, not on the name string: a panel
+  // opened before this component first reported still holds the placeholder name.
   const isForOpenPanel = data.isGripper
     ? activeComponentData?.type === 'Gripper'
     : activeComponentData?.type === 'Anchor' && activeComponentData.index === data.anchorNum;
@@ -1498,6 +1476,15 @@ function setPopupButtons(labels: string[], onClick: (index: number) => void) {
   });
 }
 
+// Show a popup whose message and buttons are already set. A single button is an
+// acknowledgement, so it takes focus and Enter dismisses; focus after unhiding, since a
+// display:none element cannot take it. A popup offering a real choice gets no default.
+function revealPopup(overlay: HTMLElement) {
+  overlay.classList.remove('hidden');
+  const buttons = overlay.querySelectorAll<HTMLButtonElement>('#popup-buttons button');
+  if (buttons.length === 1) buttons[0].focus();
+}
+
 function showPopup(data: nf.telemetry.IPopup) {
   const overlay = document.getElementById('popup-overlay');
   const msgEl = document.getElementById('popup-message');
@@ -1520,7 +1507,7 @@ function showPopup(data: nf.telemetry.IPopup) {
         })]);
       }
     });
-    overlay.classList.remove('hidden');
+    revealPopup(overlay);
   }
 }
 
@@ -1602,8 +1589,7 @@ function initTargetRoutePickers() {
 }
 initTargetRoutePickers();
 
-// VideoReady.feed_number identifies which stream this is. Note that it is NOT the
-// anchor num in stringman pilot. The feeds are:
+// VideoReady.feed_number identifies the stream. Not the anchor num in stringman pilot:
 //   0: gripper camera
 //   1: first preferred anchor camera
 //   2: second preferred anchor camera
@@ -1748,10 +1734,9 @@ function handleSwingCancellationState(data: nf.telemetry.ISwingCancellationState
 }
 
 // --- Menu state toggles (torque, tension regulation) ---
-// Both are on/off states the robot reports rather than one-shot commands, so they
-// render as the same switch the swing cancellation toggle uses: the knob shows the
-// robot's state, a click sends the matching enable/disable command, and the menu
-// stays open so the state coming back is visible.
+// Robot-reported on/off states, not one-shot commands, so they render as the swing
+// cancellation switch: the knob shows the robot's state, a click sends the matching
+// enable/disable command, and the menu stays open so the state coming back is visible.
 interface MenuToggle {
   knob: HTMLElement;
   enabled: boolean;
@@ -1802,9 +1787,8 @@ function handleAutoTargetingState(data: nf.telemetry.IAutoTargetingState) {
   btn?.classList.toggle('active', autoTargetEnabled);
 }
 
-// Tracks the last reported state so callers can spot the offline->online edge. Cloud mode
-// reports online on every uplinkStatus tick, so acting on `online` alone would re-send
-// per-tick rather than per-reconnect.
+// Last reported state, so callers can spot the offline->online edge. Cloud mode reports
+// online on every uplinkStatus tick, so acting on `online` alone would re-send per tick.
 let wasOnline = false;
 
 function updateOnlineStatus(online: boolean) {
@@ -1976,10 +1960,9 @@ function sendSingleComponentAction(type: string, index: number, actionEnum: nf.c
 overheadVideofeeds.forEach(feed => {feed.sendFn = sendControl});
 targetListManager.sendFn = sendControl;
 
-// A floor point clicked in the 3D view is already in room coordinates, so it goes
-// straight to the robot — no anchor cam needs to be able to see it.
-// Any popup closing (button clicked, timed out, clicked elsewhere) takes the
-// provisional target down with it.
+// A floor point clicked in the 3D view is already in room coordinates, so it goes straight
+// to the robot; no anchor cam needs to see it. Any popup closing takes the provisional
+// target down with it.
 targetListManager.onPopupClosed = () => floorProjection.setProvisionalTarget(null);
 
 targetListManager.onAddTargetAtFloorPoint = (point: THREE.Vector3) => {
@@ -2094,7 +2077,6 @@ function initRunMenu() {
   bindCommand('action-record-park',    Command.COMMAND_RECORD_PARK);
   bindCommand('action-record-drop',    Command.COMMAND_RECORD_DROP);
   bindCommand('action-shutdown-components', Command.COMMAND_SAFE_COMPONENT_SHUTDOWN);
-  // Park / UnPark temporarily removed from the menu — feature is unstable and unrecommended.
   // State toggles. Both show what the robot reports (torque_state and
   // tension_regulation_state telemetry) rather than what was last clicked.
   initMenuToggle('action-toggle-torque', 'toggle-torque-indicator',
@@ -2224,7 +2206,7 @@ async function handleGetTicket() {
       msgEl.textContent = `Stream ticket:\n\n${ticket}`;
     }
     setPopupButtons([], hidePopup);
-    overlay.classList.remove('hidden');
+    revealPopup(overlay);
   } catch (e) {
     showPopup({ message: "Failed to get ticket. Are you logged in?" });
   }
@@ -2327,29 +2309,22 @@ async function triggerSetPrompt() {
 }
 
 // Renders the LeRobot panel (header button, inactive "start" view, active session view)
-// from the module-level state variables below. Call this after any of them change.
+// from the module-level state below. Call after any of them change.
 //
-// - isLeRobotSessionActive: master switch between the inactive panel (start buttons)
-//   and the active panel (session info + action buttons). Derived in handleEpisodeControl
-//   from the latest status: false for NA/null and the terminal REC_ALL_COMPLETE/
-//   EVAL_ALL_COMPLETE/ERROR states, true otherwise.
-// - leRobotState (LerobotStatus enum): the specific state within either panel - which
-//   action buttons render (Start Episode / Complete+Abandon / Stop Episode), the header
-//   icon, and the REC_ALL_COMPLETE "successful finish" special case that overrides the
-//   normal active/inactive split.
-// - isLeRobotStarting: true only during the brief window after clicking a Start button
-//   and before the first status update arrives (handleLeRobotStart sets it true;
-//   handleEpisodeControl clears it on the next status). Shows the pending spinner and
-//   disables all three start buttons; they're re-enabled once this clears.
-// - sentFinalizeCommand: true after clicking End Session, before the terminal status
-//   arrives. Shows the "FINALIZING DATASET..." spinner in place of the action buttons,
-//   except when leRobotState is ERROR (nothing to wait for - see handleLeRobotFinalize).
-// - lerobotError: latest error string from status.error, if any. Rendered in the active
-//   panel's error box when a session is active, or the inactive panel's start-error box
-//   otherwise. handleEpisodeControl additionally pops it up in the popup overlay when it
-//   changes, since the panel is usually closed while the operator is recording.
+// - isLeRobotSessionActive: inactive panel vs. active panel. Set in handleEpisodeControl:
+//   false for NA/null and terminal REC_ALL_COMPLETE/EVAL_ALL_COMPLETE/ERROR, true otherwise.
+// - leRobotState (LerobotStatus): which action buttons render (Start Episode /
+//   Complete+Abandon / Stop Episode), the header icon, and the REC_ALL_COMPLETE finish
+//   that overrides the active/inactive split.
+// - isLeRobotStarting: between clicking a Start button and the first status. Shows the
+//   pending spinner and disables the three start buttons.
+// - sentFinalizeCommand: between End Session and the terminal status. Shows the
+//   "FINALIZING DATASET..." spinner in place of the action buttons, except on ERROR
+//   (see handleLeRobotFinalize).
+// - lerobotError: latest status.error. Rendered in the active panel's error box, or the
+//   inactive panel's start-error box; handleEpisodeControl also pops it up on change.
 // - numEpisodesRecorded, datasetEpCount, hfRepoId, policyRepoId, episodesUntilCheckpoint:
-//   session/progress display fields, all populated from the status payload.
+//   display fields from the status payload.
 function updateLeRobotUI() {
   const headerBtn = document.getElementById('btn-header-lerobot');
   const panelInactive = document.getElementById('lerobot-panel-inactive');
@@ -2691,10 +2666,8 @@ function openFullCalOverlay() {
   overlay.classList.remove('hidden');
 }
 
-/**
- * Preselect the tilt the robot reported for this anchor, so starting calibration without
- * touching the control keeps the configured angle instead of imposing the markup's default.
- */
+/** Preselect the tilt the robot reported for this anchor, so starting calibration without
+ * touching the control keeps the configured angle rather than the markup's default. */
 function showConfiguredTilt(anchorNum: number) {
   const sel = document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement | null;
   const configured = lastTiltAngles[anchorNum];
@@ -2723,14 +2696,9 @@ function readFullCalTiltAngle(anchorNum: number): number {
   return TILT_TEETH_ANGLES[teeth] ?? DEFAULT_CAM_TILT;
 }
 
-/**
- * Preselect the pole the robot reported, the same contract as showConfiguredTilt: opening
- * the panel and starting without touching the control must keep the configured pole.
- *
- * A robot whose config predates the field reports UNSPECIFIED, which the host reads as the
- * ABS pole every robot shipped with first; the option list says so rather than leaving the
- * markup's default selected and quietly proposing a different pole.
- */
+/** Preselect the pole the robot reported, the same contract as showConfiguredTilt. A
+ * config predating the field reports UNSPECIFIED, which the host reads as ABS500, so
+ * select that rather than leaving the markup's default proposing a different pole. */
 function showConfiguredPole() {
   const sel = document.getElementById('fullcal-pole') as HTMLSelectElement | null;
   if (!sel || lastPoleType == null) return;
@@ -2892,7 +2860,7 @@ function initComponentMenu() {
     });
   }
 
-  // Close menu when clicking outside (shares logic with run menu if needed, or specific listener)
+  // Close menu when clicking outside.
   document.addEventListener('click', () => {
     if (compMenu && compMenu.classList.contains('show')) {
       compMenu.classList.remove('show');
@@ -3002,8 +2970,8 @@ function applyHover(targetMesh: THREE.Object3D, type: string, index: number) {
   currentHoverIndex = index;
   document.body.style.cursor = 'pointer';
 
-    // OutlinePass natively handles traversing the hierarchy to draw the outline
-    // without hacking any materials, preventing the shared material bug!
+    // OutlinePass traverses the hierarchy itself, so no material hacking and no
+    // shared-material bug.
   outlinePass.selectedObjects = [targetMesh];
 }
 
@@ -3016,9 +2984,8 @@ function isDescendant(child: THREE.Object3D, parent: THREE.Object3D): boolean {
   return false;
 }
 
-// The target the 3D view is currently hovering, if any. Tracked so that leaving
-// the canvas only clears a hover this view set — hovers coming from the target
-// list or a video feed are theirs to clear.
+// The target this 3D view is hovering, so leaving the canvas only clears a hover this
+// view set; hovers from the target list or a video feed are theirs to clear.
 let floorHoverId: string | null = null;
 
 renderer.domElement.addEventListener('pointerleave', () => {
@@ -3125,10 +3092,9 @@ window.addEventListener('click', (event) => {
   }
 });
 
-/** The componentStates key for a component, which for the gripper is whatever
- * name its telemetry arrived under rather than a fixed string. Resolved on every
- * render, not just on open, so a panel opened before the gripper ever reported
- * picks up its real entry once it does. */
+/** The componentStates key for a component; for the gripper, whatever name its telemetry
+ * arrived under rather than a fixed string. Resolved on every render, so a panel opened
+ * before the gripper ever reported picks up its real entry once it does. */
 function componentPanelName(type: string, index: number): string {
   if (type === 'Anchor') return `Anchor ${index}`;
   for (const key of componentStates.keys()) {
@@ -3137,11 +3103,9 @@ function componentPanelName(type: string, index: number): string {
   return "Gripper";
 }
 
-/** Paint the open detail panel's fields from the current componentStates entry.
- * Split out of openComponentPanel so a ComponentConnStatus arriving while the
- * panel is open refreshes it in place -- components report their temperature
- * every second, and without this the panel showed whatever was true when it was
- * opened. A no-op when no panel is open. */
+/** Paint the open detail panel's fields from the current componentStates entry, so a
+ * ComponentConnStatus arriving while the panel is open refreshes it in place; components
+ * report their temperature every second. A no-op when no panel is open. */
 function refreshComponentPanel() {
   if (!activeComponentData) return;
   const overlay = document.getElementById('component-details-overlay');
@@ -3254,11 +3218,23 @@ function initComponentDetailsPanel() {
   bindCdBtn('btn-cd-set-cam-angle', (type, index) => {
     if (type === 'Anchor') handleSetCamAngle(index);
   });
+  bindCdBtn('btn-cd-shutdown', handleComponentShutdown);
 }
 
 
 function handleComponentIdentify(type: string, index: number) {
   sendSingleComponentAction(type, index, nf.control.ComponentAction.COMPONENTACTION_IDENTIFY);
+}
+
+// The component drops off the network and only a power cycle brings it back, so this asks
+// first. The panel closes because what it is describing is on its way out.
+function handleComponentShutdown(type: string, index: number) {
+  const name = componentPanelName(type, index);
+  askConfirm(`Shut down ${name}? It powers off and stays off until you power cycle it.`, () => {
+    sendSingleComponentAction(type, index, nf.control.ComponentAction.COMPONENTACTION_SHUTDOWN);
+    document.getElementById('component-details-overlay')?.classList.add('hidden');
+    activeComponentData = null;
+  });
 }
 
 function handleAnchorTighten(index: number) {

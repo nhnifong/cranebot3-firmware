@@ -1082,6 +1082,11 @@ h2 {
   transition: background 0.2s;
 }
 #popup-buttons button:hover { background: var(--accent-hover); }
+/* showPopup() focuses this button when it is the only one, so Enter dismisses the popup.
+   Stated rather than left to the default ring: the focus is programmatic, and a browser
+   that decides the last interaction was a mouse click draws no :focus-visible ring at all,
+   which would leave the key working with nothing on screen saying so. */
+#popup-buttons button:focus { outline: 2px solid #fff; outline-offset: 2px; }
 
 .confirm-buttons { display: flex; justify-content: center; gap: 10px; }
 
