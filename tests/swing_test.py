@@ -214,20 +214,25 @@ class TestSelectMinResidual(unittest.TestCase):
         self.assertAlmostEqual(swing.select_min_residual(results), 0.15)
 
 
+def swing_recording(length, duration=20.0, seed=0):
+    """A synthetic free swing carrying what a real gyro recording has: bias, jittered
+    sample times, decay, and a second axis ringing along with the first."""
+    rng = np.random.default_rng(seed)
+    n = int(duration * 100)
+    ts = np.sort(np.arange(n) / 100 + rng.normal(0, 0.002, n)) + 1_700_000_000.0
+    omega = np.sqrt(swing.GRAVITY / length)
+    envelope = 0.5 * np.exp(-(ts - ts[0]) / 12.0)
+    gx = envelope * np.sin(omega * (ts - ts[0])) + 0.04 + rng.normal(0, 0.01, n)
+    gy = 0.25 * envelope * np.sin(omega * (ts - ts[0]) + 0.6) - 0.02 + rng.normal(0, 0.01, n)
+    return np.stack([ts, gx, gy], axis=1)
+
+
 class TestMeasurePendulum(unittest.TestCase):
-    """Enough to trust the number this prints: a synthetic swing carrying what a real
-    recording has - gyro bias, jittered sample times, decay, and a second axis ringing
-    along with the first - has to come back out as the length that went in."""
+    """Enough to trust the number this prints: a synthetic swing has to come back out as
+    the length that went in."""
 
     def _recording(self, length, duration=20.0, seed=0):
-        rng = np.random.default_rng(seed)
-        n = int(duration * 100)
-        ts = np.sort(np.arange(n) / 100 + rng.normal(0, 0.002, n)) + 1_700_000_000.0
-        omega = np.sqrt(swing.GRAVITY / length)
-        envelope = 0.5 * np.exp(-(ts - ts[0]) / 12.0)
-        gx = envelope * np.sin(omega * (ts - ts[0])) + 0.04 + rng.normal(0, 0.01, n)
-        gy = 0.25 * envelope * np.sin(omega * (ts - ts[0]) + 0.6) - 0.02 + rng.normal(0, 0.01, n)
-        return np.stack([ts, gx, gy], axis=1)
+        return swing_recording(length, duration, seed)
 
     def test_recovers_the_length_it_was_given(self):
         # 2mm is the accuracy worth running this for: well inside the 18mm between the two
@@ -244,6 +249,75 @@ class TestMeasurePendulum(unittest.TestCase):
         # too few swings to time
         self.assertEqual(swing.measure_pendulum(self._recording(0.4526, duration=4.0)),
                          (None, None))
+
+
+class TestNearestPoleType(unittest.TestCase):
+    """Which pole a measured swing length names. Only the CARBON270 has to come out right:
+    it is 130 mm shorter than either of the others, while those two sit 14 mm apart and are
+    not separable this way."""
+
+    def test_every_real_pole_names_itself(self):
+        for pole_type, geometry in model_constants.POLE_GEOMETRY.items():
+            if pole_type == common.PoleType.UNSPECIFIED:
+                continue
+            with self.subTest(pole=pole_type.name):
+                named, mismatch = swing.nearest_pole_type(geometry.swing_length)
+                self.assertEqual(named, pole_type)
+                self.assertAlmostEqual(mismatch, 0.0)
+
+    def test_unspecified_is_never_named(self):
+        # it is not a pole, and it carries the ABS500 geometry it gets backfilled to
+        length = model_constants.POLE_GEOMETRY[common.PoleType.UNSPECIFIED].swing_length
+        named, _ = swing.nearest_pole_type(length)
+        self.assertEqual(named, common.PoleType.ABS500)
+
+    def test_the_short_pole_survives_a_realistic_error(self):
+        short = model_constants.POLE_GEOMETRY[common.PoleType.CARBON270].swing_length
+        for error in (-0.03, -0.01, 0.0, 0.01, 0.03):
+            with self.subTest(error=error):
+                named, _ = swing.nearest_pole_type(short + error)
+                self.assertEqual(named, common.PoleType.CARBON270)
+
+    def test_a_long_pole_is_never_mistaken_for_the_short_one(self):
+        for pole_type in (common.PoleType.ABS500, common.PoleType.CARBON400):
+            length = model_constants.POLE_GEOMETRY[pole_type].swing_length
+            for error in (-0.03, 0.0, 0.03):
+                with self.subTest(pole=pole_type.name, error=error):
+                    named, _ = swing.nearest_pole_type(length + error)
+                    self.assertNotEqual(named, common.PoleType.CARBON270)
+
+    def test_nothing_is_named_when_nothing_is_close(self):
+        for length in (0.374, 0.9, 0.05):  # the midpoint, and lengths no pole has
+            with self.subTest(length=length):
+                named, mismatch = swing.nearest_pole_type(length)
+                self.assertIsNone(named)
+                self.assertGreater(mismatch, swing.POLE_MATCH_TOLERANCE_M)
+
+
+class TestIdentifyPoleFromARecording(unittest.TestCase):
+    """The two halves together, over the recording length calibration actually takes: a free
+    swing on a given pole has to name that pole."""
+
+    RECORD_S = 12.0
+
+    def test_a_swing_on_each_pole_names_it(self):
+        for pole_type in (common.PoleType.ABS500, common.PoleType.CARBON400,
+                          common.PoleType.CARBON270):
+            length = model_constants.POLE_GEOMETRY[pole_type].swing_length
+            for seed in range(3):
+                with self.subTest(pole=pole_type.name, seed=seed):
+                    samples = swing_recording(length, duration=self.RECORD_S, seed=seed)
+                    _, measured = swing.measure_pendulum(samples)
+                    named, _ = swing.nearest_pole_type(measured)
+                    # the two long poles are within noise of each other by design, so the
+                    # test that matters is that the short one is told apart from them
+                    self.assertEqual(named == common.PoleType.CARBON270,
+                                     pole_type == common.PoleType.CARBON270)
+
+    def test_an_unreadable_recording_names_nothing(self):
+        freq, measured = swing.measure_pendulum(np.zeros((0, 3)))
+        self.assertIsNone(freq)
+        self.assertIsNone(measured)
 
 
 if __name__ == '__main__':

@@ -854,6 +854,70 @@ class AsyncObserver:
                f'(configured {configured:.4f} m, {(length - configured) * 1000:+.0f} mm off)')
         return length
 
+    async def _identify_pole_type(self, record_s=None):
+        """Set config.gripper.pole_type from how the gripper actually swings.
+
+        The pole sets the frequency every swing-latency trial is phased against, so it is
+        worth reading rather than trusting: tuned against the wrong pole, the correction
+        lands a fraction of a period out and nothing damps well. The gripper's published
+        swing model is no use for this, being fitted at the configured frequency, so this
+        times a free swing off the raw gyro the way measure_pendulum_length does.
+
+        Only the CARBON270 has to come out right - see swing.nearest_pole_type. Returns the
+        pole it settled on, or None when the swing could not be read, leaving the configured
+        pole standing. This is a motion task and induces a swing.
+        """
+        # long enough for measure_swing_frequency to have the swings it wants to time,
+        # short enough not to add much to a calibration that already induces one per trial
+        record_s = record_s or 12.0
+
+        gc = self.gripper_client
+        if gc is None:
+            return None
+
+        # anything still driving the gantry would put a second frequency in the gyro
+        was_cancelling = self.set_swing_cancellation(False)
+        try:
+            # Recording starts after the induction, not before it. _induce_swing pumps at
+            # the configured half period, so on a misconfigured pole it drives off
+            # resonance, and leaving that in the record would offer the spectrum a peak at
+            # the very frequency this is trying not to take on faith. The free swing that
+            # follows is at the pole's own frequency whatever pumped it.
+            await self._induce_swing()
+            await gc.record_raw_gyro(True)
+            await asyncio.sleep(record_s)
+        finally:
+            await gc.record_raw_gyro(False)
+            self.slow_stop_all_spools()
+            if was_cancelling:
+                self.set_swing_cancellation(True)
+        # the last samples are still in flight when recording stops
+        await asyncio.sleep(0.5)
+
+        samples = gc.collect_raw_gyro()
+        freq, length = swing.measure_pendulum(samples)
+        if freq is None:
+            logger.warning(f'Pole identification: no swing in {len(samples)} gyro samples; '
+                           f'keeping the configured pole')
+            return None
+
+        pole_type, mismatch = swing.nearest_pole_type(length)
+        if pole_type is None:
+            logger.warning(f'Pole identification: {freq:.3f} Hz is an effective length of '
+                           f'{length:.3f} m, {mismatch * 1000:.0f} mm from the nearest pole; '
+                           f'keeping the configured pole')
+            return None
+
+        was = self.config.gripper.pole_type
+        logger.info(f'Pole identification: {freq:.3f} Hz, effective length {length:.3f} m, '
+                    f'nearest pole {pole_type.name} ({mismatch * 1000:.0f} mm off)')
+        if pole_type != was:
+            logger.warning(f'Pole identification: measured {pole_type.name} where '
+                           f'{was.name} was configured. Whatever this run fitted before now '
+                           f'used the old pole, so rerun calibration after it finishes.')
+        await self.set_pole_type(pole_type)
+        return pole_type
+
     def _broadcast_swing_latency(self, latency):
         """Set config.swing_latency (in memory) and tell the UI. Does not persist;
         callers save_config only once a value is committed."""
@@ -993,6 +1057,13 @@ class AsyncObserver:
             logger.warning('Swing latency calibration requires a connected gripper')
             finish('Swing latency tuning needs a connected gripper')
             return None
+
+        # Before anything is tuned: the pole decides the frequency the trials below are
+        # phased against, and the operator picking it from a list is the weakest link in
+        # that chain. Ahead of center_pos so it is taken where the trials will actually run.
+        report_progress(progress_range[0] if progress_range else 0.0,
+                        'Identifying the gripper pole')
+        await self._identify_pole_type()
 
         original_latency = self.config.swing_latency
         center_pos = np.array(self.pe.gant_pos, dtype=float)
