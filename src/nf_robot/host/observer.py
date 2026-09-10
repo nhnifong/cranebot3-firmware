@@ -666,6 +666,9 @@ class AsyncObserver:
                 ))
             elif item.action == control.ComponentAction.SET_POLE_TYPE and item.pole_type is not None:
                 await self.set_pole_type(item.pole_type)
+            elif item.action == control.ComponentAction.SHUTDOWN:
+                name = 'the gripper' if item.is_gripper else f'anchor {item.anchor_num}'
+                await self.shutdown_one_bot(client, name)
 
     async def set_pole_type(self, pole_type: common.PoleType):
         """Record which pole is installed and re-derive everything hanging off it.
@@ -1301,6 +1304,32 @@ class AsyncObserver:
                 logger.warning(f'{name} may not have received the poweroff request: {result!r}')
         logger.info('poweroff requested; wait 10 seconds before cutting power')
         self.send_ui(pop_message=telemetry.Popup(message='Shutdown complete.'))
+
+    async def shutdown_one_bot(self, client, name):
+        """Ask one component to power its Pi off cleanly.
+
+        Motion stops across the whole robot first, not just at this component: the lines
+        are coupled, so a spool that goes dead while the others are still pulling is the
+        case that leaves the gantry hanging off the remainder.
+
+        The component latches its own poweroff, so asking twice is harmless.
+        """
+        # nothing should be commanding motion into a component that is about to halt.
+        await self.stop_all()
+        logger.info(f'requesting poweroff of {name}')
+        try:
+            # ten seconds to ensure green led is off. user cant see them.
+            await asyncio.gather(client.send_commands({'shutdown_pi': True}), asyncio.sleep(10))
+        except Exception as e:
+            logger.warning(f'{name} may not have received the poweroff request: {e!r}')
+            self.send_ui(pop_message=telemetry.Popup(
+                message=f'{name.capitalize()} may not have received the shutdown request. '
+                        f'Check that it is off before cutting power.'))
+            return
+        logger.info(f'poweroff of {name} requested; safe to cut its power')
+        self.send_ui(pop_message=telemetry.Popup(
+            message=f'{name.capitalize()} has shut down. Its power can now be cut safely. '
+                    f'It will not come back until it is power cycled.'))
 
     async def pull_logs_to_zip(self):
         """Pull recent log lines from every connected component and bundle them into a

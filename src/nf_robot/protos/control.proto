@@ -193,6 +193,9 @@ enum ComponentAction {
   // Set which pole the gripper hangs from. Like the camera angle, the robot cannot see
   // this for itself; the user reports what is installed.
   COMPONENTACTION_SET_POLE_TYPE = 6;
+  // Halt this one component's Pi so its power can be cut safely. The component drops off
+  // the network and only comes back on a power cycle.
+  COMPONENTACTION_SHUTDOWN = 7;
 }
 
 message SingleComponentAction {

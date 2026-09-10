@@ -17,6 +17,7 @@ merge:
     exclude_episodes: ['14']
   - naavox/79west-sep4
   - naavox/bedroom-sep6
+  - naavox/playroom-sep10
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
 keep_state_features:

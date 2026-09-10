@@ -263,6 +263,12 @@ class ComponentAction(betterproto2.Enum):
     this for itself; the user reports what is installed.
     """
 
+    SHUTDOWN = 7
+    """
+    Halt this one component's Pi so its power can be cut safely. The component drops off
+    the network and only comes back on a power cycle.
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -273,6 +279,7 @@ class ComponentAction(betterproto2.Enum):
             4: "COMPONENTACTION_RELAX",
             5: "COMPONENTACTION_SET_CAM_ANGLE",
             6: "COMPONENTACTION_SET_POLE_TYPE",
+            7: "COMPONENTACTION_SHUTDOWN",
         }
 
     @classmethod
@@ -285,6 +292,7 @@ class ComponentAction(betterproto2.Enum):
             "COMPONENTACTION_RELAX": 4,
             "COMPONENTACTION_SET_CAM_ANGLE": 5,
             "COMPONENTACTION_SET_POLE_TYPE": 6,
+            "COMPONENTACTION_SHUTDOWN": 7,
         }
 
 
