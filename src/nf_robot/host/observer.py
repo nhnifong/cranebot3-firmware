@@ -3596,6 +3596,8 @@ class AsyncObserver:
 
             # roomspin
             r = await self.calibrate_spin(reset_wrist_first=False) # already did that during diamond to save time
+            
+            await self.half_auto_calibration()
 
             # Tune swing_latency by inducing swings and finding the value that damps
             # them best. Requires a connected gripper (IMU-driven swing model).
@@ -3609,6 +3611,8 @@ class AsyncObserver:
                 SWING_MEASURE_DROP_M = 0.1
                 await self.seek_goal(np.array([0, 0, gant_z - SWING_MEASURE_DROP_M]), head_turn=False)
                 await self.calibrate_swing_latency(progress_range=(30.0, 61.0))
+
+            await self.half_auto_calibration()
 
             # Refine the pull-point geometry with close-range gripper-camera views of the
             # calibration cards. The cards are still in place at this point (they are only
