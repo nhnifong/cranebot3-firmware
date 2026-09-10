@@ -12,8 +12,9 @@ import unittest
 import numpy as np
 
 from nf_robot.ml.visual_servoing.mine_teleop import (
-    CANVAS_SCALE, OFF_SCREEN_MARGIN, ShardWriter, find_lift, holding_label, in_view,
-    mine_episode)
+    CANVAS_SCALE, FALSE_GRAB_PREFIX, MODE_FALSE_GRABS, MODE_GRASPS, MODE_NEGATIVES,
+    NEGATIVE_PREFIX, OFF_SCREEN_MARGIN, ShardWriter, find_lift, holding_label, in_view,
+    mine_episode, mine_false_grab_episode, shard_prefix)
 
 
 def rows_for(offsets, fps=30.0, grasp_at=60, length=90):
@@ -195,6 +196,55 @@ class TestMineEpisode(unittest.TestCase):
         self.assertEqual(blind, 0)
 
 
+class TestFalseGrabs(unittest.TestCase):
+    """A recording where closing the jaws would catch nothing.
+
+    Only two heads can be labelled from that: the close should not begin, and nothing is
+    held. Everything else has to stay masked, and target_present is the one that matters -
+    a false grab happens next to graspable things, so claiming the picture is empty would
+    teach the target head the opposite of what the frame shows.
+    """
+
+    def setUp(self):
+        # pressure high throughout: jaws closing on each other read exactly like jaws
+        # closing on an object, and in this recording it is always the former
+        self.rows = rows_for([0.0] * 90, grasp_at=0)
+        self.out, _, _ = mine_false_grab_episode(self.rows, stride=1)
+
+    def test_the_close_head_is_told_not_to_close(self):
+        self.assertTrue(all(r["close_now"] == 0 for r in self.out))
+
+    def test_the_holding_head_is_told_nothing_is_held(self):
+        self.assertTrue(all(r["holding"] == 0 for r in self.out))
+
+    def test_pressure_does_not_soften_the_holding_label(self):
+        """mine_negative_episode masks holding when pressure is up, because something may
+        have been picked up mid-recording. Here that reading is the fingers meeting, and
+        those frames are the whole point of the mode."""
+        self.assertTrue(all(r["pressure"] > 0 for r in self.rows[1:]))
+        self.assertTrue(all(r["holding"] == 0 for r in self.out))
+
+    def test_it_does_not_claim_the_picture_is_empty(self):
+        self.assertTrue(all(r["target_present"] is None for r in self.out))
+
+    def test_every_other_head_is_masked(self):
+        for key in ("target_uv", "target_range_m", "grasp_axis_rad", "finger",
+                    "grasp_pressure", "seconds_to_grasp"):
+            with self.subTest(key=key):
+                self.assertTrue(all(r[key] is None for r in self.out))
+
+    def test_the_state_vector_still_reaches_the_row(self):
+        """Masked labels, but the frame is still a real observation and the state inputs
+        are what the model reads alongside it."""
+        self.assertEqual(self.out[0]["state"]["laser_rangefinder"],
+                         round(self.rows[0]["laser_rangefinder"], 4))
+
+    def test_the_stride_thins_the_recording(self):
+        thinned, _, _ = mine_false_grab_episode(self.rows, stride=5)
+        self.assertEqual(len(thinned), 18)
+        self.assertEqual([r["frame_index"] for r in thinned[:3]], [0, 5, 10])
+
+
 class TestShardPrefix(unittest.TestCase):
 
     def test_the_miner_owns_only_its_own_shards(self):
@@ -203,6 +253,13 @@ class TestShardPrefix(unittest.TestCase):
         without saying so."""
         self.assertEqual(ShardWriter.DEFAULT_PREFIX, "shard")
         self.assertNotEqual(ShardWriter.DEFAULT_PREFIX, "synth")
+
+    def test_every_mode_writes_under_its_own_prefix(self):
+        """One pool holds all three, so a rerun of any mode must replace only its own."""
+        prefixes = [shard_prefix(m) for m in (MODE_GRASPS, MODE_NEGATIVES, MODE_FALSE_GRABS)]
+        self.assertEqual(prefixes, [ShardWriter.DEFAULT_PREFIX, NEGATIVE_PREFIX,
+                                    FALSE_GRAB_PREFIX])
+        self.assertEqual(len(set(prefixes)), 3)
 
 
 if __name__ == "__main__":

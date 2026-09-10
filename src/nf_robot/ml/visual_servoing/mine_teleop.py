@@ -52,6 +52,12 @@ composited images: measured on a real checkpoint, it fires low on half of the sy
 bare-floor frames and never once on a real one. Negatives have to arrive through the same
 camera and the same pipeline as the positives to mean anything at deploy time.
 
+With --false_grabs the source is a recording in which closing the jaws would catch
+nothing, and every frame becomes a close_now=0, holding=0 row with every other label
+masked. The floor being empty and the jaws being empty are different claims: a false grab
+happens next to graspable things, which is exactly where the close and holding heads fire
+on nothing being between the fingers. See mine_false_grab_episode.
+
 After the grasp the object rides in the jaws, so the static room point stops describing
 where it is. Those frames therefore carry only `holding` and `finger`, and every other
 label is null - which the row format spells "mask this head's loss here" rather than
@@ -71,6 +77,10 @@ lerobot_trim_to_grasp is exactly that success filter and is reused here.
 Usage:
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/empty-floor-sweep --negatives \
+        --output_root datasets/visual_servoing
+
+    python -m nf_robot.ml.visual_servoing.mine_teleop \
+        --repo_id naavox/false-grabs --false_grabs \
         --output_root datasets/visual_servoing
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
@@ -124,20 +134,26 @@ CANVAS_SCALE = 1.5
 # would mask 20% and 0.20 only 4%, with the off-screen ones spread evenly out to the
 # canvas edge at 0.25.
 OFF_SCREEN_MARGIN = 0.10
-# What negative shards are called, so mining an empty-floor recording into a split that
-# already holds positives replaces only its own output.
+# What each whole-recording mode's shards are called, so mining one into a split that
+# already holds the others replaces only its own output.
 NEGATIVE_PREFIX = "negative"
+FALSE_GRAB_PREFIX = "false_grab"
 
 # Every producer writes here, and split_pool deals the result into train/ and eval/
 # afterwards. One pool rather than a split per producer: mining is the expensive step and
 # should run once over everything, and a producer that arrives after the cut would
 # otherwise land wholly on one side of it.
 POOL_SPLIT = "all"
-# Keep one frame in this many when mining negatives. A recording of flying over empty
-# floor is negative in every frame, and at 30fps thirty of them a second are the same
-# picture; six a second is plenty of variety and keeps an hour of flying from burying the
-# positives it is meant to balance.
-NEGATIVE_STRIDE = 5
+# Keep one frame in this many when a whole recording carries one label. Both --negatives
+# and --false_grabs are true in every frame, and at 30fps thirty of them a second are the
+# same picture; six a second is plenty of variety and keeps an hour of flying from burying
+# the positives it is meant to balance.
+SWEEP_STRIDE = 5
+
+# What a source recording is, and so what its frames can be labelled with.
+MODE_GRASPS = "grasps"
+MODE_NEGATIVES = "negatives"
+MODE_FALSE_GRABS = "false_grabs"
 # (frames) how long a pause in the closing command can be and still count as part of the
 # same close. A thumb comes off the trigger for a moment; a third of a second of nothing
 # is a different decision.
@@ -264,6 +280,14 @@ class ShardWriter:
         self.shards += 1
         self.rows = []
         self.pending = 0
+
+
+def shard_prefix(mode):
+    """The shard prefix a mode writes under, so a rerun replaces only its own output."""
+    return {
+        MODE_NEGATIVES: NEGATIVE_PREFIX,
+        MODE_FALSE_GRABS: FALSE_GRAB_PREFIX,
+    }.get(mode, ShardWriter.DEFAULT_PREFIX)
 
 
 def encode_frame(bgr, image_size=IMAGE_SIZE):
@@ -595,7 +619,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
     return out, dropped, blind
 
 
-def mine_negative_episode(rows, stride=NEGATIVE_STRIDE):
+def mine_negative_episode(rows, stride=SWEEP_STRIDE):
     """Rows for one episode of an empty-floor recording.
 
     The mirror image of mine_episode: no grasp to run time backwards from, so nothing is
@@ -643,6 +667,62 @@ def mine_negative_episode(rows, stride=NEGATIVE_STRIDE):
             "grasp_pressure": None,
             "target_present": 0,
             "holding": 0 if empty else None,
+            "state": {
+                "laser_rangefinder": round(float(r["laser_rangefinder"]), 4),
+                "finger_angle": round(float(r["finger_angle"]), 3),
+                "target_force": round(float(r["target_force"]), 4),
+            },
+        })
+    return out, 0, 0
+
+
+def mine_false_grab_episode(rows, stride=SWEEP_STRIDE):
+    """Rows for one episode of a false-grab recording.
+
+    A recording made where closing the jaws would catch nothing: the gripper near things,
+    over things, beside things, and never around one. Two heads can be labelled from that
+    premise alone and the rest cannot.
+
+        close_now       0. The whole recording is the case where the close should not
+                        begin, which is the one thing these frames are evidence of.
+        holding         0. Nothing is ever between the fingers.
+        target_present  null, not 0. A false grab happens next to graspable things - the
+                        picture usually has one in it, just not in the jaws - so calling
+                        it empty would teach the opposite of what the frame shows. The
+                        honest empties are the bare-floor negatives.
+        target_uv       null, with range and axis: no grasp happened here, so there is no
+        target_range_m  point to run time backwards from and nothing to point at.
+        grasp_axis_rad
+        finger          null. A close commanded on nothing is the action being labelled
+                        wrong, so what the operator's hand did is not what the finger
+                        head should copy.
+        grasp_pressure  null. No lift, so no force that turned out to be enough.
+
+    Pressure is not consulted, which is the difference from mine_negative_episode: fingers
+    closing on each other read the same as fingers closing on an object, and here that
+    reading is always the former. Those frames are the point rather than a doubt - a
+    holding head trained without them learns that pressure means an object.
+
+    Takes the recording at its word the same way the negatives pass does; nothing here can
+    check that the jaws stayed empty, and the preview is the check that works.
+
+    Returns (rows, dropped, blind) like mine_episode, the last two always zero.
+    """
+    out = []
+    for i in range(0, len(rows), max(1, stride)):
+        r = rows[i]
+        out.append({
+            "split_source": "teleop",
+            "frame_index": r["frame_index"],
+            "seconds_to_grasp": None,
+            "target_uv": None,
+            "target_range_m": None,
+            "grasp_axis_rad": None,
+            "finger": None,
+            "close_now": 0,
+            "grasp_pressure": None,
+            "target_present": None,
+            "holding": 0,
             "state": {
                 "laser_rangefinder": round(float(r["laser_rangefinder"]), 4),
                 "finger_angle": round(float(r["finger_angle"]), 3),
@@ -784,11 +864,12 @@ def report_sources(sources):
 
 def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds: float,
                 carry_seconds: float, rise_m: float, limit: int | None, progress=None,
-                negatives: bool = False, stride: int = NEGATIVE_STRIDE,
+                mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
                 image_size=IMAGE_SIZE):
     """Mine one teleop dataset into an open shard writer.
 
-    `negatives` treats the whole recording as empty floor: see mine_negative_episode.
+    `mode` says what the recording is: grasps to run time backwards from, empty floor
+    (mine_negative_episode), or grabs that would catch nothing (mine_false_grab_episode).
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -820,8 +901,10 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         considered += 1
         if progress is not None:
             progress.update(1)
-        if negatives:
+        if mode == MODE_NEGATIVES:
             result, info, blind = mine_negative_episode(episodes[ep], stride)
+        elif mode == MODE_FALSE_GRABS:
+            result, info, blind = mine_false_grab_episode(episodes[ep], stride)
         else:
             result, info, blind = mine_episode(episodes[ep], fps, calibration,
                                                approach_seconds, carry_seconds, rise_m)
@@ -860,7 +943,7 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
 
 def mine(sources, output_root: Path, split: str, approach_seconds: float,
          carry_seconds: float, rise_m: float, limit: int | None,
-         negatives: bool = False, stride: int = NEGATIVE_STRIDE,
+         mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
          image_size=IMAGE_SIZE):
     """Replace this producer's share of the pool with the given (repo_id, root) sources.
 
@@ -889,9 +972,9 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
             f"would write {image_size[0]}x{image_size[1]}. Pass --image_size "
             f"{existing[0]} {existing[1]} to match it, or mine into a different "
             f"--output_root.")
-    # Negatives are their own producer, written beside the positives rather than over
-    # them: a split wants both, and each rerun should replace only what it wrote.
-    prefix = NEGATIVE_PREFIX if negatives else ShardWriter.DEFAULT_PREFIX
+    # Each mode is its own producer, written beside the others rather than over them: a
+    # split wants all of them, and each rerun should replace only what it wrote.
+    prefix = shard_prefix(mode)
     for stale in split_dir.glob(f"{prefix}-*.parquet"):
         stale.unlink()
 
@@ -902,7 +985,7 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
     with tqdm(total=total, unit="ep", dynamic_ncols=True) as progress:
         for repo_id, root in sources:
             mine_source(writer, root, repo_id, approach_seconds, carry_seconds, rise_m,
-                        limit, progress, negatives=negatives, stride=stride,
+                        limit, progress, mode=mode, stride=stride,
                         image_size=image_size)
     writer.flush()
 
@@ -926,7 +1009,7 @@ def write_dataset_card(output_root: Path):
 
 
 def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
-                         negatives=False):
+                         keep_unlabelled=False):
     """`count` random labelled rows, images included, read back out of the shards.
 
     Two passes so that previewing a large dataset does not mean reading it: the first
@@ -936,17 +1019,19 @@ def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
     import pyarrow.parquet as pq
 
     label_columns = ["episode_index", "frame_index", "seconds_to_grasp", "target_uv",
-                     "target_range_m", "grasp_axis_rad", "finger", "holding", "state"]
+                     "target_range_m", "grasp_axis_rad", "finger", "close_now",
+                     "target_present", "holding", "state"]
 
     candidates = []
     for path in sorted(split_dir.glob(f"{prefix}-*.parquet" if prefix else "*.parquet")):
         table = pq.read_table(path, columns=["target_uv"])
         uv = table.column("target_uv").to_pylist()
-        # A negative row has no position label by construction, so requiring one would
-        # preview nothing at all - and "is this really empty floor" is the check that
-        # matters most for a mode whose whole job is to assert emptiness.
+        # Negative and false-grab rows have no position label by construction, so
+        # requiring one would preview nothing at all - and "is this really empty floor",
+        # "would this grab really have missed" are the checks that matter most for modes
+        # whose whole job is to assert something a frame cannot be tested for.
         candidates += [(path, i) for i, value in enumerate(uv)
-                       if value is not None or negatives]
+                       if value is not None or keep_unlabelled]
 
     chosen = random.Random(seed).sample(candidates, min(count, len(candidates)))
 
@@ -974,7 +1059,7 @@ def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
 
 
 def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
-                  group: int = 20, columns: int = 4, prefix=None, negatives=False):
+                  group: int = 20, columns: int = 4, prefix=None, keep_unlabelled=False):
     """A folder of annotated frames plus contact sheets, for eyeballing the labels.
 
     A sign error in the projection produces perfectly plausible numbers and an obviously
@@ -986,7 +1071,7 @@ def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
     for old in list(preview_dir.glob("*.jpg")) + list(preview_dir.glob("*.png")):
         old.unlink()
 
-    chosen = sample_labelled_rows(split_dir, count, seed, prefix, negatives)
+    chosen = sample_labelled_rows(split_dir, count, seed, prefix, keep_unlabelled)
 
     annotated = []
     for sample in chosen:
@@ -1017,20 +1102,28 @@ def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
             cv2.drawMarker(canvas, (cx, cy), (0, 255, 0), cv2.MARKER_CROSS, 26, 2)
         else:
             # No crosshair to draw, and saying so beats an unmarked frame that could just
-            # as easily be a preview bug.
-            cv2.putText(canvas, "NOTHING HERE", (pad_x + 10, pad_y + h - 14),
+            # as easily be a preview bug. Which of the two it is matters: a bare-floor
+            # negative asserts the frame is empty, while a masked one only declines to
+            # say, and stamping the stronger claim on both is how a preview stops being
+            # able to catch the difference.
+            banner = "NOTHING HERE" if sample['target_present'] == 0 else "NO TARGET LABEL"
+            cv2.putText(canvas, banner, (pad_x + 10, pad_y + h - 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 5)
-            cv2.putText(canvas, "NOTHING HERE", (pad_x + 10, pad_y + h - 14),
+            cv2.putText(canvas, banner, (pad_x + 10, pad_y + h - 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 200, 255), 2)
 
+        # Every label here is nullable and a mode that masks one still has to preview,
+        # so nothing is formatted without first being known to be there.
+        finger = ('none' if sample['finger'] is None else f"{sample['finger']:+.2f}")
         lines = [
             f"ep{sample['episode_index']} f{sample['frame_index']}" + (
                 "  no grasp" if sample['seconds_to_grasp'] is None
                 else f"  t-{sample['seconds_to_grasp']:.2f}s"),
             (f"uv {sample['target_uv'][0]:+.3f},{sample['target_uv'][1]:+.3f}  "
-             f"range {sample['target_range_m']:.3f}m") if has_target else "target_present 0",
+             f"range {sample['target_range_m']:.3f}m") if has_target
+            else f"target_present {sample['target_present']}",
             (f"axis {math.degrees(theta):+.1f}deg  " if has_target else "")
-            + f"finger {sample['finger']:+.2f}  holding {sample['holding']}",
+            + f"finger {finger}  close {sample['close_now']}  holding {sample['holding']}",
             f"laser {sample['state']['laser_rangefinder']:.3f}  fingerang {sample['state']['finger_angle']:.1f}"
             f"  force {sample['state']['target_force']:.3f}",
         ]
@@ -1087,14 +1180,22 @@ def main():
     parser.add_argument("--carry_seconds", type=float, default=CARRY_SECONDS)
     parser.add_argument("--rise_m", type=float, default=RISE_M)
     parser.add_argument("--limit", type=int, default=None, help="Only mine this many episodes")
-    parser.add_argument(
+    what = parser.add_mutually_exclusive_group()
+    what.add_argument(
         "--negatives", action="store_true",
         help="The source is a recording of empty floor, so every frame is a "
              "target_present=0 row with no position labels. Writes negative-*.parquet "
              "beside the positives rather than replacing them. Point it only at a "
              "recording that really is empty - nothing here can check that for you.")
-    parser.add_argument("--negative_stride", type=int, default=NEGATIVE_STRIDE,
-                        help="With --negatives, keep one frame in this many")
+    what.add_argument(
+        "--false_grabs", action="store_true",
+        help="The source is a recording in which closing the jaws would catch nothing, "
+             "so every frame is a close_now=0, holding=0 row with every other label "
+             "masked. Writes false_grab-*.parquet beside the positives. Point it only at "
+             "a recording where the fingers really did stay empty throughout.")
+    parser.add_argument("--negative_stride", "--false_grab_stride", dest="stride",
+                        type=int, default=SWEEP_STRIDE,
+                        help="With --negatives or --false_grabs, keep one frame in this many")
     parser.add_argument("--image_size", type=int, nargs=2, default=list(IMAGE_SIZE),
                         metavar=("WIDTH", "HEIGHT"),
                         help="Frame size to store, which has to suit the backbone the "
@@ -1120,17 +1221,19 @@ def main():
         else:
             sources.append((repo_id, Path(hub_root(repo_id))))
 
+    mode = (MODE_NEGATIVES if args.negatives
+            else MODE_FALSE_GRABS if args.false_grabs
+            else MODE_GRASPS)
     total, split_dir = mine(
         sources, Path(args.output_root), args.split,
         args.approach_seconds, args.carry_seconds, args.rise_m, args.limit,
-        negatives=args.negatives, stride=args.negative_stride,
+        mode=mode, stride=args.stride,
         image_size=tuple(args.image_size),
     )
     if args.preview_dir and total:
         write_preview(split_dir, Path(args.preview_dir),
                       args.preview_count, args.preview_seed, args.preview_group,
-                      prefix=NEGATIVE_PREFIX if args.negatives else ShardWriter.DEFAULT_PREFIX,
-                      negatives=args.negatives)
+                      prefix=shard_prefix(mode), keep_unlabelled=mode != MODE_GRASPS)
 
 
 if __name__ == "__main__":

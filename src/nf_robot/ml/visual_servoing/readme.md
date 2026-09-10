@@ -530,6 +530,16 @@ under the wrist turn.
 One run over everything. Every producer writes into the same `all/` pool and the
 train/eval cut happens after all of them.
 
+Frames are stored at 448x252, the default, and everything in the pool has to keep it: the
+backbone is a /14 DINOv2 and 252 = 14 x 18. Do not pass `--image_size`. Mining into a pool
+that already holds another size raises rather than writing rows that will not collate.
+
+Each mode replaces its own shards and leaves the others alone, so any one of the three can
+be re-run without disturbing the rest or the synthetic frames - but mine every source of a
+given mode in one run, since a second run replaces the first rather than adding to it.
+
+### Positives (default)
+
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/grip_o naavox/simple_grasp_spin \
         --output_root datasets/visual_servoing_pool_252 \
@@ -541,15 +551,9 @@ No split of the LeRobot dataset first: pass the whole thing. `simple_grasp_spin`
 added here even though it cannot be merged into `naavox/combined_targets`, because the
 miner takes several sources in one run.
 
-Frames are stored at 448x252, the default, and everything in the pool has to keep it: the
-backbone is a /14 DINOv2 and 252 = 14 x 18. Do not pass `--image_size`. Mining into a pool
-that already holds another size raises rather than writing rows that will not collate.
+### Empty floor (`--negatives`)
 
-Each producer replaces its own shards and leaves the others alone, so this can be re-run
-without disturbing the negatives or the synthetic frames - but mine every source of the
-pool in one run, since a second run replaces the first rather than adding to it.
-
-Recordings of flying over empty floor are mined with `--negatives`:
+Recordings of flying over empty floor:
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/combined_negatives --negatives \
@@ -562,6 +566,33 @@ rather than over them.
 
 Nothing here can check that the flight was really over empty floor. You are responsible
 for making sure they were all over empty floor.
+
+### False grabs (`--false_grabs`)
+
+Recordings in which closing the jaws would catch nothing:
+
+    python -m nf_robot.ml.visual_servoing.mine_teleop \
+        --repo_id naavox/false-grabs --false_grabs \
+        --output_root datasets/visual_servoing_pool_252 \
+        --preview_dir datasets/visual_servoing_pool_252/false_grab_preview
+
+Every frame becomes a `close_now = 0`, `holding = 0` row with **every other label masked**,
+one frame in five by default, written as `false_grab-*.parquet`.
+
+Empty floor and empty jaws are different claims, which is why this is not just more
+negatives. A false grab happens *next to* graspable things: the picture usually has one in
+it, just not between the fingers. So `target_present` is masked rather than 0 - calling
+that frame empty would teach the target head the opposite of what it shows - and these are
+the hardest negatives the close and holding heads get, being exactly the case where an
+object is in view and near the jaws without being in them.
+
+`finger` is masked too. A close commanded on nothing is the action being labelled wrong, so
+whatever the operator's hand did in these recordings is not what the finger head should
+copy. Pressure is not consulted at all: fingers closing on each other read the same as
+fingers closing on an object, and here it is always the former.
+
+As with the negatives, nothing can check the premise. You are responsible for making sure
+the fingers really were empty on every frame.
 
 ## 4. Generate synthetic frames
 
