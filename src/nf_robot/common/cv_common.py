@@ -51,23 +51,15 @@ SPECIAL_SIZES = {
 # report: solvePnP places a marker at whatever range makes it subtend the pixels it does, so
 # a marker assumed bigger is placed further away. Below 1 pulls every sighting closer.
 #
-# Measured, not guessed. Fitting a hang survey (experiments/hang_survey_fit.py) against the
-# line lengths, which have their own scale from the spool encoders, showed the camera
-# distances standing about 6% long: sweeping this constant while refitting the geometry at
-# each value put the leave-one-out error at 86 mm here at 1.00 and 62 mm at 0.94, with a clean
-# minimum between 0.935 and 0.945.
+# 1.0 means the sizes above are taken at face value. Tape-measuring the span between two
+# calibration cards and comparing it against the anchor cameras' reconstruction of the same
+# two cards puts the cameras within 1% at this value, so there is no camera-side scale error
+# to absorb here. An earlier 0.94 came from fitting camera distances against spool line
+# lengths, which folds any pull-point geometry error into what looks like camera scale.
 #
-# What is 6% off is still unknown. The gantry marker has been measured with a ruler and the
-# cameras checkerboard calibrated, and both agree with the constants above, so the cause is
-# something they share -- a corner convention in the detector, a resolution or crop mismatch
-# between the calibration and the stream -- rather than either of those two. This corrects the
-# symptom, in one place, until the cause turns up.
-#
-# It was measured from gantry marker sightings alone and is applied to every marker, which is
-# right if the error is on the camera side and wrong if it is that one tag. Changing it moves
-# every vision-derived position, so anchor poses fitted under a different value do not carry
-# over: recalibrate after touching it.
-GLOBAL_MARKER_SIZE_BIAS = 0.94
+# Changing it moves every vision-derived position, so anchor poses fitted under a different
+# value do not carry over: recalibrate after touching it.
+GLOBAL_MARKER_SIZE_BIAS = 1.0
 
 # These are the 3D corner points of a generic marker of size 1x1 meter.
 # We will scale this based on the actual marker size.

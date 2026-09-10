@@ -27,6 +27,20 @@ W_GRIPPER_DIST = 1.0 # change in pull-point-to-gantry distance between two gripp
                      # Scaled down at use, so this is the weight of one independent delta, not one pair.
 W_ROOM_YAW = 5.0 # yaw of the anchor layout == yaw of the reference layout (see room_yaw_offset)
 
+# Terms that say the room is physically possible rather than that it matches a measurement:
+# the anchors stand plumb, the four pull points share a height, the anchor pair and the eyelet
+# pair span the same distance, and the eyelets stay near where they started.
+STRUCTURAL_COST_TERMS = ('anchor_tilt', 'anchor_planarity', 'shape_match', 'eyelet_reg')
+
+# How much of that plausibility a warm-started pass may spend to fit its data. A pass given a
+# constraint the state vector cannot express drives its data term down by deforming the room
+# instead, which reads as a lower total cost and a worse machine, so the total is no guard.
+STRUCTURAL_COST_GROWTH_LIMIT = 1.5
+
+# Below this the deformation is small in absolute terms whatever the ratio says, and a warm
+# start that begins near zero would otherwise trip the limit on rounding.
+STRUCTURAL_COST_FLOOR = 0.05
+
 # Proposed new terms:
 # W_GRIPPER_CARD = 1.0 # where gripper camera projects a card == where anchor cameras project it (assuming it is on the floor)
 # W_TENSION_CAMERA_HEIGHT = 1.0 # gantry height implied by tension == gantry height observed by anchor cameras at each marker stop
@@ -529,6 +543,145 @@ class _OptTimeout(Exception):
     pass
 
 
+def refinement_is_plausible(fit_info):
+    """Whether a warm-started pass improved its fit without deforming the room to do it.
+
+    Returns (ok, reason). A pass whose data term is fed a constraint the state vector has no
+    parameter for - a pull point in the wrong place, say - cannot correct the cause, so it
+    pays with the structural terms instead: it leans the anchors, spreads the pull points in
+    z, and drags the eyelets off their guess. That lowers the total cost while leaving a room
+    whose camera projections are all wrong, so the caller has to weigh the structural terms
+    on their own rather than trust the total.
+
+    Only meaningful for a warm start, where the input point is a real geometry rather than the
+    crude cold-start guess.
+    """
+    before = fit_info.get('input_costs')
+    if not before:
+        return True, 'no starting costs recorded'
+    after = fit_info.get('costs', {})
+    was = sum(float(before.get(term, 0.0)) for term in STRUCTURAL_COST_TERMS)
+    now = sum(float(after.get(term, 0.0)) for term in STRUCTURAL_COST_TERMS)
+    detail = ', '.join(
+        f'{term} {float(before.get(term, 0.0)):.4f}->{float(after.get(term, 0.0)):.4f}'
+        for term in STRUCTURAL_COST_TERMS
+    )
+    if now <= STRUCTURAL_COST_FLOOR or now <= was * STRUCTURAL_COST_GROWTH_LIMIT:
+        return True, f'structural cost {was:.4f} -> {now:.4f} ({detail})'
+    return False, (f'structural cost {was:.4f} -> {now:.4f}, past the '
+                   f'{STRUCTURAL_COST_GROWTH_LIMIT:g}x limit ({detail})')
+
+
+# A sighting whose normal lands this far from the rest of its camera's is a solvePnP branch
+# flip rather than a tipped card: IPPE_SQUARE has two solutions for a planar tag and takes the
+# wrong one often enough at range. The position it reports stays usable, which is why nothing
+# downstream notices - only the orientation this estimate reads is wrong.
+CAM_TILT_FLIP_REJECT_DEG = 5.0
+
+# Too few sightings left after that to believe the answer over the configured one.
+CAM_TILT_MIN_SIGHTINGS = 4
+
+# The adapters are physical parts. An estimate outside this says the tag orientations cannot
+# be trusted, not that a camera is aimed there.
+CAM_TILT_RANGE_DEG = (10.0, 60.0)
+
+
+def estimate_cam_tilts(raw_obs, fallback):
+    """Each anchor camera's downward pitch in degrees, measured from the cards it can see.
+
+    Every calibration card lies flat, so its own normal is the room vertical. The modelled
+    mount carries that normal from the camera frame into the anchor frame, where a plumb
+    anchor has to see it along z. The only unknown left in the chain is the tilt, and it turns
+    about the camera's x axis, so the y and z components of one sighting's normal fix it
+    outright - no anchor pose, no room frame, no optimizer. That is what lets this run on the
+    observation snapshot before the first pass, which is the pass that needs the tilts.
+
+    A camera without enough usable sightings keeps its configured value, so a room where one
+    anchor sees almost nothing degrades to today's behaviour rather than to a guess.
+
+    Reading tag orientation rather than tag position, this is the one place branch flips
+    matter, so outliers are dropped against the median before it is taken again.
+    """
+    camera_rotation, _ = cv2.Rodrigues(
+        np.asarray(model_constants.arp_anchor_camera[0], dtype=float).reshape(3))
+    # room vertical, expressed in the camera frame the tilt node turns
+    up = camera_rotation.T @ np.array([0.0, 0.0, 1.0])
+    up_angle = np.arctan2(up[2], up[1])
+
+    tilts = []
+    for anchor_idx, configured in enumerate(fallback):
+        estimates = []
+        for marker_name in CAL_MARKERS:
+            sightings = raw_obs.get(marker_name)
+            if sightings is None or anchor_idx >= len(sightings):
+                continue
+            for pose_cam in sightings[anchor_idx]:
+                if pose_cam is None or np.all(pose_cam == 0):
+                    continue
+                marker_rotation, _ = cv2.Rodrigues(np.asarray(pose_cam[0], dtype=float).reshape(3))
+                normal = marker_rotation[:, 2]
+                # the card faces up and the camera looks down on it, so its normal points back
+                # towards the camera; the detector's sign convention does not always agree
+                if normal[2] > 0:
+                    normal = -normal
+                extra_tilt = up_angle - np.arctan2(normal[2], normal[1])
+                extra_tilt = (extra_tilt + np.pi) % (2 * np.pi) - np.pi
+                estimates.append(ARP_CAMERA_MODEL_TILT_DEG - np.degrees(extra_tilt))
+
+        kept = []
+        if estimates:
+            median = float(np.median(estimates))
+            kept = [t for t in estimates if abs(t - median) <= CAM_TILT_FLIP_REJECT_DEG]
+
+        if len(kept) < CAM_TILT_MIN_SIGHTINGS:
+            logger.warning(
+                f'estimate_cam_tilts: anchor {anchor_idx} had {len(kept)} usable card sightings '
+                f'of {len(estimates)}; keeping the configured {configured} deg')
+            tilts.append(float(configured))
+            continue
+
+        estimate = float(np.median(kept))
+        if not CAM_TILT_RANGE_DEG[0] <= estimate <= CAM_TILT_RANGE_DEG[1]:
+            logger.warning(
+                f'estimate_cam_tilts: anchor {anchor_idx} measured {estimate:.1f} deg, outside '
+                f'{CAM_TILT_RANGE_DEG}; keeping the configured {configured} deg')
+            tilts.append(float(configured))
+            continue
+
+        logger.info(
+            f'estimate_cam_tilts: anchor {anchor_idx} camera looks {estimate:.1f} deg below '
+            f'horizontal (configured {configured}), from {len(kept)} of {len(estimates)} card '
+            f'sightings, spread {np.std(kept):.2f} deg')
+        tilts.append(estimate)
+
+    return tuple(tilts)
+
+
+def rectangular_room_eyelet_guess(anchor_poses):
+    """Starting guess for the two external eyelets, from the anchor positions alone.
+
+    The anchors sit at opposite corners of the room and each external eyelet sits at one of
+    the other two, so the four pull points are the corners of a rectangle whose diagonal the
+    anchors already give. A diagonal alone leaves the other two corners sliding around a
+    circle, and the anchors' own yaw cannot narrow it: they face along the diagonal, not
+    along a wall, so their local x sits perpendicular to it and carries no wall direction.
+    This takes the square, putting the other two corners on the perpendicular bisector.
+    Eyelet 0 belongs to anchor 0, in the order the state vector keeps them.
+
+    Each eyelet takes its own anchor's height rather than an offset through the anchor's
+    local frame: an anchor fitted a few degrees off plumb tips a 3 m local offset by most of
+    a metre in z, and this guess doubles as the eyelet_reg target that holds the answer near.
+    """
+    positions = np.asarray(anchor_poses, dtype=float)[:, 1, :]
+    center = (positions[0] + positions[1]) / 2.0
+    half = (positions[1] - positions[0]) / 2.0
+    perp = np.array([-half[1], half[0], 0.0])
+    return np.array([
+        [center[0] - perp[0], center[1] - perp[1], positions[0][2]],
+        [center[0] + perp[0], center[1] + perp[1], positions[1][2]],
+    ])
+
+
 def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_guesses=None, fixed_anchor_poses=None, line_deltas=None, cam_tilts=(22, 22), gripper_obs=None, time_budget_s=12.0, diamond_size=DIAMOND_SIZE, yaw_reference=None, initial_anchor_guesses=None, gantry_marker_inv=gantry_april_inv):
     """
     Finds optimal anchor poses AND external eyelet positions.
@@ -590,16 +743,9 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
         anchor_poses_to_use = np.array(initial_guesses)
         logger.debug(f'initial_anchor_guesses = {initial_guesses}')
     
-    # A point on the wall on the anchor's right side at the same height, about five meters away.
-    # this is a diagonal in the anchor's local frame of refernce.
-    external_guess = np.array([(0,0,0), (-3.67, -3.57, 0.00)])
-
     # Initialize eyelet guesses if none provided
     if initial_eyelet_guesses is None:
-        initial_eyelet_guesses = np.array([
-            compose_poses([anchor_poses_to_use[0], external_guess])[1], # Guess for eyelet 0
-            compose_poses([anchor_poses_to_use[1], external_guess])[1]  # Guess for eyelet 1
-        ])
+        initial_eyelet_guesses = rectangular_room_eyelet_guess(anchor_poses_to_use)
         
     # Configure the state vector and args depending on whether we are freezing anchors
     if fixed_anchor_poses is not None:
@@ -653,9 +799,13 @@ def optimize_arp_anchors(raw_obs, diamond_observations=None, initial_eyelet_gues
     # so it's directly comparable across calibration attempts).
     logger.info("Final Optimization Costs:")
     _, costs = multi_card_residuals(result_x, raw_obs, diamond_observations, initial_eyelet_guesses, debug=True, fixed_anchor_poses=fixed_anchor_poses, line_deltas=line_deltas, cam_tilts=cam_tilts, gripper_obs=gripper_obs, diamond_size=diamond_size, yaw_reference=yaw_reference, gantry_marker_inv=gantry_marker_inv)
+    # The same residual set scored at the point this pass started from. Only the pair says
+    # whether a pass improved the fit or traded one term away for another.
+    _, input_costs = multi_card_residuals(x0, *opt_args)
     fit_info = {
         'total_cost': float(sum(costs.values())),
         'costs': costs,
+        'input_costs': input_costs,
         'converged': converged,
         'nfev': nfev,
     }

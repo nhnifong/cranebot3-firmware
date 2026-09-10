@@ -50,7 +50,9 @@ from nf_robot.host.data_store import DataStore
 from nf_robot.host.fake_progress import FakeProgress
 from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
-from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
+from nf_robot.host.eyelet_calibration import (optimize_arp_anchors, analyze_diamond_data,
+                                             refinement_is_plausible, estimate_cam_tilts,
+                                             DIAMOND_SIZE)
 from nf_robot.host.component_client import max_origin_detections
 from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vector,
                                               ROUTE_TAG_MAX_AGE_S, CAPTURE_RESOLUTION_SIZE,
@@ -3479,7 +3481,30 @@ class AsyncObserver:
             ))
             r = await self.flush_tele_buffer()
 
-            tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
+            # Measure each camera's real pitch off the cards it just saw, rather than trusting
+            # the adapter's nominal angle. A tilt that is wrong shows up as an anchor fitted
+            # off plumb, which the anchor_tilt term then fights for the rest of calibration,
+            # and the room it settles on drives the moves the later passes are surveyed from.
+            # Persisted because arp_anchor_client projects live frames through the configured
+            # value: fitting the poses under one tilt and viewing through another puts the two
+            # back out of step.
+            configured_tilts = (self.config.anchors[0].indirect_line.cam_tilt,
+                                self.config.anchors[1].indirect_line.cam_tilt)
+            tilts = estimate_cam_tilts(raw_obs, configured_tilts)
+            if tilts != configured_tilts:
+                logger.info(f'Measured camera tilts {tilts} (configured {configured_tilts})')
+                for anchor_num, tilt in enumerate(tilts):
+                    self.config.anchors[anchor_num].indirect_line.cam_tilt = tilt
+                    self.anchors[anchor_num].updatePoseAndEye()
+                save_config(self.config, self.config_path)
+                self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
+                    poses=[a.pose for a in self.config.anchors],
+                    eyelets=[a.indirect_line.eyelet_pos for a in self.config.anchors],
+                    tilt=[a.indirect_line.cam_tilt for a in self.config.anchors],
+                    swing_latency=self.config.swing_latency,
+                    pole_type=self.config.gripper.pole_type,
+                ))
+
             # determine position of two anchors visually and guess at external eyelets.
             pass1_args = (raw_obs, None, None, None, None, tilts)
             pass1_kwargs = {'diamond_size': self.diamond_size, 'gantry_marker_inv': self.gantry_april_inv}
@@ -3607,9 +3632,19 @@ class AsyncObserver:
                     name="Calibration",
                     current_action="Tuning swing cancellation",
                 ))
-                # Perform swing cancellation measurements lower than the spin-measurement
-                SWING_MEASURE_DROP_M = 0.1
-                await self.seek_goal(np.array([0, 0, gant_z - SWING_MEASURE_DROP_M]), head_turn=False)
+                # Swing tuning runs lower than the spin measurement, and the rangefinder says
+                # how much lower. A fixed drop from gant_z cannot: that height is chosen so the
+                # camera can see the origin card, and the card may be up on a bed or a table, so
+                # the same drop leaves a different gap over whatever is really underneath. This
+                # descends until the gap itself reads right, from wherever the spin step ended.
+                # More steps than the survey's trim takes, because that one starts near its
+                # target and this one starts at whatever height found the card.
+                SWING_MEASURE_RANGE_M = 0.25
+                reached = await self._trim_altitude_to_range(
+                    SWING_MEASURE_RANGE_M, max_steps=6, ceiling_z=upper_z - 0.1)
+                if reached is None:
+                    logger.warning('Swing tuning: no rangefinder reading; measuring at the '
+                                   'spin-measurement height instead')
                 await self.calibrate_swing_latency(progress_range=(30.0, 61.0))
 
             await self.half_auto_calibration()
@@ -3681,12 +3716,20 @@ class AsyncObserver:
                     refined_anchors, refined_eyelets, refined_floor_z, fit_info = async_result.get(timeout=60)
                     if self.rec_diagnostics:
                         self._record_calibration_fitness('anchors_pass3', fit_info)
-                    if refined_anchors is not None:
-                        anchor_poses, eyelet_positions, floor_z = refined_anchors, refined_eyelets, refined_floor_z
-                        logger.info(f'Refined with gripper card views:\nanchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
-                        self.save_poses_arp(anchor_poses, eyelet_positions)
-                    else:
+                    # This pass carries far more residuals than the one before it, so its total
+                    # cost falls even when it reaches that by leaning the anchors and spreading
+                    # the pull points rather than by finding a better room. Weigh the structural
+                    # terms on their own and keep pass 2's geometry when they have been spent.
+                    plausible, reason = refinement_is_plausible(fit_info)
+                    if refined_anchors is None:
                         logger.warning('Gripper-card refinement optimization failed; keeping previous geometry')
+                    elif not plausible:
+                        logger.warning(f'Rejected gripper-card refinement: it fit the card survey by '
+                                       f'deforming the room ({reason}). Keeping previous geometry.')
+                    else:
+                        anchor_poses, eyelet_positions, floor_z = refined_anchors, refined_eyelets, refined_floor_z
+                        logger.info(f'Refined with gripper card views ({reason}):\nanchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+                        self.save_poses_arp(anchor_poses, eyelet_positions)
 
                     # Re-enable swing cancellation only if it still damps a test swing with the new
                     # geometry. _measure_swing_residual induces a swing, runs cancellation, and
