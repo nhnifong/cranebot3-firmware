@@ -30,10 +30,6 @@ const AuthManager = getAuthBridge();
 
 // --- GLOBAL VARIABLES ---
 const DEFAULT_CAM_TILT = 30.0; // degrees — matches the standard tilt adapter
-// Toothed tilt adapters are set by how many teeth are exposed; index = tooth count, value = degrees.
-const TILT_TEETH_ANGLES = [22.0, 26.0, 30.0, 34.0, 38.0, 42.0];
-// Value of the tilt option added for a configured angle that is not on the toothed scale.
-const CONFIGURED_TILT_OPTION = 'configured';
 
 // Debug toggle: show wireframe frustum helpers for the anchor cameras used in floor-projection raycasting
 const SHOW_ANCHOR_CAMERA_FRUSTUMS = false;
@@ -2661,42 +2657,12 @@ function openFullCalOverlay() {
     unavailable?.classList.add('hidden');
     content?.classList.remove('hidden');
   }
-  for (let i = 0; i < 2; i++) showConfiguredTilt(i);
   showConfiguredPole();
   overlay.classList.remove('hidden');
 }
 
-/** Preselect the tilt the robot reported for this anchor, so starting calibration without
- * touching the control keeps the configured angle rather than the markup's default. */
-function showConfiguredTilt(anchorNum: number) {
-  const sel = document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement | null;
-  const configured = lastTiltAngles[anchorNum];
-  if (!sel) return;
-  sel.querySelector(`option[value="${CONFIGURED_TILT_OPTION}"]`)?.remove();
-  if (configured == null) return;
-  // Tolerant match: the angle round-trips through a 32-bit proto float.
-  const teeth = TILT_TEETH_ANGLES.findIndex(a => Math.abs(a - configured) < 0.05);
-  if (teeth >= 0) {
-    sel.value = teeth.toString();
-    return;
-  }
-  // An angle off the adapter scale (hand-set via component details) is still what this robot
-  // is calibrated around, so it gets its own option rather than being rounded onto the scale.
-  const opt = document.createElement('option');
-  opt.value = CONFIGURED_TILT_OPTION;
-  opt.textContent = `${configured.toFixed(1)}° — as configured`;
-  sel.appendChild(opt);
-  sel.value = CONFIGURED_TILT_OPTION;
-}
-
-function readFullCalTiltAngle(anchorNum: number): number {
-  const sel = document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement | null;
-  if (sel?.value === CONFIGURED_TILT_OPTION) return lastTiltAngles[anchorNum] ?? DEFAULT_CAM_TILT;
-  const teeth = parseInt(sel?.value ?? '', 10);
-  return TILT_TEETH_ANGLES[teeth] ?? DEFAULT_CAM_TILT;
-}
-
-/** Preselect the pole the robot reported, the same contract as showConfiguredTilt. A
+/** Preselect the pole the robot reported, so opening the panel and starting without
+ * touching the control keeps what the robot is set to rather than the markup's default. A
  * config predating the field reports UNSPECIFIED, which the host reads as ABS500, so
  * select that rather than leaving the markup's default proposing a different pole. */
 function showConfiguredPole() {
@@ -2719,20 +2685,6 @@ function initFullCalPanel() {
 
   document.getElementById('btn-fullcal-start')?.addEventListener('click', () => {
     sendControl([
-      nf.control.ControlItem.create({
-        singleComponentAction: {
-          isGripper: false, anchorNum: 0,
-          action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
-          camAngle: readFullCalTiltAngle(0),
-        }
-      }),
-      nf.control.ControlItem.create({
-        singleComponentAction: {
-          isGripper: false, anchorNum: 1,
-          action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
-          camAngle: readFullCalTiltAngle(1),
-        }
-      }),
       // Ahead of the calibration, since the pole decides the gantry marker and how far
       // the gripper hangs below it - both of which the calibration measures against.
       nf.control.ControlItem.create({
