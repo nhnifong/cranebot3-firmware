@@ -144,9 +144,24 @@ the rate head exactly as before.
 More grip is positive, less grip is negative; scaled to the robot's finger speed units
 downstream, which keeps it compatible with the existing gripper_vel action.
 
-Predicted from [CLS] rather than from any cell, because by the time the decision matters
-the object usually fills or blinds the frame. Whether to close is a property of the
-whole image, not of a location in it.
+Predicted from [CLS] by default, on the argument that by the time the decision matters the
+object usually fills or blinds the frame.
+
+`--spatial_close` reads it off the cell grid instead, on the opposite argument: closing is
+a test of whether there is something *between the fingers* - bottom centre of a rigidly
+mounted camera - square on, and near enough. A vector pooled over the whole image can say
+the frame holds a graspable thing without saying this one is in the jaws, which is the
+distinction the head exists to make. The cells are reduced to 32 channels, average-pooled
+to a 4x6 grid, and flattened with the state vector into a small MLP. Pooled to a grid
+rather than to a vector on purpose: a mean over the whole map would throw away exactly the
+position being asked about. The state rides along a second time (it is already FiLMed into
+the map upstream) because the rangefinder is most of "near enough".
+
+Both are one checkpoint key apart, so the two can be trained and compared with everything
+else held fixed. A checkpoint with no `spatial_close` key builds the [CLS] head, and the
+deployed output is identical either way - same `close_logit`, same `decode`, same robot
+path. The grasp-pressure head stays on [CLS] under both: how hard to squeeze is a property
+of the object, not of where it sits in frame.
 
 Labels for synthetic frames are the open problem. Rather than hand-authoring a rule,
 author a *parametrised* one - close when the target is inside the jaw region and the
