@@ -745,6 +745,8 @@ joined by a line.
 `--lerobot_grasp` is what hands the grasp to a policy session instead, and that one does
 fall back here when no session answers.
 
+## 9. Publish Model
+
 `--local_models` reads `models/visual_servo.pth`; without it the checkpoint comes from
 `naavox/visual_servo` on the hub, which has to have been published there first:
 
