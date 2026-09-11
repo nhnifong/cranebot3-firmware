@@ -587,7 +587,8 @@ for making sure they were all over empty floor.
 Recordings in which closing the jaws would catch nothing:
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/false-grabs --false_grabs \
+        --repo_id naavox/false-grabs naavox/bd-false-grabs
+        --false_grabs \
         --output_root datasets/visual_servoing_pool_252 \
         --preview_dir datasets/visual_servoing_pool_252/false_grab_preview
 
@@ -669,7 +670,7 @@ an object the robot has never seen.
 
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing_pool_252 \
-        --close_heads \
+        --close_heads --spatial_close \
         --epochs 14 \
         --batch_size 400
 
