@@ -15,6 +15,7 @@ import { GamepadController } from './ui/gamepad.ts'
 import { MobileShell } from './ui/mobile.ts'
 import { TargetListManager } from './ui/target_list_manager.ts'
 import { Say, Listen } from './utils.ts';
+import { setHostVersion, hostSupports } from './version_gates.ts';
 import { isTutorialMode, maybeStartTutorial } from './tutorial.ts';
 
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -30,6 +31,10 @@ const AuthManager = getAuthBridge();
 
 // --- GLOBAL VARIABLES ---
 const DEFAULT_CAM_TILT = 30.0; // degrees — matches the standard tilt adapter
+// Toothed tilt adapters are set by how many teeth are exposed; index = tooth count, value = degrees.
+const TILT_TEETH_ANGLES = [22.0, 26.0, 30.0, 34.0, 38.0, 42.0];
+// Value of the tilt option added for a configured angle that is not on the toothed scale.
+const CONFIGURED_TILT_OPTION = 'configured';
 
 // Debug toggle: show wireframe frustum helpers for the anchor cameras used in floor-projection raycasting
 const SHOW_ANCHOR_CAMERA_FRUSTUMS = false;
@@ -1203,6 +1208,16 @@ function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
         applyAnchorCamTilt(i, camera, lastTiltAngles[i]);
       }
     }
+  }
+  // Optional on the wire precisely so this test works: an absent pole reads as
+  // UNSPECIFIED, which is a pole type, and would otherwise overwrite the real one.
+  if (data.poleType != null) {
+    lastPoleType = data.poleType;
+  }
+  // Only setup telemetry carries the host version; the other messages of this type leave it out.
+  if (data.hostVersion != null) {
+    setHostVersion(data.hostVersion);
+    applyFullCalVersionGates();
   }
   if (data.swingLatency) {
     const slider = document.getElementById('swing-latency-slider') as HTMLInputElement | null;
@@ -2652,7 +2667,68 @@ function openFullCalOverlay() {
     unavailable?.classList.add('hidden');
     content?.classList.remove('hidden');
   }
+  applyFullCalVersionGates();
+  for (let i = 0; i < 2; i++) showConfiguredTilt(i);
+  showConfiguredPole();
   overlay.classList.remove('hidden');
+}
+
+/** Whether calibration should be told the tilts and pole, rather than measuring them itself. */
+function fullCalAsksForTiltAndPole(): boolean {
+  return !hostSupports('calibrationMeasuresTiltAndPole');
+}
+
+/** Show the tilt and pole inputs only to a host that still needs to be told them. */
+function applyFullCalVersionGates() {
+  const hide = !fullCalAsksForTiltAndPole();
+  document.getElementById('fullcal-tilt-section')?.classList.toggle('hidden', hide);
+  document.getElementById('fullcal-pole-section')?.classList.toggle('hidden', hide);
+}
+
+/** Preselect the tilt the robot reported for this anchor, so starting calibration without
+ * touching the control keeps the configured angle rather than the markup's default. */
+function showConfiguredTilt(anchorNum: number) {
+  const sel = document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement | null;
+  const configured = lastTiltAngles[anchorNum];
+  if (!sel) return;
+  sel.querySelector(`option[value="${CONFIGURED_TILT_OPTION}"]`)?.remove();
+  if (configured == null) return;
+  // Tolerant match: the angle round-trips through a 32-bit proto float.
+  const teeth = TILT_TEETH_ANGLES.findIndex(a => Math.abs(a - configured) < 0.05);
+  if (teeth >= 0) {
+    sel.value = teeth.toString();
+    return;
+  }
+  // An angle off the adapter scale (hand-set via component details) is still what this robot
+  // is calibrated around, so it gets its own option rather than being rounded onto the scale.
+  const opt = document.createElement('option');
+  opt.value = CONFIGURED_TILT_OPTION;
+  opt.textContent = `${configured.toFixed(1)}° — as configured`;
+  sel.appendChild(opt);
+  sel.value = CONFIGURED_TILT_OPTION;
+}
+
+function readFullCalTiltAngle(anchorNum: number): number {
+  const sel = document.getElementById(`fullcal-teeth-${anchorNum}`) as HTMLSelectElement | null;
+  if (sel?.value === CONFIGURED_TILT_OPTION) return lastTiltAngles[anchorNum] ?? DEFAULT_CAM_TILT;
+  const teeth = parseInt(sel?.value ?? '', 10);
+  return TILT_TEETH_ANGLES[teeth] ?? DEFAULT_CAM_TILT;
+}
+
+/** Preselect the pole the robot reported, the same contract as showConfiguredTilt. A
+ * config predating the field reports UNSPECIFIED, which the host reads as ABS500, so
+ * select that rather than leaving the markup's default proposing a different pole. */
+function showConfiguredPole() {
+  const sel = document.getElementById('fullcal-pole') as HTMLSelectElement | null;
+  if (!sel || lastPoleType == null) return;
+  const name = nf.common.PoleType[lastPoleType];
+  sel.value = name === 'POLETYPE_UNSPECIFIED' ? 'POLETYPE_ABS500' : name;
+}
+
+function readFullCalPoleType(): nf.common.PoleType {
+  const sel = document.getElementById('fullcal-pole') as HTMLSelectElement | null;
+  const chosen = (nf.common.PoleType as any)[sel?.value ?? ''];
+  return chosen ?? lastPoleType ?? nf.common.PoleType.POLETYPE_CARBON270;
 }
 
 function initFullCalPanel() {
@@ -2661,6 +2737,37 @@ function initFullCalPanel() {
   document.getElementById('fullcal-bg-catcher')?.addEventListener('click', close);
 
   document.getElementById('btn-fullcal-start')?.addEventListener('click', () => {
+    // Gated on the version rather than on visibility: the hidden selects still hold values,
+    // and sending them to a host that measures both would overwrite what its measurement
+    // falls back on with whatever the markup defaulted to.
+    if (fullCalAsksForTiltAndPole()) {
+      sendControl([
+        nf.control.ControlItem.create({
+          singleComponentAction: {
+            isGripper: false, anchorNum: 0,
+            action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
+            camAngle: readFullCalTiltAngle(0),
+          }
+        }),
+        nf.control.ControlItem.create({
+          singleComponentAction: {
+            isGripper: false, anchorNum: 1,
+            action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
+            camAngle: readFullCalTiltAngle(1),
+          }
+        }),
+        // Ahead of the calibration, since the pole decides the gantry marker and how far
+        // the gripper hangs below it - both of which the calibration measures against.
+        nf.control.ControlItem.create({
+          singleComponentAction: {
+            isGripper: true,
+            action: nf.control.ComponentAction.COMPONENTACTION_SET_POLE_TYPE,
+            poleType: readFullCalPoleType(),
+          }
+        }),
+      ]);
+    }
+
     simpleCommand(nf.control.Command.COMMAND_FULL_CAL);
     close();
   });
@@ -2846,6 +2953,9 @@ let currentHoverType: string | null = null;
 let currentHoverIndex: number = -1;
 let activeComponentData: { type: string, index: number, name: string } | null = null;
 let lastTiltAngles: number[] = [];
+// The pole the robot says it has, null until setup telemetry arrives. The full calibration
+// panel preselects it so opening and starting cannot silently change the pole.
+let lastPoleType: nf.common.PoleType | null = null;
 // Tracks the tilt angle (degrees) currently applied to each anchor's camera so deltas are correct.
 const appliedCamTilt: (number | null)[] = [null, null];
 

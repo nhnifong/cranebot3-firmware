@@ -10,6 +10,7 @@ import socket
 import asyncio
 import argparse
 import logging
+import importlib.metadata
 from zeroconf import IPVersion, ServiceStateChange, Zeroconf
 from zeroconf.asyncio import (
     AsyncServiceBrowser,
@@ -176,6 +177,14 @@ VERSION_GATES = {
     "speed_0.45": "4.1.0",
     "gripper_card_survey": "4.2.0",
 }
+
+def host_nf_robot_version():
+    """This host's installed nf_robot version, or None when it runs from a source tree that was
+    never installed and so has no package metadata to read."""
+    try:
+        return importlib.metadata.version('nf_robot')
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 def _ignore_sigint():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -426,8 +435,10 @@ class AsyncObserver:
         """Push the stored poses and the setup values that ride with them.
 
         Only arpeggio anchors have eyelets and tilt adapters to report. The pole goes in
-        either way: every robot hangs from one.
+        either way: every robot hangs from one. So does the host's own version, which is how
+        a UI tells which setup steps this host still needs it to ask about.
         """
+        host_version = host_nf_robot_version()
         if self.config.anchor_type == common.AnchorType.ARPEGGIO:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
@@ -436,12 +447,14 @@ class AsyncObserver:
                 swing_latency=self.config.swing_latency,
                 calibrated=self.config.calibrated_status,
                 pole_type=self.config.gripper.pole_type,
+                host_version=host_version,
             ))
         else:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
                 calibrated=self.config.calibrated_status,
                 pole_type=self.config.gripper.pole_type,
+                host_version=host_version,
             ))
 
     async def send_setup_telemetry(self):

@@ -702,6 +702,58 @@
 
         <div id="fullcal-content">
 
+          <!-- Section: Tilt Adapters. Hidden for hosts that measure the tilt during calibration. -->
+          <div id="fullcal-tilt-section" class="session-section">
+            <div class="fullcal-section-heading">Confirm Camera Tilt</div>
+
+            <p class="fullcal-body">Confirm the camera tilt. Two exposed teeth (30°) is the default.
+              <span class="help-hint" tabindex="0">
+                <span class="help-hint-icon">?</span>
+                <img class="help-hint-img" src="%VITE_ASSET_BUCKET_URL%/assets/playroom/tilt_adapter.webp" alt="Tilt adapters" />
+              </span>
+            </p>
+            <div style="display:flex; gap:16px;">
+              <div class="session-input-group" style="flex:1; margin-bottom:0;">
+                <div class="input-label">Anchor 0 tilt adapter</div>
+                <select id="fullcal-teeth-0" class="input-text" style="width:100%; box-sizing:border-box;" title="Tilt adapter installed on Anchor 0. Count the teeth exposed under the anchor cover, or use the angle printed on a fixed adapter.">
+                  <option value="0">0 teeth &mdash; 22&deg;</option>
+                  <option value="1">1 tooth &mdash; 26&deg;</option>
+                  <option value="2" selected>2 teeth &mdash; 30&deg;</option>
+                  <option value="3">3 teeth &mdash; 34&deg;</option>
+                  <option value="4">4 teeth &mdash; 38&deg;</option>
+                  <option value="5">5 teeth &mdash; 42&deg;</option>
+                </select>
+              </div>
+              <div class="session-input-group" style="flex:1; margin-bottom:0;">
+                <div class="input-label">Anchor 1 tilt adapter</div>
+                <select id="fullcal-teeth-1" class="input-text" style="width:100%; box-sizing:border-box;" title="Tilt adapter installed on Anchor 1. Count the teeth exposed under the anchor cover, or use the angle printed on a fixed adapter.">
+                  <option value="0">0 teeth &mdash; 22&deg;</option>
+                  <option value="1">1 tooth &mdash; 26&deg;</option>
+                  <option value="2" selected>2 teeth &mdash; 30&deg;</option>
+                  <option value="3">3 teeth &mdash; 34&deg;</option>
+                  <option value="4">4 teeth &mdash; 38&deg;</option>
+                  <option value="5">5 teeth &mdash; 42&deg;</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section: Gripper Pole. Hidden for hosts that measure the pole during calibration. -->
+          <div id="fullcal-pole-section" class="session-section">
+            <div class="fullcal-section-heading">Confirm Gripper Pole</div>
+
+            <p class="fullcal-body">Confirm the pole type.
+            </p>
+            <div class="session-input-group" style="margin-bottom:0;">
+              <div class="input-label">Installed pole</div>
+              <select id="fullcal-pole" class="input-text" style="width:100%; box-sizing:border-box;" title="The pole between the gantry and the gripper. The carbon poles mount the flat marker; the ABS pole mounts the box marker.">
+                <option value="POLETYPE_CARBON270">270mm carbon &mdash; flat marker</option>
+                <option value="POLETYPE_CARBON400">400mm carbon &mdash; flat marker</option>
+                <option value="POLETYPE_ABS500">500mm printed ABS &mdash; box marker</option>
+              </select>
+            </div>
+          </div>
+
           <!-- Section: Origin Markers -->
           <div class="session-section">
             <div class="fullcal-section-heading">Place Origin Markers</div>
