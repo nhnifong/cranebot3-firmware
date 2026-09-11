@@ -175,6 +175,21 @@ VERSION_GATES = {
     "gripper_card_survey": "4.2.0",
 }
 
+# model repo -> the hub commit this build downloads it at. hf_hub_download with no
+# revision re-resolves the tip of main on every start, so publishing a checkpoint would
+# change what every robot in the field runs at its next restart - no version bump, nothing
+# in the logs, and the old behaviour unrecoverable without knowing which commit it was.
+# Bump these deliberately, after the new checkpoint has been flown.
+#
+# --local_models ignores them and reads models/ instead, which is how a checkpoint gets
+# tried before it is pinned here.
+MODEL_REVISIONS = {
+    # ortho_target.TARGETING_MODEL_REPOID and servo.SERVO_MODEL_REPOID, spelled out
+    # because both modules are imported late and this table is read at import time.
+    "naavox/targeting": "aa8df16ce86d55f8a6ca851886f3649d06b0e932",
+    "naavox/visual_servo": "9255c396e8efc16caa18fd5cb0728de9a354ef81",
+}
+
 def _ignore_sigint():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
@@ -5443,8 +5458,10 @@ class AsyncObserver:
         def load_sync():
             from nf_robot.ml import ortho_target
             filename = ortho_target.TARGETING_MODEL_FILENAME
+            repo_id = ortho_target.TARGETING_MODEL_REPOID
             path = (f"models/{filename}" if self.local_models
-                    else hf_hub_download(repo_id=ortho_target.TARGETING_MODEL_REPOID, filename=filename))
+                    else hf_hub_download(repo_id=repo_id, filename=filename,
+                                         revision=MODEL_REVISIONS[repo_id]))
             logger.info(f"Loading ortho target model from {path}...")
             model, _ = ortho_target.load_checkpoint(path, DEVICE)
             return model

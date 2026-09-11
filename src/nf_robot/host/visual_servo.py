@@ -324,7 +324,12 @@ class VisualServo:
                     "The visual servoing grasp cannot be used without some kind of hardware "
                     "acceleration. Loading was aborted because the torch device is CPU.")
 
-            model, checkpoint = servo.load_model(device, local_models=self.ob.local_models)
+            # Imported here rather than at module scope: observer imports this module.
+            from nf_robot.host.observer import MODEL_REVISIONS
+
+            model, checkpoint = servo.load_model(
+                device, local_models=self.ob.local_models,
+                revision=MODEL_REVISIONS[servo.SERVO_MODEL_REPOID])
             logger.info(f"Visual servoing model ready: epoch {checkpoint.get('epoch')}, "
                         f"input {tuple(checkpoint['image_size'])}, "
                         f"axis loss {checkpoint.get('axis_loss')}, "
@@ -381,6 +386,10 @@ class VisualServo:
             return (f"No visual servoing checkpoint at {LOCAL_MODEL_PATH}. Train one, or drop "
                     f"a downloaded {SERVO_MODEL_FILENAME} there, or run without "
                     f"--local_models to fetch it from the hub.")
+        if name == 'RevisionNotFoundError':
+            return (f"The pinned visual servoing checkpoint is not on {SERVO_MODEL_REPOID} "
+                    f"any more. observer.MODEL_REVISIONS names the commit to download; it "
+                    f"has to be one that still exists in that repo.")
         if name in ('RepositoryNotFoundError', 'GatedRepoError', 'HfHubHTTPError',
                     'LocalEntryNotFoundError'):
             local = pathlib.Path(LOCAL_MODEL_PATH)

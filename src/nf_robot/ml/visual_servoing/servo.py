@@ -28,8 +28,12 @@ SERVO_MODEL_FILENAME = "visual_servo.pth"
 LOCAL_MODEL_PATH = "models/visual_servo.pth"
 
 
-def load_model(device, local_models=False):
+def load_model(device, local_models=False, revision=None):
     """The trained checkpoint on `device`, from models/ or from the hub.
+
+    `revision` is the hub commit to download at; None takes the tip of main, which is what
+    a training or evaluation run wants. The robot passes a pin (observer.MODEL_REVISIONS)
+    so that publishing a checkpoint does not change what is already flying.
 
     Returns (model, checkpoint) - the checkpoint carries the metrics and the input size,
     both worth logging when a model reaches a robot.
@@ -41,7 +45,8 @@ def load_model(device, local_models=False):
     else:
         from huggingface_hub import hf_hub_download
 
-        path = hf_hub_download(repo_id=SERVO_MODEL_REPOID, filename=SERVO_MODEL_FILENAME)
+        path = hf_hub_download(repo_id=SERVO_MODEL_REPOID, filename=SERVO_MODEL_FILENAME,
+                               revision=revision)
     logger.info(f"Loading visual servoing model from {path}...")
     return load_checkpoint(path, device)
 
