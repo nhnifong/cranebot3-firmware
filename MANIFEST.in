@@ -4,5 +4,6 @@ recursive-include src/nf_robot/ui/assets *
 recursive-include src/nf_robot/protos *.proto
 recursive-include src/nf_robot/scripts *.sh
 recursive-include src/nf_robot/ml/models *
+include src/nf_robot/common/model_revisions.json
 global-exclude *.pyc
 global-exclude pycache

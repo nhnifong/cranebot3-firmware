@@ -753,6 +753,15 @@ fall back here when no session answers.
 Until it is, a run without `--local_models` declines the grasp and says so rather than
 raising.
 
+Uploading is not enough to put a checkpoint on a robot. Robots download at a fixed commit
+recorded in `common/model_revisions.json`, so that publishing does not change what is
+already flying. Move the pin once the new checkpoint has been flown, and commit the file:
+
+    python -m nf_robot.ml.pin_latest_model --visual_servo
+
+It prints the commit title it is pinning to, so check that is the upload you meant.
+`--dry_run` says what would change without writing it.
+
 The `servograsp` debug command runs one grasp from wherever the gripper is parked, so a
 checkpoint can be tried without the pick and place loop choosing targets around it.
 `servoloop` repeats that forever - grasp, drop where the lift ended, settle, again -

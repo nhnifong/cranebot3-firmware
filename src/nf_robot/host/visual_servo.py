@@ -30,6 +30,7 @@ import time
 
 import numpy as np
 
+from nf_robot.common.model_revisions import REVISIONS_PATH, pinned_revision
 from nf_robot.common.util import clamp
 from nf_robot.generated.nf import telemetry
 from nf_robot.host.arp_gripper_client import OPEN, CLOSED, RANGE_MAX_AGE_S
@@ -324,12 +325,9 @@ class VisualServo:
                     "The visual servoing grasp cannot be used without some kind of hardware "
                     "acceleration. Loading was aborted because the torch device is CPU.")
 
-            # Imported here rather than at module scope: observer imports this module.
-            from nf_robot.host.observer import MODEL_REVISIONS
-
             model, checkpoint = servo.load_model(
                 device, local_models=self.ob.local_models,
-                revision=MODEL_REVISIONS[servo.SERVO_MODEL_REPOID])
+                revision=pinned_revision(servo.SERVO_MODEL_REPOID))
             logger.info(f"Visual servoing model ready: epoch {checkpoint.get('epoch')}, "
                         f"input {tuple(checkpoint['image_size'])}, "
                         f"axis loss {checkpoint.get('axis_loss')}, "
@@ -388,8 +386,8 @@ class VisualServo:
                     f"--local_models to fetch it from the hub.")
         if name == 'RevisionNotFoundError':
             return (f"The pinned visual servoing checkpoint is not on {SERVO_MODEL_REPOID} "
-                    f"any more. observer.MODEL_REVISIONS names the commit to download; it "
-                    f"has to be one that still exists in that repo.")
+                    f"any more. {REVISIONS_PATH} names the commit to download; it has to "
+                    f"be one that still exists in that repo.")
         if name in ('RepositoryNotFoundError', 'GatedRepoError', 'HfHubHTTPError',
                     'LocalEntryNotFoundError'):
             local = pathlib.Path(LOCAL_MODEL_PATH)

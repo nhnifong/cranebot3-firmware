@@ -83,6 +83,16 @@ intermediate is a LeRobot dataset and the result is not:
 
        hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
 
+  9. Move the pin, and commit it. Robots download this model at a fixed commit
+     recorded in common/model_revisions.json, so step 8 alone changes nothing for
+     anyone - which is the point, since it means publishing cannot alter what is
+     already flying. This is what says the new checkpoint is the one to run:
+
+       python -m nf_robot.ml.pin_latest_model --targeting
+
+     It prints the commit title it pins to, so check that is the upload you meant;
+     --dry_run says what would change without writing it.
+
 Labels can also come from the UI instead of a recording, and they are the only frames
 where every target is marked - the shape this head wants, and one the teleop labels
 cannot supply, since an episode confirms one grasp and says nothing about the rest of the

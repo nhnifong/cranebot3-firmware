@@ -65,6 +65,8 @@ qa-gripper-arp = "nf_robot.qa.gripper_arp_eval:main"
 qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
 
 [tool.setuptools.package-data]
+# the model pins are read at runtime, so they have to ship with the package
+"nf_robot.common" = ["model_revisions.json"]
 "nf_robot.scripts" = ["*.sh"]
 "nf_robot.protos" = ["protos/*"]
 "nf_robot.ui" = ["assets/**"]
