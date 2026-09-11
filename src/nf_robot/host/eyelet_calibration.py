@@ -22,7 +22,7 @@ W_DIAMOND_PLANAR = 0.4 # sideways offset of an observed gantry position from the
 W_EYELET_REG = 0.2 # where an eyelet ends up == the initial guess it started from
 W_SHAPE_MATCH = 0.2 # distance between the two anchors == distance between the two eyelets
 W_ANCHOR_TILT = 2.0 # each anchor's own z axis == the room's z axis (leaves only rotation about z)
-W_GRIPPER_DIST = 1.0 # change in pull-point-to-gantry distance between two gripper hovers == the
+W_GRIPPER_DIST = 0.6 # change in pull-point-to-gantry distance between two gripper hovers == the
                      # change that line's measured length reports (as W_DIAMOND_DIST, close range).
                      # Scaled down at use, so this is the weight of one independent delta, not one pair.
 W_ROOM_YAW = 5.0 # yaw of the anchor layout == yaw of the reference layout (see room_yaw_offset)

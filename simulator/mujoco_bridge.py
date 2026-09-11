@@ -45,6 +45,8 @@ except ImportError as e:  # pragma: no cover - a clearer message than the raw Im
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.robot.spools import SpiralCalculator
+from nf_robot.robot.server_conf import read_hold_torque
+from nf_robot.robot.spool_dm import HOLD_TORQUE_MOTION_VEL
 
 
 DEFAULT_MODEL = os.path.join(
@@ -404,6 +406,7 @@ class MujocoSpoolMotor:
         self.accel = None         # rad/s^2, from set_acceleration
         self.enabled = False
         self.mode = None
+        self.last_turn = 0        # way the shaft last turned, for the reported friction
 
         # Seed the true zero angle so that shaft angle 0 means initial_length of line is
         # out, which is where the model's keyframe has the gantry.
@@ -491,6 +494,14 @@ class MujocoSpoolMotor:
             revs = self._shaft_revs()
             m_per_rev = self.sc.get_unspool_rate(revs)
             torq = -tension * m_per_rev / (2 * math.pi * self.direction)
+            # a real motor's torque reading also carries the friction it last pushed through,
+            # which spool_dm takes back off. report the same amount so the two cancel.
+            if self.vel > HOLD_TORQUE_MOTION_VEL:
+                self.last_turn = 1
+            elif self.vel < -HOLD_TORQUE_MOTION_VEL:
+                self.last_turn = -1
+            hold = self.hold_torque
+            torq += {1: hold[0], -1: hold[1]}.get(self.last_turn, (hold[0] + hold[1]) / 2)
             # wrap position the way the real motor reports it
             pos = self.raw_rad
             pos = (pos + POS_WRAP_RAD / 2) % POS_WRAP_RAD - POS_WRAP_RAD / 2
@@ -544,6 +555,8 @@ class MujocoDaMiaoController:
             initial_length=self.world.keyframe_spool_length(line_index))
         m.motor_id = motor_id
         m.feedback_id = feedback_id
+        # the same value spool_dm will load for this id
+        m.hold_torque = read_hold_torque(motor_id)
         self.motors[motor_id] = m
         logger.info('anchor %d %s spool -> mujoco %s (%.1f m spool, start %.3f m out)',
                     self.anchor_index, kind, LINE_MAP[line_index], full_length,

@@ -39,6 +39,16 @@ WINDING_SHORT = 'short'
 WINDING_LONG = 'long'
 WINDINGS = (WINDING_SHORT, WINDING_LONG)
 
+# The torque a spool motor reports while holding still with no load on the line, in N.m in the
+# motor's own frame, as (after turning positive, after turning negative). It is the friction the
+# motor was pushing through when it stopped, held by its speed loop, so it depends on which way
+# the shaft last turned. anchor_arp_eval measures it per motor and records it as
+#   hold_torque_motor<can id>=<after positive>,<after negative>
+# Anchors without a measurement get the mean of four motors measured by hand: two bare and the
+# two on an installed anchor.
+HOLD_TORQUE_KEY = 'hold_torque_motor{}'
+DEFAULT_HOLD_TORQUE_NM = (0.0252, -0.0328)
+
 
 def read_server_conf(path=None):
     """Parse server.conf into (component_type, fields).
@@ -86,10 +96,48 @@ def read_winding(path=None):
     return winding
 
 
-def write_server_conf(component_type, winding=WINDING_SHORT, path=CONF_PATH):
-    """Rewrite server.conf from scratch. Fields first; see the module docstring for why."""
+def parse_hold_torque(value):
+    """'<after positive>,<after negative>' -> (float, float), or None if it doesn't hold a
+    positive value followed by a negative one."""
+    try:
+        after_pos, after_neg = (float(v) for v in value.split(','))
+    except (AttributeError, ValueError):
+        return None
+    if not after_pos > 0 > after_neg:
+        return None
+    return after_pos, after_neg
+
+
+def read_hold_torque(motor_id, path=None):
+    """(after positive, after negative) holding torque for the motor with this CAN id, in N.m.
+    Falls back to DEFAULT_HOLD_TORQUE_NM when the file or the field is missing or unreadable."""
+    _, fields = read_server_conf(path)
+    key = HOLD_TORQUE_KEY.format(motor_id)
+    if key not in fields:
+        return DEFAULT_HOLD_TORQUE_NM
+    hold = parse_hold_torque(fields[key])
+    if hold is None:
+        logger.warning(f'server.conf: unreadable {key}={fields[key]!r}, assuming {DEFAULT_HOLD_TORQUE_NM}')
+        return DEFAULT_HOLD_TORQUE_NM
+    return hold
+
+
+def write_server_conf(component_type, winding=WINDING_SHORT, hold_torques=None, path=CONF_PATH):
+    """Rewrite server.conf. Fields first; see the module docstring for why.
+
+    hold_torques is {motor_id: (after positive, after negative)}. Measurements already in the
+    file are kept for any motor not given, so rewriting the build details does not throw away a
+    friction measurement that took the engineer a slack-line setup to get.
+    """
+    _, old_fields = read_server_conf(path)
+    holds = {k: v for k, v in old_fields.items()
+             if k.startswith(HOLD_TORQUE_KEY.format('')) and parse_hold_torque(v) is not None}
+    for motor_id, (after_pos, after_neg) in (hold_torques or {}).items():
+        holds[HOLD_TORQUE_KEY.format(motor_id)] = f'{after_pos:.5f},{after_neg:.5f}'
     with open(path, 'w') as f:
         f.write(f'winding={winding}\n')
+        for key in sorted(holds):
+            f.write(f'{key}={holds[key]}\n')
         f.write(component_type + '\n')
 
 

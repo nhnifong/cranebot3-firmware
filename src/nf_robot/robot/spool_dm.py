@@ -6,6 +6,11 @@ import numpy as np
 from damiao_motor import DaMiaoMotor
 
 from nf_robot.robot.spools import SpiralCalculator
+from nf_robot.robot.server_conf import read_hold_torque
+
+# shaft speed in rad/s (about 4 mm/s of line) above which the spool counts as turning, for
+# choosing which holding torque to take off the torque reading. A stopped motor reads -0.011.
+HOLD_TORQUE_MOTION_VEL = 0.1
 
 
 # values that can be overridden by the controller
@@ -56,7 +61,7 @@ class DamiaoSpoolController:
         should be set to 1 for the motor on the right when facing the front of the device.
         in other words should be 1 when negative motor commands reel in the line.
     """
-    def __init__(self, motor:DaMiaoMotor, empty_diameter, full_diameter, full_length, config, direction, extra_tension_n=0.0):
+    def __init__(self, motor:DaMiaoMotor, empty_diameter, full_diameter, full_length, config, direction, extra_tension_n=0.0, hold_torque=None):
         """
         Create a controller for a spool of line.
 
@@ -65,11 +70,22 @@ class DamiaoSpoolController:
         line_capacity_m is the length of line in meters that is attached to this spool.
             if all of it were reeled in, the object at the end would reach the limit switch, if there is one.
         extra_tension_n is added to TENSION_FLOOR_N, e.g. to account for the slightly heavier powerline.
+        hold_torque is (after positive, after negative), the torque in N.m, motor frame, this motor
+            reports with no load after last turning each way. Read from server.conf by CAN id if not given.
         """
         self.motor = motor
         self.direction = direction
         # added to TENSION_FLOOR_N. per-instance because self.conf is shared across spools.
         self.extra_tension_n = extra_tension_n
+
+        # friction the motor's torque reading carries, which depends on the way the shaft last
+        # turned. taken off the torque before it becomes tension. until the shaft has turned
+        # there is no telling which one applies, so the midpoint is used.
+        if hold_torque is None:
+            hold_torque = read_hold_torque(getattr(motor, 'motor_id', None))
+        self.hold_torque = hold_torque
+        self.last_turn = 0  # +1 or -1, motor frame. 0 until the shaft has turned
+        logging.info(f'motor {getattr(motor, "motor_id", "?")} hold torque {hold_torque} N.m')
         # spiral always dir -1, we're hiding that from it.
         self.sc = SpiralCalculator(empty_diameter, full_diameter, full_length, 1, -1)
 
@@ -242,6 +258,18 @@ class DamiaoSpoolController:
                 motor_torque = self.direction * states.get('torq', 0.0) # Newton-meters
                 # we could also read status status_code, t_mos, t_rotor (temps)
 
+                raw_vel = states.get('vel', 0.0)
+                if raw_vel > HOLD_TORQUE_MOTION_VEL:
+                    self.last_turn = 1
+                elif raw_vel < -HOLD_TORQUE_MOTION_VEL:
+                    self.last_turn = -1
+                if self.last_turn > 0:
+                    hold = self.hold_torque[0]
+                elif self.last_turn < 0:
+                    hold = self.hold_torque[1]
+                else:
+                    hold = (self.hold_torque[0] + self.hold_torque[1]) / 2
+
                 # Convert to absolute position in revolutions
                 self.last_angle = self._update_absolute_angle(motor_pos)
 
@@ -253,7 +281,9 @@ class DamiaoSpoolController:
                 self.last_length = self.sc.get_unspooled_length(self.last_angle)
                 self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
                 current_line_speed = (motor_vel / twopi) * self.meters_per_rev
-                self.last_tension = (-smooth_torque * twopi) / self.meters_per_rev
+                # tension from the torque with the motor's own friction taken off. torque_err
+                # below still uses the raw torque its TARGET_TORQUE threshold was tuned against.
+                self.last_tension = (-(smooth_torque - self.direction * hold) * twopi) / self.meters_per_rev
 
                 if self.last_tension > self.conf['NO_CONN_TENSION_LIMIT']:
                     self.pauseTrackingLoop(disable_torque=True)

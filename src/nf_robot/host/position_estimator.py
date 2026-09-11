@@ -14,6 +14,7 @@ from scipy.spatial.transform import Rotation
 
 import nf_robot.common.definitions as model_constants
 from nf_robot.common.kalman_filter import KalmanFilter
+from nf_robot.host.tension_height import TensionResidualLogger, SLACK_TENSION_N
 from nf_robot.generated.nf import telemetry, common
 from nf_robot.common.util import *
 from nf_robot.common.pose_functions import compose_poses, gripper_imu_inv
@@ -346,6 +347,10 @@ class Positioner2:
         # last tension of each line in newtons
         self.tension = np.zeros(4)
 
+        # experimental: records each line's measured tension against what the force balance
+        # predicts at the fused position. purely observational, nothing reads it back.
+        self.tension_residual = TensionResidualLogger()
+
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
         assert points.shape == (4, 3), f"points = {points}"
@@ -523,7 +528,7 @@ class Positioner2:
 
             # if any line is measured to be slack,
             # make its length effectively infinite so it won't play a part in the hang position
-            lengths[self.tension < 0.0275] = 100
+            lengths[self.tension < SLACK_TENSION_N] = 100
 
             # calculate hang point
             result = find_hang_point(self.anchor_points, lengths)
@@ -541,6 +546,18 @@ class Positioner2:
                 self.kf.update(self.hang_vel, data_ts, self.vel_noise_covariance, 'velocity')
 
             self.hang_time_taken = time.time()-start_time
+
+    async def log_tension_residual(self):
+        """Periodically predict every line's tension at the fused position and log how far
+        the measured tension is from it."""
+        while self.run:
+            await asyncio.sleep(1/10)
+            # no tension reported yet, or everything slack with the gantry resting on something
+            if not np.any(self.tension):
+                continue
+            self.tension_residual.observe(
+                time.time(), self.anchor_points, self.tension, self.gant_pos, self.gant_vel,
+                holding=self.holding)
 
     def record_commanded_vel(self, vel):
         self.commanded_vel = vel
@@ -619,8 +636,11 @@ class Positioner2:
                 visual_task = tg.create_task(self.update_visual())
                 hang_task = tg.create_task(self.update_hang())
                 comv_task = tg.create_task(self.update_commanded_vel())
+                tension_task = tg.create_task(self.log_tension_residual())
 
         except asyncio.exceptions.CancelledError:
             pass
-            
+        finally:
+            self.tension_residual.close()
+
         np.save('gant_pos.npy', self.gant_pos)

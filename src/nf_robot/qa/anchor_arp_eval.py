@@ -3,6 +3,8 @@
 # test camera
 
 import argparse
+import random
+import statistics
 import time
 import socket
 import subprocess
@@ -21,6 +23,23 @@ ANCHOR_MOTOR_TARGETS = [
     ("lower", 1, 1),
     ("upper", 2, 2),
 ]
+
+# Holding torque measurement. See server_conf.DEFAULT_HOLD_TORQUE_NM for what is measured and why.
+HOLD_SLACK_M = 0.5  # slack asked for on each spool. a run reels in about 0.25 m of it
+HOLD_TENSION_LIMIT_N = 10.0  # abort if the torque implies more line tension than this
+HOLD_MAX_TRAVEL_RAD = 8.0  # abort past this far from the start, about 0.29 m of line
+HOLD_STATIONS = 12  # stops spread over one revolution
+HOLD_STROKE_RAD = 0.3  # the back and forth at each stop
+HOLD_SPEED = 3.0  # rad/s
+HOLD_ACCEL = 0.01  # ACC/DEC register, the value the spool loop runs at
+HOLD_RAD_S2_PER_ACCEL = 1000.0  # that register value measured as a 10 rad/s^2 ramp
+HOLD_STILL_S = 0.15  # still this long before reading the torque
+HOLD_STILL_VEL = 0.03  # rad/s. a stopped motor reads -0.011
+HOLD_MAX_SD_NM = 0.012  # per-stop scatter about 3x normal, seen when a spool rubs on something
+HOLD_LOOP_HZ = 100
+HOLD_STALE_COMMANDS = 20  # commands in a row with no feedback before aborting
+EMPTY_SPOOL_RADIUS_M = 0.036  # the most tension per N.m, so the tension limit trips early, not late
+POS_WRAP_RAD = 25.0  # reported position wraps over [-12.5, 12.5] rad
 
 
 def scan_motors(controller, motor_type=MOTOR_TYPE, ids=MOTOR_ID_SCAN_RANGE, duration=0.5):
@@ -304,6 +323,148 @@ def wind_with_ramp(motor, direction, total_revs, max_rev_per_s=4.0, accel_rev_pe
     motor.send_cmd_vel(target_velocity=0)
 
 
+class HoldTorqueAbort(Exception):
+    pass
+
+
+class HoldTorqueRun:
+    """Drives one motor through the holding torque measurement, checking every command's
+    feedback against the tension, travel and feedback limits."""
+
+    def __init__(self, motor):
+        self.motor = motor
+        self.raw = None
+        self.pos = 0.0  # unwrapped rad since the first feedback
+        self.last_frame = None
+        self.stale = 0
+        self.torque_limit = HOLD_TENSION_LIMIT_N * EMPTY_SPOOL_RADIUS_M
+
+    def tick(self, vel):
+        t0 = time.time()
+        self.motor.send_cmd_vel(target_velocity=vel)
+        time.sleep(max(0.0, 1.0 / HOLD_LOOP_HZ - (time.time() - t0)))
+        # the driver replaces its state dict with every feedback frame it decodes
+        frame = self.motor.state
+        if not frame or frame is self.last_frame:
+            self.stale += 1
+            if self.stale >= HOLD_STALE_COMMANDS:
+                raise HoldTorqueAbort(f'no feedback for {self.stale} commands')
+            return {}
+        self.stale = 0
+        self.last_frame = frame
+        torq = frame.get('torq', 0.0)
+        if abs(torq) > self.torque_limit:
+            raise HoldTorqueAbort(f'torque {torq:+.3f} N.m is about '
+                                  f'{abs(torq) / EMPTY_SPOOL_RADIUS_M:.1f} N of line tension')
+        raw = frame.get('pos', 0.0)
+        if self.raw is not None:
+            d = raw - self.raw
+            self.pos += d - POS_WRAP_RAD * round(d / POS_WRAP_RAD)
+        self.raw = raw
+        if abs(self.pos) > HOLD_MAX_TRAVEL_RAD:
+            raise HoldTorqueAbort(f'the spool turned {self.pos:+.1f} rad, past the {HOLD_MAX_TRAVEL_RAD} rad limit')
+        return frame
+
+    def move_to(self, target, timeout_s=5.0):
+        """Run toward target, letting go early enough that the decel lands near it. Speed is
+        capped so a short move still gets up to speed and slides before it stops."""
+        accel = HOLD_ACCEL * HOLD_RAD_S2_PER_ACCEL
+        dist = target - self.pos
+        sign = 1.0 if dist > 0 else -1.0
+        speed = min(HOLD_SPEED, sqrt(accel * abs(dist)))
+        brake = speed * speed / (2 * accel)
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            vel = sign * self.tick(sign * speed).get('vel', 0.0)
+            if sign * (target - self.pos) <= brake and vel >= 0.8 * speed:
+                return
+        raise HoldTorqueAbort('the spool did not get up to speed, it may be blocked')
+
+    def hold_and_read(self, timeout_s=2.0):
+        """Command zero until the shaft has been still for HOLD_STILL_S, then read the torque."""
+        deadline = time.time() + timeout_s
+        still_since = None
+        while time.time() < deadline:
+            if abs(self.tick(0.0).get('vel', 1.0)) < HOLD_STILL_VEL:
+                still_since = still_since or time.time()
+                if time.time() - still_since >= HOLD_STILL_S:
+                    break
+            else:
+                still_since = None
+        torques = []
+        while len(torques) < 5:  # a feedback outage ends this through tick's abort
+            torq = self.tick(0.0).get('torq')
+            if torq is not None:
+                torques.append(torq)
+        return statistics.fmean(torques)
+
+    def run(self, reel_in_direction):
+        """Returns ((after positive, after negative), (sd positive, sd negative)) in N.m.
+
+        Walks once around a revolution in the reel-in direction, so the net motion takes up slack
+        rather than paying out loose line. The held torque also varies with where the rotor
+        stops, faster than the station spacing, so each stop is at a random spot within its
+        station: evenly spaced stops sample that pattern at the same phase every time and bias
+        the whole run by wherever it started.
+        """
+        self.motor.enable()
+        time.sleep(0.1)
+        self.motor.ensure_control_mode('VEL')
+        self.motor.set_acceleration(HOLD_ACCEL)
+        self.motor.set_deceleration(-HOLD_ACCEL)
+        for _ in range(20):
+            self.tick(0.0)
+        held = {1: [], -1: []}
+        step = 2 * pi / HOLD_STATIONS
+        for i in range(HOLD_STATIONS):
+            base = reel_in_direction * (i + random.random()) * step
+            for sign, target in ((reel_in_direction, base + reel_in_direction * HOLD_STROKE_RAD),
+                                 (-reel_in_direction, base)):
+                self.move_to(target)
+                held[sign].append(self.hold_and_read())
+        for _ in range(5):
+            self.tick(0.0)
+        return ((statistics.fmean(held[1]), statistics.fmean(held[-1])),
+                (statistics.stdev(held[1]), statistics.stdev(held[-1])))
+
+
+def measure_hold_torques(motors):
+    """Measure the holding torque of each spool motor with slack line. Returns
+    {motor_id: (after positive, after negative)} for the motors that measured cleanly."""
+    print(f"Measuring spool friction. Pull at least {HOLD_SLACK_M * 100:.0f} cm of line off each spool "
+          "so both lines hang slack, and make sure nothing touches either spool or its line.")
+    print("Each spool turns about one revolution back and forth and reels some of that slack back in.")
+    input("Press Enter when ready...")
+
+    results = {}
+    for motor, reel_in_direction, name, _ in motors:
+        while True:
+            print(f"  Measuring the {name} motor...")
+            try:
+                (after_pos, after_neg), (sd_pos, sd_neg) = HoldTorqueRun(motor).run(reel_in_direction)
+            except HoldTorqueAbort as e:
+                print(f"  Stopped: {e}.")
+            else:
+                if max(sd_pos, sd_neg) > HOLD_MAX_SD_NM:
+                    print(f"  Readings too scattered (sd {sd_pos:.4f}, {sd_neg:.4f} N.m). "
+                          "The spool or line is probably touching something.")
+                elif not after_pos > 0 > after_neg:
+                    print(f"  Implausible result ({after_pos:+.4f}, {after_neg:+.4f} N.m).")
+                else:
+                    results[motor.motor_id] = (after_pos, after_neg)
+                    print(f"  {name} motor: {after_pos:+.4f} N.m after turning positive, "
+                          f"{after_neg:+.4f} N.m after turning negative.")
+                    break
+            finally:
+                for m, _, _, _ in motors:
+                    m.disable()
+            if input(f"  Pull {HOLD_SLACK_M * 100:.0f} cm of slack off the {name} spool again, "
+                     "clear anything touching it, and retry? y/n").strip().lower() != 'y':
+                print(f"  The {name} motor keeps its previous value, or the default if it has none.")
+                break
+    return results
+
+
 def test_camera():
     print('Starting Camera...')
 
@@ -405,6 +566,14 @@ def main():
                   "tie on a carabiner with a palomar knot.")
         else:
             continue
+
+    # Friction in each spool motor biases its tension reading by up to a newton, depending on
+    # the way it last turned. Measured here, after winding, while the line can still be slack.
+    if input("Do you want to measure spool friction? y/n").strip().lower() == 'y':
+        holds = measure_hold_torques(motors)
+        if holds:
+            server_conf.write_server_conf(anchor_type, winding=winding, hold_torques=holds)
+            print(f"Recorded spool friction for motor(s) {sorted(holds)} in {server_conf.CONF_PATH}.")
 
     if input("Do you want to run the camera test? y/n").strip().lower() == 'y':
         test_camera()
