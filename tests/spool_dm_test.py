@@ -222,8 +222,8 @@ class TestDamiaoSpoolController(unittest.TestCase):
             self.controller.run_spool_loop = False
         mock_sleep.side_effect = stop_loop
         
-        # Torque error > 0 means the line has gone slack.
-        # Target torque is -0.01. So giving it a positive torque (+0.1) forces a slack condition.
+        # A positive torque (+0.1) on a direction 1 spool reads as about -2.8 N of tension,
+        # well under PAYOUT_TENSION_FLOOR_N, so paying out is muted.
         self.mock_motor.get_states.return_value = {'pos': 0.0, 'vel': 0.0, 'torq': 0.1}
         
         # We try to outspool line (wanted_motor_vel > 0)
@@ -235,7 +235,7 @@ class TestDamiaoSpoolController(unittest.TestCase):
         cmd_vel_calls = self.mock_motor.send_cmd_vel.call_args_list
         last_cmd_vel = cmd_vel_calls[-1].kwargs['target_velocity']
         
-        # Because torque err > 0 and wanted vel > 0, mute = 0.
+        # Because tension < payout floor and wanted vel > 0, mute = 0.
         # Smooth_mute pulls it down heavily from 1 towards 0. 
         # So commanded velocity should be less than the raw aim requested.
         raw_wanted_vel = (1.0 / self.controller.meters_per_rev) * (2 * math.pi)

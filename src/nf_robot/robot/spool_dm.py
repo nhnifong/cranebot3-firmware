@@ -36,6 +36,10 @@ default_conf_dm = {
     # minimum tension in newtons to keep on the line when no hold target is set.
     # the loop reels in to restore at least this much tension while still obeying speed commands.
     'TENSION_FLOOR_N': 0.1,
+    # the floor while the motion controller is paying line out, which is also where the soft mute
+    # stops the payout. lower than TENSION_FLOOR_N so a nearly slack line can keep paying out
+    # and let the gantry reach a wall instead of holding it off.
+    'PAYOUT_TENSION_FLOOR_N': 0.0,
     # proportional gain converting a tension error (N) into a correction line speed (m/s).
     'TENSION_KP': 0.3,
     # clamp on the magnitude of the tension correction line speed in meters per second.
@@ -282,7 +286,8 @@ class DamiaoSpoolController:
                 self.meters_per_rev = self.sc.get_unspool_rate(self.last_angle)
                 current_line_speed = (motor_vel / twopi) * self.meters_per_rev
                 # tension from the torque with the motor's own friction taken off. torque_err
-                # below still uses the raw torque its TARGET_TORQUE threshold was tuned against.
+                # below still uses the raw torque its TARGET_TORQUE threshold was tuned against,
+                # but only setReferenceLength reads it now.
                 self.last_tension = (-(smooth_torque - self.direction * hold) * twopi) / self.meters_per_rev
 
                 if self.last_tension > self.conf['NO_CONN_TENSION_LIMIT']:
@@ -318,22 +323,31 @@ class DamiaoSpoolController:
                 wanted_line_speed = self.aim_line_speed
 
                 if self.tension_reg_enabled:
-                    # 1) soft mute: never pay out while slack, smoothed so the velocity eases
-                    #    to zero instead of stepping. prevents birdsnest. gated by a flag so it
-                    #    can be A/B tested live (it keeps the would-be-slack cable taut, which
+                    paying_out = wanted_line_speed > 0
+                    payout_floor = self.conf['PAYOUT_TENSION_FLOOR_N'] + self.extra_tension_n
+
+                    # 1) soft mute: never pay out below the payout floor, smoothed so the velocity
+                    #    eases to zero instead of stepping. prevents birdsnest. gated by a flag so
+                    #    it can be A/B tested live (it keeps the would-be-slack cable taut, which
                     #    over-constrains the gantry and warps open-loop moves).
                     if self.conf['SOFT_MUTE_ENABLED']:
-                        mute = 0 if (self.torque_err > 0 and wanted_line_speed > 0) else 1
+                        mute = 0 if (paying_out and self.last_tension < payout_floor) else 1
                         smooth_mute = mute * sf + smooth_mute * (1 - sf)
                         wanted_line_speed *= smooth_mute
 
                     # 2) active tension correction toward a target, with a hysteresis band.
-                    #    floor mode (no target): one-sided, only reels in below the floor.
+                    #    floor mode (no target): one-sided, only reels in below the floor, which
+                    #    is the lower payout floor while the motion controller is paying out.
                     #    hold mode (target set): two-sided, also pays out above the target.
                     band = self.conf['TENSION_BAND_N']
                     kp = self.conf['TENSION_KP']
                     max_corr = self.conf['MAX_TENSION_CORRECTION_MPS']
-                    target = self.tension_target if self.tension_target is not None else self.conf['TENSION_FLOOR_N'] + self.extra_tension_n
+                    if self.tension_target is not None:
+                        target = self.tension_target
+                    elif paying_out:
+                        target = payout_floor
+                    else:
+                        target = self.conf['TENSION_FLOOR_N'] + self.extra_tension_n
                     if self.last_tension < target - band:
                         correction = -min(max_corr, kp * (target - self.last_tension)) # reel in
                     elif self.tension_target is not None and self.last_tension > target + band:

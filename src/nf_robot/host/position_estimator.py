@@ -349,7 +349,7 @@ class Positioner2:
 
         # experimental: records each line's measured tension against what the force balance
         # predicts at the fused position. purely observational, nothing reads it back.
-        self.tension_residual = TensionResidualLogger()
+        # self.tension_residual = TensionResidualLogger()
 
     def set_anchor_points(self, points):
         """refers to the grommet points. shape (4,3)"""
@@ -636,7 +636,7 @@ class Positioner2:
                 visual_task = tg.create_task(self.update_visual())
                 hang_task = tg.create_task(self.update_hang())
                 comv_task = tg.create_task(self.update_commanded_vel())
-                tension_task = tg.create_task(self.log_tension_residual())
+                # tension_task = tg.create_task(self.log_tension_residual())
 
         except asyncio.exceptions.CancelledError:
             pass
