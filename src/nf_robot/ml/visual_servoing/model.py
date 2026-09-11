@@ -359,6 +359,9 @@ def predict(model, images, state, top_k=1):
 def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     freeze = checkpoint.get("freeze", True)
+    # These default off while training defaults them on, and the asymmetry is the point:
+    # here the question is what a checkpoint that does not mention them was built with,
+    # and the answer is the shape the key's absence describes.
     # Absent in every checkpoint written before these heads existed, which is what makes
     # those checkpoints keep loading: no key, no extra heads, same three outputs.
     model = VisualServoNet(

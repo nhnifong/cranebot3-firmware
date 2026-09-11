@@ -505,8 +505,9 @@ def train(args):
 
     if args.close_heads and not train_set.has_close_labels():
         raise SystemExit(
-            f"--close_heads needs close_now labels and no row in {data_root}/train has "
-            f"one. Re-mine the teleop half: the columns are written by mine_teleop.")
+            f"The close heads need close_now labels and no row in {data_root}/train has "
+            f"one. Re-mine the teleop half (the columns are written by mine_teleop), or "
+            f"pass --no_close_heads to train the finger-rate head alone.")
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
         close_heads=args.close_heads, spatial_close=args.spatial_close,
@@ -606,19 +607,31 @@ def main():
     parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
                         help="Mined dataset on the hub, used when --data_root is absent")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
+    # On by default: these answer *when* to start closing and *how hard* to end up
+    # squeezing, which is what the robot needs and what a per-frame rate label describes
+    # badly. --close_heads is still accepted so existing commands keep working.
     parser.add_argument(
-        "--close_heads", action="store_true",
-        help="Train the close-onset and grasp-pressure heads instead of relying on the "
-             "finger-rate head alone. The rate head still trains; these two answer *when* "
-             "to start closing and *how hard* to end up squeezing, which is what the "
-             "robot actually needs and what a per-frame rate label describes badly.")
+        "--close_heads", dest="close_heads", action="store_true", default=True,
+        help="Train the close-onset and grasp-pressure heads (the default). The "
+             "finger-rate head still trains alongside them.")
     parser.add_argument(
-        "--spatial_close", action="store_true",
-        help="Read the close head off the patch grid instead of the pooled [CLS] vector. "
-             "Whether to close is a spatial test - something between the fingers, square "
-             "on, near enough - and a vector averaged over the whole image can say the "
-             "frame holds a graspable thing but not that this one is in the jaws. Needs "
-             "--close_heads; ignored without it.")
+        "--no_close_heads", dest="close_heads", action="store_false",
+        help="Train the finger-rate head alone, the way checkpoints before the close "
+             "heads existed were built. Needed for a pool with no close_now labels.")
+    # Default None rather than True so that "not asked for" and "asked for" can be told
+    # apart: the first follows --close_heads, the second is worth an error when the close
+    # heads it moves are switched off.
+    parser.add_argument(
+        "--spatial_close", dest="spatial_close", action="store_true", default=None,
+        help="Read the close head off the patch grid rather than the pooled [CLS] vector "
+             "(the default whenever the close heads are built). Whether to close is a "
+             "spatial test - something between the fingers, square on, near enough - and "
+             "a vector averaged over the whole image can say the frame holds a graspable "
+             "thing but not that this one is in the jaws.")
+    parser.add_argument(
+        "--global_close", dest="spatial_close", action="store_false",
+        help="Read the close head off the [CLS] vector instead, the way it was built "
+             "before the spatial head.")
     parser.add_argument("--eval_every", type=int, default=1,
                         help="Score the eval split every N epochs (and always on the last)")
     parser.add_argument("--select_best", action="store_true",
@@ -658,8 +671,12 @@ def main():
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
     if args.spatial_close and not args.close_heads:
-        parser.error("--spatial_close only moves the close head that --close_heads builds; "
-                     "pass both or neither.")
+        parser.error("--spatial_close moves the close head that --no_close_heads just "
+                     "switched off; pass one or the other.")
+    # Unasked-for follows the close heads, so a --no_close_heads run records False rather
+    # than a stale True for a head it never built.
+    if args.spatial_close is None:
+        args.spatial_close = args.close_heads
     train(args)
 
 

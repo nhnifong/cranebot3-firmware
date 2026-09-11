@@ -116,10 +116,11 @@ captures are photographed already in their ideal grasping orientation.
 
 **3. Finger speed, scalar in [-1, 1], from the global vector.**
 
-A `--close_heads` checkpoint adds two more global heads and deploys from those instead,
-because what a rate label describes is a teleoperator's thumb: on the same situation it
-reads +1 one frame and 0 the next, and 69% of the mined values are exactly zero. What a
-grasp actually consists of is a decision and a target, so those are what get predicted:
+Two further heads are built alongside it by default and deployed from instead, because
+what a rate label describes is a teleoperator's thumb: on the same situation it reads +1
+one frame and 0 the next, and 69% of the mined values are exactly zero. What a grasp
+actually consists of is a decision and a target, so those are what get predicted
+(`--no_close_heads` trains the rate head alone, the way older checkpoints were built):
 
   **3a. Probability the close should have begun by this frame.** A step at the close
   onset, found by walking back from the grasp through the run of frames commanding a
@@ -144,24 +145,27 @@ the rate head exactly as before.
 More grip is positive, less grip is negative; scaled to the robot's finger speed units
 downstream, which keeps it compatible with the existing gripper_vel action.
 
-Predicted from [CLS] by default, on the argument that by the time the decision matters the
-object usually fills or blinds the frame.
+Predicted from the cell grid, because closing is a test of whether there is something
+*between the fingers* - bottom centre of a rigidly mounted camera - square on, and near
+enough. A vector pooled over the whole image can say the frame holds a graspable thing
+without saying this one is in the jaws, which is the distinction the head exists to make.
+On the robot this reads as a cleaner close signal than the [CLS] head gave.
 
-`--spatial_close` reads it off the cell grid instead, on the opposite argument: closing is
-a test of whether there is something *between the fingers* - bottom centre of a rigidly
-mounted camera - square on, and near enough. A vector pooled over the whole image can say
-the frame holds a graspable thing without saying this one is in the jaws, which is the
-distinction the head exists to make. The cells are reduced to 32 channels, average-pooled
-to a 4x6 grid, and flattened with the state vector into a small MLP. Pooled to a grid
-rather than to a vector on purpose: a mean over the whole map would throw away exactly the
-position being asked about. The state rides along a second time (it is already FiLMed into
-the map upstream) because the rangefinder is most of "near enough".
+The cells are reduced to 32 channels, average-pooled to a 4x6 grid, and flattened with the
+state vector into a small MLP. Pooled to a grid rather than to a vector on purpose: a mean
+over the whole map would throw away exactly the position being asked about. The state
+rides along a second time (it is already FiLMed into the map upstream) because the
+rangefinder is most of "near enough".
 
-Both are one checkpoint key apart, so the two can be trained and compared with everything
-else held fixed. A checkpoint with no `spatial_close` key builds the [CLS] head, and the
-deployed output is identical either way - same `close_logit`, same `decode`, same robot
-path. The grasp-pressure head stays on [CLS] under both: how hard to squeeze is a property
-of the object, not of where it sits in frame.
+`--global_close` builds it off [CLS] instead, which is where it used to live, on the
+argument that by the time the decision matters the object usually fills or blinds the
+frame. The two are one checkpoint key apart, so they can be trained and compared with
+everything else held fixed, and a checkpoint with no `spatial_close` key builds the [CLS]
+head - which is what every checkpoint written before the spatial one is. The deployed
+output is identical either way: same `close_logit`, same `decode`, same robot path.
+
+The grasp-pressure head stays on [CLS] under both: how hard to squeeze is a property of the
+object, not of where it sits in frame.
 
 Labels for synthetic frames are the open problem. Rather than hand-authoring a rule,
 author a *parametrised* one - close when the target is inside the jaw region and the
@@ -670,9 +674,12 @@ an object the robot has never seen.
 
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing_pool_252 \
-        --close_heads --spatial_close \
         --epochs 14 \
         --batch_size 400
+
+The close and grasp-pressure heads are built by default, with close read off the cell grid.
+`--no_close_heads` drops back to the finger-rate head alone, which a pool with no
+`close_now` labels needs; `--global_close` keeps the close head but reads it off [CLS].
 
 The whole `train/` split trains - what step 5 dealt. The checkpoint written after every epoch is always the
 newest one; `eval/` is scored and reported but selects nothing.
