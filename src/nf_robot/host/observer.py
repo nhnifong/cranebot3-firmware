@@ -10,6 +10,7 @@ import socket
 import asyncio
 import argparse
 import logging
+import importlib.metadata
 from zeroconf import IPVersion, ServiceStateChange, Zeroconf
 from zeroconf.asyncio import (
     AsyncServiceBrowser,
@@ -51,7 +52,9 @@ from nf_robot.host.data_store import DataStore
 from nf_robot.host.fake_progress import FakeProgress
 from nf_robot.host.stats import StatCounter
 from nf_robot.host.target_queue import TargetQueue
-from nf_robot.host.eyelet_calibration import optimize_arp_anchors, analyze_diamond_data, DIAMOND_SIZE
+from nf_robot.host.eyelet_calibration import (optimize_arp_anchors, analyze_diamond_data,
+                                             refinement_is_plausible, estimate_cam_tilts,
+                                             DIAMOND_SIZE)
 from nf_robot.host.component_client import max_origin_detections
 from nf_robot.host.arp_gripper_client import (ArpeggioGripperClient, rotate_vector,
                                               ROUTE_TAG_MAX_AGE_S, CAPTURE_RESOLUTION_SIZE,
@@ -181,6 +184,14 @@ VERSION_GATES = {
 # declaration as VERSION_GATES above - what this build expects to run against - kept as
 # data because bumping a pin should read as a data change. --local_models ignores it and
 # reads models/ instead, which is how a checkpoint gets flown before it is pinned.
+
+def host_nf_robot_version():
+    """This host's installed nf_robot version, or None when it runs from a source tree that was
+    never installed and so has no package metadata to read."""
+    try:
+        return importlib.metadata.version('nf_robot')
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 def _ignore_sigint():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -431,8 +442,10 @@ class AsyncObserver:
         """Push the stored poses and the setup values that ride with them.
 
         Only arpeggio anchors have eyelets and tilt adapters to report. The pole goes in
-        either way: every robot hangs from one.
+        either way: every robot hangs from one. So does the host's own version, which is how
+        a UI tells which setup steps this host still needs it to ask about.
         """
+        host_version = host_nf_robot_version()
         if self.config.anchor_type == common.AnchorType.ARPEGGIO:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
@@ -441,12 +454,14 @@ class AsyncObserver:
                 swing_latency=self.config.swing_latency,
                 calibrated=self.config.calibrated_status,
                 pole_type=self.config.gripper.pole_type,
+                host_version=host_version,
             ))
         else:
             self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
                 poses=[a.pose for a in self.config.anchors],
                 calibrated=self.config.calibrated_status,
                 pole_type=self.config.gripper.pole_type,
+                host_version=host_version,
             ))
 
     async def send_setup_telemetry(self):
@@ -859,6 +874,70 @@ class AsyncObserver:
                f'(configured {configured:.4f} m, {(length - configured) * 1000:+.0f} mm off)')
         return length
 
+    async def _identify_pole_type(self, record_s=None):
+        """Set config.gripper.pole_type from how the gripper actually swings.
+
+        The pole sets the frequency every swing-latency trial is phased against, so it is
+        worth reading rather than trusting: tuned against the wrong pole, the correction
+        lands a fraction of a period out and nothing damps well. The gripper's published
+        swing model is no use for this, being fitted at the configured frequency, so this
+        times a free swing off the raw gyro the way measure_pendulum_length does.
+
+        Only the CARBON270 has to come out right - see swing.nearest_pole_type. Returns the
+        pole it settled on, or None when the swing could not be read, leaving the configured
+        pole standing. This is a motion task and induces a swing.
+        """
+        # long enough for measure_swing_frequency to have the swings it wants to time,
+        # short enough not to add much to a calibration that already induces one per trial
+        record_s = record_s or 12.0
+
+        gc = self.gripper_client
+        if gc is None:
+            return None
+
+        # anything still driving the gantry would put a second frequency in the gyro
+        was_cancelling = self.set_swing_cancellation(False)
+        try:
+            # Recording starts after the induction, not before it. _induce_swing pumps at
+            # the configured half period, so on a misconfigured pole it drives off
+            # resonance, and leaving that in the record would offer the spectrum a peak at
+            # the very frequency this is trying not to take on faith. The free swing that
+            # follows is at the pole's own frequency whatever pumped it.
+            await self._induce_swing()
+            await gc.record_raw_gyro(True)
+            await asyncio.sleep(record_s)
+        finally:
+            await gc.record_raw_gyro(False)
+            self.slow_stop_all_spools()
+            if was_cancelling:
+                self.set_swing_cancellation(True)
+        # the last samples are still in flight when recording stops
+        await asyncio.sleep(0.5)
+
+        samples = gc.collect_raw_gyro()
+        freq, length = swing.measure_pendulum(samples)
+        if freq is None:
+            logger.warning(f'Pole identification: no swing in {len(samples)} gyro samples; '
+                           f'keeping the configured pole')
+            return None
+
+        pole_type, mismatch = swing.nearest_pole_type(length)
+        if pole_type is None:
+            logger.warning(f'Pole identification: {freq:.3f} Hz is an effective length of '
+                           f'{length:.3f} m, {mismatch * 1000:.0f} mm from the nearest pole; '
+                           f'keeping the configured pole')
+            return None
+
+        was = self.config.gripper.pole_type
+        logger.info(f'Pole identification: {freq:.3f} Hz, effective length {length:.3f} m, '
+                    f'nearest pole {pole_type.name} ({mismatch * 1000:.0f} mm off)')
+        if pole_type != was:
+            logger.warning(f'Pole identification: measured {pole_type.name} where '
+                           f'{was.name} was configured. Whatever this run fitted before now '
+                           f'used the old pole, so rerun calibration after it finishes.')
+        await self.set_pole_type(pole_type)
+        return pole_type
+
     def _broadcast_swing_latency(self, latency):
         """Set config.swing_latency (in memory) and tell the UI. Does not persist;
         callers save_config only once a value is committed."""
@@ -998,6 +1077,13 @@ class AsyncObserver:
             logger.warning('Swing latency calibration requires a connected gripper')
             finish('Swing latency tuning needs a connected gripper')
             return None
+
+        # Before anything is tuned: the pole decides the frequency the trials below are
+        # phased against, and the operator picking it from a list is the weakest link in
+        # that chain. Ahead of center_pos so it is taken where the trials will actually run.
+        report_progress(progress_range[0] if progress_range else 0.0,
+                        'Identifying the gripper pole')
+        await self._identify_pole_type()
 
         original_latency = self.config.swing_latency
         center_pos = np.array(self.pe.gant_pos, dtype=float)
@@ -3486,7 +3572,30 @@ class AsyncObserver:
             ))
             r = await self.flush_tele_buffer()
 
-            tilts = (self.config.anchors[0].indirect_line.cam_tilt, self.config.anchors[1].indirect_line.cam_tilt)
+            # Measure each camera's real pitch off the cards it just saw, rather than trusting
+            # the adapter's nominal angle. A tilt that is wrong shows up as an anchor fitted
+            # off plumb, which the anchor_tilt term then fights for the rest of calibration,
+            # and the room it settles on drives the moves the later passes are surveyed from.
+            # Persisted because arp_anchor_client projects live frames through the configured
+            # value: fitting the poses under one tilt and viewing through another puts the two
+            # back out of step.
+            configured_tilts = (self.config.anchors[0].indirect_line.cam_tilt,
+                                self.config.anchors[1].indirect_line.cam_tilt)
+            tilts = estimate_cam_tilts(raw_obs, configured_tilts)
+            if tilts != configured_tilts:
+                logger.info(f'Measured camera tilts {tilts} (configured {configured_tilts})')
+                for anchor_num, tilt in enumerate(tilts):
+                    self.config.anchors[anchor_num].indirect_line.cam_tilt = tilt
+                    self.anchors[anchor_num].updatePoseAndEye()
+                save_config(self.config, self.config_path)
+                self.send_ui(new_anchor_poses=telemetry.AnchorPoses(
+                    poses=[a.pose for a in self.config.anchors],
+                    eyelets=[a.indirect_line.eyelet_pos for a in self.config.anchors],
+                    tilt=[a.indirect_line.cam_tilt for a in self.config.anchors],
+                    swing_latency=self.config.swing_latency,
+                    pole_type=self.config.gripper.pole_type,
+                ))
+
             # determine position of two anchors visually and guess at external eyelets.
             pass1_args = (raw_obs, None, None, None, None, tilts)
             pass1_kwargs = {'diamond_size': self.diamond_size, 'gantry_marker_inv': self.gantry_april_inv}
@@ -3614,9 +3723,19 @@ class AsyncObserver:
                     name="Calibration",
                     current_action="Tuning swing cancellation",
                 ))
-                # Perform swing cancellation measurements lower than the spin-measurement
-                SWING_MEASURE_DROP_M = 0.1
-                await self.seek_goal(np.array([0, 0, gant_z - SWING_MEASURE_DROP_M]), head_turn=False)
+                # Swing tuning runs lower than the spin measurement, and the rangefinder says
+                # how much lower. A fixed drop from gant_z cannot: that height is chosen so the
+                # camera can see the origin card, and the card may be up on a bed or a table, so
+                # the same drop leaves a different gap over whatever is really underneath. This
+                # descends until the gap itself reads right, from wherever the spin step ended.
+                # More steps than the survey's trim takes, because that one starts near its
+                # target and this one starts at whatever height found the card.
+                SWING_MEASURE_RANGE_M = 0.25
+                reached = await self._trim_altitude_to_range(
+                    SWING_MEASURE_RANGE_M, max_steps=6, ceiling_z=upper_z - 0.1)
+                if reached is None:
+                    logger.warning('Swing tuning: no rangefinder reading; measuring at the '
+                                   'spin-measurement height instead')
                 await self.calibrate_swing_latency(progress_range=(30.0, 61.0))
 
             await self.half_auto_calibration()
@@ -3688,12 +3807,20 @@ class AsyncObserver:
                     refined_anchors, refined_eyelets, refined_floor_z, fit_info = async_result.get(timeout=60)
                     if self.rec_diagnostics:
                         self._record_calibration_fitness('anchors_pass3', fit_info)
-                    if refined_anchors is not None:
-                        anchor_poses, eyelet_positions, floor_z = refined_anchors, refined_eyelets, refined_floor_z
-                        logger.info(f'Refined with gripper card views:\nanchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
-                        self.save_poses_arp(anchor_poses, eyelet_positions)
-                    else:
+                    # This pass carries far more residuals than the one before it, so its total
+                    # cost falls even when it reaches that by leaning the anchors and spreading
+                    # the pull points rather than by finding a better room. Weigh the structural
+                    # terms on their own and keep pass 2's geometry when they have been spent.
+                    plausible, reason = refinement_is_plausible(fit_info)
+                    if refined_anchors is None:
                         logger.warning('Gripper-card refinement optimization failed; keeping previous geometry')
+                    elif not plausible:
+                        logger.warning(f'Rejected gripper-card refinement: it fit the card survey by '
+                                       f'deforming the room ({reason}). Keeping previous geometry.')
+                    else:
+                        anchor_poses, eyelet_positions, floor_z = refined_anchors, refined_eyelets, refined_floor_z
+                        logger.info(f'Refined with gripper card views ({reason}):\nanchor_poses=\n{anchor_poses}\neyelet_positions=\n{eyelet_positions}')
+                        self.save_poses_arp(anchor_poses, eyelet_positions)
 
                     # Re-enable swing cancellation only if it still damps a test swing with the new
                     # geometry. _measure_swing_residual induces a swing, runs cancellation, and

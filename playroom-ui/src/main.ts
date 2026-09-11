@@ -15,6 +15,7 @@ import { GamepadController } from './ui/gamepad.ts'
 import { MobileShell } from './ui/mobile.ts'
 import { TargetListManager } from './ui/target_list_manager.ts'
 import { Say, Listen } from './utils.ts';
+import { setHostVersion, hostSupports } from './version_gates.ts';
 import { isTutorialMode, maybeStartTutorial } from './tutorial.ts';
 
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -1212,6 +1213,11 @@ function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
   // UNSPECIFIED, which is a pole type, and would otherwise overwrite the real one.
   if (data.poleType != null) {
     lastPoleType = data.poleType;
+  }
+  // Only setup telemetry carries the host version; the other messages of this type leave it out.
+  if (data.hostVersion != null) {
+    setHostVersion(data.hostVersion);
+    applyFullCalVersionGates();
   }
   if (data.swingLatency) {
     const slider = document.getElementById('swing-latency-slider') as HTMLInputElement | null;
@@ -2661,9 +2667,22 @@ function openFullCalOverlay() {
     unavailable?.classList.add('hidden');
     content?.classList.remove('hidden');
   }
+  applyFullCalVersionGates();
   for (let i = 0; i < 2; i++) showConfiguredTilt(i);
   showConfiguredPole();
   overlay.classList.remove('hidden');
+}
+
+/** Whether calibration should be told the tilts and pole, rather than measuring them itself. */
+function fullCalAsksForTiltAndPole(): boolean {
+  return !hostSupports('calibrationMeasuresTiltAndPole');
+}
+
+/** Show the tilt and pole inputs only to a host that still needs to be told them. */
+function applyFullCalVersionGates() {
+  const hide = !fullCalAsksForTiltAndPole();
+  document.getElementById('fullcal-tilt-section')?.classList.toggle('hidden', hide);
+  document.getElementById('fullcal-pole-section')?.classList.toggle('hidden', hide);
 }
 
 /** Preselect the tilt the robot reported for this anchor, so starting calibration without
@@ -2718,31 +2737,36 @@ function initFullCalPanel() {
   document.getElementById('fullcal-bg-catcher')?.addEventListener('click', close);
 
   document.getElementById('btn-fullcal-start')?.addEventListener('click', () => {
-    sendControl([
-      nf.control.ControlItem.create({
-        singleComponentAction: {
-          isGripper: false, anchorNum: 0,
-          action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
-          camAngle: readFullCalTiltAngle(0),
-        }
-      }),
-      nf.control.ControlItem.create({
-        singleComponentAction: {
-          isGripper: false, anchorNum: 1,
-          action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
-          camAngle: readFullCalTiltAngle(1),
-        }
-      }),
-      // Ahead of the calibration, since the pole decides the gantry marker and how far
-      // the gripper hangs below it - both of which the calibration measures against.
-      nf.control.ControlItem.create({
-        singleComponentAction: {
-          isGripper: true,
-          action: nf.control.ComponentAction.COMPONENTACTION_SET_POLE_TYPE,
-          poleType: readFullCalPoleType(),
-        }
-      }),
-    ]);
+    // Gated on the version rather than on visibility: the hidden selects still hold values,
+    // and sending them to a host that measures both would overwrite what its measurement
+    // falls back on with whatever the markup defaulted to.
+    if (fullCalAsksForTiltAndPole()) {
+      sendControl([
+        nf.control.ControlItem.create({
+          singleComponentAction: {
+            isGripper: false, anchorNum: 0,
+            action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
+            camAngle: readFullCalTiltAngle(0),
+          }
+        }),
+        nf.control.ControlItem.create({
+          singleComponentAction: {
+            isGripper: false, anchorNum: 1,
+            action: nf.control.ComponentAction.COMPONENTACTION_SET_CAM_ANGLE,
+            camAngle: readFullCalTiltAngle(1),
+          }
+        }),
+        // Ahead of the calibration, since the pole decides the gantry marker and how far
+        // the gripper hangs below it - both of which the calibration measures against.
+        nf.control.ControlItem.create({
+          singleComponentAction: {
+            isGripper: true,
+            action: nf.control.ComponentAction.COMPONENTACTION_SET_POLE_TYPE,
+            poleType: readFullCalPoleType(),
+          }
+        }),
+      ]);
+    }
 
     simpleCommand(nf.control.Command.COMMAND_FULL_CAL);
     close();

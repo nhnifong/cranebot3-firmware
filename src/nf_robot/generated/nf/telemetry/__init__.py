@@ -147,6 +147,7 @@ class TargetStatus(betterproto2.Enum):
 class AnchorPoses(betterproto2.Message):
     """
     Send by the observer to UIs when calibration or config file reading has set the anchor poses
+    Despite name, this message can be considered the "Anything you need at startup" message
     """
 
     poses: "list[_common__.Pose]" = betterproto2.field(
@@ -186,6 +187,13 @@ class AnchorPoses(betterproto2.Message):
     The pole recorded for this robot, so the UI can show it before a calibration and
     offer to change it. Optional because an absent enum reads as UNSPECIFIED, which is
     itself a pole type: a message that does not carry one leaves the UI's value alone.
+    """
+
+    host_version: "str | None" = betterproto2.field(
+        7, betterproto2.TYPE_STRING, optional=True
+    )
+    """
+    nf_robot version of host
     """
 
 

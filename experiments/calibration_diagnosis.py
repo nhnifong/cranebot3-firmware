@@ -47,8 +47,12 @@ def tilt_nodes(cam_tilts):
     ]
 
 
-def project_marker(name, sightings, anchor_poses, cam_tilts):
-    """Every sighting of one marker, projected into the room at the given anchor poses."""
+def project_marker(name, sightings, anchor_poses, cam_tilts, gantry_marker_inv=None):
+    """Every sighting of one marker, projected into the room at the given anchor poses.
+
+    gantry_marker_inv comes from the recorded run: the pole type sets where the gantry tag
+    sits, so the module default is the wrong offset for any robot on another pole.
+    """
     nodes = tilt_nodes(cam_tilts)
     points = []
     for anchor_idx, poses in enumerate(sightings):
@@ -58,15 +62,16 @@ def project_marker(name, sightings, anchor_poses, cam_tilts):
             chain = [anchor_poses[anchor_idx], model_constants.arp_anchor_camera,
                      nodes[anchor_idx], pose_cam]
             if name == 'gantry':
-                chain.append(ec.gantry_april_inv)
+                chain.append(gantry_marker_inv if gantry_marker_inv is not None
+                             else ec.gantry_april_inv)
             points.append((anchor_idx, compose_poses(chain)[1]))
     return points
 
 
-def card_centroids(raw_obs, anchor_poses, cam_tilts):
+def card_centroids(raw_obs, anchor_poses, cam_tilts, gantry_marker_inv=None):
     out = {}
     for name, sightings in raw_obs.items():
-        points = project_marker(name, sightings, anchor_poses, cam_tilts)
+        points = project_marker(name, sightings, anchor_poses, cam_tilts, gantry_marker_inv)
         if points:
             out[name] = np.mean([p for _, p in points], axis=0)
     return out
@@ -129,12 +134,17 @@ def evaluate(x, args):
         args.get('initial_eyelet_guesses'), False, args.get('fixed_anchor_poses'),
         args.get('line_deltas'), args.get('cam_tilts', (22, 22)), args.get('gripper_obs'),
         args.get('diamond_size', ec.DIAMOND_SIZE), args.get('yaw_reference'),
+        # the pole type decides where the gantry tag sits relative to the gantry, so leaving
+        # this at the module default scores every gantry sighting through the wrong offset and
+        # charges the difference to origin_consistency
+        args.get('gantry_marker_inv', ec.gantry_april_inv),
     )
 
 
 def gripper_samples(args, anchor_poses, eyelet_positions):
     """(card name, gantry room position, line lengths) per hover, as the residual builds them."""
-    centroids = card_centroids(args['raw_obs'], anchor_poses, args.get('cam_tilts', (22, 22)))
+    centroids = card_centroids(args['raw_obs'], anchor_poses, args.get('cam_tilts', (22, 22)),
+                               args.get('gantry_marker_inv'))
     out = []
     for name, samples in (args.get('gripper_obs') or {}).items():
         if name not in centroids:
@@ -221,7 +231,8 @@ def best_room_scale(args, anchor_poses, eyelet_positions):
         A, E = scaled_state(s)
         pulls = pull_points(A, E)
         centroids = {n: c * s for n, c in
-                     card_centroids(args['raw_obs'], anchor_poses, cam_tilts).items()}
+                     card_centroids(args['raw_obs'], anchor_poses, cam_tilts,
+                                    args.get('gantry_marker_inv')).items()}
         pts = [(centroids[n] + np.asarray(o['gantry_minus_card']), np.asarray(o['line_lengths']))
                for n, obs in (args.get('gripper_obs') or {}).items() if n in centroids for o in obs]
         total = 0.0
@@ -240,7 +251,8 @@ def best_room_scale(args, anchor_poses, eyelet_positions):
             return None
         centroids = {}
         for st in states:
-            pts = [p for _, p in project_marker('gantry', diamond[st], anchor_poses, cam_tilts)]
+            pts = [p for _, p in project_marker('gantry', diamond[st], anchor_poses, cam_tilts,
+                                                args.get('gantry_marker_inv'))]
             centroids[st] = np.mean(pts, axis=0) * s
         edges = [('bottom', 'right', 'bot_to_rig'), ('right', 'top', 'rig_to_top'),
                  ('top', 'left', 'top_to_lef'), ('left', 'bottom', None)]
@@ -388,7 +400,8 @@ def main(argv=None):
         print('  spread no geometry can remove, and its share of the cost is pure floor:')
         marker_costs = {}
         for marker, sightings in args['raw_obs'].items():
-            points = project_marker(marker, sightings, anchors, args.get('cam_tilts', (22, 22)))
+            points = project_marker(marker, sightings, anchors, args.get('cam_tilts', (22, 22)),
+                                    args.get('gantry_marker_inv'))
             if not points:
                 continue
             P = np.array([p for _, p in points])

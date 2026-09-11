@@ -18,6 +18,7 @@ import logging
 import numpy as np
 
 import nf_robot.common.definitions as model_constants
+from nf_robot.generated.nf import common
 
 logger = logging.getLogger(__name__)
 
@@ -361,3 +362,30 @@ def measure_pendulum(samples):
     if freq is None or freq <= 0:
         return None, None
     return freq, length_for_frequency(freq)
+
+
+# A measured length further than this from every pole did not come from one of them, so no
+# pole is named rather than the least-wrong one taken. It also refuses the midpoint between
+# the two the poles are furthest apart at, which sits 65 mm from each.
+POLE_MATCH_TOLERANCE_M = 0.06
+
+
+def nearest_pole_type(length):
+    """(pole type, how far its swing length sits from `length` in metres), or (None, gap)
+    when nothing is close enough to be the pole on this robot.
+
+    Only the CARBON270 has to come out right: it swings 130 mm shorter than either of the
+    others, which a free swing separates easily. The ABS500 and CARBON400 sit 14 mm apart,
+    far inside what a different payload moves the effective length by, so this will not
+    reliably tell those two apart - and it need not, since they hang the gripper within a
+    couple of centimetres of each other.
+
+    UNSPECIFIED is left out. It is not a pole, only what a config predating the field
+    reports, and it carries the ABS500 geometry that config_loader backfills it to.
+    """
+    candidates = [(pole_type, geometry.swing_length)
+                  for pole_type, geometry in model_constants.POLE_GEOMETRY.items()
+                  if pole_type != common.PoleType.UNSPECIFIED]
+    pole_type, swing_length = min(candidates, key=lambda c: abs(c[1] - length))
+    mismatch = abs(swing_length - length)
+    return (pole_type if mismatch <= POLE_MATCH_TOLERANCE_M else None), mismatch

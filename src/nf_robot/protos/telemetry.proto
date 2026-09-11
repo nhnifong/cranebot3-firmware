@@ -41,6 +41,7 @@ message GantrySightings {
 }
 
 // Send by the observer to UIs when calibration or config file reading has set the anchor poses
+// Despite name, this message can be considered the "Anything you need at startup" message
 message AnchorPoses {
   // Will either be four poses in order of anchor num (pilot anchors)
   // or two anchor poses (arpeggio anchors)
@@ -60,6 +61,9 @@ message AnchorPoses {
   // offer to change it. Optional because an absent enum reads as UNSPECIFIED, which is
   // itself a pole type: a message that does not carry one leaves the UI's value alone.
   optional nf.common.PoleType pole_type = 6;
+
+  // nf_robot version of host
+  optional string host_version = 7;
 }
 
 enum ConnStatus {
