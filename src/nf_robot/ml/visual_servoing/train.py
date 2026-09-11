@@ -459,6 +459,9 @@ def checkpoint_payload(model, args, metrics, epoch):
         # from every checkpoint written before the heads existed, which is exactly how
         # those keep loading.
         "close_heads": args.close_heads,
+        # Where the close head reads from. Absent in every checkpoint written before the
+        # spatial head existed, which is how those keep loading onto the global one.
+        "spatial_close": args.spatial_close,
     }
 
 
@@ -506,7 +509,7 @@ def train(args):
             f"one. Re-mine the teleop half: the columns are written by mine_teleop.")
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
-        close_heads=args.close_heads,
+        close_heads=args.close_heads, spatial_close=args.spatial_close,
         attention_layers=args.attention_layers, freeze=not args.unfreeze_backbone,
     ).to(device)
     head_params = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
@@ -609,6 +612,13 @@ def main():
              "finger-rate head alone. The rate head still trains; these two answer *when* "
              "to start closing and *how hard* to end up squeezing, which is what the "
              "robot actually needs and what a per-frame rate label describes badly.")
+    parser.add_argument(
+        "--spatial_close", action="store_true",
+        help="Read the close head off the patch grid instead of the pooled [CLS] vector. "
+             "Whether to close is a spatial test - something between the fingers, square "
+             "on, near enough - and a vector averaged over the whole image can say the "
+             "frame holds a graspable thing but not that this one is in the jaws. Needs "
+             "--close_heads; ignored without it.")
     parser.add_argument("--eval_every", type=int, default=1,
                         help="Score the eval split every N epochs (and always on the last)")
     parser.add_argument("--select_best", action="store_true",
@@ -646,7 +656,11 @@ def main():
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default=None)
-    train(parser.parse_args())
+    args = parser.parse_args()
+    if args.spatial_close and not args.close_heads:
+        parser.error("--spatial_close only moves the close head that --close_heads builds; "
+                     "pass both or neither.")
+    train(args)
 
 
 if __name__ == "__main__":

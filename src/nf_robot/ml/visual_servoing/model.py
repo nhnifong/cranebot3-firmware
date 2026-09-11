@@ -50,6 +50,14 @@ CANVAS_SCALE = 1.5
 # Cells per token, i.e. how far the decoder upsamples. 2 gives 36x64 cells of about
 # 10.5px each, and the offset head takes precision below that.
 CELLS_PER_TOKEN = 2
+# Shape the spatial close head reads the cell grid at: channels it reduces to, then the
+# coarse grid it pools to. Pooled to a grid rather than to a vector because that is the
+# whole point of moving the head here - "is there something between the fingers" is a
+# question about one part of the frame, and a mean over the whole map cannot tell the
+# bottom centre from anywhere else. 4x6 over 36x64 cells keeps the jaws in their own
+# bins while staying small enough to flatten.
+CLOSE_CHANNELS = 32
+CLOSE_POOL = (4, 6)
 # laser_rangefinder, finger_angle, target_force. Deliberately not the previous velocity
 # (the shortcut that teaches "keep doing what you were doing") and not the measured
 # finger pressure (the answer head 5 is supposed to work out from the image).
@@ -132,7 +140,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
-                 state_dim=STATE_DIM, close_heads=False):
+                 state_dim=STATE_DIM, close_heads=False, spatial_close=False):
         super().__init__()
         trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
@@ -194,8 +202,15 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
         # actually consists of. The finger head stays in the output either way, so one
         # loader and one deployment path serve both kinds of checkpoint.
         self.close_heads = close_heads
+        # Whether the close question is asked of the cell grid instead of the pooled
+        # vector. It is a spatial test - something between the fingers, square on, near
+        # enough - and the bottom centre of the frame is where "between the fingers" is.
+        # A [CLS] vector has been averaged over the whole image before the head sees it,
+        # so what survives is that the frame contains a graspable thing, not that this
+        # one is in the jaws. Only meaningful alongside the close heads themselves.
+        self.spatial_close = bool(spatial_close and close_heads)
         global_dim = hidden * 2 + state_dim
-        self.global_outputs = 5 if close_heads else 3
+        self.global_outputs = (4 if self.spatial_close else 5) if close_heads else 3
         self.global_head = nn.Sequential(
             # LayerNorm first, and it is load-bearing: the trunk's [CLS] comes out with a
             # large norm, which drives the finger head's tanh straight into saturation
@@ -203,6 +218,17 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
             # do not have this problem because GroupNorm rescales the trunk for them.
             nn.LayerNorm(global_dim),
             nn.Linear(global_dim, 256), nn.GELU(), nn.Linear(256, self.global_outputs))
+
+        if self.spatial_close:
+            # State is concatenated after the pool as well as being FiLMed into the map
+            # upstream: the rangefinder is most of "close enough", and a direct path to
+            # it costs one small matrix.
+            self.close_reduce = nn.Conv2d(channels, CLOSE_CHANNELS, 1)
+            self.close_pool = nn.AdaptiveAvgPool2d(CLOSE_POOL)
+            close_dim = CLOSE_CHANNELS * CLOSE_POOL[0] * CLOSE_POOL[1] + state_dim
+            self.close_head = nn.Sequential(
+                nn.LayerNorm(close_dim),
+                nn.Linear(close_dim, 256), nn.GELU(), nn.Linear(256, 1))
 
     def features(self, pixel_values):
         """Fused patch features as a map, plus the global [CLS]/register vector."""
@@ -245,8 +271,15 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
             # "Should the close have begun by now", as a logit, and the grip force the
             # operator ended up carrying this object with. The pressure is a softplus so
             # it cannot be predicted negative, which is not a force the gripper can hold.
-            out["close_logit"] = flags[:, 3]
-            out["grasp_pressure"] = F.softplus(flags[:, 4])
+            if self.spatial_close:
+                cells = F.gelu(self.close_reduce(x))
+                pooled = self.close_pool(cells).flatten(1)
+                out["close_logit"] = self.close_head(
+                    torch.cat([pooled, state], dim=-1)).squeeze(-1)
+                out["grasp_pressure"] = F.softplus(flags[:, 3])
+            else:
+                out["close_logit"] = flags[:, 3]
+                out["grasp_pressure"] = F.softplus(flags[:, 4])
         return out
 
     def train(self, mode=True):
@@ -332,6 +365,7 @@ def load_checkpoint(path, device):
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],
         fuse_layers=checkpoint["fuse_layers"], attention_layers=checkpoint["attention_layers"],
         freeze=freeze, close_heads=checkpoint.get("close_heads", False),
+        spatial_close=checkpoint.get("spatial_close", False),
     ).to(device)
     state = checkpoint["state_dict"]
     if freeze:
