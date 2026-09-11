@@ -261,12 +261,12 @@ def ensure_motor_ids(controller, motor_type=MOTOR_TYPE, targets=ANCHOR_MOTOR_TAR
     configure_feedback_in_place(
         controller, "lower", lower_motor_id, lower_feedback_id, motor_type=motor_type)
 
+    
+    input("Unplug and re-plug the upper motor to power cycle it, then press Enter...")
+
     # This re-reads live registers, i.e. RAM, so it confirms the ids are in effect but
-    # cannot prove store_parameters() committed them to flash. There is no cheaper way
-    # to read flash -- the motors have no soft-reset command, so only cutting their
-    # power reloads it, and on an anchor that also reboots the pi and kills this script.
-    # AnchorArpServer re-checks the ids at startup instead, which is exactly where a
-    # store that never reached flash shows up: the first power up after this runs.
+    # cannot prove store_parameters() committed them to flash. This only happens when the motor power cycles.
+    # This means we can't actually tell if the user followed the previous step.
     print("Confirming final motor IDs...")
     found = {}
     for _ in range(3):  # motors may need a moment to answer after the writes
