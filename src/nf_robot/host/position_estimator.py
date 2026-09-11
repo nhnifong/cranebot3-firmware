@@ -640,7 +640,7 @@ class Positioner2:
 
         except asyncio.exceptions.CancelledError:
             pass
-        finally:
-            self.tension_residual.close()
+        # finally:
+        #     self.tension_residual.close()
 
         np.save('gant_pos.npy', self.gant_pos)
