@@ -101,6 +101,19 @@ def camera_point(uv, distance):
     return ray / ray.norm(dim=-1, keepdim=True) * distance.unsqueeze(-1)
 
 
+def adaptive_avg_pool2d(x, size):
+    """F.adaptive_avg_pool2d with the same bins, for any input size on any device.
+
+    MPS refuses inputs that are not a multiple of the output, and 64 cells into 6 bins
+    is not. Bins are rectangles of uniform weight, so pooling rows then columns is exact.
+    """
+    for dim, out in ((-2, size[0]), (-1, size[1])):
+        n = x.shape[dim]
+        x = torch.stack([x.narrow(dim, i * n // out, -(-(i + 1) * n // out) - i * n // out).mean(dim)
+                         for i in range(out)], dim=dim)
+    return x
+
+
 class FiLM(nn.Module):
     """Per-channel scale and shift on a feature map, conditioned on the state vector."""
 
@@ -224,7 +237,6 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
             # upstream: the rangefinder is most of "close enough", and a direct path to
             # it costs one small matrix.
             self.close_reduce = nn.Conv2d(channels, CLOSE_CHANNELS, 1)
-            self.close_pool = nn.AdaptiveAvgPool2d(CLOSE_POOL)
             close_dim = CLOSE_CHANNELS * CLOSE_POOL[0] * CLOSE_POOL[1] + state_dim
             self.close_head = nn.Sequential(
                 nn.LayerNorm(close_dim),
@@ -273,7 +285,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
             # it cannot be predicted negative, which is not a force the gripper can hold.
             if self.spatial_close:
                 cells = F.gelu(self.close_reduce(x))
-                pooled = self.close_pool(cells).flatten(1)
+                pooled = adaptive_avg_pool2d(cells, CLOSE_POOL).flatten(1)
                 out["close_logit"] = self.close_head(
                     torch.cat([pooled, state], dim=-1)).squeeze(-1)
                 out["grasp_pressure"] = F.softplus(flags[:, 3])
