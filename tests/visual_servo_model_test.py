@@ -22,7 +22,7 @@ try:
 
     from nf_robot.ml.visual_servoing.model import (
         CLOSE_POOL, DEFAULT_BACKBONE, DEFAULT_IMAGE_SIZE, VisualServoNet,
-        drop_trunk_weights, load_checkpoint, predict)
+        adaptive_avg_pool2d, drop_trunk_weights, load_checkpoint, predict)
     cached = isinstance(try_to_load_from_cache(DEFAULT_BACKBONE, "config.json"), str)
     AVAILABLE = cached
 except ImportError:
@@ -76,8 +76,8 @@ class TestSpatialCloseHead(unittest.TestCase):
         at_edge[:, :, :rows // 6, :8] = 3.0
 
         def close_logit(feature_map):
-            pooled = self.spatial.close_pool(
-                F.gelu(self.spatial.close_reduce(feature_map))).flatten(1)
+            pooled = adaptive_avg_pool2d(
+                F.gelu(self.spatial.close_reduce(feature_map)), CLOSE_POOL).flatten(1)
             return self.spatial.close_head(
                 torch.cat([pooled, torch.zeros(1, 3)], dim=-1)).item()
 
