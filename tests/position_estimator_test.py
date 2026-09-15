@@ -103,9 +103,10 @@ class TestPositionEstimator(unittest.TestCase):
         # make one length too long
         lengths[3] = 6
 
-        result = find_hang_point(anchors, lengths)
-        self.assertTrue(result is not None)
-        point, slack_lines = result
+        solutions = find_hang_point(anchors, lengths)
+        # lines 0, 1 and 2 are the taut ones, so that is the key the point is filed under
+        self.assertIn((0, 1, 2), solutions)
+        point, slack_lines = solutions[(0, 1, 2)]
 
         np.testing.assert_array_almost_equal(point, expected_hang_point)
 
@@ -113,6 +114,9 @@ class TestPositionEstimator(unittest.TestCase):
         self.assertFalse(slack_lines[1])
         self.assertFalse(slack_lines[2])
         self.assertTrue(slack_lines[3])
+
+        # two line solutions are opt-in, so nothing shorter than a triple is returned
+        self.assertTrue(all(len(key) == 3 for key in solutions))
 
 
     def test_find_hang_point_2(self):
@@ -130,9 +134,9 @@ class TestPositionEstimator(unittest.TestCase):
         # make two lengths too long
         lengths = np.array([6, 4.358, 6, 4.358])
 
-        result = find_hang_point(anchors, lengths)
-        self.assertTrue(result is not None)
-        point, slack_lines = result
+        solutions = find_hang_point(anchors, lengths, include_two_line_solutions=True)
+        self.assertIn((1, 3), solutions)
+        point, slack_lines = solutions[(1, 3)]
 
         np.testing.assert_array_almost_equal(point, expected_hang_point, 2)
 
@@ -140,6 +144,9 @@ class TestPositionEstimator(unittest.TestCase):
         self.assertFalse(slack_lines[1])
         self.assertTrue(slack_lines[2])
         self.assertFalse(slack_lines[3])
+
+        # and without the flag, the two taut lines name no solution at all
+        self.assertNotIn((1, 3), find_hang_point(anchors, lengths))
 
     def test_stale_vel_timestamp_causes_jitter(self):
         """

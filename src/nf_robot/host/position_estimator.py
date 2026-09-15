@@ -9,6 +9,7 @@ import asyncio
 import cv2
 import logging
 import scipy.optimize as optimize
+from itertools import combinations
 from math import pi, sqrt, sin, cos
 from scipy.spatial.transform import Rotation
 
@@ -28,6 +29,12 @@ _X_AXIS = np.array([1., 0., 0.])
 _DOWN_VECTOR = np.array([0., 0., -1.])
 _ZERO_3 = np.zeros(3, dtype=float)
 _ANCHOR_PAIRS = ((0,1), (1,2), (2,3), (3,0), (0,2), (1,3))
+
+# Every set of lines that can hold up a hang point, and the filter sensor name for the point it
+# implies. The two-line sets only produce a point under find_hang_point's include_two_line_solutions,
+# but they are named unconditionally so the filter's sensor list does not depend on that flag.
+_HANG_KEYS = tuple(combinations(range(4), 3)) + tuple(combinations(range(4), 2))
+HANG_SENSOR_NAMES = {key: 'hang' + ''.join(map(str, key)) for key in _HANG_KEYS}
 
 def find_intersection(positions, lengths):
     """Triangulation by least squares
@@ -152,28 +159,41 @@ def lowest_point_on_circle(circle_center, circle_normal, circle_radius):
     # Calculate the lowest point
     return circle_center + circle_radius * (projected_vector / proj_norm)
 
-def find_hang_point(positions, lengths):
+def find_hang_point(positions, lengths, include_two_line_solutions=False):
     """
-    Find the lowest point at which a mass could hang from the given anchor positions without
-    the distance to any anchor being longer than the given lengths of available line
-
-    In addition to finding the position, we get an array of bools indicating which lines are slack as a side effect
+    Find every point at which a mass could hang from the given anchor positions without
+    the distance to any anchor being longer than the given lengths of available line.
 
     If two spheres intersect, they form a circle.
     The lowest point on the circle may be a hang point if only two lines are taut
     if a circle intersects a sphere, it does so at two points, the lower of which may be a hang point.
     Any hang point below the floor is discarded
     Any hang point not inside all spheres is discarded
-    take the lowest remaining point
 
     For a four anchor system, there are six possible sphere-sphere crosses.
     For each circle formed this way, it could intersect with either of the two uninvolved spheres.
+
+    Rather than reducing to a single point, every solution is returned keyed by the identity
+    of the lines holding it up, so a filter can treat each one as its own sensor. A triple
+    {i,j,k} is reached three ways (each of its pairs crossed with the remaining sphere), so
+    the lowest valid point found for a key is the one kept.
+
+    Args:
+        include_two_line_solutions: also return the points held by exactly two taut lines,
+            the lowest point on each sphere-sphere circle. Off by default: these are only
+            physical when the other two lines really are slack, and a pair of them straddling
+            the three-line solution pulls a filter to either side of it.
+
+    Returns:
+        dict mapping a sorted tuple of taut line indices to (point, slack_lines), where
+        slack_lines is a length-4 bool array. Empty when no valid hang point exists.
     """
     if len(positions) != 4 or len(lengths) != 4:
         raise ValueError
         
     lengths = lengths + 1e-8
-    candidates = []
+    # taut line identity -> candidate points implied by that set of lines
+    candidates = {}
     
     for pair in _ANCHOR_PAIRS:
         # find the intersection of the two spheres in this pair
@@ -181,9 +201,10 @@ def find_hang_point(positions, lengths):
         if circle is None:
             continue
             
-        lp = lowest_point_on_circle(*circle)
-        if lp is not None and lp[2] > 0:
-            candidates.append(lp)
+        if include_two_line_solutions:
+            lp = lowest_point_on_circle(*circle)
+            if lp is not None and lp[2] > 0:
+                candidates.setdefault(tuple(sorted(pair)), []).append(lp)
             
         # intersect this circle with the two uninvoled spheres
         for i in range(4):
@@ -194,31 +215,30 @@ def find_hang_point(positions, lengths):
                     # take the lower point
                     lower = pts[0] if pts[0][2] < pts[1][2] else pts[1]
                     if lower[2] > 0:
-                        candidates.append(lower)
+                        candidates.setdefault(tuple(sorted(pair + (i,))), []).append(lower)
                         
-    if not candidates:
-        return None
-
-    valid_candidates = []
     ex_lengths = lengths + 1e-5
+    solutions = {}
     
-    # filter out candidates that are not inside all spheres
+    # filter out candidates that are not inside all spheres, and keep the lowest survivor per key
     # Avoiding broadcasting across multiple axes reduces allocation tax. We can easily afford a 
     # Python loop for evaluating distance on these few candidate points.
-    for c in candidates:
-        dists = np.linalg.norm(positions - c, axis=1)
-        if np.all(dists <= ex_lengths):
-            valid_candidates.append((c, dists))
-
-    if not valid_candidates:
-        return None
-
-    best_candidate, best_dists = min(valid_candidates, key=lambda x: x[0][2])
-    
-    # line length must exceed distance to point by this much to be considered slack
-    # this is the estimate of slackness implied by the line lengths.
-    slack_lines = best_dists <= (ex_lengths - 0.04)
-    return best_candidate, slack_lines
+    for key, points in candidates.items():
+        best_candidate = None
+        best_dists = None
+        for c in points:
+            dists = np.linalg.norm(positions - c, axis=1)
+            if not np.all(dists <= ex_lengths):
+                continue
+            if best_candidate is None or c[2] < best_candidate[2]:
+                best_candidate, best_dists = c, dists
+                
+        if best_candidate is not None:
+            # line length must exceed distance to point by this much to be considered slack
+            # this is the estimate of slackness implied by the line lengths.
+            solutions[key] = (best_candidate, best_dists <= (ex_lengths - 0.04))
+            
+    return solutions
 
 def eval_linear_pos(t, starting_time, starting_pos, velocity_vec):
     """
@@ -308,6 +328,10 @@ class Positioner2:
 
         # hang point based prediction of slack lines (currently unused)
         self.slack_lines = [False, False, False, False]
+
+        # whether to also feed the filter the points held by exactly two taut lines. Off because
+        # those are only physical when the other two lines really are slack; see find_hang_point.
+        self.include_two_line_hangs = False
         self.last_visual_cutoff = time.time()
 
         # Expected standard deviation in gantry acceleration
@@ -327,7 +351,7 @@ class Positioner2:
         self.vel_noise_covariance = np.diag([commanded_vel_std_dev**2] * 3)
 
         # Initialize the Kalman filter
-        self.sensor_names = ['v0', 'v1' ,'v2' ,'v3', 'hang']
+        self.sensor_names = ['v0', 'v1' ,'v2' ,'v3'] + list(HANG_SENSOR_NAMES.values())
         self.kf = KalmanFilter(self.sensor_names, acceleration_std_dev, bias_std_dev)
         self.kf.state_estimate[:3] = last_gant_pos
 
@@ -530,12 +554,16 @@ class Positioner2:
             # make its length effectively infinite so it won't play a part in the hang position
             lengths[self.tension < SLACK_TENSION_N] = 100
 
-            # calculate hang point
-            result = find_hang_point(self.anchor_points, lengths)
-            if result is not None:
-                self.hang_pos, self.slack_lines = result
-                # update kalman filter with this position
-                self.kf.update(self.hang_pos, data_ts, self.hang_noise_covariance, 'position', self.sensor_names[-1])
+            # calculate every hang point the line lengths admit
+            solutions = find_hang_point(self.anchor_points, lengths,
+                                        include_two_line_solutions=self.include_two_line_hangs)
+            if solutions:
+                # Every possible hang solution gets its own bias and sensor name in the filter
+                # only the best one gets an update.
+                best_key = min(solutions, key=lambda k: solutions[k][0][2])
+                self.hang_pos, self.slack_lines = solutions[best_key]
+                self.kf.update(self.hang_pos, data_ts, self.hang_noise_covariance, 'position',
+                               HANG_SENSOR_NAMES[best_key])
                 self.data_ts = data_ts
 
             self.kf.enforce_bias_constraint()
