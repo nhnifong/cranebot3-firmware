@@ -4,137 +4,274 @@
 <meta charset="utf-8">
 <title>Visual servoing network</title>
 <style>
-  :root {
-    --ink: #14181c;
-    --muted: #77828f;
-    --line: #ccd4dd;
-    --frozen-bg: #eaeef3;
-    --frozen-edge: #a9b5c3;
-    --trained-bg: #fff3e6;
-    --trained-edge: #e5a45f;
-    --io-bg: #ffffff;
-    --accent: #2f6f8f;
-  }
   @page { size: landscape; margin: 0; }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    margin: 0; background: #fff; color: var(--ink);
-    font: 400 26px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    display: flex; flex-direction: column; justify-content: center;
-    padding: 54px 60px;
-  }
-  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-
-  h1 { font-size: 46px; font-weight: 600; margin: 0 0 40px; letter-spacing: -0.02em; }
-
-  .flow { display: flex; align-items: stretch; gap: 0; flex: 1 1 auto; }
-  .block {
-    flex: 1 1 0; min-width: 0;
-    border: 3px solid var(--line); border-radius: 16px;
-    background: var(--io-bg); padding: 30px 26px;
-    display: flex; flex-direction: column; justify-content: center;
-  }
-  .block.frozen  { background: var(--frozen-bg);  border-color: var(--frozen-edge); }
-  .block.trained { background: var(--trained-bg); border-color: var(--trained-edge); }
-
-  .title { font-size: 34px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 4px; }
-  .note  { font-size: 23px; color: var(--muted); margin-top: 6px; }
-  .shape { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-           font-size: 20px; color: var(--muted); margin-top: 10px; }
-  .layer { font-size: 25px; margin-top: 12px; }
-  .layer:first-of-type { margin-top: 0; }
-
-  .arrow {
-    flex: 0 0 56px; align-self: center;
-    display: flex; align-items: center; justify-content: center;
-    color: #93a0ae; font-size: 40px; line-height: 1;
-  }
-
-  
-  .group { flex: 1 1 0; }
-  .group .g-title {
-    font-size: 18px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--accent); margin-bottom: 10px;
-  }
-  .group.global .g-title { color: #a9682f; }
-  .group ul { margin: 0; padding: 0; list-style: none; }
-  .group li { font-size: 24px; padding: 4px 0; }
-
-  .key { display: flex; gap: 34px; margin-top: 34px; font-size: 22px; color: var(--muted); }
-  .key span::before {
-    content: ""; display: inline-block; width: 18px; height: 18px; border-radius: 3px;
-    margin-right: 8px; vertical-align: -2px; border: 2px solid;
-  }
-  .key .f::before { background: var(--frozen-bg);  border-color: var(--frozen-edge); }
-  .key .t::before { background: var(--trained-bg); border-color: var(--trained-edge); }
+  html, body { margin: 0; height: 100%; background: #fff; }
+  body { display: flex; align-items: center; justify-content: center; }
+  .frame { width: min(100vw, calc(100vh * 16 / 9)); aspect-ratio: 16 / 9; background: #fff; }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         fill: #000; }
+  /* playback: sections stay hidden until spacebar reveals them in order */
+  .sec { opacity: 0; transition: opacity 1s ease; }
+  .sec.on { opacity: 1; }
 </style>
 </head>
 <body>
-
-<h1>Visual servoing network</h1>
-
-<div class="flow">
-
-  <div class="block">
-    <div class="title">Input</div>
-    <div class="layer">Gripper frame</div>
-    <div class="shape">448 &times; 252</div>
-    <div class="layer">Sensors</div>
-    <div class="shape">range &middot; finger &middot; force</div>
-  </div>
-
-  <div class="arrow">&rarr;</div>
-
-  <div class="block frozen">
-    <div class="title">Backbone</div>
-    <div class="note">DINOv2 ViT-B/14</div>
-    <div class="layer">Patch tokens</div>
-    <div class="shape">18 &times; 32</div>
-    <div class="layer">[CLS] + registers</div>
-  </div>
-
-  <div class="arrow">&rarr;</div>
-
-  <div class="block trained">
-    <div class="title">Trunk</div>
-    <div class="layer">Fuse &rarr; 256</div>
-    <div class="layer">FiLM from sensors</div>
-    <div class="layer">Attention &times;3</div>
-    <div class="layer">Upsample</div>
-    <div class="shape">36 &times; 64 cells</div>
-  </div>
-
-  <div class="arrow">&rarr;</div>
-
-  <div class="block trained">
-    <div class="title">Heads</div>
-    <div class="group">
-      <div class="g-title">per cell</div>
-      <ul><li>target &middot; offset</li><li>distance &middot; axis</li></ul>
-    </div>
-    <div class="group global" style="margin-top:18px">
-      <div class="g-title">whole frame</div>
-      <ul><li>present &middot; holding</li><li>close &middot; force</li></ul>
-    </div>
-  </div>
-
-  <div class="arrow">&rarr;</div>
-
-  <div class="block">
-    <div class="title">Output</div>
-    <div class="layer">Where it is</div>
-    <div class="shape">3D point</div>
-    <div class="layer">How to grip it</div>
-    <div class="shape">axis &middot; when &middot; how hard</div>
-  </div>
-
+<div class="frame">
+  <svg id="d" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="ah" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="16" markerHeight="16"
+              markerUnits="userSpaceOnUse" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#000"/>
+      </marker>
+    </defs>
+    <rect width="1920" height="1080" fill="#fff"/>
+  </svg>
 </div>
 
-<div class="key">
-  <span class="f">frozen &mdash; 86.6M</span>
-  <span class="t">trained &mdash; 4.1M</span>
-</div>
+<script>
+// Layout is the network in model.py (VisualServoNet, default close_heads + spatial_close).
+const S = document.getElementById("d");
+const NS = "http://www.w3.org/2000/svg";
 
+const COLOR = {
+  input:   "#00D1FF",
+  state:   "#FF3DB4",
+  frozen:  "#B866FF",
+  trained: "#FFD400",
+  head:    "#2EE86A",
+  tensor:  "#FFFFFF",
+  output:  "#FF7A00",
+};
+
+let parent = S;
+function el(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  parent.appendChild(e);
+  return e;
+}
+
+// A block: bold title plus optional detail lines, centred. "" in subs is a spacer.
+function box(x, y, w, h, kind, title, subs = [], opt = {}) {
+  const ts = opt.titleSize || 23, tl = opt.titleLine || 28;
+  const ss = opt.subSize || 19, sl = opt.subLine || 24;
+  el("rect", { x, y, width: w, height: h, rx: 12, fill: COLOR[kind],
+               stroke: "#000", "stroke-width": kind === "tensor" ? 4 : 3 });
+  const total = tl + sl * subs.length;
+  let base = y + h / 2 - total / 2 + tl * 0.78;
+  el("text", { x: x + w / 2, y: base, "text-anchor": "middle",
+               "font-size": ts, "font-weight": 800 }, title);
+  base += tl * 0.22;
+  for (const s of subs) {
+    base += sl;
+    if (s) el("text", { x: x + w / 2, y: base - sl * 0.22, "text-anchor": "middle",
+                        "font-size": ss, "font-weight": 600 }, s);
+  }
+}
+
+function path(pts, head) {
+  el("polyline", { points: pts.map(p => p.join(",")).join(" "), fill: "none",
+                   stroke: "#000", "stroke-width": 3, "stroke-linejoin": "round",
+                   ...(head ? { "marker-end": "url(#ah)" } : {}) });
+}
+const arrow = (...pts) => path(pts, true);
+const line = (...pts) => path(pts, false);
+
+function plus(cx, cy) {
+  el("circle", { cx, cy, r: 18, fill: "#fff", stroke: "#000", "stroke-width": 3 });
+  el("path", { d: `M${cx - 10},${cy} H${cx + 10} M${cx},${cy - 10} V${cy + 10}`,
+               stroke: "#000", "stroke-width": 3.5 });
+}
+
+function label(x, y, text, anchor = "middle") {
+  el("text", { x, y, "text-anchor": anchor, "font-size": 19, "font-weight": 800,
+               "letter-spacing": "0.06em" }, text);
+}
+
+// Playback. section() starts a new group; everything drawn after it belongs to that group
+// and stays invisible until spacebar reveals the groups one at a time, in order.
+const sections = [];
+let root = null;
+function section() {
+  root = root || parent;
+  parent = root;
+  parent = el("g", { class: "sec" });
+  sections.push(parent);
+}
+
+// ---- title and key --------------------------------------------------------------
+el("text", { x: 16, y: 60, "font-size": 44, "font-weight": 800 }, "Visual servoing network");
+[["input", "Input"], ["frozen", "Frozen · 86.6M"], ["trained", "Trained trunk"],
+ ["head", "Trained heads"], ["tensor", "Tensor"], ["output", "Output"], ["state", "State"]]
+  .reduce((x, [k, t]) => {
+    el("rect", { x, y: 34, width: 28, height: 28, rx: 5, fill: COLOR[k],
+                 stroke: "#000", "stroke-width": k === "tensor" ? 4 : 3 });
+    const label = el("text", { x: x + 38, y: 57, "font-size": 21, "font-weight": 700 }, t);
+    return x + 38 + label.getComputedTextLength() + 34;
+  }, 640);
+
+// ---- inputs and backbone ----------------------------------------------------------
+box(16, 110, 154, 105, "input", "Image", ["448 × 252", "RGB"]);
+box(16, 700, 154, 160, "state", "State", ["rangefinder", "finger angle", "target force"]);
+section(); // 1: vision encoder
+arrow([170, 160], [200, 160]);
+
+box(200, 110, 180, 930, "frozen", "DINOv2",
+    ["ViT-B/14", "with registers", "", "12 layers", "18 × 32 tokens", "14 px patches", "", "FROZEN", "86.6M params"],
+    { titleSize: 38, titleLine: 48, subSize: 22, subLine: 32 });
+arrow([380, 160], [410, 160]);
+arrow([380, 945], [410, 945]);
+box(410, 890, 170, 110, "tensor", "CLS vector", ["CLS + registers", "1536"]);
+
+// ---- patch tokens and FiLM MLP ------------------------------------------------------
+box(410, 110, 180, 105, "tensor", "Patch tokens", ["last 4 layers", "3072 × 18 × 32"]);
+
+section(); // 2: stem, FiLM and attention
+arrow([590, 148], [620, 148]);
+
+box(410, 232, 180, 36, "state", "state");
+arrow([500, 268], [500, 290]);
+box(410, 290, 180, 60, "trained", "Linear", ["3 → 128"]);
+arrow([500, 350], [500, 372]);
+box(410, 372, 180, 40, "trained", "GELU");
+arrow([500, 412], [500, 434]);
+box(410, 434, 180, 60, "trained", "Linear", ["128 → 512"]);
+arrow([590, 464], [620, 464]);
+label(500, 526, "FiLM MLP → γ, β");
+
+// ---- stem ---------------------------------------------------------------------------
+label(710, 96, "STEM");
+box(620, 110, 180, 76, "trained", "Conv 1×1", ["3072 → 256"]);
+arrow([710, 186], [710, 214]);
+box(620, 214, 180, 60, "trained", "GroupNorm", ["32 groups"]);
+arrow([710, 274], [710, 302]);
+box(620, 302, 180, 60, "trained", "GELU");
+arrow([710, 362], [710, 390]);
+box(620, 390, 180, 90, "trained", "FiLM", ["x·(1+γ) + β"]);
+arrow([710, 480], [710, 508]);
+box(620, 508, 180, 76, "trained", "+ Pos embed", ["learned, 576×256"]);
+
+// ---- transformer block x3 -------------------------------------------------------------
+label(1040, 96, "TRANSFORMER BLOCK");
+el("rect", { x: 822, y: 108, width: 436, height: 500, rx: 16, fill: "none",
+             stroke: "#000", "stroke-width": 3, "stroke-dasharray": "12 8" });
+el("text", { x: 940, y: 505, "text-anchor": "middle", "font-size": 64, "font-weight": 900 }, "× 3");
+el("text", { x: 940, y: 545, "text-anchor": "middle", "font-size": 21, "font-weight": 700 }, "256 × 18 × 32");
+
+line([800, 546], [812, 546], [812, 125], [940, 125]);
+arrow([940, 125], [940, 150]);
+box(850, 150, 180, 50, "trained", "LayerNorm");
+arrow([940, 200], [940, 232]);
+box(850, 232, 180, 88, "trained", "Self-attention", ["8 heads", "576 tokens"]);
+arrow([940, 320], [940, 342]);
+arrow([840, 125], [840, 360], [922, 360]);        // residual
+plus(940, 360);
+
+line([958, 360], [1045, 360], [1045, 125], [1250, 125]);
+arrow([1150, 125], [1150, 150]);
+box(1060, 150, 180, 50, "trained", "LayerNorm");
+arrow([1150, 200], [1150, 228]);
+box(1060, 228, 180, 62, "trained", "Linear", ["256 → 1024"]);
+arrow([1150, 290], [1150, 316]);
+box(1060, 316, 180, 44, "trained", "GELU");
+arrow([1150, 360], [1150, 386]);
+box(1060, 386, 180, 62, "trained", "Linear", ["1024 → 256"]);
+arrow([1150, 448], [1150, 472]);
+arrow([1250, 125], [1250, 490], [1168, 490]);     // residual
+plus(1150, 490);
+
+section(); // 3: upscale
+arrow([1150, 508], [1150, 580], [1274, 580], [1274, 185], [1296, 185]);
+
+// ---- decoder --------------------------------------------------------------------------
+label(1381, 96, "DECODER");
+box(1296, 150, 170, 70, "trained", "Upsample ×2", ["bilinear"]);
+arrow([1381, 220], [1381, 248]);
+box(1296, 248, 170, 70, "trained", "Conv 3×3", ["256 → 128"]);
+arrow([1381, 318], [1381, 346]);
+box(1296, 346, 170, 50, "trained", "GroupNorm");
+arrow([1381, 396], [1381, 424]);
+box(1296, 424, 170, 50, "trained", "GELU");
+arrow([1381, 474], [1381, 500]);
+box(1296, 500, 170, 95, "tensor", "Cell features", ["128 × 36 × 64"]);
+
+section(); // 4: heads
+// ---- per-cell heads ---------------------------------------------------------------------
+label(1588, 96, "PER-CELL HEADS");
+label(1802, 96, "OUTPUTS");
+line([1466, 547], [1482, 547], [1482, 190]);
+const cellHeads = [
+  ["128 → 1", "Target heatmap", "logits · 36×64"],
+  ["128 → 2", "Sub-cell offset", "2 × 36 × 64"],
+  ["128 → 1", "Distance", "log m · 36×64"],
+  ["128 → 2", "Grasp axis", "sin 2θ, cos 2θ"],
+];
+cellHeads.forEach(([ch, name, detail], i) => {
+  const y = 150 + i * 100;
+  arrow([1482, y + 40], [1508, y + 40]);
+  box(1508, y, 160, 80, "head", "Conv 1×1", [ch]);
+  arrow([1668, y + 40], [1700, y + 40]);
+  box(1700, y, 204, 80, "output", name, [detail]);
+});
+
+// ---- spatial close head -------------------------------------------------------------------
+arrow([1381, 595], [1381, 640], [480, 640], [480, 690]);
+label(590, 677, "CLOSE HEAD (SPATIAL)", "start");
+const closeRow = [
+  [410, 140, "Conv 1×1", ["128 → 32"]],
+  [586, 90, "GELU", []],
+  [712, 130, "Avg pool", ["4 × 6"]],
+  [878, 150, "Flatten", ["+ state", "→ 771"]],
+  [1064, 130, "LayerNorm", []],
+  [1230, 140, "Linear", ["771 → 256"]],
+  [1406, 90, "GELU", []],
+  [1532, 130, "Linear", ["256 → 1"]],
+];
+closeRow.forEach(([x, w, t, subs], i) => {
+  box(x, 690, w, 120, "head", t, subs);
+  const next = i + 1 < closeRow.length ? closeRow[i + 1][0] : 1698;
+  arrow([x + w, 750], [next, 750]);
+});
+box(1698, 690, 206, 120, "output", "Close now?", ["logit → sigmoid"]);
+box(893, 836, 120, 34, "state", "state");
+arrow([953, 836], [953, 810]);
+
+// ---- global head ------------------------------------------------------------------------------
+label(616, 876, "GLOBAL HEAD", "start");
+const globalRow = [
+  [616, 150, "Concat", ["+ state", "→ 1539"]],
+  [802, 130, "LayerNorm", []],
+  [968, 150, "Linear", ["1539 → 256"]],
+  [1154, 90, "GELU", []],
+  [1280, 130, "Linear", ["256 → 4"]],
+];
+arrow([580, 945], [616, 945]);
+globalRow.forEach(([x, w, t, subs], i) => {
+  box(x, 890, w, 110, "head", t, subs);
+  if (i + 1 < globalRow.length) arrow([x + w, 945], [globalRow[i + 1][0], 945]);
+});
+box(631, 1022, 120, 34, "state", "state");
+arrow([691, 1022], [691, 1000]);
+
+line([1410, 945], [1800, 945]);
+for (const x of [1573, 1800]) {
+  arrow([x, 945], [x, 925]);
+  arrow([x, 945], [x, 965]);
+}
+box(1470, 860, 207, 65, "output", "Finger speed", ["tanh → [−1, 1]"]);
+box(1697, 860, 207, 65, "output", "Target present", ["sigmoid"]);
+box(1470, 965, 207, 65, "output", "Holding", ["sigmoid"]);
+box(1697, 965, 207, 65, "output", "Grasp pressure", ["softplus"]);
+
+document.addEventListener("keydown", e => {
+  if (e.code !== "Space") return;
+  e.preventDefault();
+  if (e.repeat) return;
+  const next = sections.find(g => !g.classList.contains("on"));
+  if (next) next.classList.add("on");
+});
+</script>
 </body>
 </html>

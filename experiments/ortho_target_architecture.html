@@ -4,129 +4,204 @@
 <meta charset="utf-8">
 <title>Ortho target network</title>
 <style>
-  :root {
-    --ink: #14181c;
-    --muted: #77828f;
-    --line: #ccd4dd;
-    --frozen-bg: #eaeef3;
-    --frozen-edge: #a9b5c3;
-    --trained-bg: #eef4f7;
-    --trained-edge: #6fa2bd;
-    --io-bg: #ffffff;
-    --accent: #2f6f8f;
-  }
   @page { size: landscape; margin: 0; }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    margin: 0; background: #fff; color: var(--ink);
-    font: 400 26px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    display: flex; flex-direction: column; justify-content: center;
-    padding: 54px 60px;
-  }
-  h1 { font-size: 46px; font-weight: 600; margin: 0 0 40px; letter-spacing: -0.02em; }
-
-  .flow { display: flex; align-items: stretch; gap: 0; flex: 1 1 auto; }
-  .block {
-    flex: 1 1 0; min-width: 0;
-    border: 3px solid var(--line); border-radius: 16px;
-    background: var(--io-bg); padding: 30px 26px;
-    display: flex; flex-direction: column; justify-content: center;
-  }
-  .block.frozen  { background: var(--frozen-bg);  border-color: var(--frozen-edge); }
-  .block.trained { background: var(--trained-bg); border-color: var(--trained-edge); }
-
-  .title { font-size: 34px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 4px; }
-  .note  { font-size: 23px; color: var(--muted); margin-top: 6px; }
-  .shape { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-           font-size: 20px; color: var(--muted); margin-top: 10px; }
-  .layer { font-size: 25px; margin-top: 12px; }
-  .layer:first-of-type { margin-top: 0; }
-
-  .arrow {
-    flex: 0 0 56px; align-self: center;
-    display: flex; align-items: center; justify-content: center;
-    color: #93a0ae; font-size: 40px; line-height: 1;
-  }
-
-  .g-title {
-    font-size: 18px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--accent); margin-bottom: 10px;
-  }
-  ul { margin: 0; padding: 0; list-style: none; }
-  li { font-size: 24px; padding: 4px 0; }
-
-  .key { display: flex; gap: 34px; margin-top: 34px; font-size: 22px; color: var(--muted); }
-  .key span::before {
-    content: ""; display: inline-block; width: 18px; height: 18px; border-radius: 3px;
-    margin-right: 8px; vertical-align: -2px; border: 2px solid;
-  }
-  .key .f::before { background: var(--frozen-bg);  border-color: var(--frozen-edge); }
-  .key .t::before { background: var(--trained-bg); border-color: var(--trained-edge); }
+  html, body { margin: 0; height: 100%; background: #fff; }
+  body { display: flex; align-items: center; justify-content: center; }
+  .frame { width: min(100vw, calc(100vh * 16 / 9)); aspect-ratio: 16 / 9; background: #fff; }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         fill: #000; }
+  /* playback: sections stay hidden until spacebar reveals them in order */
+  .sec { opacity: 0; transition: opacity 1s ease; }
+  .sec.on { opacity: 1; }
 </style>
 </head>
 <body>
-
-<h1>Ortho target network</h1>
-
-<div class="flow">
-
-  <div class="block">
-    <div class="title">Input</div>
-    <div class="layer">Floor projection</div>
-    <div class="shape">448 &times; 448</div>
-    <div class="layer">5 m of room</div>
-    <div class="shape">anchor cameras, warped flat</div>
-  </div>
-
-  <div class="arrow">&rarr;</div>
-
-  <div class="block frozen">
-    <div class="title">Backbone</div>
-    <div class="note">DINOv2 ViT-B/14</div>
-    <div class="layer">Patch tokens</div>
-    <div class="shape">32 &times; 32</div>
-    <div class="layer">Last 4 layers</div>
-  </div>
-
-  <div class="arrow">&rarr;</div>
-
-  <div class="block trained">
-    <div class="title">Decoder</div>
-    <div class="layer">Fuse &rarr; 256</div>
-    <div class="layer">Upsample &times;2</div>
-    <div class="layer">Upsample &times;2</div>
-    <div class="shape">128 &times; 128 cells</div>
-    <div class="shape">3.9 cm each</div>
-  </div>
-
-  <div class="arrow">&rarr;</div>
-
-  <div class="block trained">
-    <div class="title">Heads</div>
-    <div class="g-title">per cell</div>
-    <ul>
-      <li>objectness</li>
-      <li>offset</li>
-    </ul>
-    <div class="note" style="margin-top:18px">Independent sigmoids,<br>not one softmax</div>
-  </div>
-
-  <div class="arrow">&rarr;</div>
-
-  <div class="block">
-    <div class="title">Output</div>
-    <div class="layer">Things worth reaching for</div>
-    <div class="shape">room x, y &middot; any number of them</div>
-    <div class="layer">Scores compare across frames</div>
-  </div>
-
+<div class="frame">
+  <svg id="d" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="ah" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="16" markerHeight="16"
+              markerUnits="userSpaceOnUse" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#000"/>
+      </marker>
+    </defs>
+    <rect width="1920" height="1080" fill="#fff"/>
+  </svg>
 </div>
 
-<div class="key">
-  <span class="f">frozen &mdash; 86.6M</span>
-  <span class="t">trained &mdash; 1.2M</span>
-</div>
+<script>
+// Layout is OrthoTargetNet in src/nf_robot/ml/ortho_target.py, at its defaults.
+const S = document.getElementById("d");
+const NS = "http://www.w3.org/2000/svg";
 
+const COLOR = {
+  input:   "#00D1FF",
+  state:   "#FF3DB4",
+  frozen:  "#B866FF",
+  trained: "#FFD400",
+  head:    "#2EE86A",
+  tensor:  "#FFFFFF",
+  output:  "#FF7A00",
+};
+
+let parent = S;
+function el(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  parent.appendChild(e);
+  return e;
+}
+
+// A block: bold title plus optional detail lines, centred. "" in subs is a spacer.
+function box(x, y, w, h, kind, title, subs = [], opt = {}) {
+  const ts = opt.titleSize || 26, tl = opt.titleLine || 32;
+  const ss = opt.subSize || 21, sl = opt.subLine || 26;
+  el("rect", { x, y, width: w, height: h, rx: 12, fill: COLOR[kind],
+               stroke: "#000", "stroke-width": kind === "tensor" ? 4 : 3,
+               ...(opt.dashed ? { "stroke-dasharray": "12 8" } : {}) });
+  const total = tl + sl * subs.length;
+  let base = y + h / 2 - total / 2 + tl * 0.78;
+  el("text", { x: x + w / 2, y: base, "text-anchor": "middle",
+               "font-size": ts, "font-weight": 800 }, title);
+  base += tl * 0.22;
+  for (const s of subs) {
+    base += sl;
+    if (s) el("text", { x: x + w / 2, y: base - sl * 0.22, "text-anchor": "middle",
+                        "font-size": ss, "font-weight": 600 }, s);
+  }
+}
+
+function path(pts, head) {
+  el("polyline", { points: pts.map(p => p.join(",")).join(" "), fill: "none",
+                   stroke: "#000", "stroke-width": 3, "stroke-linejoin": "round",
+                   ...(head ? { "marker-end": "url(#ah)" } : {}) });
+}
+const arrow = (...pts) => path(pts, true);
+const line = (...pts) => path(pts, false);
+
+function plus(cx, cy) {
+  el("circle", { cx, cy, r: 18, fill: "#fff", stroke: "#000", "stroke-width": 3 });
+  el("path", { d: `M${cx - 10},${cy} H${cx + 10} M${cx},${cy - 10} V${cy + 10}`,
+               stroke: "#000", "stroke-width": 3.5 });
+}
+
+function label(x, y, text, anchor = "middle") {
+  el("text", { x, y, "text-anchor": anchor, "font-size": 19, "font-weight": 800,
+               "letter-spacing": "0.06em" }, text);
+}
+
+// Playback. section() starts a new group; everything drawn after it belongs to that group
+// and stays invisible until spacebar reveals the groups one at a time, in order.
+const sections = [];
+let root = null;
+function section() {
+  root = root || parent;
+  parent = root;
+  parent = el("g", { class: "sec" });
+  sections.push(parent);
+}
+
+// ---- title and key --------------------------------------------------------------
+el("text", { x: 16, y: 60, "font-size": 44, "font-weight": 800 }, "Ortho target network");
+[["input", "Input"], ["frozen", "Frozen · 86.6M"], ["trained", "Trained · 1.2M"],
+ ["head", "Heads"], ["tensor", "Tensor"], ["output", "Output"]]
+  .reduce((x, [k, t]) => {
+    el("rect", { x, y: 34, width: 28, height: 28, rx: 5, fill: COLOR[k],
+                 stroke: "#000", "stroke-width": k === "tensor" ? 4 : 3 });
+    const label = el("text", { x: x + 38, y: 57, "font-size": 21, "font-weight": 700 }, t);
+    return x + 38 + label.getComputedTextLength() + 40;
+  }, 700);
+
+// The diagram is shorter than the page; centre it under the title.
+parent = el("g", { transform: "translate(0, 45)" });
+
+// Five rows every column shares.
+const SLOT = [150, 315, 480, 645, 810], SH = 120;
+const mid = i => SLOT[i] + SH / 2;
+
+// A column of blocks flowing downward, one per slot.
+function column(x, w, blocks) {
+  blocks.forEach(([slot, kind, title, subs], i) => {
+    box(x, SLOT[slot], w, SH, kind, title, subs);
+    if (i + 1 < blocks.length) arrow([x + w / 2, SLOT[slot] + SH], [x + w / 2, SLOT[blocks[i + 1][0]]]);
+  });
+}
+
+// ---- input and backbone --------------------------------------------------------------
+box(16, 150, 170, 180, "input", "Floor image", ["448 × 448", "5 m of room", "anchor cams", "warped flat"]);
+section(); // 1: vision encoder
+arrow([186, 210], [216, 210]);
+
+box(216, 150, 180, 780, "frozen", "DINOv2",
+    ["ViT-B/14", "with registers", "", "12 layers", "32 × 32 tokens", "14 px patches", "", "FROZEN", "86.6M params"],
+    { titleSize: 38, titleLine: 48, subSize: 22, subLine: 32 });
+arrow([396, 210], [426, 210]);
+arrow([396, mid(4)], [426, mid(4)]);
+
+box(426, SLOT[0], 190, SH, "tensor", "Patch tokens", ["last 4 layers", "3072 × 32 × 32"]);
+box(426, SLOT[4], 190, SH, "tensor", "CLS vector", ["CLS + registers", "not used"], { dashed: true });
+
+section(); // 2: stem (this network has no attention layers)
+arrow([616, 210], [656, 210]);
+
+// ---- stem and decoder ------------------------------------------------------------------
+label(751, 105, "STEM");
+column(656, 190, [
+  [0, "trained", "Conv 1×1", ["3072 → 256"]],
+  [1, "trained", "GroupNorm", ["32 groups"]],
+  [2, "trained", "GELU", []],
+  [3, "tensor", "Features", ["256 × 32 × 32"]],
+]);
+
+section(); // 3: upscale
+arrow([846, mid(3)], [871, mid(3)], [871, 125], [991, 125], [991, 150]);
+
+label(991, 105, "DECODER · 1");
+column(896, 190, [
+  [0, "trained", "Upsample ×2", ["bilinear"]],
+  [1, "trained", "Conv 3×3", ["256 → 128"]],
+  [2, "trained", "GroupNorm", ["32 groups"]],
+  [3, "trained", "GELU", []],
+  [4, "tensor", "Features", ["128 × 64 × 64"]],
+]);
+arrow([1086, mid(4)], [1111, mid(4)], [1111, 125], [1231, 125], [1231, 150]);
+
+label(1231, 105, "DECODER · 2");
+column(1136, 190, [
+  [0, "trained", "Upsample ×2", ["bilinear"]],
+  [1, "trained", "Conv 3×3", ["128 → 64"]],
+  [2, "trained", "GroupNorm", ["32 groups"]],
+  [3, "trained", "GELU", []],
+  [4, "tensor", "Cell features", ["64 × 128 × 128", "3.9 cm each"]],
+]);
+
+section(); // 4: heads
+// ---- heads and outputs --------------------------------------------------------------------
+label(1466, 105, "HEADS");
+label(1728, 105, "OUTPUTS");
+line([1326, mid(4)], [1351, mid(4)], [1351, mid(1)]);
+for (const [slot, ch, name, subs] of [
+  [1, "64 → 1", "Objectness", ["128 × 128 cells", "sigmoid per cell"]],
+  [3, "64 → 2", "Sub-cell offset", ["2 × 128 × 128", "sigmoid → in-cell x, y"]],
+]) {
+  arrow([1351, mid(slot)], [1376, mid(slot)]);
+  box(1376, SLOT[slot], 180, SH, "head", "Conv 1×1", [ch]);
+  arrow([1556, mid(slot)], [1596, mid(slot)]);
+  box(1596, SLOT[slot], 264, SH, "output", name, subs);
+  line([1860, mid(slot)], [1885, mid(slot)]);
+}
+arrow([1885, mid(1)], [1885, SLOT[4]]);
+box(1376, SLOT[4], 528, SH, "output", "Targets",
+    ["peaks over threshold, placed by offset", "room x, y · any number of them"]);
+
+document.addEventListener("keydown", e => {
+  if (e.code !== "Space") return;
+  e.preventDefault();
+  if (e.repeat) return;
+  const next = sections.find(g => !g.classList.contains("on"));
+  if (next) next.classList.add("on");
+});
+</script>
 </body>
 </html>
