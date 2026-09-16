@@ -196,6 +196,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from nf_robot.ml.dino_trunk import SharedTrunkMixin, drop_trunk_weights
+from nf_robot.ml.visual_servoing.model import AttentionBlock
 
 ORTHO_FEED = 3
 
@@ -1268,6 +1269,12 @@ DEFAULT_BACKBONE = "facebook/dinov2-with-registers-base"
 # power-of-two multiple of it. Moves with the backbone: a /16 trunk wants 512.
 DEFAULT_IMAGE_SIZE = 448
 DEFAULT_GRID = 128
+# Self-attention blocks over the token grid, between the 1x1 stem and the upsampling. The
+# decoder is otherwise all 3x3 convolutions, so a cell sees the rest of the floor only
+# through whatever DINOv2 mixed into its patch token; these let it weigh the whole map
+# (another object nearby, the gripper, where the operator went last) before deciding.
+# Checkpoints written before they existed record no count, and load as 0.
+DEFAULT_ATTENTION_LAYERS = 3
 DEFAULT_MODEL_PATH = "models/ortho_target.pth"
 # (cells) width of the Gaussian the cell head is trained against. 1.5 cells is about 6cm
 # of floor at the default grid, which is well inside "the operator would have grabbed
@@ -1310,10 +1317,15 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
 
     The offset head then places the point inside each winning cell, which is what keeps
     precision finer than the cell size.
+
+    Between the stem and the upsampling, attention_layers self-attention blocks run over
+    the token grid, as in VisualServoNet. With attention_layers=0 the module is exactly
+    the convolution-only network older checkpoints were trained as.
     """
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
-                 grid=DEFAULT_GRID, fuse_layers=4, width=256, freeze=True):
+                 grid=DEFAULT_GRID, fuse_layers=4, width=256, freeze=True,
+                 attention_layers=DEFAULT_ATTENTION_LAYERS, heads=8):
         super().__init__()
         trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
@@ -1321,6 +1333,7 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
         self.grid = grid
         self.fuse_layers = fuse_layers
         self.freeze = freeze
+        self.attention_layers = attention_layers
 
         config = trunk.config
         self.patch_size = config.patch_size
@@ -1343,7 +1356,17 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
                 nn.Conv2d(channels, nxt, 3, padding=1), nn.GroupNorm(32, nxt), nn.GELU(),
             ]
             channels = nxt
+        # One Sequential, stem included, because that is the state dict older checkpoints
+        # hold. forward() runs the attention between its stem and the rest.
         self.decoder = nn.Sequential(*layers)
+        self.stem_len = 3
+        if attention_layers:
+            # Learned, as in VisualServoNet: the 1x1 stem keeps the backbone's own position
+            # information, but attention over the map does better with its own.
+            self.pos = nn.Parameter(torch.zeros(1, self.token_grid ** 2, width))
+            nn.init.trunc_normal_(self.pos, std=0.02)
+        self.attention = nn.ModuleList(
+            [AttentionBlock(width, heads) for _ in range(attention_layers)])
         self.logit_head = nn.Conv2d(channels, 1, 1)
         self.offset_head = nn.Conv2d(channels, 2, 1)
 
@@ -1357,7 +1380,14 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
         return x.reshape(x.shape[0], x.shape[1], self.token_grid, self.token_grid)
 
     def forward(self, pixel_values):
-        x = self.decoder(self.features(pixel_values))
+        x = self.decoder[:self.stem_len](self.features(pixel_values))
+        if len(self.attention):
+            batch, channels, rows, cols = x.shape
+            seq = x.flatten(2).transpose(1, 2) + self.pos
+            for block in self.attention:
+                seq = block(seq)
+            x = seq.transpose(1, 2).reshape(batch, channels, rows, cols)
+        x = self.decoder[self.stem_len:](x)
         return self.logit_head(x).squeeze(1), self.offset_head(x)
 
     def train(self, mode=True):
@@ -1807,6 +1837,7 @@ def train(args):
     model = OrthoTargetNet(
         backbone_id=args.backbone, image_size=args.image_size, grid=args.grid,
         fuse_layers=args.fuse_layers, freeze=not args.unfreeze_backbone,
+        attention_layers=args.attention_layers,
     ).to(device)
     head_params = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
     groups = [{"params": head_params, "lr": args.lr}]
@@ -1862,6 +1893,7 @@ def train(args):
                     "image_size": args.image_size,
                     "grid": args.grid,
                     "fuse_layers": args.fuse_layers,
+                    "attention_layers": args.attention_layers,
                     # What logits mean. A checkpoint from before the head was per-cell
                     # objectness has the same tensors and would load in silence, then read
                     # softmax logits through a sigmoid and saturate at 1.0 everywhere.
@@ -1910,6 +1942,8 @@ def load_checkpoint(path, device):
     model = OrthoTargetNet(
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],
         grid=checkpoint["grid"], fuse_layers=checkpoint["fuse_layers"], freeze=freeze,
+        # absent from every checkpoint trained before the attention blocks existed
+        attention_layers=checkpoint.get("attention_layers", 0),
     ).to(device)
     state = checkpoint["state_dict"]
     if freeze:
@@ -2073,6 +2107,9 @@ def main():
                               help="output cells per side; 128 over a 5m map is 3.9cm per cell")
     train_parser.add_argument("--fuse_layers", type=int, default=4,
                               help="how many of the backbone's last blocks to concatenate")
+    train_parser.add_argument("--attention_layers", type=int, default=DEFAULT_ATTENTION_LAYERS,
+                              help="self-attention blocks over the token grid before "
+                                   "upsampling; 0 trains the convolution-only decoder")
     train_parser.add_argument("--epochs", type=int, default=60)
     # Paired with --batch_size: a batch four times larger takes a quarter as many steps,
     # so the rate rises with it (sqrt of the ratio, the usual compromise for AdamW).
