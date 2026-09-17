@@ -97,7 +97,7 @@ class TestCheckpointCompatibility(unittest.TestCase):
         return {
             "backbone_id": model.backbone_id, "image_size": list(model.image_size),
             "fuse_layers": model.fuse_layers, "attention_layers": len(model.attention),
-            "freeze": model.freeze, "close_heads": model.close_heads,
+            "freeze": model.freeze, "close_heads": model.close_heads, "skip": model.skip,
             "state_dict": drop_trunk_weights(model.state_dict(), model.trunk, verify=False),
             **extra,
         }

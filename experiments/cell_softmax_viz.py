@@ -1,18 +1,19 @@
 #!/usr/bin/env python
 
-"""Live illustration of how the visual servo net picks a point: an offset per cell, a softmax over cells.
+"""Live illustration of how the visual servo net picks a point: a softmax over cells, then its centre of mass near the peak.
 
     python experiments/cell_softmax_viz.py
-    python experiments/cell_softmax_viz.py --model models/visual_servo.pth --port 4250
+    python experiments/cell_softmax_viz.py --local_models --port 4250
 
 Reads the gripper MJPEG feed, runs VisualServoNet on it at up to 30 fps, and serves a page
 at http://127.0.0.1:4250/ that draws, over the frame the model actually saw:
 
-    - the cell grid: 36 x 64 cells over 1.5x the frame, so the edge cells are off-frame
+    - the cell grid: 18 x 32 cells over 1.25x the frame, so the edge cells are off-frame
     - the softmax over all cells, as orange heat
-    - every cell's offset answer, a small dot where that cell says the target would be
-    - the winning cell outlined, its answer drawn large, and a magnified inset of it with
-      the offset drawn from the cell's corner
+    - the winning cell and the window around it that the centre of mass is taken over
+    - the centre of mass, which is the answer, with the grasp axis averaged over the
+      same window drawn through it
+    - a magnified inset of the window, each cell labelled with its share of the weight
 
 Press p on the page to toggle the 18 x 32 backbone patch grid.
 
@@ -33,7 +34,8 @@ import numpy as np
 import torch
 
 from nf_robot.ml.visual_servoing.dataset import state_vector
-from nf_robot.ml.visual_servoing.model import CANVAS_SCALE, load_checkpoint
+from nf_robot.ml.visual_servoing.model import (
+    CANVAS_SCALE, CENTROID_RADIUS, local_centroid, window_average)
 from nf_robot.ml.visual_servoing.servo import load_model, prepare_frame
 
 logger = logging.getLogger(__name__)
@@ -97,9 +99,13 @@ def run_model(model, device, state, frames: Latest, results: Latest):
         start = time.monotonic()
         with torch.no_grad():
             out = model(prepare_frame(bgr, model.image_size, device), state_t)
-        probs = out["logits"][0].float().flatten().softmax(0)
-        offsets = out["offsets"][0].float().sigmoid()          # (2, rows, cols): x, y in the cell
+        logits = out["logits"][:1].float()
+        probs = logits[0].flatten().softmax(0)
         winner = int(probs.argmax())
+        # The same decode model.decode does for top_k=1, kept in pieces so the window's
+        # weights can be drawn: (x, y) in cells, (K,) weights over the (2r+1)^2 window.
+        centroid, weights, window = local_centroid(logits, torch.tensor([winner], device=device))
+        axis = window_average(out["axis"][:1].float(), weights, window)[0]
         latency = time.monotonic() - start
         slow = slow + 1 if latency > 1 / FPS else 0
         if slow == FPS:
@@ -116,8 +122,13 @@ def run_model(model, device, state, frames: Latest, results: Latest):
             "canvas_scale": CANVAS_SCALE,
             "jpeg": base64.b64encode(jpeg.tobytes()).decode(),
             "probs": base64.b64encode(probs.cpu().numpy().astype("<f4").tobytes()).decode(),
-            "offsets": base64.b64encode(offsets.cpu().numpy().astype("<f4").tobytes()).decode(),
             "winner": winner,
+            "radius": CENTROID_RADIUS,
+            "centroid": [round(float(v), 4) for v in centroid[0]],
+            # row-major over the window, dy then dx, as local_centroid builds it
+            "weights": [round(float(v), 4) for v in weights[0]],
+            "axis_rad": float(torch.atan2(axis[0], axis[1]) / 2.0),
+            "kappa": float(axis.norm()),
             "latency_ms": round(latency * 1000),
         }).encode())
 
@@ -168,7 +179,7 @@ async function poll() {
         const img = new Image();
         img.src = "data:image/jpeg;base64," + d.jpeg;
         await img.decode();
-        render(d, img, f32(d.probs), f32(d.offsets));
+        render(d, img, f32(d.probs));
       }
     } catch (e) {
       await new Promise(res => setTimeout(res, 500));
@@ -176,7 +187,7 @@ async function poll() {
   }
 }
 
-function render(data, image, probs, offsets) {
+function render(data, image, probs) {
   const { rows, cols, canvas_scale: s, winner } = data;
   const n = rows * cols, cw = W / cols, ch = H / rows;
   // The cells span -(s-1)/2 .. 1+(s-1)/2 of the frame; the frame sits in the middle.
@@ -224,64 +235,63 @@ function render(data, image, probs, offsets) {
     g.stroke();
   }
 
-  // every cell's answer to "if the target is here, where in the cell is it"
-  g.globalAlpha = 0.6;
-  g.fillStyle = DOT;
-  g.strokeStyle = "#000";
-  g.lineWidth = 1;
-  for (let i = 0; i < n; i++) {
-    const x = ((i % cols) + offsets[i]) * cw, y = (Math.floor(i / cols) + offsets[n + i]) * ch;
-    g.beginPath();
-    g.arc(x, y, 3.5, 0, Math.PI * 2);
-    g.fill();
-    g.stroke();
-  }
-  g.globalAlpha = 1;
-
   ctx.drawImage(scene, 0, 0);
 
-  // the one answer that is kept
+  const R = data.radius, span = 2 * R + 1;
   const c = winner % cols, r = Math.floor(winner / cols);
-  const x = (c + offsets[winner]) * cw, y = (r + offsets[n + winner]) * ch;
-  ctx.strokeStyle = "#000"; ctx.lineWidth = 8;
-  ctx.strokeRect(c * cw, r * ch, cw, ch);
-  ctx.strokeStyle = WIN; ctx.lineWidth = 4;
-  ctx.strokeRect(c * cw, r * ch, cw, ch);
-  ctx.beginPath();
-  ctx.moveTo(x - 40, y); ctx.lineTo(x + 40, y); ctx.moveTo(x, y - 40); ctx.lineTo(x, y + 40);
-  ctx.strokeStyle = "#000"; ctx.lineWidth = 7; ctx.stroke();
-  ctx.strokeStyle = WIN; ctx.lineWidth = 3; ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(x, y, 10, 0, Math.PI * 2);
-  ctx.fillStyle = DOT; ctx.fill();
-  ctx.lineWidth = 3; ctx.strokeStyle = "#000"; ctx.stroke();
+  const [mx, my] = data.centroid;          // cells, centres at i + 0.5
+  const x = mx * cw, y = my * ch;
 
-  // magnified inset of the winner and its neighbours, in the corner farthest from it
-  const span = 5, size = 330, k = size / (span * cw);
-  const ix = c < cols / 2 ? W - size - 24 : 24;
-  const iy = r < rows / 2 ? H - size - 70 : 24;
+  // the window the centre of mass is taken over, then the winning cell inside it
+  function frame(g, x0, y0, w, h, colour, width) {
+    g.strokeStyle = "#000"; g.lineWidth = width + 4; g.strokeRect(x0, y0, w, h);
+    g.strokeStyle = colour; g.lineWidth = width; g.strokeRect(x0, y0, w, h);
+  }
+  ctx.setLineDash([14, 8]);
+  frame(ctx, (c - R) * cw, (r - R) * ch, span * cw, span * ch, "#fff", 3);
+  ctx.setLineDash([]);
+  frame(ctx, c * cw, r * ch, cw, ch, WIN, 4);
+
+  // the answer: centre of mass, with the window-averaged grasp axis through it
+  function answer(g, px, py, len, dot) {
+    const dx = Math.cos(data.axis_rad) * len, dy = Math.sin(data.axis_rad) * len;
+    g.beginPath(); g.moveTo(px - dx, py - dy); g.lineTo(px + dx, py + dy);
+    g.strokeStyle = "#000"; g.lineWidth = 9; g.stroke();
+    g.strokeStyle = WIN; g.lineWidth = 4; g.stroke();
+    g.beginPath(); g.arc(px, py, dot, 0, Math.PI * 2);
+    g.fillStyle = DOT; g.fill(); g.lineWidth = 3; g.strokeStyle = "#000"; g.stroke();
+  }
+  answer(ctx, x, y, 60, 10);
+
+  // magnified inset of the window, always bottom left
+  const size = 400, k = size / (span * cw), kh = size / (span * ch);
+  const ix = 24, iy = H - size - 70;
   ctx.fillStyle = "#E4E8EE";
   ctx.fillRect(ix, iy, size, size);
-  ctx.drawImage(scene, (c - 2) * cw, (r - 2) * ch, span * cw, span * ch, ix, iy, size, size);
-  const cx = ix + 2 * cw * k, cy = iy + 2 * ch * k;
-  ctx.strokeStyle = "#000"; ctx.lineWidth = 9;
-  ctx.strokeRect(cx, cy, cw * k, ch * k);
-  ctx.strokeStyle = WIN; ctx.lineWidth = 5;
-  ctx.strokeRect(cx, cy, cw * k, ch * k);
-  const px = cx + offsets[winner] * cw * k, py = cy + offsets[n + winner] * ch * k;
-  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(px, py);
-  ctx.strokeStyle = "#000"; ctx.lineWidth = 8; ctx.stroke();
-  ctx.strokeStyle = "#fff"; ctx.lineWidth = 4; ctx.stroke();
-  ctx.beginPath(); ctx.arc(px, py, 14, 0, Math.PI * 2);
-  ctx.fillStyle = DOT; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = "#000"; ctx.stroke();
+  ctx.drawImage(scene, (c - R) * cw, (r - R) * ch, span * cw, span * ch, ix, iy, size, size);
+  ctx.textAlign = "center";
+  ctx.font = "700 20px system-ui, sans-serif";
+  for (let j = 0; j < span; j++) {
+    for (let i = 0; i < span; i++) {
+      const w = data.weights[j * span + i];
+      const gx = c - R + i, gy = r - R + j;
+      if (gx < 0 || gy < 0 || gx >= cols || gy >= rows) continue;
+      const tx = ix + (i + 0.5) * cw * k, ty = iy + (j + 0.5) * ch * kh + 7;
+      const label = w >= 0.995 ? "100" : (w * 100).toFixed(w < 0.1 ? 1 : 0);
+      ctx.lineWidth = 4; ctx.strokeStyle = "#000"; ctx.strokeText(label, tx, ty);
+      ctx.fillStyle = "#fff"; ctx.fillText(label, tx, ty);
+    }
+  }
+  frame(ctx, ix + R * cw * k, iy + R * ch * kh, cw * k, ch * kh, WIN, 4);
+  answer(ctx, ix + (mx - (c - R)) * cw * k, iy + (my - (r - R)) * ch * kh, 90, 14);
   ctx.lineWidth = 6; ctx.strokeStyle = "#000";
   ctx.strokeRect(ix, iy, size, size);
   ctx.fillStyle = "#000";
   ctx.fillRect(ix - 3, iy + size, size + 6, 46);
   ctx.fillStyle = "#fff";
-  ctx.font = "700 24px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(`offset (${offsets[winner].toFixed(2)}, ${offsets[n + winner].toFixed(2)})  ·  p = ${probs[winner].toFixed(2)}`,
+  ctx.font = "700 22px system-ui, sans-serif";
+  const deg = data.axis_rad * 180 / Math.PI;
+  ctx.fillText(`p = ${probs[winner].toFixed(2)}  ·  window % shown  ·  axis ${deg.toFixed(0)}° κ ${data.kappa.toFixed(1)}`,
                ix + size / 2, iy + size + 32);
 }
 
@@ -334,8 +344,9 @@ def make_handler(results: Latest, page: bytes):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--stream", default="http://127.0.0.1:4246/stream.mjpeg")
-    parser.add_argument("--model", default=None,
-                        help="checkpoint path; default downloads the published visual servo model")
+    parser.add_argument("--local_models", action="store_true",
+                        help="Use the local model from models/ rather than downloading the "
+                             "production model from huggingface")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=4250)
     parser.add_argument("--device", default=None)
@@ -348,10 +359,7 @@ def main():
 
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available()
                                           else "mps" if torch.backends.mps.is_available() else "cpu"))
-    if args.model:
-        model, _ = load_checkpoint(args.model, device)
-    else:
-        model, _ = load_model(device)
+    model, _ = load_model(device, local_models=args.local_models)
     logger.info(f"model on {device}: {model.grid[0]}x{model.grid[1]} cells, input {model.image_size}")
 
     state = {"laser_rangefinder": args.range, "finger_angle": args.finger_angle,

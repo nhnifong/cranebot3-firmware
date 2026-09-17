@@ -3,7 +3,7 @@
 """Live illustration of how the ortho target net finds targets: an offset and an objectness per cell.
 
     python experiments/ortho_cell_viz.py
-    python experiments/ortho_cell_viz.py --model models/ortho_target.pth --port 4252
+    python experiments/ortho_cell_viz.py --local_models --port 4252
 
 The ortho counterpart of cell_softmax_viz.py. Reads the floor projection MJPEG feed, runs
 OrthoTargetNet on it at up to 30 fps (the feed itself is 10), and serves a page at
@@ -35,8 +35,8 @@ import torch
 import torch.nn.functional as F
 
 from cell_softmax_viz import Latest, make_handler, read_stream
-from nf_robot.ml.ortho_target import (DEFAULT_MODEL_PATH, load_checkpoint, prepare_ortho_image,
-                                      resolve_model_path)
+from nf_robot.ml.ortho_target import (DEFAULT_MODEL_PATH, TARGETING_MODEL_FILENAME,
+                                      TARGETING_MODEL_REPOID, load_checkpoint, prepare_ortho_image)
 
 logger = logging.getLogger(__name__)
 
@@ -283,8 +283,9 @@ poll();
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--stream", default="http://127.0.0.1:8747/stream.mjpeg")
-    parser.add_argument("--model", default=DEFAULT_MODEL_PATH,
-                        help="checkpoint path; if the default is missing, the published model is downloaded")
+    parser.add_argument("--local_models", action="store_true",
+                        help="Use the local model from models/ rather than downloading the "
+                             "production model from huggingface")
     parser.add_argument("--threshold", type=float, default=None,
                         help="objectness to keep a peak at; default is the checkpoint's own")
     parser.add_argument("--host", default="127.0.0.1")
@@ -295,7 +296,13 @@ def main():
 
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available()
                                           else "mps" if torch.backends.mps.is_available() else "cpu"))
-    model, _ = load_checkpoint(resolve_model_path(args.model), device)
+    if args.local_models:
+        path = DEFAULT_MODEL_PATH
+    else:
+        from huggingface_hub import hf_hub_download
+        path = hf_hub_download(repo_id=TARGETING_MODEL_REPOID, filename=TARGETING_MODEL_FILENAME)
+    logger.info(f"loading ortho target model from {path}")
+    model, _ = load_checkpoint(path, device)
     threshold = model.threshold if args.threshold is None else args.threshold
     logger.info(f"model on {device}: {model.grid}x{model.grid} cells, input {model.image_size}, "
                 f"threshold {threshold:.3f}")

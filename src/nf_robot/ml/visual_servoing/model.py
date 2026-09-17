@@ -14,10 +14,11 @@ observer.py's _center_card_in_view already does.
             Conv2d(3072 -> 256, 1x1), GroupNorm, GELU   (B,  256, 18, 32)
             FiLM from the state vector
             self-attention blocks over 576 tokens       (B,  256, 18, 32)
-            bilinear x2, Conv 3x3 -> 128, GN, GELU      (B,  128, 36, 64)
+            skip: concat the pre-attention map, 1x1 -> 256 (B,  256, 18, 32)
 
-    heads   1. target position, 3D, in the gripper camera frame
-            2. grasp axis, 2 channels, read from the winning cell
+    heads   1. target position, 3D, in the gripper camera frame: the centre of mass
+               of the cell softmax in a window around the winning cell
+            2. grasp axis, 2 channels, averaged over that same window
             3. finger speed, scalar in [-1, 1], from the global vector
             4. probability any graspable target is present
             5. probability we are currently holding something
@@ -31,8 +32,6 @@ Swapping backbones therefore means re-mining; readme.md's DINOv3 footnote has th
 details and the failure mode.
 """
 
-import math
-
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -43,19 +42,22 @@ from nf_robot.ml.dino_trunk import SharedTrunkMixin, drop_trunk_weights
 DEFAULT_BACKBONE = "facebook/dinov2-with-registers-base"
 # (width, height). 32x18 tokens at /14, and exactly the gripper camera's native 16:9.
 DEFAULT_IMAGE_SIZE = (448, 252)
-# The head predicts over 1.5x the frame extent, so normalized coordinates run
-# -0.25..1.25 and an object just past an edge has a real cell instead of being clamped
-# to the border. That case is the whole reason this model exists.
-CANVAS_SCALE = 1.5
-# Cells per token, i.e. how far the decoder upsamples. 2 gives 36x64 cells of about
-# 10.5px each, and the offset head takes precision below that.
-CELLS_PER_TOKEN = 2
+# The head predicts over 1.25x the frame extent, so normalized coordinates run
+# -0.125..1.125 and an object just past an edge has a real cell instead of being clamped
+# to the border. That case is the whole reason this model exists. Must match
+# mine_teleop.CANVAS_SCALE, which decides which labels the dataset keeps.
+CANVAS_SCALE = 1.25
+# Cells are the attention's own tokens: no upsampling, so 18x32 cells of 17.5px each.
+# Precision below a cell comes from the centre of mass of the softmax in a window of
+# this many cells either side of the winner, not from a separate offset head.
+CENTROID_RADIUS = 2
 # Shape the spatial close head reads the cell grid at: channels it reduces to, then the
 # coarse grid it pools to. Pooled to a grid rather than to a vector because that is the
 # whole point of moving the head here - "is there something between the fingers" is a
 # question about one part of the frame, and a mean over the whole map cannot tell the
-# bottom centre from anywhere else. 4x6 over 36x64 cells keeps the jaws in their own
-# bins while staying small enough to flatten.
+# bottom centre from anywhere else. 4x6 over 18x32 cells keeps the jaws in their own
+# bins while staying small enough to flatten. On the 18x32 grid the bins are uneven
+# (adaptive_avg_pool2d below), which is fine.
 CLOSE_CHANNELS = 32
 CLOSE_POOL = (4, 6)
 # laser_rangefinder, finger_angle, target_force. Deliberately not the previous velocity
@@ -153,7 +155,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
-                 state_dim=STATE_DIM, close_heads=False, spatial_close=False):
+                 state_dim=STATE_DIM, close_heads=False, spatial_close=False, skip=True):
         super().__init__()
         trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
@@ -168,7 +170,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
         if width_px % self.patch_size or height_px % self.patch_size:
             raise ValueError(f"image_size {self.image_size} is not a multiple of patch {self.patch_size}")
         self.token_grid = (height_px // self.patch_size, width_px // self.patch_size)
-        self.grid = (self.token_grid[0] * CELLS_PER_TOKEN, self.token_grid[1] * CELLS_PER_TOKEN)
+        self.grid = self.token_grid
 
         hidden = config.hidden_size
         self.stem = nn.Sequential(
@@ -182,19 +184,23 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
         self.attention = nn.ModuleList(
             [AttentionBlock(width, heads) for _ in range(attention_layers)])
 
-        decoder, channels = [], width
-        for _ in range(int(math.log2(CELLS_PER_TOKEN))):
-            nxt = max(64, channels // 2)
-            decoder += [
-                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
-                nn.Conv2d(channels, nxt, 3, padding=1), nn.GroupNorm(32, nxt), nn.GELU(),
-            ]
-            channels = nxt
-        self.decoder = nn.Sequential(*decoder)
+        channels = width
 
-        # Head 1: one softmax over canvas cells, plus sub-cell offset and log distance.
+        # The skip connection: the map from before attention, concatenated with the map
+        # after it and fused, so every spatial head reads "what is in this cell" beside
+        # "what the whole image says about this cell". The attention blocks' own residual
+        # stream does not provide this - by the last block it has been added to three
+        # times, and a head reading it cannot tell the two apart. Without the local half a
+        # cell's logit is whatever attention writes there, and pooling the positions of
+        # several objects writes one peak at their mean.
+        self.skip = skip
+        if skip:
+            self.skip_fuse = nn.Sequential(
+                nn.Conv2d(width * 2, width, 1), nn.GroupNorm(32, width), nn.GELU())
+
+        # Head 1: one softmax over canvas cells, plus log distance. Sub-cell position is
+        # the softmax's local centre of mass; see local_centroid.
         self.logit_head = nn.Conv2d(channels, 1, 1)
-        self.offset_head = nn.Conv2d(channels, 2, 1)
         # log metres, per cell: with two objects at different heights in frame there is
         # no single correct distance for the image
         self.distance_head = nn.Conv2d(channels, 1, 1)
@@ -260,19 +266,19 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
     def forward(self, pixel_values, state):
         """Returns a dict of raw head outputs; see decode() for what they mean."""
         tokens, global_vec = self.features(pixel_values)
-        x = self.film(self.stem(tokens), state)
+        local = self.film(self.stem(tokens), state)
 
         rows, cols = self.token_grid
-        seq = x.flatten(2).transpose(1, 2) + self.pos
+        seq = local.flatten(2).transpose(1, 2) + self.pos
         for block in self.attention:
             seq = block(seq)
-        x = seq.transpose(1, 2).reshape(x.shape[0], -1, rows, cols)
+        x = seq.transpose(1, 2).reshape(local.shape[0], -1, rows, cols)
+        if self.skip:
+            x = self.skip_fuse(torch.cat([local, x], dim=1))
 
-        x = self.decoder(x)
         flags = self.global_head(torch.cat([global_vec, state], dim=-1))
         out = {
             "logits": self.logit_head(x).squeeze(1),
-            "offsets": self.offset_head(x),
             "log_distance": self.distance_head(x).squeeze(1),
             "axis": self.axis_head(x),
             "finger": torch.tanh(flags[:, 0]),
@@ -307,12 +313,48 @@ def gather_cells(maps, index):
     return flat.gather(2, index[:, None, None].expand(-1, flat.shape[1], -1)).squeeze(-1)
 
 
-def decode(outputs, grid, top_k=1, nms_radius=2):
+def local_centroid(logits, index, radius=CENTROID_RADIUS):
+    """Centre of mass of the cell softmax in a window around one cell per batch item.
+
+    Returns (cell, weights, window): the continuous cell coordinate (cell centres at
+    i + 0.5, as uv_to_cell produces), the (B, K) softmax weights over the window, and the
+    (B, K) flat indices of the window's cells for gathering other maps with the same
+    weights. Cells off the grid get zero weight, so a winner on the border is pulled
+    inward only by what is really there.
+
+    A softmax over just the window's logits is the global softmax renormalized to the
+    window, so this is "the probability mass near the peak, averaged" - and restricting
+    it to a window is what keeps a second object elsewhere from dragging the answer onto
+    the floor between them.
+    """
+    batch, rows, cols = logits.shape
+    steps = torch.arange(-radius, radius + 1, device=logits.device)
+    dy, dx = torch.meshgrid(steps, steps, indexing="ij")
+    dy, dx = dy.flatten(), dx.flatten()
+    cy = torch.div(index, cols, rounding_mode="floor")[:, None] + dy
+    cx = (index % cols)[:, None] + dx
+    valid = (cy >= 0) & (cy < rows) & (cx >= 0) & (cx < cols)
+    window = cy.clamp(0, rows - 1) * cols + cx.clamp(0, cols - 1)
+    local = logits.flatten(1).gather(1, window).masked_fill(~valid, float("-inf"))
+    weights = local.softmax(dim=1)
+    centres = torch.stack([cx, cy], dim=-1).to(logits.dtype) + 0.5
+    return (weights.unsqueeze(-1) * centres).sum(dim=1), weights, window
+
+
+def window_average(maps, weights, window):
+    """Average a (B, C, H, W) map over local_centroid's window with its weights."""
+    flat = maps.flatten(2)
+    gathered = flat.gather(2, window[:, None, :].expand(-1, flat.shape[1], -1))
+    return (gathered * weights[:, None, :]).sum(dim=2)
+
+
+def decode(outputs, grid, top_k=1, nms_radius=CENTROID_RADIUS):
     """Head outputs -> (uv, distance, axis angle, score), all batched, top_k per item.
 
     Peaks rather than the expectation over the map: averaging two candidate objects
     would land the prediction on the empty floor between them - the same reason
-    ortho_target decodes the way it does.
+    ortho_target decodes the way it does. The expectation is taken only locally, in a
+    window around each peak, which is where the sub-cell position comes from.
     """
     logits = outputs["logits"]
     batch, rows, cols = logits.shape
@@ -328,13 +370,13 @@ def decode(outputs, grid, top_k=1, nms_radius=2):
     uv, distance, angle, concentration = [], [], [], []
     for k in range(top_k):
         idx = index[:, k]
-        cx = (idx % cols).float()
-        cy = torch.div(idx, cols, rounding_mode="floor").float()
-        offset = gather_cells(outputs["offsets"], idx).sigmoid()
-        cell = torch.stack([cx, cy], dim=-1) + offset
+        cell, weights, window = local_centroid(logits, idx)
         uv.append(cell_to_uv(cell, grid))
         distance.append(gather_cells(outputs["log_distance"].unsqueeze(1), idx).squeeze(-1).exp())
-        axis = gather_cells(outputs["axis"], idx)
+        # The raw (sin 2t, cos 2t) vectors, not their angles, are averaged: neighbours
+        # that disagree cancel, which shortens the result and so lowers the concentration
+        # reported below - disagreement reads as uncertainty, as it should.
+        axis = window_average(outputs["axis"], weights, window)
         angle.append(torch.atan2(axis[:, 0], axis[:, 1]) / 2.0)
         # The length of the axis vector, which the von Mises objective in train.py trains
         # as the head's concentration: how sure it is, not just what it thinks. atan2
@@ -381,6 +423,8 @@ def load_checkpoint(path, device):
         fuse_layers=checkpoint["fuse_layers"], attention_layers=checkpoint["attention_layers"],
         freeze=freeze, close_heads=checkpoint.get("close_heads", False),
         spatial_close=checkpoint.get("spatial_close", False),
+        # absent in checkpoints trained before the skip connection existed
+        skip=checkpoint.get("skip", False),
     ).to(device)
     state = checkpoint["state_dict"]
     if freeze:

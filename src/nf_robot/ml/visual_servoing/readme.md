@@ -89,26 +89,31 @@ Decoded from a spatial softmax rather than regressed directly, so that several
 candidate objects produce several modes instead of an average that lands on the empty
 floor between them - the same argument as the ortho targeting model.
 
-The grid spans **1.5x the frame extent in each axis** (image coordinates -0.25 to 1.25),
-so an object just past the bottom edge has a real cell to live in and the softmax can
-answer "down there, off-screen" instead of being forced to pick a visible cell. This is
-the sock case, and it is the specific thing dit-grasp-4 cannot represent. At 36x64 cells
-over 1.5x extent each cell is about 10.5px of frame; a 2-channel sub-cell offset head
-(sigmoid, L1 loss, supervised only at the true cell) takes precision below that.
+The grid spans **1.25x the frame extent in each axis** (image coordinates -0.125 to
+1.125), so an object just past the bottom edge has a real cell to live in and the softmax
+can answer "down there, off-screen" instead of being forced to pick a visible cell. This is
+the sock case, and it is the specific thing dit-grasp-4 cannot represent. The cells are the
+attention blocks' own 18x32 tokens, with no upsampling, so each is about 17.5px of frame.
+There is no offset head: the position is the centre of mass of the softmax in a 5x5 window
+around the winning cell (`CENTROID_RADIUS`), which gives sub-cell precision from the logits
+alone while a second object outside the window cannot drag the answer toward it.
 
 The spatial softmax gives two of the three dimensions. The third - distance along the
-ray - is a per-cell regression channel in log metres, gathered at the winning cell along
-with the offsets. (u, v, distance) is then a 3D point by the pinhole model, using the
+ray - is a per-cell regression channel in log metres, gathered at the winning cell.
+(u, v, distance) is then a 3D point by the pinhole model, using the
 gripper camera's calibrated intrinsic_matrix; cv_common.py already reads that out of the
 camera calibration. Per-cell rather than a single global scalar because with two objects
 at different heights in frame, one global distance has no correct value.
 
-Loss: cross-entropy over cells, L1 on the offset of the true cell, Huber on log
-distance.
+Loss: cross-entropy over cells against a Gaussian (`--cell_sigma`, 1 cell), Huber on the
+windowed centre of mass (centred on the true cell) in cells, Huber on log distance.
 
-**2. Grasp axis, 2 channels, read from the winning cell.**
+**2. Grasp axis, 2 channels, averaged over the winning window.**
 
-Predicted per-cell and gathered at the argmax, like the offsets. Parametrised as
+Predicted per-cell and averaged over the same 5x5 window with the same softmax weights
+(detached in training, so the axis loss cannot move the position). The raw vectors are
+averaged, so neighbours that disagree shorten the result and lower its concentration.
+Parametrised as
 (sin 2*theta, cos 2*theta) because a two-finger grasp axis is pi-periodic - regressing
 theta directly puts a wraparound discontinuity in the middle of the label space. Labels
 come free from how much the object was rotated when composited, given that board
@@ -256,7 +261,7 @@ Both write the image-folder-plus-metadata.jsonl layout that ortho_target.py alre
 uses; write_split and upload_dataset there can be reused as they are. One row per frame:
 
     {"file_name": ..., "split_source": "synth" | "teleop",
-     "target_uv": [u, v] | null,        # in 1.5x canvas coordinates, may be off-frame
+     "target_uv": [u, v] | null,        # in 1.25x canvas coordinates, may be off-frame
      "target_range_m": float | null,    # third dimension of the 3D target
      "grasp_axis_rad": float | null,    # pi-periodic
      "finger": float | null,            # -1..1
@@ -389,7 +394,7 @@ geometric label in the synthetic set.
    how many frames it affects, and the fix for that number is a floorplates run from
    higher up.
 3. Pick 0-4 object cutouts. Scale each by its own capture range over `r`, rotate by a
-   random angle, and paste at a random position **in the 1.5x canvas, not the frame** -
+   random angle, and paste at a random position **in the 1.25x canvas, not the frame** -
    so a good fraction land partly or wholly off the visible edge. This is the sock case
    and it has to be common in training, not a rare corner. Carry each object's crosshair
    point and axis line through the identical transform to get its label.
@@ -451,7 +456,7 @@ Then the labels fall out per head:
 
 - **target_uv, target_range_m**: for each frame t in the window, take the delta from
   gripper_pos(t) to P, rotate into the gripper frame using spin/wrist_angle, and project
-  through the extrinsic and intrinsic. Frames where P lands outside the 1.5x canvas are
+  through the extrinsic and intrinsic. Frames where P lands outside the 1.25x canvas are
   dropped rather than clipped.
 - **grasp_axis_rad**: wrist_angle at the grasp minus wrist_angle at frame t. A delta, so
   it is frame-relative and matches the head living in the gripper frame - which is also
@@ -561,8 +566,8 @@ given mode in one run, since a second run replaces the first rather than adding 
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/grip_o naavox/simple_grasp_spin \
-        --output_root datasets/visual_servoing_pool_252 \
-        --preview_dir datasets/visual_servoing_pool_252/preview \
+        --output_root datasets/vs-centroid-dataset \
+        --preview_dir datasets/vs-centroid-dataset/preview \
         --preview_count 100 \
         --approach_seconds 5
 
@@ -576,8 +581,8 @@ Recordings of flying over empty floor:
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
         --repo_id naavox/combined_negatives --negatives \
-        --output_root datasets/visual_servoing_pool_252 \
-        --preview_dir datasets/visual_servoing_pool_252/negative_preview
+        --output_root datasets/vs-centroid-dataset \
+        --preview_dir datasets/vs-centroid-dataset/negative_preview
 
 Every frame becomes a `target_present = 0` row with no position labels, one frame in five
 by default (`--negative_stride`), written as `negative-*.parquet` beside the positives
@@ -591,10 +596,10 @@ for making sure they were all over empty floor.
 Recordings in which closing the jaws would catch nothing:
 
     python -m nf_robot.ml.visual_servoing.mine_teleop \
-        --repo_id naavox/false-grabs naavox/bd-false-grabs
+        --repo_id naavox/false-grabs naavox/bd-false-grabs \
         --false_grabs \
-        --output_root datasets/visual_servoing_pool_252 \
-        --preview_dir datasets/visual_servoing_pool_252/false_grab_preview
+        --output_root datasets/vs-centroid-dataset \
+        --preview_dir datasets/vs-centroid-dataset/false_grab_preview
 
 Every frame becomes a `close_now = 0`, `holding = 0` row with **every other label masked**,
 one frame in five by default, written as `false_grab-*.parquet`.
@@ -621,10 +626,10 @@ two cover the same range distribution:
 
     python -m nf_robot.ml.visual_servoing.synth_frames \
         --plates plates_all \
-        --output_root datasets/visual_servoing_pool_252/ \
-        --ranges_from datasets/visual_servoing_pool_252/all \
+        --output_root datasets/vs-centroid-dataset/ \
+        --ranges_from datasets/vs-centroid-dataset/all \
         --count 80000 \
-        --annotate_dir datasets/visual_servoing_pool_252/synth_preview
+        --annotate_dir datasets/vs-centroid-dataset/synth_preview
 
 Composites at `mine_teleop.IMAGE_SIZE`, the same constant the mining above defaults to,
 so both producers of the pool agree without being told. Rerunning replaces only its own
@@ -633,7 +638,7 @@ which is where a compositing sign error shows up.
 
 ## 4b. Audit what was built
 
-    python -m nf_robot.ml.visual_servoing.audit --data_root datasets/visual_servoing_pool_252
+    python -m nf_robot.ml.visual_servoing.audit --data_root datasets/vs-centroid-dataset
 
 Run after every rebuild, before dealing the pool: whether a head has anything to learn
 from is a property of what was built, not of how it was cut. With no `--split` it audits
@@ -648,7 +653,7 @@ range. Catches the failures a loss curve cannot: a pool with no synthetic shards
 ## 5. Deal the pool into train and eval
 
     python -m nf_robot.ml.visual_servoing.split_pool \
-        --data_root datasets/visual_servoing_pool_252
+        --data_root datasets/vs-centroid-dataset
 
 Replaces `train/` and `eval/` wholesale from the pool, one row at a time and at random.
 `--eval_fraction` (0.1) and `--seed` (0) are the only knobs; the same seed over the same
@@ -673,7 +678,7 @@ an object the robot has never seen.
 ## 6. Train
 
     python -m nf_robot.ml.visual_servoing.train \
-        --data_root datasets/visual_servoing_pool_252 \
+        --data_root datasets/vs-centroid-dataset \
         --epochs 14 \
         --batch_size 400
 
@@ -700,7 +705,7 @@ per-angle-bin row weighting for an A/B; both are on by default.
 
 ## 6c. Publishing the dataset
 
-    hf upload naavox/visual_servoing_dataset_pool_252 datasets/visual_servoing_pool_252 \
+    hf upload naavox/visual_servoing_dataset_pool_252 datasets/vs-centroid-dataset \
         --repo-type dataset --exclude "all/*"
 
 Exclude the pool: it holds every row that train/ and eval/ already hold between them, so
@@ -727,9 +732,9 @@ difference that survives a download and shows up as a metric that moved for no r
 ## 7. Evaluate
 
     python -m nf_robot.ml.visual_servoing.evaluate \
-        --data_root datasets/visual_servoing_pool_252 \
+        --data_root datasets/vs-centroid-dataset \
         --model_path models/visual_servo.pth \
-        --preview_dir datasets/visual_servoing_pool_252/eval_predictions
+        --preview_dir datasets/vs-centroid-dataset/eval_predictions
 
 Prints the metrics next to the constant-prediction baseline. Beating that baseline is the
 bar: for a centering task "always predict the middle" already scores well.
@@ -835,7 +840,7 @@ during a descent distinguishes a model mislocating the object from a mistuned lo
 
 # Open questions
 
-- 1.5x canvas extent is a guess. If misses are usually small, 1.25x is cheaper to learn;
+- 1.25x canvas extent is a guess, halved from 1.5x. If misses are usually small it is cheaper to learn;
   if the gripper often ends up a body-length away, the canvas cannot cover it and a
   direction-only fallback would be needed for those.
 - Whether the holding head has enough teleop positives on its own, given that synthetic

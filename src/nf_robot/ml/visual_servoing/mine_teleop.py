@@ -117,9 +117,10 @@ from nf_robot.ml.lerobot_trim_to_grasp import (
 APPROACH_SECONDS = 10.0
 # (seconds) how much of the carry after the grasp to keep, for the holding head.
 CARRY_SECONDS = 3.0
-# The canvas the target head predicts over, as a fraction of the frame. 1.5 means
-# coordinates run -0.25..1.25 and a target a quarter-frame off the edge still has a cell.
-CANVAS_SCALE = 1.5
+# The canvas the target head predicts over, as a fraction of the frame. 1.25 means
+# coordinates run -0.125..1.125 and a target an eighth of a frame off the edge still has
+# a cell. Must match model.CANVAS_SCALE.
+CANVAS_SCALE = 1.25
 # How far outside the visible frame a target may be and still be worth predicting, as a
 # fraction of the frame. A tenth is about 45px of the 448 wide input.
 #
@@ -132,7 +133,7 @@ CANVAS_SCALE = 1.5
 #
 # Measured on the combined_targets eval split, this masks 15% of the labelled rows; 0.05
 # would mask 20% and 0.20 only 4%, with the off-screen ones spread evenly out to the
-# canvas edge at 0.25.
+# old 1.5x canvas edge at 0.25.
 OFF_SCREEN_MARGIN = 0.10
 # What each whole-recording mode's shards are called, so mining one into a split that
 # already holds the others replaces only its own output.

@@ -74,6 +74,23 @@ LATERAL_SPEED_MAX = 0.15    # (m/s)
 CENTER_TOL_FRACTION = 0.12
 CENTER_TOL_MIN_M = 0.012
 PRESENT_THRESHOLD = 0.5     # target-present probability below which the loop holds still
+# The other half of "is this answer worth steering at": how much of the position softmax
+# the winning cell actually holds. The present head says the frame contains something
+# graspable; this says the position head found *where*. They fail apart - on a scene the
+# head has no opinion about, the map goes flat and its peak drifts to wherever the
+# training positions piled up, near the jaws, while present stays high. Steering at that
+# is steering at a prior, and with several objects in frame it reads as the gripper
+# hovering between them.
+#
+# Measured on the eval split of vs-centroid-dataset, over rows carrying a position label:
+# a miss (>50px) has a median score of 0.04 and a hit 0.11. This gate keeps 87% of frames
+# and 95% of those are within 50px, against 88% with no gate; it costs 5.7% of the good
+# frames, which the next frame 30ms later mostly brings back.
+#
+# It is a fraction of a softmax over the cell grid, so it moves with anything that changes
+# that grid's size or the width of the Gaussian it is trained against (train.CELL_SIGMA).
+# Re-measure it after either, or after a backbone change.
+SCORE_THRESHOLD = 0.05
 NOTHING_SEEN_FRAMES = 15    # consecutive unsure frames before an attempt is abandoned
 
 # (s) time constant of the filter on the target's room position, at about one pendulum
@@ -446,6 +463,16 @@ class VisualServo:
 
     # -- what the robot does about it --------------------------------------
 
+    @staticmethod
+    def target_found(prediction):
+        """Whether this frame's answer is worth steering at.
+
+        Both heads have to agree: something graspable is in view, and the position head
+        put real mass on one cell rather than spreading it over the canvas.
+        """
+        return (prediction['present'] >= PRESENT_THRESHOLD
+                and prediction.get('score', 1.0) >= SCORE_THRESHOLD)
+
     async def drive_fingers(self, prediction):
         """Move the fingers the way this checkpoint's heads say to. Returns the speed sent.
 
@@ -707,7 +734,7 @@ class VisualServo:
             error = float(np.linalg.norm(error_xy))
             turned = None
             if steering:
-                confident = prediction['present'] >= PRESENT_THRESHOLD
+                confident = self.target_found(prediction)
                 lateral = error_xy * LATERAL_GAIN if confident else np.zeros(2)
                 lateral_speed = float(np.linalg.norm(lateral))
                 if lateral_speed > LATERAL_SPEED_MAX:
@@ -736,7 +763,8 @@ class VisualServo:
     def _describe(self, prediction):
         """The model's answer as one line, for the logs."""
         return (f"uv {np.round(prediction['uv'], 3)} range {prediction['range_m']:.3f}m "
-                f"present {prediction['present']:.2f} holding {prediction['holding']:.2f} "
+                f"present {prediction['present']:.2f} score {prediction.get('score', float('nan')):.2f} "
+                f"holding {prediction['holding']:.2f} "
                 f"finger {prediction['finger']:+.2f} "
                 f"axis {np.degrees(prediction['grasp_axis_rad']):+.0f}deg "
                 f"k{prediction['axis_concentration']:.1f} "
@@ -829,7 +857,7 @@ class VisualServo:
                 await asyncio.sleep(LOOP_DELAY)
                 continue
 
-            if prediction['present'] < PRESENT_THRESHOLD and range_to_target > COMMIT_RANGE_M:
+            if not self.target_found(prediction) and range_to_target > COMMIT_RANGE_M:
                 if nothing_seen_countdown == NOTHING_SEEN_FRAMES:
                     # High up and unsure anything graspable is down there. Hold still
                     # rather than chase whatever the position head picked out of an empty

@@ -47,7 +47,9 @@ from nf_robot.ml.visual_servoing.model import (
     decode,
     gather_cells,
     load_checkpoint,  # noqa: F401  (re-exported for callers that only import this module)
+    local_centroid,
     uv_to_cell,
+    window_average,
 )
 
 DEFAULT_MODEL_PATH = "models/visual_servo.pth"
@@ -62,15 +64,16 @@ DEFAULT_MODEL_ID = "naavox/visual_servo"
 # are a constant nobody can predict away and they otherwise swamp the figure.
 SELECTION_METRIC = "onscreen_recall@25px"
 DEFAULT_WEIGHTS = {
-    "cell": 1.0, "offset": 1.0, "distance": 0.5,
+    "cell": 1.0, "centroid": 1.0, "distance": 0.5,
     "axis": 0.5, "finger": 0.5, "present": 0.2, "holding": 0.2,
     # Only ever nonzero for a --close_heads model. The close flag is weighted like the
     # other two flags; the pressure is a regression in the same units as the sensor, so
     # its raw magnitude is small and it needs the room.
     "close": 0.2, "pressure": 1.0,
 }
-# Width, in cells, of the Gaussian the cell head is trained against. Cells are 12px of the
-# 448x256 input (the 1.5x canvas over 56x32 cells), so 1.5 cells is about 18px.
+# Width, in cells, of the Gaussian the cell head is trained against. Cells are 17.5px of
+# the 448x252 input (the 1.25x canvas over 32x18 cells), so 1.0 cell is about 18px - the
+# same width in pixels the finer grid used to be trained at.
 #
 # Sized to the labels rather than to the grid. A mined label is a room point projected
 # back through the approach, and that projection ignores the gripper's swing and hangs its
@@ -81,7 +84,7 @@ DEFAULT_WEIGHTS = {
 # the label plausibly covers asks for what is actually known.
 #
 # Set to 0 for the old one-hot target, which is the A/B worth running.
-CELL_SIGMA = 1.5
+CELL_SIGMA = 1.0
 
 # Angle bins used to re-weight the axis loss, over the -pi/2..pi/2 a pi-periodic axis
 # lives in. Ten degrees per bin: fine enough to separate "upright" from "a little off",
@@ -233,15 +236,21 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
     has_uv = batch["has_uv"]
 
     parts = {}
-    # Only the cell head is softened. The offset, distance and axis heads are all read at
-    # the one true cell, where a spread target would mean nothing.
+    # Only the cell head is softened. The distance head is read at the one true cell,
+    # where a spread target would mean nothing.
     parts["cell"], _ = masked_mean(
         cell_loss(logits, cell, grid, index, cell_sigma), has_uv)
 
-    frac = (cell - torch.stack([cx, cy], dim=1).float()).clamp(0.0, 1.0)
-    offset = gather_cells(outputs["offsets"], index).sigmoid()
-    parts["offset"], _ = masked_mean(
-        F.l1_loss(offset, frac, reduction="none").mean(dim=1), has_uv)
+    # The sub-cell position is the softmax's centre of mass around the peak, so it is
+    # trained directly, in cells, with the window centred on the true cell the way decode
+    # centres it on the predicted one. The cross-entropy alone only asks for a Gaussian,
+    # whose windowed centroid is pulled toward the middle of the cell it peaks in.
+    # The target is clamped to the outermost cell centres, which is as far as an average of
+    # cell centres can reach.
+    centroid, window_weights, window = local_centroid(logits, index)
+    reachable = cell.clamp(min=0.5).minimum(cell.new_tensor([cols - 0.5, rows - 0.5]))
+    parts["centroid"], _ = masked_mean(
+        F.smooth_l1_loss(centroid, reachable, reduction="none").mean(dim=1), has_uv)
 
     # Log metres: the useful error in a range is relative, and the head has to cover
     # everything from a gripper across the room to one about to touch the object.
@@ -251,7 +260,10 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
         F.smooth_l1_loss(predicted_log, target_log, reduction="none"), has_uv)
 
     angle = batch["grasp_axis_rad"]
-    axis = gather_cells(outputs["axis"], index)
+    # Averaged over the same window decode uses. The weights are detached: the axis loss
+    # gets to shape the axis map, not to move probability mass toward the cells whose
+    # axis it happens to like.
+    axis = window_average(outputs["axis"], window_weights.detach(), window)
     if axis_loss == "mse":
         axis_target = torch.stack([torch.sin(2 * angle), torch.cos(2 * angle)], dim=1)
         axis_terms = F.mse_loss(axis, axis_target, reduction="none").mean(dim=1)
@@ -462,6 +474,9 @@ def checkpoint_payload(model, args, metrics, epoch):
         # Where the close head reads from. Absent in every checkpoint written before the
         # spatial head existed, which is how those keep loading onto the global one.
         "spatial_close": args.spatial_close,
+        # Whether the spatial heads read the pre-attention map too. Absent in checkpoints
+        # trained before it existed, which load without it.
+        "skip": args.skip,
     }
 
 
@@ -510,7 +525,7 @@ def train(args):
             f"pass --no_close_heads to train the finger-rate head alone.")
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
-        close_heads=args.close_heads, spatial_close=args.spatial_close,
+        close_heads=args.close_heads, spatial_close=args.spatial_close, skip=args.skip,
         attention_layers=args.attention_layers, freeze=not args.unfreeze_backbone,
     ).to(device)
     head_params = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
@@ -632,6 +647,10 @@ def main():
         "--global_close", dest="spatial_close", action="store_false",
         help="Read the close head off the [CLS] vector instead, the way it was built "
              "before the spatial head.")
+    parser.add_argument(
+        "--no_skip", dest="skip", action="store_false",
+        help="Leave out the skip connection from the pre-attention map to the spatial "
+             "heads, for the A/B against the model that averaged several objects' positions.")
     parser.add_argument("--eval_every", type=int, default=1,
                         help="Score the eval split every N epochs (and always on the last)")
     parser.add_argument("--select_best", action="store_true",
