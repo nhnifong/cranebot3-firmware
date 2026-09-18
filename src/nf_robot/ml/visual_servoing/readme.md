@@ -568,8 +568,8 @@ given mode in one run, since a second run replaces the first rather than adding 
         --repo_id naavox/grip_o naavox/simple_grasp_spin \
         --output_root datasets/vs-centroid-dataset \
         --preview_dir datasets/vs-centroid-dataset/preview \
-        --preview_count 100 \
-        --approach_seconds 5
+        --preview_count 200 \
+        --approach_seconds 4
 
 No split of the LeRobot dataset first: pass the whole thing. `simple_grasp_spin` can be
 added here even though it cannot be merged into `naavox/combined_targets`, because the
@@ -618,6 +618,30 @@ fingers closing on an object, and here it is always the former.
 
 As with the negatives, nothing can check the premise. You are responsible for making sure
 the fingers really were empty on every frame.
+
+### Which arithmetic decides uv
+
+    --uv_method room-delta | dead-reckon | dead-reckon-observed | optical-flow
+
+`room-delta` is the default and is what every existing dataset was mined with: the grasp
+point fixed in the room, differenced against the gripper position `Positioner2` reported.
+The two dead-reckoning methods integrate velocity outwards from the grasp instead and never
+consult that position at all; `optical-flow` tracks the target through the pixels and reads
+no telemetry but the rangefinder, at the cost of decoding the video and of never labelling
+a target that has left the frame. The flag is shared with `label_video`, so a video can be
+rendered with the method a pool was mined with; the methods, what each is wrong about, and
+the vertical offset the comparison exposes are in [data_quality.md](data_quality.md).
+
+A pool holds no record of which method wrote its rows, so re-mining with a different one
+replaces the positives and leaves the negatives, false grabs and synthetic shards alone -
+mine all of one mode in one run, as ever.
+
+### Checking what was mined
+
+`--preview_dir` above draws a random sample of the rows that were written. Two checks that
+come before that one - `--preview_only`, which labels without writing anything, and
+`label_video`, which renders a whole episode as video with the mark and its track - are in
+[data_quality.md](data_quality.md), along with what the shapes of a drifting mark mean.
 
 ## 4. Generate synthetic frames
 
@@ -752,6 +776,12 @@ fall back here when no session answers.
 
 ## 9. Publish Model
 
+Checkpoints from before the camera tilt was corrected (`geometry.CAMERA_ROT_BODY`, see
+[data_quality.md](data_quality.md)) are not compatible with the current transform: they
+predict points in the old convention and `camera_to_room` now undoes the new one, an 18
+degree error in the direction the gantry flies. Re-mine the pool, re-train, fly it, and
+only then move the pin. Nothing checks this at load time.
+
 `--local_models` reads `models/visual_servo.pth`; without it the checkpoint comes from
 `naavox/visual_servo` on the hub, which has to have been published there first:
 
@@ -837,6 +867,96 @@ gripper feed: an arrow from the frame centre to the target, a bar for the grasp 
 the two probability bars. `move_x`/`move_y` are a displacement from the frame centre, so
 an arrow can leave the picture - that is the off-canvas case, not a bug. Watching it
 during a descent distinguishes a model mislocating the object from a mistuned loop.
+
+# Improving data quality
+
+How to *check* a dataset is [data_quality.md](data_quality.md). This is a list of what is
+most likely wrong with the data itself, and none of it is established - each entry is
+written as something to measure rather than something to believe. They are ordered by how
+quietly the failure would be costing us accuracy today, not by how certain it is.
+
+**1. Nothing independently checks the pose chain, and every position label rests on it.**
+`target_uv` is one room point projected through the recorded gripper position, `spin` and
+the camera extrinsic. An error anywhere in that chain yields a plausible number and a
+label that is simply somewhere else, and `label_video` catches it one episode at a time by
+eye - which does not scale to a source of several hundred.
+
+Two label-free checks exist and neither is being run. The cheap one: `grasp_point_room`
+hangs the target straight down from the rangefinder, so through the last part of the
+approach - while the object is under the beam - the projected `target_range_m` and the
+recorded `laser_rangefinder` are measuring nearly the same distance and have to converge
+as t goes to 0. They are identical at the grasp frame by construction and free to differ
+earlier, so it is the *shape* of the residual over the approach that carries the
+information: a floor is a mount or extrinsic constant, a ramp is pose drift, a jitter is
+`spin`. It costs no image decode, so the miner could compute it on every episode it writes
+and print the worst.
+
+The strong one: the object does not move before the grasp, so the mark's motion in frame is
+entirely explained by camera motion. Track the image patch under the grasp point backwards
+through the approach with plain normalised cross-correlation and compare it against the
+projected track. That turns the eyeball test into a per-episode number over a whole source.
+It needs pixels, so run it over the last second or two only, and it will fail on
+featureless carpet - which is a reason to report a confidence beside it, not a reason not
+to have it.
+
+Either one gives what is missing today: a per-episode reject list, so a bad episode can be
+dropped without dropping the source.
+
+**2. Every eval number is optimistic and nobody knows by how much.** `split_pool` deals row
+by row, so an episode's 120-odd frames of the same object at the same place land on both
+sides, and eval measures how the model does on *further frames of scenes it trained on*.
+The doc says so and it is the right default for choosing between checkpoints of one run.
+The problem is that it is the only number there is. Deal a second eval split grouped by
+episode and by plate run, score both, and report them side by side; the gap between them is
+the generalisation estimate this project currently does not have. It is one pass over the
+pool, and if the gap turns out to be small then a lot of the worry here is unfounded and
+that is worth knowing too.
+
+**3. Some label values are nearly a function of which producer wrote them.**
+`target_present = 0` comes from synthetic bare floor and from `--negatives` recordings;
+`= 1` comes from mined approaches. `holding = 1` comes only from teleop carries and can come
+from nowhere else. A frozen backbone limits how much a head can key on compositing edges,
+JPEG statistics or the white balance of one room, but it does not stop it, and a head that
+learns "this frame is synthetic" scores well on eval and fails on the robot. `audit`
+already breaks the axis down by producer; do it for every flag head, and make it a finding
+when any label value of any head is reachable from only one producer. Then close the gaps -
+more `--negatives` and `--false_grabs` footage is the cheapest data in the project to
+collect, since none of it has to contain a successful grasp.
+
+**4. The row counts overstate what is there.** Four seconds at 30fps is ~120 rows of one
+object at one place under one light; the 66k mined frames are not 66k samples and the
+1:6.2 `holding` balance is not a balance over independent draws. Two things follow. Report
+an effective count beside every count in `audit` - rows divided by rows per episode is
+crude and already far more honest than the raw number. And thin the positives the way the
+negatives are already thinned, but by motion rather than by index: keep a frame when the
+projected target or the gripper pose has moved more than some threshold since the last one
+kept. A hover over an object contributes one row instead of ninety, which is what it is
+worth.
+
+**5. Episode rejection asks whether the grasp succeeded, never whether the approach was
+clean.** `no_grasp` and `no_rise` are a success filter, and a successful grasp flown
+through a pendulum swing, or in a source where `spin` had to be reconstructed by
+`recover_spin`, produces confidently wrong labels that pass it. The miner already knows
+most of what is needed - it counts frames dropped off-canvas and frames kept blind per
+source, and both are proxies for a bad pose chain. Make them per-episode, add the swing
+amplitude of `gripper_pos` over the mined window, record in the row whether `spin` was
+recovered rather than recorded, and give the miner a threshold to reject on.
+
+**6. There is still no fixture set.** The training notes above asked for twenty hand-labelled
+hard frames run against every checkpoint, starting with the dark sock past the bottom edge.
+It does not exist, and it is the only check here that spans checkpoints - `audit` grades a
+dataset and `evaluate` grades a model against an eval split that moves every time the pool
+is rebuilt, so neither can answer "did this get worse". `--preview_seed` makes a fixed set
+of frames cheap to redraw, which is most of the work.
+
+**7. Object diversity is probably the real ceiling, and nothing measures it.** If the whole
+set is a dozen household objects then no amount of label cleaning moves the robot's
+performance on the thirteenth, and every number in `audit` can look healthy while that is
+true - because nothing anywhere records which object a row is of. Capture an object name
+at `objectplates` time and in the teleop episode's task string, carry it into the row
+beside `source_repo_id`, and report coverage. It is a small change that turns an unanswerable
+question into a histogram, and it is the one item on this list that could make the others
+moot.
 
 # Open questions
 

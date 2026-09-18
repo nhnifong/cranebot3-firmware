@@ -13,8 +13,12 @@ import numpy as np
 
 from nf_robot.ml.visual_servoing.mine_teleop import (
     CANVAS_SCALE, FALSE_GRAB_PREFIX, MODE_FALSE_GRABS, MODE_GRASPS, MODE_NEGATIVES,
-    NEGATIVE_PREFIX, OFF_SCREEN_MARGIN, ShardWriter, find_lift, holding_label, in_view,
-    mine_episode, mine_false_grab_episode, shard_prefix)
+    NEGATIVE_PREFIX, OFF_SCREEN_MARGIN, ReservoirSampler, ShardWriter, find_lift,
+    holding_label, in_view, mine_episode, mine_false_grab_episode, shard_prefix)
+from nf_robot.ml.visual_servoing.uv_methods import (
+    DEFAULT_UV_METHOD, DELTA_METHODS, JAW_UV, UV_METHODS, grasp_point_room,
+    gripper_camera_calibration, project, project_camera, range_to_floor, target_track,
+    unproject)
 
 
 def rows_for(offsets, fps=30.0, grasp_at=60, length=90):
@@ -43,11 +47,56 @@ def rows_for(offsets, fps=30.0, grasp_at=60, length=90):
             "target_force": 0.0,
             "finger_speed": 0.0,
         })
+    # Exactly the velocity the track was built from, so a dead-reckoning method integrating
+    # it has to land back on the positions - which is what makes a disagreement in these
+    # tests a bug in the integration rather than in the fixture. spin is zero throughout,
+    # so the gripper and room frames coincide and both velocity fields hold the same thing.
+    for i, row in enumerate(rows):
+        j = min(i + 1, len(rows) - 1)
+        dt = rows[j]["timestamp"] - row["timestamp"]
+        step = (rows[j]["gripper_pos"] - row["gripper_pos"]) / dt if dt else np.zeros(3)
+        row["vel_cmd"] = step
+        row["vel_obs"] = step.copy()
     return rows
 
 
 # intrinsics as fractions of the frame, the way gripper_camera_calibration returns them
 CALIBRATION = ((439.3 / 684.0, 461.6 / 384.0), (0.5, 0.308))
+
+FRAME_W, FRAME_H = 684, 384
+
+
+def synthetic_frames(rows, grasp, calibration=CALIBRATION, seed=7):
+    """Frames in which the target's place is known, for testing a method that reads pixels.
+
+    One noise texture slid so that the same feature lands where `room-delta` says the
+    target is in each frame. Noise because it is what a tracker locks onto best, and a
+    tracker that cannot follow this could not follow carpet; a plain translation because
+    the question here is whether the track walks the right way from the right anchor, and
+    a real approach's scale change would only blur that with the tracker's own accuracy.
+    """
+    import cv2
+
+    from nf_robot.ml.visual_servoing.uv_methods import target_track
+
+    rng = np.random.default_rng(seed)
+    pad = 400
+    texture = rng.integers(0, 255, (FRAME_H + 2 * pad, FRAME_W + 2 * pad, 3), dtype=np.uint8)
+    texture = cv2.GaussianBlur(texture, (5, 5), 0)  # LK wants gradients, not white noise
+
+    truth = target_track(rows, grasp, calibration, "room-delta")
+    anchor = truth[grasp]
+    frames = {}
+    for row, point in zip(rows, truth):
+        if point is None:
+            continue
+        dx = int(round((point[0] - anchor[0]) * FRAME_W))
+        dy = int(round((point[1] - anchor[1]) * FRAME_H))
+        x, y = pad - dx, pad - dy
+        if not (0 <= x <= 2 * pad and 0 <= y <= 2 * pad):
+            continue
+        frames[row["frame_index"]] = texture[y:y + FRAME_H, x:x + FRAME_W].copy()
+    return lambda i: frames[i]
 
 
 class TestInView(unittest.TestCase):
@@ -264,3 +313,201 @@ class TestShardPrefix(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReservoirSampler(unittest.TestCase):
+    """The preview-only sink. It stands in for the shard writer, so what it keeps has to
+    be a fair picture of what a real run would have written."""
+
+    def test_it_keeps_everything_while_it_is_not_full(self):
+        sampler = ReservoirSampler(10, seed=0)
+        for i in range(4):
+            sampler.add({"i": i})
+        self.assertEqual([r["i"] for r in sampler.rows], [0, 1, 2, 3])
+        self.assertEqual(sampler.total, 4)
+
+    def test_it_counts_the_whole_stream_it_did_not_keep(self):
+        """The count is what says how much a full run would write, and the preview says
+        so: a sample of 20 out of 200 frames means something else than 20 out of 20."""
+        sampler = ReservoirSampler(5, seed=0)
+        for i in range(200):
+            sampler.add({"i": i})
+        self.assertEqual(sampler.total, 200)
+        self.assertEqual(len(sampler.rows), 5)
+
+    def test_the_same_seed_over_the_same_stream_picks_the_same_rows(self):
+        """Two preview runs over unchanged sources have to land on the same frames, or a
+        label change cannot be told apart from a different draw."""
+        def run():
+            sampler = ReservoirSampler(8, seed=3)
+            for i in range(500):
+                sampler.add({"i": i})
+            return [r["i"] for r in sampler.rows]
+        self.assertEqual(run(), run())
+
+    def test_it_draws_from_the_whole_stream_not_just_the_head(self):
+        """Keeping the first N would preview only the earliest episodes, which is exactly
+        where an approach looks most alike."""
+        late = 0
+        for seed in range(20):
+            sampler = ReservoirSampler(10, seed=seed)
+            for i in range(1000):
+                sampler.add({"i": i})
+            late += sum(1 for r in sampler.rows if r["i"] >= 500)
+        self.assertGreater(late, 50)
+
+
+class TestUvMethods(unittest.TestCase):
+    """The choice of how a frame's uv is decided. Each method is wrong in its own way, so
+    what is tested here is the contract they share and the anchor each one commits to."""
+
+    def setUp(self):
+        self.rows = rows_for([0.0] * 90)
+        self.grasp = 60
+        self.frames = synthetic_frames(self.rows, self.grasp)
+
+    def track(self, method):
+        return target_track(self.rows, self.grasp, CALIBRATION, method, JAW_UV,
+                            frames=self.frames)
+
+    def test_every_method_answers_for_every_frame(self):
+        """label_video renders the whole episode, not the mined window, so a track short
+        of the episode would silently misalign the mark with the frame it is drawn on."""
+        for method in UV_METHODS:
+            with self.subTest(method=method):
+                self.assertEqual(len(self.track(method)), len(self.rows))
+
+    def test_dead_reckoning_anchors_on_the_jaws(self):
+        """The whole method hangs off this frame: at the grasp the object is between the
+        fingers, and that is the one place in an episode the answer is known."""
+        for method in ("dead-reckon", "dead-reckon-observed", "optical-flow"):
+            with self.subTest(method=method):
+                u, v, _ = self.track(method)[self.grasp]
+                self.assertAlmostEqual(u, JAW_UV[0], places=5)
+                self.assertAlmostEqual(v, JAW_UV[1], places=5)
+
+    def test_room_delta_anchors_on_the_rangefinder_instead(self):
+        """It arrives at the grasp frame's answer down the body axis rather than out of the
+        picture, so under a synthetic calibration it lands somewhere else than the jaws. The
+        real one is the interesting case and has its own test below."""
+        u, v, distance = self.track("room-delta")[self.grasp]
+        self.assertAlmostEqual(u, 0.5, places=5)
+        self.assertAlmostEqual(distance, self.rows[self.grasp]["laser_rangefinder"], places=5)
+
+    def test_the_mount_agrees_with_where_the_jaws_are_seen_to_be(self):
+        """The regression test for the camera tilt sign, which was wrong until it was
+        measured this way: dropping straight down from the lens by the rangefinder has to
+        land on the jaws, because that is the premise the whole dataset is labelled on.
+
+        A flipped tilt mirrors this about the centre line and nothing else moves - every
+        label stays plausible, the loss still falls, and the mark sits a third of a frame
+        above the object in every video. Uses the real calibration, since the claim is
+        about this camera on this mount.
+        """
+        calibration = gripper_camera_calibration()
+        row = {"gripper_pos": np.zeros(3), "spin": 0.0, "laser_rangefinder": 0.12}
+        u, v, _ = project(grasp_point_room(row), row["gripper_pos"], 0.0, calibration)
+        self.assertAlmostEqual(u, JAW_UV[0], places=3)
+        self.assertAlmostEqual(v, JAW_UV[1], places=2)
+
+    def test_the_projecting_methods_report_the_range_the_laser_read(self):
+        """The rangefinder is what puts the target in space, so a method that disagreed
+        with it at the grasp would be answering a different question. Optical flow gets
+        there differently and has its own test below."""
+        for method in DELTA_METHODS:
+            with self.subTest(method=method):
+                self.assertAlmostEqual(self.track(method)[self.grasp][2],
+                                       self.rows[self.grasp]["laser_rangefinder"], places=5)
+
+    def test_optical_flow_ranges_off_the_floor_plane(self):
+        """It has no 3D point to measure, only a bearing, so the range is where that
+        bearing meets the floor the rangefinder found: L / cos of the angle off straight
+        down. On this camera the jaws are nearly straight down, so at the grasp the two
+        answers agree to well under a percent - which is the check that the cosine is the
+        right way up, since dividing by it where multiplying was meant looks identical
+        until the target is far off axis.
+        """
+        real = gripper_camera_calibration()
+        row = self.rows[self.grasp]
+        self.assertAlmostEqual(range_to_floor(*JAW_UV, row, real),
+                               row["laser_rangefinder"], places=3)
+        # off to the side, the floor is further along the ray than it is straight down
+        self.assertGreater(range_to_floor(0.05, 0.692, row, real), row["laser_rangefinder"])
+
+    def test_optical_flow_follows_the_target_it_was_given(self):
+        """Against frames built so the target's place in each of them is known, the track
+        has to be that place. Anchored at the jaws, so what is compared is the motion -
+        which is all the method claims to recover."""
+        track = self.track("optical-flow")
+        truth = self.track("room-delta")
+        for i in range(self.grasp - 25, self.grasp + 1, 5):
+            with self.subTest(frame=i):
+                self.assertIsNotNone(track[i], "flow lost a target that never left frame")
+                self.assertAlmostEqual(track[i][0] - track[self.grasp][0],
+                                       truth[i][0] - truth[self.grasp][0], places=2)
+                self.assertAlmostEqual(track[i][1] - track[self.grasp][1],
+                                       truth[i][1] - truth[self.grasp][1], places=2)
+
+    def test_optical_flow_stops_rather_than_guessing(self):
+        """A lost track snaps onto whatever else is nearby rather than drifting off
+        slowly, so extrapolating past the loss would put a confident label on the wrong
+        thing. Blank frames are the bluntest way to lose it."""
+        blank = np.zeros((384, 684, 3), np.uint8)
+        track = target_track(self.rows, self.grasp, CALIBRATION, "optical-flow", JAW_UV,
+                             frames=lambda i: blank)
+        self.assertIsNotNone(track[self.grasp])
+        self.assertTrue(all(t is None for i, t in enumerate(track) if i != self.grasp))
+
+    def test_optical_flow_says_so_when_it_is_given_no_frames(self):
+        """It is the one method that reads pixels, and a caller that cannot offer them has
+        to be told which flag asked for them rather than handed a track of None."""
+        with self.assertRaises(SystemExit) as caught:
+            target_track(self.rows, self.grasp, CALIBRATION, "optical-flow", JAW_UV)
+        self.assertIn("optical-flow", str(caught.exception))
+
+    def test_exact_velocity_reproduces_the_track_it_was_built_from(self):
+        """With the recorded velocity equal to the motion that happened, the integrator
+        has no error to make, so the two methods can differ only by their anchors - the
+        same vector in every frame. A gap that drifts is an integration bug, and it is the
+        one failure this fixture can tell apart from the real disagreement on a robot."""
+        deltas = {m: DELTA_METHODS[m](self.rows, self.grasp, CALIBRATION, JAW_UV)
+                  for m in ("room-delta", "dead-reckon")}
+        gaps = [deltas["dead-reckon"][i] - deltas["room-delta"][i]
+                for i in range(len(self.rows))]
+        for i, gap in enumerate(gaps):
+            with self.subTest(frame=i):
+                np.testing.assert_allclose(gap, gaps[self.grasp], atol=1e-9)
+
+    def test_dead_reckoning_walks_the_object_out_of_frame_as_the_gripper_leaves(self):
+        """Integrating away from the grasp has to move the mark the way the camera moved.
+        Rising off the object puts it further away and nearer the middle, not nowhere."""
+        track = self.track("dead-reckon")
+        self.assertIsNotNone(track[0])
+        self.assertGreater(track[0][2], track[self.grasp][2])
+
+    def test_a_recording_without_velocity_says_which_flag_needed_it(self):
+        """These fields are optional in read_columns, so the failure lands here rather than
+        at read time, and a run that cannot use a method has to say so by name."""
+        for row in self.rows:
+            row["vel_cmd"] = None
+        with self.assertRaises(SystemExit) as caught:
+            self.track("dead-reckon")
+        self.assertIn("vel_cmd", str(caught.exception))
+        self.assertIn(DEFAULT_UV_METHOD, str(caught.exception))
+
+    def test_an_unknown_method_names_the_ones_there_are(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.track("wishful-thinking")
+        self.assertIn("room-delta", str(caught.exception))
+
+    def test_unproject_inverts_project(self):
+        """The dead-reckoning anchor is an unprojection, so a sign error in it would put
+        the target at a mirrored bearing and still produce a plausible looking track.
+        Off-frame coordinates included: that is where the anchor is allowed to land."""
+        for uv in (JAW_UV, (0.1, 0.2), (1.2, -0.1)):
+            with self.subTest(uv=uv):
+                u, v, distance = project_camera(unproject(*uv, 0.35, CALIBRATION),
+                                                CALIBRATION)
+                self.assertAlmostEqual(u, uv[0], places=6)
+                self.assertAlmostEqual(v, uv[1], places=6)
+                self.assertAlmostEqual(distance, 0.35, places=6)

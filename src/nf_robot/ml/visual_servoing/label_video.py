@@ -20,6 +20,13 @@ Two things it draws that the stills do not:
   - The mark's own history, as a fading trail. A steady drift is much easier to see as a
     curve across the frame than as a dot that moved.
 
+`--uv_method` picks which arithmetic is being watched, out of the same set `mine_teleop`
+mines with and by the same flag - see uv_methods.py. Rendering one episode under each is
+the way to tell a mount constant from a drifting position estimate: a gap that is the same
+in every frame is the first, a gap that opens with distance from the grasp is the second.
+The method in force is captioned on every frame, so a video cannot be mistaken for one
+made another way.
+
     python -m nf_robot.ml.visual_servoing.label_video \\
         --root datasets/chuck-aug28 \\
         --output_dir datasets/labelling_test/label_video
@@ -41,8 +48,10 @@ import numpy as np
 from nf_robot.ml.lerobot_trim_to_grasp import (
     MIN_GRASP_SECONDS, PRESSURE_THRESHOLD, RISE_M, find_grasp,
 )
-from nf_robot.ml.visual_servoing.mine_teleop import (
-    gripper_camera_calibration, grasp_point_room, project, read_columns,
+from nf_robot.ml.visual_servoing.mine_teleop import frame_bgr, read_columns
+from nf_robot.ml.visual_servoing.uv_methods import (
+    DEFAULT_UV_METHOD, JAW_UV, PIXEL_METHODS, add_uv_arguments,
+    gripper_camera_calibration, target_track,
 )
 
 # The trail is this many frames long. Two seconds at 30fps: enough to show the direction
@@ -99,12 +108,16 @@ def caption(bgr, lines, colour=(235, 235, 235)):
 
 
 def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
-                  approach_seconds, carry_seconds, vcodec, crf):
+                  approach_seconds, carry_seconds, vcodec, crf,
+                  uv_method=DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
     """One episode's gripper frames with the grasp point drawn on each of them."""
     import av
 
     image_key = "observation.images.gripper_camera"
-    target_room = grasp_point_room(rows[grasp])
+    track = target_track(
+        rows, grasp, calibration, uv_method, jaw_uv,
+        frames=(lambda i: frame_bgr(dataset, start + i, image_key))
+        if uv_method in PIXEL_METHODS else None)
     window = (max(0, grasp - int(round(approach_seconds * fps))),
               min(len(rows) - 1, grasp + int(round(carry_seconds * fps))))
 
@@ -123,7 +136,7 @@ def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
         rgb = dataset[start + i][image_key].numpy().transpose(1, 2, 0)
         bgr = cv2.cvtColor((rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
 
-        projected = project(target_room, row["gripper_pos"], row["spin"], calibration)
+        projected = track[i]
         seconds = rows[grasp]["timestamp"] - row["timestamp"]
         in_window = window[0] <= i <= window[1]
 
@@ -140,7 +153,7 @@ def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
 
         pos = row["gripper_pos"]
         caption(bgr, [
-            f"ep{episode:04d} f{i:05d}  t{seconds:+.2f}s"
+            f"ep{episode:04d} f{i:05d}  t{seconds:+.2f}s  {uv_method}"
             + ("  [mined]" if in_window else "")
             + ("  <- GRASP" if i == grasp else ""),
             detail,
@@ -158,7 +171,8 @@ def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
 
 
 def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_wanted=None,
-           approach_seconds=5.0, carry_seconds=1.0, vcodec="libx264", crf=23):
+           approach_seconds=5.0, carry_seconds=1.0, vcodec="libx264", crf=23,
+           uv_method=DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     root = Path(root)
@@ -194,10 +208,13 @@ def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_want
         if not np.any(heights[grasp:] >= heights[grasp] + RISE_M):
             logging.info(f"ep{episode:04d}: no rise after the grasp, skipped (so does the miner)")
             continue
-        path = output_dir / f"ep{episode:04d}.mp4"
+        # Named for the method too, so rendering the same episode under two of them
+        # leaves two files to flip between rather than one overwriting the other.
+        suffix = "" if uv_method == DEFAULT_UV_METHOD else f"_{uv_method}"
+        path = output_dir / f"ep{episode:04d}{suffix}.mp4"
         total, labelled, inside = episode_video(
             dataset, rows, episode, starts[episode], grasp, calibration, fps, path,
-            approach_seconds, carry_seconds, vcodec, crf)
+            approach_seconds, carry_seconds, vcodec, crf, uv_method, jaw_uv)
         logging.info(f"ep{episode:04d}: {total} frames, {labelled} projected, "
                      f"{inside} with the mark inside the frame -> {path.name}")
         written += 1
@@ -220,6 +237,7 @@ def main():
     parser.add_argument("--approach_seconds", type=float, default=5.0,
                         help="Only marks the window; the whole episode is rendered either way")
     parser.add_argument("--carry_seconds", type=float, default=1.0)
+    add_uv_arguments(parser)
     parser.add_argument("--vcodec", default="libx264",
                         help="h264 by default, which every browser and player will scrub")
     parser.add_argument("--crf", type=int, default=23)
@@ -227,7 +245,8 @@ def main():
 
     render(Path(args.root), Path(args.output_dir), args.repo_id, args.limit,
            set(args.episodes) if args.episodes else None,
-           args.approach_seconds, args.carry_seconds, args.vcodec, args.crf)
+           args.approach_seconds, args.carry_seconds, args.vcodec, args.crf,
+           args.uv_method, tuple(args.jaw_uv))
 
 
 if __name__ == "__main__":

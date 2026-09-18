@@ -21,8 +21,28 @@ import nf_robot.common.definitions as definitions
 # into the z-up body frame the rest of the system uses (pole up +z, nose at +y). Rx(90)
 # is the same seam arp_gripper_client.measure_gantry_minus_card crosses.
 _YUP_TO_ZUP = Rotation.from_euler("x", 90, degrees=True)
-# Comes out as Rx(180 - 9.06 deg): looking down, tilted back away from the nose.
-CAMERA_ROT_BODY = _YUP_TO_ZUP * Rotation.from_rotvec(definitions.gripper_camera[0])
+# Straight down, in that same y-up frame. What the CAD rotvec has over it is the tilt and
+# nothing else, both being rotations about the same x axis.
+_STRAIGHT_DOWN = Rotation.from_euler("x", 90, degrees=True)
+# The lens tilts 9.06 degrees off straight down, and it tilts *toward* the nose. The CAD
+# value says away, and the frames say otherwise: the jaws are at the bottom of every
+# gripper frame, while dropping straight down from the lens and projecting through the
+# away-tilt puts that same point at v=0.31, the upper third. The two are mirror images
+# about the centre line, which is the signature of this sign and of nothing else - a
+# rotated sensor would mirror u as well, and phase correlation over 18 windows of lateral
+# flight says u is right (the predicted and measured image flow agree at cos +0.94, and
+# anti-correlate under a 180 degree sensor rotation).
+#
+# Applied by inverting the tilt rather than by writing 189.06 here, so the angle itself
+# stays in definitions.gripper_camera where a re-measurement would land.
+#
+# Flipping this moves the labels and the robot's control path together, and they are only
+# in step once a checkpoint has been re-mined and re-trained: an older checkpoint predicts
+# points in the old convention and camera_to_room now undoes the new one, which is an 18
+# degree error in the direction the gantry flies.
+_CAD_TILT = _STRAIGHT_DOWN.inv() * Rotation.from_rotvec(definitions.gripper_camera[0])
+# Comes out as Rx(180 + 9.06 deg): looking down, tilted toward the nose.
+CAMERA_ROT_BODY = _YUP_TO_ZUP * _STRAIGHT_DOWN * _CAD_TILT.inv()
 # Comes out as (0, +0.027, +0.006): 2.7cm toward the nose, 6mm up from the body origin.
 CAMERA_POS_BODY = _YUP_TO_ZUP.apply(definitions.gripper_camera[1])
 
@@ -37,8 +57,8 @@ def rotate_about_vertical(vec, radians):
     return Rotation.from_euler("z", float(radians)).apply(np.asarray(vec, dtype=np.float64))
 
 
-def point_in_camera(point_room, gripper_pos, spin):
-    """A room point in the gripper camera's optical frame, assuming the gripper hangs level.
+def delta_in_camera(delta_room, spin):
+    """A room-frame vector from the gripper to a point, in the camera's optical frame.
 
     Step one is the rotated contact vector that lerobot_label_contact_actions already
     builds: the room-frame vector from the gripper to the target, turned into the gripper
@@ -49,11 +69,20 @@ def point_in_camera(point_room, gripper_pos, spin):
     and looks 9.06 degrees back from straight down. Both matter at grasping range, where
     the object is only a few centimetres away and 2.7cm is a large part of the frame.
 
+    Takes the delta rather than the two positions because an integrating labeller never
+    has a position to give - only how far the gripper has moved since its anchor frame.
+
     Still ignored: any swing of the gripper away from vertical.
     """
-    delta = np.asarray(point_room, dtype=np.float64) - np.asarray(gripper_pos, dtype=np.float64)
-    in_body = rotate_about_vertical(delta, spin)
+    in_body = rotate_about_vertical(np.asarray(delta_room, dtype=np.float64), spin)
     return CAMERA_ROT_BODY.inv().apply(in_body - CAMERA_POS_BODY)
+
+
+def point_in_camera(point_room, gripper_pos, spin):
+    """A room point in the gripper camera's optical frame, assuming the gripper hangs level."""
+    return delta_in_camera(
+        np.asarray(point_room, dtype=np.float64) - np.asarray(gripper_pos, dtype=np.float64),
+        spin)
 
 
 def camera_to_body(point_cam):

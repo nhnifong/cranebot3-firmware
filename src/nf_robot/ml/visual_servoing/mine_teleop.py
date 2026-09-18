@@ -88,6 +88,10 @@ Usage:
         --root datasets/bedroom-laundry-aug7-2 \
         --output_root data/visual_servoing \
         --preview_dir data/visual_servoing/preview
+
+    python -m nf_robot.ml.visual_servoing.mine_teleop \
+        --repo_id naavox/bedroom-laundry-aug7-2 --preview_only \
+        --preview_dir /tmp/label_check --limit 20
 """
 
 import argparse
@@ -101,9 +105,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from nf_robot.common.config_loader import create_default_config
-from nf_robot.ml.stringman_lerobot import rotate_vector
-from nf_robot.ml.visual_servoing.geometry import CAMERA_POS_BODY, point_in_camera
+from nf_robot.ml.visual_servoing.uv_methods import (
+    DEFAULT_UV_METHOD, JAW_UV, MIN_DEPTH_M, PIXEL_METHODS, add_uv_arguments,
+    gripper_camera_calibration, grasp_point_room, project, target_track,
+)
 from nf_robot.ml.lerobot_trim_to_grasp import (
     MIN_GRASP_SECONDS,
     PRESSURE_THRESHOLD,
@@ -167,8 +172,6 @@ LIFT_CONFIRM_SECONDS = 0.5
 # gone rather than a bad reading. Half the grasp threshold because a carry rides right on
 # that threshold: see find_drop for what each level costs.
 RELEASE_PRESSURE = 0.05
-# (metres) minimum distance in front of the camera for a projection to mean anything.
-MIN_DEPTH_M = 0.02
 # Full-scale commanded finger speed, used to normalize the finger label into -1..1.
 FINGER_SPEED_FULL_SCALE = 90.0
 # Frames are stored at the model's input resolution. Labels are normalized coordinates,
@@ -199,6 +202,11 @@ STATE_NEEDED = (
     "spin", "finger_pressure", "wrist_angle", "finger_angle",
     "laser_rangefinder", "target_force",
 )
+# Wanted by the dead-reckoning uv methods and by nothing else, so a recording without them
+# is still minable - it just cannot be labelled those ways. Read as None when absent rather
+# than refused, and uv_methods says which flag needed what.
+VELOCITY_OPTIONAL = {"vel_cmd": ("action", ("vel_x", "vel_y", "vel_z")),
+                     "vel_obs": ("state", ("vel_x", "vel_y", "vel_z"))}
 
 
 def row_schema():
@@ -283,6 +291,35 @@ class ShardWriter:
         self.pending = 0
 
 
+class ReservoirSampler:
+    """Stands in for a ShardWriter and keeps a uniform random sample of what it is given.
+
+    Preview-only mining sees every row a full run would write and keeps `count` of them,
+    so the sample has to be drawn in one pass: the stream is never stored and its length
+    is not known until it ends. Deterministic given the seed and the source order, so two
+    runs over unchanged sources preview the same frames and a label change is the only
+    thing that moves between them.
+    """
+
+    def __init__(self, count: int, seed: int):
+        self.count = count
+        self.rng = random.Random(seed)
+        self.rows: list[dict] = []
+        self.total = 0
+
+    def add(self, row: dict):
+        self.total += 1
+        if len(self.rows) < self.count:
+            self.rows.append(row)
+            return
+        i = self.rng.randrange(self.total)
+        if i < self.count:
+            self.rows[i] = row
+
+    def flush(self):
+        pass
+
+
 def shard_prefix(mode):
     """The shard prefix a mode writes under, so a rerun replaces only its own output."""
     return {
@@ -298,23 +335,6 @@ def encode_frame(bgr, image_size=IMAGE_SIZE):
     if not ok:
         raise RuntimeError("JPEG encoding failed")
     return buf.tobytes()
-
-
-def gripper_camera_calibration():
-    """Gripper camera intrinsics as fractions of the frame: (fx, fy), (cx, cy).
-
-    The wide calibration rather than camera_cal: the gripper streams the full-sensor
-    16:9 field of view, which is what camera_cal_wide was chessboard-calibrated for.
-
-    Normalized, because that makes the labels independent of what resolution the frames
-    happen to be stored at - a resize moves every pixel coordinate and leaves every
-    normalized one alone. A *crop* does not, which is why the recipe that builds the
-    source dataset sets center_crop and pad_clamp false.
-    """
-    cal = create_default_config().camera_cal_wide
-    K = np.array(cal.intrinsic_matrix, dtype=np.float64).reshape(3, 3)
-    width, height = cal.resolution.width, cal.resolution.height
-    return (K[0, 0] / width, K[1, 1] / height), (K[0, 2] / width, K[1, 2] / height)
 
 
 def read_columns(root: Path):
@@ -337,6 +357,12 @@ def read_columns(root: Path):
 
     si = {n: i for i, n in enumerate(state_names)}
     finger_idx = action_names.index("finger_speed")
+    names = {"state": state_names, "action": action_names}
+    velocity = {
+        field: [names[where].index(n) for n in components]
+        for field, (where, components) in VELOCITY_OPTIONAL.items()
+        if all(n in names[where] for n in components)
+    }
 
     files = sorted(root.glob("data/chunk-*/file-*.parquet"))
     if not files:
@@ -364,51 +390,14 @@ def read_columns(root: Path):
                 "laser_rangefinder": state[si["laser_rangefinder"]],
                 "target_force": state[si["target_force"]],
                 "finger_speed": action[finger_idx],
+                "vel_cmd": (np.array([action[i] for i in velocity["vel_cmd"]])
+                            if "vel_cmd" in velocity else None),
+                "vel_obs": (np.array([state[i] for i in velocity["vel_obs"]])
+                            if "vel_obs" in velocity else None),
             })
     for rows in episodes.values():
         rows.sort(key=lambda r: r["frame_index"])
     return episodes, float(info["fps"])
-
-
-def project(point_room, gripper_pos, spin, calibration):
-    """A room point as normalized (u, v) in the gripper camera, plus its distance.
-
-    0..1 spans the visible frame whatever resolution it is stored at. Returns None for
-    anything at or behind the lens, where the projection is meaningless but still
-    numerically produces a plausible looking coordinate.
-
-    Pinhole only, no distortion: the wide calibration's coefficients are small (k1 is
-    -0.026) next to the approximations above, and the distortion polynomial diverges
-    wildly outside the field of view - which is exactly where this has to stay sane,
-    since the whole point is labelling targets past the frame edge.
-    """
-    (fx, fy), (cx, cy) = calibration
-    p_cam = point_in_camera(point_room, gripper_pos, spin)
-    if p_cam[2] < MIN_DEPTH_M:
-        return None
-    u = fx * p_cam[0] / p_cam[2] + cx
-    v = fy * p_cam[1] / p_cam[2] + cy
-    return float(u), float(v), float(np.linalg.norm(p_cam))
-
-
-def grasp_point_room(row):
-    """Where the object was, in the room, at the instant of the grasp.
-
-    Straight down from the *rangefinder* by whatever it read. The rangefinder sits
-    beside the lens (see the measure_hover comment in observer.py), so the drop hangs
-    from the camera position, not from the recorded gripper position - those differ by
-    the 2.7cm the camera sits toward the nose, which is a systematic error in every
-    label if it is charged to the wrong point.
-
-    Down rather than along the optical axis because the beam points down the body axis;
-    the lens is what is tilted, not the sensor.
-    """
-    body_offset = np.asarray(CAMERA_POS_BODY, dtype=np.float64)
-    # body -> room is a rotation by -spin, the inverse of the room -> body above
-    horizontal = rotate_vector(body_offset[:2], -float(row["spin"]))
-    camera_room = np.asarray(row["gripper_pos"], dtype=np.float64) + np.array(
-        [horizontal[0], horizontal[1], body_offset[2]])
-    return camera_room + np.array([0.0, 0.0, -float(row["laser_rangefinder"])])
 
 
 def close_onset(rows, grasp, gap_frames=CLOSE_GAP_FRAMES):
@@ -531,11 +520,17 @@ def in_view(u, v, margin=OFF_SCREEN_MARGIN):
 
 
 def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m,
-                 margin=OFF_SCREEN_MARGIN):
+                 margin=OFF_SCREEN_MARGIN, uv_method=DEFAULT_UV_METHOD, jaw_uv=JAW_UV,
+                 frames=None):
     """Labelled rows for one episode, or (None, reason, 0) if it is not a usable grasp.
 
     Returns (rows, dropped, blind): dropped fell off the canvas entirely, blind kept their
     frame but lost their position labels for being too far outside it to see.
+
+    `uv_method` picks how the grasp point's place in each frame is decided; every choice
+    and what each is wrong about is in uv_methods.py. It changes the position labels and
+    nothing else - the close, holding and finger labels come off pressure and the
+    operator's own commands, which no method here touches.
     """
     pressure = np.array([r["pressure"] for r in rows], dtype=np.float32)
     grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
@@ -547,7 +542,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
         # closed on nothing, or on something it could not pick up
         return None, "no_rise", 0
 
-    target_room = grasp_point_room(rows[grasp])
+    track = target_track(rows, grasp, calibration, uv_method, jaw_uv, frames)
     wrist_at_grasp = rows[grasp]["wrist_angle"]
     onset = close_onset(rows, grasp)
     lift = find_lift(rows, grasp, fps)
@@ -589,7 +584,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
         # Only up to the grasp. After it the object rides in the jaws and the static room
         # point no longer says where it is.
         if i <= grasp:
-            projected = project(target_room, r["gripper_pos"], r["spin"], calibration)
+            projected = track[i]
             if projected is None:
                 dropped += 1
                 continue
@@ -760,6 +755,13 @@ def source_episode_count(root: Path) -> int:
 IMAGE_KEY = "observation.images.gripper_camera"
 
 
+def frame_bgr(dataset, index, image_key=IMAGE_KEY):
+    """One decoded frame from a LeRobot dataset, as BGR uint8."""
+    frame = dataset[index][image_key]
+    return cv2.cvtColor(
+        (frame.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8), cv2.COLOR_RGB2BGR)
+
+
 def check_source(source):
     """Whether a teleop dataset can be mined, from its metadata alone.
 
@@ -863,14 +865,24 @@ def report_sources(sources):
     return usable
 
 
-def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds: float,
+def mine_source(writer, root: Path, repo_id: str, approach_seconds: float,
                 carry_seconds: float, rise_m: float, limit: int | None, progress=None,
                 mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
-                image_size=IMAGE_SIZE):
+                image_size=IMAGE_SIZE, fetch_images: bool = True,
+                uv_method: str = DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
+    # Note for the pixel methods: they decode the approach window to track it, and the row
+    # images are decoded again afterwards. Worth the second pass rather than holding a
+    # window of frames in memory per episode, and it is what makes optical-flow the
+    # expensive method - --preview_only included, whose whole saving it gives back.
     """Mine one teleop dataset into an open shard writer.
 
     `mode` says what the recording is: grasps to run time backwards from, empty floor
     (mine_negative_episode), or grabs that would catch nothing (mine_false_grab_episode).
+
+    With `fetch_images` off no frame is decoded at all: each row carries `_fetch`, the
+    coordinates its frame can be pulled back from later, and the sink is free to keep a
+    handful of rows and throw the rest away. That is what makes preview-only mining cheap
+    - decoding every frame is nearly all of a run, and a preview looks at a few hundred.
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -883,10 +895,9 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         for r in dataset.meta.episodes.select_columns(
             ["episode_index", "dataset_from_index"]).to_list()
     }
-    image_key = "observation.images.gripper_camera"
-    if image_key not in dataset.meta.video_keys:
-        raise ValueError(f"{repo_id} has no {image_key}; present: {dataset.meta.video_keys}")
-    src_h, src_w = dataset.meta.features[image_key]["shape"][:2]
+    if IMAGE_KEY not in dataset.meta.video_keys:
+        raise ValueError(f"{repo_id} has no {IMAGE_KEY}; present: {dataset.meta.video_keys}")
+    src_h, src_w = dataset.meta.features[IMAGE_KEY]["shape"][:2]
     if progress is not None:
         progress.set_description(f"{repo_id.split('/')[-1]} {src_w}x{src_h}")
 
@@ -907,8 +918,11 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         elif mode == MODE_FALSE_GRABS:
             result, info, blind = mine_false_grab_episode(episodes[ep], stride)
         else:
-            result, info, blind = mine_episode(episodes[ep], fps, calibration,
-                                               approach_seconds, carry_seconds, rise_m)
+            result, info, blind = mine_episode(
+                episodes[ep], fps, calibration, approach_seconds, carry_seconds, rise_m,
+                uv_method=uv_method, jaw_uv=jaw_uv,
+                frames=(lambda i, base=starts[ep]: frame_bgr(dataset, base + i))
+                if uv_method in PIXEL_METHODS else None)
         if result is None:
             skipped[info] += 1
             continue
@@ -916,10 +930,11 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
         blind_total += blind
         base = starts[ep]
         for sample in result:
-            frame = dataset[base + sample["frame_index"]][image_key]
-            bgr = cv2.cvtColor(
-                (frame.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8), cv2.COLOR_RGB2BGR)
-            sample["image"] = encode_frame(bgr, image_size)
+            index = base + sample["frame_index"]
+            if fetch_images:
+                sample["image"] = encode_frame(frame_bgr(dataset, index), image_size)
+            else:
+                sample["_fetch"] = (repo_id, str(root), index)
             sample["episode_index"] = ep
             sample["source_repo_id"] = repo_id
             writer.add(sample)
@@ -945,7 +960,7 @@ def mine_source(writer: ShardWriter, root: Path, repo_id: str, approach_seconds:
 def mine(sources, output_root: Path, split: str, approach_seconds: float,
          carry_seconds: float, rise_m: float, limit: int | None,
          mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
-         image_size=IMAGE_SIZE):
+         image_size=IMAGE_SIZE, uv_method: str = DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
     """Replace this producer's share of the pool with the given (repo_id, root) sources.
 
     Only this producer's shards go: mining is deterministic given its inputs, so a rerun
@@ -987,12 +1002,63 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
         for repo_id, root in sources:
             mine_source(writer, root, repo_id, approach_seconds, carry_seconds, rise_m,
                         limit, progress, mode=mode, stride=stride,
-                        image_size=image_size)
+                        image_size=image_size, uv_method=uv_method, jaw_uv=jaw_uv)
     writer.flush()
 
     write_dataset_card(output_root)
     logging.info(f"{writer.total} rows in {writer.shards} shard(s) under {split_dir}")
     return writer.total, split_dir
+
+
+def mine_preview(sources, approach_seconds: float, carry_seconds: float, rise_m: float,
+                 limit: int | None, count: int, seed: int, mode: str = MODE_GRASPS,
+                 stride: int = SWEEP_STRIDE, image_size=IMAGE_SIZE,
+                 uv_method: str = DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
+    """Label every frame a real run would, keep a random `count` of the rows, write nothing.
+
+    The point is the loop this closes: change how a label is derived, look at the frames
+    it lands on, change it again, without a shard write or a full decode in between. What
+    comes back is what `mine` would have written, so the preview is of the real thing and
+    not of a second code path that could drift from it.
+    """
+    from tqdm import tqdm
+
+    if uv_method in PIXEL_METHODS:
+        logging.info(
+            f"--uv_method {uv_method} reads the video to label it, so this run decodes the "
+            f"approach window of every episode and --preview_only saves little. --limit is "
+            f"the knob that still works.")
+    total = sum(min(source_episode_count(root), limit or 1 << 30) for _, root in sources)
+    sampler = ReservoirSampler(count, seed)
+    with tqdm(total=total, unit="ep", dynamic_ncols=True) as progress:
+        for repo_id, root in sources:
+            mine_source(sampler, root, repo_id, approach_seconds, carry_seconds, rise_m,
+                        limit, progress, mode=mode, stride=stride,
+                        image_size=image_size, fetch_images=False,
+                        uv_method=uv_method, jaw_uv=jaw_uv)
+
+    logging.info(f"{sampler.total} rows would be written; previewing {len(sampler.rows)}")
+    fetch_preview_images(sampler.rows, image_size)
+    return sampler.rows
+
+
+def fetch_preview_images(rows, image_size=IMAGE_SIZE):
+    """Fill in `image` on sampled rows, decoding only the frames they name.
+
+    One dataset open per source and the rows taken in dataset order: a video decoder
+    handles forward reads far better than it handles a seek per row.
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    by_source: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        repo_id, root, _ = row["_fetch"]
+        by_source.setdefault((repo_id, root), []).append(row)
+
+    for (repo_id, root), group in by_source.items():
+        dataset = LeRobotDataset(repo_id, root=Path(root))
+        for row in sorted(group, key=lambda r: r["_fetch"][2]):
+            row["image"] = encode_frame(frame_bgr(dataset, row.pop("_fetch")[2]), image_size)
 
 
 def write_dataset_card(output_root: Path):
@@ -1061,18 +1127,25 @@ def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
 
 def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
                   group: int = 20, columns: int = 4, prefix=None, keep_unlabelled=False):
-    """A folder of annotated frames plus contact sheets, for eyeballing the labels.
+    """A folder of annotated frames plus contact sheets, read back out of written shards."""
+    render_preview(sample_labelled_rows(split_dir, count, seed, prefix, keep_unlabelled),
+                   preview_dir, group, columns)
+
+
+def render_preview(chosen, preview_dir: Path, group: int = 20, columns: int = 4):
+    """Draw labelled rows as annotated frames plus contact sheets, for eyeballing them.
 
     A sign error in the projection produces perfectly plausible numbers and an obviously
     wrong crosshair, so this is the check that actually catches things. The frames are
     drawn at twice their stored size, and the sheets do not shrink them to fit, because
     text scaled down to fit a grid cell cannot be read - which defeats the point.
+
+    Takes rows rather than a directory, so the same drawing serves shards read back from
+    the pool and rows a preview-only run never wrote.
     """
     preview_dir.mkdir(parents=True, exist_ok=True)
     for old in list(preview_dir.glob("*.jpg")) + list(preview_dir.glob("*.png")):
         old.unlink()
-
-    chosen = sample_labelled_rows(split_dir, count, seed, prefix, keep_unlabelled)
 
     annotated = []
     for sample in chosen:
@@ -1173,10 +1246,17 @@ def main():
                         help=f"Where the shards land. The default is the {POOL_SPLIT}/ pool, "
                              f"which split_pool deals into train and eval afterwards")
     parser.add_argument("--preview_dir", default=None, help="Write annotated sample frames here")
+    parser.add_argument("--preview_only", action="store_true",
+                        help="Label the sources as usual but write only the preview: no "
+                             "frame is decoded except the ones it draws, and no shard is "
+                             "written or replaced. The loop to iterate on labelling in - "
+                             "pair it with --limit to cut it further. Needs --preview_dir "
+                             "and ignores --output_root.")
     parser.add_argument("--preview_count", type=int, default=100)
     parser.add_argument("--preview_group", type=int, default=20,
                         help="Frames per contact sheet")
     parser.add_argument("--preview_seed", type=int, default=0)
+    add_uv_arguments(parser)
     parser.add_argument("--approach_seconds", type=float, default=APPROACH_SECONDS)
     parser.add_argument("--carry_seconds", type=float, default=CARRY_SECONDS)
     parser.add_argument("--rise_m", type=float, default=RISE_M)
@@ -1212,8 +1292,10 @@ def main():
     if args.check:
         report_sources(roots or args.repo_id)
         return
-    if not args.output_root:
-        parser.error("--output_root is required unless --check")
+    if args.preview_only and not args.preview_dir:
+        parser.error("--preview_only needs --preview_dir to write to")
+    if not (args.output_root or args.preview_only):
+        parser.error("--output_root is required unless --check or --preview_only")
 
     sources = []
     for i, repo_id in enumerate(args.repo_id):
@@ -1225,11 +1307,23 @@ def main():
     mode = (MODE_NEGATIVES if args.negatives
             else MODE_FALSE_GRABS if args.false_grabs
             else MODE_GRASPS)
+
+    if args.preview_only:
+        rows = mine_preview(
+            sources, args.approach_seconds, args.carry_seconds, args.rise_m, args.limit,
+            args.preview_count, args.preview_seed, mode=mode, stride=args.stride,
+            image_size=tuple(args.image_size),
+            uv_method=args.uv_method, jaw_uv=tuple(args.jaw_uv),
+        )
+        render_preview(rows, Path(args.preview_dir), args.preview_group)
+        return
+
     total, split_dir = mine(
         sources, Path(args.output_root), args.split,
         args.approach_seconds, args.carry_seconds, args.rise_m, args.limit,
         mode=mode, stride=args.stride,
         image_size=tuple(args.image_size),
+        uv_method=args.uv_method, jaw_uv=tuple(args.jaw_uv),
     )
     if args.preview_dir and total:
         write_preview(split_dir, Path(args.preview_dir),
