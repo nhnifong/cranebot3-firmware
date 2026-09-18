@@ -417,6 +417,11 @@ class GripperArpServer(RobotComponentServer):
             'dforce': self.desired_force if self.in_force_mode else 0,
         }
 
+        # Streamed every cycle rather than only on request. The swing model the host fits
+        # from the gyro assumes a free pendulum, which is exactly what is untrue when the
+        # fingers are resting on something, so the host needs the accelerometer's own answer.
+        self.update['angle_from_vertical'] = self.getAngleFromVertical()
+
         if self.rangefinder.data_ready:
             distance = self.rangefinder.distance
             # None when the floor is out of range

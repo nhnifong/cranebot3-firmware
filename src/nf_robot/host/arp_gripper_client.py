@@ -91,9 +91,11 @@ class ArpeggioGripperClient(ComponentClient):
         # ends fit and project the swing at one frequency
         self.pendulum = swing.pendulum_for(self.config)
         self.finger_contact_calibration_complete = asyncio.Event()
-        # set when the gripper replies to a query_angle_from_vertical request
+        # the gripper streams this with every sensor update; the event exists so a
+        # query_angle_from_vertical can wait for one that landed after it asked
         self.angle_from_vertical_received = asyncio.Event()
         self.last_angle_from_vertical = None
+        self.angle_from_vertical_ts = 0.0
         # grip force set point last reported by the gripper. Kept because it is one of the
         # three state inputs the visual servoing model takes, and unlike the range and the
         # finger angle it has no home in the datastore.
@@ -175,6 +177,7 @@ class ArpeggioGripperClient(ComponentClient):
 
         if 'angle_from_vertical' in update:
             self.last_angle_from_vertical = float(update['angle_from_vertical'])
+            self.angle_from_vertical_ts = time.time()
             self.angle_from_vertical_received.set()
 
     async def query_angle_from_vertical(self, timeout=2.0):

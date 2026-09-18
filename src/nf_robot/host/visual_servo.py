@@ -73,7 +73,8 @@ LATERAL_SPEED_MAX = 0.15    # (m/s)
 # descent absorbs, and the same 3cm at 8cm up is a miss.
 CENTER_TOL_FRACTION = 0.12
 CENTER_TOL_MIN_M = 0.012
-PRESENT_THRESHOLD = 0.5     # target-present probability below which the loop holds still
+# TODO adjust downwards after fixing model, it should have such a high bias
+PRESENT_THRESHOLD = 0.95     # target-present probability below which the loop holds still
 # The other half of "is this answer worth steering at": how much of the position softmax
 # the winning cell actually holds. The present head says the frame contains something
 # graspable; this says the position head found *where*. They fail apart - on a scene the
@@ -91,7 +92,26 @@ PRESENT_THRESHOLD = 0.5     # target-present probability below which the loop ho
 # that grid's size or the width of the Gaussian it is trained against (train.CELL_SIGMA).
 # Re-measure it after either, or after a backbone change.
 SCORE_THRESHOLD = 0.05
-NOTHING_SEEN_FRAMES = 15    # consecutive unsure frames before an attempt is abandoned
+# (s) how long an approach may go without a confident frame before it gives up, and (m/s)
+# how fast it climbs meanwhile. A timeout rather than a frame count, so the patience does
+# not change with inference speed.
+NOTHING_SEEN_TIMEOUT_S = 2.0
+NOTHING_SEEN_RISE_SPEED = 0.1
+
+# (deg, m) the pole leaning this far with the rangefinder reading this short means the
+# fingers are planted on something: the lateral command is levering the pole over rather
+# than moving the gripper, and steering harder only leans it further.
+TILT_STUCK_DEG = 12.0
+TILT_STUCK_RANGE_M = 0.12
+# (m, s) how far to lift clear of it, and how long to let the swing damp before resuming
+TILT_RECOVER_RISE_M = 0.03
+TILT_RECOVER_SETTLE_S = 1.5
+# (s) how long the lift takes to reach full speed, so that most of a 3cm rise happens
+# while still ramping
+TILT_RECOVER_EASE_S = 0.4
+# (s) the gripper streams its angle with every sensor update, so anything older than a
+# handful of those means the stream has stopped and the last angle says nothing about now.
+TILT_MAX_AGE_S = 0.25
 
 # (s) time constant of the filter on the target's room position, at about one pendulum
 # period. The gripper hangs on half a metre of pole and swings, so a per-frame prediction
@@ -822,7 +842,7 @@ class VisualServo:
         """
         self.filter.reset()
         self.reset_close()
-        nothing_seen_countdown = NOTHING_SEEN_FRAMES
+        nothing_seen_since = None
         close_countdown = CLOSE_CONFIRM_FRAMES
         approach_timeout = time.time() + APPROACH_TIMEOUT_S
         reason, evidence, asked_to_close = 'approach timed out', 'no frames', False
@@ -846,6 +866,24 @@ class VisualServo:
                 # how far there is left to go; flying on a stale one is how the fingers
                 # end up driven into the floor
                 return 'rangefinder reading went stale', False, evidence, asked_to_close
+
+            # Check if gripper is tilting and range is short.
+            # If so we need to go up and straighten out, because we can't move laterally
+            # with the fingers touching the floor.
+            tilt_deg = self.ob.gripper_client.last_angle_from_vertical
+            tilt_age = time.time() - self.ob.gripper_client.angle_from_vertical_ts
+            if (tilt_deg is not None and tilt_age < TILT_MAX_AGE_S
+                    and tilt_deg > TILT_STUCK_DEG and range_to_target < TILT_STUCK_RANGE_M
+                    and not asked_to_close):
+                logger.info(f'Pole leaning {tilt_deg:.0f}deg at range '
+                            f'{range_to_target:.3f}m; backing off to straighten up')
+                await self._straighten_up()
+                # the lift is smaller than STUCK_DISTANCE_M, so the stuck detector would
+                # count the settle against an approach that just moved on purpose
+                still_at = np.array(self.ob.pe.gant_pos, dtype=float)
+                still_since = time.time()
+                continue
+
             if range_to_target < RANGE_ITEM:
                 gripper_height = self.ob.pe.grip_pose[1][2]
                 return (f'reached target at height {gripper_height:.3f}m '
@@ -858,18 +896,19 @@ class VisualServo:
                 continue
 
             if not self.target_found(prediction) and range_to_target > COMMIT_RANGE_M:
-                if nothing_seen_countdown == NOTHING_SEEN_FRAMES:
-                    # High up and unsure anything graspable is down there. Hold still
-                    # rather than chase whatever the position head picked out of an empty
-                    # floor - every other head is conditional on this one. Stopping once,
-                    # not every pass, since it stays stopped.
-                    self.ob.slow_stop_all_spools()
-                nothing_seen_countdown -= 1
-                if nothing_seen_countdown <= 0:
+                # High up and unsure anything graspable is down there. Climb rather than
+                # chase whatever the position head picked out of an empty floor - every
+                # other head is conditional on this one - since backing off widens the view
+                # and is the move most likely to bring the object into it. Re-commanded
+                # every pass, because an input velocity that stops being refreshed expires.
+                if nothing_seen_since is None:
+                    nothing_seen_since = time.time()
+                if time.time() - nothing_seen_since > NOTHING_SEEN_TIMEOUT_S:
                     return 'nothing seen', False, evidence, asked_to_close
+                await self.ob.move_direction_speed([0.0, 0.0, NOTHING_SEEN_RISE_SPEED])
                 await asyncio.sleep(LOOP_DELAY)
                 continue
-            nothing_seen_countdown = NOTHING_SEEN_FRAMES
+            nothing_seen_since = None
 
             # horizontal part of the offset from the lens to the target, in the room
             # frame: exactly the error that must go to zero for the jaws to be over it,
@@ -910,6 +949,25 @@ class VisualServo:
             await asyncio.sleep(LOOP_DELAY)
 
         return reason, False, evidence, asked_to_close
+
+    async def _straighten_up(self):
+        """Lift clear of whatever the fingers are planted on and let the pole hang again.
+
+        The lift eases in: a step change in line speed against a propped pole is itself a
+        shove, and the swing it starts is what the settle below would then have to wait out.
+        """
+        risen, started = 0.0, time.time()
+        while risen < TILT_RECOVER_RISE_M:
+            speed = NOTHING_SEEN_RISE_SPEED * min(
+                1.0, (time.time() - started) / TILT_RECOVER_EASE_S)
+            await self.ob.move_direction_speed([0.0, 0.0, speed])
+            await asyncio.sleep(LOOP_DELAY)
+            # the ramp is driven by elapsed time, so the climb always reaches full speed
+            # and this distance always converges
+            risen += speed * LOOP_DELAY
+        self.ob.slow_stop_all_spools()
+        # swing cancellation works the spools from the gripper's IMU, so settling is a wait
+        await asyncio.sleep(TILT_RECOVER_SETTLE_S)
 
     async def _close_until_held(self):
         """Hold the gantry still, let the model work the fingers, and wait for a grip.
