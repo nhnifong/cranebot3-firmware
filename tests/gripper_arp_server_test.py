@@ -63,6 +63,7 @@ class TestGripperArpServer(unittest.IsolatedAsyncioTestCase):
         # Configure IMU Mock
         self.mock_imu = self.mock_mpu_class.return_value
         self.mock_imu.gyro = [0.0, 0.0, 0.0]
+        self.mock_imu.acceleration = (0.0, 0.0, 9.81)
 
         # Configure STS3215 Motors Mock
         self.mock_motors = self.mock_sts_class.return_value

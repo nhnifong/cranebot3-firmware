@@ -137,6 +137,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         self.patchers.append(patch('nf_robot.robot.gripper_arp_server.MPU6050', self.mock_imu_class))
         self.mock_imu = self.mock_imu_class.return_value
         self.mock_imu.gyro = (0,0,0)
+        self.mock_imu.acceleration = (0, 0, 9.81)
 
         self.mock_ads_class = Mock(spec=ADS1015)
         self.patchers.append(patch('nf_robot.robot.gripper_arp_server.ADS1015', self.mock_ads_class))
