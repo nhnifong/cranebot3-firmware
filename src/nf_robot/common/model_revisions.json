@@ -1,5 +1,5 @@
 {
-  "_comment": "Hub commit each model is downloaded at. Written by nf_robot.ml.pin_latest_model; see the publish steps in ml/visual_servoing/readme.md and ml/ortho_target.py.",
+  "_comment": "Hub commit each model is downloaded at. Written by nf_robot.ml.pin_latest_model; see the publish steps in ml/visual_servoing/readme.md and ml/ortho_target/readme.md.",
   "naavox/targeting": {
     "revision": "779ef7df729fc372ddf757b0a6c33077d261de0c",
     "pinned_at": "2026-09-16",

@@ -1,30 +1,6 @@
 #!/usr/bin/env python
 
-"""Composite synthetic visual servoing frames from captured plates.
-
-Offline, no robot. Three ingredients, each captured by a motion task in observer.py and
-turned into usable pieces by its own extractor:
-
-    floorplates    raw frames of bare floor at a spread of heights - the background
-    objects        RGBA cutouts keyed off the green board (object_matte.py)
-    fingers        RGBA plates of the gripper's own hardware (finger_matte.py)
-
-and the labels come from the compositing rather than from looking at the result: we
-know where we pasted the object, at what scale and at what orientation, so the target
-position, its range and its grasp axis are exact by construction. That is the whole
-reason for building frames this way instead of labelling more teleop.
-
-Objects are pasted into a canvas 1.5x the frame, so a good fraction land partly or
-wholly off the visible edge. That case - an object just past the bottom edge, which the
-model must still point at - is the one this whole model exists to get right, so it has
-to be common in training rather than a rare corner.
-
-Fingers go on top, and objects that end up behind one are kept rather than avoided: that
-occlusion is a large part of why the live frames are hard.
-
-Output is parquet shards in the row format readme.md describes, written into the same
-split directory the miner writes to and named apart from its shards, so training on the
-mix needs nothing but generating some.
+"""Composite exactly labelled synthetic visual servoing frames from floor, object and finger plates.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.synth_frames \
@@ -55,68 +31,34 @@ from nf_robot.ml.visual_servoing.object_matte import read_objects
 from nf_robot.ml.visual_servoing.plates import iter_run, read_manifest
 from nf_robot.ml.visual_servoing import white_balance
 
-# Simulated camera heights, in metres, when no real distribution is supplied. Sampled
-# log-uniformly because what matters to the image is the ratio between heights, not the
-# difference: the step from 0.2m to 0.3m changes the view far more than 0.9m to 1.0m.
+# Simulated camera heights, sampled log-uniformly when no real distribution is supplied.
 RANGE_MIN_M = 0.12
 RANGE_MAX_M = 1.10
-# How many objects land in the canvas. Zero is deliberate and not rare: those frames are
-# the only negatives the target-present head ever sees, since mined teleop rows are all
-# positives by construction.
+# How many objects land in the canvas; zero gives the target-present head its negatives.
 OBJECT_COUNT_WEIGHTS = {0: 0.12, 1: 0.45, 2: 0.25, 3: 0.12, 4: 0.06}
-# Where the jaws are in the frame: straight down from the camera, which the 9.06 degree
-# backward tilt puts above centre. Same point mine_teleop's anchor projects to, so
-# "nearest the jaws" means the same thing in both halves of the dataset.
+# Where the jaws are in the frame, the same point mine_teleop's anchor projects to.
 JAW_REF_UV = (0.5, 0.308)
 # Finger apertures to sample, in degrees; -90 is fully open.
 FINGER_ANGLE_RANGE = (-90.0, 90.0)
-# How much extra zoom a floor plate may be given on top of the scale its range implies.
-# Inwards only, and only a little. Zooming out would need floor outside what was
-# captured - which is what the tiling used to invent - and a large zoom in would tell the
-# model the floor is nearer than the range label it is being trained against says.
+# Extra inward zoom a floor plate may get on top of the scale its range implies.
 FLOOR_ZOOM_MAX = 1.12
-# Sign taking a cutout's measured wrist offset to the grasp axis in the image.
-#
-# The axis label is an image-plane direction - the line the jaws close along - because
-# that is the only thing a network looking at one frame can be asked for. It is drawn
-# perpendicular to the object's long axis, and it reads zero (a horizontal bar) when the
-# object stands upright in frame, which is the orientation the servoing is steering to.
-#
-# The offset it comes from is a wrist angle, and the camera turns with the wrist: a wrist
-# turned +30 degrees off ideal photographs the object rotated 30 degrees the *other* way
-# in the image. So the image-plane angle is the negative of the wrist offset. Flip this
-# to +1 if annotated frames show the bar mirrored about the horizontal - it is a fact
-# about the mount, and one look at a long object settles it.
+# Sign taking a cutout's wrist offset to the image-plane grasp axis; flip it if annotated
+# bars look mirrored.
 AXIS_FROM_WRIST_SIGN = -1.0
-# (MB) how much decoded floor plate to hold. This is the tool's high water mark by a wide
-# margin - every other structure here is either streaming or a manifest - so it is the
-# number to move when the machine is smaller or larger, not a thing to discover by
-# watching the OOM killer.
+# (MB) decoded floor plate pool budget, this tool's high water mark.
 FLOOR_CACHE_MB = 2048
-# (MB) how much image data a synthetic shard buffers before it is written. The buffer is
-# copied into an arrow table on the way out, so the transient cost is about twice this.
+# (MB) image data a synthetic shard buffers before it is written.
 SHARD_MB = 256
-# (metres) the simulated heights this tool is willing to composite, whatever a recording
-# says. The mined rangefinder column bottoms out at 0.001m - 1.5% of rows are under 1cm -
-# which is the sensor in contact rather than a camera looking at a floor. Composited
-# literally, 0.001m asks for a floor plate magnified 283x: a 271936x152964 image, 125GB in
-# one allocation, and the end of the run. The ceiling is the same idea from the other end,
-# where a plate shrinks past the point of carrying any texture.
+# (metres) the simulated heights this tool will composite, excluding sensor-in-contact
+# readings.
 SIM_RANGE_M = (0.05, 1.5)
-# Hard cap on magnifying any plate or cutout, as a backstop that bounds the largest
-# intermediate array whatever ranges arrive. With SIM_RANGE_M in force the worst real case
-# is about 5.7x, so this never binds in normal operation - it exists so that a bad capture
-# range cannot allocate the machine.
+# Hard cap on magnifying any plate or cutout, a backstop against bad ranges.
 MAX_MAGNIFICATION = 6.0
 
 
 def neutralize_plates(entries, what):
-    """Take one capture's colour cast out of its plates, in place.
-
-    Returns the illuminant that was removed, so a caller holding sources that cannot be
-    measured on their own - a cutout is mostly object, and the object's colour is not the
-    light's - can borrow it.
-    """
+    """Remove one capture's colour cast from its plates in place, returning the illuminant
+    removed."""
     if not entries:
         return np.ones(3)
     illuminant = white_balance.estimate_illuminant(e["image"] for e in entries)
@@ -129,33 +71,15 @@ def neutralize_plates(entries, what):
 
 
 def load_floorplates(plate_dir, limit_runs=None, budget_mb=FLOOR_CACHE_MB, seed=0):
-    """A bounded pool of floorplate frames, with the range each was captured at.
-
-    Kept decoded, because the compositor picks a different plate for every synthetic frame
-    and seeking into an h264 capture per frame would cost more than the composite does.
-
-    Bounded, because decoded frames are enormous and the pool is the peak of this whole
-    tool: one 960x540 frame is 1.56MB, and eleven runs of ~1,700 frames each is 28GB of
-    resident numpy - enough to have the OOM killer end a 40,000 frame run before a single
-    shard is written, which is exactly what it did. The budget caps that at something a
-    machine can hold, and everything else here is streaming.
-
-    Which frames make the cut matters as much as how many. A run steps through heights and
-    turns the wrist at each one, so the first N frames of a run are all one height: taking
-    the front of the run would quietly narrow the background distribution to the lowest
-    capture. Each run is reservoir sampled instead, so every frame of the sweep has the
-    same chance of being in the pool however long the run turns out to be - no frame count
-    is needed in advance, which is just as well, since the manifest's `samples` undercounts
-    the frames a video run decodes to by over 10%.
-    """
+    """A memory-bounded, reservoir-sampled pool of decoded floorplate frames with their
+    capture ranges."""
     runs = [r for r in read_manifest(plate_dir) if r["kind"] == "floorplates"]
     if limit_runs:
         runs = runs[-limit_runs:]
     if not runs:
         return []
 
-    # One frame decoded up front, only to find out what a frame costs here; capture
-    # resolution is a property of the run, not something this tool should assume.
+    # Decode one frame up front to learn the per-frame cost.
     probe = iter_run(plate_dir, runs[0]["run_id"])
     try:
         first = next(probe, None)
@@ -182,13 +106,11 @@ def load_floorplates(plate_dir, limit_runs=None, budget_mb=FLOOR_CACHE_MB, seed=
             if len(kept) < quota:
                 kept.append(entry)
             else:
-                # standard reservoir replacement; anything not kept is freed as the
-                # generator moves on, so the high water mark is the pool itself
+                # Standard reservoir replacement.
                 index = rng.randrange(seen)
                 if index < quota:
                     kept[index] = entry
-        # Per run, because a run is one session under one set of room lights, and two runs
-        # shot at different times of day are not the same yellow.
+        # White balance per run, since each run is its own lighting.
         if kept:
             illuminants[run["run_id"]] = neutralize_plates(kept, run["run_id"])
         plates += kept
@@ -214,11 +136,7 @@ def run_time(run_id):
 
 
 def nearest_illuminant(run_id, measured):
-    """The illuminant of whichever measured capture sits closest in time to run_id.
-
-    For sources whose own pixels cannot be measured: the light in the house is what these
-    all have in common, and the capture nearest in time is the best record of it there is.
-    """
+    """The illuminant of the measured capture closest in time to run_id."""
     when = run_time(run_id)
     dated = {other: value for other, value in measured.items() if run_time(other)}
     if not dated:
@@ -229,14 +147,7 @@ def nearest_illuminant(run_id, measured):
 
 
 def cutout_gains(entries, floor_illuminants):
-    """Neutralizing gains per objectplates run, borrowed from the floorplates runs.
-
-    The cutouts cannot be measured on their own. A cutout is object and nothing else, and
-    assorted objects do not average to grey the way a room does: measured that way this
-    set asks for a 4.6x blue gain, which is the toys being warm-coloured rather than the
-    light being warm. The floor captured nearest in time is the same house under the same
-    pinned preset, and it has a room's worth of surfaces to average over.
-    """
+    """Neutralizing gains per objectplates run, borrowed from the nearest floorplates run."""
     gains = {}
     for run_id in sorted({entry.get("run_id", "") for entry in entries}):
         illuminant = nearest_illuminant(run_id, floor_illuminants)
@@ -247,14 +158,7 @@ def cutout_gains(entries, floor_illuminants):
 
 
 def load_finger_plates(finger_dir, neutralize=True):
-    """RGBA finger plates grouped by capture, as [[(finger_angle, rgba), ...], ...].
-
-    One list per fingerplates run rather than one flat list, because a run is one physical
-    set of fingers - they get swapped, and they are not all the same colour. Keeping them
-    apart lets a frame pick a set and then an aperture within it, so the model sees each
-    set at every aperture instead of a chimera that is blue at one angle and white at the
-    next.
-    """
+    """RGBA finger plates grouped by capture, as [[(finger_angle, rgba), ...], ...]."""
     finger_dir = Path(finger_dir)
     manifest = finger_dir / "mattes.jsonl"
     if not manifest.exists():
@@ -266,18 +170,13 @@ def load_finger_plates(finger_dir, neutralize=True):
         bgra = cv2.imread(str(finger_dir / entry["file"]), cv2.IMREAD_UNCHANGED)
         if bgra is None or bgra.shape[2] != 4:
             continue
-        # Downscaled once here rather than per composite: a finger plate is always pasted
-        # over the whole frame at exactly this size, so anything larger is memory that is
-        # thrown away every time it is used. A capture-resolution set of plates is 2MB
-        # each; at frame size they are a quarter of that.
+        # Downscaled once to frame size, the only size they are pasted at.
         if (bgra.shape[1], bgra.shape[0]) != IMAGE_SIZE:
             bgra = cv2.resize(bgra, IMAGE_SIZE, interpolation=cv2.INTER_AREA)
         by_run.setdefault(entry.get("run_id", ""), []).append(
             (float(entry["finger_angle"]), bgra[:, :, [2, 1, 0, 3]]))
     for run_id, plates in sorted(by_run.items()):
-        # Per run again: a run is one set of fingers under one set of lights, and the sets
-        # really are different colours, so pooling them would read a white set as the
-        # light and turn a blue set bluer.
+        # White balance per run, since finger sets really are different colours.
         if neutralize:
             illuminant = white_balance.estimate_illuminant(rgba for _, rgba in plates)
             gains = white_balance.neutralize_gains(illuminant)
@@ -290,12 +189,7 @@ def load_finger_plates(finger_dir, neutralize=True):
 
 
 def capped_scale(scale, what):
-    """A rescale factor, clamped to something that cannot allocate the machine.
-
-    Logged when it binds, because it should not: SIM_RANGE_M is what keeps the inputs
-    sane, and this firing means a plate or a cutout carries a range that the range clamp
-    did not cover.
-    """
+    """A rescale factor clamped to MAX_SCALE, logged when it binds."""
     if scale <= MAX_MAGNIFICATION:
         return scale
     logging.warning(f"{what}: magnification {scale:.1f}x capped at {MAX_MAGNIFICATION}x; "
@@ -304,12 +198,7 @@ def capped_scale(scale, what):
 
 
 def sample_ranges(dataset_root, count, rng):
-    """Simulated heights, drawn from real teleop ranges when a mined dataset is given.
-
-    Matching the real distribution matters more than covering the span evenly: the model
-    spends its time where the gripper spends its time, and a uniform sample over-trains
-    the heights an operator flies through quickly.
-    """
+    """Simulated heights, drawn from real teleop ranges when a mined dataset is given."""
     if dataset_root:
         import pyarrow.parquet as pq
 
@@ -329,13 +218,7 @@ def sample_ranges(dataset_root, count, rng):
 
 
 def clamp_ranges(values):
-    """Simulated heights held inside SIM_RANGE_M, reporting how many had to move.
-
-    A recorded rangefinder reading is not automatically a height worth simulating: the
-    sensor reads 0.001m while the fingers are closing on something, and that number
-    composites into an allocation no machine has. Clamping rather than dropping keeps the
-    height distribution the mined data asked for everywhere it is meaningful.
-    """
+    """Simulated heights clamped into SIM_RANGE_M, reporting how many moved."""
     low, high = SIM_RANGE_M
     clamped = [min(max(v, low), high) for v in values]
     moved = sum(1 for v, c in zip(values, clamped) if v != c)
@@ -347,30 +230,8 @@ def clamp_ranges(values):
 
 
 def floor_canvas(plate, target_range, canvas_size, rng):
-    """A floor plate rescaled to the simulated height and cropped to the canvas.
-
-    Two scalings, and forgetting either puts the floor at the wrong size. The plate was
-    captured at some resolution of the same field of view the model input covers, so it
-    first has to be scaled by the ratio between them; then a plate captured at r0 and
-    viewed from r covers r0/r as much floor per pixel.
-
-    That product regularly lands short of the frame - whenever nothing was captured above
-    the simulated height, and by a couple of percent anyway because the plate's aspect
-    ratio is not exactly the model input's. Filling the shortfall by tiling is what put a
-    seam through the middle of every frame: repeated floor is not something any camera can
-    see, and the model would have been free to learn the repeat as a feature. So the scale
-    is floored at what covers the frame and then given a small random zoom that only ever
-    goes inwards, and the crop moves within the slack that zoom leaves. Every pixel of the
-    result is floor that was photographed exactly once.
-
-    Being magnified past r0/r does mean the texture looks nearer than the range label
-    says. The alternative is inventing floor; generate() counts how often it happens,
-    because the fix is capturing floorplates from higher up rather than anything here.
-
-    The canvas margin outside the frame is edge-replicated. Objects are pasted in canvas
-    coordinates and the frame is cut out of the middle, so nothing out there is ever
-    rendered - the margin exists to give an off-frame object somewhere to land.
-    """
+    """A floor plate rescaled to the simulated height and cropped to the canvas, zooming in
+    rather than tiling to fill the frame."""
     image = plate["image"]
     frame_w, frame_h = IMAGE_SIZE
     canvas_w, canvas_h = canvas_size
@@ -397,7 +258,7 @@ def floor_canvas(plate, target_range, canvas_size, rng):
 
 
 def paste_rgba(canvas, rgba, top_left):
-    """Alpha-composite an RGBA patch onto a canvas, clipped to it. In place."""
+    """Alpha-composite an RGBA patch onto a canvas in place, clipped to it."""
     x, y = int(round(top_left[0])), int(round(top_left[1]))
     h, w = rgba.shape[:2]
     x0, y0 = max(0, x), max(0, y)
@@ -411,17 +272,7 @@ def paste_rgba(canvas, rgba, top_left):
 
 
 def photometric(image, rng):
-    """Colour temperature, exposure, white balance, noise, motion blur and JPEG quality.
-
-    Motion blur especially: live frames have it and no captured plate does, so without
-    it the model can key on sharpness to tell synthetic from real - which it cannot do
-    at eval, where everything is real and half of it is blurred.
-
-    The temperature comes first because it is the light in the room, not something the
-    camera did: the ingredients have each been neutralized on the way in, so this is what
-    puts a cast back, and it re-lights the whole frame at once the way a room does. The
-    per-channel jitter below stays, on top of it, for everything that is the camera.
-    """
+    """Colour temperature, exposure, white balance, noise, motion blur and JPEG quality."""
     image = white_balance.apply_gains(image, white_balance.random_illuminant_gains(rng))
     out = image.astype(np.float32)
     out *= rng.uniform(0.75, 1.3)
@@ -445,11 +296,8 @@ def photometric(image, rng):
 
 
 def axis_from_wrist_offset(offset_deg):
-    """A cutout's measured wrist offset as the grasp axis in the image, in radians.
-
-    None passes through as None - an unlabelled capture masks the axis loss instead of
-    claiming the object is upright.
-    """
+    """A cutout's wrist offset as the image-plane grasp axis in radians, with None passing
+    through."""
     if offset_deg is None:
         return None
     return math.radians(AXIS_FROM_WRIST_SIGN * float(offset_deg))
@@ -457,21 +305,12 @@ def axis_from_wrist_offset(offset_deg):
 
 def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
             object_gains=None):
-    """One synthetic frame and its labels.
-
-    The winner - the object the target head is trained to point at - is whichever
-    candidate lands nearest the jaws in the image plane. Across many random
-    arrangements that teaches the softmax to put a mode on every candidate while the
-    cross-entropy target names one, which is the same argument the ortho targeting model
-    makes about several objects on a floor.
-    """
+    """One synthetic frame and its labels, targeting the candidate nearest the jaws."""
     frame_w, frame_h = IMAGE_SIZE
     canvas_w, canvas_h = int(frame_w * CANVAS_SCALE), int(frame_h * CANVAS_SCALE)
     offset_x, offset_y = (canvas_w - frame_w) // 2, (canvas_h - frame_h) // 2
 
-    # Prefer a plate captured no closer than the simulated height. Magnifying it by r0/r
-    # is then the honest transform, and floor_canvas has to magnify further than that -
-    # putting the texture at the wrong scale - only when nothing was captured high enough.
+    # Prefer a plate captured no closer than the simulated height.
     higher = [p for p in floor_plates if p["range_m"] >= target_range]
     pool = higher or floor_plates
     plate = min(pool, key=lambda p: abs(math.log(p["range_m"] / target_range)))
@@ -500,8 +339,8 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
         candidates.append({
             "uv": ((top_left[0] + grasp[0] - offset_x) / frame_w,
                    (top_left[1] + grasp[1] - offset_y) / frame_h),
-            # The cutout was photographed with the wrist this far off ideal, which is the
-            # same thing as the object being that far off upright in the image.
+            # The wrist offset at capture is the object's rotation from upright in the
+            # image.
             "axis": axis_from_wrist_offset(entry.get("wrist_offset_deg")),
             "label": entry.get("label", ""),
         })
@@ -510,9 +349,7 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
 
     finger_angle = rng.uniform(*FINGER_ANGLE_RANGE)
     if finger_plates:
-        # a set of fingers first, then the aperture nearest the one drawn. Uniform over
-        # sets, not over plates, so a capture that swept more angles does not crowd out
-        # the colour of the fingers in another.
+        # Pick a set of fingers uniformly, then the nearest aperture within it.
         chosen = rng.choice(finger_plates)
         finger_angle, plate_rgba = min(chosen, key=lambda p: abs(p[0] - finger_angle))
         if (plate_rgba.shape[1], plate_rgba.shape[0]) != IMAGE_SIZE:
@@ -533,15 +370,11 @@ def compose(floor_plates, objects, object_dir, finger_plates, target_range, rng,
         "frame_index": 0,
         "seconds_to_grasp": None,
         "target_uv": [round(winner["uv"][0], 5), round(winner["uv"][1], 5)] if winner else None,
-        # The simulated camera height, ignoring the object's own height above the floor.
-        # A real approximation, and it biases tall objects; recording object height at
-        # capture time and subtracting it is the fix if it shows up in eval.
+        # Simulated camera height, ignoring the object's own height.
         "target_range_m": round(target_range, 4) if winner else None,
         "grasp_axis_rad": (round(wrap_half_pi(winner["axis"]), 5)
                            if winner and winner["axis"] is not None else None),
-        # No finger label: what a human does with the fingers is not something the
-        # compositing knows, and teleop is where that signal lives. Same for when a close
-        # would have started and how hard it would have ended up squeezing.
+        # No finger, close or pressure labels: compositing can't know them.
         "finger": None,
         "close_now": None,
         "grasp_pressure": None,
@@ -579,8 +412,7 @@ def annotate(frame, row, candidates):
         y = int(row["target_uv"][1] * frame.shape[0] + pad_y)
         angle = row["grasp_axis_rad"]
         if angle is None:
-            # no bar at all, rather than one lying flat: a flat bar is what an axis of
-            # exactly zero looks like, and telling those apart is the whole point here
+            # No bar at all, so a missing axis isn't mistaken for zero.
             cv2.putText(canvas, "no axis", (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX,
                         0.4, (0, 200, 255), 1)
         else:
@@ -601,10 +433,7 @@ def annotate(frame, row, candidates):
 def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger_dir=None,
              ranges_from=None, annotate_dir=None, annotate_count=40,
              floor_cache_mb=FLOOR_CACHE_MB, shard_mb=SHARD_MB):
-    # Every ingredient is neutralized as it loads, each measured against its own capture,
-    # so the floor, the objects and the fingers in a composite agree on what white is.
-    # photometric then re-lights the finished frame at one random colour temperature, the
-    # way a room lights everything in it at once.
+    # Each ingredient is white-balanced on load; photometric re-lights the finished frame.
     floor_plates, floor_illuminants = load_floorplates(plate_dir, budget_mb=floor_cache_mb, seed=seed)
     if not floor_plates:
         raise ValueError(f"no floorplates runs in {plate_dir}; nothing to build a background from")
@@ -621,10 +450,8 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
     rng = random.Random(seed)
     ranges = sample_ranges(ranges_from, count, rng)
 
-    # Above the tallest plate there is no floor captured wide enough to fill the frame, so
-    # floor_canvas magnifies past r0/r and the texture comes out looking nearer than the
-    # label says. Worth knowing how much of the output that is, since the fix is a capture
-    # run from higher up rather than anything this file can do.
+    # Count frames above the tallest plate, where the floor texture looks nearer than
+    # labelled.
     tallest = max(p["range_m"] for p in floor_plates)
     stretched = sum(1 for r in ranges if r > tallest)
     if stretched:
@@ -661,8 +488,7 @@ def generate(plate_dir, output_root, split, count, seed, object_dir=None, finger
 
     logging.info(f"{writer.total} synthetic frames in {writer.shards} shard(s) under "
                  f"{split_dir}; {present} with a target, {writer.total - present} without")
-    # Measured rather than predicted, because the budget above only bounds the plate pool
-    # and this is the number that decides whether the run survives on this machine.
+    # Measured peak memory, the number that decides whether the run survives.
     if resource is not None:
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6
         logging.info(f"peak resident memory {peak:.1f} GB")

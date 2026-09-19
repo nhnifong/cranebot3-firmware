@@ -3,9 +3,7 @@ import importlib.abc
 import importlib.util
 import sys
 
-# The lerobot modules used to live directly in this package with a name prefix. Their
-# old names still import (and still run with `python -m`), resolving to the same module
-# object under nf_robot.ml.lerobot, so existing callers and pickles keep working.
+# Old flat names of the modules now in nf_robot.ml.lerobot, kept importable.
 _MOVED_TO_LEROBOT = {
     'stringman_lerobot': 'stringman',
     **{f'lerobot_{name}': name for name in (

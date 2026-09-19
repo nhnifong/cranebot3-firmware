@@ -2,35 +2,8 @@
 
 """Deal the mined pool into train and eval, one row at a time and at random.
 
-Every producer - the teleop miner, its negatives pass, and the synthetic compositor -
-writes into one `all/` pool, and the cut happens here, downstream of all of them. That
-ordering is the point:
-
-  - Each producer runs once over everything it has, instead of once per split. Mining is
-    the expensive step and splitting upstream in LeRobot meant paying it twice.
-
-  - A producer that arrives late still reaches both sides. Split first, and whatever is
-    generated afterwards lands wholly in whichever split it was pointed at - which is how
-    an eval split ends up with no synthetic rows in it, and so no `target_present = 0`
-    anywhere, and so no way to grade the head that decides whether there is anything to
-    reach for at all.
-
-  - Re-dealing with another seed costs one pass over the pool rather than a re-mine.
-
-The cut is random over rows, not over episodes or plates, and that is what makes the
-leakage line worth reading. An episode donates a run of frames of the same object at the
-same range, and a plate donates however many composites were drawn from it, so most eval
-rows have a near-duplicate on the other side. Eval then measures how well the model does
-on further frames of scenes it has trained on: the right question when choosing between
-checkpoints of one run, an optimistic one for predicting an object it has never seen.
-Group the pool by `sample_group` and cut on that instead if the second question is the
-one being asked.
-
     python -m nf_robot.ml.visual_servoing.split_pool \
         --data_root datasets/visual_servoing_pool_252
-
-Replaces train/ and eval/ wholesale each time, so it is safe to re-run and it is the
-step to re-run after any producer writes into the pool again.
 """
 
 import argparse
@@ -60,13 +33,7 @@ def pool_shards(root: Path):
 
 
 def normalized(table):
-    """One shard under the canonical schema, filling in columns it predates.
-
-    A shard written before a label existed simply does not carry the column, which the
-    loader already reads as "mask this head here". Filling it with nulls now keeps every
-    shard concatenable, so the deal does not have to care which producer or which version
-    wrote a given row.
-    """
+    """One shard under the canonical schema, with missing label columns filled as nulls."""
     import pyarrow as pa
 
     schema = row_schema()
@@ -79,22 +46,12 @@ def normalized(table):
 
 
 def sample_group(row):
-    """What a row is a near-duplicate of: one teleop episode, or one synthetic plate.
-
-    Both producers fill source_repo_id - a dataset for the miner, a plate run for the
-    compositor - so the same key describes "frames that came from the same scene" for
-    either of them.
-    """
+    """What a row is a near-duplicate of: one teleop episode, or one synthetic plate."""
     return (row.get("split_source"), row.get("source_repo_id"), row.get("episode_index"))
 
 
 class ShardBuffer:
-    """Accumulates arrow tables and writes them out at roughly SHARD_TARGET_BYTES.
-
-    Tables rather than rows of python dicts: a shard of this dataset is mostly JPEG
-    bytes, and round-tripping half a gigabyte of them through python objects to move
-    them between two directories costs memory and time for nothing.
-    """
+    """Accumulates arrow tables and writes them out at roughly SHARD_TARGET_BYTES."""
 
     def __init__(self, split_dir: Path, prefix="shard", target_bytes=SHARD_TARGET_BYTES):
         self.split_dir = split_dir
@@ -131,12 +88,8 @@ class ShardBuffer:
 
 
 def split_pool(root, eval_fraction=DEFAULT_EVAL_FRACTION, seed=0):
-    """Deal every row of the pool into train and eval. Returns (train rows, eval rows).
-
-    Streams a shard at a time: which side each row lands on is decided up front from the
-    row counts alone, which parquet keeps in its footer, so nothing bigger than one shard
-    is ever in memory at once.
-    """
+    """Deal every row of the pool into train and eval a shard at a time, returning (train
+    rows, eval rows)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 

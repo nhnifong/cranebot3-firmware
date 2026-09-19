@@ -1,22 +1,6 @@
 #!/usr/bin/env python
 
-"""Collect plate captures from several machines, and keep them somewhere everyone can see.
-
-Every capture is already a self-contained set of files named after a run id that carries
-the kind, the moment and six random hex digits, so merging is copying files and
-concatenating manifests. Runs are never combined, rewritten or resampled: whatever the
-camera produced stays exactly as it was, which is what lets the matte and compositing
-steps be redone later without going back to the robots.
-
-Runs already present in the destination are skipped by run id, so merging the same
-source twice is harmless, an interrupted merge can be rerun, and a hub dataset can be
-both a source and the upload target of the same collection.
-
-Only raw captures move: the manifest and the files it names. Mattes and previews sit in
-subdirectories of the same collection and are deliberately left behind everywhere here -
-they are derived by keying thresholds still being tuned, so a copy of one is a stale
-answer to a question that will be asked again. Rerun finger_matte and object_matte on
-whatever collection you end up with.
+"""Merge plate captures from directories or the hub, skipping run ids already present.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.merge_plates --into plates_all --from plates
@@ -37,30 +21,19 @@ from pathlib import Path
 
 from nf_robot.ml.visual_servoing.plates import MANIFEST_NAME, read_manifest, run_files
 
-# Sources given as "hf://owner/name" are always the hub; a bare "owner/name" is the hub
-# only when there is no directory by that name, so a local path always wins.
+# A local directory always wins over a bare hub name.
 HF_PREFIX = "hf://"
 
-# Where a merge is reading from. `present` is False for a manifest fetched without its
-# runs, `remote` marks a huggingface cache directory, whose files are shared symlinks that
-# must be copied out of rather than moved, and `sizes` is {filename: bytes} read off the
-# hub when the files themselves are not here to measure.
+# Where a merge reads from: presence, whether it is a hub cache, and remote file sizes.
 Source = collections.namedtuple("Source", "dir present remote sizes", defaults=(None,))
 
 
 def plate_count(entry):
-    """How many plates a run holds.
-
-    Video runs record telemetry samples rather than a frame count, because counting frames
-    means decoding the stream. The two are captured together over the same sweep, so
-    samples are the honest stand-in for a number that would otherwise cost a decode.
-    """
+    """How many plates a run holds, using telemetry samples for video runs."""
     return int(entry.get("frames") or entry.get("samples") or 0)
 
 
 def raw_files(entries):
-    """The manifest and every file it names - the raw captures of a collection, and nothing
-    else. Anything not in this list is derived and gets rebuilt rather than moved."""
     return [MANIFEST_NAME] + [f for entry in entries for f in run_files(entry)]
 
 
@@ -77,12 +50,7 @@ def _hub_manifest(repo_id):
 
 
 def _hub_sizes(repo_id):
-    """{filename: bytes} for a hub dataset, or {} if the listing cannot be had.
-
-    One metadata call, no download - which is what lets a dry run report what a merge
-    would actually cost. Without it the only honest answer is that the size is unknown,
-    since a manifest-only pull has nothing on disk to measure.
-    """
+    """{filename: bytes} for a hub dataset from one metadata call, or {} if unavailable."""
     from huggingface_hub import HfApi
 
     try:
@@ -95,11 +63,7 @@ def _hub_sizes(repo_id):
 
 
 def _pull(repo_id, manifest_only=False):
-    """Fetch a hub collection into the usual cache.
-
-    The manifest comes down first and names the files worth pulling, which is what keeps a
-    matted collection's cutouts on the hub from being dragged along with the captures.
-    """
+    """Fetch a hub collection into the cache, pulling only the files its manifest names."""
     from huggingface_hub import hf_hub_download, snapshot_download
 
     entries = _hub_manifest(repo_id)
@@ -129,12 +93,7 @@ def resolve_source(source, manifest_only=False):
 
 
 def merge(sources, into: Path, move=False, dry_run=False):
-    """Copy every run from each source into one directory, skipping ones already there.
-
-    A source is a directory or a hub dataset repo id, which is pulled first. A dry run
-    against the hub fetches only the manifest, so asking what a merge would cost does not
-    cost the download itself.
-    """
+    """Copy every run from each source into one directory, skipping ones already there."""
     into = Path(into)
     if not dry_run:
         into.mkdir(parents=True, exist_ok=True)
@@ -240,12 +199,7 @@ def summarize(directory: Path):
 
 
 def _strays(directory, entries):
-    """Capture files in a collection that no manifest entry claims.
-
-    An aborted run leaves its video behind without ever writing a manifest line, and
-    nothing can read those bytes without one - but they are still the only copy of
-    something a robot did, so they are reported rather than deleted.
-    """
+    """Capture files no manifest entry claims, reported rather than deleted."""
     directory = Path(directory)
     claimed = set(raw_files(entries))
     found = {p.name for pattern in ("*.parquet", "*.ts", "*.jsonl")
@@ -254,12 +208,7 @@ def _strays(directory, entries):
 
 
 def prune(directory: Path, dry_run=False):
-    """Drop manifest entries whose files are gone.
-
-    Deleting a bad capture is a normal thing to do between the capture and the matte, and
-    it leaves the manifest describing a run nothing can read: every reader here skips
-    those, but --list would still count them and the numbers would be a lie.
-    """
+    """Drop manifest entries whose files are gone."""
     directory = Path(directory)
     entries = read_manifest(directory)
     kept, dropped = [], []
@@ -284,13 +233,7 @@ def prune(directory: Path, dry_run=False):
 
 
 def upload(directory: Path, repo_id: str, dry_run=False):
-    """Push a collection's raw captures to a hub dataset, adding to what is already there.
-
-    The hub copy is the shared one, so this only ever adds: runs it already has are left
-    alone and its manifest lines are carried into the new manifest verbatim, which is what
-    lets two machines upload their own captures to one dataset without either erasing the
-    other. Mattes stay local - see the module docstring.
-    """
+    """Push a collection's raw captures to a hub dataset, only ever adding."""
     from huggingface_hub import HfApi, create_repo
 
     directory = Path(directory)
@@ -317,9 +260,7 @@ def upload(directory: Path, repo_id: str, dry_run=False):
 
     create_repo(repo_id, repo_type="dataset", exist_ok=True)
     api = HfApi()
-    # Runs first and the manifest last. An interrupted upload then leaves files the
-    # manifest does not mention yet, which the next run of this re-uploads; the other
-    # order would publish a manifest naming files that never arrived.
+    # Runs first and the manifest last, so an interrupted upload never names missing files.
     api.upload_folder(folder_path=str(directory), repo_id=repo_id, repo_type="dataset",
                       allow_patterns=files,
                       commit_message=f"add {len(new)} plate run(s)")

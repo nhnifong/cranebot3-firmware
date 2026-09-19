@@ -1,17 +1,6 @@
 #!/usr/bin/env python
 
-"""Loader for the mined/synthesised visual servoing dataset.
-
-Reads the parquet shards mine_teleop.py writes: one row per frame, the frame itself in
-an `image` column as JPEG bytes, and every label nullable. Null means "mask this head's
-loss for this row" rather than "the answer is zero", so each item carries a mask beside
-each label and the trainer never has to guess which producer wrote the row.
-
-The JPEG bytes are held in memory, decoded per item. They are small - the frames are
-stored at the model's input resolution - and holding them beats a random seek into a
-shard per sample. The total is logged at load so a dataset that outgrows this is
-obvious rather than mysterious.
-"""
+"""Loader for the visual servoing parquet shards, with a mask beside every nullable label."""
 
 import logging
 from pathlib import Path
@@ -20,7 +9,7 @@ import cv2
 import numpy as np
 import torch
 
-from nf_robot.ml.ortho_target import IMAGENET_MEAN, IMAGENET_STD, photometric_jitter
+from nf_robot.ml.image_input import normalize, photometric_jitter, to_tensor
 from nf_robot.ml.visual_servoing.mine_teleop import POOL_SPLIT
 
 # Scales that put each state component roughly in -1..1 before it reaches the FiLM MLP.
@@ -51,8 +40,7 @@ class VisualServoDataset(torch.utils.data.Dataset):
         self.dir = Path(root) / split
         shards = sorted(self.dir.glob("*.parquet"))
         if not shards:
-            # The commonest way to be here is a pool that was built but never dealt, which
-            # looks like an empty dataset rather than a missing step.
+            # Most often a pool that was built but never dealt.
             pool = Path(root) / POOL_SPLIT
             hint = (f". {pool} holds shards that have not been dealt yet: run "
                     f"`python -m nf_robot.ml.visual_servoing.split_pool --data_root {root}`"
@@ -64,8 +52,7 @@ class VisualServoDataset(torch.utils.data.Dataset):
         for shard in shards:
             table = pq.read_table(shard)
             images = table.column("image").to_pylist()
-            # A shard written before a label existed simply does not carry the column,
-            # and that is the same thing as the label being null: mask this head here.
+            # A shard without a label column means that label is null.
             present = [c for c in LABEL_COLUMNS if c in table.schema.names]
             missing = [c for c in LABEL_COLUMNS if c not in present]
             labels = table.select(present).to_pylist()
@@ -95,7 +82,6 @@ class VisualServoDataset(torch.utils.data.Dataset):
                         dtype=np.float32)
 
     def has_close_labels(self):
-        """Whether any row carries the close/pressure labels, so training can say so."""
         return any(r.get("close_now") is not None for r in self.rows)
 
     def labelled_axis(self):
@@ -108,7 +94,7 @@ class VisualServoDataset(torch.utils.data.Dataset):
         bgr = cv2.imdecode(np.frombuffer(self.images[idx], np.uint8), cv2.IMREAD_COLOR)
         if bgr is None:
             raise ValueError(f"row {idx} has an undecodable image")
-        img = torch.from_numpy(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)).permute(2, 0, 1).float() / 255.0
+        img = to_tensor(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
         uv = row["target_uv"]
         uv = [float(uv[0]), float(uv[1])] if uv is not None else [0.0, 0.0]
@@ -116,16 +102,14 @@ class VisualServoDataset(torch.utils.data.Dataset):
 
         if self.augment:
             rng = torch.Generator().manual_seed(int(torch.randint(0, 2**31 - 1, (1,)).item()))
-            # Horizontal flip only. A vertical flip is not a pose this camera can be in -
-            # the fingers occupy specific edges and the lighting is top-biased - so the
-            # full dihedral group ortho_target uses would be teaching a lie here.
+            # Horizontal flip only: the camera is never upside down.
             if torch.rand((), generator=rng) < 0.5:
                 img = torch.flip(img, dims=(-1,))
                 uv[0] = 1.0 - uv[0]
                 angle = -angle
             img = photometric_jitter(img, rng)
 
-        img = (img - torch.tensor(IMAGENET_MEAN).view(3, 1, 1)) / torch.tensor(IMAGENET_STD).view(3, 1, 1)
+        img = normalize(img)
 
         has_uv = row["target_uv"] is not None
         return {

@@ -74,7 +74,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from nf_robot.ml.ortho_target import ORTHO_EXTENT_M
+from nf_robot.ml.ortho_target.model import ORTHO_EXTENT_M
 
 DEFAULT_MODEL = "google/siglip2-base-patch16-512"
 # The set has to span the frame: object prompts plus at least one that describes empty
@@ -105,7 +105,7 @@ FRAME_SIZE = 512
 
 def load_frames(root: Path, split: str, count: int, seed: int):
     """`count` frames from a distilled split, as (BGR, (u, v), name) at FRAME_SIZE."""
-    from nf_robot.ml.ortho_target import OrthoTargetDataset
+    from nf_robot.ml.ortho_target.dataset import OrthoTargetDataset
 
     dataset = OrthoTargetDataset(root, split, image_size=FRAME_SIZE, augment=False)
     rng = np.random.default_rng(seed)
@@ -429,7 +429,7 @@ def report(rows, args, prompts, controls, gaps, rendered, out_dir):
 
 
 def resolve_root(args) -> Path:
-    """The same local-wins-over-hub shape ortho_target.resolve_data_root has."""
+    """The same local-wins-over-hub shape train_common.resolve_data_root has."""
     if args.data_root:
         return Path(args.data_root)
     from huggingface_hub import snapshot_download
@@ -446,7 +446,7 @@ def default_device():
 
 
 def main():
-    from nf_robot.ml.ortho_target import DEFAULT_DATASET_ID, LOCAL_DATASET_ROOT
+    from nf_robot.ml.ortho_target.dataset import DEFAULT_DATASET_ID, LOCAL_DATASET_ROOT
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])

@@ -1,38 +1,10 @@
 #!/usr/bin/env python
 
-"""Render an episode's gripper video with the mined grasp point drawn on every frame.
-
-The still previews mine_teleop writes show one frame each, which says whether a label
-landed on the object but not why it missed. A miss has a shape over time: a mark that
-tracks the object and then slides off is a pose estimate drifting, one that sits at a
-fixed offset all the way down is a mount constant, and one that jumps frame to frame is
-noise in whatever the projection is being fed. Those look identical in stills.
-
-Everything here comes from mine_teleop, deliberately: the same grasp detection, the same
-grasp_point_room, the same projection and the same calibration. If this video is wrong
-about where the label goes then the labels are wrong in the same way, which is the only
-property that makes it worth watching.
-
-Two things it draws that the stills do not:
-
-  - The whole episode, not the mined window, so the frames either side of what training
-    sees are visible too. The mined window is marked in the corner.
-  - The mark's own history, as a fading trail. A steady drift is much easier to see as a
-    curve across the frame than as a dot that moved.
-
-`--uv_method` picks which arithmetic is being watched, out of the same set `mine_teleop`
-mines with and by the same flag - see uv_methods.py. Rendering one episode under each is
-the way to tell a mount constant from a drifting position estimate: a gap that is the same
-in every frame is the first, a gap that opens with distance from the grasp is the second.
-The method in force is captioned on every frame, so a video cannot be mistaken for one
-made another way.
+"""Render an episode's gripper video with the mined grasp point and its trail drawn on every frame.
 
     python -m nf_robot.ml.visual_servoing.label_video \\
         --root datasets/chuck-aug28 \\
         --output_dir datasets/labelling_test/label_video
-
-One mp4 per episode, named for it. Episodes with no detectable grasp are skipped, the
-same ones the miner skips.
 """
 
 import argparse
@@ -54,8 +26,7 @@ from nf_robot.ml.visual_servoing.uv_methods import (
     gripper_camera_calibration, target_track,
 )
 
-# The trail is this many frames long. Two seconds at 30fps: enough to show the direction
-# a drift is heading without the curve wrapping over itself.
+# Trail length in frames (two seconds at 30fps).
 TRAIL_FRAMES = 60
 GREEN = (80, 230, 120)
 AMBER = (60, 170, 235)
@@ -63,11 +34,7 @@ GREY = (150, 150, 150)
 
 
 def draw_mark(bgr, u, v, colour, radius=9):
-    """A crosshair at normalized (u, v), clipped to the frame but drawn even when outside.
-
-    Off-frame labels are drawn on the border rather than dropped: the mined window keeps
-    frames whose target is out of shot, and where it went off the edge is the useful part.
-    """
+    """A crosshair at normalized (u, v), drawn on the border when off-frame."""
     h, w = bgr.shape[:2]
     x, y = u * w, v * h
     inside = 0 <= x < w and 0 <= y < h
@@ -94,11 +61,7 @@ def draw_trail(bgr, trail):
 
 
 def caption(bgr, lines, colour=(235, 235, 235)):
-    """Numbers on a solid banner rather than over the frame.
-
-    These are read while the video plays, over whatever the camera happens to be looking
-    at - and a pale outline on a pale carpet is not readable at 30fps.
-    """
+    """Text on a solid banner so it stays readable over the video."""
     step, pad = 17, 6
     banner = pad * 2 + step * len(lines)
     cv2.rectangle(bgr, (0, 0), (bgr.shape[1], banner), (24, 24, 24), -1)
@@ -197,8 +160,7 @@ def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_want
         if limit and written >= limit:
             break
         rows = episodes[episode]
-        # The same three tests mine_episode applies, so this renders the episodes that are
-        # actually mined and nothing else.
+        # The same three tests mine_episode applies.
         pressure = np.array([r["pressure"] for r in rows], dtype=np.float64)
         grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
         if grasp is None:
@@ -213,8 +175,8 @@ def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_want
                          f"{rows[grasp]['laser_rangefinder']:.3f}m at the grasp, so there is "
                          f"no target to draw, skipped (so does the miner)")
             continue
-        # Named for the method too, so rendering the same episode under two of them
-        # leaves two files to flip between rather than one overwriting the other.
+        # Named for the method too, so renders under different methods don't overwrite each
+        # other.
         suffix = "" if uv_method == DEFAULT_UV_METHOD else f"_{uv_method}"
         path = output_dir / f"ep{episode:04d}{suffix}.mp4"
         total, labelled, inside = episode_video(
@@ -228,8 +190,7 @@ def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_want
 
 
 def main():
-    # force=True: importing lerobot installs its own root handler, which makes a plain
-    # basicConfig a no-op and silently drops every progress and skip line this prints.
+    # force=True because importing lerobot installs its own root handler.
     logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)

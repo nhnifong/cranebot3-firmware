@@ -34,7 +34,7 @@ class TestPinnedRevisions(unittest.TestCase):
     def test_the_models_the_robot_loads_are_all_pinned(self):
         """The two repos the host downloads from, named by the modules that own them, so
         renaming a repo without repinning fails here rather than on a robot."""
-        from nf_robot.ml import ortho_target
+        from nf_robot.ml.ortho_target import model as ortho_target
         from nf_robot.ml.visual_servoing import servo
 
         pinned = load_revisions()

@@ -20,9 +20,10 @@ try:
     import torch.nn.functional as F
     from huggingface_hub import try_to_load_from_cache
 
+    from nf_robot.ml.dino_trunk import drop_trunk_weights
     from nf_robot.ml.visual_servoing.model import (
         CLOSE_POOL, DEFAULT_BACKBONE, DEFAULT_IMAGE_SIZE, VisualServoNet,
-        adaptive_avg_pool2d, drop_trunk_weights, load_checkpoint, predict)
+        adaptive_avg_pool2d, load_checkpoint, predict)
     cached = isinstance(try_to_load_from_cache(DEFAULT_BACKBONE, "config.json"), str)
     AVAILABLE = cached
 except ImportError:

@@ -1,57 +1,7 @@
 #!/usr/bin/env python
 
-"""The "camera_goal" action space: where to go, expressed in each camera's frame.
-
-Everything specific to this action space lives here - the component layout, the
-derivation from recorded data, and the conversion back into robot control - so it
-can be reasoned about in one place.
-
-What the policy predicts
-------------------------
-The gripper's goal position, once per camera, in that camera's optical frame:
-
-    goal_gripper_cam_{x,y,z}   goal seen from the gripper camera
-    goal_anchor_0_{x,y,z}      goal seen from anchor camera 0
-    goal_anchor_1_{x,y,z}      goal seen from anchor camera 1
-    wrist_offset               radians to turn the wrist by to reach its angle at the
-                               goal; 0 means "stay where you are"
-    finger_speed               unchanged from the recorded action space
-    episode_end                unchanged
-
-Why camera frames rather than the room frame: the room origin is wherever an
-operator happened to place the origin card during calibration, so room
-coordinates mean something different in every installation and a policy trained
-on them learns that installation. A camera frame is defined by the images the
-policy is looking at, so it transfers.
-
-The wrist follows the same principle as the position: an offset to the angle the
-wrist ends up at, rather than a rate. It is an offset rather than an absolute angle
-because the wrist turns freely through more than one revolution, so its absolute
-angle has no fixed relationship to anything the cameras see.
-
-Why a goal position rather than a velocity: for the two anchor cameras - which do
-not move - the goal is one number that stays put for the whole approach, instead
-of thirty small deltas whose meaning only appears after integration. The gripper
-camera moves with the robot, so its "goal position" is really a displacement; it
-earns its place by being the view that resolves the target at grasping range.
-
-Three predictions of one point is redundancy on purpose: each is transformed back
-to the room and fused, and how far they disagree is a usable confidence signal.
-
-Deriving it from recordings
----------------------------
-Recordings store gamepad velocities, which say nothing about where the operator
-was heading. The goal comes from the contact labelling pass instead:
-`contact_vec_*` is already the room-frame vector from the gripper to the position
-it eventually reaches, so `goal_room = gripper_pos + contact_vec`. That requires
-label_contact_actions to have run with rotate_contact_vec=false.
-
-Each camera's pose in the room is then needed to express that goal in its frame:
-  - the gripper camera rides the gripper, so its pose comes from the recorded
-    gripper position and 6D rotation composed with the fixed camera mount
-  - the anchor cameras are fixed, so their poses come from the calibration file
-    of the robot that recorded the dataset, which must be supplied per source
-"""
+"""The camera_goal action space: the gripper's goal position in each camera's frame, derived
+from contact-labelled recordings and fused back into robot control."""
 
 import collections
 import json
@@ -84,20 +34,18 @@ GOAL_SLOTS = {
     "anchor_camera_1": ("goal_anchor_1_x", "goal_anchor_1_y", "goal_anchor_1_z"),
 }
 
-# Fusion weights. The gripper camera resolves the target at grasping range; the
-# fixed anchors are the ones that still see it from across the room.
+# Fusion weights: the gripper camera is best at grasping range, the anchors from across the
+# room.
 FUSION_WEIGHTS = {"gripper_camera": 1.0, "anchor_camera_0": 1.0, "anchor_camera_1": 1.0}
 
-# Speed the goal is approached at, m/s. Speed is a controller constant here rather
-# than something the policy emits, which is what keeps eval at demonstration pace.
+# Goal approach speed in m/s, a controller constant so eval runs at demonstration pace.
 APPROACH_SPEED = 0.25
 # Wrist offsets are turned into a rate the same way: proportional, capped. deg/s.
 WRIST_GAIN = 2.0
 WRIST_MAX_SPEED = 120.0
 WRIST_DEADBAND_RAD = 0.05
-# Wrist run detection. A run is movement faster than MIN_WRIST_SPEED_DPS; runs closer
-# together than WRIST_GAP_S are one turn, and a run must travel WRIST_MIN_TRAVEL_DEG
-# to count as intent rather than sensor noise.
+# A wrist run is movement faster than MIN_WRIST_SPEED_DPS, merged across gaps under
+# WRIST_GAP_S and ignored under WRIST_MIN_TRAVEL_DEG.
 MIN_WRIST_SPEED_DPS = 5.0
 WRIST_GAP_S = 0.25
 WRIST_MIN_TRAVEL_DEG = 5.0
@@ -106,12 +54,8 @@ GOAL_DEADBAND_M = 0.03
 
 
 def gripper_camera_pose(gripper_pos, gripper_rot_6d):
-    """Room-frame pose of the gripper camera, as (rotvec, position).
-
-    gripper_rot_6d is the 6D rotation stored in observation.state: the first two
-    columns of the rotation matrix, from which the third is recovered by
-    orthonormalizing.
-    """
+    """Room-frame pose of the gripper camera as (rotvec, position), from the 6D rotation in
+    observation.state."""
     a = np.asarray(gripper_rot_6d[:3], dtype=float)
     b = np.asarray(gripper_rot_6d[3:6], dtype=float)
     c1 = a / (np.linalg.norm(a) + 1e-9)
@@ -124,16 +68,13 @@ def gripper_camera_pose(gripper_pos, gripper_rot_6d):
 
 
 def goal_in_camera_frame(goal_room, camera_pose):
-    """Express a room-frame point in a camera's frame, given that camera's room pose."""
     inv = invert_pose(camera_pose)
     return compose_poses([inv, (np.zeros(3), np.asarray(goal_room, dtype=float))])[1]
 
 
 def load_anchor_poses(config):
-    """Anchor camera poses as [(rotvec, position), ...].
-
-    Takes a path to a robot config file (str or Path) or an already-parsed config.
-    """
+    """Anchor camera poses as [(rotvec, position), ...] from a robot config path or parsed
+    config."""
     if isinstance(config, (str, os.PathLike)):
         config = json.loads(pathlib.Path(config).read_text())
     poses = []
@@ -149,9 +90,7 @@ def load_anchor_poses(config):
 # Calibration recorded alongside the data
 # --------------------------------------------------------------------------
 
-# A dataset that carries its own anchor poses can be converted without hunting for the
-# config the robot was running. Recorded per frame because that is the only granularity
-# lerobot datasets have; the value is constant within an episode and survives merging.
+# Anchor poses recorded per frame, so a dataset can be converted without the robot's config.
 ANCHOR_POSES_KEY = "anchor_poses"
 N_RECORDED_ANCHORS = 2
 ANCHOR_POSE_NAMES = [
@@ -171,11 +110,7 @@ def anchor_poses_feature():
 
 
 def pack_anchor_poses(poses):
-    """[(rotvec, position), ...] -> the flat vector stored in each frame.
-
-    Unknown poses record as zeros, which unpack_anchor_poses reports as absent rather
-    than as an anchor at the origin.
-    """
+    """[(rotvec, position), ...] -> the flat per-frame vector, with unknown poses as zeros."""
     flat = np.zeros(len(ANCHOR_POSE_NAMES), dtype=np.float32)
     for i, (rotvec, position) in enumerate(list(poses)[:N_RECORDED_ANCHORS]):
         flat[i * 6:i * 6 + 3] = np.asarray(rotvec, dtype=np.float32)
@@ -197,11 +132,8 @@ def unpack_anchor_poses(flat):
     return poses or None
 
 
-# An anchor's pose says where the anchor is; its camera sits on a mount tilted by this
-# many degrees off it, so both are needed to know where the camera looks from. Recorded
-# separately rather than widened into ANCHOR_POSES_KEY: that vector's width is fixed in
-# every dataset already built, and changing it would make old and new unmergeable and
-# every stored stat the wrong shape.
+# Anchor camera mount tilts, kept out of ANCHOR_POSES_KEY so its width stays mergeable with
+# old datasets.
 ANCHOR_CAM_TILT_KEY = "anchor_cam_tilt"
 ANCHOR_CAM_TILT_NAMES = [f"anchor_{i}_cam_tilt" for i in range(N_RECORDED_ANCHORS)]
 
@@ -218,16 +150,11 @@ def anchor_cam_tilt_feature():
 
 
 def recorded_calibration_features():
-    """Every feature a recording carries to describe the calibration it was made under."""
     return {**anchor_poses_feature(), **anchor_cam_tilt_feature()}
 
 
 def pack_anchor_cam_tilt(tilts):
-    """[degrees, ...] -> the flat vector stored in each frame.
-
-    Zero means unknown, as it does for the poses. No anchor is mounted flat against the
-    ceiling, so a real tilt is never zero.
-    """
+    """[degrees, ...] -> the flat per-frame vector, with 0 meaning unknown."""
     flat = np.zeros(len(ANCHOR_CAM_TILT_NAMES), dtype=np.float32)
     for i, tilt in enumerate(list(tilts)[:N_RECORDED_ANCHORS]):
         flat[i] = float(tilt)
@@ -249,14 +176,7 @@ def unpack_anchor_cam_tilt(flat):
 def convert_actions(states, actions, state_names, action_names, anchor_poses,
                     episode_index=None, timestamps=None, pressure_threshold=0.1, blend_seconds=0.5,
                     stored_anchor_poses=None):
-    """Convert one dataset's recorded actions into camera_goal actions.
-
-    states/actions are (n_frames, dim) arrays straight out of a data parquet.
-    episode_index and timestamps are the matching columns, needed for the wrist
-    offset: it is measured against the wrist angle at the same target the position
-    goal points at, so both are found with the same contact rule.
-    Returns an (n_frames, len(ACTION_NAMES)) array.
-    """
+    """Convert one dataset's recorded actions (n_frames, dim) into camera_goal actions."""
     required_state = ["gripper_pos_x", "gripper_pos_y", "gripper_pos_z"] + [f"gripper_rot_{i}" for i in range(6)]
     missing = [n for n in required_state if n not in state_names]
     if missing:
@@ -290,9 +210,8 @@ def convert_actions(states, actions, state_names, action_names, anchor_poses,
         g = goal_in_camera_frame(goal_room[t], cam_pose)
         out[t, [o_idx[n] for n in GOAL_SLOTS["gripper_camera"]]] = g
 
-    # Poses recorded with the data win over the ones passed in: they are the
-    # calibration that was actually running, where a config file is only right if
-    # nothing has been recalibrated since. Frames sharing a calibration go together.
+    # Poses recorded with the data win over the ones passed in, since they are what was
+    # actually running.
     if stored_anchor_poses is not None:
         blocks = _group_rows_by_value(stored_anchor_poses)
     else:
@@ -335,13 +254,8 @@ def _group_rows_by_value(rows):
 
 
 def derive_dataset_actions(root, anchor_poses=(), pressure_threshold=0.1, blend_seconds=0.5):
-    """Rewrite a dataset in place so its action feature is the camera_goal space.
-
-    anchor_poses is the fallback for datasets recorded before they carried their own;
-    a dataset with an anchor_poses feature ignores it. The data parquets, info.json,
-    meta/stats.json and the per-episode stats are updated together, so nothing that
-    later re-aggregates stats sees the old action width.
-    """
+    """Rewrite a dataset in place so its action feature, stats included, is the camera_goal
+    space."""
     from pathlib import Path
 
     import pyarrow as pa
@@ -411,14 +325,8 @@ def derive_dataset_actions(root, anchor_poses=(), pressure_threshold=0.1, blend_
 
 
 def add_anchor_poses_feature(root, anchor_poses):
-    """Give a dataset recorded before the feature existed the poses it was converted with.
-
-    Datasets recorded now carry their own calibration, older ones do not, and lerobot's
-    merge requires every source to have exactly the same features. Rather than dropping
-    the feature from the new ones, the old ones gain it, filled with the calibration the
-    conversion just used - so the dataset ends up documenting the poses its labels were
-    derived from. Returns False when the dataset already has the feature.
-    """
+    """Add the anchor-pose feature to an older dataset, filled with the poses it was
+    converted with, so it merges with new ones."""
     if has_feature(root, ANCHOR_POSES_KEY):
         return False
     if len(anchor_poses) < N_RECORDED_ANCHORS:
@@ -431,13 +339,7 @@ def add_anchor_poses_feature(root, anchor_poses):
 
 
 def add_anchor_cam_tilt_feature(root, cam_tilts):
-    """The same, for the camera tilts - which older recordings do not carry either.
-
-    cam_tilts is one sequence of degrees for the whole dataset, or {episode index:
-    sequence} where a dataset spans more than one calibration. Nothing is written where
-    a tilt is unknown: a column of zeros would claim a calibration rather than admit
-    there is none.
-    """
+    """Add the camera-tilt feature to an older dataset, skipping episodes whose tilt is unknown."""
     if has_feature(root, ANCHOR_CAM_TILT_KEY):
         return False
     by_episode = isinstance(cam_tilts, dict)
@@ -460,14 +362,8 @@ def has_feature(root, key):
 
 
 def add_recorded_calibration_feature(root, key, feature, values):
-    """Add a per-episode-constant calibration feature to a dataset that has none.
-
-    `values` is one packed vector for the whole dataset, or {episode index: vector}. The
-    data parquets, info.json, meta/stats.json and the per-episode stats are written
-    together: a feature present in info.json but missing from the episode stats trips
-    anything that later re-aggregates them (delete_episodes, merge). Returns False when
-    the dataset already has the feature.
-    """
+    """Add a per-episode-constant calibration feature, updating parquets, info.json and all
+    stats together."""
     from pathlib import Path
 
     import pyarrow as pa
@@ -518,8 +414,7 @@ def add_recorded_calibration_feature(root, key, feature, values):
                                     pa.array([[int(n)] for n in lengths], type=count_type))
         pq.write_table(table, f)
 
-    # The whole-dataset aggregate. Constant within an episode, so the spread across the
-    # dataset is entirely between episodes, weighted by how long each one is.
+    # Aggregate stats across episodes, weighted by episode length.
     rows = np.asarray([r for r, _ in per_episode], dtype=np.float64)
     weights = np.asarray([n for _, n in per_episode], dtype=np.float64)
     mean = np.average(rows, axis=0, weights=weights)
@@ -577,13 +472,8 @@ def _rewrite_episode_stats(root, episode_columns, all_new):
 
 
 def wrist_runs(wrist_angles_deg, timestamps, min_speed_dps=None, gap_s=None, min_travel_deg=None):
-    """Index ranges over which the wrist was turning, as [(start, stop), ...].
-
-    A run ends on the frame the wrist stopped, which is the angle the offsets point
-    at. Runs separated by less than gap_s are merged, so a turn that pauses briefly
-    counts once, and runs that travel less than min_travel_deg are dropped as sensor
-    noise rather than intent.
-    """
+    """Index ranges [(start, stop), ...] over which the wrist was turning, with brief pauses
+    merged and noise dropped."""
     min_speed_dps = MIN_WRIST_SPEED_DPS if min_speed_dps is None else min_speed_dps
     gap_s = WRIST_GAP_S if gap_s is None else gap_s
     min_travel_deg = WRIST_MIN_TRAVEL_DEG if min_travel_deg is None else min_travel_deg
@@ -620,15 +510,7 @@ def wrist_runs(wrist_angles_deg, timestamps, min_speed_dps=None, gap_s=None, min
 
 
 def _wrist_offsets(wrist_angles_deg, timestamps, anticipate=True):
-    """Radians from each frame's wrist angle to the angle the next turn ends at.
-
-    Every run of wrist movement is found, and the frames leading up to and including
-    that run point at the angle it stopped on. After the last run there is nothing
-    left to turn, so the offset is zero. With anticipate=False only the frames inside
-    a run are labelled, which keeps the demonstrator's timing but leaves the channel
-    near-zero almost everywhere - the sparsity that makes a rate channel hard to
-    learn in the first place.
-    """
+    """Radians from each frame's wrist angle to the angle the next wrist turn ends at."""
     angles = np.asarray(wrist_angles_deg, dtype=float)
     offsets = np.zeros(len(angles), dtype=np.float64)
 
@@ -645,13 +527,8 @@ def _wrist_offsets(wrist_angles_deg, timestamps, anticipate=True):
 # --------------------------------------------------------------------------
 
 def fuse_goal_to_room(action, gripper_pos, gripper_rot_6d, anchor_poses, robust=False):
-    """Fuse the per-camera goal predictions into one room-frame goal.
-
-    Returns (goal_room, spread) where spread is the mean distance of the
-    individual estimates from the fused one - a usable confidence signal, since
-    the three views only agree when they agree about where the target is.
-    Cameras whose pose is unknown are skipped.
-    """
+    """Fuse per-camera goal predictions into (goal_room, spread), skipping cameras with
+    unknown pose."""
     estimates, weights = [], []
 
     if all(n in action for n in GOAL_SLOTS["gripper_camera"]):
@@ -687,40 +564,26 @@ def fuse_goal_to_room(action, gripper_pos, gripper_rot_6d, anchor_poses, robust=
 # Turning a stream of predictions into a destination (opt-in at eval time)
 # --------------------------------------------------------------------------
 
-# Measured on naavox/xvla-camera-goal over 40 consecutive frames of a training
-# episode: the 30 steps within one inference agree on the goal to 0.017m, but
-# successive inferences land 0.102m apart while the whole 1.3s window spans only
-# 0.122m. The signal is steady and the sampling is noisy, so a rolling median over
-# half a second cuts per-frame movement to 0.010m - below the arrival radius, i.e. a
-# destination that can actually be converged on. A 1s window measured no better.
+# A half-second rolling median cuts per-frame goal jitter from 0.10m to 0.01m, below the
+# arrival radius.
 MEDIAN_WINDOW_FRAMES = 15
 ARRIVAL_RADIUS_M = 0.08
-# A new destination has to disagree with the latched one by this much, this long,
-# before it replaces it. Well above the 0.01m residual jitter, well below a real move.
+# How far and how long a new destination must disagree before it replaces the latched one.
 CHALLENGE_DISTANCE_M = 0.25
 CHALLENGE_SECONDS = 0.5
 # Escapes, so a latch onto something unreachable cannot hold forever.
 STALL_SECONDS = 4.0
 STALL_PROGRESS_M = 0.05
-# Cross-camera disagreement above which a prediction is not trusted to move the latch.
-# In-distribution it measures ~0.06m; on a room the policy had never seen, ~1.8m.
+# Cross-camera spread above which a prediction may not move the latch (~0.06m in-
+# distribution, ~1.8m on unseen rooms).
 SPREAD_GATE_M = 0.30
 APPROACH_GAIN = 1.0
 MIN_APPROACH_SPEED = 0.05
 
 
 class GoalStabilizer:
-    """Commit to one destination instead of steering at every prediction.
-
-    Without this, each inference sets a new setpoint: at 30Hz the robot is told to go
-    somewhere 0.1m from the last instruction while only travelling 8mm in between, so
-    it never arrives anywhere. This keeps a latched destination and replaces it only on
-    arrival, on a sustained disagreement, on a stall, or when the caller says the phase
-    changed - and drives to it with a proportional approach so it settles rather than
-    running at full speed until a deadband.
-
-    Everything here is eval-side; the labels and the policy are untouched.
-    """
+    """Latch one destination and replace it only on arrival, sustained disagreement, a stall
+    or a phase change."""
 
     def __init__(self, window=MEDIAN_WINDOW_FRAMES, arrival_radius=ARRIVAL_RADIUS_M,
                  challenge_distance=CHALLENGE_DISTANCE_M, challenge_seconds=CHALLENGE_SECONDS,
@@ -755,11 +618,7 @@ class GoalStabilizer:
         self._best_at = now
 
     def update(self, goal_room, spread, gripper_pos, now, hold=False):
-        """Feed one prediction; returns the destination to drive to, or None.
-
-        hold freezes the destination outright - used while the fingers are closing,
-        when a wandering setpoint does the most damage.
-        """
+        """Feed one prediction and return the destination to drive to, or None; hold freezes it."""
         if goal_room is not None:
             self._recent.append(np.asarray(goal_room, dtype=float))
         if not self._recent:

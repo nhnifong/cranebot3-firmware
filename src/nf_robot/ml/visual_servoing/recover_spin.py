@@ -1,34 +1,6 @@
 #!/usr/bin/env python
 
-"""Put the `spin` state field back into a teleop dataset that was recorded without it.
-
-`spin` is the gripper camera's heading in the room, and mine_teleop cannot label anything
-without it: the whole method is projecting one room point into the camera, and a camera of
-unknown heading projects nothing. Some older recordings never logged it.
-
-It is recoverable because the recorder logged something else derived from it. Every named
-target carries a bearing, built as `room_angle - spin` where room_angle points from the
-gripper to that target (lerobot.stringman._build_state). In these recordings no target was
-ever detected, so every one of them sits at the room origin - which is visible in the data
-as `distance` being exactly the gripper's horizontal distance from the origin. The room
-angle is then known from the gripper position alone, and
-
-    spin = atan2(-x, -y) - bearing
-
-is an identity rather than an estimate. It degenerates only near the origin, where the
-direction back to it stops being well defined.
-
-That gap is closed by the wrist. `spin` moves with `wrist_angle` and nothing else -
-get_spin() is `radians(wrist) + (frame_room_spin - pi)` - so the difference between the two
-is a calibration constant, per recording session. Measuring that constant on the frames
-where the bearing is well conditioned lets every frame in the episode be filled exactly,
-including the ones near the origin. The constant is also the check: it has to come out flat
-across an episode, and an episode where it does not is left without spin rather than
-guessed at.
-
-The source dataset is never modified. A new root is written beside it with the state
-column widened by one, its metadata patched to match, and its videos symlinked - they are
-the bulk of the bytes and none of them change.
+"""Recover a teleop dataset's missing `spin` from target bearings and the wrist angle.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.recover_spin --repo_id naavox/simple_grasp \\
@@ -46,22 +18,19 @@ from pathlib import Path
 
 import numpy as np
 
-# (metres) how far the gripper has to be from the room origin for the direction back to it
-# to be worth reading. Close in, a centimetre of position noise swings the bearing wildly.
+# (metres) minimum gripper distance from the origin for the bearing back to it to be
+# reliable.
 MIN_HORIZONTAL_M = 0.30
-# (metres) how exactly a target's distance must match the gripper's own distance from the
-# origin before that column is believed to be pointing at the origin rather than at
-# something real. These are the same float twice, so the tolerance is only for round-trips.
+# (metres) tolerance for a target's distance to equal the gripper's distance from the
+# origin.
 ORIGIN_TOLERANCE_M = 1e-3
 # Frames an episode needs before its calibration constant is trusted.
 MIN_FRAMES_PER_EPISODE = 30
-# (degrees) how far the measured constant may wander inside one episode. spin is an exact
-# function of the wrist, so anything past a rounding error means the assumption is wrong
-# for that episode and it should go unlabelled.
+# (degrees) how far the calibration constant may wander within an episode before it is left
+# unlabelled.
 MAX_SPREAD_DEG = 1.0
 
-# The named targets the recorder wrote a bearing and distance for. Any of them will do; all
-# of them together outvote a column that happened to hold a real detection.
+# Named targets whose bearing and distance the recorder wrote.
 TARGET_NAMES = ("hamper", "toybox", "trashcan", "gamepad", "parking_location")
 
 STATE_FEATURE = "observation.state"
@@ -69,7 +38,6 @@ SPIN_FIELD = "spin"
 
 
 def circular_mean(angles):
-    """Mean of angles that wrap, which the arithmetic mean of radians is not."""
     return float(np.angle(np.mean(np.exp(1j * np.asarray(angles)))))
 
 
@@ -78,15 +46,12 @@ def wrap_pi(angles):
 
 
 def spin_from_bearings(state, index):
-    """Per-frame spin from every target column that points at the room origin.
-
-    Returns (spin, usable), both (targets, frames): spin is only meaningful where usable.
-    """
+    """Per-frame spin from every target column pointing at the room origin, as (spin, usable)."""
     x = state[:, index["gripper_pos_x"]]
     y = state[:, index["gripper_pos_y"]]
     horizontal = np.hypot(x, y)
-    # bearing = room_angle - spin, and with the target at the origin the room angle is the
-    # direction from the gripper back to it
+    # bearing = room_angle - spin, with the room angle pointing from the gripper back to the
+    # origin.
     room_angle = np.arctan2(-x, -y)
 
     spins, usable = [], []
@@ -100,12 +65,7 @@ def spin_from_bearings(state, index):
 
 
 def episode_constant(state, index):
-    """(constant, spread_deg, frames) relating spin to the wrist for one episode.
-
-    The constant is `spin - radians(wrist_angle)`, which get_spin makes a property of the
-    calibration rather than of the moment. spread_deg is how much it moved across the
-    episode and is the reason to believe or disbelieve the result.
-    """
+    """(constant, spread_deg, frames) relating spin to the wrist for one episode."""
     spins, usable = spin_from_bearings(state, index)
     wrist = np.radians(state[:, index["wrist_angle"]])
 
@@ -134,8 +94,7 @@ def episode_spin(state, index):
         return None, {"frames": frames, "spread_deg": spread,
                       "reason": f"spin is not a fixed offset from the wrist here "
                                 f"({spread:.1f} deg of drift)"}
-    # Every frame, not just the well conditioned ones: the wrist is exact everywhere and
-    # the constant is what was missing.
+    # Every frame, since the wrist is exact everywhere.
     spin = np.radians(state[:, index["wrist_angle"]]) + constant
     return spin, {"frames": frames, "spread_deg": spread,
                   "constant_deg": float(np.degrees(constant))}
@@ -169,12 +128,7 @@ def read_state(root: Path):
 
 
 def recover(root: Path):
-    """Spin for every frame of a dataset, as (values, mask, per-episode diagnostics).
-
-    Frames of an episode that could not be measured get 0.0 and a False mask; they are
-    written as a value like any other, because a state column cannot have holes, and the
-    report says how many there are.
-    """
+    """Spin for every frame of a dataset as (values, mask, diagnostics), 0.0 where unmeasured."""
     episode_index, state, index, names, info = read_state(root)
     spin = np.zeros(len(state))
     known = np.zeros(len(state), bool)
@@ -204,8 +158,7 @@ def summarize(report, known):
     spreads = np.array([d["spread_deg"] for d in good.values()])
     logging.info(f"   drift of the constant inside an episode: median "
                  f"{np.median(spreads):.3f} deg, worst {spreads.max():.3f} deg")
-    # The constant is a calibration, so a dataset recorded across sessions shows a handful
-    # of distinct values. Seeing them is the sanity check that this is a real quantity.
+    # Distinct constants correspond to calibration sessions.
     constants = np.array([d["constant_deg"] for d in good.values()])
     values, counts = np.unique(np.round(constants, 1), return_counts=True)
     order = np.argsort(-counts)
@@ -217,11 +170,7 @@ def summarize(report, known):
 
 
 def write_dataset(source: Path, into: Path, spin, names, info, copy_videos=False):
-    """A copy of the dataset with spin appended to its state column.
-
-    Appended rather than inserted so that every existing field keeps its index, which
-    anything reading the old dataset by position keeps working against.
-    """
+    """A copy of the dataset with spin appended to its state column."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -300,11 +249,7 @@ def _write_meta(source: Path, into: Path, spin, names, info):
 
 
 def _stat(key, spin):
-    """One statistic of the recovered column, for the metadata's per-dimension arrays.
-
-    Whole-dataset values for a per-episode table are wrong in detail, and harmless: nothing
-    trains on the metadata, and a loader that normalizes by it gets a sane scale either way.
-    """
+    """One statistic of the recovered column, for the metadata's per-dimension arrays."""
     if key == "min":
         return float(np.min(spin))
     if key == "max":
@@ -317,17 +262,7 @@ def _stat(key, spin):
 
 
 def upload_dataset(root: Path, repo_id: str, what="the recovered spin field"):
-    """Publish a LeRobot dataset, with the two things a raw folder upload leaves out.
-
-    The videos are a symlink into the cache of whatever this was recovered from, and
-    upload_folder walks with os.walk, which does not follow symlinked directories - a
-    plain upload silently publishes a dataset with no frames in it, which passes every
-    metadata check and fails at the first frame read.
-
-    The tag is how lerobot finds a dataset at all: it resolves a repo by a git tag named
-    after the codebase version in meta/info.json, and a repo without one fails deep inside
-    LeRobotDataset with an error that names neither the tag nor the repo.
-    """
+    """Publish a LeRobot dataset, following the video symlink and moving the version tag."""
     from huggingface_hub import HfApi, create_repo
 
     root = Path(root)
@@ -347,11 +282,7 @@ def upload_dataset(root: Path, repo_id: str, what="the recovered spin field"):
         logging.warning(f"no videos under {root}; the upload will not be mineable. "
                         f"Recover again with --videos to fetch them.")
 
-    # The tag is moved, not just created when absent. LeRobotDataset resolves a repo by
-    # this tag rather than by main, so a tag left on an older commit means every reader
-    # keeps getting the old dataset while the new one sits on main, unread - which is
-    # silent, because the repo id and the episode count both look like whatever the tag
-    # points at.
+    # Move the tag, since LeRobotDataset reads a repo at the tag rather than main.
     tags = [t.name for t in api.list_repo_refs(repo_id, repo_type="dataset").tags]
     if version in tags:
         api.delete_tag(repo_id, tag=version, repo_type="dataset")
@@ -361,12 +292,7 @@ def upload_dataset(root: Path, repo_id: str, what="the recovered spin field"):
 
 
 def resolve_root(repo_id, root=None, videos=False):
-    """Where the dataset is on disk.
-
-    Only the metadata and the state columns are needed to recover spin, and they are a
-    rounding error next to the videos - so the videos come down only when the result is
-    meant to be mined, which is what needs the frames.
-    """
+    """Where the dataset is on disk, downloading videos only if they will be mined."""
     if root:
         return Path(root)
     from huggingface_hub import snapshot_download

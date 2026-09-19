@@ -1,14 +1,6 @@
 #!/usr/bin/env python
 
-"""Point a model's pin at whatever is newest on the hub.
-
-Robots download the published models at a fixed commit (common/model_revisions.json), so
-uploading a checkpoint does not change what is already flying. This is the step that says
-"and now it should": it reads the tip of the model repo and rewrites that one entry.
-
-Run it after publishing, check the title it prints is the upload you meant, and commit the
-file. Nothing here uploads or downloads a checkpoint - it is a metadata call and a write to
-one JSON file.
+"""Point a model's pin in common/model_revisions.json at the newest commit on the hub.
 
 Usage:
     python -m nf_robot.ml.pin_latest_model --visual_servo
@@ -26,7 +18,7 @@ from nf_robot.common.model_revisions import REVISIONS_PATH, load_revisions
 # flag name -> the module that owns the repo id, so the id is never written down twice
 MODELS = {
     "visual_servo": ("nf_robot.ml.visual_servoing.servo", "SERVO_MODEL_REPOID"),
-    "targeting": ("nf_robot.ml.ortho_target", "TARGETING_MODEL_REPOID"),
+    "targeting": ("nf_robot.ml.ortho_target.model", "TARGETING_MODEL_REPOID"),
 }
 
 
@@ -47,7 +39,7 @@ def latest_commit(repo_id):
 
 
 def pin(names, dry_run=False, path=REVISIONS_PATH):
-    """Rewrite each named model's entry to the tip of its repo. Returns what changed."""
+    """Rewrite each named model's entry to the tip of its repo, returning what changed."""
     # Read the file rather than load_revisions() so the comment key survives the rewrite.
     data = json.loads(path.read_text())
     changed = []

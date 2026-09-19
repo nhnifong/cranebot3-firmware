@@ -18,7 +18,7 @@ http://127.0.0.1:4252/ that draws, over the frame the model saw:
     - magnified insets of the four strongest kept peaks, with the offset drawn from the
       cell's corner
 
-Peaks are found the way ortho_target.decode finds them: local maxima after a 5x5 max
+Peaks are found the way ortho_target.model.decode finds them: local maxima after a 5x5 max
 pool, the top 16, then the threshold.
 """
 
@@ -35,8 +35,8 @@ import torch
 import torch.nn.functional as F
 
 from cell_softmax_viz import Latest, make_handler, read_stream
-from nf_robot.ml.ortho_target import (DEFAULT_MODEL_PATH, TARGETING_MODEL_FILENAME,
-                                      TARGETING_MODEL_REPOID, load_checkpoint, prepare_ortho_image)
+from nf_robot.ml.ortho_target.model import (DEFAULT_MODEL_PATH, TARGETING_MODEL_FILENAME,
+                                            TARGETING_MODEL_REPOID, load_checkpoint, prepare_ortho_image)
 
 logger = logging.getLogger(__name__)
 

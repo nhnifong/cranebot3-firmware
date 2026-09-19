@@ -1,33 +1,6 @@
 #!/usr/bin/env python
 
-"""Cut objects out of an objectplates capture by chroma key, ready for compositing.
-
-Green for the usual reason a green screen is green: almost nothing we pick up off a
-floor is that colour, so a threshold on greenness is a complete segmentation - including
-the holes, concavities and gaps inside a crumpled towel. Those gaps are the reason this
-is worth doing over a white board, where a largest-component-and-fill rule closes them
-and hands the compositor a towel-shaped blob.
-
-Nothing here fills holes, for that reason. Speckle smaller than a threshold is dropped
-and everything else is kept exactly as keyed.
-
-What the key cannot do is reject things that are not green: from the top of a height
-sweep the board no longer fills the frame, and its edge and the floor beyond it key as
-foreground. Everything more than VIGNETTE_DIAMETER_M across the floor from the grasp
-point is cut, which is off-frame low down and well inside it at the top of the sweep.
-
-Two labels come out of how the capture was taken rather than from anything in the image:
-
-    grasp point   the operator centred the object's intended grasp lump under the
-                  camera, so the grasp point is the principal point of the capture. It
-                  is carried through the crop as a pixel offset into the cutout.
-    grasp axis    the operator turned the wrist to the ideal grasping angle before
-                  starting, so each frame's wrist offset from that start is how far the
-                  object is rotated away from ideal in that frame.
-
-Every frame of the capture becomes its own cutout: the wrist turn already photographed
-the object at a spread of orientations, and the height stepping at a spread of scales,
-so the compositor can pick one near what it wants instead of rotating and resampling.
+"""Chroma-key objectplates captures into RGBA cutouts with grasp point and axis labels.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.object_matte --dir plates
@@ -45,43 +18,27 @@ import numpy as np
 from nf_robot.ml.visual_servoing.plates import (
     VIDEO_FPS, checkerboard, iter_run, over_checkerboard, read_manifest, write_video)
 
-# Greenness, as G minus the larger of R and B, above which a pixel is certainly
-# backdrop and below which it is certainly not. Between them the alpha ramps, which is
-# what gives a soft edge on hair, fluff and the frayed edge of a towel.
+# Greenness thresholds between which the alpha ramps for a soft edge.
 GREEN_HIGH = 40.0
 GREEN_LOW = 10.0
-# Connected components smaller than this fraction of the frame are speckle - keyer noise
-# and dust on the board - rather than object.
+# Connected components smaller than this fraction of the frame are speckle.
 MIN_COMPONENT_FRACTION = 0.0008
 # Margin in pixels left around the object's bounding box when cropping.
 CROP_MARGIN = 8
-# Optical axis as a fraction of the frame, from camera_cal_wide. The operator centred
-# the grasp point under the lens, so this is where it is.
+# Optical axis as a fraction of the frame, where the operator centred the grasp point.
 PRINCIPAL_NORM = (342.0 / 684.0, 192.0 / 384.0)
 
-# Anything further than this from the grasp point, on the floor, is not the object. The
-# green board fills the frame from close up but not from the top of a height sweep, where
-# its edge - and the floor past it - key as foreground.
-#
-# A real diameter rather than a fraction of the frame, because the thing being excluded is
-# out there in the room: one number covers every height, since the projection shrinks it
-# as the camera climbs. At the bottom of a sweep it lands well outside the frame.
+# Floor diameter around the grasp point beyond which keyed pixels are board edge or floor,
+# not object.
 VIGNETTE_DIAMETER_M = 0.5
-# Focal length over frame size, from camera_cal_wide (439.32/684, 461.56/384). Stored
-# normalized so it holds at the capture resolution, which is not the resolution the camera
-# was calibrated at but the same field of view.
+# Normalized focal length from camera_cal_wide, valid at any capture resolution.
 FOCAL_NORM = (439.31834658631243 / 684.0, 461.5621083718772 / 384.0)
 
 MANIFEST_NAME = "objects.jsonl"
 
 
 def chroma_key(rgb, green_low=GREEN_LOW, green_high=GREEN_HIGH):
-    """Alpha from greenness, plus the colour with green spill pulled out.
-
-    Greenness is G - max(R, B), which needs no colour space conversion and does not care
-    how brightly the backdrop is lit - a shadowed green board is still green by this
-    measure, where a hue threshold in HSV gets unreliable as saturation falls.
-    """
+    """Alpha from greenness (G - max(R, B)), plus the colour with green spill pulled out."""
     image = rgb.astype(np.float32)
     red, green, blue = image[:, :, 0], image[:, :, 1], image[:, :, 2]
     greenness = green - np.maximum(red, blue)
@@ -89,9 +46,7 @@ def chroma_key(rgb, green_low=GREEN_LOW, green_high=GREEN_HIGH):
     alpha = (green_high - greenness) / max(green_high - green_low, 1e-6)
     alpha = np.clip(alpha, 0.0, 1.0)
 
-    # Spill suppression: a green cast survives on edges and on anything shiny, because
-    # the backdrop lit it. Clamping G to the average of the other two removes the cast
-    # without touching genuinely green pixels of the object more than it has to.
+    # Clamp G to the average of R and B to remove the backdrop's green cast.
     despilled = image.copy()
     spill = greenness > 0
     despilled[:, :, 1] = np.where(spill, np.minimum(green, (red + blue) / 2.0), green)
@@ -112,23 +67,14 @@ def clean_alpha(alpha, min_component_fraction=MIN_COMPONENT_FRACTION):
 
 
 def vignette_axes(shape, range_m, diameter_m=VIGNETTE_DIAMETER_M):
-    """Semi-axes in pixels that VIGNETTE_DIAMETER_M projects to at range_m.
-
-    Two of them, not a radius: fx and fy differ by 5% in this calibration, so a circle out
-    on the floor lands as a slightly elliptical region of pixels.
-    """
+    """Pixel semi-axes that VIGNETTE_DIAMETER_M projects to at range_m (fx and fy differ)."""
     height, width = shape[:2]
     radius = diameter_m / 2.0 / max(range_m, 1e-6)
     return FOCAL_NORM[0] * width * radius, FOCAL_NORM[1] * height * radius
 
 
 def apply_vignette(alpha, range_m, diameter_m=VIGNETTE_DIAMETER_M):
-    """Zero alpha outside the keep-region, centred on the grasp point.
-
-    The object is at the principal point by construction, so distance from there is the
-    only cue available for telling it from board edge and floor - neither of which the
-    chroma key rejects, both being ungreen.
-    """
+    """Zero alpha outside the keep-region centred on the grasp point."""
     height, width = alpha.shape
     ax, ay = vignette_axes(alpha.shape, range_m, diameter_m)
     cx, cy = PRINCIPAL_NORM[0] * width, PRINCIPAL_NORM[1] * height
@@ -139,15 +85,10 @@ def apply_vignette(alpha, range_m, diameter_m=VIGNETTE_DIAMETER_M):
 
 def extract_cutout(rgb, margin=CROP_MARGIN, range_m=None,
                    diameter_m=VIGNETTE_DIAMETER_M, **key_kwargs):
-    """One frame as a tight RGBA cutout plus where the grasp point landed in it.
-
-    Returns (rgba, grasp_xy, coverage) or None when the frame keys to nothing. range_m
-    scales the vignette; without it nothing outside the key is discarded.
-    """
+    """One frame as a tight RGBA cutout, returning (rgba, grasp_xy, coverage) or None."""
     alpha, colour = chroma_key(rgb, **key_kwargs)
     if range_m is not None:
-        # before the speckle pass, so the sliver of board edge the cut leaves behind is
-        # judged on the size it ends up, not the size it was
+        # Before the speckle pass, so leftover board edge is judged at its final size.
         alpha = apply_vignette(alpha, range_m, diameter_m)
     alpha = clean_alpha(alpha)
     if not (alpha > 0.5).any():
@@ -167,15 +108,8 @@ def extract_cutout(rgb, margin=CROP_MARGIN, range_m=None,
 
 
 def wrist_offset_deg(wrist_angle, grasp_axis_deg):
-    """How far a frame's view of the object is turned from the ideal grasping angle.
-
-    The operator set the wrist to that angle before starting, so it is the capture's zero;
-    every later frame is the sweep having turned away from it. Folded to -180..180 because
-    a sweep crosses 360 and the raw difference would jump there.
-
-    None when the capture cannot say - an older run with no recorded zero, or a frame with
-    no wrist telemetry - so a caller can tell "not known" from "aligned".
-    """
+    """Degrees a frame's view of the object is turned from the ideal grasping angle, or None
+    if unknown."""
     if wrist_angle is None or grasp_axis_deg is None:
         return None
     return (float(wrist_angle) - float(grasp_axis_deg) + 180.0) % 360.0 - 180.0
@@ -187,9 +121,7 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # The wrist angle the capture started at, which the operator had set to the object's
-    # ideal grasping angle. start_wrist_angle is the same reading under the name the
-    # sweep records it by, and is the fallback for runs written before this was named.
+    # The starting wrist angle, set by the operator to the ideal grasping angle.
     run = next((e for e in read_manifest(plate_dir) if e["run_id"] == run_id), {})
     grasp_axis = run.get("grasp_axis_wrist_angle", run.get("start_wrist_angle"))
     if grasp_axis is None:
@@ -200,8 +132,7 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
     entries, skipped = [], 0
     for index, row in enumerate(iter_run(plate_dir, run_id)):
         attrs = row["attrs"]
-        # the measured range where there is one, the height the sweep was aiming for
-        # otherwise; both size the vignette equally well and one of them is always there
+        # Measured range where there is one, else the sweep's target height.
         range_m = row["laser_rangefinder"] or attrs.get("target_range_m")
         result = extract_cutout(row["image"], diameter_m=diameter_m,
                                 range_m=range_m if vignette else None, **key_kwargs)
@@ -216,10 +147,7 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
             "file": name,
             "run_id": run_id,
             "label": label or attrs.get("label", ""),
-            # Measured per frame from the wrist telemetry, not carried in attrs: the
-            # capture records where the wrist was, and the run records where zero was.
-            # Which way round the offset means is a fact about the mount that a real
-            # capture will settle; see the note in synth_frames.compose.
+            # Measured per frame from wrist telemetry against the run's zero.
             "wrist_offset_deg": attrs.get(
                 "wrist_offset_deg", wrist_offset_deg(row.get("wrist_angle"), grasp_axis)),
             "range_m": range_m,
@@ -227,13 +155,10 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
             "grasp_y": round(float(grasp[1]), 2),
             "width": int(rgba.shape[1]),
             "height": int(rgba.shape[0]),
-            # The frame this was cropped out of. Needed at composite time: a cutout is
-            # in capture pixels, and the synthetic frame is a different resolution of
-            # the same field of view, so the two only agree after scaling by the ratio.
+            # The source frame size, needed to scale the cutout at composite time.
             "capture_width": int(row["image"].shape[1]),
             "capture_height": int(row["image"].shape[0]),
-            # what the vignette worked out to here, in pixels, for eyeballing a run that
-            # came back over-cropped
+            # The vignette size in pixels, for spotting over-cropped runs.
             "vignette_px": (None if not (vignette and range_m) else
                             [round(2 * a, 1) for a in
                              vignette_axes(row["image"].shape, range_m, diameter_m)]),
@@ -251,9 +176,8 @@ def extract_run(plate_dir, run_id, output_dir, label=None,
         logging.info(f"{run_id}: nothing extracted")
         return entries
 
-    # The spread of the axis label, reported because a capture that produces one value for
-    # every cutout trains the axis head to answer that value and nothing else, and looks
-    # identical to a good run everywhere else in this output.
+    # Report the axis label spread, since one constant value would train the axis head to
+    # answer it.
     offsets = [e["wrist_offset_deg"] for e in entries if e["wrist_offset_deg"] is not None]
     axis = (f"grasp axis {min(offsets):+.0f}..{max(offsets):+.0f} deg" if offsets
             else "grasp axis UNLABELLED")
@@ -274,12 +198,7 @@ def read_objects(output_dir):
 
 
 def write_video_preview(output_dir, entries, fps=VIDEO_FPS):
-    """The cutouts as an mp4, each pasted back where it sat in its capture frame.
-
-    Back in place rather than centred, because that is what makes the run readable as the
-    sweep it was: the object holds still near the principal point while the wrist turns
-    around it, so anything that wanders is a keying failure and not the capture.
-    """
+    """The cutouts as an mp4, each pasted back where it sat in its capture frame."""
     output_dir = Path(output_dir)
 
     def frames():
@@ -292,8 +211,8 @@ def write_video_preview(output_dir, entries, fps=VIDEO_FPS):
             if board is None or board.shape[:2] != capture:
                 board = checkerboard(*capture)
             canvas = np.zeros((*capture, 4), np.uint8)
-            # the crop's offset in the capture frame, recovered from where the grasp point
-            # (the principal point, by construction) ended up inside the cutout
+            # The crop's offset in the capture frame, recovered from the grasp point's
+            # position in the cutout.
             x0 = int(round(PRINCIPAL_NORM[0] * capture[1] - entry["grasp_x"]))
             y0 = int(round(PRINCIPAL_NORM[1] * capture[0] - entry["grasp_y"]))
             x0 = max(0, min(x0, capture[1] - bgra.shape[1]))

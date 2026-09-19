@@ -1,22 +1,6 @@
 #!/usr/bin/env python
 
-"""What is actually in a visual servoing dataset, per head and per producer.
-
-Every failure this tool exists to catch was invisible in a loss curve and obvious in a
-histogram. Two real ones, both found by hand after a checkpoint misbehaved on a robot:
-
-  - the training set had no synthetic shards at all and therefore not one row with
-    target_present = 0, so that head could only ever saturate at 1.0
-  - every object cutout carried a grasp axis of exactly zero, so the axis head was being
-    taught that orientation is irrelevant while being shown objects at every orientation
-
-Neither is a modelling problem and neither shows up in training loss, because in both
-cases the network was fitting its labels correctly. So the checks here are about the
-labels: how many exist, how they are distributed, and whether a constant already beats
-them. A head whose labels are 85% one value is a head that will predict that value, and
-that is worth knowing before the training run rather than after the robot flies.
-
-Reads label columns only - never the image bytes - so a 4.5GB split audits in seconds.
+"""Label distributions of a visual servoing dataset per head and producer, without reading images.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.audit --data_root datasets/visual_servoing
@@ -33,31 +17,23 @@ import numpy as np
 
 from nf_robot.ml.visual_servoing.mine_teleop import POOL_SPLIT
 
-# Everything except the image, which is the whole point: parquet is columnar, so leaving
-# `image` out of the read means the bytes are never touched.
+# Everything except the image, so its bytes are never read.
 LABEL_COLUMNS = [
     "split_source", "source_repo_id", "episode_index", "frame_index",
     "seconds_to_grasp", "target_uv", "target_range_m", "grasp_axis_rad",
     "finger", "target_present", "holding", "state",
 ]
 
-# An axis label distribution this concentrated means "predict the constant" is already a
-# good answer, and a head trained on it with a scale-invariant decode will find that out.
+# An axis label distribution this concentrated means a constant already scores well.
 AXIS_CONCENTRATION_WARN = 0.70
-# (fraction of the frame) systematic offset in the position labels worth explaining.
-# 0.02 of 448px is about 9px, which is most of a cell.
+# Systematic position-label offset worth explaining, as a fraction of the frame (~9px).
 UV_BIAS_WARN = 0.02
 # below this, a producer's axis labels are constant to within rounding
 AXIS_CONSTANT_DEG = 0.5
 
 
 class Findings:
-    """Warnings collected while reporting, printed together at the end.
-
-    Together rather than inline because the interesting ones are relationships between
-    sections - "no negatives" reads as a footnote next to the present histogram and as an
-    alarm next to the fact that the split has no synthetic rows.
-    """
+    """Warnings collected while reporting, printed together at the end."""
 
     def __init__(self):
         self.items = []
@@ -98,14 +74,7 @@ def column(table, name):
 
 
 def circular_summary(angles):
-    """Resultant length and mean of a pi-periodic angle set, and what a constant scores.
-
-    Doubled before averaging because the grasp axis is pi-periodic: an axis at +80 degrees
-    and one at -80 are 20 degrees apart, not 160, and a plain mean of the raw angles would
-    call them opposite. R is how concentrated the labels are - 1.0 means every label is
-    the same direction, and a head reading its output through atan2 can match that with a
-    constant.
-    """
+    """Resultant length and mean of a pi-periodic angle set, and what a constant scores."""
     doubled = 2.0 * np.asarray(angles, dtype=float)
     sin, cos = np.sin(doubled).mean(), np.cos(doubled).mean()
     return float(np.hypot(sin, cos)), math.degrees(math.atan2(sin, cos) / 2.0)
@@ -186,9 +155,7 @@ def audit_flags(table, findings, split):
         elif not positives:
             findings.fail(f"{split}: {name} has no positive examples.")
 
-    # The holding label flips at the grasp instant, where the frames either side look the
-    # same. Counting the rows in that window says how much of the head's training data is
-    # a coin flip.
+    # Rows near the grasp instant, where the holding label is a coin flip.
     seconds = [s for s in column(table, "seconds_to_grasp") if s is not None]
     if seconds:
         ambiguous = sum(1 for s in seconds if abs(s) < 0.3)
@@ -211,9 +178,7 @@ def audit_position(table, findings, split):
     print(f"   off the visible frame: u {off_frame[0]:.1%}, v {off_frame[1]:.1%}")
     print(f"   signed offset from centre: u {centred[:, 0].mean():+.3f}, "
           f"v {centred[:, 1].mean():+.3f} (frame widths)")
-    # Not a defect on its own - the jaws sit above centre, so v is expected to lean - but
-    # it is the number to compare against the model's own mean prediction when chasing a
-    # systematic lean at deploy time.
+    # Compare this against the model's mean prediction when chasing a systematic lean.
     if abs(centred[:, 0].mean()) > UV_BIAS_WARN:
         findings.warn(
             f"{split}: position labels lean {centred[:, 0].mean():+.3f} frame widths in u. "

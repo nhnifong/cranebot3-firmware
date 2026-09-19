@@ -1647,8 +1647,8 @@ class AsyncObserver:
         def save():
             # imported in the thread: it pulls torch, and this is the only thing on the
             # host that wants it before a target model is loaded
-            from nf_robot.ml import ortho_target
-            return ortho_target.write_user_labels(frame, targets)
+            from nf_robot.ml.ortho_target.dataset import write_user_labels
+            return write_user_labels(frame, targets)
 
         try:
             path, written = await asyncio.to_thread(save)
@@ -5351,7 +5351,7 @@ class AsyncObserver:
         The model reads the same projection the ortho worker already renders, so nothing
         per-camera is inferred and no warping is needed.
         """
-        from nf_robot.ml import ortho_target
+        from nf_robot.ml.ortho_target import model as ortho_target
 
         # Each cell carries its own objectness, decided without reference to the rest of
         # the map, so one absolute bar holds on a bare floor and a crowded one alike and a
@@ -5575,7 +5575,7 @@ class AsyncObserver:
             return
 
         def load_sync():
-            from nf_robot.ml import ortho_target
+            from nf_robot.ml.ortho_target import model as ortho_target
             filename = ortho_target.TARGETING_MODEL_FILENAME
             repo_id = ortho_target.TARGETING_MODEL_REPOID
             path = (f"models/{filename}" if self.local_models

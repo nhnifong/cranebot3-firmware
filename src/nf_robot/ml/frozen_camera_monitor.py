@@ -1,54 +1,33 @@
-"""Detect a frozen camera feed live, during a recording session.
+"""Detect a camera feed that keeps delivering the same byte-identical frame during recording.
 
-A camera can stall while the rest of the session looks healthy: the stream keeps
-delivering frames at full rate, but every frame is the same image. That silently
-ruins every episode recorded afterwards (naavox/move_clutter episodes 289-325 and
-448-481, and justink04/laundry-in-hamper2-8-1-26 episodes 41-60, are all whole
-runs of episodes with a dead gripper camera that nobody noticed until training
-data was being assembled). The operator can only fix it by restarting the
-session, so they need to hear about it while it is still cheap.
+Frozen cameras can silently corrupt teleop data. This detector produces a user visible warning
+that the current ep should be abandoned and the dataset closed out.
 
-The signal is that consecutive frames are byte-identical. Live video never is:
-sensor noise moves pixels even with a motionless camera and a motionless scene.
-The one caveat is that these cameras run below the recording fps, so the same
-image legitimately arrives a few times in a row - hence the several-second
-threshold rather than "any repeat".
-
-Cost is a strided subsample plus an array compare per frame, so this can sit
-directly in the video decode loop. See lerobot/find_frozen_video.py for the
-offline version that audits an already-recorded dataset.
+the robot may even need a hard reboot.
 """
 
 import time
 
 import numpy as np
 
-# Seconds of unchanging video before a feed is called frozen. Healthy feeds in
-# recorded datasets never repeat an image for more than ~1.8 s (usually < 0.7 s),
-# while real stalls last for whole episodes, so anything in between works.
+# Seconds of unchanging video before a feed is called frozen; healthy feeds never repeat for
+# more than ~1.8s.
 FROZEN_SECONDS = 3.0
 
 # Re-warn this often while a feed stays frozen, so the alert doesn't scroll away.
 REPEAT_ALERT_SECONDS = 10.0
 
-# Compare every Nth pixel. Frozen frames are identical everywhere, so a subsample
-# is just as decisive and ~64x cheaper. Keep it a strided view rather than a
-# resize: averaging would smooth away exactly the sensor noise this relies on.
+# Compare every Nth pixel, a strided view rather than a resize so sensor noise isn't
+# averaged away.
 _STRIDE = 8
 
 
 def fingerprint(frame: np.ndarray) -> np.ndarray:
-    """Cheap content fingerprint of a frame: a strided subsample of its pixels."""
     return np.ascontiguousarray(frame[::_STRIDE, ::_STRIDE])
 
 
 class FrozenCameraMonitor:
-    """Tracks, per camera feed, how long its image has been unchanging.
-
-    note_frame() is called from each feed's decode thread; frozen_feeds() is
-    polled from the recording loop. Feeds register themselves on their first
-    frame, so a feed that has not connected yet is not reported as frozen.
-    """
+    """Tracks how long each camera feed's image has been unchanging."""
 
     def __init__(self, frozen_seconds: float = FROZEN_SECONDS, names: dict | None = None):
         self.frozen_seconds = frozen_seconds
@@ -61,7 +40,7 @@ class FrozenCameraMonitor:
         return self.names.get(feed, f"feed {feed}")
 
     def note_frame(self, feed, frame: np.ndarray) -> None:
-        """Record that `frame` arrived on `feed`. Called once per decoded frame."""
+        """Record that `frame` arrived on `feed`."""
         fp = fingerprint(frame)
         prev = self._last_fingerprint.get(feed)
         if prev is None or prev.shape != fp.shape or not np.array_equal(fp, prev):
@@ -69,29 +48,17 @@ class FrozenCameraMonitor:
         self._last_fingerprint[feed] = fp
 
     def forget(self, feed) -> None:
-        """Drop a feed's state, e.g. when its stream is torn down and reconnected."""
         self._last_fingerprint.pop(feed, None)
         self._last_change_t.pop(feed, None)
         self._alerted_at.pop(feed, None)
 
     def frozen_feeds(self) -> dict:
-        """Feeds whose image has not changed for longer than the threshold.
-
-        Maps feed -> seconds frozen. A feed whose stream has died outright is
-        also caught: no frames arrive, so its last change only gets older.
-        """
         now = time.monotonic()
         return {feed: now - t for feed, t in self._last_change_t.items()
                 if now - t >= self.frozen_seconds}
 
     def new_alerts(self) -> list:
-        """Frozen feeds worth telling the operator about right now.
-
-        Returns [(feed, seconds_frozen), ...] for feeds that just froze or that
-        have stayed frozen since the last alert, so polling this every tick
-        produces one message per feed per REPEAT_ALERT_SECONDS rather than one
-        per tick. Recovery clears a feed's alert state.
-        """
+        """Frozen feeds to alert about now, at most once per feed per REPEAT_ALERT_SECONDS."""
         now = time.monotonic()
         frozen = self.frozen_feeds()
         for feed in list(self._alerted_at):
@@ -107,13 +74,8 @@ class FrozenCameraMonitor:
         return alerts
 
     def describe(self, alerts: list) -> str:
-        """One-line operator-facing message for the output of new_alerts().
-
-        Deliberately identical every time the same feeds are frozen - no elapsed
-        seconds - because the UI pops a dialog on each *changed* error string,
-        and a repeating alert must not keep reopening it. How long it has been
-        frozen goes in the log line instead.
-        """
+        """One-line operator message, identical while the same feeds stay frozen so the UI
+        doesn't reopen its dialog."""
         return ("FROZEN CAMERA: " + ", ".join(self.name(feed) for feed, _ in alerts) +
                 " - the image has stopped changing. Episodes recorded now are unusable; "
                 "restart the session.")

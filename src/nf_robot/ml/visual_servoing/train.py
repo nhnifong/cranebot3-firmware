@@ -1,27 +1,11 @@
 #!/usr/bin/env python
 
-"""Train the visual servoing model on the mined/synthesised dataset.
-
-Every head is masked by its own label mask, so a row that only knows where the object
-is trains only the position heads, and a row that only knows we are holding something
-trains only that. This is what lets teleop mining and the synthetic compositor write
-into one dataset without either of them inventing labels it cannot know - see
-readme.md, and mine_teleop.py for the producer that currently exists.
-
-Validation is real teleop, held out by whole episode: consecutive frames of one
-approach are near-duplicates, so splitting inside an episode scores the model on frames
-it effectively trained on. The constant-prediction baseline is printed alongside,
-because for a centering task "always predict the middle" is an embarrassingly strong
-answer and a model that fails to beat it has learned nothing about the image.
+"""Train the visual servoing model, each head masked by its own label mask.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing \
         --epochs 40 --batch_size 32
-
-    On the ungated backbone, against a dataset rebuilt at 448x252 (see readme.md,
-    "Training on the ungated backbone" - the stored frame size has to change with the
-    backbone's patch size, and nothing checks that it did):
 
     python -m nf_robot.ml.visual_servoing.train \
         --data_root datasets/visual_servoing_pool_252 \
@@ -39,6 +23,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from nf_robot.ml.train_common import param_groups, resolve_data_root, warmup_cosine
 from nf_robot.ml.visual_servoing.dataset import VisualServoDataset
 from nf_robot.ml.visual_servoing.model import (
     DEFAULT_BACKBONE,
@@ -57,56 +42,30 @@ DEFAULT_MODEL_PATH = "models/visual_servo.pth"
 DEFAULT_DATASET_ID = "naavox/visual_servoing_dataset"
 # Where a trained checkpoint is pushed, with --upload.
 DEFAULT_MODEL_ID = "naavox/visual_servo"
-# Relative weights. Position is the point of the model; the flags are easy and would
-# otherwise dominate a sum of raw losses simply by being confidently right.
-# The eval number reported each epoch, and the one --select_best selects on when it is
-# passed. Measured on rows whose target is inside the frame, because a split's blind rows
-# are a constant nobody can predict away and they otherwise swamp the figure.
+# Relative loss weights, so the easy flags don't dominate.
+# Eval metric reported each epoch and used by --select_best, on rows whose target is in frame.
 SELECTION_METRIC = "onscreen_recall@25px"
 DEFAULT_WEIGHTS = {
     "cell": 1.0, "centroid": 1.0, "distance": 0.5,
     "axis": 0.5, "finger": 0.5, "present": 0.2, "holding": 0.2,
-    # Only ever nonzero for a --close_heads model. The close flag is weighted like the
-    # other two flags; the pressure is a regression in the same units as the sensor, so
-    # its raw magnitude is small and it needs the room.
+    # Only nonzero for a --close_heads model; pressure's small raw magnitude needs the
+    # weight.
     "close": 0.2, "pressure": 1.0,
 }
-# Width, in cells, of the Gaussian the cell head is trained against. Cells are 17.5px of
-# the 448x252 input (the 1.25x canvas over 32x18 cells), so 1.0 cell is about 18px - the
-# same width in pixels the finer grid used to be trained at.
-#
-# Sized to the labels rather than to the grid. A mined label is a room point projected
-# back through the approach, and that projection ignores the gripper's swing and hangs its
-# anchor off a rangefinder reading - it is good to a few cells, not to one. Training a
-# 1792-way softmax on a one-hot target against a label that imprecise asks the network to
-# reproduce the error along with the position, which it can only do by memorising: the
-# training cross-entropy falls and nothing transfers. Spreading the target over the cells
-# the label plausibly covers asks for what is actually known.
-#
-# Set to 0 for the old one-hot target, which is the A/B worth running.
+# Width in cells (~18px) of the Gaussian the cell head trains against, matched to label
+# precision; 0 is one-hot.
 CELL_SIGMA = 1.0
 
-# Angle bins used to re-weight the axis loss, over the -pi/2..pi/2 a pi-periodic axis
-# lives in. Ten degrees per bin: fine enough to separate "upright" from "a little off",
-# coarse enough that a bin still holds a usable number of rows.
+# Ten-degree angle bins used to re-weight the axis loss.
 AXIS_BINS = 18
-# Most any one bin's rows can be worth relative to the average row. Inverse frequency
-# without a cap hands a nearly empty bin unbounded pull.
+# Cap on a bin's weight relative to the average row.
 AXIS_WEIGHT_CAP = 10.0
-# Largest concentration the axis head may claim. The von Mises likelihood is unbounded in
-# kappa for a perfectly predicted angle, and an unbounded kappa is how the axis term comes
-# to dominate every other head late in a run.
+# Largest concentration the axis head may claim, so the axis term can't dominate.
 KAPPA_MAX = 50.0
 
 
 def masked_mean(values, mask):
-    """Mean over the rows a label actually exists for; zero when there are none.
-
-    `mask` doubles as a per-row weight: it is 0/1 for a plain label mask, and the axis
-    head passes a re-weighted version of it so that rare angles count for more. The
-    denominator is the weight sum either way, which keeps the loss a mean rather than a
-    sum that grows with how many rare rows a batch happened to draw.
-    """
+    """Mean over rows weighted by `mask`; zero when there are none."""
     total = mask.sum()
     return (values * mask).sum() / total.clamp(min=1.0), total
 
@@ -118,21 +77,8 @@ def axis_bin(angle, bins=AXIS_BINS):
 
 
 def axis_bin_weights(angles, bins=AXIS_BINS, cap=AXIS_WEIGHT_CAP):
-    """Per-bin weights that undo the label distribution's lean toward zero.
-
-    69% of the axis labels in a mixed split sit within 5 degrees of zero, and the mined
-    half is 85% of the way there on its own, because a teleoperator sets the wrist early
-    and "how much further it turns" is zero from then on. Weighting every row equally
-    therefore spends almost all of the head's gradient on the one answer it already knows,
-    and the rare orientations - the ones the wrist actually has to move for - arrive as
-    noise around it.
-
-    Inverse frequency over bins, normalized so the mean weight of the training rows is 1,
-    which keeps this from silently rescaling the axis term against the other heads. Capped
-    because inverse frequency is unstable in the tail: a bin holding five rows would
-    otherwise be handed thousands of times the pull of the bulk, and the head would chase
-    those five.
-    """
+    """Capped inverse-frequency per-bin weights with mean 1, undoing the axis labels' pile-
+    up at zero."""
     angles = np.asarray(angles, dtype=np.float64)
     if not len(angles):
         return np.ones(bins, dtype=np.float32)
@@ -147,50 +93,21 @@ def axis_bin_weights(angles, bins=AXIS_BINS, cap=AXIS_WEIGHT_CAP):
 
 
 def von_mises_axis_loss(predicted, angle, kappa_max=KAPPA_MAX):
-    """Negative log likelihood of a pi-periodic angle under a von Mises the head predicts.
-
-    The head emits an unnormalized (sin 2t, cos 2t). Read as a von Mises, its direction is
-    the answer and its length is the concentration - how sure the head is - so both halves
-    of the output mean something and both are trained.
-
-    That is the whole point of the change. Under the mean squared error this replaces, the
-    optimum is the conditional mean of the target vector, and `decode` reads the direction
-    with atan2, which does not care how long the vector is. Shrinking toward the mean was
-    therefore free, and with labels piled at zero the mean *is* zero: a head that answered
-    "0 degrees, always" was sitting at the bottom of its loss. Here, shrinking costs
-    likelihood - log I0 rewards length when the direction is right and punishes it when it
-    is wrong - so hedging has a price and confidence has a meaning.
-
-    Written as log I0(k) - v.u because the dot product of the raw output with the unit
-    target already equals k cos(2t_pred - 2t_true); no atan2 in the loss and no gradient
-    through one.
-    """
+    """Negative log likelihood of a pi-periodic angle under the von Mises the head's (sin
+    2t, cos 2t) vector defines."""
     target = torch.stack([torch.sin(2 * angle), torch.cos(2 * angle)], dim=1)
-    # The whole vector is bounded, not just the kappa read off it. Clamping only the
-    # log-partition term leaves the dot product below free to grow without limit, which
-    # makes an arbitrarily long vector an arbitrarily large reward - the exact runaway
-    # kappa_max exists to stop. Rescaling instead keeps the direction and its gradient
-    # while the magnitude saturates.
+    # Rescale the whole vector to kappa_max, keeping its direction, so length can't be an
+    # unbounded reward.
     norm = predicted.norm(dim=1, keepdim=True).clamp(min=1e-6)
     bounded = predicted * (norm.clamp(max=kappa_max) / norm)
     kappa = bounded.norm(dim=1)
-    # log I0 via the exponentially scaled Bessel, which is what keeps this finite at the
-    # concentrations a confident head reaches
+    # log I0 via the exponentially scaled Bessel, to stay finite at high concentration.
     log_i0 = torch.special.i0e(kappa).log() + kappa
     return log_i0 - (bounded * target).sum(dim=1)
 
 
 def soft_cell_target(cell, grid, sigma):
-    """A Gaussian over the cell grid centred on the true position, as a distribution.
-
-    Centres are at i + 0.5 in the continuous cell coordinates uv_to_cell produces, so the
-    peak sits where the label actually falls rather than snapping to the cell it lands in.
-
-    Normalized over the grid after the fact, which matters at the edges: a target near a
-    corner has most of its Gaussian outside the canvas, and renormalizing puts that mass
-    back on the cells that exist instead of quietly training against a target that sums to
-    less than one.
-    """
+    """A normalized Gaussian over the cell grid centred on the true position."""
     rows, cols = grid
     xs = torch.arange(cols, device=cell.device, dtype=cell.dtype).view(1, 1, cols) + 0.5
     ys = torch.arange(rows, device=cell.device, dtype=cell.dtype).view(1, rows, 1) + 0.5
@@ -201,13 +118,7 @@ def soft_cell_target(cell, grid, sigma):
 
 
 def cell_loss(logits, cell, grid, index, sigma):
-    """Cross-entropy of the cell head against a hard or a softened target.
-
-    Reported as a KL divergence rather than a raw cross-entropy: against a soft target the
-    cross-entropy bottoms out at the target's own entropy, so the raw number would neither
-    reach zero nor compare with a run at another sigma. The gradient is identical - the
-    entropy subtracted is a constant of the labels.
-    """
+    """KL divergence of the cell head against a hard or softened target."""
     if sigma <= 0:
         return F.cross_entropy(logits.flatten(1), index, reduction="none")
     target = soft_cell_target(cell, grid, sigma)
@@ -218,13 +129,7 @@ def cell_loss(logits, cell, grid, index, sigma):
 
 def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
                axis_loss="vonmises", axis_bin_weight=None):
-    """Total loss and its parts, each averaged only over rows that carry that label.
-
-    axis_loss picks between the von Mises likelihood and the mean squared error it
-    replaced, which is the A/B worth running before believing any of the argument above
-    it. axis_bin_weight is a per-bin weight vector from axis_bin_weights, or None to
-    weight every axis row alike.
-    """
+    """Total loss and its parts, each averaged only over rows that carry that label."""
     weights = {**DEFAULT_WEIGHTS, **(weights or {})}
     logits = outputs["logits"]
     rows, cols = grid
@@ -236,33 +141,25 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
     has_uv = batch["has_uv"]
 
     parts = {}
-    # Only the cell head is softened. The distance head is read at the one true cell,
-    # where a spread target would mean nothing.
+    # Only the cell head is softened.
     parts["cell"], _ = masked_mean(
         cell_loss(logits, cell, grid, index, cell_sigma), has_uv)
 
-    # The sub-cell position is the softmax's centre of mass around the peak, so it is
-    # trained directly, in cells, with the window centred on the true cell the way decode
-    # centres it on the predicted one. The cross-entropy alone only asks for a Gaussian,
-    # whose windowed centroid is pulled toward the middle of the cell it peaks in.
-    # The target is clamped to the outermost cell centres, which is as far as an average of
-    # cell centres can reach.
+    # Train the windowed centre of mass directly, clamped to the outermost cell centres.
     centroid, window_weights, window = local_centroid(logits, index)
     reachable = cell.clamp(min=0.5).minimum(cell.new_tensor([cols - 0.5, rows - 0.5]))
     parts["centroid"], _ = masked_mean(
         F.smooth_l1_loss(centroid, reachable, reduction="none").mean(dim=1), has_uv)
 
-    # Log metres: the useful error in a range is relative, and the head has to cover
-    # everything from a gripper across the room to one about to touch the object.
+    # Log metres, since range error is relative.
     predicted_log = gather_cells(outputs["log_distance"].unsqueeze(1), index).squeeze(-1)
     target_log = batch["target_range_m"].clamp(min=1e-3).log()
     parts["distance"], _ = masked_mean(
         F.smooth_l1_loss(predicted_log, target_log, reduction="none"), has_uv)
 
     angle = batch["grasp_axis_rad"]
-    # Averaged over the same window decode uses. The weights are detached: the axis loss
-    # gets to shape the axis map, not to move probability mass toward the cells whose
-    # axis it happens to like.
+    # Average the axis over decode's window with detached weights, so the axis loss can't
+    # move probability mass.
     axis = window_average(outputs["axis"], window_weights.detach(), window)
     if axis_loss == "mse":
         axis_target = torch.stack([torch.sin(2 * angle), torch.cos(2 * angle)], dim=1)
@@ -271,8 +168,7 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
         axis_terms = von_mises_axis_loss(axis, angle)
     axis_mask = batch["has_axis"]
     if axis_bin_weight is not None:
-        # folded into the mask rather than the loss, so masked_mean divides by the weight
-        # that was actually applied and an unlabelled row still contributes nothing
+        # Folded into the mask so masked_mean divides by the applied weight.
         axis_mask = axis_mask * axis_bin_weight.to(angle.device)[axis_bin(angle)]
     parts["axis"], _ = masked_mean(axis_terms, axis_mask)
 
@@ -293,8 +189,7 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
             F.binary_cross_entropy_with_logits(
                 outputs["close_logit"], batch["close_now"], reduction="none"),
             batch["has_close"])
-        # Huber rather than squared error: the pressure label is read off one frame of a
-        # real sensor at the moment of a lift, so its tail is measurement, not signal.
+        # Huber, since the pressure label's tail is measurement noise.
         parts["pressure"], _ = masked_mean(
             F.smooth_l1_loss(outputs["grasp_pressure"], batch["grasp_pressure"],
                              reduction="none", beta=0.05),
@@ -330,9 +225,7 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         if has_uv.any():
             delta = (uv - batch["target_uv"])[has_uv].cpu() * scale
             errors.append(delta.norm(dim=-1))
-            # Whether the answer was in the picture at all. A target outside the frame
-            # cannot be found by looking, so it sets a floor on any average that includes
-            # it, and a model can improve for a long time without moving one.
+            # Whether the target was in frame at all.
             target = batch["target_uv"][has_uv].cpu()
             onscreen.append(((target - 0.5).abs() <= 0.5).all(dim=-1))
             ratio = distance[has_uv] / batch["target_range_m"][has_uv].clamp(min=1e-3)
@@ -362,10 +255,7 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         metrics["mean_px"] = errors.mean().item()
         for radius in radii_px:
             metrics[f"recall@{radius}px"] = (errors <= radius).float().mean().item()
-        # The same again over the rows the image can actually answer. This is the number
-        # that moves when the model learns something, and the one to select a checkpoint
-        # on; the headline figures above are diluted by however many blind rows the split
-        # happens to carry.
+        # The same over rows whose target is in frame, the number to select on.
         visible = torch.cat(onscreen)
         if visible.any():
             seen = errors[visible]
@@ -377,13 +267,9 @@ def evaluate(model, loader, device, image_size, radii_px=(10, 25, 50)):
         metrics["range_ratio"] = torch.cat(range_ratio).median().item()
     if axis_errors:
         metrics["axis_deg"] = math.degrees(torch.cat(axis_errors).median().item())
-        # What "always upright" scores on the same rows. The labels pile up at zero, so
-        # that is a strong answer and a head can look good while knowing nothing about the
-        # image; printing the two together is what makes the difference legible.
+        # What "always upright" scores on the same rows.
         metrics["axis_deg_flat"] = math.degrees(torch.cat(axis_labels).median().item())
-        # Median concentration: how sure the head is, in the units the von Mises loss
-        # trains. Near zero is a head that has learned to hedge, which is the failure this
-        # objective exists to make visible rather than silent.
+        # Median axis concentration; near zero means the head hedges.
         metrics["axis_kappa"] = torch.cat(axis_kappa).median().item()
     if finger_abs:
         metrics["finger_mae"] = torch.cat(finger_abs).mean().item()
@@ -413,28 +299,8 @@ def _format(metrics):
         f"{k} {v:.3f}" if abs(v) < 1000 else f"{k} {v:.0f}" for k, v in metrics.items())
 
 
-def resolve_data_root(args) -> Path:
-    """The mined dataset on disk, downloading it from the hub if no local copy was named.
-
-    Same shape as ortho_target.resolve_data_root: a local directory wins, and naming a
-    hub dataset is what asks for a download, so a mistyped path fails loudly instead of
-    quietly fetching something else.
-    """
-    if args.data_root:
-        return Path(args.data_root)
-    from huggingface_hub import snapshot_download
-
-    logging.info(f"Downloading {args.dataset_id}")
-    return Path(snapshot_download(repo_id=args.dataset_id, repo_type="dataset"))
-
-
 def upload_model(path, model_id, metrics=None):
-    """Push a trained checkpoint to the hub, creating the repo if it does not exist.
-
-    Uploaded once at the end rather than on every improvement: the checkpoint carries
-    the frozen backbone's weights too, so it is a few hundred megabytes, and pushing
-    that each time the score ticks up would cost more than the training.
-    """
+    """Push a trained checkpoint to the hub, creating the repo if needed."""
     from huggingface_hub import HfApi, create_repo
 
     path = Path(path)
@@ -455,27 +321,21 @@ def checkpoint_payload(model, args, metrics, epoch):
         "image_size": tuple(args.image_size),
         "fuse_layers": args.fuse_layers,
         "attention_layers": args.attention_layers,
-        # Whether the state dict above holds a backbone at all: a frozen one is left to
-        # dino_trunk's shared instance and never written.
+        # Whether the state dict holds a backbone at all.
         "freeze": not args.unfreeze_backbone,
         "metrics": metrics,
         "epoch": epoch,
         # not needed to rebuild the model, kept so a checkpoint says how it was trained
         "cell_sigma": args.cell_sigma,
-        # A checkpoint trained under the mean squared error decodes the same way and
-        # answers zero far more often; that is worth being able to tell from the file
-        # rather than from whichever run log is still around.
+        # Record the axis loss, since MSE checkpoints answer zero far more often.
         "axis_loss": args.axis_loss,
         "axis_balance": args.axis_balance,
-        # What makes this a close/pressure model rather than a finger-rate one. Absent
-        # from every checkpoint written before the heads existed, which is exactly how
-        # those keep loading.
+        # Close/pressure heads; absent in older checkpoints, which load without them.
         "close_heads": args.close_heads,
-        # Where the close head reads from. Absent in every checkpoint written before the
-        # spatial head existed, which is how those keep loading onto the global one.
+        # Where the close head reads from; absent in older checkpoints, which use the global
+        # one.
         "spatial_close": args.spatial_close,
-        # Whether the spatial heads read the pre-attention map too. Absent in checkpoints
-        # trained before it existed, which load without it.
+        # Whether the spatial heads read the pre-attention map; absent in older checkpoints.
         "skip": args.skip,
     }
 
@@ -483,7 +343,7 @@ def checkpoint_payload(model, args, metrics, epoch):
 def train(args):
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     torch.manual_seed(args.seed)
-    data_root = resolve_data_root(args)
+    data_root = resolve_data_root(args.data_root, args.dataset_id)
     logging.info(f"dataset at {data_root}")
 
     train_set = VisualServoDataset(data_root, "train", augment=True)
@@ -528,22 +388,9 @@ def train(args):
         close_heads=args.close_heads, spatial_close=args.spatial_close, skip=args.skip,
         attention_layers=args.attention_layers, freeze=not args.unfreeze_backbone,
     ).to(device)
-    head_params = [p for n, p in model.named_parameters() if not n.startswith("backbone.")]
-    groups = [{"params": head_params, "lr": args.lr}]
-    if args.unfreeze_backbone:
-        groups.append({"params": list(model.trunk.parameters()),
-                       "lr": args.lr * args.backbone_lr_scale})
-        logging.info(f"backbone unfrozen at {args.backbone_lr_scale}x the head learning rate")
-    else:
-        logging.info(f"backbone frozen; training {sum(p.numel() for p in head_params) / 1e6:.1f}M parameters")
-
+    groups = param_groups(model, args.lr, args.unfreeze_backbone, args.backbone_lr_scale)
     optimizer = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
-    steps = max(1, len(train_loader)) * args.epochs
-    warmup = max(1, int(0.05 * steps))
-    schedule = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda s: (
-        (s + 1) / warmup if s < warmup
-        else 0.5 * (1.0 + math.cos(math.pi * (s - warmup) / max(1, steps - warmup)))
-    ))
+    schedule = warmup_cosine(optimizer, max(1, len(train_loader)) * args.epochs)
     autocast = torch.autocast(device_type=device.type, dtype=torch.bfloat16,
                               enabled=device.type == "cuda")
 
@@ -571,11 +418,8 @@ def train(args):
 
         line = f"epoch {epoch + 1}/{args.epochs} " + _format({k: v / max(seen, 1) for k, v in totals.items()})
 
-        # The eval split is scored and reported whether or not it decides anything. The
-        # number is worth seeing every epoch; what it should not do by default is pick the
-        # checkpoint, because it is one held-out room measured on a position proxy that
-        # the axis, finger and flag heads never enter - a run once kept epoch 1 on it and
-        # discarded nineteen epochs that were better on the robot.
+        # Eval is reported every epoch but only picks the checkpoint with --select_best,
+        # since it is a narrow proxy.
         metrics = {}
         due = (epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs
         if due and eval_loader is not None:
@@ -595,8 +439,7 @@ def train(args):
                 logging.info(f"saved {args.model_path} ({SELECTION_METRIC} {score:.3f})")
 
     if args.select_best:
-        # Loud on purpose: the whole hazard of selecting is a file that is quietly older
-        # than the run that produced it.
+        # Loud, because a selected checkpoint is older than the run.
         logging.info(f"done; kept epoch {best_epoch} of {args.epochs} by "
                      f"{SELECTION_METRIC} {best:.3f}, checkpoint at {args.model_path}")
     else:
@@ -611,8 +454,7 @@ def train(args):
 
 
 def main():
-    # force=True: importing lerobot/transformers installs a root handler, which makes a
-    # later basicConfig a silent no-op and drops every info line this tool logs.
+    # force=True because importing lerobot/transformers installs a root handler.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         force=True)
     parser = argparse.ArgumentParser(description=__doc__,
@@ -622,9 +464,7 @@ def main():
     parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
                         help="Mined dataset on the hub, used when --data_root is absent")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
-    # On by default: these answer *when* to start closing and *how hard* to end up
-    # squeezing, which is what the robot needs and what a per-frame rate label describes
-    # badly. --close_heads is still accepted so existing commands keep working.
+    # Close heads are on by default; --close_heads is still accepted.
     parser.add_argument(
         "--close_heads", dest="close_heads", action="store_true", default=True,
         help="Train the close-onset and grasp-pressure heads (the default). The "
@@ -633,9 +473,7 @@ def main():
         "--no_close_heads", dest="close_heads", action="store_false",
         help="Train the finger-rate head alone, the way checkpoints before the close "
              "heads existed were built. Needed for a pool with no close_now labels.")
-    # Default None rather than True so that "not asked for" and "asked for" can be told
-    # apart: the first follows --close_heads, the second is worth an error when the close
-    # heads it moves are switched off.
+    # None so an explicit request can be told from the default.
     parser.add_argument(
         "--spatial_close", dest="spatial_close", action="store_true", default=None,
         help="Read the close head off the patch grid rather than the pooled [CLS] vector "
@@ -692,8 +530,7 @@ def main():
     if args.spatial_close and not args.close_heads:
         parser.error("--spatial_close moves the close head that --no_close_heads just "
                      "switched off; pass one or the other.")
-    # Unasked-for follows the close heads, so a --no_close_heads run records False rather
-    # than a stale True for a head it never built.
+    # The unset default follows the close heads.
     if args.spatial_close is None:
         args.spatial_close = args.close_heads
     train(args)

@@ -1,22 +1,7 @@
 #!/usr/bin/env python
 
-"""One DINOv3 backbone, shared by every model that only reads from it.
-
-OrthoTargetNet and VisualServoNet load into the same observer process, onto the same
-device, from the same pretrained id, and both freeze what they load - so the second
-copy is a third of a gigabyte holding the same numbers as the first. They still run
-separate forward passes, on different cameras at different input shapes, but DINOv3
-interpolates its position embeddings per call, so one instance serves both.
-
-Sharing is only sound while the weights stay read-only, so it applies to frozen trunks
-only. Training with the backbone unfrozen gets a private copy, which is what stops one
-model's fine-tuning from moving the features the other one reads.
-
-A frozen trunk is also kept out of the owning module's _modules, which is what keeps it
-out of state_dict. The weights are recoverable from backbone_id and a download, so a
-checkpoint that stores them spends 327MB on the least interesting thing in it - and,
-worse, restoring them writes through the shared instance into every other model.
-"""
+"""One frozen DINO backbone shared by every model that reads from it, and kept out of their
+checkpoints."""
 
 import logging
 import threading
@@ -26,9 +11,8 @@ import torch
 TRUNK_PREFIX = "backbone."
 
 _TRUNKS = {}
-# The observer loads both models inside asyncio.to_thread, so two misses can race.
-# Without the lock each thread builds its own trunk and the loser stays alive in
-# whichever model asked for it: no error, and none of the sharing.
+# The observer loads models from threads, so without the lock two could build separate
+# trunks.
 _LOCK = threading.Lock()
 
 
@@ -48,40 +32,48 @@ def shared_backbone(backbone_id):
 
 
 class SharedTrunkMixin:
-    """A DINOv3 trunk that is shared and unsaved while it is frozen.
-
-    Mixed in ahead of nn.Module so the _apply override precedes it in the MRO.
-    """
+    """A DINO trunk that is shared and left out of state_dict while frozen."""
 
     def _init_trunk(self, backbone_id, freeze):
-        """Attach the backbone. Call after nn.Module.__init__, before reading self.trunk."""
+        """Attach the backbone; call after nn.Module.__init__."""
         if freeze:
             trunk = shared_backbone(backbone_id)
         else:
             from transformers import AutoModel
 
             trunk = AutoModel.from_pretrained(backbone_id)
-        # Held in a bare list so nn.Module.__setattr__ leaves it unregistered, which is
-        # what keeps it out of state_dict, parameters() and the optimizer.
+        # A bare list keeps nn.Module from registering the trunk, so it stays out of
+        # state_dict and the optimizer.
         self._trunk = [trunk]
         if not freeze:
-            # A fine-tuned trunk is genuinely part of this model, so register it the
-            # ordinary way and let it be trained, moved and saved like anything else.
+            # A fine-tuned trunk is registered normally so it trains and saves with the
+            # model.
             self.backbone = trunk
         return trunk
 
     @property
     def trunk(self):
-        """The backbone, whether or not it is a registered submodule."""
         return self._trunk[0]
 
-    def _apply(self, fn, *args, **kwargs):
-        """Follow .to() and friends into an unregistered trunk.
+    def patch_token_map(self, pixel_values, rows, cols):
+        """The last fuse_layers patch tokens as a (B, C, rows, cols) map, plus the last
+        hidden state."""
+        with torch.set_grad_enabled(self.training and not self.freeze):
+            out = self.trunk(pixel_values, output_hidden_states=True)
+        n_patches = rows * cols
+        # [CLS] and the register tokens lead the sequence; patches are always the tail.
+        feats = [h[:, -n_patches:, :] for h in out.hidden_states[-self.fuse_layers:]]
+        x = torch.cat(feats, dim=-1).transpose(1, 2)
+        return x.reshape(x.shape[0], x.shape[1], rows, cols), out.hidden_states[-1]
 
-        It is shared, so this moves it for every owner at once. They all take the
-        observer's single eval device, and applying it twice is free - a tensor already
-        on the target device comes back unchanged.
-        """
+    def train(self, mode=True):
+        super().train(mode)
+        if self.freeze:
+            self.trunk.eval()  # a frozen backbone must not update its norm statistics
+        return self
+
+    def _apply(self, fn, *args, **kwargs):
+        """Follow .to() into an unregistered trunk, moving it for every owner at once."""
         out = super()._apply(fn, *args, **kwargs)
         trunk = self.__dict__.get("_trunk")
         if trunk is not None and TRUNK_PREFIX[:-1] not in self._modules:
@@ -90,14 +82,7 @@ class SharedTrunkMixin:
 
 
 def drop_trunk_weights(state_dict, trunk, verify):
-    """A state dict without the trunk weights checkpoints used to carry.
-
-    The trunk was frozen when they were written, so they are the pretrained weights the
-    shared instance already holds and restoring them would only write identical values.
-    `verify` checks that claim, for checkpoints from before it was recorded: a run with
-    --unfreeze_backbone stores weights that are not the pretrained ones, and dropping
-    those would quietly pair a fine-tuned head with a stock trunk.
-    """
+    """A state dict without trunk weights, verifying they are pretrained when asked."""
     kept = {key: value for key, value in state_dict.items() if not key.startswith(TRUNK_PREFIX)}
     if len(kept) == len(state_dict) or not verify:
         return kept
@@ -115,3 +100,13 @@ def drop_trunk_weights(state_dict, trunk, verify):
                 f"\"freeze\": False so it loads its backbone instead of sharing one."
             )
     return kept
+
+
+def load_head_state(model, checkpoint):
+    """Restore a checkpoint's weights into a model built with the checkpoint's freeze flag."""
+    state = checkpoint["state_dict"]
+    if model.freeze:
+        # Old checkpoints still carry the trunk; verify it is pretrained if they don't say
+        # so.
+        state = drop_trunk_weights(state, model.trunk, verify="freeze" not in checkpoint)
+    model.load_state_dict(state)

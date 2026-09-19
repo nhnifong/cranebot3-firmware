@@ -59,7 +59,7 @@ against the sensor.
 
 ## Backbone and trunk
 
-Same skeleton as OrthoTargetNet in ortho_target.py, which already works in this repo:
+Same skeleton as OrthoTargetNet in ortho_target/model.py, which already works in this repo:
 
     frozen DINOv2 ViT-B/14, last 4 hidden states, patch tokens only
       -> concat on channels                        (B, 3072, 18, 32)
@@ -229,7 +229,7 @@ will not. (Cast shadows: skipped for now.)
 
 **Validation is real teleop only.** Synthetic validation accuracy will be high and
 meaningless. Hold out whole teleop episodes and score with distance error and hit-rate
-at radius, plus the constant-prediction baseline - ortho_target.py has both
+at radius, plus the constant-prediction baseline - ortho_target/training.py has both
 (evaluate_model and constant_baseline). For a centering task, "always predict the
 centre" is an embarrassingly strong baseline and we want to know when we actually beat
 it.
@@ -257,7 +257,7 @@ frames from separately captured ingredients, and a miner that recovers labels fr
 teleop recordings we already have. They emit the same row format, so training reads one
 directory and the mix is a matter of how much of each we generate.
 
-Both write the image-folder-plus-metadata.jsonl layout that ortho_target.py already
+Both write the image-folder-plus-metadata.jsonl layout that ortho_target/dataset.py already
 uses; write_split and upload_dataset there can be reused as they are. One row per frame:
 
     {"file_name": ..., "split_source": "synth" | "teleop",
@@ -415,7 +415,7 @@ The distance label is the simulated range, ignoring the object's own height abov
 floor. That is a real approximation and it biases tall objects; if it shows up in eval,
 the fix is to record object height at capture time and subtract it.
 
-`--annotate_dir` should render the label onto each frame the way ortho_target.annotate
+`--annotate_dir` should render the label onto each frame the way ortho_target.dataset.annotate
 does - crosshair at the target, a tick for the grasp axis, the finger value in the
 corner - because a sign error in a compositing transform is invisible in a loss curve
 and obvious after ten seconds of flipping through annotated frames.
@@ -440,7 +440,7 @@ filter, and its `no_rise` and `no_grasp` counts are the ones to watch.
 
 **Per-frame state from the parquets**: gripper_pos_x/y/z, spin, wrist_angle,
 finger_angle, laser_rangefinder, finger_pressure, timestamp. All of these are already
-columns; scan_episode_states in ortho_target.py is the pattern for pulling a few
+columns; scan_episode_states in ortho_target/dataset.py is the pattern for pulling a few
 components for every frame without decoding video.
 
 **The camera pose chain**, which already exists and needs nothing new. The gripper

@@ -1,19 +1,6 @@
 #!/usr/bin/env python
 
-"""Extract the gripper's fingers, with alpha, from a fingerplates capture.
-
-A chroma key against the green backdrop the capture is taken over, the same keyer the
-object cutouts use: greenness is G - max(R, B), which needs no colour space conversion
-and holds up in shadow, where a hue threshold in HSV gets unreliable as saturation falls.
-
-The wrist turn in the capture is still doing work. Each frame is keyed on its own and the
-per-pixel median taken across the turn, so the fingers - the only ungreen thing that is in
-the same place in every frame - survive, while anything that rotated past underneath is
-outvoted rather than matted in.
-
-One plate per finger angle. Threshold, morphology and the border test are all offline
-decisions, revisable against the same capture, which is why the capture stores raw frames
-and nothing else.
+"""Chroma-key the gripper's fingers out of a fingerplates capture, one RGBA plate per finger angle.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.finger_matte --dir plates
@@ -35,34 +22,22 @@ from nf_robot.ml.visual_servoing.plates import (
 
 # Connected components smaller than this fraction of the frame are speckle.
 MIN_COMPONENT_FRACTION = 0.002
-# Fraction of the frame above which what was kept is not plausibly the gripper, and almost
-# certainly means the backdrop was not green enough to key.
+# Kept fraction above which the backdrop probably failed to key.
 IMPLAUSIBLE_KEPT_FRACTION = 0.40
-# Fraction of the frame that has to be decisively green before a capture is worth keying
-# at all. Below it the backdrop was missing or badly lit, which is worth saying out loud.
+# Green fraction below which the backdrop was missing or badly lit.
 MIN_GREEN_FRACTION = 0.20
 
 MANIFEST_NAME = "mattes.jsonl"
 
 
 def green_fraction(image, green_high=GREEN_HIGH):
-    """Fraction of a frame that is decisively green, which is how a backdrop is checked."""
     image = image.astype(np.float32)
     greenness = image[:, :, 1] - np.maximum(image[:, :, 0], image[:, :, 2])
     return float((greenness > green_high).mean())
 
 
 def clean_mask(raw, border_only=True, min_component_fraction=MIN_COMPONENT_FRACTION):
-    """Speckle, floaters and holes.
-
-    Returns (filled, kept, components): kept is what survived the component tests, filled
-    is that with enclosed holes closed, so a caller can tell a hole from hardware.
-
-    The morphology is deliberately mild - an opening to drop speckle, a closing to bridge
-    the gaps JPEG noise leaves inside a finger - and holes are found as components of the
-    background rather than by a flood from a corner, which does nothing when a finger
-    reaches that corner and reads the whole background as one giant hole.
-    """
+    """Remove speckle and floaters and fill holes, returning (filled, kept, components)."""
     height, width = raw.shape
     area = height * width
 
@@ -79,8 +54,7 @@ def clean_mask(raw, border_only=True, min_component_fraction=MIN_COMPONENT_FRACT
         if size < min_component_fraction * area:
             continue
         if border_only:
-            # The fingers are attached to a gripper that is itself at the edge of the
-            # frame, so anything floating in the middle is scene, not hardware.
+            # Fingers touch the frame edge, so floating components are scene.
             touches = x == 0 or y == 0 or x + w == width or y + h == height
             if not touches:
                 continue
@@ -107,18 +81,14 @@ def build_matte(stack, green_low=GREEN_LOW, green_high=GREEN_HIGH, border_only=T
         alpha, colour = chroma_key(frame, green_low=green_low, green_high=green_high)
         alphas.append(alpha)
         colours.append(colour)
-        # measured on the way in: chroma_key's despill has taken the cast out of what it
-        # returns, so the backdrop is no longer green by the time the colour comes back
+        # Measured before chroma_key's despill removes the green cast.
         greens.append(green_fraction(frame, green_high))
-    # Median over the turn, so a pixel has to have been ungreen most of the time. Mean
-    # would let one frame's intruder leave a ghost at a third of its opacity.
+    # Median over the turn, so anything that moved past is outvoted.
     alpha = np.median(np.stack(alphas), axis=0)
     colour = np.median(np.stack(colours), axis=0)
 
     filled, kept, components = clean_mask(alpha > 0.5, border_only, min_component_fraction)
-    # Keep the ramp wherever it is - it is what puts a soft edge on fluff and on the frayed
-    # rubber of a finger pad - but lift enclosed holes to solid, since a green-lit
-    # highlight inside a finger keys as backdrop and is not one.
+    # Keep the soft alpha ramp, but make enclosed holes solid.
     out = alpha * np.maximum(filled, (alpha > 0) & (alpha <= 0.5))
     out = np.where(filled & ~kept, 1.0, out)
 
@@ -136,12 +106,7 @@ def build_matte(stack, green_low=GREEN_LOW, green_high=GREEN_HIGH, border_only=T
 
 
 def group_by_finger_angle(plate_dir, run_id):
-    """Frames of one run grouped by finger angle, as {angle: [images]}.
-
-    Keyed on the commanded angle rather than the measured one so that a group is exactly
-    one aperture; the measured value wanders by a fraction of a degree and would split
-    every group into singletons.
-    """
+    """Frames of one run grouped by commanded finger angle, as {angle: [images]}."""
     groups = defaultdict(list)
     for row in iter_run(plate_dir, run_id):
         key = row["attrs"].get("commanded_finger_angle")
@@ -168,9 +133,7 @@ def extract_mattes(plate_dir, run_id, output_dir, green_low=GREEN_LOW,
         stack = np.stack(frames).astype(np.float32)
         rgba, diagnostics = build_matte(stack, green_low, green_high, border_only)
 
-        # named per run, not per angle alone: a collection holds captures of more than one
-        # set of fingers - they get swapped, and they are not all the same colour - and
-        # every one of them is wanted, not just the last one matted
+        # Named per run, since a collection holds several sets of fingers.
         name = f"{run_id}-finger{finger_angle:+04.0f}.png"
         # cv2 writes BGRA; the plates are RGB
         cv2.imwrite(str(output_dir / name), rgba[:, :, [2, 1, 0, 3]])
@@ -215,12 +178,7 @@ def read_mattes(output_dir):
 
 
 def write_video_preview(output_dir, entries, fps=VIDEO_FPS):
-    """The plates as an mp4, in finger angle order: the aperture sweep as it will look.
-
-    A still contact sheet hides the failure this catches - a plate whose matte is a few
-    pixels different from its neighbours' reads as a flicker in motion and as nothing at
-    all side by side.
-    """
+    """The plates as an mp4 in finger angle order, where matte flicker is visible."""
     output_dir = Path(output_dir)
     board = None
 
@@ -308,8 +266,7 @@ def main():
         parser.error(f"no fingerplates runs in {args.dir}")
     output_dir = Path(args.output_dir or Path(args.dir) / "fingers")
 
-    # Every capture, not the newest one: a collection can hold several sets of fingers,
-    # and synth_frames picks between them per frame.
+    # Every capture, since synth_frames picks between finger sets per frame.
     for run in runs:
         extract_mattes(args.dir, run["run_id"], output_dir, args.green_low,
                        args.green_high, not args.keep_floating)

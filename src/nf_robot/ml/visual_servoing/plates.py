@@ -1,25 +1,7 @@
 #!/usr/bin/env python
 
-"""Storage for the raw ingredients of the synthetic visual servoing dataset.
-
-Three capture routines feed this, all of them motion tasks in observer.py:
-
-    fingerplates   the gripper's own fingers, matted out of their background
-    floorplates    bare floor at a range of heights, for backgrounds
-    objectplates   one object on a green board, for compositing onto them
-
-They are different captures but the same kind of thing - a stack of frames plus the
-state that was true when each was taken - so they share a file format and differ only in
-which attributes they carry. Frames go in a parquet file as encoded bytes and the run is
-described by a line appended to manifest.jsonl beside it, so a directory of captures can
-be read without opening any of the parquet files.
-
-What is deliberately *not* here is any matting, keying or segmentation. Those are offline
-decisions that will be revised - both mattes are chroma keys with thresholds nobody has
-tuned yet - and a capture that has already thrown away the frames it was derived from
-cannot be revisited without going back to the robot. This module stores what the camera
-saw.
-"""
+"""Storage for raw fingerplates, floorplates and objectplates captures: frames plus a
+manifest.jsonl line per run."""
 
 import json
 import logging
@@ -32,37 +14,26 @@ import numpy as np
 
 KINDS = ("fingerplates", "floorplates", "objectplates")
 
-# Capture quality. These frames are the source every synthetic image is built from and are
-# only ever downscaled later, so the encoding wants to be near-lossless: compression
-# ringing along a keyed edge is exactly where a matte's alpha ramp lives. Lossless PNG is
-# available by passing image_format="png" if q95 turns out to muddy the matte, at roughly
-# ten times the bytes.
+# Near-lossless capture quality, since keyed edges are where compression ringing hurts.
 PLATE_JPEG_QUALITY = 95
 
 MANIFEST_NAME = "manifest.jsonl"
 
 
 def provenance(robot_id=""):
-    """Who captured a run, so merged collections stay attributable."""
     import socket
 
     return {"robot_id": robot_id or "", "host": socket.gethostname()}
 
 
 def run_files(entry):
-    """Every file a manifest entry refers to, relative to its directory."""
     if entry.get("storage") == "video":
         return [entry["file"], entry["telemetry"]]
     return [entry.get("file") or f"{entry['run_id']}.parquet"]
 
 
 def plate_schema():
-    """One row per captured frame.
-
-    The typed columns are the state every capture type has an opinion about; anything
-    specific to one routine goes in `attrs` as JSON rather than growing a column that is
-    null for two kinds out of three.
-    """
+    """One row per captured frame; type-specific state goes in `attrs` as JSON."""
     import pyarrow as pa
 
     return pa.schema([
@@ -94,12 +65,7 @@ def encode_plate(image_rgb, image_format="jpeg"):
 
 
 class PlateWriter:
-    """Accumulates one capture run and writes it as a parquet file plus a manifest line.
-
-    Buffered rather than streamed because a run is a few hundred frames taken over a few
-    minutes of robot motion, and a partial file from an aborted run is worse than none -
-    the manifest would describe a capture that never finished.
-    """
+    """Accumulates one capture run and writes it as a parquet file plus a manifest line."""
 
     def __init__(self, output_dir, kind: str, image_format: str = "jpeg", notes: str = ""):
         if kind not in KINDS:
@@ -136,8 +102,8 @@ class PlateWriter:
         return len(self.rows)
 
     def close(self, **run_attrs):
-        """Write the parquet file and append the manifest line. Returns the path, or None
-        for a run that captured nothing - which leaves no file and no manifest entry."""
+        """Write the parquet file and manifest line, returning the path, or None for an
+        empty run."""
         if not self.rows:
             logging.warning(f"{self.run_id}: no frames captured, nothing written")
             return None
@@ -196,11 +162,7 @@ def read_manifest(output_dir):
 
 
 def read_run(output_dir, run_id, columns=None, decode=True):
-    """One run's rows, images decoded to RGB unless decode is False.
-
-    A run of 1080p frames is a couple of hundred megabytes, so pass columns without
-    "image" to read the attributes of a capture without paying for its pixels.
-    """
+    """One run's rows, images decoded to RGB unless decode is False."""
     import pyarrow.parquet as pq
 
     table = pq.read_table(Path(output_dir) / f"{run_id}.parquet", columns=columns)
@@ -215,13 +177,8 @@ def read_run(output_dir, run_id, columns=None, decode=True):
 
 
 class VideoRunWriter:
-    """A capture run stored as the camera's own video plus a telemetry track.
-
-    For runs where the camera is sweeping continuously there is no reason to decode
-    anything on the robot: the compressed stream goes straight to a file, telemetry is
-    sampled beside it, and the two are matched by timestamp when something offline
-    actually needs pixels. The result is a tenth the size of the same frames as JPEG.
-    """
+    """A capture run stored as the camera's own video plus a telemetry track matched by
+    timestamp."""
 
     def __init__(self, output_dir, kind: str, notes: str = ""):
         if kind not in KINDS:
@@ -290,12 +247,7 @@ def _run_entry(output_dir, run_id):
 
 
 def _telemetry_lookup(samples):
-    """A nearest-sample lookup over one run's telemetry track, sorted once up front.
-
-    One time at a time rather than a whole run's worth at once, because batching the match
-    meant holding every decoded frame of the run to have their timestamps - about 1.6GB
-    per floorplates run, on a path whose whole job is to stream.
-    """
+    """A nearest-sample lookup over one run's telemetry track."""
     stamps = np.array([s["t"] for s in samples])
     order = np.argsort(stamps)
     stamps, ordered = stamps[order], [samples[i] for i in order]
@@ -310,12 +262,7 @@ def _telemetry_lookup(samples):
 
 
 def iter_video_run(output_dir, run_id, entry):
-    """Decode a video-backed run, attaching the telemetry nearest each frame.
-
-    One frame resident at a time: the decode is a generator and each frame is converted,
-    yielded and dropped. The consumer decides what to keep, which is what lets
-    synth_frames hold a bounded sample of a capture that does not fit in memory whole.
-    """
+    """Decode a video-backed run one frame at a time, attaching the nearest telemetry."""
     import av
 
     output_dir = Path(output_dir)
@@ -346,17 +293,12 @@ def iter_video_run(output_dir, run_id, entry):
                                        "laser_rangefinder", "finger_pressure")},
             }
     finally:
-        # a consumer that stops early - the probe synth_frames uses to size one frame -
-        # closes the generator here, and the container has to go with it
+        # An early stop closes the generator, and the container with it.
         container.close()
 
 
 def iter_run(output_dir, run_id, decode=True):
-    """Yield a run's rows, whichever way it was stored.
-
-    Video-backed runs are decoded and matched to their telemetry track; parquet runs are
-    read a row group at a time, so a whole capture is never resident.
-    """
+    """Yield a run's rows, whichever way it was stored."""
     import pyarrow.parquet as pq
 
     entry = _run_entry(output_dir, run_id)
@@ -374,16 +316,13 @@ def iter_run(output_dir, run_id, decode=True):
             yield row
 
 
-# Playback rate for the matte videos. Fast enough that a sweep reads as motion, which is
-# what makes a plate that jumps or a matte that flickers obvious.
+# Playback rate for the matte videos.
 VIDEO_FPS = 60
-# Videos are downscaled to this width. The captures are 1080p and nothing here is being
-# inspected pixel by pixel - that is what the full size stills are for.
+# Videos are downscaled to this width.
 VIDEO_WIDTH = 960
 
 
 def checkerboard(height, width, square=16, light=110, dark=70):
-    """Grey checkerboard, as BGR - the standard "this is transparent" backdrop."""
     ys, xs = np.mgrid[0:height, 0:width]
     board = np.where(((ys // square) + (xs // square)) % 2 == 0, light, dark)
     return np.dstack([board.astype(np.uint8)] * 3)
@@ -400,21 +339,14 @@ def over_checkerboard(bgra, board=None):
 
 
 def write_video(path, frames, fps=VIDEO_FPS, width=VIDEO_WIDTH):
-    """Write BGR frames to an mp4, scaling them to a common width.
-
-    Every frame is resized to the first one's shape: a video needs one size, and the
-    cutouts these are built from do not have one.
-
-    Returns the path, or None if there was nothing to write or no encoder for it.
-    """
+    """Write BGR frames to an mp4 at the first frame's size, returning the path or None."""
     writer, size = None, None
     count = 0
     for frame in frames:
         if size is None:
             scale = min(1.0, width / frame.shape[1])
             size = (int(round(frame.shape[1] * scale)), int(round(frame.shape[0] * scale)))
-            # even dimensions: odd ones are legal in the container but choke players that
-            # assume 4:2:0 chroma
+            # Even dimensions, which 4:2:0 players need.
             size = (size[0] - size[0] % 2, size[1] - size[1] % 2)
             writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
             if not writer.isOpened():
@@ -443,11 +375,7 @@ def _label(row):
 
 def write_preview(output_dir, run_id, preview_dir, cell_width=480, columns=6, group=24,
                   every=1, full_size=0):
-    """Contact sheets of a capture run, plus optionally some frames at full size.
-
-    Cells are downscaled first and the text drawn afterwards, so it renders at the size
-    it will actually be read at rather than shrinking into illegibility with the image.
-    """
+    """Contact sheets of a capture run, plus optionally some frames at full size."""
     preview_dir = Path(preview_dir)
     preview_dir.mkdir(parents=True, exist_ok=True)
     for old in list(preview_dir.glob("*.jpg")) + list(preview_dir.glob("*.png")):

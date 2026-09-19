@@ -1,78 +1,6 @@
 #!/usr/bin/env python
 
-"""Mine visual-servoing labels out of teleop recordings.
-
-The trick is to run time backwards. At the moment of the grasp we know exactly where
-the object was - directly under the gripper camera, at the distance the rangefinder was
-reading. Projecting that one room point back into the camera for each of the preceding
-frames labels a whole approach with no object detector involved, and labels it with the
-spot a human chose to grab rather than an object's visual centroid. On a towel those are
-different places and only the first one is a good grasp.
-
-Note that the anchor point is *not* the recorded gripper_pos. That is the gripper body
-origin, which sits about a centimetre from the camera, so projecting it produces a point
-effectively inside the lens and a garbage pixel. The object is a jaw-length further down,
-so the anchor is the gripper position at the grasp dropped straight down by whatever the
-rangefinder was reading.
-
-Getting that point into the frame is the rotated contact vector that
-lerobot.label_contact_actions already builds - the room-frame vector from the gripper to
-the target, with its horizontal part rotated by `spin` into the gripper frame - followed
-by the fixed camera mount and config.camera_cal_wide's 684x384 intrinsics. See
-geometry.point_in_camera for the mount, which is two sign flips once the gripper is
-assumed level; the robot's inverse of it lives beside it, so the two cannot drift apart.
-
-The camera's 9.06 degree backward tilt and its 2.7cm offset toward the nose are both
-accounted for. Swing of the gripper away from vertical is still ignored - the recorded
-6D rotation carries it, but nothing here reads it yet.
-
-Output is parquet shards of a few hundred MB, one row per frame with the frame itself in
-an `image` column as JPEG bytes at the model's input resolution. One file per frame is
-the obvious layout and the wrong one: mining the full source list is on the order of
-400k frames, and the hub charges per file, not per byte. Each run replaces its split
-directory outright.
-
-What comes out, per frame, in the row format readme.md describes:
-
-    target_uv        the grasp point in normalized frame coordinates, where 0..1 is the
-                     visible frame and the kept range is -0.25..1.25 - so a target just
-                     off the bottom edge keeps a real position instead of being clamped
-                     to the edge or thrown away. That case is the whole point.
-    target_range_m   distance from the camera to the grasp point, the third dimension
-    grasp_axis_rad   how much further the wrist turned before grasping, pi-wrapped
-    finger           commanded finger speed / 90, in -1..1
-    holding          1 between the lift and the drop, 0 before the grasp, null in
-                     between - the grip is not proven until it takes the weight
-    target_present   1 (an approach always has one)
-
-With --negatives the source is instead a recording of flying over empty floor, and every
-frame becomes a target_present=0 row with no position labels at all. That mode exists
-because a head trained only on synthetic negatives learns "nothing here" as a property of
-composited images: measured on a real checkpoint, it fires low on half of the synthetic
-bare-floor frames and never once on a real one. Negatives have to arrive through the same
-camera and the same pipeline as the positives to mean anything at deploy time.
-
-With --false_grabs the source is a recording in which closing the jaws would catch
-nothing, and every frame becomes a close_now=0, holding=0 row with every other label
-masked. The floor being empty and the jaws being empty are different claims: a false grab
-happens next to graspable things, which is exactly where the close and holding heads fire
-on nothing being between the fingers. See mine_false_grab_episode.
-
-After the grasp the object rides in the jaws, so the static room point stops describing
-where it is. Those frames therefore carry only `holding` and `finger`, and every other
-label is null - which the row format spells "mask this head's loss here" rather than
-"the answer is zero".
-
-`holding` runs on the lift rather than on the grasp. Pressure crossing the grasp
-threshold means the jaws closed on something, not that it is held: the grip is unproven
-until it takes the weight, and it ends at the drop, whether the operator opened the jaws
-or the object slipped out of them. Labelling from the grasp instead makes "an object is
-close in frame" sufficient for a positive, which is the cheapest feature in the episode
-and the one the head learns instead of the object being in the hand.
-
-Only successful grasps are mined. A grasp that closed on nothing puts the label
-somewhere the object never was, which is worse than no label at all; the rise test in
-lerobot.trim_to_grasp is exactly that success filter and is reused here.
+"""Mine visual servoing labels by projecting each teleop grasp point back into the frames before it.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.mine_teleop \
@@ -117,85 +45,45 @@ from nf_robot.ml.lerobot.trim_to_grasp import (
     find_grasp,
 )
 
-# (seconds) how much of the approach before the grasp to label. Long enough to cover the
-# final descent and the corrections in it, short enough that the object is plausibly the
-# one being approached rather than whatever the gripper happened to fly over earlier.
+# (seconds) how much of the approach before the grasp to label.
 APPROACH_SECONDS = 10.0
 # (seconds) how much of the carry after the grasp to keep, for the holding head.
 CARRY_SECONDS = 3.0
-# The canvas the target head predicts over, as a fraction of the frame. 1.25 means
-# coordinates run -0.125..1.125 and a target an eighth of a frame off the edge still has
-# a cell. Must match model.CANVAS_SCALE.
+# The canvas the target head predicts over, as a fraction of the frame; must match
+# model.CANVAS_SCALE.
 CANVAS_SCALE = 1.25
-# How far outside the visible frame a target may be and still be worth predicting, as a
-# fraction of the frame. A tenth is about 45px of the 448 wide input.
-#
-# A little way out is the case the oversized canvas exists for: the object is still in
-# shot, only the spot to grab it by has slipped past the edge, and "down there, just off
-# the bottom" is an answer the image supports. Further out there is nothing in the picture
-# to point at, and asking for a position anyway trains the head to invent one from
-# whatever the floor happens to look like. Those rows keep their frame and lose their
-# position labels.
-#
-# Measured on the combined_targets eval split, this masks 15% of the labelled rows; 0.05
-# would mask 20% and 0.20 only 4%, with the off-screen ones spread evenly out to the
-# old 1.5x canvas edge at 0.25.
+# How far outside the frame, as a fraction of it, a target keeps its position labels.
 OFF_SCREEN_MARGIN = 0.10
-# What each whole-recording mode's shards are called, so mining one into a split that
-# already holds the others replaces only its own output.
+# Shard prefixes of the whole-recording modes, so each rerun replaces only its own output.
 NEGATIVE_PREFIX = "negative"
 FALSE_GRAB_PREFIX = "false_grab"
 
-# Every producer writes here, and split_pool deals the result into train/ and eval/
-# afterwards. One pool rather than a split per producer: mining is the expensive step and
-# should run once over everything, and a producer that arrives after the cut would
-# otherwise land wholly on one side of it.
+# Every producer writes into this pool, which split_pool deals into train/ and eval/.
 POOL_SPLIT = "all"
-# Keep one frame in this many when a whole recording carries one label. Both --negatives
-# and --false_grabs are true in every frame, and at 30fps thirty of them a second are the
-# same picture; six a second is plenty of variety and keeps an hour of flying from burying
-# the positives it is meant to balance.
+# Keep one frame in this many when a whole recording carries one label.
 SWEEP_STRIDE = 5
 
 # What a source recording is, and so what its frames can be labelled with.
 MODE_GRASPS = "grasps"
 MODE_NEGATIVES = "negatives"
 MODE_FALSE_GRABS = "false_grabs"
-# (frames) how long a pause in the closing command can be and still count as part of the
-# same close. A thumb comes off the trigger for a moment; a third of a second of nothing
-# is a different decision.
+# (frames) the longest pause in the closing command that still counts as the same close.
 CLOSE_GAP_FRAMES = 10
 # (metres, seconds) what counts as the lift having started: this much climb, still
 # climbing this long later.
 LIFT_ONSET_M = 0.03
 LIFT_CONFIRM_SECONDS = 0.5
-# (normalized 0-1) finger_pressure this low, held for MIN_GRASP_SECONDS, is the object
-# gone rather than a bad reading. Half the grasp threshold because a carry rides right on
-# that threshold: see find_drop for what each level costs.
+# (normalized 0-1) finger_pressure held this low for MIN_GRASP_SECONDS means the object is
+# gone.
 RELEASE_PRESSURE = 0.05
 # Full-scale commanded finger speed, used to normalize the finger label into -1..1.
 FINGER_SPEED_FULL_SCALE = 90.0
-# Frames are stored at the model's input resolution. Labels are normalized coordinates,
-# so they survive the resize untouched, and the stored frame is then exactly what the
-# model sees - nothing is gained by keeping pixels the training loader would throw away.
-# 252 rather than 256 because the model's backbone is a /14 DINOv2 and 252 = 14 x 18.
-# --image_size overrides it, and a run into a split that already holds frames takes that
-# split's size instead; synth_frames imports this constant, so both producers of a split
-# agree by construction.
-#
-# Getting it wrong is quiet in both directions. Frames written at 256 tall and fed to a
-# /14 model configured for 252 run fine: the patch embedding floors to the same 18 token
-# rows, the bottom 4 pixel rows are never seen, and every label stays normalized over all
-# 256, which is a 1.6% downward bias nothing reports. Frames of two different heights in
-# one split are at least loud, but only at the first batch.
+# Stored frame size, the model's input; 252 = 14 x 18 for the /14 backbone.
 IMAGE_SIZE = (448, 252)
 JPEG_QUALITY = 90
-# Roughly how much image data goes in one parquet shard. The point of shards is file
-# count: a few hundred large files upload and download from the hub in a way that
-# hundreds of thousands of small ones do not.
+# Target bytes of image data per parquet shard, to keep the hub file count down.
 SHARD_TARGET_BYTES = 512 * 1024 * 1024
-# Rows per parquet row group. Small groups let the preview pull a handful of scattered
-# images back without reading whole shards.
+# Rows per parquet row group, small so the preview can read scattered rows cheaply.
 ROW_GROUP_SIZE = 256
 
 STATE_NEEDED = (
@@ -203,21 +91,13 @@ STATE_NEEDED = (
     "spin", "finger_pressure", "wrist_angle", "finger_angle",
     "laser_rangefinder", "target_force",
 )
-# Wanted by the dead-reckoning uv methods and by nothing else, so a recording without them
-# is still minable - it just cannot be labelled those ways. Read as None when absent rather
-# than refused, and uv_methods says which flag needed what.
+# Only the dead-reckoning uv methods need these, so they read as None when absent.
 VELOCITY_OPTIONAL = {"vel_cmd": ("action", ("vel_x", "vel_y", "vel_z")),
                      "vel_obs": ("state", ("vel_x", "vel_y", "vel_z"))}
 
 
 def row_schema():
-    """Parquet schema for one labelled frame.
-
-    Mirrors the row format in readme.md: every label is nullable, and null means "mask
-    this head's loss for this row" rather than "the answer is zero". The frame travels
-    in the row as JPEG bytes, which is what keeps the file count down without a second
-    copy of the pixels living outside the table.
-    """
+    """Parquet schema for one labelled frame, where a null label masks that head's loss."""
     import pyarrow as pa
 
     return pa.schema([
@@ -227,16 +107,14 @@ def row_schema():
         ("episode_index", pa.int32()),
         ("frame_index", pa.int32()),
         ("seconds_to_grasp", pa.float32()),
-        # a plain list rather than a fixed-size one: parquet cannot store a null in a
-        # fixed-size list, and null is exactly what an unlabelled row needs here
+        # A plain list, since parquet cannot store a null in a fixed-size list.
         ("target_uv", pa.list_(pa.float32())),
         ("target_range_m", pa.float32()),
         ("grasp_axis_rad", pa.float32()),
         ("finger", pa.float32()),
         # 1 from the frame the operator began closing on, 0 before it
         ("close_now", pa.int8()),
-        # the grip force being carried at the moment the lift began, same value on every
-        # frame of the episode: it is a property of the object, not of the frame
+        # Grip force at the lift, the same on every frame of the episode.
         ("grasp_pressure", pa.float32()),
         ("target_present", pa.int8()),
         ("holding", pa.int8()),
@@ -251,15 +129,13 @@ def row_schema():
 class ShardWriter:
     """Buffers rows and flushes them as parquet shards of roughly SHARD_TARGET_BYTES."""
 
-    # What the miner's own shards are called. The compositor passes its own prefix, and
-    # each producer only ever deletes files carrying its own.
+    # The miner's shard prefix; each producer only deletes its own files.
     DEFAULT_PREFIX = "shard"
 
     def __init__(self, split_dir: Path, target_bytes: int = SHARD_TARGET_BYTES,
                  prefix: str = DEFAULT_PREFIX):
         self.split_dir = split_dir
-        # Shards are named by producer so the synthetic compositor can write into the
-        # same split as the miner without either overwriting the other's files.
+        # Shards are named by producer so producers can share a split.
         self.prefix = prefix
         self.target_bytes = target_bytes
         self.schema = row_schema()
@@ -293,14 +169,7 @@ class ShardWriter:
 
 
 class ReservoirSampler:
-    """Stands in for a ShardWriter and keeps a uniform random sample of what it is given.
-
-    Preview-only mining sees every row a full run would write and keeps `count` of them,
-    so the sample has to be drawn in one pass: the stream is never stored and its length
-    is not known until it ends. Deterministic given the seed and the source order, so two
-    runs over unchanged sources preview the same frames and a label change is the only
-    thing that moves between them.
-    """
+    """A ShardWriter stand-in that keeps a deterministic uniform random sample of `count` rows."""
 
     def __init__(self, count: int, seed: int):
         self.count = count
@@ -339,12 +208,7 @@ def encode_frame(bgr, image_size=IMAGE_SIZE):
 
 
 def read_columns(root: Path):
-    """Per-episode state and action rows, straight from the parquets.
-
-    Read as columns rather than through LeRobotDataset because this pass wants a handful
-    of components for every frame and none of the video; decoding a frame per row to
-    find the grasps would dominate the runtime.
-    """
+    """Per-episode state and action rows, read as columns from the parquets."""
     import pyarrow.parquet as pq
 
     info = json.loads((root / "meta" / "info.json").read_text())
@@ -402,17 +266,8 @@ def read_columns(root: Path):
 
 
 def close_onset(rows, grasp, gap_frames=CLOSE_GAP_FRAMES):
-    """The frame the operator began the close that ended in this grasp.
-
-    Walks back from the grasp through the run of frames commanding a close, and stops at
-    the first gap longer than `gap_frames`. Backwards rather than forwards because an
-    approach can contain any number of adjustments, half-closes and re-opens; the one
-    that matters is the last one, the one that was still closing when the object was
-    caught. A short gap inside it is a thumb pausing, not a different decision.
-
-    Returns None when the operator was already closing at the start of the window, which
-    means the onset happened before anything mined here and the frames cannot say when.
-    """
+    """The frame the operator began the close that ended in this grasp, or None if it began
+    before the window."""
     i, gap = grasp, 0
     onset = grasp
     while i >= 0:
@@ -427,17 +282,7 @@ def close_onset(rows, grasp, gap_frames=CLOSE_GAP_FRAMES):
 
 
 def find_lift(rows, grasp, fps):
-    """The frame the gripper started carrying the object up, or None if it never rose.
-
-    The first frame after the grasp where the gripper has climbed LIFT_ONSET_M and is
-    still climbing LIFT_CONFIRM_SECONDS later, rather than the top of the climb: the lift
-    is the moment the object leaves what it was resting on, and everything after it is
-    the object being carried rather than merely squeezed.
-
-    Both things that need the lift want this instant - the force that turned out to be
-    enough is the one held here, and a grasp only proves itself by taking the weight - so
-    they read the same frame rather than each finding their own.
-    """
+    """The frame the gripper started carrying the object up, or None if it never rose."""
     start_z = rows[grasp]["gripper_pos"][2]
     settle = max(1, int(round(LIFT_CONFIRM_SECONDS * fps)))
     for i in range(grasp, len(rows)):
@@ -451,24 +296,8 @@ def find_lift(rows, grasp, fps):
 
 def find_drop(rows, lift, fps, release_pressure=RELEASE_PRESSURE,
               min_release_seconds=MIN_GRASP_SECONDS):
-    """The frame the object stopped being held after `lift`, or None if it never did.
-
-    Two ways a carry ends and the earlier one wins, because the label wanted here is the
-    run of frames the grip was beyond doubt:
-
-      the operator commands an open - finger_speed goes negative. The jaws take a few
-      tenths of a second to actually let go, so this is early by that much, which is the
-      right direction to be wrong in for a positive label.
-
-      the pressure collapses and stays collapsed - the object slipped out with nobody
-      asking it to, and no command marks it.
-
-    The sustain is what makes the pressure test usable at all: a carry rides right on the
-    grasp threshold, and over 744 mined grasps 18% of them dip under PRESSURE_THRESHOLD
-    at some point without dropping anything. At RELEASE_PRESSURE held for as long as a
-    grasp must hold, 6.5% trip it, and only 3 of those recover - so what it catches is
-    losses rather than noise.
-    """
+    """The frame the object stopped being held after `lift` (an open command or a sustained
+    pressure drop), or None."""
     drop = None
     for i in range(lift, len(rows)):
         if rows[i]["finger_speed"] < 0:
@@ -488,19 +317,8 @@ def find_drop(rows, lift, fps, release_pressure=RELEASE_PRESSURE,
 
 
 def holding_label(i, grasp, lift, drop):
-    """Whether frame `i` shows an object securely held, or None where nothing can say.
-
-    Positive only between the lift and the drop. The jaws closing on something is not yet
-    holding it - the grip is unproven until it takes the weight - and pressure crossing
-    the grasp threshold is the cheapest thing in the episode to reach, which is why a head
-    trained from that instant learns "an object is close in frame" instead.
-
-    The window between the grasp and the lift is masked rather than negative. Those frames
-    look exactly like the held ones and the object really is between the jaws; all that is
-    missing is the proof, and teaching them as negatives would contradict the frames on
-    either side. Before the grasp is a real negative - an object in view, in reach, and
-    not in the hand is the case the head keeps getting wrong.
-    """
+    """Whether frame `i` shows an object securely held: 1 from lift to drop, 0 before the
+    grasp, None between."""
     if i < grasp:
         return 0
     if lift is None or i < lift:
@@ -516,23 +334,14 @@ def wrap_pi(radians):
 
 
 def in_view(u, v, margin=OFF_SCREEN_MARGIN):
-    """Whether a projected target is close enough to the frame to be worth predicting."""
     return -margin <= u <= 1 + margin and -margin <= v <= 1 + margin
 
 
 def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m,
                  margin=OFF_SCREEN_MARGIN, uv_method=DEFAULT_UV_METHOD, jaw_uv=None,
                  frames=None):
-    """Labelled rows for one episode, or (None, reason, 0) if it is not a usable grasp.
-
-    Returns (rows, dropped, blind): dropped fell off the canvas entirely, blind kept their
-    frame but lost their position labels for being too far outside it to see.
-
-    `uv_method` picks how the grasp point's place in each frame is decided; every choice
-    and what each is wrong about is in uv_methods.py. It changes the position labels and
-    nothing else - the close, holding and finger labels come off pressure and the
-    operator's own commands, which no method here touches.
-    """
+    """Labelled rows for one grasp episode as (rows, dropped, blind), or (None, reason, 0)
+    if unusable."""
     pressure = np.array([r["pressure"] for r in rows], dtype=np.float32)
     grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
     if grasp is None:
@@ -543,11 +352,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
         # closed on nothing, or on something it could not pick up
         return None, "no_rise", 0
 
-    # Every method puts the target where the rangefinder says the floor is at the grasp
-    # frame, so a grasp frame with no usable reading has no target to label. It happens:
-    # the gripper closing while resting on the floor reports a few millimetres, and the
-    # jaw point is then at or behind the lens. Screened here rather than left to produce a
-    # whole episode of frames dropped one at a time for reasons that do not name the cause.
+    # A grasp frame with no usable rangefinder reading has no target to label.
     if not anchor_is_usable(rows[grasp], calibration):
         return None, "no_range", 0
 
@@ -573,11 +378,8 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
             "target_range_m": None,
             "grasp_axis_rad": None,
             "finger": round(float(r["finger_speed"]) / FINGER_SPEED_FULL_SCALE, 4),
-            # Whether the close should have begun by the time this frame was taken. A
-            # step rather than a spike on the one onset frame: the question the robot
-            # asks every pass is "should I be closing now", and it never asks again once
-            # the answer is yes. Masked when the onset is outside the mined window, since
-            # those frames cannot say whether it has happened yet.
+            # Whether the close should have begun by this frame, masked when the onset is
+            # outside the window.
             "close_now": None if onset is None else (1 if i >= onset else 0),
             "grasp_pressure": (None if pressure_at_lift is None
                                else round(pressure_at_lift, 4)),
@@ -590,8 +392,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
             },
         }
 
-        # Only up to the grasp. After it the object rides in the jaws and the static room
-        # point no longer says where it is.
+        # Only up to the grasp, after which the object rides in the jaws.
         if i <= grasp:
             projected = track[i]
             if projected is None:
@@ -608,15 +409,8 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
                 sample["grasp_axis_rad"] = round(
                     wrap_pi(math.radians(wrist_at_grasp - r["wrist_angle"])), 5)
             else:
-                # The frame is kept and its position labels are not: nothing in it shows
-                # where this object is, so every position head is masked here.
-                #
-                # target_present is masked rather than set to 0. All that is known is that
-                # the object being approached is out of shot - not that the picture is
-                # empty, and in a room with laundry over the floor it usually is not.
-                # Teaching "nothing here" off that would be a lie the model can see
-                # through. The honest negatives are the synthetic bare-floor frames, which
-                # are empty by construction.
+                # Too far off-frame: keep the frame but mask the position labels and
+                # target_present.
                 blind += 1
                 sample["target_present"] = None
 
@@ -625,34 +419,7 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
 
 
 def mine_negative_episode(rows, stride=SWEEP_STRIDE):
-    """Rows for one episode of an empty-floor recording.
-
-    The mirror image of mine_episode: no grasp to run time backwards from, so nothing is
-    labelled about *where* anything is - only that there was nothing there to go to.
-    Every frame qualifies, which is the point, and the stride is what stops an hour of
-    flying from contributing a hundred thousand near-identical rows.
-
-    What each row carries, and what it deliberately does not:
-
-        target_present  0, the label this whole mode exists to produce
-        target_uv       null, along with range and axis. "Nothing is there" says nothing
-        target_range_m  about where it would have been, and a zero would be a position
-        grasp_axis_rad  claim rather than an absence of one
-        finger          the recorded finger speed, same as any mined row. An operator
-                        flying over bare floor is commanding no grip, which is exactly
-                        what the finger head should answer here
-        holding         0 while the pressure says the hand is empty, null if it is not -
-                        an operator who picked something up mid-recording is no longer
-                        describing empty floor, and guessing would be worse than masking
-
-    Takes the recording at its word about being empty. It cannot check: the pressure
-    signature of a grasp and of the fingers closing on each other are the same signature,
-    so a flight with the jaws shut trips every test for "something was picked up here".
-    The preview is the check that works, because a person can see an empty floor.
-
-    Returns (rows, dropped, blind) like mine_episode, the last two always zero, so both
-    producers report through the same path.
-    """
+    """Rows for one episode of an empty-floor recording: target_present=0 and no position labels."""
     out = []
     for i in range(0, len(rows), max(1, stride)):
         r = rows[i]
@@ -665,8 +432,7 @@ def mine_negative_episode(rows, stride=SWEEP_STRIDE):
             "target_range_m": None,
             "grasp_axis_rad": None,
             "finger": round(float(r["finger_speed"]) / FINGER_SPEED_FULL_SCALE, 4),
-            # 0 as a fact, not as a mask: bare floor is exactly where a close should not
-            # begin, and it is the only place that can say so about a real frame.
+            # 0 as a fact: bare floor is exactly where a close should not begin.
             "close_now": 0,
             # But how hard to squeeze has no answer with nothing to squeeze.
             "grasp_pressure": None,
@@ -682,37 +448,8 @@ def mine_negative_episode(rows, stride=SWEEP_STRIDE):
 
 
 def mine_false_grab_episode(rows, stride=SWEEP_STRIDE):
-    """Rows for one episode of a false-grab recording.
-
-    A recording made where closing the jaws would catch nothing: the gripper near things,
-    over things, beside things, and never around one. Two heads can be labelled from that
-    premise alone and the rest cannot.
-
-        close_now       0. The whole recording is the case where the close should not
-                        begin, which is the one thing these frames are evidence of.
-        holding         0. Nothing is ever between the fingers.
-        target_present  null, not 0. A false grab happens next to graspable things - the
-                        picture usually has one in it, just not in the jaws - so calling
-                        it empty would teach the opposite of what the frame shows. The
-                        honest empties are the bare-floor negatives.
-        target_uv       null, with range and axis: no grasp happened here, so there is no
-        target_range_m  point to run time backwards from and nothing to point at.
-        grasp_axis_rad
-        finger          null. A close commanded on nothing is the action being labelled
-                        wrong, so what the operator's hand did is not what the finger
-                        head should copy.
-        grasp_pressure  null. No lift, so no force that turned out to be enough.
-
-    Pressure is not consulted, which is the difference from mine_negative_episode: fingers
-    closing on each other read the same as fingers closing on an object, and here that
-    reading is always the former. Those frames are the point rather than a doubt - a
-    holding head trained without them learns that pressure means an object.
-
-    Takes the recording at its word the same way the negatives pass does; nothing here can
-    check that the jaws stayed empty, and the preview is the check that works.
-
-    Returns (rows, dropped, blind) like mine_episode, the last two always zero.
-    """
+    """Rows for one episode of a false-grab recording: close_now=0 and holding=0, everything
+    else masked."""
     out = []
     for i in range(0, len(rows), max(1, stride)):
         r = rows[i]
@@ -738,11 +475,7 @@ def mine_false_grab_episode(rows, stride=SWEEP_STRIDE):
 
 
 def split_image_size(split_dir: Path):
-    """The frame size the shards in a split are already written at, or None if empty.
-
-    One row out of one shard is enough: a split that holds two sizes cannot be collated
-    into a batch, so either they all agree or the split is already broken.
-    """
+    """The frame size the shards in a split are already written at, or None if empty."""
     import pyarrow.parquet as pq
 
     for path in sorted(split_dir.glob("*.parquet")):
@@ -757,7 +490,6 @@ def split_image_size(split_dir: Path):
 
 
 def source_episode_count(root: Path) -> int:
-    """Episodes in a source, read from its metadata."""
     return int(json.loads((root / "meta" / "info.json").read_text())["total_episodes"])
 
 
@@ -765,23 +497,13 @@ IMAGE_KEY = "observation.images.gripper_camera"
 
 
 def frame_bgr(dataset, index, image_key=IMAGE_KEY):
-    """One decoded frame from a LeRobot dataset, as BGR uint8."""
     frame = dataset[index][image_key]
     return cv2.cvtColor(
         (frame.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8), cv2.COLOR_RGB2BGR)
 
 
 def check_source(source):
-    """Whether a teleop dataset can be mined, from its metadata alone.
-
-    Worth having as its own thing because the answer is a property of how the robot was
-    recorded, not of the frames: a dataset that never logged the rangefinder cannot be
-    mined however many good grasps are in it, and finding that out by downloading a few
-    hundred GB of video first is the expensive way round.
-
-    `source` is a directory or a hub dataset repo id. Returns a dict; `ok` is whether
-    every requirement is met and `missing` says which are not.
-    """
+    """Whether a teleop dataset (directory or hub repo id) can be mined, from its metadata alone."""
     root = Path(source)
     if root.is_dir():
         info = json.loads((root / "meta" / "info.json").read_text())
@@ -822,13 +544,8 @@ def check_source(source):
 
 
 def hub_root(repo_id):
-    """A hub dataset's local root, downloading it if it is not already there.
-
-    Wrapped for the error: lerobot resolves a dataset by a git tag named after the
-    codebase_version in its meta/info.json, and a repo published by a plain folder upload
-    has no such tag. What comes back then is a TypeError raised while raising
-    RevisionNotFoundError, naming neither the repo nor the tag - so say it here instead.
-    """
+    """A hub dataset's local root, downloading it if needed, with a clear error when the
+    version tag is missing."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     try:
@@ -879,20 +596,9 @@ def mine_source(writer, root: Path, repo_id: str, approach_seconds: float,
                 mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
                 image_size=IMAGE_SIZE, fetch_images: bool = True,
                 uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
-    # Note for the pixel methods: they decode the approach window to track it, and the row
-    # images are decoded again afterwards. Worth the second pass rather than holding a
-    # window of frames in memory per episode, and it is what makes optical-flow the
-    # expensive method - --preview_only included, whose whole saving it gives back.
-    """Mine one teleop dataset into an open shard writer.
-
-    `mode` says what the recording is: grasps to run time backwards from, empty floor
-    (mine_negative_episode), or grabs that would catch nothing (mine_false_grab_episode).
-
-    With `fetch_images` off no frame is decoded at all: each row carries `_fetch`, the
-    coordinates its frame can be pulled back from later, and the sink is free to keep a
-    handful of rows and throw the rest away. That is what makes preview-only mining cheap
-    - decoding every frame is nearly all of a run, and a preview looks at a few hundred.
-    """
+    # The pixel methods decode the approach window a second time, which makes them the
+    # expensive ones.
+    """Mine one teleop dataset into an open shard writer, decoding frames only if `fetch_images`."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     calibration = gripper_camera_calibration()
@@ -913,8 +619,7 @@ def mine_source(writer, root: Path, repo_id: str, approach_seconds: float,
     mined, skipped = 0, {"no_grasp": 0, "no_rise": 0, "no_range": 0}
     dropped_total, blind_total = 0, 0
     considered = 0
-    # The holding head is the one whose labels are a judgement call rather than a
-    # projection, so the balance it ends up with is worth seeing at mining time.
+    # Report the holding label balance, since it is a judgement call.
     holding_counts = {1: 0, 0: 0, None: 0}
     for n, ep in enumerate(sorted(episodes)):
         if limit and n >= limit:
@@ -970,26 +675,12 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
          carry_seconds: float, rise_m: float, limit: int | None,
          mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
          image_size=IMAGE_SIZE, uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
-    """Replace this producer's share of the pool with the given (repo_id, root) sources.
-
-    Only this producer's shards go: mining is deterministic given its inputs, so a rerun
-    should leave no trace of the previous one - appending instead is how a dataset ends up
-    with rows for frames that are no longer produced, or two rows for the same frame. The
-    negatives pass and the synthetic compositor write their own shards into the same pool
-    and they are not ours to delete, which emptying the whole directory used to do
-    silently.
-
-    Writing into the pool rather than into train/ or eval/ is what lets one mining run
-    serve both; split_pool deals them afterwards. Nothing stops `split` naming a split
-    directly, which is occasionally what a one-off comparison wants, but then that mining
-    run only ever reaches the split it was pointed at.
-    """
+    """Replace this producer's share of the pool with rows mined from the given (repo_id,
+    root) sources."""
     split_dir = output_root / split
     split_dir.mkdir(parents=True, exist_ok=True)
 
-    # Frames of two heights in one split do not collate, and the failure surfaces as a
-    # torch.stack error inside a dataloader worker on the first batch - long after the
-    # ten gigabytes of mismatched rows were written and the run was left overnight.
+    # Frames of two heights in one split fail only at the first batch, so check now.
     existing = split_image_size(split_dir)
     if existing is not None and tuple(existing) != tuple(image_size):
         raise SystemExit(
@@ -997,8 +688,7 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
             f"would write {image_size[0]}x{image_size[1]}. Pass --image_size "
             f"{existing[0]} {existing[1]} to match it, or mine into a different "
             f"--output_root.")
-    # Each mode is its own producer, written beside the others rather than over them: a
-    # split wants all of them, and each rerun should replace only what it wrote.
+    # Each mode is its own producer and replaces only what it wrote.
     prefix = shard_prefix(mode)
     for stale in split_dir.glob(f"{prefix}-*.parquet"):
         stale.unlink()
@@ -1023,13 +713,7 @@ def mine_preview(sources, approach_seconds: float, carry_seconds: float, rise_m:
                  limit: int | None, count: int, seed: int, mode: str = MODE_GRASPS,
                  stride: int = SWEEP_STRIDE, image_size=IMAGE_SIZE,
                  uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
-    """Label every frame a real run would, keep a random `count` of the rows, write nothing.
-
-    The point is the loop this closes: change how a label is derived, look at the frames
-    it lands on, change it again, without a shard write or a full decode in between. What
-    comes back is what `mine` would have written, so the preview is of the real thing and
-    not of a second code path that could drift from it.
-    """
+    """Label every frame a real run would, keep a random `count` of the rows, write nothing."""
     from tqdm import tqdm
 
     if uv_method in PIXEL_METHODS:
@@ -1052,11 +736,7 @@ def mine_preview(sources, approach_seconds: float, carry_seconds: float, rise_m:
 
 
 def fetch_preview_images(rows, image_size=IMAGE_SIZE):
-    """Fill in `image` on sampled rows, decoding only the frames they name.
-
-    One dataset open per source and the rows taken in dataset order: a video decoder
-    handles forward reads far better than it handles a seek per row.
-    """
+    """Fill in `image` on sampled rows, decoding only the frames they name, in dataset order."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     by_source: dict[tuple[str, str], list[dict]] = {}
@@ -1071,11 +751,7 @@ def fetch_preview_images(rows, image_size=IMAGE_SIZE):
 
 
 def write_dataset_card(output_root: Path):
-    """The YAML header that makes the parquet files load as a hub dataset.
-
-    Names train and eval only. The pool is the working copy every row is dealt from, not
-    a split anything reads, and listing it would have the hub serve every row twice.
-    """
+    """The YAML header that makes the train and eval shards load as a hub dataset."""
     lines = ["---", "configs:", "- config_name: default", "  data_files:"]
     for split, name in (("train", "train"), ("eval", "test")):
         if any((output_root / split).glob("*.parquet")):
@@ -1086,12 +762,7 @@ def write_dataset_card(output_root: Path):
 
 def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
                          keep_unlabelled=False):
-    """`count` random labelled rows, images included, read back out of the shards.
-
-    Two passes so that previewing a large dataset does not mean reading it: the first
-    reads only the label columns to find candidates, the second pulls just the row
-    groups the chosen rows landed in.
-    """
+    """`count` random labelled rows with images, reading only the row groups they land in."""
     import pyarrow.parquet as pq
 
     label_columns = ["episode_index", "frame_index", "seconds_to_grasp", "target_uv",
@@ -1102,10 +773,7 @@ def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
     for path in sorted(split_dir.glob(f"{prefix}-*.parquet" if prefix else "*.parquet")):
         table = pq.read_table(path, columns=["target_uv"])
         uv = table.column("target_uv").to_pylist()
-        # Negative and false-grab rows have no position label by construction, so
-        # requiring one would preview nothing at all - and "is this really empty floor",
-        # "would this grab really have missed" are the checks that matter most for modes
-        # whose whole job is to assert something a frame cannot be tested for.
+        # Negative and false-grab rows have no position label, so don't require one.
         candidates += [(path, i) for i, value in enumerate(uv)
                        if value is not None or keep_unlabelled]
 
@@ -1136,22 +804,12 @@ def sample_labelled_rows(split_dir: Path, count: int, seed: int, prefix=None,
 
 def write_preview(split_dir: Path, preview_dir: Path, count: int, seed: int,
                   group: int = 20, columns: int = 4, prefix=None, keep_unlabelled=False):
-    """A folder of annotated frames plus contact sheets, read back out of written shards."""
     render_preview(sample_labelled_rows(split_dir, count, seed, prefix, keep_unlabelled),
                    preview_dir, group, columns)
 
 
 def render_preview(chosen, preview_dir: Path, group: int = 20, columns: int = 4):
-    """Draw labelled rows as annotated frames plus contact sheets, for eyeballing them.
-
-    A sign error in the projection produces perfectly plausible numbers and an obviously
-    wrong crosshair, so this is the check that actually catches things. The frames are
-    drawn at twice their stored size, and the sheets do not shrink them to fit, because
-    text scaled down to fit a grid cell cannot be read - which defeats the point.
-
-    Takes rows rather than a directory, so the same drawing serves shards read back from
-    the pool and rows a preview-only run never wrote.
-    """
+    """Draw labelled rows as annotated frames plus contact sheets, at twice their stored size."""
     preview_dir.mkdir(parents=True, exist_ok=True)
     for old in list(preview_dir.glob("*.jpg")) + list(preview_dir.glob("*.png")):
         old.unlink()
@@ -1166,16 +824,14 @@ def render_preview(chosen, preview_dir: Path, group: int = 20, columns: int = 4)
                 if has_target else (w / 2, h / 2))
         theta = sample["grasp_axis_rad"] or 0.0
 
-        # Draw on a canvas big enough to hold the whole -0.25..1.25 range, so a target
-        # off the edge is visible instead of silently clipped away.
+        # A canvas big enough for the whole -0.25..1.25 range, so off-edge targets show.
         pad_x, pad_y = int(w * 0.25), int(h * 0.25)
         canvas = cv2.copyMakeBorder(img, pad_y, pad_y, pad_x, pad_x,
                                     cv2.BORDER_CONSTANT, value=(40, 40, 40))
         cx, cy = int(round(u + pad_x)), int(round(v + pad_y))
         cv2.rectangle(canvas, (pad_x, pad_y), (pad_x + w, pad_y + h), (90, 90, 90), 1)
 
-        # The grasp axis is how much further the wrist turns before the grasp, so the bar
-        # is drawn rotated by it: it shows the jaw line the operator ended up using.
+        # The bar is rotated by the grasp axis, showing the jaw line the operator used.
         if has_target:
             length = 40
             dx, dy = math.cos(theta) * length, math.sin(theta) * length
@@ -1184,19 +840,14 @@ def render_preview(chosen, preview_dir: Path, group: int = 20, columns: int = 4)
             cv2.circle(canvas, (cx, cy), 14, (0, 255, 0), 2)
             cv2.drawMarker(canvas, (cx, cy), (0, 255, 0), cv2.MARKER_CROSS, 26, 2)
         else:
-            # No crosshair to draw, and saying so beats an unmarked frame that could just
-            # as easily be a preview bug. Which of the two it is matters: a bare-floor
-            # negative asserts the frame is empty, while a masked one only declines to
-            # say, and stamping the stronger claim on both is how a preview stops being
-            # able to catch the difference.
+            # Say why there is no crosshair: an empty-floor negative or a masked label.
             banner = "NOTHING HERE" if sample['target_present'] == 0 else "NO TARGET LABEL"
             cv2.putText(canvas, banner, (pad_x + 10, pad_y + h - 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 5)
             cv2.putText(canvas, banner, (pad_x + 10, pad_y + h - 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 200, 255), 2)
 
-        # Every label here is nullable and a mode that masks one still has to preview,
-        # so nothing is formatted without first being known to be there.
+        # Every label is nullable, so check before formatting.
         finger = ('none' if sample['finger'] is None else f"{sample['finger']:+.2f}")
         lines = [
             f"ep{sample['episode_index']} f{sample['frame_index']}" + (
@@ -1235,8 +886,7 @@ def render_preview(chosen, preview_dir: Path, group: int = 20, columns: int = 4)
 
 
 def main():
-    # force=True: importing lerobot/transformers installs a root handler, which makes a
-    # later basicConfig a silent no-op and drops every info line this tool logs.
+    # force=True because importing lerobot/transformers installs a root handler.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         force=True)
 

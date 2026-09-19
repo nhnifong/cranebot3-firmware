@@ -1,39 +1,6 @@
 #!/usr/bin/env python
 
-"""Score a trained visual servoing checkpoint against a held-out split.
-
-Numbers say whether the model is right; `--preview_dir` says whether it is right for the
-right reason, by drawing the label as a green cross and the prediction as a red one on the
-frames it was scored on. That is the check worth doing before a model reaches a robot.
-
-What the numbers mean, all measured on the model's own 448x256 input, whose diagonal is
-516 px - so an error of 112 px is about a quarter of the frame away:
-
-    median_px     typical distance between the predicted grasp point and the true one.
-                  Lower is better. The median rather than the mean because a handful of
-                  frames where the model points at the wrong object dominate an average.
-    mean_px       the same with those frames included, so mean >> median means a few
-                  confident mistakes rather than uniform vagueness.
-    recall@Npx    the fraction of frames landing within N pixels of the truth. Higher is
-                  better, 1.0 is perfect. "Recall" here is a hit rate at a tolerance, not
-                  the precision/recall of a detector - there is nothing to miss, since
-                  every scored frame has exactly one target. Read the three radii as
-                  usable (10px), close (25px) and roughly right (50px).
-    range_ratio   median predicted distance over true distance. 1.0 is perfect, above 1
-                  means the model thinks the floor is further away than it is.
-    axis_deg      median grasp axis error in degrees. Only meaningful if the labels
-                  themselves vary - a split whose axis labels are all one value can be
-                  scored at a degree or two by a model that has learned to answer that
-                  value and nothing else.
-    finger_mae    mean error of the commanded finger speed, in the -1..1 the head predicts.
-    present_acc,  accuracy of the two classifier heads. present_acc is near 1.0 for free
-    holding_acc   on any split that is mostly frames with a target in them.
-
-The constant-prediction baseline is printed first, and it is the number that matters most:
-it is the score of ignoring the image entirely and always answering the average training
-target. For a centering task that is a strong answer. A model that does not clearly beat
-it on median_px *and* on the recall radii has learned nothing about the image, whatever
-its loss curve did.
+"""Score a visual servoing checkpoint on a held-out split, beside the constant-prediction baseline.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.evaluate \
@@ -53,6 +20,7 @@ import cv2
 import numpy as np
 import torch
 
+from nf_robot.ml.image_input import denormalize_to_bgr
 from nf_robot.ml.visual_servoing.dataset import VisualServoDataset
 from nf_robot.ml.visual_servoing.model import decode, load_checkpoint
 from nf_robot.ml.visual_servoing.servo import SERVO_MODEL_REPOID
@@ -85,21 +53,8 @@ class LabelsOnly:
         return self.uv
 
 
-def undo_normalization(tensor):
-    """A normalized model input back to a BGR image."""
-    from nf_robot.ml.ortho_target import IMAGENET_MEAN, IMAGENET_STD
-
-    array = tensor.cpu().numpy().transpose(1, 2, 0)
-    array = array * np.array(IMAGENET_STD) + np.array(IMAGENET_MEAN)
-    return cv2.cvtColor((np.clip(array, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
-
-
 def draw_legend(canvas):
-    """Say which mark is which, on the image rather than in the docs.
-
-    These frames get looked at on their own, days later and often by someone who did not
-    run the eval, and "which one is the prediction" is the first question every time.
-    """
+    """Label the marks on the image itself."""
     y = canvas.shape[0] - 9
     cv2.rectangle(canvas, (0, y - 15), (canvas.shape[1], canvas.shape[0]), (25, 25, 25), -1)
 
@@ -118,13 +73,8 @@ def draw_legend(canvas):
 
 
 def draw_prediction(image, label_uv, predicted, image_size):
-    """One frame with its label and the model's answer drawn on a padded canvas.
-
-    Green upright cross is the label, red tilted cross is the prediction, the orange bar
-    through it is the predicted grasp axis, and the thin grey line joins the two so the
-    error is a length rather than a number to look up. draw_legend puts the same on the
-    image.
-    """
+    """One frame with its label (green), prediction (red) and grasp axis (orange) on a
+    padded canvas."""
     width, height = image_size
     pad_x, pad_y = int(width * 0.25), int(height * 0.25)
     canvas = cv2.copyMakeBorder(image, pad_y, pad_y, pad_x, pad_x,
@@ -190,7 +140,7 @@ def write_preview(model, dataset, device, preview_dir, count, seed, image_size):
             "holding": float(outputs["holding_logit"][0].sigmoid()),
             "error_px": float(((uv[0, 0].cpu() - item["target_uv"]) * scale).norm()) if has_uv else 0.0,
         }
-        cell = draw_prediction(undo_normalization(item["image"]), label_uv, predicted, image_size)
+        cell = draw_prediction(denormalize_to_bgr(item["image"]), label_uv, predicted, image_size)
         cv2.imwrite(str(preview_dir / f"row{index:06d}.jpg"), cell)
         cells.append(cell)
 
@@ -249,9 +199,7 @@ def main():
                       args.preview_count, args.seed, image_size)
 
     if args.upload:
-        # Uploading from here rather than from training means what goes to the hub is the
-        # checkpoint that was just scored, and the score in the commit message is the one
-        # that was measured rather than the best seen mid-run.
+        # Upload the checkpoint just scored, with the measured score in the commit message.
         upload_model(args.model_path, args.model_id, metrics)
 
 
