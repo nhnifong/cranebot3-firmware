@@ -61,9 +61,7 @@ from lerobot.datasets.video_utils import get_video_info
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
-from nf_robot.ml import camera_goal
-from nf_robot.ml.lerobot import label_contact_actions as label_contact
-from nf_robot.ml.lerobot.label_contact_actions import label_dataset
+from nf_robot.ml.lerobot import recorded_calibration
 from nf_robot.ml.lerobot.normalize_tasks import load_mapping, normalize_tasks
 from nf_robot.ml.lerobot.reblend_ortho import load_anchor_config, reblend_ortho
 from nf_robot.ml.lerobot.resize_video_feature import resize_video
@@ -236,8 +234,6 @@ def derive_dataset(
     pad_clamp: bool = False,
     keep_state_features: list[str] | None = None,
     normalize_tasks_spec: dict | None = None,
-    camera_goal_anchor_poses: list | None = None,
-    camera_goal_label_cfg: dict | None = None,
     drop_features: list[str] | None = None,
     keep_action_features: list[str] | None = None,
     reblend_ortho_cfg: dict | None = None,
@@ -267,11 +263,6 @@ def derive_dataset(
     # source have an identical feature set, so an extra on one source fails the whole
     # build. Only dropped where present; naming a feature no source has is a no-op.
     if drop_features:
-        if camera_goal_anchor_poses is not None and camera_goal.ANCHOR_POSES_KEY in drop_features:
-            raise ValueError(
-                f"cannot drop '{camera_goal.ANCHOR_POSES_KEY}': the "
-                f"'{camera_goal.ACTION_SPACE_NAME}' action space conversion reads it"
-            )
         features_to_remove += [k for k in drop_features if k in dataset.meta.features]
 
     if features_to_remove:
@@ -312,16 +303,17 @@ def derive_dataset(
     # one feature set without the new ones having to give theirs up. Each is a no-op on a
     # dataset that already has it, which is how the recordings that do keep their own.
     if backfill_anchor_poses:
-        if drop_features and camera_goal.ANCHOR_POSES_KEY in drop_features:
+        if drop_features and recorded_calibration.ANCHOR_POSES_KEY in drop_features:
             raise ValueError(
-                f"backfill_anchor_poses and dropping '{camera_goal.ANCHOR_POSES_KEY}' "
+                f"backfill_anchor_poses and dropping '{recorded_calibration.ANCHOR_POSES_KEY}' "
                 f"ask for opposite things"
             )
-        added = camera_goal.add_anchor_poses_feature(
-            output_dir, camera_goal.load_anchor_poses(anchor_config) if anchor_config else ()
+        added = recorded_calibration.add_anchor_poses_feature(
+            output_dir,
+            recorded_calibration.load_anchor_poses(anchor_config) if anchor_config else ()
         )
         if anchor_config:
-            added |= camera_goal.add_anchor_cam_tilt_feature(
+            added |= recorded_calibration.add_anchor_cam_tilt_feature(
                 output_dir, load_anchor_config(anchor_config)[2])
         if added:
             dataset = LeRobotDataset(repo_id=repo_id, root=output_dir)
@@ -398,34 +390,9 @@ def derive_dataset(
 
     _write_info_json(info, dataset.root)
 
-    # before the state trim: the conversion reads gripper_rot_*, which the trim may drop
-    if camera_goal_anchor_poses is not None:
-        # the goal comes from contact_vec, so labelling runs here, per source, rather
-        # than after the merge - by then the sources are mixed and each one's anchor
-        # poses no longer apply.
-        cfg = camera_goal_label_cfg or {}
-        logging.info("Labelling contact actions before the action space conversion")
-        label_dataset(
-            root=dataset.root,
-            pressure_threshold=float(cfg.get("pressure_threshold", 0.1)),
-            episode_end_seconds=float(cfg.get("episode_end_seconds", 1.0)),
-            rotate_contact_vec=False,  # camera_goal needs contact_vec in the room frame
-            blend_seconds=float(cfg.get("blend_seconds", 0.5)),
-            mode=str(cfg.get("mode", "contact")),
-            rest_speed_mps=float(cfg.get("rest_speed_mps", label_contact.REST_SPEED_MPS)),
-            min_rest_s=float(cfg.get("min_rest_s", label_contact.MIN_REST_S)),
-        )
-        logging.info(f"Converting actions to the '{camera_goal.ACTION_SPACE_NAME}' space")
-        camera_goal.derive_dataset_actions(
-            dataset.root, camera_goal_anchor_poses,
-            pressure_threshold=float(cfg.get("pressure_threshold", 0.1)),
-            blend_seconds=float(cfg.get("blend_seconds", 0.5)),
-        )
-
     if keep_state_features:
         select_state_features(dataset.root, keep_state_features)
 
-    # after the camera_goal conversion, which rewrites the action space wholesale
     if keep_action_features:
         select_vector_feature(dataset.root, "action", keep_action_features)
 
@@ -478,11 +445,6 @@ def main() -> None:
              "(see normalize_tasks.py)",
     )
     parser.add_argument(
-        "--camera_goal_anchors", default=None,
-        help="Robot config file (conf_*.json) whose anchor poses convert the actions to the "
-             "camera_goal space; see camera_goal.py",
-    )
-    parser.add_argument(
         "--reblend_ortho", action="store_true",
         help="Re-render the ortho floor view from the anchor cameras with today's blend "
              "before they are dropped; see reblend_ortho.py",
@@ -533,9 +495,6 @@ def main() -> None:
         pad_clamp=args.pad_clamp,
         keep_state_features=args.keep_state_features,
         normalize_tasks_spec=normalize_tasks_spec,
-        camera_goal_anchor_poses=(
-            camera_goal.load_anchor_poses(args.camera_goal_anchors) if args.camera_goal_anchors else None
-        ),
         reblend_ortho_cfg={"enabled": True} if args.reblend_ortho else None,
         anchor_config=args.anchor_config,
         backfill_anchor_poses=args.backfill_anchor_poses,

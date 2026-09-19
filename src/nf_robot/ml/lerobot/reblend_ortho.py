@@ -14,9 +14,8 @@ What has to be recovered, per source dataset:
   anchor camera poses  Datasets recorded from August 2026 onward carry the anchor poses
                        of the robot that recorded them in an `anchor_poses` feature.
                        Older ones need `anchor_config`, the calibration file the robot
-                       was running - the same rule, and the same risk of a config that
-                       has been recalibrated since, as camera_goal; see
-                       ml/calibrations/readme.md.
+                       was running, with the risk that it has been recalibrated since;
+                       see ml/calibrations/readme.md.
 
   camera intrinsics    Not recorded at all. They come from `anchor_config` when there is
                        one, and otherwise from the stock calibration in config_loader,
@@ -70,7 +69,7 @@ from nf_robot.common.pose_functions import arp_anchor_camera_pose
 from nf_robot.common.util import poseProtoToTuple
 from nf_robot.generated.nf import config as nf_config
 from nf_robot.host.floor_view import EXTENT_M, SIDE_PX, OrthoBlender
-from nf_robot.ml import camera_goal
+from nf_robot.ml.lerobot import recorded_calibration
 from nf_robot.ml.lerobot.resize_video_feature import open_encoder
 
 ORTHO_KEY = "observation.images.overhead_camera"
@@ -341,7 +340,7 @@ def resolve_camera_poses(source_root, episodes, fps, out_w, out_h, anchor_config
     """Each episode's anchor camera poses in the room, ready to warp with.
 
     Returns (camera_cal, {episode: [camera_pose, ...]}, {episode: [cam_tilt, ...]}).
-    Anchor poses recorded with the data win over a config file, matching camera_goal:
+    Anchor poses recorded with the data win over a config file:
     they are the calibration that was actually running, where a config is only right if
     nothing has been recalibrated since. The tilts follow the same rule.
     """
@@ -356,13 +355,13 @@ def resolve_camera_poses(source_root, episodes, fps, out_w, out_h, anchor_config
             "assumed; a robot with its own chessboard calibration would differ."
         )
 
-    recorded = _episode_calibration(source_root, camera_goal.ANCHOR_POSES_KEY,
-                                    camera_goal.unpack_anchor_poses)
-    recorded_tilts = _episode_calibration(source_root, camera_goal.ANCHOR_CAM_TILT_KEY,
-                                          camera_goal.unpack_anchor_cam_tilt) or {}
+    recorded = _episode_calibration(source_root, recorded_calibration.ANCHOR_POSES_KEY,
+                                    recorded_calibration.unpack_anchor_poses)
+    recorded_tilts = _episode_calibration(source_root, recorded_calibration.ANCHOR_CAM_TILT_KEY,
+                                          recorded_calibration.unpack_anchor_cam_tilt) or {}
     if recorded is None and config_poses is None:
         raise ValueError(
-            f"{source_root} has no '{camera_goal.ANCHOR_POSES_KEY}' feature and no "
+            f"{source_root} has no '{recorded_calibration.ANCHOR_POSES_KEY}' feature and no "
             f"anchor_config was given, so nothing says where its anchor cameras were."
         )
 
@@ -649,7 +648,7 @@ def reblend_ortho(
 
     # Whatever the tilts turned out to be, the derived dataset now says so - a source
     # that had to have them recovered does not have to have them recovered again.
-    camera_goal.add_anchor_cam_tilt_feature(dest_root, cam_tilts)
+    recorded_calibration.add_anchor_cam_tilt_feature(dest_root, cam_tilts)
 
     if alignments:
         # Low scores here mean the re-render does not sit where the recorded one did,

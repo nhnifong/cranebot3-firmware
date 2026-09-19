@@ -20,7 +20,7 @@ pad_clamp: false
 
 # Rebuilding the view needs to know where each anchor camera was, so this is the
 # intersection of combined_targets with the sources whose calibration is recoverable:
-# the ones move_clutter_camera_goal pairs with a checked config file, plus everything
+# the ones paired below with a checked config file, plus everything
 # recorded after the anchor_poses feature landed, which carries its own. combined_targets
 # sources older than August 2026 and without a config are simply absent - there is
 # nothing to re-render them from.
@@ -67,7 +67,7 @@ merge:
     anchor_config: ../calibrations/justin.json
 
   # episode 13's gripper_camera video came out of our own AV1 re-encode with undecodable
-  # packets in the middle, as it did in move_clutter_camera_goal; the source decodes clean.
+  # packets in the middle, as it did in an earlier build; the source decodes clean.
   - repo_id: justink04/laundry-in-hamper4-8-1-26
     exclude_episodes: [13]
     anchor_config: ../calibrations/justin.json
@@ -112,8 +112,8 @@ keep_state_features:
 # demands identical feature sets - which combined_targets settles by dropping the feature
 # everywhere. It can go the other way here: every source without it has an anchor_config,
 # so the older ones gain the feature filled from that config instead. The merged dataset
-# then documents where each episode's anchor cameras were, which is what a later
-# camera_goal conversion or another re-render would otherwise have to be told again.
+# then documents where each episode's anchor cameras were, which is what another
+# re-render would otherwise have to be told again.
 #
 # It records the anchor poses, not the camera poses - same as a recording does - so the
 # camera tilt composed on top of them still is not in there. The tilts this build resolved

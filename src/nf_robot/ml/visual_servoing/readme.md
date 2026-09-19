@@ -432,14 +432,10 @@ finger_angle, laser_rangefinder, finger_pressure, timestamp. All of these are al
 columns; scan_episode_states in ortho_target/dataset.py is the pattern for pulling a few
 components for every frame without decoding video.
 
-**The camera pose chain**, which already exists and needs nothing new. The gripper
-camera's mount pose in the gripper frame is definitions.gripper_camera, camera_goal.py
-composes it with the recorded gripper position and 6D rotation in gripper_camera_pose,
-and goal_in_camera_frame expresses any room point in that camera's frame - the same
-chain the camera_goal action space and the waypoint labelling in
-lerobot.label_contact_actions already run on this data. The 684x384 intrinsic and
-distortion are config.camera_cal_wide. So the projection is assembled from parts that
-are already load-bearing elsewhere rather than from a new calibration.
+**The camera pose chain**, which needs nothing new. The gripper camera's mount pose in
+the gripper frame is definitions.gripper_camera (see geometry.py), and the 684x384
+intrinsic and distortion are config.camera_cal_wide. So the projection is assembled from
+parts that are already load-bearing elsewhere rather than from a new calibration.
 
 Then the labels fall out per head:
 

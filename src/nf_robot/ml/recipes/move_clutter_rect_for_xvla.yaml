@@ -35,9 +35,8 @@ merge:
   - repo_id: justink04/laundry-in-hamper3-8-1-26
     exclude_episodes: ['48-99']
   - justink04/cranebot-ethernet-test-02
-  # excluded because this episode's re-encoded gripper video was corrupt in
-  # naavox/move_clutter_camera_goal; the source itself decodes clean, so this may be
-  # unnecessary here (see move_clutter_camera_goal.yaml)
+  # excluded because this episode's re-encoded gripper video was corrupt in an earlier
+  # build; the source itself decodes clean, so this may be unnecessary here
   - repo_id: justink04/laundry-in-hamper4-8-1-26
     exclude_episodes: [13]
   - naavox/nick-clutter-aug3

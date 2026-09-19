@@ -19,7 +19,7 @@ calibration is run, so a config file is only correct for the sessions recorded
 between one calibration and the next.
 
 Usage:
-    python experiments/check_dataset_robots.py --recipe src/nf_robot/ml/recipes/move_clutter_camera_goal.yaml
+    python experiments/check_dataset_robots.py --recipe src/nf_robot/ml/recipes/move_clutter_rect_for_xvla.yaml
     python experiments/check_dataset_robots.py --repo_ids naavox/move_clutter justink04/laundry-in-hamper-8-1-26
 """
 

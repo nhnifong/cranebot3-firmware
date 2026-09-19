@@ -29,7 +29,7 @@ import inspect
 from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
 from nf_robot.ml.frozen_camera_monitor import FrozenCameraMonitor
-from nf_robot.ml import camera_goal
+from nf_robot.ml.lerobot import recorded_calibration
 
 from lerobot.robots import Robot, RobotConfig
 from lerobot.datasets.image_writer import safe_stop_image_writer
@@ -101,8 +101,6 @@ _ACTION_SPACES: dict[str, list[str]] = {
         "contact_vec_x", "contact_vec_y", "contact_vec_z",
         "episode_end",
     ],
-    # goal positions in camera frames instead of velocities; see camera_goal.py
-    camera_goal.ACTION_SPACE_NAME: list(camera_goal.ACTION_NAMES),
 }
 DEFAULT_ACTION_SPACE = "dual_vel_contact"
 
@@ -176,9 +174,6 @@ class StringmanConfig(RobotConfig):
     remote_stream_token: str | None = None
     camera_mode: str = "all"
     action_space: str = DEFAULT_ACTION_SPACE
-    # eval-only: commit to one camera_goal destination instead of steering at every
-    # prediction. Off by default, and inert for every other action space.
-    stabilize_goals: bool = False
 
 def decode_image(jpeg_bytes):
     try:
@@ -233,13 +228,12 @@ class StringmanLeRobot(Robot):
         self.last_status = common.LerobotStatus.NA
 
         self.last_spin = 0.0
-        # anchor camera poses from the observer, needed to place camera_goal
-        # predictions back in the room. empty until the observer sends them.
+        # anchor camera poses from the observer, recorded with each frame. empty until the
+        # observer sends them.
         self.anchor_poses = []
         # degrees each anchor's camera mount is tilted off the anchor, which the poses
         # alone do not say. Only arpeggio anchors report it.
         self.anchor_cam_tilt = []
-        self.goal_stabilizer = camera_goal.GoalStabilizer() if config.stabilize_goals else None
 
         self.events = events
 
@@ -645,50 +639,6 @@ class StringmanLeRobot(Robot):
             **{_FEED_NAMES[f]: img for f, img in images.items()},
         }
 
-    def _send_camera_goal_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Drive toward a camera_goal prediction. See camera_goal.py for the action space."""
-        stabilizer = self.goal_stabilizer
-        goal_room, spread = camera_goal.fuse_goal_to_room(
-            action, self.last_gripper_pos, self.last_gripper_rot_6d, self.anchor_poses,
-            robust=stabilizer is not None,
-        )
-        if stabilizer is not None:
-            # steer at a committed destination rather than at this frame's prediction
-            previous = stabilizer.reason
-            logger.debug(f'fings {fings}')
-            destination = stabilizer.update(
-                goal_room, spread, self.last_gripper_pos, time.time(),
-                hold=abs(float(action.get('finger_speed', 0.0))) > 1.0,
-            )
-            if stabilizer.reason != previous:
-                shown = np.round(destination, 3) if destination is not None else None
-                print(f'camera_goal: {stabilizer.reason} -> {shown}')
-            velocity = stabilizer.velocity(self.last_gripper_pos)
-            self.last_goal_room = destination
-            self.last_goal_spread = spread
-        elif goal_room is None:
-            print('camera_goal: no usable camera goal in the action; holding still')
-            velocity = np.zeros(3)
-        else:
-            velocity = camera_goal.goal_to_velocity(goal_room, self.last_gripper_pos)
-            self.last_goal_room = goal_room
-            self.last_goal_spread = spread
-
-        batch = control.ControlBatchUpdate(
-            robot_id="0",
-            updates=[control.ControlItem(move=control.CombinedMove(
-                direction=common.Vec3(x=velocity[0], y=velocity[1], z=velocity[2]),
-                finger_speed=action.get('finger_speed', 0.0),
-                wrist_speed=camera_goal.wrist_offset_to_speed(action.get('wrist_offset', 0.0)),
-                # goals are fused in the room frame, so the direction is too
-                direction_is_in_gripper_frame=False,
-            ))]
-        )
-        to_send = bytes(batch)
-        if self.websocket and to_send:
-            self.websocket.send(to_send)
-        return action
-
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
 
         # action['wrist_speed'] *= 30
@@ -702,11 +652,6 @@ class StringmanLeRobot(Robot):
         z = 0.0
         wrist_speed = 0.0
         finger_speed = 0.0
-
-        # camera_goal predicts where to go rather than how fast to move: fuse the
-        # per-camera goals into a room position and head toward it at a fixed speed.
-        if any(k in action for k in camera_goal.GOAL_SLOTS['gripper_camera']):
-            return self._send_camera_goal_action(action)
 
         if not IGNORE_GRIPPER_FRAME_VEL:
             gripper_xy += [action.get('vel_x', 0.0), action.get('vel_y', 0.0)]
@@ -840,8 +785,10 @@ def record_episode(
 
         frame = {
             **observation_frame, **action_frame,
-            camera_goal.ANCHOR_POSES_KEY: camera_goal.pack_anchor_poses(robot.anchor_poses),
-            camera_goal.ANCHOR_CAM_TILT_KEY: camera_goal.pack_anchor_cam_tilt(robot.anchor_cam_tilt),
+            recorded_calibration.ANCHOR_POSES_KEY:
+                recorded_calibration.pack_anchor_poses(robot.anchor_poses),
+            recorded_calibration.ANCHOR_CAM_TILT_KEY:
+                recorded_calibration.pack_anchor_cam_tilt(robot.anchor_cam_tilt),
             "task": robot.last_task_description,
         }
         dataset.add_frame(frame)
@@ -960,10 +907,9 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
         action_features = hw_to_dataset_features(robot.action_features, "action")
         obs_features = hw_to_dataset_features(robot.observation_features, "observation")
         # Recorded so a dataset carries the calibration it was made under; policies
-        # ignore it (it is not an observation.* key), camera_goal consumes the poses and
-        # reblend_ortho consumes both.
+        # ignore it (it is not an observation.* key) and reblend_ortho consumes it.
         dataset_features = {**action_features, **obs_features,
-                            **camera_goal.recorded_calibration_features()}
+                            **recorded_calibration.recorded_calibration_features()}
 
         dsname = hf_repo_id.split('/')[1]
         root = f"datasets/{dsname}"
@@ -1145,8 +1091,6 @@ def eval_episode(
     policy.reset()
     preprocessor.reset()
     postprocessor.reset()
-    if robot.goal_stabilizer is not None:
-        robot.goal_stabilizer.reset()
     policy_device = get_device_from_parameters(policy)
 
     while timestamp < max_episode_duration:
@@ -1276,10 +1220,6 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
     from lerobot.policies.factory import make_policy, make_pre_post_processors
     from lerobot.configs.policies import PreTrainedConfig
 
-    # camera_goal policies only: commit to one destination and drive to it, instead of
-    # steering at every prediction. Ignored by other action spaces. Edit here to toggle.
-    stabilize_goals = True
-
     events = {
         'episode_abandon': False,
         'end_recording': False,
@@ -1302,7 +1242,7 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
     # connect to the robot right away because it is our channel to send error messages back to the user.
     print(f"Connecting to robot...")
     robot = StringmanLeRobot(StringmanConfig(uri, remote_stream_token=remote_stream_token, camera_mode=camera_mode,
-                                             action_space=action_space, stabilize_goals=stabilize_goals), events)
+                                             action_space=action_space), events)
     print(describe_session_spaces(camera_mode, action_space, robot.observation_features, robot.action_features))
     robot.connect()
 

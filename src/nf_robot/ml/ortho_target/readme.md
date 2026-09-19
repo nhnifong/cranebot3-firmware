@@ -172,8 +172,7 @@ costs what it used to.
 ## Geometry
 
 The ortho view is an orthographic projection of the floor plane (host/floor_view.py), so
-room metres map to its pixels analytically - no camera pose is involved, unlike
-camera_goal.py's per-anchor projection.
+room metres map to its pixels analytically - no camera pose is involved.
 
 ## What eval measures
 

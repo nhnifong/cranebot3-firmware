@@ -38,9 +38,9 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     merge:                                    # source datasets to merge (>= 1)
       - naavox/test_dataset_3                 # plain repo id: use every episode
       - repo_id: naavox/laptop_test_dataset   # or a mapping, to select episodes
-        anchor_config: conf_robot.json        # only for action_space: camera_goal, and only
-                                              # for datasets recorded before they carried their
-                                              # own anchor_poses feature
+        anchor_config: conf_robot.json        # only for reblend_ortho or backfill_anchor_poses,
+                                              # and only for datasets recorded before they
+                                              # carried their own anchor_poses feature
         include_episodes: ["0-99"]            # optional; keep only these (default: all)
         exclude_episodes: [3, "10-14", 27]    # dropped on top of include_episodes
                                               # both take ints and inclusive "first-last" ranges.
@@ -66,14 +66,14 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
       render_fps: 10                          # instead of keeping the one it was recorded with.
       cam_tilt: [30, 26]                      # See reblend_ortho.py. Every source needs
                                               # anchor poses, from its own anchor_poses feature
-                                              # or from an anchor_config, exactly as camera_goal
-                                              # does. cam_tilt is optional: it comes from the
+                                              # or from an anchor_config. cam_tilt is
+                                              # optional: it comes from the
                                               # anchor_config, and where there is none it is
                                               # recovered from the recorded ortho view.
     action_space: gripper_vel                 # optional; omit to keep the recorded space.
-                                              # camera_goal converts; any other named space is a
-                                              # subset of the recorded action components and is
-                                              # trimmed to. See stringman._ACTION_SPACES.
+                                              # A named space is a subset of the recorded action
+                                              # components and is trimmed to. See
+                                              # stringman._ACTION_SPACES.
     trim_to_grasp:                            # optional; cut each episode to just its grasp
       enabled: true                           # (see trim_to_grasp.py). Runs on the merged
       pressure_threshold: 0.1                 # dataset and re-encodes all video, so it is slow.
@@ -84,9 +84,6 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
       post_lift_seconds: 1.0                  # carry kept after the lift
     label_contact_actions:                    # optional; omit or set enabled: false to skip
       enabled: true
-      mode: contact                           # or "waypoints": target the next position the
-                                              # gantry actually stopped at, rather than the
-                                              # grasp blended into the episode end
       pressure_threshold: 0.1
       episode_end_seconds: 1.0
       blend_seconds: 0.5
@@ -115,7 +112,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from nf_robot.ml.lerobot.derive_dataset import camera_mode_problems, derive_dataset
 from nf_robot.ml.lerobot.label_contact_actions import label_dataset
-from nf_robot.ml import camera_goal
+from nf_robot.ml.lerobot import recorded_calibration
 from nf_robot.ml.lerobot import reblend_ortho
 from nf_robot.ml.lerobot.normalize_tasks import load_mapping
 from nf_robot.ml.lerobot.stringman import (
@@ -206,8 +203,7 @@ def resolve_source_revision(repo_id: str) -> str | None:
     return "main"
 
 
-def preflight_sources(sources: list[dict], action_space: str | None = None,
-                      reblend: bool = False, backfill: bool = False,
+def preflight_sources(sources: list[dict], reblend: bool = False, backfill: bool = False,
                       camera_mode: str | None = None,
                       pad_clamp: bool = False) -> dict[str, str | None]:
     """Resolve every source's revision before any conversion work starts.
@@ -215,7 +211,7 @@ def preflight_sources(sources: list[dict], action_space: str | None = None,
     Conversion takes hours; reaching a broken source at the end wastes all of it.
     These are metadata-only Hub calls, so checking all of them up front is cheap.
 
-    For camera_goal, the ortho re-blend and the anchor_poses backfill, this also settles
+    For the ortho re-blend and the anchor_poses backfill, this also settles
     where each source's anchor poses come from: the dataset's own anchor_poses feature, or an anchor_config
     naming the calibration the robot was running. A source with neither cannot be
     converted. The re-blend additionally needs the anchor cameras it rebuilds the view
@@ -227,7 +223,7 @@ def preflight_sources(sources: list[dict], action_space: str | None = None,
     """
     from huggingface_hub import hf_hub_download
 
-    needs_poses = reblend or backfill or action_space == camera_goal.ACTION_SPACE_NAME
+    needs_poses = reblend or backfill
 
     revisions: dict[str, str | None] = {}
     self_describing = []
@@ -263,9 +259,9 @@ def preflight_sources(sources: list[dict], action_space: str | None = None,
 
         if spec.get("anchor_config"):
             continue
-        if camera_goal.ANCHOR_POSES_KEY not in info["features"]:
+        if recorded_calibration.ANCHOR_POSES_KEY not in info["features"]:
             raise ValueError(
-                f"Source '{repo_id}' has no '{camera_goal.ANCHOR_POSES_KEY}' feature and no "
+                f"Source '{repo_id}' has no '{recorded_calibration.ANCHOR_POSES_KEY}' feature and no "
                 f"'anchor_config' in the recipe, so nothing says where its anchor cameras "
                 f"were. Datasets recorded before that feature existed need the config of "
                 f"the robot that recorded them."
@@ -376,8 +372,8 @@ def normalize_sources(merge_spec: list) -> list[dict]:
             # empty include means "all of them"; exclude applies on top either way
             "include_episodes": include,
             "exclude_episodes": exclude,
-            # config of the robot that recorded this source, for action spaces that
-            # need its anchor camera poses (camera_goal)
+            # config of the robot that recorded this source, for steps that need its
+            # anchor camera poses
             "anchor_config": entry.get("anchor_config"),
         })
     return sources
@@ -463,14 +459,14 @@ def load_recipe(path: Path) -> dict:
             )
 
     backfill = bool(recipe.get("backfill_anchor_poses", False))
-    if backfill and camera_goal.ANCHOR_POSES_KEY in (recipe.get("drop_features") or []):
+    if backfill and recorded_calibration.ANCHOR_POSES_KEY in (recipe.get("drop_features") or []):
         raise ValueError(
-            f"'backfill_anchor_poses' and dropping '{camera_goal.ANCHOR_POSES_KEY}' in "
+            f"'backfill_anchor_poses' and dropping '{recorded_calibration.ANCHOR_POSES_KEY}' in "
             f"'drop_features' ask for opposite things"
         )
 
     # anchor_config supplies the anchor camera poses, and all of these need them.
-    if backfill or action_space == camera_goal.ACTION_SPACE_NAME or (reblend and reblend.get("enabled")):
+    if backfill or (reblend and reblend.get("enabled")):
         # anchor_config is optional: a dataset recorded after the anchor_poses feature
         # was added carries its own calibration, and preflight checks that every source
         # has one source of poses or the other.
@@ -725,7 +721,7 @@ def build(
         logging.info(f"Removing existing {output_root}")
         shutil.rmtree(output_root)
 
-    revisions = preflight_sources(sources, action_space, reblend=do_reblend,
+    revisions = preflight_sources(sources, reblend=do_reblend,
                                   backfill=backfill_anchor_poses, camera_mode=camera_mode,
                                   pad_clamp=pad_clamp)
 
@@ -775,24 +771,12 @@ def build(
                 pad_clamp=pad_clamp,
                 keep_state_features=keep_state_features,
                 normalize_tasks_spec=normalize_tasks_spec,
-                # empty tuple still triggers the conversion, and means "the dataset's own
-                # recorded poses are the only source"
-                camera_goal_anchor_poses=(
-                    (camera_goal.load_anchor_poses(source_spec["anchor_config"])
-                     if source_spec["anchor_config"] else ())
-                    if action_space == camera_goal.ACTION_SPACE_NAME else None
-                ),
-                camera_goal_label_cfg=label_cfg,
                 drop_features=drop_features,
                 reblend_ortho_cfg=reblend_cfg if do_reblend else None,
                 anchor_config=source_spec["anchor_config"],
                 backfill_anchor_poses=backfill_anchor_poses,
-                # camera_goal rewrites the action space itself; every other named space is
-                # a subset of the recorded components, so it's a trim.
-                keep_action_features=(
-                    _ACTION_SPACES[action_space]
-                    if action_space and action_space != camera_goal.ACTION_SPACE_NAME else None
-                ),
+                # a named space is a subset of the recorded components, so it's a trim
+                keep_action_features=_ACTION_SPACES[action_space] if action_space else None,
             )
             validate_dataset(repo_id, converted_root, expected_camera_mode=camera_mode,
                              decode_videos=verify_decode)
@@ -875,11 +859,7 @@ def build(
                          decode_videos=verify_decode)
 
     # Step 5: optional contact-action labeling (rewrites the action column + its stats).
-    # camera_goal labels per source (its conversion consumes contact_vec), so the
-    # merged dataset has nothing left to label.
-    if do_label and action_space == camera_goal.ACTION_SPACE_NAME:
-        logging.info("Skipping the post-merge labeling pass; camera_goal labels per source")
-    elif do_label:
+    if do_label:
         logging.info(f"Labeling contact actions on '{output_repo_id}'")
         label_dataset(
             root=output_root,
