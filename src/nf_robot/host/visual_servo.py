@@ -66,7 +66,7 @@ COMMIT_RANGE_M = 0.3
 DESCENT_GAIN = 0.25         # (1/s) speed asked for per metre of range left to close
 DESCENT_SPEED_MAX = 0.14    # (m/s) cap while there is plenty of room below
 DESCENT_SPEED_MIN = 0.07    # (m/s) floor, or the last centimetres never arrive
-LATERAL_GAIN = 0.8          # (1/s) fraction of the remaining offset commanded per second
+LATERAL_GAIN = 0.9          # (1/s) fraction of the remaining offset commanded per second
 LATERAL_SPEED_MAX = 0.15    # (m/s)
 # Descent is gated on being centered, and the tolerance is a fraction of the range, which
 # makes it an angular tolerance: 3cm of error at 60cm up is a correction the rest of the
