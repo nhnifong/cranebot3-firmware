@@ -17,7 +17,7 @@ from nf_robot.ml.visual_servoing.mine_teleop import (
     holding_label, in_view, mine_episode, mine_false_grab_episode, shard_prefix)
 from nf_robot.ml.visual_servoing.geometry import CAMERA_POS_BODY
 from nf_robot.ml.visual_servoing.uv_methods import (
-    DEFAULT_UV_METHOD, DELTA_METHODS, UV_METHODS, grasp_point_room,
+    DEFAULT_UV_METHOD, anchor_is_usable, DELTA_METHODS, UV_METHODS, grasp_point_room,
     gripper_camera_calibration, jaw_uv, project, project_camera, range_to_floor,
     target_track, unproject)
 
@@ -528,3 +528,44 @@ class TestUvMethods(unittest.TestCase):
                 self.assertAlmostEqual(u, uv[0], places=6)
                 self.assertAlmostEqual(v, uv[1], places=6)
                 self.assertAlmostEqual(distance, 0.35, places=6)
+
+
+class TestUnusableRange(unittest.TestCase):
+    """A grasp frame whose rangefinder read nothing. Every method hangs the target off that
+    reading, so there is no target and the episode is not minable by any of them."""
+
+    def rows_with_grasp_laser(self, laser):
+        rows = rows_for([0.0] * 90)
+        for row in rows:
+            row["laser_rangefinder"] = laser
+        return rows
+
+    def test_a_gripper_resting_on_the_floor_has_no_anchor(self):
+        """What a close commanded with the fingers already down reports. The jaw point is
+        then at or behind the lens, where a projection still returns plausible numbers."""
+        rows = self.rows_with_grasp_laser(0.004)
+        self.assertFalse(anchor_is_usable(rows[60], gripper_camera_calibration()))
+
+    def test_an_ordinary_grasp_range_does(self):
+        rows = self.rows_with_grasp_laser(0.11)
+        self.assertTrue(anchor_is_usable(rows[60], gripper_camera_calibration()))
+
+    def test_the_miner_skips_it_by_name(self):
+        """Named rather than left to drop frame by frame: a whole episode vanishing one
+        frame at a time reports as off-canvas, which says nothing about the cause."""
+        rows = self.rows_with_grasp_laser(0.004)
+        result, reason, _ = mine_episode(rows, 30.0, gripper_camera_calibration(),
+                                         2.0, 1.0, 0.05)
+        self.assertIsNone(result)
+        self.assertEqual(reason, "no_range")
+
+    def test_the_skip_counter_has_a_slot_for_it(self):
+        """mine_source counts reasons into a fixed dict, so a reason with no slot is a
+        KeyError halfway through a several-hour run."""
+        import inspect
+
+        from nf_robot.ml.visual_servoing import mine_teleop
+
+        source = inspect.getsource(mine_teleop.mine_source)
+        for reason in ("no_grasp", "no_rise", "no_range"):
+            self.assertIn(f'"{reason}": 0', source)

@@ -50,7 +50,7 @@ from nf_robot.ml.lerobot_trim_to_grasp import (
 )
 from nf_robot.ml.visual_servoing.mine_teleop import frame_bgr, read_columns
 from nf_robot.ml.visual_servoing.uv_methods import (
-    DEFAULT_UV_METHOD, PIXEL_METHODS, add_uv_arguments,
+    DEFAULT_UV_METHOD, PIXEL_METHODS, add_uv_arguments, anchor_is_usable,
     gripper_camera_calibration, target_track,
 )
 
@@ -197,7 +197,7 @@ def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_want
         if limit and written >= limit:
             break
         rows = episodes[episode]
-        # The same two tests mine_episode applies, so this renders the episodes that are
+        # The same three tests mine_episode applies, so this renders the episodes that are
         # actually mined and nothing else.
         pressure = np.array([r["pressure"] for r in rows], dtype=np.float64)
         grasp = find_grasp(pressure, fps, PRESSURE_THRESHOLD, MIN_GRASP_SECONDS)
@@ -207,6 +207,11 @@ def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_want
         heights = np.array([r["gripper_pos"][2] for r in rows])
         if not np.any(heights[grasp:] >= heights[grasp] + RISE_M):
             logging.info(f"ep{episode:04d}: no rise after the grasp, skipped (so does the miner)")
+            continue
+        if not anchor_is_usable(rows[grasp], calibration):
+            logging.info(f"ep{episode:04d}: rangefinder read "
+                         f"{rows[grasp]['laser_rangefinder']:.3f}m at the grasp, so there is "
+                         f"no target to draw, skipped (so does the miner)")
             continue
         # Named for the method too, so rendering the same episode under two of them
         # leaves two files to flip between rather than one overwriting the other.

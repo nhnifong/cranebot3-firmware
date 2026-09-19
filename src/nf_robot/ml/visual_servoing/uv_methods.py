@@ -51,13 +51,30 @@ DEFAULT_UV_METHOD = "room-delta"
 # mirror of the pre-flip (0.5, 0.308) and happened to sit 2px from the truth at grasping
 # range and a quarter of a frame away at half a metre.
 def jaw_uv(laser_rangefinder, calibration):
-    """Where the point the jaws will close on sits in the frame, at this range."""
-    return project_camera(jaw_in_camera(laser_rangefinder), calibration)[:2]
+    """Where the point the jaws will close on sits in the frame, at this range.
+
+    None when the rangefinder read too little to place anything: a gripper resting on the
+    floor reports a few millimetres, and the jaw point is then at or behind the lens, where
+    there is no answer rather than a large one.
+    """
+    projected = project_camera(jaw_in_camera(laser_rangefinder), calibration)
+    return None if projected is None else projected[:2]
 
 
 def _jaw_uv_of(row, calibration):
     """The mount's answer for one row, which is what every anchor here defaults to."""
     return jaw_uv(row["laser_rangefinder"], calibration)
+
+
+def anchor_is_usable(row, calibration):
+    """Whether this frame can anchor an episode's labels.
+
+    It cannot when the rangefinder read too little to put the jaw point in front of the
+    lens, which is what a gripper closing while resting on the floor reports. Every method
+    hangs the target off that reading, so the answer is a property of the frame rather than
+    of the method.
+    """
+    return _jaw_uv_of(row, calibration) is not None
 
 
 def jaw_in_camera(laser_rangefinder):
@@ -353,7 +370,12 @@ def _track_optical_flow(rows, grasp, calibration, jaw_uv, frames):
         return gray[i]
 
     track = [None] * len(rows)
-    track[grasp] = tuple(jaw_uv) if jaw_uv else _jaw_uv_of(rows[grasp], calibration)
+    anchor = tuple(jaw_uv) if jaw_uv is not None else _jaw_uv_of(rows[grasp], calibration)
+    if anchor is None:
+        raise SystemExit(
+            "the rangefinder read nothing at the grasp frame, so there is no anchor to "
+            "track from. mine_episode screens these out as 'no_range' before getting here.")
+    track[grasp] = anchor
     for step in (-1, 1):
         uv = track[grasp]
         k = grasp + step

@@ -107,7 +107,8 @@ import numpy as np
 
 from nf_robot.ml.visual_servoing.uv_methods import (
     DEFAULT_UV_METHOD, MIN_DEPTH_M, PIXEL_METHODS, add_uv_arguments,
-    gripper_camera_calibration, grasp_point_room, project, target_track,
+    anchor_is_usable, gripper_camera_calibration, grasp_point_room, project,
+    target_track,
 )
 from nf_robot.ml.lerobot_trim_to_grasp import (
     MIN_GRASP_SECONDS,
@@ -542,6 +543,14 @@ def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m
         # closed on nothing, or on something it could not pick up
         return None, "no_rise", 0
 
+    # Every method puts the target where the rangefinder says the floor is at the grasp
+    # frame, so a grasp frame with no usable reading has no target to label. It happens:
+    # the gripper closing while resting on the floor reports a few millimetres, and the
+    # jaw point is then at or behind the lens. Screened here rather than left to produce a
+    # whole episode of frames dropped one at a time for reasons that do not name the cause.
+    if not anchor_is_usable(rows[grasp], calibration):
+        return None, "no_range", 0
+
     track = target_track(rows, grasp, calibration, uv_method, jaw_uv, frames)
     wrist_at_grasp = rows[grasp]["wrist_angle"]
     onset = close_onset(rows, grasp)
@@ -901,7 +910,7 @@ def mine_source(writer, root: Path, repo_id: str, approach_seconds: float,
     if progress is not None:
         progress.set_description(f"{repo_id.split('/')[-1]} {src_w}x{src_h}")
 
-    mined, skipped = 0, {"no_grasp": 0, "no_rise": 0}
+    mined, skipped = 0, {"no_grasp": 0, "no_rise": 0, "no_range": 0}
     dropped_total, blind_total = 0, 0
     considered = 0
     # The holding head is the one whose labels are a judgement call rather than a
