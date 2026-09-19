@@ -63,8 +63,8 @@ COMMIT_RANGE_M = 0.3
 #
 #   range   0.60  0.40  0.20  0.15  0.10  0.06
 #   m/s     0.12  0.12  0.12  0.08  0.05  0.03
-DESCENT_GAIN = 0.25         # (1/s) speed asked for per metre of range left to close
-DESCENT_SPEED_MAX = 0.14    # (m/s) cap while there is plenty of room below
+DESCENT_GAIN = 0.35         # (1/s) speed asked for per metre of range left to close
+DESCENT_SPEED_MAX = 0.20    # (m/s) cap while there is plenty of room below
 DESCENT_SPEED_MIN = 0.07    # (m/s) floor, or the last centimetres never arrive
 LATERAL_GAIN = 0.9          # (1/s) fraction of the remaining offset commanded per second
 LATERAL_SPEED_MAX = 0.15    # (m/s)
