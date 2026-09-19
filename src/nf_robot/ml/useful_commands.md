@@ -43,7 +43,7 @@ When ready to upload models ( PUSH TO PROD )
 Example record command
 
 ```
-python -m nf_robot.ml.stringman_lerobot record \
+python -m nf_robot.ml.lerobot.stringman record \
   --robot_id=lan \
   --server_address=ws://localhost:4245 \
   --repo_id=naavox/grasping_dataset_c
@@ -150,7 +150,7 @@ lerobot-train \
 
 train on modal
 
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --dataset.repo_id=naavox/move_clutter_rect \
   --output_dir /multitask_dit_data/tidy_modal_14 \
   --steps=60000 \
@@ -188,7 +188,7 @@ First, build a local copy of smolvla_base with max_state_dim expanded to fit our
 observation.state (the state_proj input is zero-padded from 32 to 64, preserving pretrained
 behavior at init):
 
-python src/nf_robot/ml/lerobot_expand_smolvla_state_dim.py \
+python src/nf_robot/ml/lerobot/expand_smolvla_state_dim.py \
     --source lerobot/smolvla_base \
     --output_dir models/smolvla_base_state64 \
     --max_state_dim 64
@@ -207,7 +207,7 @@ lerobot-train \
 
 JEPA
 
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --output_dir /multitask_dit_data/tidy_modal_14 \
   --policy.path=lerobot/VLA-JEPA-Pretrain \
   --policy.repo_id=naavox/jepa-3 \
@@ -233,7 +233,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
 Example evaluation command (on robot)
 
 ```
-python -m nf_robot.ml.stringman_lerobot eval \
+python -m nf_robot.ml.lerobot.stringman eval \
   --robot_id=lan \
   --server_address=ws://localhost:4245 \
   --policy_id=naavox/grasp_remote_act \
@@ -249,7 +249,7 @@ Paste the ticket into the command.
 Tickets are single use, once used, you must generate a new one.
 
 ```
-python -m nf_robot.ml.stringman_lerobot record \
+python -m nf_robot.ml.lerobot.stringman record \
   --robot_id="b9a1f266-4ff5-476f-a84e-ed82f5d85886" \
   --server_address=ws://localhost:8080 \
   --remote_stream_token=92yHzkzwlyz6ARAD7wyXvoyqn9J2IQLW2tIpETEz6DY \
@@ -288,13 +288,13 @@ docker run --add-host=host.docker.internal:host-gateway -it --rm \
 
 ### building a dataset from a recipe (offline, one command)
 
-`lerobot_build_dataset.py` runs the whole convert -> merge -> label -> (recompute) ->
+`lerobot/build_dataset.py` runs the whole convert -> merge -> label -> (recompute) ->
 upload pipeline from a single declarative recipe, fully offline (no intermediate Hub
 uploads). Camera conversion happens per source *before* the merge, a validity check
 runs after every step, and intermediate copies go under `--temp_dir` (put it on a drive
 with space). See `recipes/derivation_test.yaml` for the format.
 
-    python src/nf_robot/ml/lerobot_build_dataset.py \
+    python src/nf_robot/ml/lerobot/build_dataset.py \
         --recipe src/nf_robot/ml/recipes/derivation_test.yaml \
         --temp_dir /media/nhn/nfdrive/tmp_build \
         --output_root /media/nhn/nfdrive/datasets/derivation_test \
@@ -305,13 +305,13 @@ old way of doing the same thing; the recipe tool replaces it.
 
 ### derivation of naavox/merged_224
 
-python src/nf_robot/ml/lerobot_derive_dataset.py \
+python src/nf_robot/ml/lerobot/derive_dataset.py \
     --repo_id naavox/la_june \
     --new_repo_id naavox/la_june_224 \
     --new_root datasets/la_june_224 \
     --camera_mode gripper_224
 
-python src/nf_robot/ml/lerobot_derive_dataset.py \
+python src/nf_robot/ml/lerobot/derive_dataset.py \
     --repo_id naavox/toys_june_12 \
     --new_repo_id naavox/toys_june_12_224 \
     --new_root datasets/toys_june_12_224 \

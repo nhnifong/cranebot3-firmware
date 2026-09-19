@@ -2,14 +2,14 @@
 
 """Run a lerobot policy on Modal cloud GPUs and drive the robot through the relay.
 
-This is `stringman_lerobot eval` with the GPU somewhere else. The container loads the
+This is `stringman.py eval` with the GPU somewhere else. The container loads the
 policy, connects out to the telemetry relay at `--server_address` for the control
 channel, and pulls the camera feeds over RTSP/TCP from media.neufangled.com using the
 stream ticket -- all outbound, so nothing has to be reachable from Modal. Start/stop is
 still driven from the robot's control panel exactly as with a local eval; this process
 just sits in EVAL_IDLE until you press start.
 
-  python src/nf_robot/ml/lerobot_eval_modal.py \
+  python src/nf_robot/ml/lerobot/eval_modal.py \
     --policy_id naavox/neu-298-fastwam-test \
     --server_address wss://neufangled.com \
     --robot_id YOUR_ROBOT_ID \
@@ -109,11 +109,11 @@ _EVAL_IMAGE = (
 )
 
 # This whole module is re-imported inside the container, where the file lands at
-# /root/lerobot_eval_modal.py and the repo layout does not exist -- so anything that
+# /root/eval_modal.py and the repo layout does not exist -- so anything that
 # reaches for a local path has to be guarded. The mount is declared locally only; the
 # container receives it from the already-registered function spec.
 if modal.is_local():
-    _REPO_SRC = Path(__file__).resolve().parents[2]  # <repo>/src
+    _REPO_SRC = Path(__file__).resolve().parents[3]  # <repo>/src
     _EVAL_IMAGE = _EVAL_IMAGE.add_local_dir(
         _REPO_SRC / "nf_robot",
         f"{_NF_SRC_MOUNT}/nf_robot",
@@ -145,9 +145,9 @@ def run_eval(
     """Load the policy and drive the robot until it disconnects."""
     sys.path.insert(0, _NF_SRC_MOUNT)
 
-    from nf_robot.ml.stringman_lerobot import eval_until_disconnected
+    from nf_robot.ml.lerobot.stringman import eval_until_disconnected
 
-    # Same URI construction as stringman_lerobot's __main__.
+    # Same URI construction as stringman.py's __main__.
     uri = f"{server_address}/control/{robot_id}"
     if remote_stream_token:
         uri += f"?ticket={remote_stream_token}"
@@ -168,7 +168,7 @@ def run_eval(
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="lerobot-eval-on-modal",
-        description="Run stringman_lerobot eval on a Modal GPU, driving the robot through the relay.",
+        description="Run stringman.py eval on a Modal GPU, driving the robot through the relay.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--policy_id", required=True, help="Hub repo id of the policy to run")

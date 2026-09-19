@@ -73,7 +73,7 @@ def rotate_about_vertical(vec, radians):
 def delta_in_camera(delta_room, spin):
     """A room-frame vector from the gripper to a point, in the camera's optical frame.
 
-    Step one is the rotated contact vector that lerobot_label_contact_actions already
+    Step one is the rotated contact vector that lerobot.label_contact_actions already
     builds: the room-frame vector from the gripper to the target, turned into the gripper
     frame by rotating its horizontal part by `spin`.
 

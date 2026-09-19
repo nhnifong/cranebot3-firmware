@@ -15,7 +15,7 @@
 # eval time and none of the encoder's pixels are blank. The live path resizes the same
 # way (a plain cv2.resize to the camera_mode size), so the geometry matches.
 
-# python src/nf_robot/ml/lerobot_build_dataset.py \
+# python src/nf_robot/ml/lerobot/build_dataset.py \
 #     --recipe src/nf_robot/ml/recipes/move_clutter_camera_goal.yaml \
 #     --temp_dir /home/nhn/data-scratch \
 #     --output_root /home/nhn/data-scratch/move_clutter_camera_goal \

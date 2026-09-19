@@ -15,7 +15,7 @@ image legitimately arrives a few times in a row - hence the several-second
 threshold rather than "any repeat".
 
 Cost is a strided subsample plus an array compare per frame, so this can sit
-directly in the video decode loop. See lerobot_find_frozen_video.py for the
+directly in the video decode loop. See lerobot/find_frozen_video.py for the
 offline version that audits an already-recorded dataset.
 """
 

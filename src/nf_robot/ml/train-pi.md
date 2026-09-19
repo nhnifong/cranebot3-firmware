@@ -1,7 +1,7 @@
 Train pi 0.5 on three camera rect dataset
 
 ```bash
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --lerobot_ref public \
   --gpu_type H100 \
   --timeout_hours 14 \

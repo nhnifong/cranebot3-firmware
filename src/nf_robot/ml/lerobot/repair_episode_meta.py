@@ -23,7 +23,7 @@ Nothing else in the row is touched, and the fix is idempotent: each file's rows 
 stamped with that file's own indices, which is what they should have said.
 
 Usage:
-    python src/nf_robot/ml/lerobot_repair_episode_meta.py \
+    python src/nf_robot/ml/lerobot/repair_episode_meta.py \
         --root /home/nhn/data_scratch/combined_targets
 """
 

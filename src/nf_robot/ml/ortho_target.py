@@ -18,14 +18,14 @@ intermediate is a LeRobot dataset and the result is not:
      labelling. One dataset serves both models because the expensive part - sourcing,
      excluding episodes and re-encoding video - is identical for each:
 
-       python src/nf_robot/ml/lerobot_build_dataset.py \
+       python src/nf_robot/ml/lerobot/build_dataset.py \
            --recipe src/nf_robot/ml/recipes/combined_targets_reblend.yaml \
            --temp_dir /home/nhn/data_scratch \
            --output_root /home/nhn/data_scratch/combined_targets_reblend
 
      combined_targets_reblend.yaml is combined_targets.yaml with the ortho feed
      re-rendered under today's floor_view blend instead of whatever each recording was
-     made with (see lerobot_reblend_ortho.py). It holds only the sources whose anchor
+     made with (see lerobot/reblend_ortho.py). It holds only the sources whose anchor
      camera calibration can be recovered, so it is a subset - the price of a composite
      that matches what the robot renders live now.
 
@@ -211,7 +211,7 @@ def ortho_key():
     three numbers, and pulling the whole training stack in behind that made the visual
     servoing grasp unusable on a host-only install.
     """
-    from nf_robot.ml.stringman_lerobot import _FEED_NAMES
+    from nf_robot.ml.lerobot.stringman import _FEED_NAMES
 
     return f"observation.images.{_FEED_NAMES[ORTHO_FEED]}"
 # Both feeds this dataset carries: the ortho composite for this model, and the
@@ -419,7 +419,7 @@ def build_samples(dataset, pressure_threshold, frame_offset, min_coverage, limit
         if meta is None:
             raise ValueError(f"episode {ep} has frames but no episode metadata")
 
-        from nf_robot.ml.lerobot_label_contact_actions import contact_blend_alphas
+        from nf_robot.ml.lerobot.label_contact_actions import contact_blend_alphas
 
         contact_index, _ = contact_blend_alphas(
             [r["timestamp"] for r in rows], [r["pressure"] for r in rows],

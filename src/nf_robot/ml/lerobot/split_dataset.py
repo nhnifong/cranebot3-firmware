@@ -22,7 +22,7 @@ with no path juggling; see visual_servoing/readme.md step 3. --upload pushes bot
 hub under those same names, replacing whatever is already there.
 
 Usage:
-    python src/nf_robot/ml/lerobot_split_dataset.py \
+    python src/nf_robot/ml/lerobot/split_dataset.py \
         --repo_id naavox/combined_targets \
         --root /home/nhn/data_scratch/combined_targets --upload
 """

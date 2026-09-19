@@ -1550,7 +1550,7 @@ class AsyncObserver:
         command = [
             sys.executable,
             '-u', '-c',
-            f"from nf_robot.ml.stringman_lerobot import {func_name}; "
+            f"from nf_robot.ml.lerobot.stringman import {func_name}; "
             f"{func_name}('{tele_addr}', '{repo_id}', '{self.telemetry.cloud_robot_id}'{up})"
         ]
 
@@ -5636,7 +5636,7 @@ class AsyncObserver:
 
         A seperate process must be connected to the telemetry stream to manage the act policy at this time. It can be started with
 
-        python -m nf_robot.ml.stringman_lerobot eval   --robot_id=lan   --server_address=ws://localhost:4245   --policy_id=outputs/train/grasp_remote_act_eggs_2/checkpoints/last/pretrained_model/   --dataset_id=naavox/grasping_dataset_eggs_fix
+        python -m nf_robot.ml.lerobot.stringman eval   --robot_id=lan   --server_address=ws://localhost:4245   --policy_id=outputs/train/grasp_remote_act_eggs_2/checkpoints/last/pretrained_model/   --dataset_id=naavox/grasping_dataset_eggs_fix
         """
         self.pe.finger_pressure_rising.clear()
         try:

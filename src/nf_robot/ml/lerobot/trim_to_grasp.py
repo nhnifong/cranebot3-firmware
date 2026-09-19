@@ -43,7 +43,7 @@ Requires observation.state to carry gripper_pos_x/y/z and finger_pressure. Run t
 before any keep_state_features trim that would drop them.
 
 Usage:
-    python src/nf_robot/ml/lerobot_trim_to_grasp.py \
+    python src/nf_robot/ml/lerobot/trim_to_grasp.py \
         --repo_id naavox/some_dataset \
         --root /path/to/dataset \
         --output_dir /path/to/trimmed \

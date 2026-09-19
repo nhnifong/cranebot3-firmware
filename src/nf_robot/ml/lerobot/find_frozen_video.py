@@ -5,7 +5,7 @@
 A stalled camera keeps delivering frames at full rate, but every frame is the
 same image, so the episodes recorded during the stall carry no visual
 information at all. This finds them after the fact and prints a paste-ready
-`exclude_episodes:` block for a lerobot_build_dataset.py recipe.
+`exclude_episodes:` block for a build_dataset.py recipe.
 
 The signal is runs of pixel-identical consecutive frames. Live video is never
 identical frame to frame - sensor noise moves pixels even when camera and scene
@@ -24,7 +24,7 @@ Videos are read from the dataset's local snapshot, so each dataset is downloaded
 in full on first use (tens of GB for a large one).
 
 Usage:
-    python src/nf_robot/ml/lerobot_find_frozen_video.py \
+    python src/nf_robot/ml/lerobot/find_frozen_video.py \
         --repo_id justink04/laundry-in-hamper2-8-1-26 justink04/trash-in-trashcan-7-23-26 \
         [--min_frozen_seconds 3.0] \
         [--json_out frozen_report.json]

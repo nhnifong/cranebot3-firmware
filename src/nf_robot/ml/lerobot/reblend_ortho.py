@@ -36,12 +36,12 @@ What has to be recovered, per source dataset:
                        a range of tilts and phase-correlating each against it picks the
                        true one out with a sharp, unambiguous peak.
 
-Runs as an optional step of lerobot_derive_dataset (recipe key `reblend_ortho`), where
+Runs as an optional step of derive_dataset (recipe key `reblend_ortho`), where
 it reads the anchor videos from the source dataset - the camera_mode conversion is
 about to drop them - and writes the ortho videos into the derived one.
 
 Usage:
-    python src/nf_robot/ml/lerobot_reblend_ortho.py \
+    python src/nf_robot/ml/lerobot/reblend_ortho.py \
         --source_root /path/to/recorded_dataset \
         --dest_root /path/to/derived_dataset \
         [--anchor_config src/nf_robot/ml/calibrations/conf_nick.json] \
@@ -71,7 +71,7 @@ from nf_robot.common.util import poseProtoToTuple
 from nf_robot.generated.nf import config as nf_config
 from nf_robot.host.floor_view import EXTENT_M, SIDE_PX, OrthoBlender
 from nf_robot.ml import camera_goal
-from nf_robot.ml.lerobot_resize_video_feature import open_encoder
+from nf_robot.ml.lerobot.resize_video_feature import open_encoder
 
 ORTHO_KEY = "observation.images.overhead_camera"
 ANCHOR_KEYS = ("observation.images.anchor_camera_0", "observation.images.anchor_camera_1")

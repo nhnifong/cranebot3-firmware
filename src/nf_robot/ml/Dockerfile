@@ -36,4 +36,4 @@ RUN pip install --no-cache-dir \
     nf_robot
 
 # Set the entrypoint to the python module
-ENTRYPOINT ["python", "-m", "nf_robot.ml.stringman_lerobot"]
+ENTRYPOINT ["python", "-m", "nf_robot.ml.lerobot.stringman"]

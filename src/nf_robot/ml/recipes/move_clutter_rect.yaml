@@ -4,7 +4,7 @@
 # all frames have the same dimensions so they can be used with multitask dit
 # prefer resize to center crop
 
-# python src/nf_robot/ml/lerobot_build_dataset.py \
+# python src/nf_robot/ml/lerobot/build_dataset.py \
 #     --recipe move_clutter_rect.yaml \
 #     --temp_dir /home/nhn/data_scratch \
 #     --output_root /home/nhn/data_scratch/move_clutter_rect \

@@ -1,7 +1,7 @@
 """Tests for recovering the `spin` state field from what a recording kept instead.
 
 Built by running the recorder's own arithmetic forwards - bearing = room_angle - spin,
-from stringman_lerobot's state builder - so a test failing here means the recovery no
+from lerobot.stringman's state builder - so a test failing here means the recovery no
 longer inverts what the robot actually wrote.
 """
 
@@ -119,7 +119,7 @@ class TestEpisodeConstant(unittest.TestCase):
 class TestConventionMatchesTheRecorder(unittest.TestCase):
 
     def test_bearing_is_room_angle_minus_spin_with_x_first(self):
-        """stringman_lerobot builds room_angle as arctan2(delta_x, delta_y) - a compass
+        """lerobot.stringman builds room_angle as arctan2(delta_x, delta_y) - a compass
         bearing off +Y, not the usual atan2(y, x). Getting that backwards would mirror
         every recovered heading and still look self-consistent."""
         state = make_episode([(2.0, 0.0)], [0.0], constant_deg=0.0)

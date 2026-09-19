@@ -8,7 +8,7 @@ unknown heading projects nothing. Some older recordings never logged it.
 
 It is recoverable because the recorder logged something else derived from it. Every named
 target carries a bearing, built as `room_angle - spin` where room_angle points from the
-gripper to that target (stringman_lerobot._build_state). In these recordings no target was
+gripper to that target (lerobot.stringman._build_state). In these recordings no target was
 ever detected, so every one of them sits at the room origin - which is visible in the data
 as `distance` being exactly the gripper's horizontal distance from the origin. The room
 angle is then known from the gripper position alone, and

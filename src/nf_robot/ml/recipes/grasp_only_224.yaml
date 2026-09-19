@@ -2,7 +2,7 @@
 # the gripper camera only, at 224x224, the plain 5-dim gripper_vel action space, and
 # every episode trimmed to the segment that actually picks something up.
 #
-# The trim (see lerobot_trim_to_grasp.py) starts each episode where the robot arrived
+# The trim (see lerobot/trim_to_grasp.py) starts each episode where the robot arrived
 # near the spot it eventually grasps at - so the traverse across the room is dropped,
 # and episodes that never traversed just start at frame 0 - and ends once the gripper
 # has risen 10cm above the height it grasped at - the point the object is unambiguously
@@ -12,7 +12,7 @@
 # On naavox/move_clutter_2 this kept 97 of 106 episodes with a median segment of
 # 7.8s out of 18.6s, i.e. roughly 40% of the frames of the episodes it kept.
 #
-# python src/nf_robot/ml/lerobot_build_dataset.py \
+# python src/nf_robot/ml/lerobot/build_dataset.py \
 #     --recipe src/nf_robot/ml/recipes/grasp_only_224.yaml \
 #     --temp_dir /home/nhn/data_scratch \
 #     --output_root /home/nhn/data_scratch/grasp_only_224 \

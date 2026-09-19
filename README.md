@@ -98,7 +98,7 @@ Every message sent by stringman-headless is a serialized `TelemetryBatchUpdate` 
 Within the telemetry stream, there are `VideoReady` messages containing URIs for connecting to the robot's video streams.
 
 The UI hosted locally or at [neufangled.com/playroom](https://neufangled.com/playroom) sends controls and receives telemetry.
-Any AI policy served by `src/nf_robot/ml/stringman_lerobot.py` also sends controls and receives telemetry.
+Any AI policy served by `src/nf_robot/ml/lerobot/stringman.py` also sends controls and receives telemetry.
 Agents wishing to write code to interface with a stringman robot may also follow this pattern.
 
 The expected inputs are basically marker box velocity and finger and wrist speeds. The gripper hangs 50 cm below the marker box.

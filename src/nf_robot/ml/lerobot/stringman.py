@@ -961,7 +961,7 @@ def record_until_disconnected(uri, hf_repo_id, robot_id, upload=True, remote_str
         obs_features = hw_to_dataset_features(robot.observation_features, "observation")
         # Recorded so a dataset carries the calibration it was made under; policies
         # ignore it (it is not an observation.* key), camera_goal consumes the poses and
-        # lerobot_reblend_ortho consumes both.
+        # reblend_ortho consumes both.
         dataset_features = {**action_features, **obs_features,
                             **camera_goal.recorded_calibration_features()}
 
@@ -1388,8 +1388,8 @@ def eval_until_disconnected(uri, policy_repo_id, robot_id, remote_stream_token=N
 
 if __name__ == "__main__":
     """
-    python -m nf_robot.ml.stringman_lerobot record --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --repo_id=naavox/grasping_dataset
-    python -m nf_robot.ml.stringman_lerobot eval --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --policy_id=naavox/grasping_act_policy --dataset_id=naavox/grasping_dataset
+    python -m nf_robot.ml.lerobot.stringman record --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --repo_id=naavox/grasping_dataset
+    python -m nf_robot.ml.lerobot.stringman eval --robot_id=simulated_robot_1 --server_address=ws://localhost:4245 --policy_id=naavox/grasping_act_policy --dataset_id=naavox/grasping_dataset
     """
     parser = argparse.ArgumentParser(description="Stringman Lerobot Episode Recorder / Evaluator")
     subparsers = parser.add_subparsers(dest='command', required=True)

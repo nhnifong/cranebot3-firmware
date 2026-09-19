@@ -45,7 +45,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from nf_robot.ml.lerobot_trim_to_grasp import (
+from nf_robot.ml.lerobot.trim_to_grasp import (
     MIN_GRASP_SECONDS, PRESSURE_THRESHOLD, RISE_M, find_grasp,
 )
 from nf_robot.ml.visual_servoing.mine_teleop import frame_bgr, read_columns

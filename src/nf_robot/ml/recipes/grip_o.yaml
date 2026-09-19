@@ -1,6 +1,6 @@
 # Dataset combining reblend dataset with anything newer recorded after that.
 
-# python src/nf_robot/ml/lerobot_build_dataset.py \
+# python src/nf_robot/ml/lerobot/build_dataset.py \
 #     --recipe src/nf_robot/ml/recipes/grip_o.yaml \
 #     --temp_dir /home/nhn/data_scratch \
 #     --output_root /home/nhn/data_scratch/grip_o \

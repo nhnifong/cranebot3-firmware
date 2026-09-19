@@ -1,5 +1,5 @@
 """
-Unit tests for StringmanLeRobot and related utilities in stringman_lerobot.py.
+Unit tests for StringmanLeRobot and related utilities in lerobot/stringman.py.
 
 Tests cover:
 - Module-level constants (_CAMERA_MODES, _FEED_NAMES)
@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, Mock, call, patch
 import numpy as np
 
 from nf_robot.generated.nf import common, telemetry
-from nf_robot.ml.stringman_lerobot import (
+from nf_robot.ml.lerobot.stringman import (
     CHECKPOINT_EVERY,
     DEFAULT_ACTION_SPACE,
     FPS,
@@ -542,12 +542,12 @@ class TestCameraModeForwarding(unittest.TestCase):
     # StringmanConfig deterministically. Without this the test depends on a
     # cached HF token being present (true on a dev machine, false on CI), so
     # ensure_hf_auth() raises before StringmanConfig is ever constructed.
-    @patch("nf_robot.ml.stringman_lerobot.repo_exists", return_value=False)
-    @patch("nf_robot.ml.stringman_lerobot.ensure_hf_auth")
-    @patch("nf_robot.ml.stringman_lerobot.StringmanLeRobot")
-    @patch("nf_robot.ml.stringman_lerobot.StringmanConfig")
+    @patch("nf_robot.ml.lerobot.stringman.repo_exists", return_value=False)
+    @patch("nf_robot.ml.lerobot.stringman.ensure_hf_auth")
+    @patch("nf_robot.ml.lerobot.stringman.StringmanLeRobot")
+    @patch("nf_robot.ml.lerobot.stringman.StringmanConfig")
     def test_record_forwards_camera_mode(self, MockConfig, MockRobot, _mock_auth, _mock_repo_exists):
-        from nf_robot.ml.stringman_lerobot import record_until_disconnected
+        from nf_robot.ml.lerobot.stringman import record_until_disconnected
 
         robot_instance = MockRobot.return_value
         robot_instance.is_connected = False
@@ -568,10 +568,10 @@ class TestCameraModeForwarding(unittest.TestCase):
         _, kwargs = MockConfig.call_args
         self.assertEqual(kwargs.get("camera_mode"), "gripper_224")
 
-    @patch("nf_robot.ml.stringman_lerobot.StringmanLeRobot")
-    @patch("nf_robot.ml.stringman_lerobot.StringmanConfig")
+    @patch("nf_robot.ml.lerobot.stringman.StringmanLeRobot")
+    @patch("nf_robot.ml.lerobot.stringman.StringmanConfig")
     def test_eval_forwards_camera_mode(self, MockConfig, MockRobot):
-        from nf_robot.ml.stringman_lerobot import eval_until_disconnected
+        from nf_robot.ml.lerobot.stringman import eval_until_disconnected
 
         robot_instance = MockRobot.return_value
         robot_instance.is_connected = False
@@ -588,8 +588,8 @@ class TestCameraModeForwarding(unittest.TestCase):
 
         with patch.object(_hfh, "hf_hub_download", return_value="/tmp/fake.json"), \
              patch("builtins.open", unittest.mock.mock_open(read_data='{"dataset": {"repo_id": "naavox/ds"}}')), \
-             patch("nf_robot.ml.stringman_lerobot.load_training_metadata"), \
-             patch("nf_robot.ml.stringman_lerobot.action_space_from_features", return_value="gripper_vel"), \
+             patch("nf_robot.ml.lerobot.stringman.load_training_metadata"), \
+             patch("nf_robot.ml.lerobot.stringman.action_space_from_features", return_value="gripper_vel"), \
              patch.object(_lcp, "PreTrainedConfig"), \
              patch.object(_lpf, "make_pre_post_processors", return_value=(Mock(), Mock())), \
              patch.object(_lpf, "make_policy", return_value=mock_policy):
@@ -611,7 +611,7 @@ class TestLoadTrainingMetadata(unittest.TestCase):
     """Eval must read training metadata from the cache without touching the Hub."""
 
     def test_cached_snapshot_is_passed_as_root(self):
-        from nf_robot.ml.stringman_lerobot import load_training_metadata
+        from nf_robot.ml.lerobot.stringman import load_training_metadata
 
         with tempfile.TemporaryDirectory() as tmp:
             snapshot = Path(tmp)
@@ -627,7 +627,7 @@ class TestLoadTrainingMetadata(unittest.TestCase):
         self.assertEqual(MockMeta.call_args.kwargs["root"], snapshot)
 
     def test_unreachable_hub_without_cache_raises_clear_error(self):
-        from nf_robot.ml.stringman_lerobot import load_training_metadata
+        from nf_robot.ml.lerobot.stringman import load_training_metadata
 
         with patch("huggingface_hub.snapshot_download", side_effect=OSError("not cached")), \
              patch("lerobot.datasets.lerobot_dataset.LeRobotDatasetMetadata",

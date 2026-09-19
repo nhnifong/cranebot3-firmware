@@ -434,7 +434,7 @@ this model is entirely about geometry.
 
 **Only successful grasps.** The whole trick is that the grasp point is where the jaws
 ended up, so an episode where the jaws closed on nothing gives a confidently wrong
-label. lerobot_trim_to_grasp.py already finds the grasp instant by held pressure and
+label. lerobot/trim_to_grasp.py already finds the grasp instant by held pressure and
 already rejects episodes with no subsequent rise; that rejection is exactly the success
 filter, and its `no_rise` and `no_grasp` counts are the ones to watch.
 
@@ -448,7 +448,7 @@ camera's mount pose in the gripper frame is definitions.gripper_camera, camera_g
 composes it with the recorded gripper position and 6D rotation in gripper_camera_pose,
 and goal_in_camera_frame expresses any room point in that camera's frame - the same
 chain the camera_goal action space and the waypoint labelling in
-lerobot_label_contact_actions already run on this data. The 684x384 intrinsic and
+lerobot.label_contact_actions already run on this data. The 684x384 intrinsic and
 distortion are config.camera_cal_wide. So the projection is assembled from parts that
 are already load-bearing elsewhere rather than from a new calibration.
 

@@ -1,6 +1,6 @@
 # Dataset used as a source for both for visual servoing teleop mining and for ortho target
 #
-# python src/nf_robot/ml/lerobot_build_dataset.py \
+# python src/nf_robot/ml/lerobot/build_dataset.py \
 #     --recipe src/nf_robot/ml/recipes/combined_targets.yaml \
 #     --temp_dir /home/nhn/data_scratch \
 #     --output_root /home/nhn/data_scratch/combined_targets \

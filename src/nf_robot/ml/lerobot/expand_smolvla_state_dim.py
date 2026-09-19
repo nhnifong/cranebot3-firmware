@@ -14,7 +14,7 @@ at initialization (the new state dims contribute nothing until finetuning
 adapts them).
 
 Usage:
-    python src/nf_robot/ml/lerobot_expand_smolvla_state_dim.py \
+    python src/nf_robot/ml/lerobot/expand_smolvla_state_dim.py \
         --source lerobot/smolvla_base \
         --output_dir models/smolvla_base_state64 \
         --max_state_dim 64

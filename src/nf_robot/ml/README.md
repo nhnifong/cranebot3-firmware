@@ -27,7 +27,7 @@ pip install --force-reinstall \
 ## Recording datasets
 
 ```bash
-python -m nf_robot.ml.stringman_lerobot record \
+python -m nf_robot.ml.lerobot.stringman record \
   --robot_id=lan \
   --server_address=ws://localhost:4245 \
   --repo_id=naavox/grasping_dataset_c
@@ -41,7 +41,7 @@ changed.
 
 Recording quality suffers if the CPU is fully loaded. You can split that load across two machines on the same LAN, but they must have about a 0.3Gbps link between them. In other words, wired ethernet. Wifi has proven to be insuficient in average conditions.
 
-run `stringman-headless` on one (the robot host) and `stringman_lerobot record` on
+run `stringman-headless` on one (the robot host) and `lerobot.stringman record` on
 another, with **no cloud relay** in between.
 
 By default `stringman-headless` binds both its telemetry websocket (port 4245) and all of
@@ -58,7 +58,7 @@ python -m nf_robot.host.observer --bind_address=192.168.1.50
 On the **record machine**, point `--server_address` at that IP:
 
 ```bash
-python -m nf_robot.ml.stringman_lerobot record \
+python -m nf_robot.ml.lerobot.stringman record \
   --robot_id=lan \
   --server_address=ws://192.168.1.50:4245 \
   --repo_id=naavox/grasping_dataset_c
@@ -94,7 +94,7 @@ Requirements:
 To record a dataset:
 
 ```bash
-python -m nf_robot.ml.stringman_lerobot record \
+python -m nf_robot.ml.lerobot.stringman record \
   --robot_id=YOUR_ROBOT_ID \
   --server_address=wss://neufangled.com \
   --remote_stream_token=YOUR_STREAM_TICKET \
@@ -104,7 +104,7 @@ python -m nf_robot.ml.stringman_lerobot record \
 To evaluate a trained policy, use `eval` and pass the policy's repo id with `--policy_id`:
 
 ```bash
-python -m nf_robot.ml.stringman_lerobot eval \
+python -m nf_robot.ml.lerobot.stringman eval \
   --robot_id=YOUR_ROBOT_ID \
   --server_address=wss://neufangled.com \
   --remote_stream_token=YOUR_STREAM_TICKET \
@@ -240,7 +240,7 @@ First build a local copy of `smolvla_base` with `max_state_dim` expanded to fit 
 preserving pretrained behavior at init):
 
 ```bash
-python src/nf_robot/ml/lerobot_expand_smolvla_state_dim.py \
+python src/nf_robot/ml/lerobot/expand_smolvla_state_dim.py \
     --source lerobot/smolvla_base \
     --output_dir models/smolvla_base_state64 \
     --max_state_dim 64
@@ -292,13 +292,13 @@ lerobot-train \
 ## Training on Modal
 
 Any `lerobot-train` command above can run on Modal cloud GPUs. The wrapper
-[`lerobot_train_modal.py`](lerobot_train_modal.py) forwards all lerobot args unchanged
+[`lerobot/train_modal.py`](lerobot/train_modal.py) forwards all lerobot args unchanged
 and adds Modal-only flags (`--gpu_type`, `--timeout_hours`, `--detach`, `--lerobot_ref`,
 `--hf_secret`). See its module docstring for the full list.
 
 **To convert a local command to a Modal command:**
 
-1. Replace `lerobot-train` with `python src/nf_robot/ml/lerobot_train_modal.py`.
+1. Replace `lerobot-train` with `python src/nf_robot/ml/lerobot/train_modal.py`.
 2. Point `--output_dir` at a path under `/multitask_dit_data/` — that is the Modal
    Volume (`multitask_dit_data`), and it's the only place checkpoints survive after the
    job ends.
@@ -311,7 +311,7 @@ and adds Modal-only flags (`--gpu_type`, `--timeout_hours`, `--detach`, `--lerob
 Copyable skeleton — paste any policy's flags into the middle:
 
 ```bash
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --lerobot_ref public \
   --gpu_type H200 \
   --timeout_hours 24 \
@@ -331,7 +331,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
 Concrete plain-DiT run:
 
 ```bash
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --lerobot_ref public \
   --dataset.repo_id=naavox/move_clutter_rect \
   --output_dir /multitask_dit_data/tidy_modal_14 \
@@ -373,7 +373,7 @@ Checkpoints persist on the volume at
 picks up the same `output_dir`, optimizer state, and step count from the checkpoint.
 
 ```bash
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --lerobot_ref public \
   --resume=true \
   --config_path=/multitask_dit_data/tidy_modal_14/checkpoints/last/pretrained_model/train_config.json
@@ -427,7 +427,7 @@ interrupted, or you want a mid-training step.
 ## Evaluation locally as a seperate process
 
 ```bash
-python -m nf_robot.ml.stringman_lerobot eval \
+python -m nf_robot.ml.lerobot.stringman eval \
   --robot_id=lan \
   --server_address=ws://localhost:4245 \
   --policy_id=naavox/grasp_remote_act \
@@ -436,8 +436,8 @@ python -m nf_robot.ml.stringman_lerobot eval \
 
 ## Evaluation on Modal
 
-For policies too big for the local GPU. [`lerobot_eval_modal.py`](lerobot_eval_modal.py)
-runs the same `stringman_lerobot eval` loop in a Modal container: the policy loads on a
+For policies too big for the local GPU. [`lerobot/eval_modal.py`](lerobot/eval_modal.py)
+runs the same `lerobot.stringman eval` loop in a Modal container: the policy loads on a
 cloud GPU, and the container connects **out** to the relay for the control channel and
 pulls the camera feeds over RTSP/TCP from `media.neufangled.com`. Nothing needs to be
 reachable from Modal, so this works exactly like a local remote-relay eval — including
@@ -447,7 +447,7 @@ Same prerequisites as a local relay session: the robot bound to your account, ru
 with `--telemetry_env=production`, plus a fresh single-use stream ticket.
 
 ```bash
-python src/nf_robot/ml/lerobot_eval_modal.py \
+python src/nf_robot/ml/lerobot/eval_modal.py \
   --policy_id naavox/neu-298-fastwam-test \
   --server_address wss://neufangled.com \
   --robot_id YOUR_ROBOT_ID \
@@ -457,7 +457,7 @@ python src/nf_robot/ml/lerobot_eval_modal.py \
 Notes:
 
 - **The local working tree is what runs.** `src/nf_robot` is mounted into the container
-  rather than pip-installed, so edits to `stringman_lerobot.py` take effect on the next
+  rather than pip-installed, so edits to `lerobot/stringman.py` take effect on the next
   launch with no publish step.
 - **GPU sizing.** The default `--gpu_type L40S` (48 GB) is the smallest sensible card for
   FastWAM: ~26 GB of resident weights (the 12 GB MoT DiT, the 11.4 GB UMT5-XXL text

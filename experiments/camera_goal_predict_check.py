@@ -2,7 +2,7 @@
 """Does a camera_goal policy's predicted destination actually depend on the scene?
 
 Runs a trained policy over sampled frames and, for each one, transforms the three
-per-camera goal predictions back into the room the same way stringman_lerobot.py
+per-camera goal predictions back into the room the same way lerobot/stringman.py
 does at eval. Reports:
 
   - how far the fused prediction is from the label

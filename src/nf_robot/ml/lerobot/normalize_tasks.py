@@ -25,7 +25,7 @@ Mapping file (YAML or JSON):
       "put trash in trash can": "Put trash in the trash can"
 
 Usage:
-    python src/nf_robot/ml/lerobot_normalize_tasks.py \
+    python src/nf_robot/ml/lerobot/normalize_tasks.py \
         --repo_id naavox/move_clutter_rect \
         --mapping src/nf_robot/ml/recipes/move_clutter_rect_tasks.yaml \
         --root /tmp/move_clutter_rect_tasks \
@@ -33,7 +33,7 @@ Usage:
 
 Check a build recipe's sources against a mapping file without rewriting anything
 (do this after adding sources to a recipe):
-    python src/nf_robot/ml/lerobot_normalize_tasks.py \
+    python src/nf_robot/ml/lerobot/normalize_tasks.py \
         --mapping src/nf_robot/ml/recipes/move_clutter_rect_tasks.yaml \
         --audit_recipe src/nf_robot/ml/recipes/move_clutter_rect_for_xvla.yaml
 """
@@ -183,9 +183,9 @@ def audit_recipe(recipe_path: Path, tasks: list[str], mapping: dict[str, str]) -
     """
     import yaml
 
-    # Imported here rather than at module scope: lerobot_build_dataset imports
-    # lerobot_derive_dataset, which imports this module.
-    from nf_robot.ml.lerobot_build_dataset import parse_episode_list
+    # Imported here rather than at module scope: build_dataset imports
+    # derive_dataset, which imports this module.
+    from nf_robot.ml.lerobot.build_dataset import parse_episode_list
 
     recipe = yaml.safe_load(recipe_path.read_text())
     sources = [

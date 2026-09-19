@@ -2,7 +2,7 @@
 
 """Map episode indices of a merged dataset back to the source datasets that fed it.
 
-Given the recipe a merged dataset was built from (see lerobot_build_dataset.py),
+Given the recipe a merged dataset was built from (see lerobot/build_dataset.py),
 this works out which source dataset and which source episode index each merged
 episode came from, and prints the result as a recipe `merge:` block with
 `exclude_episodes` filled in - i.e. paste-ready for excluding bad episodes on the
@@ -39,7 +39,7 @@ import numpy as np
 import pyarrow.parquet as pq
 from huggingface_hub import snapshot_download
 
-from nf_robot.ml.lerobot_build_dataset import load_recipe, parse_episode_list
+from nf_robot.ml.lerobot.build_dataset import load_recipe, parse_episode_list
 
 EPISODE_FILENAME_RE = re.compile(r"episode_(\d+)\.[A-Za-z0-9]+$")
 

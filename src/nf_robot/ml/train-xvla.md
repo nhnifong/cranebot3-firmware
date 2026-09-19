@@ -1,4 +1,4 @@
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --lerobot_ref public \
   --gpu_type H200 \
   --timeout_hours 14 \
@@ -52,7 +52,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
 # uses the whole 30-step chunk), only how the chunk is consumed at eval.
 # ---------------------------------------------------------------------------
 
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --lerobot_ref public \
   --gpu_type H200 \
   --timeout_hours 14 \
@@ -91,7 +91,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
 # floor for the whole second half.
 # ---------------------------------------------------------------------------
 
-# python src/nf_robot/ml/lerobot_train_modal.py \
+# python src/nf_robot/ml/lerobot/train_modal.py \
 #   --lerobot_ref public \
 #   --gpu_type H200 \
 #   --timeout_hours 14 \
@@ -124,7 +124,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
 # the previous run's weights barely moved in the vision encoder.
 # ---------------------------------------------------------------------------
 
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --lerobot_ref public \
   --gpu_type H200 \
   --timeout_hours 14 \
@@ -160,7 +160,7 @@ python src/nf_robot/ml/lerobot_train_modal.py \
 # camera_goal again, on the waypoint-mode rebuild of naavox/move_clutter_camera_goal,
 # warm-started
 
-python src/nf_robot/ml/lerobot_train_modal.py \
+python src/nf_robot/ml/lerobot/train_modal.py \
   --lerobot_ref public \
   --gpu_type H200 \
   --timeout_hours 14 \

@@ -4,7 +4,7 @@
 # file from its `normalize_tasks:` key.
 #
 # Can also be applied to an existing dataset on its own:
-#   python src/nf_robot/ml/lerobot_normalize_tasks.py \
+#   python src/nf_robot/ml/lerobot/normalize_tasks.py \
 #       --repo_id naavox/move_clutter_rect \
 #       --mapping src/nf_robot/ml/recipes/move_clutter_rect_tasks.yaml \
 #       --root /tmp/move_clutter_rect_tasks [--push]

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run a spot instance with a containerized stringman_lerobot.py record session
+# Run a spot instance with a containerized lerobot/stringman.py record session
 
 # Ensures you export your huggingface token before running:
 # export HF_TOKEN="hf_your_actual_token_here"

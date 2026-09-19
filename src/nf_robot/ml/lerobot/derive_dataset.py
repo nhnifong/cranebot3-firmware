@@ -7,11 +7,11 @@ shrinks the resolution of the ones that are kept. The target camera_mode's
 camera set must be a subset of the source dataset's, and each kept camera's
 target resolution must be the same size or smaller than the source.
 
-Camera modes are defined in nf_robot.ml.stringman_lerobot._CAMERA_MODES.
+Camera modes are defined in nf_robot.ml.lerobot.stringman._CAMERA_MODES.
 
 `reblend_ortho` optionally rebuilds the ortho floor view from the anchor camera
 videos before the camera work drops them, so a dataset recorded under an older
-floor_view blend gets today's; see lerobot_reblend_ortho.py.
+floor_view blend gets today's; see reblend_ortho.py.
 
 `backfill_anchor_poses` gives a source recorded before the anchor_poses and
 anchor_cam_tilt features existed those features, filled from the anchor_config
@@ -25,12 +25,12 @@ fit a policy's expectations:
                          proprioception width (X-VLA projects `max_state_dim`,
                          32 by default) need this.
   --normalize_tasks      collapses task strings onto a canonical set, see
-                         lerobot_normalize_tasks.py for the mapping format.
+                         normalize_tasks.py for the mapping format.
 
 Usage example:
 
 Derive a gripper_224 dataset from one recorded with camera_mode="all":
-    python src/nf_robot/ml/lerobot_derive_dataset.py \
+    python src/nf_robot/ml/lerobot/derive_dataset.py \
         --repo_id naavox/simple_grasp \
         --new_repo_id naavox/simple_grasp_224 \
         --new_root datasets/simple_grasp_224 \
@@ -38,7 +38,7 @@ Derive a gripper_224 dataset from one recorded with camera_mode="all":
 
 Derive a gripper_anchors_384 dataset (gripper + both overhead/anchor cams at
 384 square, no floor cam) from one recorded with camera_mode="all":
-    python src/nf_robot/ml/lerobot_derive_dataset.py \
+    python src/nf_robot/ml/lerobot/derive_dataset.py \
         --repo_id naavox/simple_grasp \
         --new_repo_id naavox/simple_grasp_ga384 \
         --new_root datasets/simple_grasp_ga384 \
@@ -62,12 +62,12 @@ from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.utils import init_logging
 
 from nf_robot.ml import camera_goal
-from nf_robot.ml import lerobot_label_contact_actions as label_contact
-from nf_robot.ml.lerobot_label_contact_actions import label_dataset
-from nf_robot.ml.lerobot_normalize_tasks import load_mapping, normalize_tasks
-from nf_robot.ml.lerobot_reblend_ortho import load_anchor_config, reblend_ortho
-from nf_robot.ml.lerobot_resize_video_feature import resize_video
-from nf_robot.ml.stringman_lerobot import _CAMERA_MODES, _FEED_NAMES
+from nf_robot.ml.lerobot import label_contact_actions as label_contact
+from nf_robot.ml.lerobot.label_contact_actions import label_dataset
+from nf_robot.ml.lerobot.normalize_tasks import load_mapping, normalize_tasks
+from nf_robot.ml.lerobot.reblend_ortho import load_anchor_config, reblend_ortho
+from nf_robot.ml.lerobot.resize_video_feature import resize_video
+from nf_robot.ml.lerobot.stringman import _CAMERA_MODES, _FEED_NAMES
 
 
 def target_camera_keys(camera_mode: str) -> dict[str, tuple[int, int]]:
@@ -475,7 +475,7 @@ def main() -> None:
     parser.add_argument(
         "--normalize_tasks", default=None,
         help="YAML/JSON mapping file collapsing task strings onto a canonical set "
-             "(see lerobot_normalize_tasks.py)",
+             "(see normalize_tasks.py)",
     )
     parser.add_argument(
         "--camera_goal_anchors", default=None,
@@ -485,7 +485,7 @@ def main() -> None:
     parser.add_argument(
         "--reblend_ortho", action="store_true",
         help="Re-render the ortho floor view from the anchor cameras with today's blend "
-             "before they are dropped; see lerobot_reblend_ortho.py",
+             "before they are dropped; see reblend_ortho.py",
     )
     parser.add_argument(
         "--backfill_anchor_poses", action="store_true",

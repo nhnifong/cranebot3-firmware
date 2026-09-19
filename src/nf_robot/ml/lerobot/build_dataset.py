@@ -32,7 +32,7 @@ to --output_root.
 Recipe format (YAML or JSON), e.g. recipe.yaml:
 
     output_repo_id: naavox/derivation_test   # id for the final dataset
-    camera_mode: gripper_floor_384           # target camera format (see stringman_lerobot._CAMERA_MODES)
+    camera_mode: gripper_floor_384           # target camera format (see stringman._CAMERA_MODES)
     center_crop: false                       # center-crop to target aspect instead of stretching (optional)
     pad_clamp: false                          # center + clamp-pad instead of stretching when target exceeds source (optional)
     merge:                                    # source datasets to merge (>= 1)
@@ -44,7 +44,7 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
         include_episodes: ["0-99"]            # optional; keep only these (default: all)
         exclude_episodes: [3, "10-14", 27]    # dropped on top of include_episodes
                                               # both take ints and inclusive "first-last" ranges.
-                                              # See lerobot_find_frozen_video.py, which prints
+                                              # See find_frozen_video.py, which prints
                                               # this block for episodes with a frozen camera.
                                               # A repo id may be listed more than once, to split
                                               # a dataset recorded by two robots into runs.
@@ -53,7 +53,7 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
       - vel_y
     normalize_tasks: tasks.yaml               # optional; path (as given, else relative to the recipe) to a
                                               # task mapping file, or the same {tasks:, map:}
-                                              # spec inline. See lerobot_normalize_tasks.py.
+                                              # spec inline. See normalize_tasks.py.
     drop_features:                            # optional; non-video features to drop from every
       - anchor_poses                          # source, for extras that only some sources carry
                                               # (the merge demands identical feature sets)
@@ -64,7 +64,7 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     reblend_ortho:                            # optional; re-render the ortho floor view from
       enabled: true                           # each source's anchor cameras with today's blend,
       render_fps: 10                          # instead of keeping the one it was recorded with.
-      cam_tilt: [30, 26]                      # See lerobot_reblend_ortho.py. Every source needs
+      cam_tilt: [30, 26]                      # See reblend_ortho.py. Every source needs
                                               # anchor poses, from its own anchor_poses feature
                                               # or from an anchor_config, exactly as camera_goal
                                               # does. cam_tilt is optional: it comes from the
@@ -73,9 +73,9 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     action_space: gripper_vel                 # optional; omit to keep the recorded space.
                                               # camera_goal converts; any other named space is a
                                               # subset of the recorded action components and is
-                                              # trimmed to. See stringman_lerobot._ACTION_SPACES.
+                                              # trimmed to. See stringman._ACTION_SPACES.
     trim_to_grasp:                            # optional; cut each episode to just its grasp
-      enabled: true                           # (see lerobot_trim_to_grasp.py). Runs on the merged
+      enabled: true                           # (see trim_to_grasp.py). Runs on the merged
       pressure_threshold: 0.1                 # dataset and re-encodes all video, so it is slow.
       min_grasp_seconds: 0.3                  # Needs gripper_pos_*/finger_pressure in
       rise_m: 0.10                            # keep_state_features.
@@ -95,7 +95,7 @@ Recipe format (YAML or JSON), e.g. recipe.yaml:
     upload: false                             # optional; may also be forced with --upload
 
 Usage:
-    python src/nf_robot/ml/lerobot_build_dataset.py \
+    python src/nf_robot/ml/lerobot/build_dataset.py \
         --recipe recipe.yaml \
         --temp_dir /media/nhn/nfdrive/tmp_build \
         --output_root /media/nhn/nfdrive/datasets/derivation_test \
@@ -113,16 +113,16 @@ from pathlib import Path
 from lerobot.datasets.dataset_tools import delete_episodes, merge_datasets, recompute_stats
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-from nf_robot.ml.lerobot_derive_dataset import camera_mode_problems, derive_dataset
-from nf_robot.ml.lerobot_label_contact_actions import label_dataset
+from nf_robot.ml.lerobot.derive_dataset import camera_mode_problems, derive_dataset
+from nf_robot.ml.lerobot.label_contact_actions import label_dataset
 from nf_robot.ml import camera_goal
-from nf_robot.ml import lerobot_reblend_ortho as reblend_ortho
-from nf_robot.ml.lerobot_normalize_tasks import load_mapping
-from nf_robot.ml.stringman_lerobot import (
+from nf_robot.ml.lerobot import reblend_ortho
+from nf_robot.ml.lerobot.normalize_tasks import load_mapping
+from nf_robot.ml.lerobot.stringman import (
     _ACTION_SPACES, _CAMERA_MODES, _FEED_NAMES, camera_mode_from_features,
 )
-from nf_robot.ml.lerobot_repair_episode_meta import repair as repair_episode_meta
-from nf_robot.ml.lerobot_trim_to_grasp import trim_dataset_to_grasp
+from nf_robot.ml.lerobot.repair_episode_meta import repair as repair_episode_meta
+from nf_robot.ml.lerobot.trim_to_grasp import trim_dataset_to_grasp
 
 # The AV1 encoder prints a twenty line configuration banner per video file, straight to
 # stderr from libSvtAv1Enc rather than through ffmpeg's log system - so av.logging cannot
@@ -837,7 +837,7 @@ def build(
     # A merge leaves every episode metadata row pointing at the file index it had in its
     # source, while writing them all into one destination file - so any source that had
     # more than one metadata file leaves rows naming a file that was never created. See
-    # lerobot_repair_episode_meta for the mechanism. Repaired here, right after the step
+    # repair_episode_meta for the mechanism. Repaired here, right after the step
     # that breaks it, because the next thing to read an episode's stats is the one that
     # fails, and that can be days later in a split.
     broken = repair_episode_meta(output_root)

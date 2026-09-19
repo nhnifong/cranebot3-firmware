@@ -16,7 +16,7 @@ so the anchor is the gripper position at the grasp dropped straight down by what
 rangefinder was reading.
 
 Getting that point into the frame is the rotated contact vector that
-lerobot_label_contact_actions already builds - the room-frame vector from the gripper to
+lerobot.label_contact_actions already builds - the room-frame vector from the gripper to
 the target, with its horizontal part rotated by `spin` into the gripper frame - followed
 by the fixed camera mount and config.camera_cal_wide's 684x384 intrinsics. See
 geometry.point_in_camera for the mount, which is two sign flips once the gripper is
@@ -72,7 +72,7 @@ and the one the head learns instead of the object being in the hand.
 
 Only successful grasps are mined. A grasp that closed on nothing puts the label
 somewhere the object never was, which is worse than no label at all; the rise test in
-lerobot_trim_to_grasp is exactly that success filter and is reused here.
+lerobot.trim_to_grasp is exactly that success filter and is reused here.
 
 Usage:
     python -m nf_robot.ml.visual_servoing.mine_teleop \
@@ -110,7 +110,7 @@ from nf_robot.ml.visual_servoing.uv_methods import (
     anchor_is_usable, gripper_camera_calibration, grasp_point_room, project,
     target_track,
 )
-from nf_robot.ml.lerobot_trim_to_grasp import (
+from nf_robot.ml.lerobot.trim_to_grasp import (
     MIN_GRASP_SECONDS,
     PRESSURE_THRESHOLD,
     RISE_M,

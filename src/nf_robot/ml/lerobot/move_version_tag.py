@@ -13,7 +13,7 @@ the tag itself. This exists for repos already in that state, where re-uploading 
 content just to move a ref would mean pushing the videos again.
 
 Usage:
-    python src/nf_robot/ml/lerobot_move_version_tag.py --repo_id naavox/combined_targets_eval
+    python src/nf_robot/ml/lerobot/move_version_tag.py --repo_id naavox/combined_targets_eval
 """
 
 import argparse

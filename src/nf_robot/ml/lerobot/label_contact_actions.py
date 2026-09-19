@@ -28,7 +28,7 @@ of which this script modifies, so re-running it reproduces the same values (up t
 float rounding).
 
 Usage:
-    python src/nf_robot/ml/lerobot_label_contact_actions.py \
+    python src/nf_robot/ml/lerobot/label_contact_actions.py \
         --repo_id naavox/simple_grasp_224 \
         [--new_repo_id naavox/simple_grasp_224_contact --new_root datasets/simple_grasp_224_contact] \
         [--rotate_contact_vec] \
@@ -45,7 +45,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from nf_robot.ml.stringman_lerobot import _ACTION_SPACES, rotate_vector
+from nf_robot.ml.lerobot.stringman import _ACTION_SPACES, rotate_vector
 
 CONTACT_ACTION_NAMES = ["contact_vec_x", "contact_vec_y", "contact_vec_z", "episode_end"]
 

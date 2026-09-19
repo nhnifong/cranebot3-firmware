@@ -5,7 +5,7 @@ before the gripper first makes contact with an object.
 
 "Contact" is the first frame in the episode whose observation.state
 finger_pressure exceeds --pressure_threshold (same convention as
-lerobot_label_contact_actions.py). Episodes that never reach that threshold are
+lerobot/label_contact_actions.py). Episodes that never reach that threshold are
 skipped.
 
 Usage:
