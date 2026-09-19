@@ -63,7 +63,7 @@ COMMIT_RANGE_M = 0.3
 #
 #   range   0.60  0.40  0.20  0.15  0.10  0.06
 #   m/s     0.12  0.12  0.12  0.08  0.05  0.03
-DESCENT_GAIN = 0.85         # (1/s) speed asked for per metre of range left to close
+DESCENT_GAIN = 0.25         # (1/s) speed asked for per metre of range left to close
 DESCENT_SPEED_MAX = 0.14    # (m/s) cap while there is plenty of room below
 DESCENT_SPEED_MIN = 0.07    # (m/s) floor, or the last centimetres never arrive
 LATERAL_GAIN = 0.8          # (1/s) fraction of the remaining offset commanded per second
@@ -296,8 +296,9 @@ class TargetFilter:
         """The lateral error to close, in room axes, from this frame's prediction."""
         now = time.time()
         target = prediction['point_room']
-        # this frame's lens position in the room: the point the offset is measured from
-        lens = target - prediction['room_offset']
+        # this frame's *jaw* position in the room, not the lens: driving the lens over the
+        # object leaves it 2.7cm past the fingers, which is where this loop used to stop
+        jaws = target - prediction['jaw_offset']
 
         if (self.point is None or self.at is None
                 or np.linalg.norm(target - self.point) > self.reset_m):
@@ -306,7 +307,7 @@ class TargetFilter:
             alpha = 1.0 - float(np.exp(-(now - self.at) / self.tau_s))
             self.point = self.point + alpha * (target - self.point)
         self.at = now
-        return (self.point - lens)[:2]
+        return (self.point - jaws)[:2]
 
 
 class VisualServo:
@@ -910,7 +911,7 @@ class VisualServo:
                 continue
             nothing_seen_since = None
 
-            # horizontal part of the offset from the lens to the target, in the room
+            # horizontal part of the offset from the jaws to the target, in the room
             # frame: exactly the error that must go to zero for the jaws to be over it,
             # filtered over a swing period so the descent steers at the object rather
             # than at the pendulum

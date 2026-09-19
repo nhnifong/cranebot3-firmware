@@ -30,7 +30,7 @@ import numpy as np
 
 from nf_robot.common.config_loader import create_default_config
 from nf_robot.ml.visual_servoing.geometry import (
-    CAMERA_POS_BODY, CAMERA_ROT_BODY, delta_in_camera, point_in_camera,
+    CAMERA_POS_BODY, CAMERA_ROT_BODY, JAW_POS_BODY, delta_in_camera, point_in_camera,
     rotate_about_vertical,
 )
 
@@ -38,17 +38,39 @@ from nf_robot.ml.visual_servoing.geometry import (
 # producing a plausible looking coordinate.
 MIN_DEPTH_M = 0.02
 
-# Where the jaws sit in the gripper camera's frame, measured off grasp frames rather than
-# derived from the mount: at the instant of a grasp the object is between the fingers, and
-# in `naavox/nick-sep14` that is the bottom centre of the picture.
+
+DEFAULT_UV_METHOD = "room-delta"
+
+# Where the jaws appear is not a constant - it is a fixed point in the body frame seen
+# from a lens 2.7cm in front of it, so it slides up the frame as the gripper climbs. On
+# naavox/red-dot it runs from v=0.72 with the fingertips on the floor to v=0.46 a metre up,
+# and nothing about that is optional: aiming at one number instead teaches an approach to
+# converge on the jaws only at the range that number was read at.
 #
-# Measured rather than derived on purpose, and kept that way now that the two agree. This
-# number is what caught geometry.CAMERA_ROT_BODY tilting the lens the wrong way: the mount
-# put the same point at (0.5, 0.308), the upper third, and a mirror about the centre line
-# is the signature of that sign. With the tilt corrected the mount projects the rangefinder
-# drop to (0.5, 0.6917) and this stays an independent measurement of the same thing, so the
-# next time one of them moves the disagreement is visible instead of being assumed away.
-JAW_UV = (0.5, 0.692)
+# This replaces a JAW_UV constant of (0.5, 0.692), which was never measured - it was the
+# mirror of the pre-flip (0.5, 0.308) and happened to sit 2px from the truth at grasping
+# range and a quarter of a frame away at half a metre.
+def jaw_uv(laser_rangefinder, calibration):
+    """Where the point the jaws will close on sits in the frame, at this range."""
+    return project_camera(jaw_in_camera(laser_rangefinder), calibration)[:2]
+
+
+def _jaw_uv_of(row, calibration):
+    """The mount's answer for one row, which is what every anchor here defaults to."""
+    return jaw_uv(row["laser_rangefinder"], calibration)
+
+
+def jaw_in_camera(laser_rangefinder):
+    """The jaw point in the camera's optical frame: straight below the jaws, on the floor.
+
+    The rangefinder sits beside the lens and measures down the body axis, so it gives the
+    lens's height; the jaws are `CAMERA_POS_BODY` behind the lens and the floor is that
+    much further below them.
+    """
+    drop = float(laser_rangefinder) - CAMERA_POS_BODY[2] + JAW_POS_BODY[2]
+    return CAMERA_ROT_BODY.inv().apply(JAW_POS_BODY + np.array([0.0, 0.0, -drop])
+                                       - CAMERA_POS_BODY)
+
 
 DEFAULT_UV_METHOD = "room-delta"
 
@@ -140,11 +162,12 @@ def camera_delta_to_room(p_cam, spin):
 def grasp_point_room(row):
     """Where the object was, in the room, at the instant of the grasp.
 
-    Straight down from the *rangefinder* by whatever it read. The rangefinder sits
-    beside the lens (see the measure_hover comment in observer.py), so the drop hangs
-    from the camera position, not from the recorded gripper position - those differ by
-    the 2.7cm the camera sits toward the nose, which is a systematic error in every
-    label if it is charged to the wrong point.
+    Straight down from the *jaws* by what the rangefinder read, adjusted for the lens
+    sitting 6mm above them. Not down from the lens, which is what this did until the
+    red-dot measurement showed the jaws are 2.7cm behind it: hanging the target under the
+    lens put every label 2.7cm toward the nose of the thing that was actually picked up,
+    and a servo loop that then nulled the offset to *that* aimed the same 2.7cm past the
+    fingers. See geometry.JAW_POS_BODY.
 
     Down rather than along the optical axis because the beam points down the body axis;
     the lens is what is tilted, not the sensor.
@@ -155,25 +178,24 @@ def grasp_point_room(row):
 def grasp_delta_room(row):
     """The same point as a room-frame vector from the gripper, which is all any method needs.
 
-    Nothing in it comes from the position estimate - it is the camera mount, the wrist
-    heading and the rangefinder - so the dead-reckoning methods can anchor on it without
-    taking on the dependency they exist to avoid.
+    Nothing in it comes from the position estimate - it is the mount and the rangefinder -
+    so the dead-reckoning methods can anchor on it without taking on the dependency they
+    exist to avoid. The wrist heading drops out too now that the point hangs from the body
+    origin: straight down is straight down whatever the gripper is facing.
     """
-    body = np.asarray(CAMERA_POS_BODY, dtype=np.float64) + np.array(
-        [0.0, 0.0, -float(row["laser_rangefinder"])])
-    return rotate_about_vertical(body, -float(row["spin"]))
+    drop = float(row["laser_rangefinder"]) - CAMERA_POS_BODY[2] + JAW_POS_BODY[2]
+    return np.asarray(JAW_POS_BODY, dtype=np.float64) + np.array([0.0, 0.0, -drop])
 
 
-def jaw_delta_room(row, calibration, jaw_uv=JAW_UV):
-    """The room-frame vector from the gripper to the jaws, anchored on where they appear.
+def jaw_delta_room(row, calibration, jaw_uv=None):
+    """The room-frame vector from the gripper to the jaws.
 
-    Same range as `grasp_delta_room` - the rangefinder is measuring the thing between the
-    fingers at the moment of a grasp - and the same direction to within the measurement,
-    now that the camera tilt is the right way round. It is arrived at differently, though:
-    unprojected from the place in the picture the fingers occupy rather than assumed to lie
-    down the body axis, so the two agreeing is a check on the mount rather than a
-    restatement of it. See JAW_UV.
+    `jaw_uv` overrides where in the frame the jaws are taken to be, which is only useful
+    for testing the aim against something other than the mount; left None it is the mount's
+    own answer and this is `grasp_delta_room`.
     """
+    if jaw_uv is None:
+        return grasp_delta_room(row)
     u, v = jaw_uv
     return camera_delta_to_room(
         unproject(u, v, float(row["laser_rangefinder"]), calibration), row["spin"])
@@ -331,9 +353,9 @@ def _track_optical_flow(rows, grasp, calibration, jaw_uv, frames):
         return gray[i]
 
     track = [None] * len(rows)
-    track[grasp] = tuple(jaw_uv)
+    track[grasp] = tuple(jaw_uv) if jaw_uv else _jaw_uv_of(rows[grasp], calibration)
     for step in (-1, 1):
-        uv = tuple(jaw_uv)
+        uv = track[grasp]
         k = grasp + step
         while 0 <= k < len(rows):
             uv = _flow_step(at(k - step), at(k), uv)
@@ -374,7 +396,7 @@ UV_METHODS["optical-flow"] = _track_optical_flow
 PIXEL_METHODS = ("optical-flow",)
 
 
-def target_track(rows, grasp, calibration, method=DEFAULT_UV_METHOD, jaw_uv=JAW_UV,
+def target_track(rows, grasp, calibration, method=DEFAULT_UV_METHOD, jaw_uv=None,
                  frames=None):
     """Where the grasp point sits in every frame of an episode: (u, v, distance) or None.
 
@@ -405,6 +427,8 @@ def add_uv_arguments(parser):
                         help="How the grasp point's place in each frame is decided. "
                              "Default %(default)s.")
     parser.add_argument("--jaw_uv", "--jaw-uv", dest="jaw_uv", type=float, nargs=2,
-                        default=list(JAW_UV), metavar=("U", "V"),
-                        help="Where the jaws sit in frame, which the dead-reckoning "
-                             "methods anchor on. Default %(default)s.")
+                        default=None, metavar=("U", "V"),
+                        help="Override where in the frame the jaws are taken to be. The "
+                             "default is the mount's own answer, which depends on range - "
+                             "uv_methods.jaw_uv - and is what you want unless you are "
+                             "testing the aim itself.")

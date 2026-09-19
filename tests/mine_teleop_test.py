@@ -15,10 +15,11 @@ from nf_robot.ml.visual_servoing.mine_teleop import (
     CANVAS_SCALE, FALSE_GRAB_PREFIX, MODE_FALSE_GRABS, MODE_GRASPS, MODE_NEGATIVES,
     NEGATIVE_PREFIX, OFF_SCREEN_MARGIN, ReservoirSampler, ShardWriter, find_lift,
     holding_label, in_view, mine_episode, mine_false_grab_episode, shard_prefix)
+from nf_robot.ml.visual_servoing.geometry import CAMERA_POS_BODY
 from nf_robot.ml.visual_servoing.uv_methods import (
-    DEFAULT_UV_METHOD, DELTA_METHODS, JAW_UV, UV_METHODS, grasp_point_room,
-    gripper_camera_calibration, project, project_camera, range_to_floor, target_track,
-    unproject)
+    DEFAULT_UV_METHOD, DELTA_METHODS, UV_METHODS, grasp_point_room,
+    gripper_camera_calibration, jaw_uv, project, project_camera, range_to_floor,
+    target_track, unproject)
 
 
 def rows_for(offsets, fps=30.0, grasp_at=60, length=90):
@@ -365,9 +366,10 @@ class TestUvMethods(unittest.TestCase):
         self.rows = rows_for([0.0] * 90)
         self.grasp = 60
         self.frames = synthetic_frames(self.rows, self.grasp)
+        self.jaw = jaw_uv(self.rows[self.grasp]["laser_rangefinder"], CALIBRATION)
 
     def track(self, method):
-        return target_track(self.rows, self.grasp, CALIBRATION, method, JAW_UV,
+        return target_track(self.rows, self.grasp, CALIBRATION, method,
                             frames=self.frames)
 
     def test_every_method_answers_for_every_frame(self):
@@ -383,41 +385,53 @@ class TestUvMethods(unittest.TestCase):
         for method in ("dead-reckon", "dead-reckon-observed", "optical-flow"):
             with self.subTest(method=method):
                 u, v, _ = self.track(method)[self.grasp]
-                self.assertAlmostEqual(u, JAW_UV[0], places=5)
-                self.assertAlmostEqual(v, JAW_UV[1], places=5)
+                self.assertAlmostEqual(u, self.jaw[0], places=5)
+                self.assertAlmostEqual(v, self.jaw[1], places=5)
 
-    def test_room_delta_anchors_on_the_rangefinder_instead(self):
-        """It arrives at the grasp frame's answer down the body axis rather than out of the
-        picture, so under a synthetic calibration it lands somewhere else than the jaws. The
-        real one is the interesting case and has its own test below."""
-        u, v, distance = self.track("room-delta")[self.grasp]
-        self.assertAlmostEqual(u, 0.5, places=5)
-        self.assertAlmostEqual(distance, self.rows[self.grasp]["laser_rangefinder"], places=5)
+    def test_every_method_starts_from_the_same_place(self):
+        """All of them anchor on the jaws now that the mount says where those are, so the
+        grasp frame is one answer arrived at three ways and they have to agree."""
+        answers = [self.track(m)[self.grasp] for m in UV_METHODS]
+        for got in answers[1:]:
+            self.assertAlmostEqual(got[0], answers[0][0], places=4)
+            self.assertAlmostEqual(got[1], answers[0][1], places=4)
 
-    def test_the_mount_agrees_with_where_the_jaws_are_seen_to_be(self):
-        """The regression test for the camera tilt sign, which was wrong until it was
-        measured this way: dropping straight down from the lens by the rangefinder has to
-        land on the jaws, because that is the premise the whole dataset is labelled on.
+    def test_the_mount_reproduces_the_red_dot_calibration(self):
+        """The regression test for the whole camera geometry, against the one measurement
+        of it that exists.
 
-        A flipped tilt mirrors this about the centre line and nothing else moves - every
-        label stays plausible, the loss still falls, and the mark sits a third of a frame
-        above the object in every video. Uses the real calibration, since the claim is
-        about this camera on this mount.
+        naavox/red-dot is a 15mm lid left sitting exactly between the fingertips while the
+        gripper climbs straight up, so the dot marks the jaw axis at every range and these
+        are where it was seen. Two constants have to be right to reproduce them and neither
+        can be checked at a single range: the tilt sets where the column of answers
+        converges as the gripper climbs, and the 2.7cm lens-to-jaw offset sets how fast it
+        gets there. A wrong tilt fitted at grasping range looks perfect there and is a
+        quarter of a frame out at half a metre, which is how the +9.06 degree version
+        survived a dataset and a training run before a descent found it.
         """
         calibration = gripper_camera_calibration()
-        row = {"gripper_pos": np.zeros(3), "spin": 0.0, "laser_rangefinder": 0.12}
-        u, v, _ = project(grasp_point_room(row), row["gripper_pos"], 0.0, calibration)
-        self.assertAlmostEqual(u, JAW_UV[0], places=3)
-        self.assertAlmostEqual(v, JAW_UV[1], places=2)
+        for laser, seen in ((0.112, 0.7121), (0.157, 0.6441), (0.236, 0.5683),
+                            (0.394, 0.5124), (0.617, 0.4821), (0.879, 0.4659)):
+            with self.subTest(laser=laser):
+                u, v = jaw_uv(laser, calibration)
+                self.assertAlmostEqual(u, 0.5, places=3)
+                # 0.01 of frame height is about 4px on the 384-tall source frames
+                self.assertAlmostEqual(v, seen, delta=0.01)
 
-    def test_the_projecting_methods_report_the_range_the_laser_read(self):
-        """The rangefinder is what puts the target in space, so a method that disagreed
-        with it at the grasp would be answering a different question. Optical flow gets
-        there differently and has its own test below."""
+    def test_the_projecting_methods_range_to_the_jaws_not_straight_down(self):
+        """The rangefinder reads the drop below the *lens* and the target hangs below the
+        *jaws*, 2.7cm behind it, so the distance along the ray is the hypotenuse of those
+        two and is always a little longer than the laser. Asserting the laser reading here
+        is what a version of this that had forgotten the offset would do.
+        """
+        row = self.rows[self.grasp]
+        # the laser reads the lens's own drop to the floor, and the jaw point sits 2.7cm
+        # back along the nose axis from directly under it
+        expected = float(np.hypot(row["laser_rangefinder"], CAMERA_POS_BODY[1]))
+        self.assertGreater(expected, row["laser_rangefinder"])
         for method in DELTA_METHODS:
             with self.subTest(method=method):
-                self.assertAlmostEqual(self.track(method)[self.grasp][2],
-                                       self.rows[self.grasp]["laser_rangefinder"], places=5)
+                self.assertAlmostEqual(self.track(method)[self.grasp][2], expected, places=5)
 
     def test_optical_flow_ranges_off_the_floor_plane(self):
         """It has no 3D point to measure, only a bearing, so the range is where that
@@ -429,10 +443,13 @@ class TestUvMethods(unittest.TestCase):
         """
         real = gripper_camera_calibration()
         row = self.rows[self.grasp]
-        self.assertAlmostEqual(range_to_floor(*JAW_UV, row, real),
-                               row["laser_rangefinder"], places=3)
+        # the jaw ray is a couple of degrees off straight down, so the floor is a shade
+        # further along it than the beam's own reading
+        self.assertAlmostEqual(range_to_floor(*jaw_uv(row["laser_rangefinder"], real), row, real),
+                               row["laser_rangefinder"], delta=0.004)
         # off to the side, the floor is further along the ray than it is straight down
-        self.assertGreater(range_to_floor(0.05, 0.692, row, real), row["laser_rangefinder"])
+        off_axis = (0.05, jaw_uv(row["laser_rangefinder"], real)[1])
+        self.assertGreater(range_to_floor(*off_axis, row, real), row["laser_rangefinder"])
 
     def test_optical_flow_follows_the_target_it_was_given(self):
         """Against frames built so the target's place in each of them is known, the track
@@ -453,7 +470,7 @@ class TestUvMethods(unittest.TestCase):
         slowly, so extrapolating past the loss would put a confident label on the wrong
         thing. Blank frames are the bluntest way to lose it."""
         blank = np.zeros((384, 684, 3), np.uint8)
-        track = target_track(self.rows, self.grasp, CALIBRATION, "optical-flow", JAW_UV,
+        track = target_track(self.rows, self.grasp, CALIBRATION, "optical-flow",
                              frames=lambda i: blank)
         self.assertIsNotNone(track[self.grasp])
         self.assertTrue(all(t is None for i, t in enumerate(track) if i != self.grasp))
@@ -462,7 +479,7 @@ class TestUvMethods(unittest.TestCase):
         """It is the one method that reads pixels, and a caller that cannot offer them has
         to be told which flag asked for them rather than handed a track of None."""
         with self.assertRaises(SystemExit) as caught:
-            target_track(self.rows, self.grasp, CALIBRATION, "optical-flow", JAW_UV)
+            target_track(self.rows, self.grasp, CALIBRATION, "optical-flow")
         self.assertIn("optical-flow", str(caught.exception))
 
     def test_exact_velocity_reproduces_the_track_it_was_built_from(self):
@@ -470,7 +487,7 @@ class TestUvMethods(unittest.TestCase):
         has no error to make, so the two methods can differ only by their anchors - the
         same vector in every frame. A gap that drifts is an integration bug, and it is the
         one failure this fixture can tell apart from the real disagreement on a robot."""
-        deltas = {m: DELTA_METHODS[m](self.rows, self.grasp, CALIBRATION, JAW_UV)
+        deltas = {m: DELTA_METHODS[m](self.rows, self.grasp, CALIBRATION, None)
                   for m in ("room-delta", "dead-reckon")}
         gaps = [deltas["dead-reckon"][i] - deltas["room-delta"][i]
                 for i in range(len(self.rows))]
@@ -504,7 +521,7 @@ class TestUvMethods(unittest.TestCase):
         """The dead-reckoning anchor is an unprojection, so a sign error in it would put
         the target at a mirrored bearing and still produce a plausible looking track.
         Off-frame coordinates included: that is where the anchor is allowed to land."""
-        for uv in (JAW_UV, (0.1, 0.2), (1.2, -0.1)):
+        for uv in (self.jaw, (0.1, 0.2), (1.2, -0.1)):
             with self.subTest(uv=uv):
                 u, v, distance = project_camera(unproject(*uv, 0.35, CALIBRATION),
                                                 CALIBRATION)

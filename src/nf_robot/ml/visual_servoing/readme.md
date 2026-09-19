@@ -569,7 +569,8 @@ given mode in one run, since a second run replaces the first rather than adding 
         --output_root datasets/vs-centroid-dataset \
         --preview_dir datasets/vs-centroid-dataset/preview \
         --preview_count 200 \
-        --approach_seconds 4
+        --approach_seconds 4 \
+        --uv_method optical-flow
 
 No split of the LeRobot dataset first: pass the whole thing. `simple_grasp_spin` can be
 added here even though it cannot be merged into `naavox/combined_targets`, because the
@@ -776,11 +777,11 @@ fall back here when no session answers.
 
 ## 9. Publish Model
 
-Checkpoints from before the camera tilt was corrected (`geometry.CAMERA_ROT_BODY`, see
-[data_quality.md](data_quality.md)) are not compatible with the current transform: they
-predict points in the old convention and `camera_to_room` now undoes the new one, an 18
-degree error in the direction the gantry flies. Re-mine the pool, re-train, fly it, and
-only then move the pin. Nothing checks this at load time.
+Checkpoints from before the camera geometry was measured against `naavox/red-dot`
+(`geometry.CAMERA_TILT_DEG` and `JAW_POS_BODY`, see [data_quality.md](data_quality.md)) are
+not compatible with the current transform: they predict points in the old convention, where
+the target was referenced to the lens rather than to the jaws. Re-mine the pool, re-train,
+fly it, and only then move the pin. Nothing checks this at load time.
 
 `--local_models` reads `models/visual_servo.pth`; without it the checkpoint comes from
 `naavox/visual_servo` on the hub, which has to have been published there first:

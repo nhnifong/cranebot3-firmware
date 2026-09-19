@@ -50,7 +50,7 @@ from nf_robot.ml.lerobot_trim_to_grasp import (
 )
 from nf_robot.ml.visual_servoing.mine_teleop import frame_bgr, read_columns
 from nf_robot.ml.visual_servoing.uv_methods import (
-    DEFAULT_UV_METHOD, JAW_UV, PIXEL_METHODS, add_uv_arguments,
+    DEFAULT_UV_METHOD, PIXEL_METHODS, add_uv_arguments,
     gripper_camera_calibration, target_track,
 )
 
@@ -109,7 +109,7 @@ def caption(bgr, lines, colour=(235, 235, 235)):
 
 def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
                   approach_seconds, carry_seconds, vcodec, crf,
-                  uv_method=DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
+                  uv_method=DEFAULT_UV_METHOD, jaw_uv=None):
     """One episode's gripper frames with the grasp point drawn on each of them."""
     import av
 
@@ -172,7 +172,7 @@ def episode_video(dataset, rows, episode, start, grasp, calibration, fps, path,
 
 def render(root: Path, output_dir: Path, repo_id=None, limit=None, episodes_wanted=None,
            approach_seconds=5.0, carry_seconds=1.0, vcodec="libx264", crf=23,
-           uv_method=DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
+           uv_method=DEFAULT_UV_METHOD, jaw_uv=None):
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     root = Path(root)
@@ -246,7 +246,7 @@ def main():
     render(Path(args.root), Path(args.output_dir), args.repo_id, args.limit,
            set(args.episodes) if args.episodes else None,
            args.approach_seconds, args.carry_seconds, args.vcodec, args.crf,
-           args.uv_method, tuple(args.jaw_uv))
+           args.uv_method, tuple(args.jaw_uv) if args.jaw_uv else None)
 
 
 if __name__ == "__main__":

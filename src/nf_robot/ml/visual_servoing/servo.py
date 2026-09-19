@@ -18,7 +18,9 @@ import logging
 
 import numpy as np
 
-from nf_robot.ml.visual_servoing.geometry import camera_to_room, point_in_room
+from nf_robot.ml.visual_servoing.geometry import (
+    camera_to_room, lens_to_jaw_body, point_in_room, rotate_about_vertical,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +87,10 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
                         the target is off the edge of the visible frame
         range_m         distance from the lens along the ray
         point_cam       the target in the camera's optical frame, metres
-        room_offset     the same vector in room axes; its horizontal part is the
-                        centering error, measured from the lens
+        room_offset     the same vector in room axes, measured from the lens
+        jaw_offset      the same vector measured from the jaws instead, which is the one
+                        to null: the lens sits 2.7cm in front of them, so closing
+                        room_offset centres the object that far past the fingers
         point_room      where that lands in the room, if a gripper position was given
         axis_concentration  how sure the axis head is, in von Mises kappa; near zero
                         means it has no opinion and a wrist gate should not act on it
@@ -120,6 +124,11 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
         "range_m": float(out["distance_m"][0, 0]),
         "point_cam": point_cam,
         "room_offset": camera_to_room(point_cam, spin),
+        # geometry.JAW_POS_BODY: what the red-dot calibration showed every part of this
+        # was missing. The heads answer in the camera's frame and the camera is not where
+        # the grip happens.
+        "jaw_offset": camera_to_room(point_cam, spin) - rotate_about_vertical(
+            lens_to_jaw_body(), -spin),
         "point_room": None if gripper_pos is None else point_in_room(point_cam, gripper_pos, spin),
         "grasp_axis_rad": float(out["grasp_axis_rad"][0, 0]),
         # Length of the axis vector, which train.py's von Mises objective fits as the

@@ -158,38 +158,64 @@ second before the grasp and 50% of the time two seconds before.
 method unless it is the default, so two renders of one episode sit side by side rather than
 one overwriting the other, and every frame is captioned with the method that drew it.
 
-### Pattern 1 was the camera tilt, and it is fixed
+### Pattern 1 was the camera geometry, and `naavox/red-dot` measured it
 
-The constant vertical offset had a cause and a number. `geometry.CAMERA_ROT_BODY` tilted
-the lens 9.06 degrees *away* from the nose, so dropping straight down from the camera by
-the rangefinder - the premise the whole dataset is labelled on - projected to **(0.5,
-0.308)** at every range, the upper third of the frame. In the frames the jaws are at the
-bottom and the object between them is at about **(0.5, 0.692)**. Mirror images about the
-centre line.
+The constant vertical offset was two errors, and each hid the other.
 
-Two things produce that mirror and only one of them was it. A flipped tilt sign mirrors v
-alone; a 180-degree sensor rotation mirrors u as well. Phase correlation settled it: over 18
-windows of lateral flight with no wrist turn, the image flow predicted from the gantry's
-own reported velocity agrees with the measured flow at cos +0.94 under the current u and
-anti-correlates under a rotated sensor. So u was right and the tilt was not.
+`geometry.CAMERA_ROT_BODY` took its tilt from `definitions.gripper_camera`, which says 9.06
+degrees. And every part of the system referenced the target to the **lens**:
+`grasp_point_room` hung it straight below the lens, and the servo loop nulled the offset
+from the lens. Nothing said where the jaws are.
 
-`CAMERA_ROT_BODY` now tilts toward the nose, and the rangefinder drop projects to
-**(0.5, 0.6917)** - a third of a pixel from the (0.5, 0.692) measured off the frames by
-eye, which is the confirmation, since nothing about the mount derivation knows what the
-pictures look like. `uv_methods.JAW_UV` stays a separate measured constant so the two can
-go on checking each other, and a test asserts they still agree.
+`naavox/red-dot` settles both. One episode: a 15mm red chapstick lid left sitting exactly
+between the fingertips, gripper climbing straight up from 0.11m to 1.0m with the dot
+centred below it. The dot therefore marks the jaw axis at every range, and how its place in
+the frame changes with range separates the two unknowns - the tilt sets where the answers
+converge as the gripper climbs, and the lens-to-jaw offset sets how fast they get there.
+Neither is identifiable from one range, which is why this went unnoticed so long.
 
-**Everything mined before this is wrong by about a third of a frame**, and so is every
-checkpoint trained on it. The transform is on both paths - `point_in_camera` makes the
-labels and `camera_to_room` is what the robot flies on - so they move together and stay
-self-consistent, which is why the old loop worked at all: the model learned the shifted
-convention and `camera_to_room` undid it. After the flip the two disagree by 18 degrees
-until the pool is re-mined and a checkpoint re-trained and re-flown. Nothing warns about
-this at load time.
+Fitting 666 detected frames:
 
-What the mark does now is patterns 2 to 4 without pattern 1 on top of it: it sits on the
-object through most of an approach and jumps off it where the position estimate does.
+    camera tilt            -3.389 deg (back, away from the nose), 1.8px residual
+    lens -> jaw offset     -27.0 mm along the nose axis
+    dot at u               0.4957, so the jaw axis is under the lens in x
 
+The offset is the striking one. The fit was told nothing about the mount and recovered
+-27.0mm; `CAMERA_POS_BODY[1]` is +27.0mm. **The jaws are at the gripper body origin and the
+lens is 2.7cm in front of them.** The CAD translation was right all along and simply was
+not being used - `geometry.JAW_POS_BODY` is now that fact.
+
+The tilt is wrong in CAD by nearly a factor of three, and its sign was right. Both earlier
+readings of this file were wrong: the original -9.06 leaned the right way and far too far,
+and the flip to +9.06 leaned the wrong way while landing within 2px of the truth at
+*grasping range*. That is why the flip looked like a clear improvement on mined frames,
+which cluster near the grasp, and fell apart on a descent - at half a metre it is a quarter
+of a frame out.
+
+So where the jaws appear is not a constant. It runs:
+
+    laser  0.11m   0.16m   0.24m   0.39m   0.62m   0.88m
+    v       0.72    0.63    0.57    0.51    0.48    0.47
+
+`uv_methods.jaw_uv(laser, calibration)` is that curve, and it replaces a `JAW_UV` constant
+of (0.5, 0.692) which was never measured - it was the mirror of the pre-flip (0.5, 0.308).
+
+**What this cost, and what it fixes.** Referencing the target to the lens made every label
+name a point 2.7cm toward the nose of the thing that was actually picked up, and made the
+servo loop null the offset to *that* - so the loop drove until the object sat 2.7cm past
+the fingers, at every range. With the target referenced to the jaws, an object sitting
+exactly in the jaws now decodes to a 0.00mm error at 0.12m, 0.30m and 0.60m, where the old
+chain gave a flat 27mm.
+
+The older pipeline hid this because its labels were tied to the actual grasp through the
+training data: the label at the grasp frame was whatever the geometry produced, and the
+model learned "report this when the scene looks like a grasp", so the loop's null point was
+the real grasp configuration however wrong the constants. Anchoring optical flow on an
+asserted `JAW_UV` broke that tie and exposed the 2.7cm.
+
+**Everything mined before this is wrong and so is every checkpoint trained on it.** Re-mine
+the pool, retrain, fly it, and only then move the pin in `common/model_revisions.json`.
+Nothing checks this at load time.
 
 ### What the comparison shows
 

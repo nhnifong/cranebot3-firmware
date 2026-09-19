@@ -21,30 +21,43 @@ import nf_robot.common.definitions as definitions
 # into the z-up body frame the rest of the system uses (pole up +z, nose at +y). Rx(90)
 # is the same seam arp_gripper_client.measure_gantry_minus_card crosses.
 _YUP_TO_ZUP = Rotation.from_euler("x", 90, degrees=True)
-# Straight down, in that same y-up frame. What the CAD rotvec has over it is the tilt and
-# nothing else, both being rotations about the same x axis.
-_STRAIGHT_DOWN = Rotation.from_euler("x", 90, degrees=True)
-# The lens tilts 9.06 degrees off straight down, and it tilts *toward* the nose. The CAD
-# value says away, and the frames say otherwise: the jaws are at the bottom of every
-# gripper frame, while dropping straight down from the lens and projecting through the
-# away-tilt puts that same point at v=0.31, the upper third. The two are mirror images
-# about the centre line, which is the signature of this sign and of nothing else - a
-# rotated sensor would mirror u as well, and phase correlation over 18 windows of lateral
-# flight says u is right (the predicted and measured image flow agree at cos +0.94, and
-# anti-correlate under a 180 degree sensor rotation).
+# The PCB normal, as CAD has it: the sensor board leans this far back from straight down.
+_PCB_TILT_DEG = 90.0 - float(np.degrees(definitions.gripper_camera[0][0]))
+# How far the optical axis sits forward of that normal. The lens does not project square to
+# the board it is soldered to, so the board's angle is not the camera's angle, and CAD
+# knows only the board.
 #
-# Applied by inverting the tilt rather than by writing 189.06 here, so the angle itself
-# stays in definitions.gripper_camera where a re-measurement would land.
+# Measured from naavox/red-dot: a 15mm lid left sitting exactly between the fingertips
+# while the gripper climbs straight up from 0.11m to 1.0m, so the dot marks the jaw axis at
+# every range. Fitting 666 frames of it puts the optical axis 3.389 degrees back from
+# straight down where the board is 9.06, a difference of 5.67 degrees, to a residual of
+# 1.8px over the whole climb.
 #
-# Flipping this moves the labels and the robot's control path together, and they are only
-# in step once a checkpoint has been re-mined and re-trained: an older checkpoint predicts
-# points in the old convention and camera_to_room now undoes the new one, which is an 18
-# degree error in the direction the gantry flies.
-_CAD_TILT = _STRAIGHT_DOWN.inv() * Rotation.from_rotvec(definitions.gripper_camera[0])
-# Comes out as Rx(180 + 9.06 deg): looking down, tilted toward the nose.
-CAMERA_ROT_BODY = _YUP_TO_ZUP * _STRAIGHT_DOWN * _CAD_TILT.inv()
-# Comes out as (0, +0.027, +0.006): 2.7cm toward the nose, 6mm up from the body origin.
+# The anchor camera calibration turned up a discrepancy of about 6 degrees between its
+# measured and CAD tilts independently. Same part, same size, so this is one property of
+# the camera module rather than two coincidences - and it is worth applying to any other
+# camera whose pose comes from CAD rather than from a calibration.
+LENS_VS_PCB_DEG = 5.671
+# Negative is back, away from the nose. Both earlier versions of this file used the board's
+# angle for the lens's: the original -9.06 leaned the right way and far too far, and a flip
+# to +9.06 leaned the wrong way while landing within 2px of the truth at grasping range -
+# which is why it looked right on mined frames and fell apart on a descent.
+CAMERA_TILT_DEG = -(_PCB_TILT_DEG - LENS_VS_PCB_DEG)
+CAMERA_ROT_BODY = Rotation.from_euler("x", 180 + CAMERA_TILT_DEG, degrees=True)
+
 CAMERA_POS_BODY = _YUP_TO_ZUP.apply(definitions.gripper_camera[1])
+# Where the jaws close, in the same body frame. The red-dot fit recovered the lens-to-jaw
+# offset as -27.0mm along the nose axis without being told anything about the mount, and
+# CAMERA_POS_BODY[1] is +27.0mm: the jaws sit at the gripper body origin and the lens is
+# 2.7cm in front of them. The CAD translation is right, and it is the piece every part of
+# this system was missing - labels hung the target below the *lens* and the servo loop
+# nulled the offset from the *lens*, so both agreed to aim 2.7cm past the fingers.
+JAW_POS_BODY = np.zeros(3)
+
+
+def lens_to_jaw_body():
+    """The body-frame vector from the lens to the jaws, which is what aiming has to add."""
+    return JAW_POS_BODY - CAMERA_POS_BODY
 
 
 def rotate_about_vertical(vec, radians):

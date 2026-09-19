@@ -106,7 +106,7 @@ import cv2
 import numpy as np
 
 from nf_robot.ml.visual_servoing.uv_methods import (
-    DEFAULT_UV_METHOD, JAW_UV, MIN_DEPTH_M, PIXEL_METHODS, add_uv_arguments,
+    DEFAULT_UV_METHOD, MIN_DEPTH_M, PIXEL_METHODS, add_uv_arguments,
     gripper_camera_calibration, grasp_point_room, project, target_track,
 )
 from nf_robot.ml.lerobot_trim_to_grasp import (
@@ -520,7 +520,7 @@ def in_view(u, v, margin=OFF_SCREEN_MARGIN):
 
 
 def mine_episode(rows, fps, calibration, approach_seconds, carry_seconds, rise_m,
-                 margin=OFF_SCREEN_MARGIN, uv_method=DEFAULT_UV_METHOD, jaw_uv=JAW_UV,
+                 margin=OFF_SCREEN_MARGIN, uv_method=DEFAULT_UV_METHOD, jaw_uv=None,
                  frames=None):
     """Labelled rows for one episode, or (None, reason, 0) if it is not a usable grasp.
 
@@ -869,7 +869,7 @@ def mine_source(writer, root: Path, repo_id: str, approach_seconds: float,
                 carry_seconds: float, rise_m: float, limit: int | None, progress=None,
                 mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
                 image_size=IMAGE_SIZE, fetch_images: bool = True,
-                uv_method: str = DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
+                uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
     # Note for the pixel methods: they decode the approach window to track it, and the row
     # images are decoded again afterwards. Worth the second pass rather than holding a
     # window of frames in memory per episode, and it is what makes optical-flow the
@@ -960,7 +960,7 @@ def mine_source(writer, root: Path, repo_id: str, approach_seconds: float,
 def mine(sources, output_root: Path, split: str, approach_seconds: float,
          carry_seconds: float, rise_m: float, limit: int | None,
          mode: str = MODE_GRASPS, stride: int = SWEEP_STRIDE,
-         image_size=IMAGE_SIZE, uv_method: str = DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
+         image_size=IMAGE_SIZE, uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
     """Replace this producer's share of the pool with the given (repo_id, root) sources.
 
     Only this producer's shards go: mining is deterministic given its inputs, so a rerun
@@ -1013,7 +1013,7 @@ def mine(sources, output_root: Path, split: str, approach_seconds: float,
 def mine_preview(sources, approach_seconds: float, carry_seconds: float, rise_m: float,
                  limit: int | None, count: int, seed: int, mode: str = MODE_GRASPS,
                  stride: int = SWEEP_STRIDE, image_size=IMAGE_SIZE,
-                 uv_method: str = DEFAULT_UV_METHOD, jaw_uv=JAW_UV):
+                 uv_method: str = DEFAULT_UV_METHOD, jaw_uv=None):
     """Label every frame a real run would, keep a random `count` of the rows, write nothing.
 
     The point is the loop this closes: change how a label is derived, look at the frames
@@ -1313,7 +1313,7 @@ def main():
             sources, args.approach_seconds, args.carry_seconds, args.rise_m, args.limit,
             args.preview_count, args.preview_seed, mode=mode, stride=args.stride,
             image_size=tuple(args.image_size),
-            uv_method=args.uv_method, jaw_uv=tuple(args.jaw_uv),
+            uv_method=args.uv_method, jaw_uv=tuple(args.jaw_uv) if args.jaw_uv else None,
         )
         render_preview(rows, Path(args.preview_dir), args.preview_group)
         return
@@ -1323,7 +1323,7 @@ def main():
         args.approach_seconds, args.carry_seconds, args.rise_m, args.limit,
         mode=mode, stride=args.stride,
         image_size=tuple(args.image_size),
-        uv_method=args.uv_method, jaw_uv=tuple(args.jaw_uv),
+        uv_method=args.uv_method, jaw_uv=tuple(args.jaw_uv) if args.jaw_uv else None,
     )
     if args.preview_dir and total:
         write_preview(split_dir, Path(args.preview_dir),
