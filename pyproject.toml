@@ -33,6 +33,10 @@ host = [
     "av",
     "huggingface_hub",
     "tzlocal",
+    # the DINOv2-with-registers backbone both pinned models run on
+    "transformers>=4.48",
+    # ortho_target.dataset.write_user_labels, behind the UI's "Add targets to dataset"
+    "pyarrow",
 ]
 dev = [
     "pytest",
