@@ -57,7 +57,7 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
     out = predict(model, images, state_t, top_k=1)  # predict is already no_grad
 
     point_cam = out["point_m"][0, 0].cpu().numpy().astype(np.float64)
-    result = {
+    return {
         "uv": out["uv"][0, 0].cpu().numpy().astype(np.float64),
         "range_m": float(out["distance_m"][0, 0]),
         "point_cam": point_cam,
@@ -73,9 +73,6 @@ def predict_frame(model, bgr, state, device, spin, gripper_pos=None):
         "present": float(out["present"][0]),
         "holding": float(out["holding"][0]),
         "score": float(out["score"][0, 0]),
+        "close": float(out["close"][0]),
+        "grasp_pressure": float(out["grasp_pressure"][0]),
     }
-    # Only close-heads checkpoints have these.
-    if "close" in out:
-        result["close"] = float(out["close"][0])
-        result["grasp_pressure"] = float(out["grasp_pressure"][0])
-    return result

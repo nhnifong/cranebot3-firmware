@@ -1,11 +1,4 @@
-"""Tests for where the close head reads from.
-
-Whether to start closing is a spatial question - something between the fingers, square on,
-near enough - and the jaws sit in one fixed part of the frame. Reading it off a vector that
-has already been pooled over the whole image can only say the frame contains a graspable
-thing, not that this one is in the jaws. --spatial_close moves the head onto the cell grid;
-these pin what that has to preserve, and that the robot's side of the model is unchanged
-either way.
+"""Tests for the visual servoing model's close head, which reads the cell grid near the jaws.
 
 Skipped where the ML extras or the cached backbone are missing, since building the model
 downloads several hundred MB otherwise.
@@ -39,25 +32,15 @@ class TestSpatialCloseHead(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.manual_seed(0)
-        cls.spatial = VisualServoNet(close_heads=True, spatial_close=True).eval()
-        cls.globalv = VisualServoNet(close_heads=True, spatial_close=False).eval()
+        cls.spatial = VisualServoNet().eval()
         width, height = DEFAULT_IMAGE_SIZE
         cls.pixels = torch.randn(2, 3, height, width)
         cls.state = torch.randn(2, 3)
 
-    def test_the_robot_sees_the_same_model_either_way(self):
-        """Deployment reads close and grasp_pressure by name, so moving where the logit
-        comes from must not change the shape of what comes out."""
-        spatial = predict(self.spatial, self.pixels, self.state)
-        pooled = predict(self.globalv, self.pixels, self.state)
-        self.assertEqual(sorted(spatial), sorted(pooled))
-        self.assertEqual(spatial["close"].shape, pooled["close"].shape)
-        self.assertEqual(spatial["grasp_pressure"].shape, pooled["grasp_pressure"].shape)
-
-    def test_the_close_logit_leaves_the_global_vector(self):
-        """One fewer flag off the pooled vector, because close is no longer one of them."""
-        self.assertEqual(self.spatial.global_outputs, 4)
-        self.assertEqual(self.globalv.global_outputs, 5)
+    def test_predict_reports_close_and_pressure_per_item(self):
+        prediction = predict(self.spatial, self.pixels, self.state)
+        self.assertEqual(prediction["close"].shape, (2,))
+        self.assertEqual(prediction["grasp_pressure"].shape, (2,))
 
     def test_the_pressure_head_stays_on_the_global_vector(self):
         """How hard to squeeze is a property of the object, not of where it is in frame."""
@@ -90,17 +73,14 @@ class TestSpatialCloseHead(unittest.TestCase):
 
 
 @needs_backbone
-class TestCheckpointCompatibility(unittest.TestCase):
-    """A checkpoint says which close head it was trained with, and one written before the
-    spatial head existed has to keep loading onto the global one."""
+class TestCheckpointRoundTrip(unittest.TestCase):
 
-    def payload(self, model, **extra):
+    def payload(self, model):
         return {
             "backbone_id": model.backbone_id, "image_size": list(model.image_size),
             "fuse_layers": model.fuse_layers, "attention_layers": len(model.attention),
-            "freeze": model.freeze, "close_heads": model.close_heads, "skip": model.skip,
+            "freeze": model.freeze,
             "state_dict": drop_trunk_weights(model.state_dict(), model.trunk, verify=False),
-            **extra,
         }
 
     def round_trip(self, payload):
@@ -110,17 +90,11 @@ class TestCheckpointCompatibility(unittest.TestCase):
             model, _ = load_checkpoint(path, "cpu")
             return model
 
-    def test_a_checkpoint_without_the_key_loads_on_the_global_head(self):
-        trained = VisualServoNet(close_heads=True, spatial_close=False)
+    def test_a_saved_model_loads_with_the_same_weights(self):
+        trained = VisualServoNet()
         loaded = self.round_trip(self.payload(trained))
-        self.assertFalse(loaded.spatial_close)
-        self.assertEqual(loaded.global_outputs, 5)
-
-    def test_a_spatial_checkpoint_comes_back_spatial(self):
-        trained = VisualServoNet(close_heads=True, spatial_close=True)
-        loaded = self.round_trip(self.payload(trained, spatial_close=True))
-        self.assertTrue(loaded.spatial_close)
-        self.assertEqual(loaded.global_outputs, 4)
+        for key, value in trained.state_dict().items():
+            self.assertTrue(torch.equal(value, loaded.state_dict()[key]), key)
 
 
 if __name__ == "__main__":

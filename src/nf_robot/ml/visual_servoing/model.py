@@ -18,6 +18,9 @@
             3. finger speed, scalar in [-1, 1], from the global vector
             4. probability any graspable target is present
             5. probability we are currently holding something
+            6. probability the close should have begun, from the cell grid pooled
+               into coarse bins so the jaws have their own
+            7. grip pressure the object will need, from the global vector
 """
 
 import numpy as np
@@ -102,7 +105,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  fuse_layers=4, width=256, attention_layers=3, heads=8, freeze=True,
-                 state_dim=STATE_DIM, close_heads=False, spatial_close=False, skip=True):
+                 state_dim=STATE_DIM):
         super().__init__()
         trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
@@ -133,10 +136,8 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
 
         # Skip connection so each spatial head sees the local pre-attention features beside
         # the attended ones.
-        self.skip = skip
-        if skip:
-            self.skip_fuse = nn.Sequential(
-                nn.Conv2d(width * 2, width, 1), nn.GroupNorm(32, width), nn.GELU())
+        self.skip_fuse = nn.Sequential(
+            nn.Conv2d(width * 2, width, 1), nn.GroupNorm(32, width), nn.GELU())
 
         # Head 1: one softmax over canvas cells, plus log distance.
         self.logit_head = nn.Conv2d(channels, 1, 1)
@@ -145,27 +146,21 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
         # Head 2: (sin 2t, cos 2t), because the grasp axis is pi-periodic.
         self.axis_head = nn.Conv2d(channels, 2, 1)
 
-        # Heads 3-5 read the whole image; close_heads adds when-to-close and how-hard heads
-        # beside the finger rate.
-        self.close_heads = close_heads
-        # Ask the close question of the cell grid, where the jaws are, rather than the
-        # pooled vector.
-        self.spatial_close = bool(spatial_close and close_heads)
+        # Finger rate, present, holding and grip pressure read the whole image.
         global_dim = hidden * 2 + state_dim
-        self.global_outputs = (4 if self.spatial_close else 5) if close_heads else 3
         self.global_head = nn.Sequential(
             # LayerNorm first, or the large [CLS] norm saturates the finger head's tanh.
             nn.LayerNorm(global_dim),
-            nn.Linear(global_dim, 256), nn.GELU(), nn.Linear(256, self.global_outputs))
+            nn.Linear(global_dim, 256), nn.GELU(), nn.Linear(256, 4))
 
-        if self.spatial_close:
-            # State also goes straight in after the pool, since the rangefinder is most of
-            # "close enough".
-            self.close_reduce = nn.Conv2d(channels, CLOSE_CHANNELS, 1)
-            close_dim = CLOSE_CHANNELS * CLOSE_POOL[0] * CLOSE_POOL[1] + state_dim
-            self.close_head = nn.Sequential(
-                nn.LayerNorm(close_dim),
-                nn.Linear(close_dim, 256), nn.GELU(), nn.Linear(256, 1))
+        # The close question is asked of the cell grid, where the jaws are, rather than the
+        # pooled vector. State also goes straight in after the pool, since the rangefinder
+        # is most of "close enough".
+        self.close_reduce = nn.Conv2d(channels, CLOSE_CHANNELS, 1)
+        close_dim = CLOSE_CHANNELS * CLOSE_POOL[0] * CLOSE_POOL[1] + state_dim
+        self.close_head = nn.Sequential(
+            nn.LayerNorm(close_dim),
+            nn.Linear(close_dim, 256), nn.GELU(), nn.Linear(256, 1))
 
     def features(self, pixel_values):
         """Fused patch features as a map, plus the global [CLS]/register vector."""
@@ -181,9 +176,7 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
         tokens, global_vec = self.features(pixel_values)
         local = self.film(self.stem(tokens), state)
 
-        x = attend(local, self.pos, self.attention)
-        if self.skip:
-            x = self.skip_fuse(torch.cat([local, x], dim=1))
+        x = self.skip_fuse(torch.cat([local, attend(local, self.pos, self.attention)], dim=1))
 
         flags = self.global_head(torch.cat([global_vec, state], dim=-1))
         out = {
@@ -193,19 +186,11 @@ class VisualServoNet(SharedTrunkMixin, nn.Module):
             "finger": torch.tanh(flags[:, 0]),
             "present_logit": flags[:, 1],
             "holding_logit": flags[:, 2],
+            # softplus so the pressure can't go negative
+            "grasp_pressure": F.softplus(flags[:, 3]),
         }
-        if self.close_heads:
-            # Close onset as a logit, and grip pressure as a softplus so it can't go
-            # negative.
-            if self.spatial_close:
-                cells = F.gelu(self.close_reduce(x))
-                pooled = adaptive_avg_pool2d(cells, CLOSE_POOL).flatten(1)
-                out["close_logit"] = self.close_head(
-                    torch.cat([pooled, state], dim=-1)).squeeze(-1)
-                out["grasp_pressure"] = F.softplus(flags[:, 3])
-            else:
-                out["close_logit"] = flags[:, 3]
-                out["grasp_pressure"] = F.softplus(flags[:, 4])
+        pooled = adaptive_avg_pool2d(F.gelu(self.close_reduce(x)), CLOSE_POOL).flatten(1)
+        out["close_logit"] = self.close_head(torch.cat([pooled, state], dim=-1)).squeeze(-1)
         return out
 
 
@@ -271,7 +256,7 @@ def predict(model, images, state, top_k=1):
     model.eval()
     outputs = model(images, state)
     uv, distance, angle, scores, concentration = decode(outputs, model.grid, top_k=top_k)
-    result = {
+    return {
         "uv": uv,
         "distance_m": distance,
         "point_m": camera_point(uv, distance),
@@ -281,24 +266,18 @@ def predict(model, images, state, top_k=1):
         "finger": outputs["finger"],
         "present": outputs["present_logit"].sigmoid(),
         "holding": outputs["holding_logit"].sigmoid(),
+        "close": outputs["close_logit"].sigmoid(),
+        "grasp_pressure": outputs["grasp_pressure"],
     }
-    if "close_logit" in outputs:
-        result["close"] = outputs["close_logit"].sigmoid()
-        result["grasp_pressure"] = outputs["grasp_pressure"]
-    return result
 
 
 def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
     freeze = checkpoint.get("freeze", True)
-    # Heads a checkpoint doesn't mention were not built, so these default off here.
     model = VisualServoNet(
         backbone_id=checkpoint["backbone_id"], image_size=checkpoint["image_size"],
         fuse_layers=checkpoint["fuse_layers"], attention_layers=checkpoint["attention_layers"],
-        freeze=freeze, close_heads=checkpoint.get("close_heads", False),
-        spatial_close=checkpoint.get("spatial_close", False),
-        # absent in checkpoints trained before the skip connection existed
-        skip=checkpoint.get("skip", False),
+        freeze=freeze,
     ).to(device)
     load_head_state(model, checkpoint)
     model.eval()

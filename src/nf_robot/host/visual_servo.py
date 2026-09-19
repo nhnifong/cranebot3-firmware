@@ -138,20 +138,12 @@ WATCH_LOG_S = 2.0           # (s) how often the debugging modes print
 # ---------------------------------------------------------------------------
 # Fingers
 # ---------------------------------------------------------------------------
-# The finger head is trained against commanded finger speed divided by 90
-# (mine_teleop.FINGER_SPEED_FULL_SCALE), so this undoes that and nothing else.
+# Normalized finger speed (mine_teleop.FINGER_SPEED_FULL_SCALE) to the robot's units.
 FINGER_SPEED_FULL_SCALE = 90.0
-# Predictions smaller than this are treated as zero. The head has a bias like any
-# regressor, and a standing 0.02 is 1.8 deg/s - eleven degrees of unasked-for finger
-# travel over a six second approach. Set to 0 to hand it the head raw.
-FINGER_DEADBAND = 0.05
-# Finger head output above which it is asking to close, and how many consecutive frames
-# of asking it takes to stop the gantry - so one noisy frame cannot end an approach.
-FINGER_CLOSE_THRESHOLD = 0.5
+# Consecutive frames of the model asking to close it takes to stop the gantry, so one
+# noisy frame cannot end an approach.
 CLOSE_CONFIRM_FRAMES = 10
 
-# The close-heads program, used when the checkpoint carries a close-onset head.
-#
 # It replaces a per-frame rate with a decision and a target: hold still until the model
 # says the close should have begun, then close at one speed until the grip is carrying
 # the force the model expects this object to need. A rate label is a teleoperator's thumb
@@ -530,33 +522,10 @@ class VisualServo:
                 and prediction.get('score', 1.0) >= SCORE_THRESHOLD)
 
     async def drive_fingers(self, prediction):
-        """Move the fingers the way this checkpoint's heads say to. Returns the speed sent.
+        """Hold, close to the predicted grip force, then stop and let the loop wait for load.
 
-        Two programs, chosen by what the model carries rather than by a flag, so one
-        deployment path serves both kinds of checkpoint and the older one keeps behaving
-        exactly as it did.
+        Returns the normalized finger speed sent.
         """
-        if 'close' in prediction:
-            return await self._drive_fingers_staged(prediction) # we are using this one right now
-        return await self._drive_fingers_rate(prediction)
-
-    async def _drive_fingers_rate(self, prediction):
-        """The finger head's rate, straight onto the fingers, in the robot's units.
-
-        The head predicts a rate in the same normalized units the teleop labels were
-        recorded in, and during a grasp this is the only thing that moves the fingers.
-        Nothing else has a better claim: the fixed closing speed it replaces was a
-        constant chosen for a routine with no opinion about fingers.
-        """
-        speed = prediction['finger']
-        if abs(speed) < FINGER_DEADBAND:
-            speed = 0.0
-        await self.ob.gripper_client.send_commands(
-            {'set_finger_speed': speed * FINGER_SPEED_FULL_SCALE})
-        return speed
-
-    async def _drive_fingers_staged(self, prediction):
-        """Hold, close to the predicted grip force, then stop and let the loop wait for load"""
         now = time.time()
         commanded = float(self.ob.gripper_client.last_target_force)
         target = prediction['grasp_pressure'] + HOLD_FORCE_EXTRA
@@ -592,16 +561,8 @@ class VisualServo:
         return speed
 
     def wants_to_close(self, prediction):
-        """Whether the model is asking for the fingers to close on this frame.
-
-        The two kinds of checkpoint answer it with different heads, and the loop above
-        cares about the answer rather than which head gave it. A rate model says so by
-        commanding a fast close; a close-heads model says so directly, which is the whole
-        reason those heads exist.
-        """
-        if 'close' in prediction:
-            return prediction['close'] > CLOSE_PROB_THRESHOLD
-        return prediction['finger'] > FINGER_CLOSE_THRESHOLD
+        """Whether the model is asking for the fingers to close on this frame."""
+        return prediction['close'] > CLOSE_PROB_THRESHOLD
 
     async def servo_wrist(self, prediction):
         """Turn the wrist toward the predicted grasp axis, if the head means it.
@@ -709,15 +670,6 @@ class VisualServo:
         resting = felt >= HOLD_FORCE_MIN_FELT and settled and commanded > HOLD_FORCE_MIN_COMMANDED
         return tracking or resting, commanded, felt, ratio, spread
 
-    @property
-    def uses_close_heads(self):
-        """Whether the loaded checkpoint carries the close-onset and pressure heads.
-
-        Read from the model rather than sniffed from a prediction, so it still answers on
-        a pass where no frame was available and there is no prediction to look at.
-        """
-        return bool(getattr(self.model, 'close_heads', False))
-
     def holding_now(self, prediction):
         """This routine's own answer to "we have it, go up", and its evidence.
         
@@ -735,9 +687,8 @@ class VisualServo:
                     f'(needs <{HOLD_FORCE_SETTLE_BAND:.3f} at felt >{HOLD_FORCE_MIN_FELT:.2f}), '
                     f'holding head {probability:.2f}')
 
-        # A close-heads model has a defined end to its close, so nothing before that end
-        # counts as holding.
-        if self.uses_close_heads and not self.close_arrived:
+        # The close has a defined end, and nothing before it counts as holding.
+        if not self.close_arrived:
             return False, evidence + ', close still running'
 
         return loaded and probability > HOLD_PROB_THRESHOLD, evidence

@@ -48,8 +48,7 @@ SELECTION_METRIC = "onscreen_recall@25px"
 DEFAULT_WEIGHTS = {
     "cell": 1.0, "centroid": 1.0, "distance": 0.5,
     "axis": 0.5, "finger": 0.5, "present": 0.2, "holding": 0.2,
-    # Only nonzero for a --close_heads model; pressure's small raw magnitude needs the
-    # weight.
+    # pressure's small raw magnitude needs the weight
     "close": 0.2, "pressure": 1.0,
 }
 # Width in cells (~18px) of the Gaussian the cell head trains against, matched to label
@@ -184,16 +183,15 @@ def servo_loss(outputs, batch, grid, weights=None, cell_sigma=CELL_SIGMA,
             outputs["holding_logit"], batch["holding"], reduction="none"),
         batch["has_holding"])
 
-    if "close_logit" in outputs:
-        parts["close"], _ = masked_mean(
-            F.binary_cross_entropy_with_logits(
-                outputs["close_logit"], batch["close_now"], reduction="none"),
-            batch["has_close"])
-        # Huber, since the pressure label's tail is measurement noise.
-        parts["pressure"], _ = masked_mean(
-            F.smooth_l1_loss(outputs["grasp_pressure"], batch["grasp_pressure"],
-                             reduction="none", beta=0.05),
-            batch["has_pressure"])
+    parts["close"], _ = masked_mean(
+        F.binary_cross_entropy_with_logits(
+            outputs["close_logit"], batch["close_now"], reduction="none"),
+        batch["has_close"])
+    # Huber, since the pressure label's tail is measurement noise.
+    parts["pressure"], _ = masked_mean(
+        F.smooth_l1_loss(outputs["grasp_pressure"], batch["grasp_pressure"],
+                         reduction="none", beta=0.05),
+        batch["has_pressure"])
 
     total = sum(weights[k] * v for k, v in parts.items())
     return total, {k: float(v.detach()) for k, v in parts.items()}
@@ -330,13 +328,6 @@ def checkpoint_payload(model, args, metrics, epoch):
         # Record the axis loss, since MSE checkpoints answer zero far more often.
         "axis_loss": args.axis_loss,
         "axis_balance": args.axis_balance,
-        # Close/pressure heads; absent in older checkpoints, which load without them.
-        "close_heads": args.close_heads,
-        # Where the close head reads from; absent in older checkpoints, which use the global
-        # one.
-        "spatial_close": args.spatial_close,
-        # Whether the spatial heads read the pre-attention map; absent in older checkpoints.
-        "skip": args.skip,
     }
 
 
@@ -378,14 +369,12 @@ def train(args):
         eval_set, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
         if eval_set else None)
 
-    if args.close_heads and not train_set.has_close_labels():
+    if not train_set.has_close_labels():
         raise SystemExit(
             f"The close heads need close_now labels and no row in {data_root}/train has "
-            f"one. Re-mine the teleop half (the columns are written by mine_teleop), or "
-            f"pass --no_close_heads to train the finger-rate head alone.")
+            f"one. Re-mine the teleop half (the columns are written by mine_teleop).")
     model = VisualServoNet(
         backbone_id=args.backbone, image_size=image_size, fuse_layers=args.fuse_layers,
-        close_heads=args.close_heads, spatial_close=args.spatial_close, skip=args.skip,
         attention_layers=args.attention_layers, freeze=not args.unfreeze_backbone,
     ).to(device)
     groups = param_groups(model, args.lr, args.unfreeze_backbone, args.backbone_lr_scale)
@@ -464,31 +453,6 @@ def main():
     parser.add_argument("--dataset_id", default=DEFAULT_DATASET_ID,
                         help="Mined dataset on the hub, used when --data_root is absent")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
-    # Close heads are on by default; --close_heads is still accepted.
-    parser.add_argument(
-        "--close_heads", dest="close_heads", action="store_true", default=True,
-        help="Train the close-onset and grasp-pressure heads (the default). The "
-             "finger-rate head still trains alongside them.")
-    parser.add_argument(
-        "--no_close_heads", dest="close_heads", action="store_false",
-        help="Train the finger-rate head alone, the way checkpoints before the close "
-             "heads existed were built. Needed for a pool with no close_now labels.")
-    # None so an explicit request can be told from the default.
-    parser.add_argument(
-        "--spatial_close", dest="spatial_close", action="store_true", default=None,
-        help="Read the close head off the patch grid rather than the pooled [CLS] vector "
-             "(the default whenever the close heads are built). Whether to close is a "
-             "spatial test - something between the fingers, square on, near enough - and "
-             "a vector averaged over the whole image can say the frame holds a graspable "
-             "thing but not that this one is in the jaws.")
-    parser.add_argument(
-        "--global_close", dest="spatial_close", action="store_false",
-        help="Read the close head off the [CLS] vector instead, the way it was built "
-             "before the spatial head.")
-    parser.add_argument(
-        "--no_skip", dest="skip", action="store_false",
-        help="Leave out the skip connection from the pre-attention map to the spatial "
-             "heads, for the A/B against the model that averaged several objects' positions.")
     parser.add_argument("--eval_every", type=int, default=1,
                         help="Score the eval split every N epochs (and always on the last)")
     parser.add_argument("--select_best", action="store_true",
@@ -526,14 +490,7 @@ def main():
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default=None)
-    args = parser.parse_args()
-    if args.spatial_close and not args.close_heads:
-        parser.error("--spatial_close moves the close head that --no_close_heads just "
-                     "switched off; pass one or the other.")
-    # The unset default follows the close heads.
-    if args.spatial_close is None:
-        args.spatial_close = args.close_heads
-    train(args)
+    train(parser.parse_args())
 
 
 if __name__ == "__main__":

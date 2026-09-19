@@ -121,11 +121,10 @@ captures are photographed already in their ideal grasping orientation.
 
 **3. Finger speed, scalar in [-1, 1], from the global vector.**
 
-Two further heads are built alongside it by default and deployed from instead, because
+Two further heads are built alongside it and deployed from instead, because
 what a rate label describes is a teleoperator's thumb: on the same situation it reads +1
 one frame and 0 the next, and 69% of the mined values are exactly zero. What a grasp
-actually consists of is a decision and a target, so those are what get predicted
-(`--no_close_heads` trains the rate head alone, the way older checkpoints were built):
+actually consists of is a decision and a target, so those are what get predicted:
 
   **3a. Probability the close should have begun by this frame.** A step at the close
   onset, found by walking back from the grasp through the run of frames commanding a
@@ -144,9 +143,6 @@ force reaches 3b. The commanded value rather than the felt one, because that is 
 ask is - the gripper turns finger speed into a force ramp on contact, and whether the
 felt force followed is the holding head's question.
 
-Old checkpoints carry no `close_heads` key, build three global outputs, and drive from
-the rate head exactly as before.
-
 More grip is positive, less grip is negative; scaled to the robot's finger speed units
 downstream, which keeps it compatible with the existing gripper_vel action.
 
@@ -162,14 +158,7 @@ over the whole map would throw away exactly the position being asked about. The 
 rides along a second time (it is already FiLMed into the map upstream) because the
 rangefinder is most of "near enough".
 
-`--global_close` builds it off [CLS] instead, which is where it used to live, on the
-argument that by the time the decision matters the object usually fills or blinds the
-frame. The two are one checkpoint key apart, so they can be trained and compared with
-everything else held fixed, and a checkpoint with no `spatial_close` key builds the [CLS]
-head - which is what every checkpoint written before the spatial one is. The deployed
-output is identical either way: same `close_logit`, same `decode`, same robot path.
-
-The grasp-pressure head stays on [CLS] under both: how hard to squeeze is a property of the
+The grasp-pressure head reads [CLS] instead: how hard to squeeze is a property of the
 object, not of where it sits in frame.
 
 Labels for synthetic frames are the open problem. Rather than hand-authoring a rule,
@@ -707,9 +696,8 @@ an object the robot has never seen.
         --epochs 14 \
         --batch_size 400
 
-The close and grasp-pressure heads are built by default, with close read off the cell grid.
-`--no_close_heads` drops back to the finger-rate head alone, which a pool with no
-`close_now` labels needs; `--global_close` keeps the close head but reads it off [CLS].
+The close and grasp-pressure heads are always built, with close read off the cell grid, so
+the pool needs `close_now` labels.
 
 The whole `train/` split trains - what step 5 dealt. The checkpoint written after every epoch is always the
 newest one; `eval/` is scored and reported but selects nothing.
