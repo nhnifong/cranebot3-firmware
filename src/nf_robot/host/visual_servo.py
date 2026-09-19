@@ -74,7 +74,7 @@ LATERAL_SPEED_MAX = 0.15    # (m/s)
 CENTER_TOL_FRACTION = 0.12
 CENTER_TOL_MIN_M = 0.012
 # TODO adjust downwards after fixing model, it should have such a high bias
-PRESENT_THRESHOLD = 0.95     # target-present probability below which the loop holds still
+PRESENT_THRESHOLD = 0.5     # target-present probability below which the loop holds still
 # The other half of "is this answer worth steering at": how much of the position softmax
 # the winning cell actually holds. The present head says the frame contains something
 # graspable; this says the position head found *where*. They fail apart - on a scene the
@@ -226,6 +226,10 @@ WRIST_LIMIT_MARGIN_DEG = 20.0
 # between equivalent setpoints. Small: it should decide a near-tie and bias a long run
 # back toward the middle, not spend a half turn chasing the centre.
 WRIST_NEUTRAL_PULL = 0.25
+# (s) time constant of the filter on the wrist goal. The axis head's angle wanders from
+# frame to frame, and acting on each one set the wrist hunting at about 2 Hz; this is
+# long enough to average that out and short enough to still follow a real turn.
+WRIST_EMA_S = 0.2
 
 # ---------------------------------------------------------------------------
 # Scoring runs
@@ -310,6 +314,36 @@ class TargetFilter:
         return (self.point - jaws)[:2]
 
 
+class WristFilter:
+    """The wrist goal, as an absolute angle, smoothed over time.
+
+    Like TargetFilter it filters the thing that holds still - the absolute angle the jaws
+    should end up at - rather than the per-frame error, which changes as the wrist turns.
+    The goal is pi-periodic, so each new sample is first moved by a multiple of 180
+    degrees to the equivalent nearest the running value; otherwise two readings of the
+    same line either side of the wrap would average to the perpendicular.
+    """
+
+    def __init__(self, tau_s=WRIST_EMA_S):
+        self.tau_s = tau_s
+        self.reset()
+
+    def reset(self):
+        self.goal = None
+        self.at = None
+
+    def update(self, goal_deg):
+        now = time.time()
+        if self.goal is None or self.at is None:
+            self.goal = goal_deg
+        else:
+            goal_deg = goal_deg + round((self.goal - goal_deg) / 180.0) * 180.0
+            alpha = 1.0 - float(np.exp(-(now - self.at) / self.tau_s))
+            self.goal = self.goal + alpha * (goal_deg - self.goal)
+        self.at = now
+        return self.goal
+
+
 class VisualServo:
     """Runs the visual servoing model against a robot, in one of SERVO_MODES.
 
@@ -321,6 +355,7 @@ class VisualServo:
         self.ob = observer
         self.model = None
         self.filter = TargetFilter()
+        self.wrist_filter = WristFilter()
         # Where the staged finger program has got to. Reset per attempt: a close that
         # began on the last one says nothing about this one.
         self.close_started_at = None
@@ -615,7 +650,8 @@ class VisualServo:
         # Not the raw sum: the wrist has three revolutions of travel and the server clamps
         # anything past them, so an approach that has walked toward a limit would otherwise
         # go quiet, every correction clamping to the angle it already holds.
-        goal = choose_wrist_setpoint(wrist_at_capture + offset, wrist_at_capture)
+        goal = self.wrist_filter.update(wrist_at_capture + offset)
+        goal = choose_wrist_setpoint(goal, wrist_at_capture)
         await self.ob.gripper_client.send_commands({'set_wrist_angle': goal})
         return True
 
@@ -743,6 +779,7 @@ class VisualServo:
                     'centering laterally, never descending'
                     if steering else 'watching only, commanding nothing')
         self.filter.reset()
+        self.wrist_filter.reset()
         next_log = 0.0
         while self.ob.run_command_loop:
             prediction = await self.predict()
@@ -842,6 +879,7 @@ class VisualServo:
         tested every pass rather than only after the approach ends.
         """
         self.filter.reset()
+        self.wrist_filter.reset()
         self.reset_close()
         nothing_seen_since = None
         close_countdown = CLOSE_CONFIRM_FRAMES
