@@ -297,6 +297,12 @@ class RoutePoint(betterproto2.Enum):
     than by position. See DropPosition in robot-config.proto.
     """
 
+    PREDICTED_DROP = 9
+    """
+    Where the drop point model says this item goes, predicted while picking it up and
+    saved as the "predicted_drop" named position. See ml/placer/model.md.
+    """
+
     @classmethod
     def betterproto_value_to_renamed_proto_names(cls) -> dict[int, str]:
         return {
@@ -309,6 +315,7 @@ class RoutePoint(betterproto2.Enum):
             6: "ROUTEPOINT_GAMEPAD",
             7: "ROUTEPOINT_ORIGIN",
             8: "ROUTEPOINT_DROP_POSITION",
+            9: "ROUTEPOINT_PREDICTED_DROP",
         }
 
     @classmethod
@@ -323,6 +330,7 @@ class RoutePoint(betterproto2.Enum):
             "ROUTEPOINT_GAMEPAD": 6,
             "ROUTEPOINT_ORIGIN": 7,
             "ROUTEPOINT_DROP_POSITION": 8,
+            "ROUTEPOINT_PREDICTED_DROP": 9,
         }
 
 

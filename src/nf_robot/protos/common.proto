@@ -117,6 +117,9 @@ enum RoutePoint {
   // The drop position saved with COMMAND_RECORD_DROP, returned to by line length rather
   // than by position. See DropPosition in robot-config.proto.
   ROUTEPOINT_DROP_POSITION = 8;
+  // Where the drop point model says this item goes, predicted while picking it up and
+  // saved as the "predicted_drop" named position. See ml/placer/model.md.
+  ROUTEPOINT_PREDICTED_DROP = 9;
 }
 
 enum CalibratedStatus {

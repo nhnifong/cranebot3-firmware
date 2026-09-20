@@ -165,12 +165,25 @@ GRIPPER_HEIGHT_OVER_TARGET = np.array([0,0,0.3])
 # what was recorded there, where the others are re-observed whenever a camera catches the tag.
 DROP_POSITION_NAME = "drop_position"
 
+# The drop point model (ml/placer/model.md) predicts where the item now being picked up
+# belongs, and its answer is saved under this name like any other place to fly to.
+PREDICTED_DROP_NAME = "predicted_drop"
+DROP_POINT_INTERVAL_S = 0.25
+# Laser range to the item over which the model was trained to answer (placer
+# mine_teleop.SNAPSHOT_RANGE_M): near enough that the item fills the frame, far enough that
+# the fingers are not across it. Outside it the prediction is not worth running.
+PREDICTED_DROP_RANGE_M = (0.12, 0.25)
+# The prediction is a point on the floor, so a drop aims this far above it. A tall hamper
+# needs the clearance, and the model does not predict a height yet.
+PREDICTED_DROP_HEIGHT_M = 0.0
+
 ROUTE_POINT_TAG_NAMES = {
     common.RoutePoint.HAMPER: "hamper",
     common.RoutePoint.TOYBOX: "toys",
     common.RoutePoint.TRASH: "trash",
     common.RoutePoint.GAMEPAD: "gamepad",
     common.RoutePoint.DROP_POSITION: DROP_POSITION_NAME,
+    common.RoutePoint.PREDICTED_DROP: PREDICTED_DROP_NAME,
 }
 
 # feature key -> minimum nf_robot version every connected component must run to use it
@@ -408,6 +421,9 @@ class AsyncObserver:
         self.ortho_event = threading.Event()
         # rgb24, the order the anchor clients decode to; only converted to BGR for the streamer
         self.last_ortho_rgb = None
+        # the drop point model and the task that runs it, both lazy
+        self.drop_point_model = None
+        self._drop_point_task = None
         # list of (NfVideoStreamer, feed_number) for ortho feeds, so send_setup_telemetry can replay them
         self.ortho_streamers: list = []
         self.lerobot_process_watcher = None
@@ -1307,6 +1323,8 @@ class AsyncObserver:
                     r = await self.set_tension_reg(True)
                 else:
                     r = await self.set_tension_reg(False)
+        if item.action == 'droppoint':
+            r = await self.toggle_drop_point_preview()
         if item.action == 'findorigin':
             # The calibration step on its own, so the search can be tuned in the room that breaks
             # it - low ceiling, origin card up on a bed - without running a whole calibration.
@@ -4146,6 +4164,125 @@ class AsyncObserver:
             f'RMS deviation {rms_cm:.2f}cm '
             f'(per-axis x={per_axis_rms_cm[0]:.2f}cm y={per_axis_rms_cm[1]:.2f}cm z={per_axis_rms_cm[2]:.2f}cm)')
 
+    async def ensure_drop_point_model(self):
+        """Load the drop point model if it is not loaded. True if there is one to run.
+
+        Everything slow happens in a worker thread - the torch import and, on the hub path,
+        a download - because on the event loop either one stalls telemetry and every motion
+        task for as long as it takes. Nothing raises: a model that will not load is a
+        prediction the robot goes without, not a traceback out of a pick and place.
+        """
+        if self.drop_point_model is not None:
+            return True
+
+        def load_sync():
+            import torch
+
+            from nf_robot.ml.placer.model import DROP_POINT_MODEL_REPOID, load_model
+
+            # Resolved here rather than read off self._device, which is only set once some
+            # model has loaded: a pick and place loads this one first, and .to(None) would
+            # leave it on the CPU while later frames arrived on the GPU.
+            device = self._device or ("cuda" if torch.cuda.is_available()
+                                      else "mps" if torch.backends.mps.is_available() else "cpu")
+            # The trunk is the shared frozen one (ml/dino_trunk.py), so this adds a head
+            # rather than a second backbone: about 0.5GB of VRAM and 30ms a frame, or the
+            # head alone when another model is already loaded. It has to be the observer's
+            # own device for that reason - loading this one somewhere else would drag the
+            # trunk the other models are using along with it.
+            model, checkpoint = load_model(device, local_models=self.local_models,
+                                           revision=pinned_revision(DROP_POINT_MODEL_REPOID))
+            return model, checkpoint, device
+
+        try:
+            model, checkpoint, device = await asyncio.to_thread(load_sync)
+        except Exception as e:
+            logger.error(f'Could not load the drop point model: {e!r}')
+            self.send_ui(pop_message=telemetry.Popup(
+                message=f'Could not load the drop point model, so nothing will predict where '
+                        f'items go: {e}'))
+            return False
+        self._device = device
+        self.drop_point_model = model
+        logger.info(f'Drop point model ready on {device}: epoch {checkpoint.get("epoch")}, '
+                    f'metrics {checkpoint.get("metrics")}')
+        return True
+
+    async def toggle_drop_point_preview(self):
+        """Debug: run the drop point model on its own, without a pick and place.
+
+        The same loop pick and place runs, so what it writes is what a pick would fly to.
+        Send the command again to stop.
+        """
+        if self._drop_point_task is not None and not self._drop_point_task.done():
+            self.stop_drop_point_watch()
+            self.send_ui(pop_message=telemetry.Popup(message='Drop point prediction stopped'))
+            return False
+        if not await self.ensure_drop_point_model():
+            return False
+        self.start_drop_point_watch()
+        return True
+
+    def start_drop_point_watch(self):
+        """Run the drop point model in the background, if it is loaded and not already running."""
+        if self.drop_point_model is None:
+            return
+        if self._drop_point_task is None or self._drop_point_task.done():
+            self._drop_point_task = asyncio.create_task(self._drop_point_watch())
+
+    def stop_drop_point_watch(self):
+        if self._drop_point_task is not None:
+            self._drop_point_task.cancel()
+            self._drop_point_task = None
+
+    def _predict_drop_point(self, gripper_bgr, ortho_rgb):
+        """The model's drop point for one pair of frames, as normalized overhead (u, v)."""
+        from nf_robot.ml.image_input import input_batch
+        from nf_robot.ml.placer.model import predict
+
+        model = self.drop_point_model
+        # The model's own device, so the frames cannot arrive somewhere its weights are not.
+        device = next(model.parameters()).device
+        item = input_batch(cv2.cvtColor(gripper_bgr, cv2.COLOR_BGR2RGB), model.item_size, device)
+        overhead = input_batch(ortho_rgb, model.overhead_size, device)
+        uv = predict(model, item, overhead)["uv"][0, 0]
+        return float(uv[0]), float(uv[1])
+
+    async def _drop_point_watch(self, interval_s=DROP_POINT_INTERVAL_S):
+        """Predict where the item in front of the gripper goes, while it is in range.
+
+        Only while the laser says the item is the distance away the model was trained at:
+        further out it is looking at the floor, closer the fingers are across it, and in
+        both cases the answer is not worth the frame. The prediction is published as the
+        PREDICTED_DROP_NAME position, which is what the UI draws and what a route flies to.
+        """
+        from nf_robot.ml.ortho_target.model import ortho_px_to_room
+
+        low, high = PREDICTED_DROP_RANGE_M
+        try:
+            while self.run_command_loop:
+                await asyncio.sleep(interval_s)
+                laser = self.datastore.range_record.getLast()[1]
+                if laser is None or not (low <= laser <= high):
+                    continue
+                gripper_bgr = self.gripper_client.last_output_frame if self.gripper_client else None
+                ortho_rgb = self.last_ortho_rgb
+                if gripper_bgr is None or ortho_rgb is None:
+                    continue
+                u, v = await asyncio.to_thread(self._predict_drop_point, gripper_bgr, ortho_rgb)
+                x, y = ortho_px_to_room(u, v, 1.0, 1.0)
+                position = np.array([x, y, 0.0], dtype=float)
+                self.config.named_positions[PREDICTED_DROP_NAME] = fromnp(position)
+                self.send_ui(named_position=telemetry.NamedObjectPosition(
+                    position=fromnp(position), name=PREDICTED_DROP_NAME))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.exception('drop point prediction failed')
+            self.send_ui(pop_message=telemetry.Popup(message=f'Drop point prediction failed: {e}'))
+        finally:
+            logger.debug('drop point prediction ended')
+
     def record_drop_position(self):
         """Save where the gantry is standing now as the place to drop things, and route there.
 
@@ -5389,6 +5526,13 @@ class AsyncObserver:
         LOOP_DELAY = ppc.loop_delay
         END_LOOP_TIMEOUT = ppc.end_loop_timeout
 
+        # Where each item goes is predicted while it is being picked up, so the model is
+        # loaded here rather than at startup, and the prediction runs for as long as this
+        # loop does. A destination of PREDICTED_DROP is what acts on it; every other
+        # destination just gets the marker to look at.
+        if await self.ensure_drop_point_model():
+            self.start_drop_point_watch()
+
         # Only --lerobot_grasp needs a session; the default servoing grasp does not, and
         # execute_grasp falls back to it anyway, so there is nothing to prompt about.
         if self.use_lerobot_grasp and not await self.check_lerobot_session_connected():
@@ -5503,6 +5647,9 @@ class AsyncObserver:
                                        f'{ROUTE_POINT_TAG_NAMES[self.pnp_dst]}; dropping at the origin')
                     else:
                         drop_point = tonp(saved)
+                        if self.pnp_dst == common.RoutePoint.PREDICTED_DROP:
+                            # A prediction is a point on the floor; let go above it.
+                            drop_point = drop_point + np.array([0, 0, PREDICTED_DROP_HEIGHT_M])
                 elif self.pnp_dst == common.RoutePoint.ORIGIN:
                     drop_point = np.zeros(3)
 
@@ -5527,6 +5674,7 @@ class AsyncObserver:
             if gtask is not None:
                 logger.info('Pick and place cancelled')
                 gtask.cancel()
+            self.stop_drop_point_watch()
             self.slow_stop_all_spools()
             await self.clear_goal()
 

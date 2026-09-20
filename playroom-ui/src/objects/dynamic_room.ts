@@ -15,6 +15,7 @@ export class DynamicRoom {
   private reticule: THREE.Object3D | undefined;
   private toybox: THREE.Object3D | undefined;
   private trash_can: THREE.Object3D | undefined;
+  private predictedDrop: THREE.Mesh;
 
   // Applied again once the model finishes loading, since it can be set before then.
   private propsVisible = true;
@@ -67,6 +68,17 @@ export class DynamicRoom {
     this.mesh = new THREE.Mesh(this.geometry, material);
     this.root.add(this.mesh);
 
+    // A four-sided pyramid pointing down at the predicted spot:
+    const pyramid = new THREE.ConeGeometry(0.06, 0.12, 4);
+    pyramid.rotateX(Math.PI);
+    pyramid.translate(0, 0.18, 0);
+    this.predictedDrop = new THREE.Mesh(pyramid, new THREE.MeshStandardMaterial({
+      color: 0x1b5e20, // dark green
+      flatShading: true,
+    }));
+    this.predictedDrop.visible = false;
+    this.root.add(this.predictedDrop);
+
     // Initial Draw
     this.updateGeometry();
   }
@@ -114,8 +126,11 @@ export class DynamicRoom {
                  : name === 'toys' ? this.toybox
                  : name === 'trash' ? this.trash_can
                  : name === 'gamepad' ? this.userPers
+                 : name === 'predicted_drop' ? this.predictedDrop
                  : undefined;
     if (target) {
+      // The prediction is not one of the room props, so the props toggle does not hide it.
+      if (target === this.predictedDrop) target.visible = true;
       target.position.set(
           (position.x ?? 0),
           (position.z ?? 0),

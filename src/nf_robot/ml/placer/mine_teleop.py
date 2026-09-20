@@ -3,10 +3,10 @@
 """Extract placer training data from teleop recordings, in the formats dataset.md defines.
 
 Usage:
-    python -m nf_robot.ml.placer.mine_teleop --repo_id naavox/nick-sep14 \\
+    python -m nf_robot.ml.placer.mine_teleop --repo_id naavox/nick-sep14 \
         --output_root datasets/drop_pairs --preview_dir datasets/drop_pairs/previews
 
-    python -m nf_robot.ml.placer.mine_teleop --mode carry --repo_id naavox/nick-sep14 \\
+    python -m nf_robot.ml.placer.mine_teleop --mode carry --repo_id naavox/nick-sep14 \
         --preview_only --preview_dir placer_previews --preview_episodes 12
 """
 

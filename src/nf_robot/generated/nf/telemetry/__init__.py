@@ -395,8 +395,7 @@ class GripCamPredictions(betterproto2.Message):
 
     move_x: "float" = betterproto2.field(1, betterproto2.TYPE_FLOAT)
     """
-    predicted target position in the unstabilized image, as an offset from frame centre in
-    fractions of frame width and height (not metres). May fall outside +-0.5 when off the edge.
+    predicted vector to target (posiution of target)
     """
 
     move_y: "float" = betterproto2.field(2, betterproto2.TYPE_FLOAT)
@@ -414,19 +413,6 @@ class GripCamPredictions(betterproto2.Message):
     grip_angle: "float" = betterproto2.field(5, betterproto2.TYPE_FLOAT)
     """
     Predicted ideal grip angle from vertical in the image [0-pi]
-    """
-
-    hover_x: "float" = betterproto2.field(6, betterproto2.TYPE_FLOAT)
-    """
-    where the floor straight below the lens appears, in the same units as move_x/move_y.
-    The servo loop is centred when the target reaches this point.
-    """
-
-    hover_y: "float" = betterproto2.field(7, betterproto2.TYPE_FLOAT)
-
-    lateral_m: "float" = betterproto2.field(8, betterproto2.TYPE_FLOAT)
-    """
-    horizontal distance in metres from the point below the lens to the predicted target
     """
 
 

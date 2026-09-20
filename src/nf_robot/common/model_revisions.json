@@ -11,5 +11,11 @@
     "pinned_at": "2026-09-19",
     "title": "Upload visual_servo.pth with huggingface_hub",
     "committed_at": "2026-09-19"
+  },
+  "naavox/drop_point": {
+    "revision": "34ca9a53ab31115a482cb3d74d41de4cacd0945e",
+    "pinned_at": "2026-09-19",
+    "title": "Upload drop_point.pth with huggingface_hub",
+    "committed_at": "2026-09-19"
   }
 }

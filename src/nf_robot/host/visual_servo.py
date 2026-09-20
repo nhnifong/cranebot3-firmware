@@ -1033,7 +1033,8 @@ class VisualServo:
         for rather than reading the tally afterwards and wondering.
 
         After each drop the gantry moves to a random point within `radius_m` of where the
-        run began and the wrist to a random angle anywhere in its range, so the object is
+        run began and the wrist to a random angle within a half turn of where it is (every
+        grasp orientation, without the long spins), so the object is
         approached from a different direction, distance and orientation every time.
         Without it the loop would measure one approach geometry repeatedly and report the
         result as a hit rate.
@@ -1082,14 +1083,18 @@ class VisualServo:
                         logger.error('servoloop stopping: could not release the payload')
                         break
                     await self._reposition_near(origin, radius_m)
-                    # A random wrist angle too, drawn across the whole usable range rather
-                    # than around neutral. Two things get exercised by that: the axis head,
-                    # which sees the object at a new orientation every attempt, and the
-                    # turnaround in choose_wrist_setpoint, which only comes into play when
-                    # an approach starts near a limit.
-                    wrist_target = float(np.random.uniform(
-                        WRIST_RANGE_DEG[0] + WRIST_LIMIT_MARGIN_DEG,
-                        WRIST_RANGE_DEG[1] - WRIST_LIMIT_MARGIN_DEG))
+                    # A random wrist angle too, so the axis head sees the object at a new
+                    # orientation every attempt. The grasp axis is pi-periodic, so a window
+                    # 180 degrees wide already holds every orientation once - drawing from
+                    # the whole range would only add long spins. The window is centred on
+                    # where the wrist is and slid inward near a limit, but never so far that
+                    # it stops containing the current angle, so the turn is at most 180.
+                    wrist_now = self.ob.datastore.winch_line_record.getLast()[1]
+                    window_low = clamp(
+                        wrist_now - 90.0,
+                        min(WRIST_RANGE_DEG[0] + WRIST_LIMIT_MARGIN_DEG, wrist_now),
+                        max(WRIST_RANGE_DEG[1] - WRIST_LIMIT_MARGIN_DEG, wrist_now) - 180.0)
+                    wrist_target = float(np.random.uniform(window_low, window_low + 180.0))
                     logger.info(f'servoloop wrist to {wrist_target:.0f} deg')
                     await self.ob.settle_wrist(wrist_target)
                 # after the hop, not before it: the settle is for the swing the hop leaves

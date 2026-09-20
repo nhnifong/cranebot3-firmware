@@ -42,8 +42,8 @@ class TestPinnedRevisions(unittest.TestCase):
         self.assertIn(servo.SERVO_MODEL_REPOID, pinned)
 
     def test_the_pinning_tool_covers_exactly_those_models(self):
-        """--targeting and --visual_servo have to reach the same repos the host reads, or
-        the tool writes pins nothing uses."""
+        """--targeting, --visual_servo and --drop_point have to reach the same repos the
+        host reads, or the tool writes pins nothing uses."""
         from nf_robot.ml.pin_latest_model import MODELS, repo_id_for
 
         self.assertEqual({repo_id_for(name) for name in MODELS}, set(load_revisions()))

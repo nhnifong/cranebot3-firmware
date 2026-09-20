@@ -1521,7 +1521,8 @@ function handleNamedPosition(data: nf.telemetry.INamedObjectPosition) {
   if (data.name) {
     if (data.position) {
       // moved the named object
-      if (data.name == 'hamper' || data.name == 'toys' || data.name == 'trash' || data.name == 'gamepad') {
+      if (data.name == 'hamper' || data.name == 'toys' || data.name == 'trash' || data.name == 'gamepad'
+          || data.name == 'predicted_drop') {
         room.setNamedObjectPosition(data.name, data.position);
       }
       // else if (data.name == 'gantry_goal_marker') {
@@ -1537,7 +1538,7 @@ function handleNamedPosition(data: nf.telemetry.INamedObjectPosition) {
 
 const TARGET_ROUTE_SOURCE_OPTIONS = ['All targets', 'User targets', 'Toybox', 'Hamper', 'Trash', 'Gamepad', 'Origin'];
 // "All targets" and "User targets" describe groups of targets, not a single named location — only valid as a source.
-const TARGET_ROUTE_DESTINATION_OPTIONS = ['Toybox', 'Hamper', 'Trash', 'Gamepad', 'Origin', 'Drop position'];
+const TARGET_ROUTE_DESTINATION_OPTIONS = ["Stringman's choice", 'Toybox', 'Hamper', 'Trash', 'Gamepad', 'Origin', 'Drop position'];
 
 const ROUTE_POINT_BY_LABEL: Record<string, nf.common.RoutePoint> = {
   'All targets': nf.common.RoutePoint.ROUTEPOINT_ALL_TARGETS,
@@ -1549,6 +1550,8 @@ const ROUTE_POINT_BY_LABEL: Record<string, nf.common.RoutePoint> = {
   'Origin': nf.common.RoutePoint.ROUTEPOINT_ORIGIN,
   // Set from the run menu rather than picked here, but it needs a label like any other
   'Drop position': nf.common.RoutePoint.ROUTEPOINT_DROP_POSITION,
+  // Wherever the drop point model says the item in the gripper belongs
+  "Stringman's choice": nf.common.RoutePoint.ROUTEPOINT_PREDICTED_DROP,
 };
 
 const ROUTE_POINT_LABELS: Record<number, string> = Object.fromEntries(
