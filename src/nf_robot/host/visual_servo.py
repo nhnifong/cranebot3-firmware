@@ -142,7 +142,7 @@ WATCH_LOG_S = 2.0           # (s) how often the debugging modes print
 FINGER_SPEED_FULL_SCALE = 90.0
 # Consecutive frames of the model asking to close it takes to stop the gantry, so one
 # noisy frame cannot end an approach.
-CLOSE_CONFIRM_FRAMES = 10
+CLOSE_CONFIRM_FRAMES = 60
 
 # It replaces a per-frame rate with a decision and a target: hold still until the model
 # says the close should have begun, then close at one speed until the grip is carrying
