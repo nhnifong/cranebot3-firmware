@@ -60,7 +60,10 @@ default_gripper_conf = {
     # (normalized force, 0-1) The target force immediately applied upon entering force mode
     'INITIAL_DESIRED_FORCE': 0.08,
     # (raw motor units, 0-1000) The maximum allowed motor load before capping the normalized load contribution (finger)
-    'MAX_SAFE_LOAD': 500,
+    'MAX_SAFE_FINGER_LOAD': 750,
+    # passes of the 60Hz motor loop a motor must read over its limit before its torque is
+    # cut, so that the spike from accelerating into a large move does not count as one
+    'OVERLOAD_PASSES': 6,
     'MAX_SAFE_WRIST_LOAD': 900,
     # (dimensionless, 0-1) weight of pad pressure in the composite force; motor load gets
     # the remaining 1-this
@@ -183,6 +186,9 @@ class GripperArpServer(RobotComponentServer):
         # when the overload cutout lets each motor have torque back
         self.finger_torque_reenable_time = 0.0
         self.wrist_torque_reenable_time = 0.0
+        # consecutive passes each motor has read over its load limit
+        self.finger_overload_passes = 0
+        self.wrist_overload_passes = 0
 
         # defaults for persistent values
         self.finger_open_pos = -1000
@@ -436,20 +442,34 @@ class GripperArpServer(RobotComponentServer):
             self.update['gyro_record'] = batch
 
     def checkMotorLoad(self, finger_data, wrist_data):
-        """Cut torque for a second on either motor that is overloaded."""
+        """Cut torque for a second on either motor that is overloaded.
+
+        The load has to stay up for OVERLOAD_PASSES of this loop before it counts. A motor
+        given a large change of position accelerates into it hard and reads a spike on the
+        way - that is the move working, not something being crushed - and cutting torque on
+        that spike stops the fingers a few degrees into a move they never finish.
+        """
         # a running re-enable timer means this already fired; don't stack cutouts
-        if finger_data['load'] < 1000 and finger_data['load'] > self.conf['MAX_SAFE_LOAD'] and not self.finger_torque_reenable_time:
+        over = (finger_data['load'] < 1000 and finger_data['load'] > self.conf['MAX_SAFE_FINGER_LOAD']
+                and not self.finger_torque_reenable_time)
+        self.finger_overload_passes = self.finger_overload_passes + 1 if over else 0
+        if self.finger_overload_passes >= self.conf['OVERLOAD_PASSES']:
             logging.warning(f"Finger motor load ({finger_data['load']}) exceeds limit. Disabling torque for 1s.")
             self.motors.torque_enable(FINGER, False)
             self.finger_torque_reenable_time = time.time() + 1.0
-            
+            self.finger_overload_passes = 0
+
             if self.in_force_mode:
                 self.desired_force = self.conf['INITIAL_DESIRED_FORCE']
 
-        if wrist_data['load'] < 1000 and wrist_data['load'] > self.conf['MAX_SAFE_WRIST_LOAD'] and not self.wrist_torque_reenable_time and not self.wrist_busy:
+        over = (wrist_data['load'] < 1000 and wrist_data['load'] > self.conf['MAX_SAFE_WRIST_LOAD']
+                and not self.wrist_torque_reenable_time and not self.wrist_busy)
+        self.wrist_overload_passes = self.wrist_overload_passes + 1 if over else 0
+        if self.wrist_overload_passes >= self.conf['OVERLOAD_PASSES']:
             logging.warning(f"Wrist motor load ({wrist_data['load']}) exceeds limit. Disabling torque for 1s.")
             self.motors.torque_enable(WRIST, False)
             self.wrist_torque_reenable_time = time.time() + 1.0
+            self.wrist_overload_passes = 0
 
     def get_current_grip_force(self):
         """(filtered composite grip force, raw normalized pad pressure), both 0-1."""
@@ -457,7 +477,7 @@ class GripperArpServer(RobotComponentServer):
 
         # over 1000 means load in the opening direction, which is not grip force
         raw_load = self.last_finger_data['load'] if self.last_finger_data['load'] <= 1000 else 0
-        norm_load = min(raw_load / self.conf['MAX_SAFE_LOAD'], 1.0)
+        norm_load = min(raw_load / self.conf['MAX_SAFE_FINGER_LOAD'], 1.0)
 
         # The FSR's resistance falls logarithmically with force - a big voltage drop on a
         # light touch, very little on a hard press - so the exponent flattens the
@@ -510,11 +530,17 @@ class GripperArpServer(RobotComponentServer):
                     logging.info("Safety timeout expired. Re-enabling finger motor torque.")
                     self.motors.torque_enable(FINGER, True)
                     self.finger_torque_reenable_time = 0.0
-                    
+                    # The goal position is written only when the desired angle changes, and
+                    # it did not change while the torque was off. Forget what was last sent
+                    # so the move is commanded again, rather than leaving the fingers parked
+                    # wherever the cutout caught them.
+                    last_sent_finger_angle = None
+
                 if self.wrist_torque_reenable_time and now >= self.wrist_torque_reenable_time:
                     logging.info("Safety timeout expired. Re-enabling wrist motor torque.")
                     self.motors.torque_enable(WRIST, True)
                     self.wrist_torque_reenable_time = 0.0
+                    self.last_sent_wrist_angle = None
 
                 # a speed command expires, so a dropped connection stops the motors
                 if now > self.time_last_commanded_finger_speed + self.conf['ACTION_TIMEOUT']:
@@ -541,11 +567,8 @@ class GripperArpServer(RobotComponentServer):
                 self.checkMotorLoad(self.last_finger_data, wrist_data)
 
                 if not self.in_force_mode:
-                    pa = self.desired_finger_angle
                     self.desired_finger_angle = clamp(self.desired_finger_angle + self.desired_finger_speed * DT, -90, 90)
-                    if abs(self.desired_finger_speed) > 0:
-                        fa = self.getFingerAngle()
-                    
+
                     # touching something while closing hands the fingers to the force
                     # controller, so the operator's speed command becomes a force command
                     if current_pressure > self.conf['FORCE_TRIGGER_THRESHOLD'] and self.desired_finger_speed > 0:

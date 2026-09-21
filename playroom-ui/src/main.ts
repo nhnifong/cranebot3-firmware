@@ -278,6 +278,8 @@ function canUseLeRobot(): boolean {
 const CONTROL_MENU_ITEMS: Record<string, string[]> = {
   'action-pick-drop':         ['owner', 'full'],
   'action-half-cal':          ['owner', 'full', 'limited_driver'],
+  'action-park':              ['owner', 'full'],
+  'action-unpark':            ['owner', 'full'],
   'action-record-park':       ['owner', 'full'],
   'action-record-drop':       ['owner', 'full'],
   'action-grasp':             ['owner', 'full', 'limited_driver'],
@@ -305,6 +307,20 @@ function applyAccessLevelUI() {
   document.getElementById('btn-header-lerobot')?.classList.toggle('hidden', !canUseLeRobot());
 
   updateAccessBadge();
+}
+
+// Parking only works with the flat gantry marker: the fork on the wall is shaped around
+// it, and the robots on the 500mm ABS pole carry the older box marker, which will not sit
+// in it. Hiding the whole Parking section rather than just Park, because Unpark and Set
+// Parking Location have nothing to be about on a robot that cannot park. An unknown pole
+// leaves the menu alone - setup telemetry always carries a real one, and guessing would
+// mean hiding it on every robot for the first second.
+function applyParkingPoleGate() {
+  const parking = document.getElementById('action-parking');
+  if (!parking || lastPoleType == null) return;
+  const boxMarker = lastPoleType === nf.common.PoleType.POLETYPE_ABS500
+    || lastPoleType === nf.common.PoleType.POLETYPE_UNSPECIFIED;
+  parking.classList.toggle('hidden', boxMarker);
 }
 
 // Small indicator of the current access level, shown just to the right of the
@@ -1213,6 +1229,7 @@ function handleNewAnchorPoses(data: nf.telemetry.IAnchorPoses) {
   // UNSPECIFIED, which is a pole type, and would otherwise overwrite the real one.
   if (data.poleType != null) {
     lastPoleType = data.poleType;
+    applyParkingPoleGate();
   }
   // Only setup telemetry carries the host version; the other messages of this type leave it out.
   if (data.hostVersion != null) {
@@ -1985,15 +2002,22 @@ function initRunMenu() {
   const runBtn = document.getElementById('run-btn');
   const runMenu = document.getElementById('run-menu');
   const maintMenu = document.getElementById('maintenance-menu');
+  const parkMenu = document.getElementById('parking-menu');
   const stopBtn = document.getElementById('stop-btn');
+
+  // Every menu that can be showing. Closing "the menu" has to close whichever one is
+  // up, so everything below goes through this rather than naming them one by one.
+  const allMenus = [runMenu, maintMenu, parkMenu];
+  const closeMenus = () => allMenus.forEach(m => m?.classList.remove('show'));
 
     // Toggle Main Menu
   if (runBtn && runMenu) {
     runBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-            // Close maint menu if open, toggle main menu
-      maintMenu?.classList.remove('show');
-      runMenu.classList.toggle('show');
+            // Close any sub-menu that is open, toggle main menu
+      const wasOpen = runMenu.classList.contains('show');
+      closeMenus();
+      runMenu.classList.toggle('show', !wasOpen);
 
       // Pick and drop / auto grasp require every anchor and gripper to be connected.
       const actionsAvailable = isFullyConnected() && isFullyCalibrated();
@@ -2002,25 +2026,26 @@ function initRunMenu() {
     });
   }
 
-    // Toggle Maintenance Menu
-  const maintAction = document.getElementById('action-maintenance');
-  const maintBack = document.getElementById('action-maint-back');
-
-  if (maintAction && maintMenu && runMenu) {
-    maintAction.addEventListener('click', (e) => {
+    // Sub-menus. A section header in the run menu swaps it for one, and that
+    // sub-menu's back item swaps it back.
+  const bindSubMenu = (headerId: string, menu: HTMLElement | null, backId: string) => {
+    const header = document.getElementById(headerId);
+    const back = document.getElementById(backId);
+    if (!header || !back || !menu || !runMenu) return;
+    header.addEventListener('click', (e) => {
       e.stopPropagation();
       runMenu.classList.remove('show');
-      maintMenu.classList.add('show');
+      menu.classList.add('show');
     });
-  }
-
-  if (maintBack && maintMenu && runMenu) {
-    maintBack.addEventListener('click', (e) => {
+    back.addEventListener('click', (e) => {
       e.stopPropagation();
-      maintMenu.classList.remove('show');
+      menu.classList.remove('show');
       runMenu.classList.add('show');
     });
-  }
+  };
+
+  bindSubMenu('action-parking', parkMenu, 'action-park-back');
+  bindSubMenu('action-maintenance', maintMenu, 'action-maint-back');
 
     // Prevent input click from closing menu
   const debugInput = document.getElementById('debug-input');
@@ -2038,20 +2063,13 @@ function initRunMenu() {
         sendControl([nf.control.ControlItem.create({
           debug: {action: val}
         })]);
-        maintMenu?.classList.remove('show');
+        closeMenus();
       }
     });
   }
 
     // Close menu when clicking outside
-  document.addEventListener('click', () => {
-    if (runMenu && runMenu.classList.contains('show')) {
-      runMenu.classList.remove('show');
-    }
-    if (maintMenu && maintMenu.classList.contains('show')) {
-      maintMenu.classList.remove('show');
-    }
-  });
+  document.addEventListener('click', () => closeMenus());
 
     // Helper to bind menu items to simpleCommand
   const bindCommand = (elementId: string, cmdEnum: nf.control.Command) => {
@@ -2061,8 +2079,7 @@ function initRunMenu() {
         if (!el.classList.contains('disabled')) {
           simpleCommand(cmdEnum);
                     // close menu after selection
-          runMenu?.classList.remove('show');
-          maintMenu?.classList.remove('show');
+          closeMenus();
         }
       });
     }
@@ -2075,14 +2092,15 @@ function initRunMenu() {
   // bindCommand('action-tension',        Command.COMMAND_TIGHTEN_LINES);
   document.getElementById('action-full-cal')?.addEventListener('click', () => {
     if (document.getElementById('action-full-cal')?.classList.contains('disabled')) return;
-    runMenu?.classList.remove('show');
-    maintMenu?.classList.remove('show');
+    closeMenus();
     openFullCalOverlay();
   });
   bindCommand('action-half-cal',       Command.COMMAND_HALF_CAL);
   bindCommand('action-grasp',          Command.COMMAND_GRASP);
   bindCommand('action-dataset',        Command.COMMAND_SUBMIT_TARGETS_TO_DATASET);
   bindCommand('action-update-firmware', Command.COMMAND_UPDATE_FIRMWARE);
+  bindCommand('action-park',           Command.COMMAND_PARK);
+  bindCommand('action-unpark',         Command.COMMAND_UNPARK);
   bindCommand('action-record-park',    Command.COMMAND_RECORD_PARK);
   bindCommand('action-record-drop',    Command.COMMAND_RECORD_DROP);
   bindCommand('action-shutdown-components', Command.COMMAND_SAFE_COMPONENT_SHUTDOWN);
@@ -2108,14 +2126,14 @@ function initRunMenu() {
   }
 
   document.getElementById('action-get-ticket')?.addEventListener('click', () => {
-    maintMenu?.classList.remove('show');
+    closeMenus();
     handleGetTicket();
   });
 
 
   // Log panel toggle (from the Calibration & Maintenance menu)
   document.getElementById('action-toggle-logs')?.addEventListener('click', () => {
-    maintMenu?.classList.remove('show');
+    closeMenus();
     toggleLogPanel();
   });
   document.getElementById('log-panel-close')?.addEventListener('click', () => {

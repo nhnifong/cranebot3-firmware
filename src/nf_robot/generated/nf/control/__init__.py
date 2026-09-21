@@ -76,17 +76,17 @@ class Command(betterproto2.Enum):
 
     RECORD_PARK = 15
     """
-    Record the robot location as being above the parking saddle.
+    Record the robot location as being above the parking hook.
     """
 
     PARK = 10
     """
-    Auto park on the saddle
+    Auto park on the hook
     """
 
     UNPARK = 11
     """
-    Unpark from the saddle and move clear of it.
+    Unpark from the hook and move clear of it.
     """
 
     GRASP = 12

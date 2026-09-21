@@ -80,7 +80,6 @@ class ArpeggioGripperClient(ComponentClient):
         )
         self.anchor_num = None
         self.pe = pe
-        self.park_pose_relative_to_camera = None
         # tag name -> (capture timestamp, (rotvec, position)) relative to the gripper
         # camera, oldest first. Each detection is appended once, so a window read out of
         # here counts each sighting once.
@@ -232,17 +231,13 @@ class ArpeggioGripperClient(ComponentClient):
         """File one frame's tag detections, called back from the detector pool."""
         self.stat.pending_frames_in_pool -= 1
         self.stat.detection_count += len(detections)
-        # cleared every frame, so this doubles as "is the park target in view"
-        self.park_pose_relative_to_camera = None
 
         for detection in detections:
             name = detection['n']
             self.last_known_centers[name] = detection['center']
             self.last_known_half_extents[name] = detection.get('half_extent')
 
-            if name == 'park_target':
-                self.park_pose_relative_to_camera = detection['p']
-            elif name in OTHER_MARKERS or name in CAL_MARKERS:
+            if name in OTHER_MARKERS or name in CAL_MARKERS:
                 # poses stay in the raw (unstabilized, tilted) camera optical frame, with
                 # their capture time; readers apply their own staleness bound. CAL_MARKERS
                 # are here for the gripper card survey.
@@ -357,6 +352,17 @@ class ArpeggioGripperClient(ComponentClient):
                 print(f'gripper spin should be wrist {roomspin} plus extra spin from config {extra}')
             roomspin = roomspin + extra
         return roomspin
+
+    def wrist_angle_for_spin(self, spin):
+        """The wrist angle in degrees that would leave the camera at this room heading.
+
+        The inverse of get_spin, and kept beside it because the offset applied there is the
+        one undone here. Answers within a single turn; three wrist angles face the same way
+        and picking between them is the caller's business.
+        """
+        if not self.calibrating_room_spin and self.config.gripper.frame_room_spin is not None:
+            spin = spin - (self.config.gripper.frame_room_spin - np.pi)
+        return float(np.degrees(spin) % 360.0)
 
     def gripper_body_room_rotation(self, timestamp=None):
         """Rotation taking a vector in the z-up gripper body frame (pole down -z, x/y horizontal)

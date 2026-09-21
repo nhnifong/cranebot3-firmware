@@ -24,7 +24,7 @@ MARKER_NAMES = [
     'trash_back',
     'toys',
     'toys_back',
-    'park_target',
+    'park_target', # deprecated
 ] # next tag id 14
 
 CAL_MARKERS = set(['origin', 'cal_assist_1', 'cal_assist_2', 'cal_assist_3'])
@@ -44,7 +44,6 @@ SPECIAL_SIZES = {
     'cal_assist_2': CAL_MARKER_SIZE,
     'cal_assist_3': CAL_MARKER_SIZE,
     'gantry':       0.0915,
-    'park_target':       0.0464,
 }
 
 # Scales every marker's assumed physical size, and so scales every distance the cameras
@@ -294,47 +293,101 @@ def project_floor_to_pixels(floor_points, pose, camera_cal: nf_config.CameraCali
 
     return normalized_pixels
 
+
+def _wall_order(anchor_points):
+    """Indices of anchor_points in the order they sit around the room.
+
+    They arrive in wiring order, which says nothing about where they are, so the polygon
+    whose edges are the walls only exists once they are sorted by angle about their
+    centroid. This is the same ordering the position estimator builds its work area from.
+    """
+    anchors_2d = np.array([np.asarray(a, dtype=float)[:2] for a in anchor_points])
+    centroid = np.mean(anchors_2d, axis=0)
+    offsets = anchors_2d - centroid
+    return np.argsort(np.arctan2(offsets[:, 1], offsets[:, 0])), anchors_2d, centroid
+
+
+def nearest_wall(p: np.ndarray, anchor_points: list[np.ndarray]):
+    """The wall of the anchor polygon nearest the point p.
+
+    Returns (i, j, closest_point, inward_normal): the anchor_points indices of the two
+    ends of that wall, the 2D point on it nearest p, and the unit 2D normal pointing
+    into the room.
+    """
+    order, anchors_2d, centroid = _wall_order(anchor_points)
+    p_2d = np.asarray(p, dtype=float)[:2]
+
+    best = None
+    closest_dist = float('inf')
+
+    for k in range(len(order)):
+        i, j = int(order[k]), int(order[(k + 1) % len(order)])
+        p1, p2 = anchors_2d[i], anchors_2d[j]
+
+        wall_vec = p2 - p1
+        wall_len_sq = np.dot(wall_vec, wall_vec)
+
+        # Project p onto the finite segment p1-p2
+        # t is the interpolation factor [0, 1]
+        t = max(0, min(1, np.dot(p_2d - p1, wall_vec) / wall_len_sq))
+        closest_point_on_wall = p1 + t * wall_vec
+
+        dist = np.linalg.norm(p_2d - closest_point_on_wall)
+        if dist >= closest_dist:
+            continue
+        closest_dist = dist
+
+        # Standard 2D normal: (dx, dy) -> (-dy, dx)
+        normal = np.array([-wall_vec[1], wall_vec[0]])
+
+        # Ensure it points toward the centroid
+        to_interior = centroid - closest_point_on_wall
+        if np.dot(normal, to_interior) < 0:
+            normal = -normal
+
+        # Normalize for a unit direction
+        mag = np.linalg.norm(normal)
+        best = (i, j, closest_point_on_wall, normal / mag if mag > 0 else normal)
+
+    return best
+
+
 def get_inward_wall_normal(p: np.ndarray, anchor_points: list[np.ndarray]) -> np.ndarray:
     """
     Given a point p and 4 anchor points (3D), finds the closest 2D wall segment
     and returns a unit vector pointing toward the interior.
     """
-    # Project anchors and point to 2D (XY plane)
-    anchors_2d = [a[:2] for a in anchor_points]
-    p_2d = p[:2]
-    
-    closest_dist = float('inf')
-    best_normal = np.array([0.0, 0.0])
-    
-    # Calculate centroid to determine "inward" direction
-    centroid = np.mean(anchors_2d, axis=0)
+    return nearest_wall(p, anchor_points)[3]
 
-    for i in range(len(anchors_2d)):
-        p1 = anchors_2d[i]
-        p2 = anchors_2d[(i + 1) % len(anchors_2d)]
-        
-        wall_vec = p2 - p1
-        wall_len_sq = np.dot(wall_vec, wall_vec)
-        
-        # Project p onto the finite segment p1-p2
-        # t is the interpolation factor [0, 1]
-        t = max(0, min(1, np.dot(p_2d - p1, wall_vec) / wall_len_sq))
-        closest_point_on_wall = p1 + t * wall_vec
-        
-        dist = np.linalg.norm(p_2d - closest_point_on_wall)
-        
-        if dist < closest_dist:
-            closest_dist = dist
-            # Standard 2D normal: (dx, dy) -> (-dy, dx)
-            normal = np.array([-(p2[1] - p1[1]), p2[0] - p1[0]])
-            
-            # Ensure it points toward the centroid
-            to_interior = centroid - closest_point_on_wall
-            if np.dot(normal, to_interior) < 0:
-                normal = -normal
-                
-            # Normalize for a unit direction
-            mag = np.linalg.norm(normal)
-            best_normal = normal / mag if mag > 0 else normal
-            
-    return best_normal
+
+def get_wall_escape_direction(p: np.ndarray, anchor_points: list[np.ndarray],
+                              anchor_indices=(0, 2), tilt_deg: float = 45.0) -> np.ndarray:
+    """Unit 2D direction for moving off the wall nearest p, angled along it toward its anchor.
+
+    Straight down the inward normal is the shortest way off a wall, but it is also the way
+    that keeps whatever is mounted there - a parking hook, say - directly astern for
+    longest. Angling tilt_deg along the wall also walks out from under it, and the end worth
+    walking toward is the one carrying an anchor, both because it is the sturdy end and
+    because its camera is the one that has to pick the gantry marker up again.
+
+    anchor_indices lists which entries of anchor_points sit on an anchor; the rest are the
+    passive eyelets the indirect lines run through. A wall with an anchor at neither end, or
+    at both, has no side to prefer and gets the plain inward normal.
+    """
+    i, j, closest_point, normal = nearest_wall(p, anchor_points)
+
+    ends = [k for k in (i, j) if k in anchor_indices]
+    if len(ends) != 1:
+        return normal
+
+    anchors_2d = np.array([np.asarray(a, dtype=float)[:2] for a in anchor_points])
+    # closest_point lies on the wall, so this runs along it and is perpendicular to normal,
+    # which is what makes the result exactly tilt_deg off the normal.
+    along = anchors_2d[ends[0]] - closest_point
+    mag = np.linalg.norm(along)
+    if mag < 1e-9:
+        return normal  # sitting right on the anchor end; there is no along to speak of
+
+    theta = np.radians(tilt_deg)
+    direction = normal * np.cos(theta) + (along / mag) * np.sin(theta)
+    return direction / np.linalg.norm(direction)

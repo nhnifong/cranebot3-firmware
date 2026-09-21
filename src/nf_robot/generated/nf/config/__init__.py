@@ -168,22 +168,53 @@ class ParkData(betterproto2.Message):
         1, betterproto2.TYPE_MESSAGE, optional=True
     )
     """
-    The position of the marker box at an ideal position over the parking saddle
-    for the pilot gripper, assumes that the winch line is reeled in to 10cm.
+    Where the gantry is when it hovers over the parking hook: 10cm above where it
+    rests, which is where record_park took the reference image below and the height
+    unpark rises to. Recorded together with that image, and only meaningful with it.
     """
 
-    marker_resting: "_common__.Pose | None" = betterproto2.field(
-        2, betterproto2.TYPE_MESSAGE, optional=True
-    )
+    reference_image: "str" = betterproto2.field(4, betterproto2.TYPE_STRING)
     """
-    pose of parking marker relative to gripper camera while resting on parking hook
+    Filename (not a path) of the gripper camera's view of the floor, taken from the
+    mouth of the fork - `pos` shifted out along escape_direction - and held in the
+    park_reference directory. That is as far in as steering by it is any use: from the
+    mouth the gantry has to go straight down the track into the fork, and there is no
+    room left to correct. Re-recording overwrites the file and keeps this name.
     """
 
-    marker_over: "_common__.Pose | None" = betterproto2.field(
-        3, betterproto2.TYPE_MESSAGE, optional=True
+    escape_direction: "_common__.Vec3 | None" = betterproto2.field(
+        5, betterproto2.TYPE_MESSAGE, optional=True
     )
     """
-    pose of parking marker relative to gripper camera while hanging 10cm over parking hook
+    Horizontal unit vector (z unused) pointing from the hook out into the room, 45
+    degrees off the wall's normal towards the anchor holding that end of it. Unpark
+    leaves along it; park stands off along it and slides back down it, since a hook is
+    a slot and the way out of one is the only way back in.
+    """
+
+    wrist_angle: "float" = betterproto2.field(6, betterproto2.TYPE_DOUBLE)
+    """
+    Wrist angle in degrees the reference image was taken at, which park turns back to
+    (or to whichever equivalent angle is nearer) so the two views can be compared.
+    """
+
+    parked_range: "float" = betterproto2.field(10, betterproto2.TYPE_DOUBLE)
+    """
+    Downward rangefinder readings in metres, taken with the gantry resting on the hook
+    and again from the mouth of the fork. The camera cannot see height and the position
+    estimate drifts in z between sessions, so these are the only absolute measure of it:
+    park sets its altitude by the mouth reading before closing in, and checks the parked
+    reading afterwards to tell the hook holding the gantry from anything else that might.
+    """
+
+    mouth_range: "float" = betterproto2.field(11, betterproto2.TYPE_DOUBLE)
+
+    parked: "bool" = betterproto2.field(9, betterproto2.TYPE_BOOL)
+    """
+    Whether the gantry is on the hook right now, as far as anything here knows: set by a
+    park that finished and by recording a parking location, cleared by unparking. Written
+    out so that a host restarted while the robot hangs on the wall still knows it has to
+    unpark before it can do anything else.
     """
 
 

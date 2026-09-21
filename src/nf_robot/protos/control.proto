@@ -24,11 +24,11 @@ enum Command {
   COMMAND_ENABLE_LEROBOT = 5;
   // Begin performing automated pick and drop of targets in queue
   COMMAND_PICK_AND_DROP = 9;
-  // Record the robot location as being above the parking saddle.
+  // Record the robot location as being above the parking hook.
   COMMAND_RECORD_PARK = 15;
-  // Auto park on the saddle
+  // Auto park on the hook
   COMMAND_PARK = 10;
-  // Unpark from the saddle and move clear of it.
+  // Unpark from the hook and move clear of it.
   COMMAND_UNPARK = 11;
   // Execute an automated grasp at the current position.
   COMMAND_GRASP = 12;

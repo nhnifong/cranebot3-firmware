@@ -47,5 +47,7 @@ calibration_fitness_history.json
 plates/
 plates_all/
 previews/
+# gripper camera views of the parking hook, written by record_park
+park_reference/
 MUJOCO_LOG.TXT
 

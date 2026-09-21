@@ -96,6 +96,10 @@ def create_default_config() -> nf_config.StringmanPilotConfig:
     
     # Preferred Cameras
     config.preferred_cameras = [0, 1]
+
+    # Empty until record_park runs, but present: the load path backfills this on older
+    # configs, and a config created here rather than loaded has to arrive in the same state.
+    config.park_data = nf_config.ParkData()
     
     # Miscelleneous anchor vars
     config.max_accel = 0.3
@@ -149,7 +153,10 @@ def load_config(path: Path=DEFAULT_CONFIG_PATH) -> nf_config.StringmanPilotConfi
             raise FileNotFoundError # observer unit test path
         with open(path, 'r') as f:
             print(f'Loaded config from {path}')
-            c = nf_config.StringmanPilotConfig().from_json(f.read())
+            # Unknown fields are ignored rather than fatal: a config written by a newer
+            # version, or carrying one this version has since dropped, still describes a
+            # perfectly good robot and refusing to load it strands the machine.
+            c = nf_config.StringmanPilotConfig().from_json(f.read(), ignore_unknown_fields=True)
             if c.camera_cal is None:
                 c.camera_cal = create_default_config().camera_cal
             # This version requires the new full-FOV (684x384) wide camera calibration. Older
