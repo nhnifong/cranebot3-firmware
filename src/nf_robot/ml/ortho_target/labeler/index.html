@@ -106,6 +106,8 @@ function render() {
     circle.setAttribute('r', i === selected ? 9 : 7);
     circle.setAttribute('fill',
       pt.carried ? 'var(--carry)' : (pt.p === null ? 'var(--green)' : 'var(--amber)'));
+    // See-through fill so the object under a dot stays visible; the outline stays solid.
+    circle.setAttribute('fill-opacity', 0.35);
     circle.setAttribute('stroke', i === selected ? '#fff' : '#000');
     circle.setAttribute('stroke-width', i === selected ? 2.5 : 1.5);
     circle.addEventListener('pointerdown', (e) => {
