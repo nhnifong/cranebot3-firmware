@@ -214,7 +214,7 @@ def train(args):
     model = OrthoTargetNet(
         backbone_id=args.backbone, image_size=args.image_size, grid=args.grid,
         fuse_layers=args.fuse_layers, freeze=not args.unfreeze_backbone,
-        attention_layers=args.attention_layers,
+        attention_layers=args.attention_layers, attention_skip=not args.no_attention_skip,
     ).to(device)
     groups = param_groups(model, args.lr, args.unfreeze_backbone, args.backbone_lr_scale)
     optimizer = torch.optim.AdamW(groups, weight_decay=args.weight_decay)
@@ -259,6 +259,7 @@ def train(args):
                     "grid": args.grid,
                     "fuse_layers": args.fuse_layers,
                     "attention_layers": args.attention_layers,
+                    "attention_skip": model.attention_skip,
                     # What the logits mean, so an old softmax checkpoint can't load
                     # silently.
                     "head": "objectness",

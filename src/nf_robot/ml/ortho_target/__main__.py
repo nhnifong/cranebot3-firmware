@@ -140,6 +140,9 @@ def main():
     train_parser.add_argument("--attention_layers", type=int, default=DEFAULT_ATTENTION_LAYERS,
                               help="self-attention blocks over the token grid before "
                                    "upsampling; 0 trains the convolution-only decoder")
+    train_parser.add_argument("--no_attention_skip", action="store_true",
+                              help="feed the decoder only the attended map, without the "
+                                   "pre-attention skip connection")
     train_parser.add_argument("--epochs", type=int, default=60)
     # The learning rate is paired with --batch_size (sqrt scaling).
     train_parser.add_argument("--lr", type=float, default=6e-4)

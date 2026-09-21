@@ -20,28 +20,7 @@ free, with no hand labelling.
 
 ## Pipeline
 
-Build, distill, merge, split, train, then ship. Building is separate because the
-intermediate is a LeRobot dataset and the result is not.
-
-1. The recipe merges the teleop datasets, keeping the ortho feed this model needs and the
-   gripper feed visual_servoing/mine_teleop.py needs, and runs contact labelling. One
-   dataset serves both models because the expensive part - sourcing, excluding episodes
-   and re-encoding video - is identical for each:
-
-   ```
-   python src/nf_robot/ml/lerobot/build_dataset.py \
-       --recipe src/nf_robot/ml/recipes/combined_targets_reblend.yaml \
-       --temp_dir /home/nhn/data_scratch \
-       --output_root /home/nhn/data_scratch/combined_targets_reblend
-   ```
-
-   combined_targets_reblend.yaml is combined_targets.yaml with the ortho feed re-rendered
-   under today's floor_view blend instead of whatever each recording was made with (see
-   lerobot/reblend_ortho.py). It holds only the sources whose anchor camera calibration
-   can be recovered, so it is a subset - the price of a composite that matches what the
-   robot renders live now.
-
-2. `distill` reduces that to a handful of samples per episode - ortho frames from before
+1. `distill` reduces that to a handful of samples per episode - ortho frames from before
    the grasp and the ortho pixel where contact eventually happened - which is a few
    hundred MB rather than a few hundred GB. One run over the whole dataset, into the pool
    that step 4 deals from:
@@ -50,7 +29,7 @@ intermediate is a LeRobot dataset and the result is not.
    python -m nf_robot.ml.ortho_target distill
    ```
 
-3. Merge the hand labels into the same pool. They are the only frames where every target
+2. Merge the hand labels into the same pool. They are the only frames where every target
    is marked, which is what the objectness head needs and what makes the selection metric
    computable at all. Repeat the repo_id line for each volunteer:
 
@@ -59,7 +38,7 @@ intermediate is a LeRobot dataset and the result is not.
    python -m nf_robot.ml.ortho_target merge_labels --repo_id naavox/ortho-target-user-labels
    ```
 
-4. `split` deals the pool into train and eval, one row at a time and at random:
+3. `split` deals the pool into train and eval, one row at a time and at random:
 
    ```
    python -m nf_robot.ml.ortho_target split --upload
@@ -71,7 +50,7 @@ intermediate is a LeRobot dataset and the result is not.
    seed deals the same split, and a re-deal costs no re-distilling. See split_pool for
    what a row-level random cut does and does not measure.
 
-5. `train` fits the model, saving the best checkpoint by f1@20cm to
+4. `train` fits the model, saving the best checkpoint by f1@20cm to
    models/ortho_target.pth:
 
    ```
@@ -83,7 +62,7 @@ intermediate is a LeRobot dataset and the result is not.
    the robot both need no flags. See [the DINOv3 footnote](#footnote-dinov3) for the
    backbone this used to default to.
 
-6. `evaluate` scores that checkpoint - or the published one, downloaded, if training has
+5. `evaluate` scores that checkpoint - or the published one, downloaded, if training has
    not run on this machine - and --preview_dir draws what it actually predicted: the
    labels in green, the ranked candidates in red. Numbers say whether it is right, the
    previews say whether it is right for the right reason, which is the check worth doing
@@ -93,7 +72,7 @@ intermediate is a LeRobot dataset and the result is not.
    python -m nf_robot.ml.ortho_target evaluate --tta --preview_dir previews
    ```
 
-7. Try it on a robot before publishing. --local_models makes the observer load
+6. Try it on a robot before publishing. --local_models makes the observer load
    models/ortho_target.pth - where training just wrote it - instead of the hub copy. This
    is the only target model; the UI's targeting switch loads it:
 
@@ -101,19 +80,11 @@ intermediate is a LeRobot dataset and the result is not.
    stringman-headless --local_models
    ```
 
-8. Publish for stringman users. Until this is done, anyone without --local_models is
+7. Publish for stringman users. Until this is done, anyone without --local_models is
    still on the previously published checkpoint:
 
    ```
    hf upload naavox/targeting models/ortho_target.pth ortho_target.pth
-   ```
-
-9. Move the pin, and commit it. Robots download this model at a fixed commit recorded in
-   common/model_revisions.json, so step 8 alone changes nothing for anyone - which is the
-   point, since it means publishing cannot alter what is already flying. This is what
-   says the new checkpoint is the one to run:
-
-   ```
    python -m nf_robot.ml.pin_latest_model --targeting
    ```
 

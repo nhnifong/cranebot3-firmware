@@ -8,6 +8,7 @@
               -> concat on channels                       (B, 3072,  32,  32)
             Conv2d(3072 -> 256, 1x1), GroupNorm, GELU     (B,  256,  32,  32)
             self-attention blocks over 1024 tokens        (B,  256,  32,  32)
+            skip: concat the pre-attention map, 1x1 -> 256 (B,  256,  32,  32)
             2x (bilinear x2, 3x3 conv, GroupNorm, GELU)   (B,   64, 128, 128)
 
     heads   1. objectness per cell, each its own sigmoid
@@ -53,6 +54,9 @@ DEFAULT_GRID = 128
 # Self-attention blocks between the stem and the upsampling; old checkpoints without a count
 # load as 0.
 DEFAULT_ATTENTION_LAYERS = 3
+# Concatenate the pre-attention map with the attended one; old checkpoints without the flag
+# load without it.
+DEFAULT_ATTENTION_SKIP = True
 DEFAULT_MODEL_PATH = "models/ortho_target.pth"
 # Width in cells of the Gaussian the cell head trains against (~6cm of floor).
 CELL_SIGMA = 1.5
@@ -66,7 +70,8 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
 
     def __init__(self, backbone_id=DEFAULT_BACKBONE, image_size=DEFAULT_IMAGE_SIZE,
                  grid=DEFAULT_GRID, fuse_layers=4, width=256, freeze=True,
-                 attention_layers=DEFAULT_ATTENTION_LAYERS, heads=8):
+                 attention_layers=DEFAULT_ATTENTION_LAYERS, heads=8,
+                 attention_skip=DEFAULT_ATTENTION_SKIP):
         super().__init__()
         trunk = self._init_trunk(backbone_id, freeze)
         self.backbone_id = backbone_id
@@ -75,6 +80,7 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
         self.fuse_layers = fuse_layers
         self.freeze = freeze
         self.attention_layers = attention_layers
+        self.attention_skip = bool(attention_skip and attention_layers)
 
         config = trunk.config
         self.patch_size = config.patch_size
@@ -106,6 +112,10 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
             nn.init.trunc_normal_(self.pos, std=0.02)
         self.attention = nn.ModuleList(
             [AttentionBlock(width, heads) for _ in range(attention_layers)])
+        if self.attention_skip:
+            # So the decoder sees the local pre-attention features beside the attended ones.
+            self.skip_fuse = nn.Sequential(
+                nn.Conv2d(width * 2, width, 1), nn.GroupNorm(32, width), nn.GELU())
         self.logit_head = nn.Conv2d(channels, 1, 1)
         self.offset_head = nn.Conv2d(channels, 2, 1)
 
@@ -115,7 +125,8 @@ class OrthoTargetNet(SharedTrunkMixin, nn.Module):
     def forward(self, pixel_values):
         x = self.decoder[:self.stem_len](self.features(pixel_values))
         if len(self.attention):
-            x = attend(x, self.pos, self.attention)
+            attended = attend(x, self.pos, self.attention)
+            x = self.skip_fuse(torch.cat([x, attended], dim=1)) if self.attention_skip else attended
         x = self.decoder[self.stem_len:](x)
         return self.logit_head(x).squeeze(1), self.offset_head(x)
 
@@ -279,6 +290,7 @@ def load_checkpoint(path, device):
         grid=checkpoint["grid"], fuse_layers=checkpoint["fuse_layers"], freeze=freeze,
         # absent from every checkpoint trained before the attention blocks existed
         attention_layers=checkpoint.get("attention_layers", 0),
+        attention_skip=checkpoint.get("attention_skip", False),
     ).to(device)
     load_head_state(model, checkpoint)
     # The operating threshold travels with the checkpoint, with a fallback for old files.
