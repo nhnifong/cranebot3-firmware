@@ -74,6 +74,7 @@ qa-anchor-arp = "nf_robot.qa.anchor_arp_eval:main"
 "nf_robot.scripts" = ["*.sh"]
 "nf_robot.protos" = ["protos/*"]
 "nf_robot.ui" = ["assets/**"]
+"nf_robot.ml.ortho_target.labeler" = ["index.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

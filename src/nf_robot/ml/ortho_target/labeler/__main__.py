@@ -7,11 +7,11 @@ nothing about the rest of the floor. This is where the other kind of label comes
 frames where *every* target is marked, so the absence of one means the floor really is
 empty there. ortho_target's objectness head has no other source for that.
 
-    python ortho_labeler/server.py --root ~/data/combined_targets_reblend
-    python ortho_labeler/server.py --repo_id naavox/combined_targets_reblend
+    python -m nf_robot.ml.ortho_target.labeler --root ~/data/combined_targets_reblend
+    python -m nf_robot.ml.ortho_target.labeler --repo_id naavox/combined_targets_reblend
 
 Then open the printed URL. Frames are extracted from the LeRobot dataset once, into
-ortho_labeler/frames/, so a restart is instant; --refresh re-extracts them.
+ortho_labeler_frames/, so a restart is instant; --refresh re-extracts them.
 
 Episodes are taken spread across the whole dataset rather than from the front of it. A
 merged dataset is its sources concatenated, so a limit applied to the front stops inside
@@ -73,7 +73,8 @@ from nf_robot.ml import ortho_target as ot
 
 HERE = Path(__file__).parent
 DEFAULT_REPO_ID = "naavox/combined_targets_reblend"
-DEFAULT_CACHE = HERE / "frames"
+# Relative to the working directory, like USER_LABEL_ROOT, not inside the package.
+DEFAULT_CACHE = Path("ortho_labeler_frames")
 # Below ortho_target.TARGET_THRESHOLD on purpose: the seeds are a starting point to prune,
 # not the model's answer, and a missed object costs more here than a spurious dot.
 SEED_THRESHOLD = 0.2

@@ -17,6 +17,7 @@ free, with no hand labelling.
 | [dataset.py](dataset.py) | distilling, hand-label merging, splitting, uploading, and the training loader |
 | [training.py](training.py) | training, scoring and previews |
 | [\_\_main\_\_.py](__main__.py) | the command line: `python -m nf_robot.ml.ortho_target <step>` |
+| [labeler/](labeler/README.md) | the browser page for hand-labelling complete frames: `python -m nf_robot.ml.ortho_target.labeler` |
 
 ## Pipeline
 
@@ -31,7 +32,8 @@ free, with no hand labelling.
 
 2. Merge the hand labels into the same pool. They are the only frames where every target
    is marked, which is what the objectness head needs and what makes the selection metric
-   computable at all. Repeat the repo_id line for each volunteer:
+   computable at all. They are made with [the labeler](labeler/README.md) and land in
+   `ortho_target_user_labels/`. Repeat the repo_id line for each volunteer:
 
    ```
    python -m nf_robot.ml.ortho_target merge_labels

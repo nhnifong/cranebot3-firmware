@@ -22,6 +22,7 @@ target_heatmap_data_merged/
 target_heatmap_data_unlabeled/
 ortho_target_data/
 ortho_target_user_labels/
+ortho_labeler_frames/
 siglip2_probe/
 src/nf_robot.egg-info
 # built playroom-ui bundle, copied in by scripts/build_release.sh

@@ -8,11 +8,11 @@ every target is marked, so an unmarked patch of floor really is empty. This is t
 that makes them.
 
 ```
-python ortho_labeler/server.py --root ~/data/combined_targets_reblend   # not on the hub yet
-python ortho_labeler/server.py --repo_id naavox/combined_targets_reblend
+python -m nf_robot.ml.ortho_target.labeler --root ~/data/combined_targets_reblend   # not on the hub yet
+python -m nf_robot.ml.ortho_target.labeler --repo_id naavox/combined_targets_reblend
 ```
 
-Open the printed URL. Frames extract once into `frames/` (gitignored), so restarts are
+Open the printed URL. Frames extract once into `ortho_labeler_frames/` (gitignored), so restarts are
 instant; `--refresh` re-extracts.
 
 ## Which frames you get
@@ -30,7 +30,7 @@ enough to carry labels even tens of episodes apart, so spreading the sample cost
 To go round again for frames you have not seen:
 
 ```
-python ortho_labeler/server.py --root ~/data/combined_targets_reblend --add 300
+python -m nf_robot.ml.ortho_target.labeler --root ~/data/combined_targets_reblend --add 300
 ```
 
 `--add N` extracts N frames that are neither already cached nor already labelled, keeps
