@@ -5138,7 +5138,7 @@ class AsyncObserver:
                                 f'{park_data.parked_range:.3f}m recorded on the hook')
                     else:
                         logger.info(f'Park: range {measured:.3f}m confirms the parked height')
-                        
+
                 return None
 
             async def back_out(offset):
@@ -5431,27 +5431,50 @@ class AsyncObserver:
             del self.bot_clients[key]
 
     async def startup_action(self, event):
-        """A sequence of actions to run when all components are discovered."""
-        # wait for event
+        """Wait for every component to turn up, then run the startup sequence.
+
+        The waiting is kept out of the motion task: the sequence only becomes the motion
+        task once it is about to move something, so a robot sitting waiting for an anchor is
+        not occupying the slot that the stop button and every operator command cancel.
+        """
         await event.wait()
+        await self.invoke_motion_task(self.startup_sequence())
 
-        park_data = self.config.park_data
+    async def startup_sequence(self):
+        """Unpark if the robot was left on the hook, work, then park again.
 
-        # Only if the robot was left on the hook. Unparking one that is already flying
-        # drops it 10cm and shoves it at the nearest wall, on the strength of a position
-        # estimate that has nothing to do with where it is.
-        if park_data is not None and park_data.parked:
-            await self.unpark()
+        A motion task, so the stop button ends it. Everything it calls is one too, and a
+        motion task called from inside another is cancelled along with it, which is what
+        makes one press of stop reach whichever stage is actually running.
+        This is a motion task.
+        """
+        try:
+            park_data = self.config.park_data
 
-        await self.pick_and_place_loop()
+            # Only if the robot was left on the hook. Unparking one that is already flying
+            # drops it 10cm and shoves it at the nearest wall, on the strength of a position
+            # estimate that has nothing to do with where it is.
+            if park_data is not None and park_data.parked:
+                await self.unpark()
 
-        # pick and place finishes if no targets appear during a timeout. Parking needs
-        # somewhere to park; without a recorded location the robot is better left hanging.
-        if park_data is not None and park_data.pos is not None:
-            await self.park()
-        else:
-            logger.info('No parking location recorded, so leaving the robot where it is')
-        # disconnect all components and set flag that they should not reconnect unless control input is received.
+            # enable auto target selection
+            await self._load_target_model()
+
+            # main task
+            await self.pick_and_place_loop()
+
+            # pick and place finishes if no targets appear during a timeout. Parking needs
+            # somewhere to park; without a recorded location the robot is better left hanging.
+            if park_data is not None and park_data.pos is not None:
+                await self.park()
+            else:
+                logger.info('No parking location recorded, so leaving the robot where it is')
+            # disconnect all components and set flag that they should not reconnect unless control input is received.
+        except asyncio.CancelledError:
+            logger.info('Startup sequence cancelled')
+            raise
+        finally:
+            self.slow_stop_all_spools()
 
     async def keep_robot_connected(self):
         """
