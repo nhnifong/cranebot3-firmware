@@ -5228,7 +5228,7 @@ class AsyncObserver:
 
         Parked, no anchor camera can see the gantry marker, so the position estimate is
         running on where the robot was shut down: enough to rise, step clear of the wall and
-        creep towards the middle of the room until a camera picks the marker up, and nothing
+        creep towards the middle of the work volume until a camera picks the marker up, and nothing
         is trusted for more than that until the half calibration at the end. The step out
         leans along the wall toward the anchor holding that end of it, which walks out from
         under the hook rather than only backwards off it, and towards the camera that has to
@@ -5239,7 +5239,7 @@ class AsyncObserver:
         LIFT_SPEED_MPS = 0.05
         CLEAR_M = 0.20                # diagonal step out from the wall
         CLEAR_SPEED_MPS = 0.05
-        CRUISE_SPEED_MPS = 0.10       # the creep in towards the middle of the room
+        CRUISE_SPEED_MPS = 0.10       # the creep in towards the middle of the work volume
         CRUISE_LOOP_S = 0.1
         CRUISE_TIMEOUT_S = 90.0
         CENTER_PROXIMITY_M = 0.3      # near enough the middle that there is no more room to use
@@ -5271,10 +5271,14 @@ class AsyncObserver:
             # clear of the hook from here, whatever becomes of the rest of this
             self.set_parked(False)
 
-            # 3. in towards the middle of the room, at this altitude, until a camera finds
-            # the marker. The pole hangs free by now, so it leaning means the gantry has run
-            # into something on its way out.
-            center = np.mean(self.pe.anchor_points[:, :2], axis=0)
+            # 3. in and down towards the middle of the work volume until a camera finds the
+            # marker. The pole hangs free by now, so it leaning means the gantry has run into
+            # something on its way out. The target is the middle of the volume rather than of
+            # the floor plan: the hook is high on a wall, so descending as it comes in crosses
+            # more of what the anchor cameras cover. The floor is z=0, so half the anchor
+            # plane height is the middle of it.
+            center = np.array([*np.mean(self.pe.anchor_points[:, :2], axis=0),
+                               float(np.mean(self.pe.anchor_points[:, 2])) / 2.0])
             tilt = TiltWatch(self, tilt_deg=UNPARK_TILT_DEG)
             logger.info(f'Unpark: moving in towards {np.round(center, 2)}')
 
@@ -5295,13 +5299,13 @@ class AsyncObserver:
                                 f'{time.time() - started:.0f}s')
                     break
 
-                to_center = center - self.pe.gant_pos[:2]
+                to_center = center - self.pe.gant_pos
                 distance = float(np.linalg.norm(to_center))
                 if distance < CENTER_PROXIMITY_M:
                     stop_short('reached the middle of the room and the gantry marker never came into sight')
                     return
 
-                velocity = np.array([*(to_center / distance * CRUISE_SPEED_MPS), 0.0])
+                velocity = to_center / distance * CRUISE_SPEED_MPS
                 await self.move_direction_speed(velocity, None, self.pe.gant_pos,
                                                 key=NUDGE_VELOCITY_KEY)
                 await asyncio.sleep(CRUISE_LOOP_S)
