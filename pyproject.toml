@@ -55,6 +55,9 @@ pi = [
     "adafruit-circuitpython-vl53l1x",
     "adafruit-circuitpython-ads1x15",
     "adafruit-circuitpython-mpu6050",
+    # 1.13.0 passes a memoryview register buffer that Adafruit_PureIO's smbus
+    # read_i2c_block_data rejects (only bytes/bytearray), breaking MPU6050 reads.
+    "adafruit-circuitpython-register<1.13",
     "pyzbar",
     "damiao-motor",
 ]

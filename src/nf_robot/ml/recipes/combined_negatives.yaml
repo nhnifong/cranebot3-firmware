@@ -16,6 +16,7 @@ pad_clamp: false
 merge:
   - naavox/negatives
   - naavox/negatives-2
+  - naavox/negatives3
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
 keep_state_features:
