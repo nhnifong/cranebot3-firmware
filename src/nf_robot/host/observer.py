@@ -98,6 +98,9 @@ WRIST_RAMP_S = 0.4
 WRIST_STEP_S = 0.05
 WRIST_EASE_MIN_DEG = 5.0
 NUDGE_VELOCITY_KEY = 'centering'
+# (seconds) quiet time after the last manual target add, move or delete before the targets
+# are submitted to the ortho target dataset on their own
+AUTO_SUBMIT_TARGETS_S = 5.0
 # (seconds) how far a wrist record may be from a frame's capture time and still describe
 # where the wrist was when that frame was taken. Grip sensors arrive with the gripper's
 # heartbeat, so in normal running the nearest record is milliseconds away; this only fires
@@ -525,6 +528,8 @@ class AsyncObserver:
         self.ortho_event = threading.Event()
         # rgb24, the order the anchor clients decode to; only converted to BGR for the streamer
         self.last_ortho_rgb = None
+        # pending auto-submit of manually edited targets; see _schedule_target_submit
+        self._target_submit_task = None
         # the drop point model and the task that runs it, both lazy
         self.drop_point_model = None
         self._drop_point_task = None
@@ -1718,6 +1723,7 @@ class AsyncObserver:
     async def _handle_delete_target(self, item: control.DeleteTarget):
         if item.target_id is not None:
             self.target_queue.remove_target(item.target_id);
+            self._schedule_target_submit()
         self.send_tq_to_ui()
         await self.flush_tele_buffer()
 
@@ -1733,13 +1739,32 @@ class AsyncObserver:
                 self.target_queue.set_target_position(item.target_id, floor_points[0])
             else:   
                 new_id = self.target_queue.add_user_target(floor_points[0], dropoff='hamper')
+            self._schedule_target_submit()
         self.send_tq_to_ui()
 
     def _handle_add_room_target(self, item: control.AddTargetInRoom):
         # Used when the position arrives already in room coordinates.
         logger.info(f'Adding target at floor point ({item.x}, {item.y}) from the 3d view')
         self.target_queue.add_user_target((item.x, item.y), dropoff='hamper')
+        self._schedule_target_submit()
         self.send_tq_to_ui()
+
+    def _schedule_target_submit(self):
+        """Submit the targets to the dataset once manual edits stop for AUTO_SUBMIT_TARGETS_S.
+
+        Each add, move or delete restarts the wait, so a burst of edits becomes one row
+        carrying the finished set rather than one per click.
+        """
+        if self._target_submit_task is not None:
+            self._target_submit_task.cancel()
+
+        async def submit_when_quiet():
+            await asyncio.sleep(AUTO_SUBMIT_TARGETS_S)
+            # past the wait, so a later edit schedules a new submit instead of cancelling this one
+            self._target_submit_task = None
+            await self._handle_submit_targets_to_dataset()
+
+        self._target_submit_task = asyncio.create_task(submit_when_quiet())
 
     async def _handle_submit_targets_to_dataset(self):
         """Save the ortho floor view and every user-placed target as ortho_target rows.

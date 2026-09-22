@@ -32,9 +32,10 @@ COUNT_K = 64
 MATCH_RADIUS_CM = 20.0
 THRESHOLD_SWEEP = tuple(round(0.05 * i, 2) for i in range(1, 20)) + (0.975, 0.99, 0.995, 0.999)
 
-# Metric that picks the saved checkpoint: detection F1 on complete frames at the best
-# threshold.
-SELECTION_METRIC = "f1@20cm"
+# Metric that picks the saved checkpoint: average precision of detections on complete
+# frames. It charges both invented targets and missed ones, like F1, but over every
+# threshold at once, so one lucky threshold on a small eval set cannot win it.
+SELECTION_METRIC = "ap@20cm"
 
 
 def balanced_pos_weight(dataset, grid, cell_sigma=CELL_SIGMA):
@@ -66,6 +67,7 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
     match_px = match_radius_cm * model.image_size / (ORTHO_EXTENT_M * 100.0)
     nearest, covered, all_scores, total_bce, count = [], [], [], 0.0, 0
     ranked, labelled = [], 0  # (score, hit) per candidate of a complete frame; its labels
+    complete_frames = 0
 
     for images, points, mask, complete in loader:
         images = images.to(device)
@@ -86,6 +88,7 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
         covered.append(distance.min(dim=2).values[real].cpu())
 
         for i in torch.nonzero(complete > 0).flatten().tolist():
+            complete_frames += 1
             labels = points[i][mask[i] > 0].cpu().numpy()
             labelled += len(labels)
             ranked.extend(match_frame(labels, uv[i].cpu().numpy(), scores[i].cpu().numpy(), match_px))
@@ -102,10 +105,15 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
     metrics[f"top{top_k}@20cm"] = (covered <= 20).float().mean().item()
 
     best = best_f1(ranked, labelled, thresholds)
+    frames = max(complete_frames, 1)
     metrics.update({
+        f"ap@{match_radius_cm:.0f}cm": average_precision(ranked, labelled),
         f"f1@{match_radius_cm:.0f}cm": best["f1"],
         f"precision@{match_radius_cm:.0f}cm": best["precision"],
         f"found@{match_radius_cm:.0f}cm": best["found"],
+        # The two failures as counts per complete frame, at the best-F1 threshold.
+        "invented_per_frame": best["fp"] / frames,
+        "missed_per_frame": (labelled - best["tp"]) / frames,
         "threshold": best["threshold"],
         "scored_targets": best["frames"],
     })
@@ -136,7 +144,7 @@ def best_f1(ranked, labelled, thresholds=THRESHOLD_SWEEP):
     """The threshold with the best F1 on the complete frames, and what it scores."""
     if not ranked or not labelled:
         return {"f1": 0.0, "precision": 0.0, "found": 0.0,
-                "threshold": TARGET_THRESHOLD, "frames": 0}
+                "threshold": TARGET_THRESHOLD, "frames": 0, "tp": 0, "fp": 0}
     scores = np.array([s for s, _ in ranked])
     hits = np.array([h for _, h in ranked])
     best = {"f1": -1.0}
@@ -148,9 +156,25 @@ def best_f1(ranked, labelled, thresholds=THRESHOLD_SWEEP):
         found = tp / labelled
         f1 = 2 * precision * found / max(precision + found, 1e-9)
         if f1 > best["f1"]:
-            best = {"f1": f1, "precision": precision, "found": found, "threshold": float(t)}
+            best = {"f1": f1, "precision": precision, "found": found, "threshold": float(t),
+                    "tp": tp, "fp": fp}
     best["frames"] = labelled
     return best
+
+
+def average_precision(ranked, labelled):
+    """Area under the precision/recall curve of every candidate on the complete frames,
+    ranked by score across frames. A confident invented target pushes precision down for
+    everything below it, and a missed target caps recall, so both cost AP."""
+    if not ranked or not labelled:
+        return 0.0
+    order = sorted(ranked, key=lambda r: -r[0])
+    hits = np.array([h for _, h in order], dtype=np.float64)
+    tp = np.cumsum(hits)
+    precision = tp / np.arange(1, len(hits) + 1)
+    # Interpolated: precision at a rank is the best precision at that recall or beyond.
+    precision = np.maximum.accumulate(precision[::-1])[::-1]
+    return float((precision * hits).sum() / labelled)
 
 
 def constant_baseline(train_set, eval_set, image_size, radii_cm=(10, 20, 50)):
@@ -188,7 +212,7 @@ def train(args):
     logging.info(f"train {len(train_set)} sample(s) | eval {len(eval_set)} sample(s) from {data_root}")
 
     complete_eval = sum(1 for sample in eval_set.samples if is_complete(sample))
-    if args.select_metric.startswith("f1") and not complete_eval:
+    if args.select_metric.startswith(("f1", "ap")) and not complete_eval:
         raise ValueError(
             f"{data_root}/eval holds no complete frames, so {args.select_metric} cannot be "
             f"computed: nothing there can tell a false detection from an object nobody "

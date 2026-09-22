@@ -7,12 +7,15 @@ import logging
 
 from nf_robot.ml.ortho_target.dataset import (
     DEFAULT_DATASET_ID,
+    DEFAULT_NEGATIVES_REPO_ID,
+    NEGATIVE_INTERVAL_S,
     DEFAULT_SOURCE_REPO_ID,
     LOCAL_DATASET_ROOT,
     POOL_SPLIT,
     USER_LABEL_DATASET_NAME,
     USER_LABEL_ROOT,
     distill,
+    distill_negatives,
     merge_labels,
     split_dataset,
     upload_user_labels,
@@ -66,6 +69,26 @@ def main():
                                 help="stop after this many samples, for a quick trial run")
     distill_parser.add_argument("--annotate_dir", default=None,
                                 help="also write copies with the label drawn on them, to check the projection")
+
+    negatives_parser = subparsers.add_parser(
+        "distill_negatives",
+        help="add target-free frames from a dataset recorded with nothing in view to the pool")
+    negatives_parser.add_argument("--repo_id", default=DEFAULT_NEGATIVES_REPO_ID,
+                                  help="LeRobot dataset with an ortho view and no graspable "
+                                       "targets in any episode")
+    negatives_parser.add_argument("--root", default=None,
+                                  help="local root of that dataset (default: the HF cache, "
+                                       "downloading if needed)")
+    negatives_parser.add_argument("--output", default=LOCAL_DATASET_ROOT,
+                                  help=f"distilled dataset directory; frames join its "
+                                       f"{POOL_SPLIT}/ pool")
+    negatives_parser.add_argument("--interval_s", type=float, default=NEGATIVE_INTERVAL_S,
+                                  help="seconds between frames taken from each episode")
+    negatives_parser.add_argument("--min_coverage", type=float, default=0.02,
+                                  help="skip frames where less than this fraction of the ortho "
+                                       "map was painted by any camera")
+    negatives_parser.add_argument("--limit", type=int, default=0,
+                                  help="stop after this many frames, for a quick trial run")
 
     upload_labels_parser = subparsers.add_parser(
         "upload_labels", help="push targets saved from the UI to a hub dataset of your own")
@@ -178,6 +201,8 @@ def main():
     args = parser.parse_args()
     if args.command == "distill":
         distill(args)
+    elif args.command == "distill_negatives":
+        distill_negatives(args)
     elif args.command == "split":
         split_dataset(args)
     elif args.command == "train":

@@ -50,6 +50,11 @@ POOL_SPLIT = "all"
 USER_LABEL_ROOT = "ortho_target_user_labels"
 USER_LABEL_DATASET_NAME = "ortho-target-user-labels"
 
+# A dataset recorded with nothing graspable in view, for distill_negatives.
+DEFAULT_NEGATIVES_REPO_ID = "naavox/combined_negatives"
+# Seconds between the frames distill_negatives takes from each episode.
+NEGATIVE_INTERVAL_S = 4.0
+
 STATE_COMPONENTS = ("gripper_pos_x", "gripper_pos_y", "gripper_pos_z", "finger_pressure")
 
 
@@ -521,9 +526,8 @@ def first_stored_size(path: Path):
 
 def split_stored_size(split_dir: Path):
     """The size a split's distilled frames are stored at, ignoring merged labels, or None."""
-    for shard in sorted(split_dir.glob("*.parquet")):
-        if not shard.name.startswith("user-"):
-            return first_stored_size(shard)
+    for shard in sorted(split_dir.glob("shard-*.parquet")):
+        return first_stored_size(shard)
     return None
 
 
@@ -668,6 +672,100 @@ def distill(args):
         logging.info(f"Annotated previews in {args.annotate_dir}")
     logging.info("Merge any hand labels into the pool next (merge_labels), then deal the "
                  "splits from it (split)")
+
+
+def negatives_tag(repo_id):
+    """The file prefix one negatives source owns in the pool, e.g. neg-naavox_combined_negatives."""
+    return "neg-" + repo_id.replace("/", "_")
+
+
+def negative_frame_offsets(length, fps, interval_s=NEGATIVE_INTERVAL_S):
+    """One frame every interval_s through an episode, starting at its first frame."""
+    stride = max(1, int(round(interval_s * fps)))
+    return list(range(0, length, stride))
+
+
+def build_negative_rows(dataset, tag, interval_s, min_coverage, limit, size=None):
+    """Pool rows of target-free ortho frames, as (rows, skipped blank frames).
+
+    Written as complete frames (episode_index -1, no points): the dataset is known to have
+    nothing graspable in view, so every cell of every frame is a confirmed no.
+    """
+    key = ortho_key()
+    starts = episode_starts(dataset)
+    rows, blank = [], 0
+    for ep in sorted(starts):
+        meta = starts[ep]
+        for offset in negative_frame_offsets(meta["length"], dataset.meta.fps, interval_s):
+            if limit and len(rows) >= limit:
+                return rows, blank
+            bgr = frame_to_bgr(dataset[meta["start"] + offset][key])
+            if coverage_fraction(bgr) < min_coverage:
+                blank += 1
+                continue
+            if size and (bgr.shape[1], bgr.shape[0]) != tuple(size):
+                bgr = cv2.resize(bgr, tuple(size), interpolation=cv2.INTER_AREA)
+            ok, buf = cv2.imencode(".jpg", bgr)
+            if not ok:
+                raise ValueError(f"could not encode episode {ep} frame {offset}")
+            rows.append({
+                # <tag>-ep<episode>-<frame>, so sample_group groups a source episode's frames.
+                "file_name": f"{tag}-ep{ep:06d}-{offset:06d}.jpg",
+                "image": buf.tobytes(),
+                "points": [],
+                "contacts_m": [],
+                "episode_index": -1,
+                "frame_offset": offset,
+                "contact_frame_index": -1,
+                "contact_time_s": 0.0,
+                "task": f"empty floor: {dataset.repo_id}",
+            })
+    return rows, blank
+
+
+def distill_negatives(args):
+    """Target-free frames from a dataset with nothing in view, into the pool.
+
+    Idempotent: the source owns the pool files named for it, and a re-run replaces exactly
+    those, so running it twice, or after merge_labels, leaves one copy of each frame.
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    root = Path(args.root) if args.root else None
+    dataset = LeRobotDataset(repo_id=args.repo_id, root=root, force_cache_sync=root is None)
+    key = ortho_key()
+    if key not in dataset.meta.video_keys:
+        raise ValueError(f"'{args.repo_id}' has no '{key}' feature, so it carries no ortho view. "
+                         f"Present: {list(dataset.meta.video_keys)}")
+
+    pool = Path(args.output) / POOL_SPLIT
+    pool.mkdir(parents=True, exist_ok=True)
+    # Match the distilled frames' size, as merge_labels does.
+    size = split_stored_size(pool)
+    logging.info(f"Taking a frame every {args.interval_s:g}s from {dataset.meta.total_episodes} "
+                 f"episode(s) of '{args.repo_id}' at {dataset.root}"
+                 + (f", stored at {size[0]}x{size[1]}" if size else ""))
+    tag = negatives_tag(args.repo_id)
+    rows, blank = build_negative_rows(dataset, tag, args.interval_s, args.min_coverage,
+                                      args.limit, size)
+    if not rows:
+        raise ValueError(f"No usable frames in '{args.repo_id}' ({blank} blank)")
+
+    for old in pool.glob(f"{tag}-*.parquet"):
+        old.unlink()
+    import pyarrow as pa
+
+    # One file per source episode keeps each file small and the naming stable.
+    by_file = {}
+    for row in rows:
+        by_file.setdefault(row["file_name"].rsplit("-", 1)[0], []).append(row)
+    for stem, chosen in by_file.items():
+        pq.write_table(pa.Table.from_pylist(chosen, schema=shard_schema()), pool / f"{stem}.parquet")
+    write_dataset_readme(Path(args.output))
+
+    logging.info(f"Wrote {len(rows)} empty-floor frame(s) from {len(by_file)} episode(s) to "
+                 f"{pool}/{tag}-*.parquet" + (f" ({blank} blank frame(s) skipped)" if blank else ""))
+    logging.info("Deal the splits from the pool next (split)")
 
 
 # ==========================================

@@ -30,6 +30,15 @@ free, with no hand labelling.
    python -m nf_robot.ml.ortho_target distill
    ```
 
+   Then add empty-floor frames from any dataset recorded with nothing graspable in view,
+   one frame every 4 seconds of each episode. They join the pool as complete frames with
+   no targets, so every cell of them is a negative. Each source owns the pool files named
+   for it and a re-run replaces them; distill rebuilds the whole pool, so run this after it:
+
+   ```
+   python -m nf_robot.ml.ortho_target distill_negatives --repo_id naavox/combined_negatives
+   ```
+
 2. Merge the hand labels into the same pool. They are the only frames where every target
    is marked, which is what the objectness head needs and what makes the selection metric
    computable at all. They are made with [the labeler](labeler/README.md) and land in
@@ -52,7 +61,7 @@ free, with no hand labelling.
    seed deals the same split, and a re-deal costs no re-distilling. See split_pool for
    what a row-level random cut does and does not measure.
 
-4. `train` fits the model, saving the best checkpoint by f1@20cm to
+4. `train` fits the model, saving the best checkpoint by ap@20cm to
    models/ortho_target.pth:
 
    ```
@@ -126,7 +135,7 @@ negative in the dataset comes from: objectness_loss trains a teleop frame's unla
 cells on nothing at all, because the objects the operator did not reach for are in them,
 so only a frame somebody marked exhaustively can say where the floor is empty. A dataset
 with none of them cannot be trained on, and one with none of them in eval cannot be
-scored - f1@20cm needs frames where an unmatched detection is known to be wrong. train
+scored - ap@20cm needs frames where an unmatched detection is known to be wrong. train
 raises rather than proceed in either case.
 
 ## Frozen backbone
