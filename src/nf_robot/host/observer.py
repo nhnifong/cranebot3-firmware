@@ -1721,7 +1721,10 @@ class AsyncObserver:
         await asyncio.wait_for(self.gripper_client.finger_contact_calibration_complete.wait(), 20)
 
     async def _handle_delete_target(self, item: control.DeleteTarget):
-        if item.target_id is not None:
+        if item.clear_all:
+            self.target_queue.remove_all_targets()
+            self._schedule_target_submit()
+        elif item.target_id is not None:
             self.target_queue.remove_target(item.target_id);
             self._schedule_target_submit()
         self.send_tq_to_ui()

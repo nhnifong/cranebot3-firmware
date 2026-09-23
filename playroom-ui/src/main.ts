@@ -14,6 +14,7 @@ import { VideoFeed } from './ui/video_feed.ts'
 import { GamepadController } from './ui/gamepad.ts'
 import { MobileShell } from './ui/mobile.ts'
 import { TargetListManager } from './ui/target_list_manager.ts'
+import { initTheme, onThemeChange, themeColor, setTheme, pinnedTheme, SCHEMES } from './ui/theme.ts'
 import { Say, Listen } from './utils.ts';
 import { setHostVersion, hostSupports } from './version_gates.ts';
 import { isTutorialMode, maybeStartTutorial } from './tutorial.ts';
@@ -84,9 +85,13 @@ const perspBottom = 3;
 const perspGripper = 5;
 let currentPerspective: number = perspGripper; // control the initial selection
 
+// Picks the colour scheme before anything reads a colour out of it.
+initTheme();
+
 // Scene Setup
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x444444);
+scene.background = themeColor('--scene-bg');
+onThemeChange(() => { scene.background = themeColor('--scene-bg'); });
 
 const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
 camera.position.set(2, 2, 5);
@@ -1997,17 +2002,44 @@ targetListManager.onAddTargetAtFloorPoint = (point: THREE.Vector3) => {
   })]);
 };
 
+// One row per scheme in theme.ts, plus a row that hands the choice back to the
+// browser's dark mode preference. The tick follows whatever is in effect, so a
+// scheme change from anywhere (the console, the OS) shows up here.
+function initThemeMenu() {
+  const container = document.getElementById('theme-menu-items');
+  if (!container) return;
+
+  const rows = [{ id: null as string | null, label: 'Follow system' }, ...SCHEMES];
+  rows.forEach(scheme => {
+    const row = document.createElement('div');
+    row.className = 'menu-item menu-item-choice';
+    row.innerHTML = '<span></span><span class="menu-check">&check;</span>';
+    (row.firstChild as HTMLElement).textContent = scheme.label;
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setTheme(scheme.id);
+    });
+    container.appendChild(row);
+    onThemeChange(() => row.classList.toggle('selected', pinnedTheme() === scheme.id));
+  });
+  // The scheme is already applied by now, so tick the current row once up front.
+  rows.forEach((scheme, i) => {
+    container.children[i].classList.toggle('selected', pinnedTheme() === scheme.id);
+  });
+}
+
 // --- Run menu ---
 function initRunMenu() {
   const runBtn = document.getElementById('run-btn');
   const runMenu = document.getElementById('run-menu');
   const maintMenu = document.getElementById('maintenance-menu');
   const parkMenu = document.getElementById('parking-menu');
+  const themeMenu = document.getElementById('theme-menu');
   const stopBtn = document.getElementById('stop-btn');
 
   // Every menu that can be showing. Closing "the menu" has to close whichever one is
   // up, so everything below goes through this rather than naming them one by one.
-  const allMenus = [runMenu, maintMenu, parkMenu];
+  const allMenus = [runMenu, maintMenu, parkMenu, themeMenu];
   const closeMenus = () => allMenus.forEach(m => m?.classList.remove('show'));
 
     // Toggle Main Menu
@@ -2046,6 +2078,8 @@ function initRunMenu() {
 
   bindSubMenu('action-parking', parkMenu, 'action-park-back');
   bindSubMenu('action-maintenance', maintMenu, 'action-maint-back');
+  bindSubMenu('action-theme', themeMenu, 'action-theme-back');
+  initThemeMenu();
 
     // Prevent input click from closing menu
   const debugInput = document.getElementById('debug-input');
@@ -2945,6 +2979,13 @@ function toggleAutoTarget() {
 }
 document.getElementById('btn-auto-target')?.addEventListener('click', toggleAutoTarget);
 
+function clearTargets() {
+  sendControl([nf.control.ControlItem.create({
+    deleteTarget: { clearAll: true }
+  })]);
+}
+document.getElementById('btn-clear-targets')?.addEventListener('click', clearTargets);
+
 // --- Swing Control Menu ---
 function initSwingControl() {
   const btn = document.getElementById('btn-swing-cancel');
@@ -3109,8 +3150,30 @@ window.addEventListener('pointermove', (event) => {
   }
 });
 
+// A camera drag ends in a click event on the canvas, which would otherwise open
+// the floor popup wherever the drag happened to stop. Only a press that stayed
+// put counts as a click on the floor.
+const DRAG_SLOP_PX = 5;
+let pressDragged = false;
+let pressX = 0;
+let pressY = 0;
+
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  pressDragged = false;
+  pressX = event.clientX;
+  pressY = event.clientY;
+});
+
+window.addEventListener('pointermove', (event) => {
+  if (event.buttons === 0) return;
+  if (Math.hypot(event.clientX - pressX, event.clientY - pressY) > DRAG_SLOP_PX) {
+    pressDragged = true;
+  }
+});
+
 window.addEventListener('click', (event) => {
   if (event.target !== renderer.domElement) return;
+  if (pressDragged) return;
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects(scene.children, true);
   if (currentHoverType) {

@@ -1,8 +1,23 @@
 /* ============================================================
-   CSS CUSTOM PROPERTIES
-   Central place for the color palette
+   COLOR SCHEMES
+   Central place for the color palette. Every scheme is one block
+   that defines the same set of names, so a new one is a copy of
+   the default block with different values - nothing else in the
+   app needs to know about it.
+
+   theme.ts puts the scheme's name in data-theme on <html>, from the
+   browser's dark mode preference. To try one out by hand, from the
+   console:  setTheme('dark')  /  setTheme(null) to follow the browser.
+
+   The 3D view can't read CSS, so theme.ts hands --scene-bg and
+   --room-wall to three.js; keep those two as plain hex.
    ============================================================ */
-:root {
+
+/* Beige - the app's original scheme, and what renders before a scheme is set. */
+:root,
+:root[data-theme="beige"] {
+  color-scheme: light;
+
   /* Brand / action colors */
   --green:        #4CAF50;
   --green-hover:  #43a047;
@@ -29,6 +44,148 @@
   /* Border shades */
   --border-dark: #444;
   --border:      #555;
+
+  /* Panels — the cards floating over the 3D view */
+  --panel-bg:       rgba(155, 155, 145, 0.85);
+  --panel-border:   rgba(255, 255, 255, 0.5);
+  --panel-rule:     #ddd;
+  --panel-text:     #000;
+  --panel-text-mid: #333;
+  --panel-label:    #444;
+  --panel-text-dim: #666;
+
+  /* Rows in the target list */
+  --item-bg:        rgba(255, 255, 255, 0.3);
+  --item-bg-active: rgba(255, 255, 255, 0.9);
+  --item-bg-hover:  rgba(0, 255, 255, 0.3);
+  --item-accent:    #ffffff;
+
+  /* Pop-up menus */
+  --menu-bg:         rgba(255, 255, 255, 0.95);
+  --menu-text:       #333;
+  --menu-rule:       #ccc;
+  --menu-hover-bg:   #e8f5e9;
+  --menu-hover-text: #2e7d32;
+
+  /* 3D view */
+  --scene-bg:  #444444;
+  --room-wall: #FFFDD1;
+}
+
+/* Light - brushed silver and sky blue, after the Mac OS look. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Brand / action colors */
+  --green:        #34c759;
+  --green-hover:  #2aa64a;
+  --blue:         #007aff;
+  --blue-hover:   #0060df;
+  --red:          #ff3b30;
+  --red-hover:    #d70015;
+  --accent:       #1f8bff;
+  --accent-hover: #0a6ed1;
+
+  /* Surface shades (dark UI) */
+  --surface-dark:  #2b3440;
+  --surface:       #36404d;
+  --surface-mid:   #47535f;
+  --surface-light: #5b6875;
+
+  /* Text shades */
+  --text-bright: #f5f8fa;
+  --text-light:  #dbe3ec;
+  --text-muted:  #aab6c4;
+  --text-dim:    #8593a3;
+  --text-green:  #2a9d3f;
+
+  /* Border shades */
+  --border-dark: #46525f;
+  --border:      #5a6775;
+
+  /* Panels */
+  --panel-bg:       rgba(236, 240, 245, 0.85);
+  --panel-border:   rgba(255, 255, 255, 0.75);
+  --panel-rule:     #c9d1db;
+  --panel-text:     #1d2733;
+  --panel-text-mid: #3b4859;
+  --panel-label:    #55657a;
+  --panel-text-dim: #7b8ba0;
+
+  /* Rows in the target list */
+  --item-bg:        rgba(255, 255, 255, 0.55);
+  --item-bg-active: rgba(255, 255, 255, 0.95);
+  --item-bg-hover:  rgba(90, 170, 255, 0.28);
+  --item-accent:    #c9d6e4;
+
+  /* Pop-up menus */
+  --menu-bg:         rgba(248, 250, 252, 0.96);
+  --menu-text:       #22303f;
+  --menu-rule:       #ccd6e0;
+  --menu-hover-bg:   #d6e9ff;
+  --menu-hover-text: #0a4a8f;
+
+  /* 3D view */
+  --scene-bg:  #8ea9c6;
+  --room-wall: #E8EEF5;
+}
+
+/* Dark - follows the browser's dark mode preference. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Brand / action colors, lifted so they carry on a dark ground */
+  --green:        #66bb6a;
+  --green-hover:  #81c784;
+  --blue:         #42a5f5;
+  --blue-hover:   #64b5f6;
+  --red:          #ef5350;
+  --red-hover:    #e57373;
+  --accent:       #4da3ff;
+  --accent-hover: #7cb9ff;
+
+  /* Surface shades */
+  --surface-dark:  #141517;
+  --surface:       #1c1e21;
+  --surface-mid:   #26282c;
+  --surface-light: #34373c;
+
+  /* Text shades */
+  --text-bright: #f2f2f2;
+  --text-light:  #d2d5d9;
+  --text-muted:  #a0a5ac;
+  --text-dim:    #7d838b;
+  --text-green:  #6ddc62;
+
+  /* Border shades */
+  --border-dark: #2c2f34;
+  --border:      #40444a;
+
+  /* Panels */
+  --panel-bg:       rgba(34, 36, 40, 0.85);
+  --panel-border:   rgba(255, 255, 255, 0.12);
+  --panel-rule:     #3a3d42;
+  --panel-text:     #f2f2f2;
+  --panel-text-mid: #d2d5d9;
+  --panel-label:    #b0b5bc;
+  --panel-text-dim: #8b9097;
+
+  /* Rows in the target list */
+  --item-bg:        rgba(255, 255, 255, 0.07);
+  --item-bg-active: rgba(255, 255, 255, 0.20);
+  --item-bg-hover:  rgba(0, 255, 255, 0.18);
+  --item-accent:    #6b7078;
+
+  /* Pop-up menus */
+  --menu-bg:         rgba(28, 30, 33, 0.96);
+  --menu-text:       #e4e6e9;
+  --menu-rule:       #3a3d42;
+  --menu-hover-bg:   #1e3a22;
+  --menu-hover-text: #9ccc9f;
+
+  /* 3D view */
+  --scene-bg:  #15171a;
+  --room-wall: #4a4840;
 }
 
 /* ============================================================
@@ -233,12 +390,12 @@ body {
    cards rendered over the 3D canvas.
    ============================================================ */
 .panel {
-  background: rgba(155, 155, 145, 0.85);
+  background: var(--panel-bg);
   backdrop-filter: blur(10px);
   border-radius: 16px;
   padding: 16px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--panel-border);
   pointer-events: auto;
   display: flex;
   flex-direction: column;
@@ -270,12 +427,12 @@ body {
   padding: 0;
   border: none;
   font-size: 1.1rem;
-  color: #000;
+  color: var(--panel-text);
   font-weight: 700;
 }
 
 .header-link {
-  color: #000;
+  color: var(--panel-text);
   text-decoration: none;
   font-weight: 600;
   font-size: 0.9rem;
@@ -318,8 +475,8 @@ body {
   color: #ddd;
   line-height: 1.2;
 }
-#op-name   { font-weight: bold; color: black; }
-#op-action { font-family: monospace; color: black; }
+#op-name   { font-weight: bold; color: var(--panel-text); }
+#op-action { font-family: monospace; color: var(--panel-text); }
 
 .op-bar-bg {
   height: 8px;
@@ -355,12 +512,12 @@ body {
   overflow: visible; /* lets the source/destination pop-up menus escape this box */
   margin-top: 12px;
   padding-top: 8px;
-  border-top: 2px solid #ddd;
+  border-top: 2px solid var(--panel-rule);
 }
 
 .route-info-row {
   font-size: 0.9rem;
-  color: #444;
+  color: var(--panel-label);
   margin-bottom: 6px;
   display: flex;
   align-items: center;
@@ -369,7 +526,7 @@ body {
 
 .route-info-label {
   font-weight: 600;
-  color: black;
+  color: var(--panel-text);
 }
 
 /* Source/Destination value pickers — pop-up menu of selectable named locations. */
@@ -389,8 +546,8 @@ body {
 h2 {
   margin-top: 0;
   font-size: 1.2rem;
-  color: #444;
-  border-bottom: 2px solid #ddd;
+  color: var(--panel-label);
+  border-bottom: 2px solid var(--panel-rule);
   padding-bottom: 8px;
   margin-bottom: 12px;
 }
@@ -400,7 +557,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border-bottom: 2px solid #ddd;
+  border-bottom: 2px solid var(--panel-rule);
   padding-bottom: 8px;
   margin-bottom: 12px;
 }
@@ -410,6 +567,13 @@ h2 {
   border-bottom: none;
   padding-bottom: 0;
   margin-bottom: 0;
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .auto-target-btn {
@@ -430,24 +594,24 @@ h2 {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--item-bg);
   padding: 0;
   margin-bottom: 4px;
   border-radius: 8px;
-  border-left: 4px solid white;
+  border-left: 4px solid var(--item-accent);
   font-family: 'Space Mono', monospace;
   font-size: 0.8rem;
-  color: #000;
+  color: var(--panel-text);
   cursor: pointer;
 }
 .task-item.active {
   border-left-color: var(--green);
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--item-bg-active);
   font-weight: bold;
 }
 .task-item:hover:not(.target-mouse-selected),
 .target-mouse-hovered:not(.target-mouse-selected) {
-  background: rgba(0, 255, 255, 0.3);
+  background: var(--item-bg-hover);
 }
 
 .task-delete {
@@ -457,7 +621,7 @@ h2 {
   margin: 2px;
   font-weight: bold;
   font-size: 1em;
-  color: #555;
+  color: var(--panel-text-dim);
   border: none;
   background: transparent;
   display: none; /* revealed by JS on hover */
@@ -471,7 +635,7 @@ h2 {
 .task-text-span { margin: 8px 10px; }
 
 /* Target status — color shown via the left accent border. */
-.status-seen      { border-left-color: white; }
+.status-seen      { border-left-color: var(--item-accent); }
 .status-selected  { border-left-color: var(--accent); }
 .status-picked-up { border-left-color: #ffd700; }
 .target-mouse-selected { background: rgba(255, 165, 0, 0.8); }
@@ -682,14 +846,14 @@ h2 {
 }
 
 .label-muted {
-  color: #444;
+  color: var(--panel-label);
   margin-right: 4px;
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
-.swing-label { font-size: 0.9rem; color: #333; }
+.swing-label { font-size: 0.9rem; color: var(--panel-text-mid); }
 
 .swing-section { gap: 6px; }
 
@@ -707,7 +871,7 @@ h2 {
 
 .swing-latency-label {
   font-size: 0.75rem;
-  color: #666;
+  color: var(--panel-text-dim);
   min-width: 38px;
 }
 
@@ -721,7 +885,7 @@ h2 {
 .swing-latency-value {
   font-size: 0.75rem;
   font-family: monospace;
-  color: #333;
+  color: var(--panel-text-mid);
   min-width: 36px;
 }
 
@@ -779,7 +943,7 @@ h2 {
   position: absolute;
   bottom: 120%;
   left: 0;
-  background-color: rgba(255, 255, 255, 0.95);
+  background-color: var(--menu-bg);
   backdrop-filter: blur(10px);
   min-width: 240px;
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
@@ -798,7 +962,7 @@ h2 {
 }
 
 .menu-item {
-  color: #333;
+  color: var(--menu-text);
   padding: 12px 20px;
   display: block;
   cursor: pointer;
@@ -807,22 +971,22 @@ h2 {
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
 .menu-item:last-child { border-bottom: none; }
-.menu-item:hover:not(.disabled) { background-color: #e8f5e9; color: #2e7d32; }
+.menu-item:hover:not(.disabled) { background-color: var(--menu-hover-bg); color: var(--menu-hover-text); }
 .menu-item.disabled    { color: var(--text-muted); cursor: default; }
 
 /* Non-clickable section divider inside the menu. */
 .menu-item.menu-section-header {
-  border-top: 1px solid #ccc;
+  border-top: 1px solid var(--menu-rule);
   font-weight: bold;
   cursor: default;
 }
-.menu-item.menu-section-header:hover { background: none; color: #333; }
+.menu-item.menu-section-header:hover { background: none; color: var(--menu-text); }
 
 /* Back-arrow item at the top of sub-menus. */
-.menu-item.menu-back { font-weight: bold; color: #555; }
+.menu-item.menu-back { font-weight: bold; color: var(--panel-text-dim); }
 
 /* Thin separator rule between menu groups. */
-.menu-separator { border: none; border-bottom: 1px solid #ddd; margin-bottom: 5px; }
+.menu-separator { border: none; border-bottom: 1px solid var(--menu-rule); margin-bottom: 5px; }
 
 /* Menu row whose action is an on/off state rather than a one-shot command:
    name on the left, the same switch the swing cancellation toggle uses on the
@@ -836,6 +1000,17 @@ h2 {
 }
 /* The whole row is the hit target; the track is only an indicator. */
 .menu-item-toggle .toggle-track { pointer-events: none; flex: none; }
+
+/* One-of-a-set row, e.g. the colour schemes. The tick keeps its space when
+   hidden so the labels don't shift as the selection moves. */
+.menu-item.menu-item-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.menu-check { visibility: hidden; font-weight: bold; }
+.menu-item-choice.selected .menu-check { visibility: visible; }
 
 /* Debug command row: a non-clickable item containing an input + send button. */
 .menu-item-debug { cursor: default; }
@@ -888,18 +1063,18 @@ h2 {
   align-items: center;
   font-weight: bold;
   font-size: 0.95rem;
-  color: #333;
+  color: var(--menu-text);
 }
 
 .comp-details {
   font-family: 'Space Mono', monospace;
   font-size: 0.8rem;
-  color: #666;
+  color: var(--panel-text-dim);
   display: flex;
   justify-content: space-between;
 }
 
-.comp-status-good { color: #2e7d32; font-weight: bold; }
+.comp-status-good { color: var(--menu-hover-text); font-weight: bold; }
 .comp-status-bad  { color: var(--red-hover); font-weight: bold; }
 
 /* ============================================================
@@ -917,7 +1092,7 @@ h2 {
 .perspective-label {
   font-weight: bold;
   font-size: 0.85rem;
-  color: #333;
+  color: var(--panel-text-mid);
   text-align: right;
   line-height: 1.1;
   max-width: 90px;
@@ -1481,11 +1656,11 @@ h2 {
   position: fixed;
   z-index: 2000;
   display: flex;
-  gap: 6px;
-  padding: 6px;
-  border-radius: 8px;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 5px;
   background-color: rgba(30, 30, 30, 0.92);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.6);
   pointer-events: auto;
   transform: translate(-50%, -130%);
   animation: popUpSmall 0.15s ease-out;
@@ -1495,10 +1670,10 @@ h2 {
   background-color: var(--green);
   color: white;
   border: none;
-  padding: 8px 14px;
-  border-radius: 6px;
+  padding: 5px 9px;
+  border-radius: 4px;
   font-weight: bold;
-  font-size: 0.9rem;
+  font-size: 0.6rem;
   cursor: pointer;
 }
 .floor-popup-btn:hover  { background-color: var(--green-hover); }

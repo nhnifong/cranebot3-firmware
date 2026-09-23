@@ -607,6 +607,13 @@ default_message_pool.register_message("nf.control", "Debug", Debug)
 class DeleteTarget(betterproto2.Message):
     target_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
 
+    clear_all: "bool | None" = betterproto2.field(
+        2, betterproto2.TYPE_BOOL, optional=True
+    )
+    """
+    Delete every target in the queue, ignoring target_id.
+    """
+
 
 default_message_pool.register_message("nf.control", "DeleteTarget", DeleteTarget)
 

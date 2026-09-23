@@ -163,6 +163,9 @@ message AddTargetInRoom {
 
 message DeleteTarget {
   string target_id = 1;
+
+  // Delete every target in the queue, ignoring target_id.
+  optional bool clear_all = 2;
 }
 
 message Debug {

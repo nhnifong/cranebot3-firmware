@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { nf } from '../generated/proto_bundle.js';
 
+// Distance from the floor popup's anchor point to the centre of its second
+// button, for the two-button bare-floor layout.
+const ADD_BTN_OFFSET_X = 30;
+const ADD_BTN_OFFSET_Y = 24;
+
 export class TargetListManager {
     private selectedId: string | null = null;
     private hoveredId: string | null = null;
@@ -183,8 +188,13 @@ export class TargetListManager {
 
         const panel = document.createElement('div');
         panel.className = 'floor-popup';
-        panel.style.left = `${x}px`;
-        panel.style.top = `${y}px`;
+        // The panel is anchored above the click and centred on it. On bare floor,
+        // nudge it so the "Add target" button - the right of the two - lands under
+        // the cursor instead, so placing a target is a click without travel.
+        const dx = targetId ? 0 : -ADD_BTN_OFFSET_X;
+        const dy = targetId ? 0 : ADD_BTN_OFFSET_Y;
+        panel.style.left = `${x + dx}px`;
+        panel.style.top = `${y + dy}px`;
 
         const addButton = (label: string, extraClass: string, onClick: () => void) => {
             const btn = document.createElement('button');

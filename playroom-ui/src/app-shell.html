@@ -156,7 +156,10 @@
       <aside id="panel-left" class="panel">
         <div class="panel-header-row">
           <h2>Targets</h2>
-          <button id="btn-auto-target" class="header-back-btn auto-target-btn" title="Toggle automatic target finding.">Auto</button>
+          <div class="panel-header-actions">
+            <button id="btn-clear-targets" class="header-back-btn auto-target-btn" title="Delete every target.">Clear</button>
+            <button id="btn-auto-target" class="header-back-btn auto-target-btn" title="Toggle automatic target finding.">Auto</button>
+          </div>
         </div>
         <div id="target-list">
           <div class="task-item status-selected">
@@ -246,9 +249,17 @@
               <span>Room props</span>
               <div class="toggle-track"><div id="toggle-props-indicator" class="toggle-knob"></div></div>
             </div>
+            <div id="action-theme" class="menu-item menu-section-header" title="Choose the colour scheme used by the panels and the 3D view.">Theme</div>
             <div id="action-parking" class="menu-item menu-section-header">Parking</div>
             <div id="action-maintenance" class="menu-item menu-section-header">Calibration and Maintenance</div>
             <div id="action-robot-auth" class="menu-item">Bind to account</div> <!-- Text updated by main.ts -->
+          </div>
+
+          <!-- Theme Sub-Menu. Rows are built from the scheme list in theme.ts. -->
+          <div id="theme-menu" class="run-menu-content">
+            <div id="action-theme-back" class="menu-item menu-back">&larr; Back</div>
+            <div class="menu-separator"></div>
+            <div id="theme-menu-items"></div>
           </div>
 
           <!-- Parking Sub-Menu -->

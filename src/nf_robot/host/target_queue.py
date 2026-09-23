@@ -218,6 +218,15 @@ class TargetQueue:
                     return True
             return False
 
+    def remove_all_targets(self):
+        """
+        Empties the work queue. Like remove_target, the removed targets are kept as
+        false targets so the AI doesn't immediately re-add them.
+        """
+        with self._lock:
+            self._false_targets.extend(self._queue)
+            self._queue = []
+
     def reorder_target(self, target_id: str, new_index: int):
         """
         Moves a specific target to a new index in the queue.

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { nf } from '../generated/proto_bundle.js';
+import { onThemeChange, themeColor } from '../ui/theme.ts';
 
 export class DynamicRoom {
   private static modelPromise: Promise<GLTF> | null = null;
@@ -60,10 +61,11 @@ export class DynamicRoom {
 
     // Create Mesh
     const material = new THREE.MeshStandardMaterial({
-      color: 0xFFFDD1, // cream
+      color: themeColor('--room-wall'),
       side: THREE.FrontSide, // already did this via winding order above
       flatShading: true // Essential for dynamic non-planar quads
     });
+    onThemeChange(() => material.color.copy(themeColor('--room-wall')));
 
     this.mesh = new THREE.Mesh(this.geometry, material);
     this.root.add(this.mesh);
