@@ -188,6 +188,65 @@
   --room-wall: #4a4840;
 }
 
+/* Loud - saturated throughout rather than accented: pink around the room,
+   yellow walls, orange panels. */
+:root[data-theme="loud"] {
+  color-scheme: light;
+
+  /* Brand / action colors */
+  --green:        #22c55e;
+  --green-hover:  #16a34a;
+  --blue:         #5865f2;
+  --blue-hover:   #4450d6;
+  --red:          #e01b3c;
+  --red-hover:    #b3142f;
+  --accent:       #ff2fa8;
+  --accent-hover: #d81f8c;
+
+  /* Surface shades (dark UI) - near-black, anchoring the overlays */
+  --surface-dark:  #08080c;
+  --surface:       #101018;
+  --surface-mid:   #1c1c28;
+  --surface-light: #2a2a3a;
+
+  /* Text shades */
+  --text-bright: #ffffff;
+  --text-light:  #ffe9c7;
+  --text-muted:  #c9b89a;
+  --text-dim:    #9a8a72;
+  --text-green:  #22c55e;
+
+  /* Border shades */
+  --border-dark: #1c1c28;
+  --border:      #2e2e40;
+
+  /* Panels — orange cards with near-black text */
+  --panel-bg:       rgba(255, 122, 47, 0.92);
+  --panel-border:   rgba(255, 210, 63, 0.85);
+  --panel-rule:     rgba(16, 16, 24, 0.3);
+  --panel-text:     #101018;
+  --panel-text-mid: #2a1608;
+  --panel-label:    #3d2110;
+  --panel-text-dim: #6b3d1c;
+
+  /* Rows in the target list — yellow on the orange panel */
+  --item-bg:        rgba(255, 210, 63, 0.9);
+  --item-bg-active: #fff3c4;
+  --item-bg-hover:  rgba(255, 47, 168, 0.6);
+  --item-accent:    #101018;
+
+  /* Pop-up menus */
+  --menu-bg:         rgba(255, 240, 199, 0.97);
+  --menu-text:       #101018;
+  --menu-rule:       #e8c56b;
+  --menu-hover-bg:   #ffd2ec;
+  --menu-hover-text: #b3006e;
+
+  /* 3D view */
+  --scene-bg:  #ff2fa8;
+  --room-wall: #FFD23F;
+}
+
 /* ============================================================
    BASE
    ============================================================ */

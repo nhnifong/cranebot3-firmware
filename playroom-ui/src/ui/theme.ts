@@ -11,6 +11,7 @@ export const SCHEMES = [
     { id: 'light', label: 'Light' },
     { id: 'beige', label: 'Beige' },
     { id: 'dark',  label: 'Dark' },
+    { id: 'loud',  label: 'Loud' },
 ];
 
 const STORAGE_KEY = 'playroom-theme';
