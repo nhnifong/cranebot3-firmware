@@ -195,6 +195,10 @@ def main():
     eval_parser.add_argument("--split", default="eval", choices=["train", "eval"])
     eval_parser.add_argument("--tta", action="store_true",
                              help="average predictions over the 8 square symmetries")
+    eval_parser.add_argument("--threshold", type=float, default=None,
+                             help="objectness a cell needs to be called a target, instead of "
+                                  "the checkpoint's own. Lower finds more targets and invents "
+                                  "more; the sweep table the run prints says how many of each")
     eval_parser.add_argument("--preview_dir", default=None,
                              help="write images with the label and the predictions drawn on")
 

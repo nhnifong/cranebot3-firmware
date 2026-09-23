@@ -60,9 +60,15 @@ def pixels_to_cm(pixels, image_size):
 
 @torch.no_grad()
 def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 50),
-                   match_radius_cm=MATCH_RADIUS_CM, thresholds=THRESHOLD_SWEEP):
+                   match_radius_cm=MATCH_RADIUS_CM, thresholds=THRESHOLD_SWEEP,
+                   threshold=None, details=None):
     """Score a checkpoint: detection metrics on complete frames at the best swept threshold,
-    distance metrics over every frame."""
+    distance metrics over every frame.
+
+    threshold pins the operating point instead of sweeping for the best one, which is what
+    a run asking "what would the robot do if I turned the sensitivity up" wants. details,
+    if given, is filled with the matched candidates so the caller can sweep them itself.
+    """
     model.eval()
     match_px = match_radius_cm * model.image_size / (ORTHO_EXTENT_M * 100.0)
     nearest, covered, all_scores, total_bce, count = [], [], [], 0.0, 0
@@ -104,8 +110,10 @@ def evaluate_model(model, loader, device, top_k=5, tta=False, radii_cm=(10, 20, 
         metrics[f"recall@{radius}cm"] = (nearest <= radius).float().mean().item()
     metrics[f"top{top_k}@20cm"] = (covered <= 20).float().mean().item()
 
-    best = best_f1(ranked, labelled, thresholds)
+    best = best_f1(ranked, labelled, (threshold,) if threshold is not None else thresholds)
     frames = max(complete_frames, 1)
+    if details is not None:
+        details.update({"ranked": ranked, "labelled": labelled, "frames": frames})
     metrics.update({
         f"ap@{match_radius_cm:.0f}cm": average_precision(ranked, labelled),
         f"f1@{match_radius_cm:.0f}cm": best["f1"],
@@ -175,6 +183,24 @@ def average_precision(ranked, labelled):
     # Interpolated: precision at a rank is the best precision at that recall or beyond.
     precision = np.maximum.accumulate(precision[::-1])[::-1]
     return float((precision * hits).sum() / labelled)
+
+
+def threshold_table(ranked, labelled, frames, thresholds=THRESHOLD_SWEEP):
+    """What each operating point would cost and find, as rows of text.
+
+    The sensitivity dial in one table: every row is a threshold the robot could run at,
+    and the two columns that matter are how many real targets it finds and how many it
+    makes up per frame."""
+    rows = ["threshold  found  precision  invented/frame  missed/frame"]
+    scores = np.array([s for s, _ in ranked])
+    hits = np.array([h for _, h in ranked])
+    for t in thresholds:
+        above = scores >= t
+        tp = int((above & hits).sum())
+        fp = int((above & ~hits).sum())
+        rows.append(f"{t:>9.3f}  {tp / max(labelled, 1):5.3f}  {tp / max(tp + fp, 1):9.3f}  "
+                    f"{fp / frames:14.2f}  {(labelled - tp) / frames:12.2f}")
+    return rows
 
 
 def constant_baseline(train_set, eval_set, image_size, radii_cm=(10, 20, 50)):
@@ -310,17 +336,33 @@ def evaluate(args):
 
     eval_set = OrthoTargetDataset(data_root, args.split, model.image_size, augment=False)
     loader = torch.utils.data.DataLoader(eval_set, batch_size=args.batch_size, num_workers=args.workers)
-    metrics = evaluate_model(model, loader, device, top_k=args.top_k, tta=args.tta)
+    # The checkpoint's own operating point is what the robot runs at, so it is the default
+    # here; --threshold turns the sensitivity up (lower) or down (higher) against it.
+    threshold = args.threshold if args.threshold is not None else None
+    details = {}
+    metrics = evaluate_model(model, loader, device, top_k=args.top_k, tta=args.tta,
+                             threshold=threshold, details=details)
     logging.info(f"checkpoint from epoch {checkpoint.get('epoch')} | {_format_metrics(metrics)}")
+    if threshold is None:
+        logging.info(f"metrics above are at the best swept threshold; the checkpoint itself "
+                     f"operates at {model.threshold:.3f}")
+
+    if details.get("ranked"):
+        for row in threshold_table(details["ranked"], details["labelled"], details["frames"]):
+            logging.info(row)
 
     if args.preview_dir:
-        _write_previews(model, eval_set, device, Path(args.preview_dir), args.top_k, args.tta)
+        shown = threshold if threshold is not None else model.threshold
+        _write_previews(model, eval_set, device, Path(args.preview_dir), args.top_k, args.tta,
+                        threshold=shown)
         logging.info(f"previews in {args.preview_dir}")
 
 
 @torch.no_grad()
-def _write_previews(model, dataset, device, out_dir: Path, top_k: int, tta: bool):
-    """Ground truth in green, ranked predictions in red."""
+def _write_previews(model, dataset, device, out_dir: Path, top_k: int, tta: bool,
+                    threshold=None):
+    """Ground truth in green, predictions at the operating point in red, the candidates
+    below it in grey - which is what a sensitivity change would turn on."""
     out_dir.mkdir(parents=True, exist_ok=True)
     for i in range(len(dataset)):
         image, points, mask, _ = dataset[i]
@@ -329,9 +371,11 @@ def _write_previews(model, dataset, device, out_dir: Path, top_k: int, tta: bool
         for (gx, gy) in points[mask > 0].numpy():
             cv2.drawMarker(canvas, (int(gx), int(gy)), (0, 255, 0), cv2.MARKER_CROSS, 24, 2)
         for rank, ((u, v), score) in enumerate(zip(uv[0].cpu().numpy(), scores[0].cpu().numpy())):
-            cv2.circle(canvas, (int(u), int(v)), 10, (0, 0, 255), 2 if rank == 0 else 1)
+            called = threshold is None or score >= threshold
+            colour = (0, 0, 255) if called else (150, 150, 150)
+            cv2.circle(canvas, (int(u), int(v)), 10, colour, 2 if rank == 0 and called else 1)
             cv2.putText(canvas, f"{score:.2f}", (int(u) + 12, int(v)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, colour, 1)
         cv2.imwrite(str(out_dir / dataset.samples[i]["file_name"]), canvas)
 
 

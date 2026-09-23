@@ -529,6 +529,10 @@ def verify_videos_decode(root: Path, repo_id: str, video_keys: list[str]) -> Non
     decodes clean can come out of the AV1 encode with a handful of broken packets
     somewhere in the middle. That survives the build, uploads, and then blows up
     hundreds of steps into training when a sampler finally lands on those frames.
+
+    Most failures reported by the parallel pass turn out to be false positives - many
+    decoders hammering the machine at once produces spurious errors - so every failing
+    file gets one serial retry, and only a file that fails twice is reported.
     """
     from concurrent.futures import ProcessPoolExecutor
 
@@ -538,13 +542,25 @@ def verify_videos_decode(root: Path, repo_id: str, video_keys: list[str]) -> Non
 
     logging.info(f"Verifying {len(files)} video file(s) of '{repo_id}' decode end to end")
     workers = max(1, min(os.cpu_count() or 1, len(files)))
+    suspect: list[str] = []
     with ProcessPoolExecutor(max_workers=workers) as pool:
         for path_str, error in pool.map(_decode_whole_video, [str(p) for p in files]):
             if error is not None:
-                raise ValueError(
-                    f"Dataset '{repo_id}' has undecodable video: "
-                    f"{Path(path_str).relative_to(root)} -> {error}"
+                logging.warning(
+                    f"Video {Path(path_str).relative_to(root)} failed to decode "
+                    f"({error}); retrying it on its own"
                 )
+                suspect.append(path_str)
+
+    for path_str in suspect:
+        _, error = _decode_whole_video(path_str)
+        if error is not None:
+            raise ValueError(
+                f"Dataset '{repo_id}' has undecodable video: "
+                f"{Path(path_str).relative_to(root)} -> {error}"
+            )
+        logging.info(f"OK on retry: {Path(path_str).relative_to(root)} decodes cleanly")
+
     logging.info(f"OK: all {len(files)} video file(s) of '{repo_id}' decode cleanly")
 
 

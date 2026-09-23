@@ -83,6 +83,25 @@ free, with no hand labelling.
    python -m nf_robot.ml.ortho_target evaluate --tta --preview_dir previews
    ```
 
+   Every run prints a sweep of the operating point - the sensitivity dial - as found,
+   precision, invented per frame and missed per frame at each threshold. The checkpoint
+   carries the one training scored best, and that is the number the robot runs at
+   (observer reads model.threshold), but best F1 is a compromise between the two failures
+   and a robot rarely wants them weighted equally: a missed object is left on the floor
+   until the next pass, an invented one sends the gantry across the room for nothing.
+   --threshold rescores at another point, and the previews then draw what it calls in red
+   and what it leaves behind in grey:
+
+   ```
+   python -m nf_robot.ml.ortho_target evaluate --threshold 0.30 --preview_dir previews
+   ```
+
+   The dial only re-cuts the ranking it is given; where the sweep shows found flattening
+   out, the targets below it are not being ranked low, they are not being found at all,
+   and no threshold recovers them. Training saves the swept threshold into the
+   checkpoint, so shipping a different one means training again with
+   --select_metric chosen to favour the side you want.
+
 6. Try it on a robot before publishing. --local_models makes the observer load
    models/ortho_target.pth - where training just wrote it - instead of the hub copy. This
    is the only target model; the UI's targeting switch loads it:
@@ -152,10 +171,10 @@ Nothing needs a flag: the pool is whatever was written into it, and `merge_label
 directory, so the ordinary one stays where it is:
 
 ```
-python -m nf_robot.ml.ortho_target merge_labels --output ortho_target_complete
-python -m nf_robot.ml.ortho_target merge_labels --repo_id naavox/ortho-target-user-labels --output ortho_target_complete
-python -m nf_robot.ml.ortho_target distill_negatives --output ortho_target_complete
-python -m nf_robot.ml.ortho_target split --data_root ortho_target_complete
+python -m nf_robot.ml.ortho_target merge_labels --output datasets/ortho_target_complete
+python -m nf_robot.ml.ortho_target merge_labels --repo_id naavox/ortho-target-user-labels --output datasets/ortho_target_complete
+python -m nf_robot.ml.ortho_target distill_negatives --output datasets/ortho_target_complete
+python -m nf_robot.ml.ortho_target split --data_root datasets/ortho_target_complete
 ```
 
 Repeat the merge line for each label repo. The split log says how many frames it dealt
@@ -165,9 +184,9 @@ mistake.
 Then train it into a checkpoint of its own, and score it against the ordinary one:
 
 ```
-python -m nf_robot.ml.ortho_target train --data_root ortho_target_complete \
+python -m nf_robot.ml.ortho_target train --data_root datasets/ortho_target_complete \
     --model_path models/ortho_target_complete.pth --epochs 400
-python -m nf_robot.ml.ortho_target evaluate --data_root ortho_target_complete \
+python -m nf_robot.ml.ortho_target evaluate --data_root datasets/ortho_target_complete \
     --model_path models/ortho_target_complete.pth --preview_dir previews_complete
 ```
 
