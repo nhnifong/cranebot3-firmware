@@ -30,8 +30,12 @@ keep_state_features:
   - wrist_angle
   - target_force
 
+# Recording-time extras only some sources carry - negatives3 was recorded after both
+# features existed, the other two before - and the merge demands identical feature sets.
+# Nothing here re-renders the ortho view, so the tilts are not needed.
 drop_features:
   - anchor_poses
+  - anchor_cam_tilt
 
 label_contact_actions:
   enabled: true

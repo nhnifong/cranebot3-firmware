@@ -19,6 +19,8 @@ merge:
   - naavox/bedroom-sep6
   - naavox/playroom-sep10
   - naavox/nick-sep14
+  - naavox/sep22-junk
+  - naavox/james-sep22
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
 keep_state_features:

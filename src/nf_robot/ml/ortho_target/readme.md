@@ -138,6 +138,53 @@ with none of them cannot be trained on, and one with none of them in eval cannot
 scored - ap@20cm needs frames where an unmatched detection is known to be wrong. train
 raises rather than proceed in either case.
 
+## Training on the complete frames alone
+
+A teleop frame's one label is true but partial: every other object on that floor sits in
+a cell the loss trains on nothing, and the model is left to guess from the label density
+whether an unmarked object is a target it should call or one nobody happened to reach
+for. That is the suspect when a model invents targets. Hand labels and empty-floor frames
+have no such gap - every cell of them is a yes or a no - so a dataset of nothing else is
+the experiment that says how much the partial labels are costing.
+
+Nothing needs a flag: the pool is whatever was written into it, and `merge_labels` and
+`distill_negatives` write into it without `distill`. Build the dataset in its own
+directory, so the ordinary one stays where it is:
+
+```
+python -m nf_robot.ml.ortho_target merge_labels --output ortho_target_complete
+python -m nf_robot.ml.ortho_target merge_labels --repo_id naavox/ortho-target-user-labels --output ortho_target_complete
+python -m nf_robot.ml.ortho_target distill_negatives --output ortho_target_complete
+python -m nf_robot.ml.ortho_target split --data_root ortho_target_complete
+```
+
+Repeat the merge line for each label repo. The split log says how many frames it dealt
+and that all of them are complete, which is the check that `distill` did not run here by
+mistake.
+
+Then train it into a checkpoint of its own, and score it against the ordinary one:
+
+```
+python -m nf_robot.ml.ortho_target train --data_root ortho_target_complete \
+    --model_path models/ortho_target_complete.pth --epochs 400
+python -m nf_robot.ml.ortho_target evaluate --data_root ortho_target_complete \
+    --model_path models/ortho_target_complete.pth --preview_dir previews_complete
+```
+
+Raise the epochs, because this dataset is about a fifteenth of the ordinary one - 460
+frames against 7450, so an epoch is 15 optimizer steps rather than 233 - and the default
+60 stops in what amounts to a warmup. --epochs 400 costs about the same wall clock as the
+ordinary run. The balanced pos_weight climbs with the frames (196 rather than 47), since
+every cell of every frame is now supervised and the negatives outnumber the positives by
+far more; leave it computed rather than carried over from the other dataset.
+
+Two things make the comparison less than a clean A/B, and both flatter this dataset.
+Its eval split is drawn from the same hand-labelled pool, so a model trained on complete
+frames is scored on the distribution it was fitted to, while the ordinary model is scored
+on a stranger; and the labelling runs put near-duplicate frames on both sides of the
+split, which the split log counts. Compare the two checkpoints on one eval set - the
+ordinary one - if the question is which model to ship, rather than each on its own.
+
 ## Frozen backbone
 
 Train with the backbone frozen, which is what step 5 does by default. --unfreeze_backbone
