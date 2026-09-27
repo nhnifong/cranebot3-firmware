@@ -5,6 +5,8 @@ variables:
 # Explicitly target the Pi Zero 2W hardware configuration
 device:
   layer: rpizero2w
+  # Newer rpi-image-gen defaults this to "passwd" when user1pass is set.
+  user1sudo: nopasswd
 
 image:
   name: stringman-zero2w
