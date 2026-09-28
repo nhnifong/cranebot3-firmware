@@ -52,6 +52,7 @@ class StubObserver:
         self.motion_task = motion_task
         self._motion_owner = None
         self._motion_safety = motion_safety
+        self._marker_may_be_hidden = False
         self.gantry_marker_fault = None
         self._gantry_marker_warned = set()
         self._gantry_marker_popped = set()
@@ -229,6 +230,32 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         await run_monitor(stub, quiet(PAST_THE_LIMIT_S))
         task.cancel.assert_called_once()
         self.assertIn('has not been seen', stub.gantry_marker_fault)
+
+    async def test_calibration_starts_with_the_marker_long_unseen(self):
+        """Until calibration has stood the pole upright the marker may be facing away from
+        every camera, so going unseen then is not a fault."""
+        task = Mock()
+        task.done.return_value = False
+        stub = StubObserver(motion_task=task, motion_safety=SafetyPolicy(needs_gantry_marker=True))
+        stub._marker_may_be_hidden = True
+        stub.sight(T0, 0, [0, 0, 1.0])
+        await run_monitor(stub, quiet(2 * PAST_THE_LIMIT_S))
+        task.cancel.assert_not_called()
+        self.assertEqual(stub.popups, [])
+
+    async def test_the_unseen_clock_starts_once_the_pole_is_upright(self):
+        task = Mock()
+        task.done.return_value = False
+        stub = StubObserver(motion_task=task, motion_safety=SafetyPolicy(needs_gantry_marker=True))
+        stub._marker_may_be_hidden = True
+        stub.sight(T0, 0, [0, 0, 1.0])
+        upright = [lambda i: setattr(stub, '_marker_may_be_hidden', False)]
+        cancels_short_of_the_limit = []
+        count = [lambda i: cancels_short_of_the_limit.append(task.cancel.call_count)]
+        await run_monitor(stub, quiet(PAST_THE_LIMIT_S) + upright + quiet(SHORT_OF_THE_LIMIT_S)
+                          + count + quiet(PAST_THE_LIMIT_S - SHORT_OF_THE_LIMIT_S))
+        self.assertEqual(cancels_short_of_the_limit, [0])
+        task.cancel.assert_called_once()
 
     async def test_fault_outside_calibration_does_not_cancel_the_motion_task(self):
         task = Mock()

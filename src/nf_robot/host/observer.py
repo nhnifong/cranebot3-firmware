@@ -370,6 +370,9 @@ class AsyncObserver:
         # set by monitor_gantry_visibility to the phrase describing why it aborted a running
         # calibration, so the calibration's own cancel handler can report the real reason.
         self.gantry_marker_fault = None
+        # set while full calibration has not yet stood the pole upright. A leaning pole can
+        # face the marker away from every camera, so it going unseen until then is expected.
+        self._marker_may_be_hidden = False
         # which gantry marker faults have already been reported, so a standing fault is not a
         # repeating popup. A key is dropped when its condition clears, and the whole set is
         # cleared when a calibration starts, so a re-run of a calibration that was aborted by
@@ -1950,8 +1953,10 @@ class AsyncObserver:
             if advanced:
                 last_advance = time.time()
                 self._gantry_marker_warned.discard('unseen')
-            elif not self.anchors:
-                # nothing is looking, which is a connection problem and reported as one
+            elif not self.anchors or self._marker_may_be_hidden:
+                # nothing is looking, which is a connection problem and reported as one; or
+                # calibration has yet to stand the pole upright, which is what brings the
+                # marker into view, and the clock starts from there
                 last_advance = time.time()
             elif time.time() - last_advance > UNSEEN_LIMIT_S:
                 self._report_gantry_marker_fault(
@@ -3421,6 +3426,7 @@ class AsyncObserver:
         # re-arm the marker monitor, so a fault that is still standing after an aborted run
         # aborts this one too rather than being counted as already reported
         self._gantry_marker_warned.clear()
+        self._marker_may_be_hidden = True
         self._calibration_step = (0.0, 'Starting')
         if self.rec_diagnostics:
             self._calibration_diagnostics = []  # clear any stale data from a previous run
@@ -3431,6 +3437,7 @@ class AsyncObserver:
                     name="Calibration",
                     current_action='Cannot run full calibration until all anchors are connected',
                 ))
+                self._marker_may_be_hidden = False
                 return
             elif len(self.anchors) > N_ANCHORS:
                 logger.warning(f'Too many anchors found \n{self.anchors}')
@@ -3539,6 +3546,7 @@ class AsyncObserver:
             # This might be the first time the lines are tightened after connecting the carabiners, and the gripper pole could be horizontal.
             # even if predictable motion is not yet possible do some basic checks to ensure the gripper is veritcal and in the middle of the room
             await self.ensure_pole_upright()
+            self._marker_may_be_hidden = False
 
             await self.move_direction_speed([0, 0, 1], 0.1, downward_bias=0)
             await asyncio.sleep(0.5)
@@ -3817,6 +3825,7 @@ class AsyncObserver:
         and disable swing cancellation so the gripper does not keep moving."""
         self.slow_stop_all_spools()
         self.set_swing_cancellation(False)
+        self._marker_may_be_hidden = False
 
     async def calibrate_spin(self, reset_wrist_first=True):
         """Calibration of the relationship between the wrist and the room frame of reference.
