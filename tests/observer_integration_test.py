@@ -23,7 +23,7 @@ sys.modules.setdefault('damiao_motor', MagicMock())
 from nf_robot.robot.anchor_arp_server import AnchorArpServer
 from nf_robot.robot.gripper_arp_server import GripperArpServer
 from nf_robot.robot.simple_st3215 import SimpleSTS3215
-from nf_robot.host.observer import AsyncObserver, INPUT_VELOCITY_TTL_S
+from nf_robot.host.observer import AsyncObserver, INPUT_VELOCITY_TTL_S, DEFAULT_VELOCITY_KEY, SWING_VELOCITY_KEY
 from nf_robot.common.pose_functions import compose_poses
 import nf_robot.common.definitions as model_constants
 from nf_robot.generated.nf import telemetry, control, common
@@ -303,8 +303,8 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         from nf_robot.generated.nf.common import Vec3
         await self._send_control(move=control.CombinedMove(direction=Vec3(x=1, y=0, z=0), speed=0.2))
         
-        self.assertIn('default', self.ob.input_velocities)
-        self.assertTrue(np.any(self.ob.input_velocities['default'] != 0))
+        self.assertIn(DEFAULT_VELOCITY_KEY, self.ob.input_velocities)
+        self.assertTrue(np.any(self.ob.input_velocities[DEFAULT_VELOCITY_KEY] != 0))
         # TODO [SERVER VERIFICATION]: Verify that all anchor servers received synchronized 'aim_speed' updates based on inverse kinematics.
 
         # Test Gantry Goal Positioning
@@ -332,7 +332,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         await self._setup_fully_connected_system()
 
         # Age the 'default' entry past its TTL so the next move prunes it.
-        self.ob.input_velocities['default'] = (np.zeros(3), time.monotonic() - INPUT_VELOCITY_TTL_S - 1.0)
+        self.ob.input_velocities[DEFAULT_VELOCITY_KEY] = (np.zeros(3), time.monotonic() - INPUT_VELOCITY_TTL_S - 1.0)
 
         # Move with an unset source key (key defaults to None -> 'default').
         total_velocity = await self.ob.move_direction_speed(np.array([1.0, 0.0, 0.0]), speed=0.2, key=None)
@@ -431,7 +431,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
         await self._send_control(set_swing_cancellation=control.SetSwingCancellation(enabled=True, present='.'))
         await asyncio.sleep(0.2)
         self.assertFalse(self.ob.swing_cancellation_task.done(), 'precondition: swing cancellation is on')
-        self.assertIn('swingc', self.ob.active_set)
+        self.assertIn(SWING_VELOCITY_KEY, self.ob.active_set)
 
         await self._send_control(command=control.CommonCommand(name=control.Command.HALF_CAL))
         self.assertEqual(self.ob.motion_task.get_name(), 'half_auto_calibration')
@@ -443,6 +443,6 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
             self.ob.swing_cancellation_task.done(),
             'swing cancellation was on before half calibration and must be running after it',
         )
-        self.assertIn('swingc', self.ob.active_set)
+        self.assertIn(SWING_VELOCITY_KEY, self.ob.active_set)
         swing_telem = self._get_latest_telemetry('swing_cancellation_state')
         self.assertTrue(swing_telem.enabled, 'UI was last told swing cancellation is off')

@@ -46,6 +46,12 @@ laser_offset = 0.14 # meters
 # position of the anchor grommet point in the reference frame of the anchor. rotation is irrelevant
 anchor_grommet = (np.array([0,0,0], dtype=float), np.array([0.018,-0.033,-0.035], dtype=float))
 
+# Which entries of the position estimator's anchor points sit on an anchor itself, the rest
+# being the passive eyelets each anchor's indirect line runs through. The cameras are on the
+# anchors, so this is also which ends of the room can see anything. Ordering follows
+# AsyncObserver.save_poses_arp.
+ANCHOR_MOUNTED_POINTS = (0, 2)
+
 # position in the anchor model where the two walls and top surface meet. rotation is irrelevant
 anchor_wall_corner = (np.array([0,0,0], dtype=float), np.array([0.005978, 0.089425, 0.042], dtype=float))
 

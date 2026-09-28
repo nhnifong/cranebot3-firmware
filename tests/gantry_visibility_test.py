@@ -20,6 +20,7 @@ import numpy as np
 
 from nf_robot.host import observer as observer_module
 from nf_robot.host.data_store import DataStore
+from nf_robot.host.maneuver import SafetyPolicy
 from nf_robot.host.observer import (AsyncObserver, UNSEEN_LIMIT_S, VISIBILITY_POLL_S,
                                     _widest_gap)
 
@@ -42,13 +43,15 @@ class FakeClock:
 class StubObserver:
     """Only what monitor_gantry_visibility and _report_gantry_marker_fault read."""
 
-    def __init__(self, motion_task=None):
+    def __init__(self, motion_task=None, motion_safety=SafetyPolicy()):
         self.datastore = DataStore()
         self.anchors = {0: Mock(anchor_num=0), 1: Mock(anchor_num=1)}
         self.run_command_loop = True
         self.any_anchor_connected = asyncio.Event()
         self.any_anchor_connected.set()
         self.motion_task = motion_task
+        self._motion_owner = None
+        self._motion_safety = motion_safety
         self.gantry_marker_fault = None
         self._gantry_marker_warned = set()
         self._gantry_marker_popped = set()
@@ -202,7 +205,7 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         task = Mock()
         task.done.return_value = False
         task.get_name.return_value = 'full_auto_calibration'
-        stub = StubObserver(motion_task=task)
+        stub = StubObserver(motion_task=task, motion_safety=SafetyPolicy(needs_gantry_marker=True))
         stub.sight(T0, 0, [0, 0, 1.0])
         seen_again = [lambda i: stub.sight(LATE_SIGHTING_T, 0, [0, 0, 1.0])]
         polls = quiet(PAST_THE_LIMIT_S) + seen_again + quiet(PAST_THE_LIMIT_S)
@@ -221,7 +224,7 @@ class TestGantryVisibility(unittest.IsolatedAsyncioTestCase):
         task = Mock()
         task.done.return_value = False
         task.get_name.return_value = 'full_auto_calibration'
-        stub = StubObserver(motion_task=task)
+        stub = StubObserver(motion_task=task, motion_safety=SafetyPolicy(needs_gantry_marker=True))
         stub.sight(T0, 0, [0, 0, 1.0])
         await run_monitor(stub, quiet(PAST_THE_LIMIT_S))
         task.cancel.assert_called_once()
