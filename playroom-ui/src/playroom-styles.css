@@ -188,9 +188,9 @@
   --room-wall: #4a4840;
 }
 
-/* Loud - saturated throughout rather than accented: pink around the room,
-   yellow walls, orange panels. */
-:root[data-theme="loud"] {
+/* Microduck - after pollen-robotics.com/microduck. The site's pops are the
+   whole scheme here: pink around the room, yellow walls, orange panels. */
+:root[data-theme="microduck"] {
   color-scheme: light;
 
   /* Brand / action colors */
@@ -203,7 +203,7 @@
   --accent:       #ff2fa8;
   --accent-hover: #d81f8c;
 
-  /* Surface shades (dark UI) - near-black, anchoring the overlays */
+  /* Surface shades (dark UI) - the site's near-black, anchoring the overlays */
   --surface-dark:  #08080c;
   --surface:       #101018;
   --surface-mid:   #1c1c28;
@@ -220,8 +220,8 @@
   --border-dark: #1c1c28;
   --border:      #2e2e40;
 
-  /* Panels — orange cards with near-black text */
-  --panel-bg:       rgba(255, 122, 47, 0.92);
+  /* Panels — orange cards with the site's near-black text */
+  --panel-bg:       rgba(166, 61, 0, 0.92);
   --panel-border:   rgba(255, 210, 63, 0.85);
   --panel-rule:     rgba(16, 16, 24, 0.3);
   --panel-text:     #101018;
