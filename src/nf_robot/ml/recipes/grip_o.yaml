@@ -21,6 +21,7 @@ merge:
   - naavox/nick-sep14
   - naavox/sep22-junk
   - naavox/james-sep22
+  - naavox/79west-sep28
 
 # Exactly mine_teleop.STATE_NEEDED, and nothing else.
 keep_state_features:
