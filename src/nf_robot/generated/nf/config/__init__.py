@@ -447,6 +447,19 @@ class StringmanPilotConfig(betterproto2.Message):
     reads false.
     """
 
+    maneuver_settings: "dict[str, str]" = betterproto2.field(
+        26,
+        betterproto2.TYPE_MAP,
+        map_meta=betterproto2.map_meta(
+            betterproto2.TYPE_STRING, betterproto2.TYPE_STRING
+        ),
+    )
+    """
+    Settings belonging to maneuvers registered from outside nf_robot, keyed by maneuver
+    name. The value is whatever the maneuver chose to store; nf_robot never reads it.
+    Maneuvers that ship with nf_robot keep typed fields of their own instead.
+    """
+
 
 default_message_pool.register_message(
     "nf.config", "StringmanPilotConfig", StringmanPilotConfig

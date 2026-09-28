@@ -203,6 +203,11 @@ message StringmanPilotConfig {
   // this robot. Only that measurement sets it, so a config written before the field existed
   // reads false.
   bool swing_cancellation_verified = 25;
+
+  // Settings belonging to maneuvers registered from outside nf_robot, keyed by maneuver
+  // name. The value is whatever the maneuver chose to store; nf_robot never reads it.
+  // Maneuvers that ship with nf_robot keep typed fields of their own instead.
+  map<string, string> maneuver_settings = 26;
 }
 
 // Tunable constants used by AsyncObserver.pick_and_place_loop

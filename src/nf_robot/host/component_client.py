@@ -69,6 +69,9 @@ class ComponentClient:
         self.ct = None # task to connect to websocket
         self.save_raw = False
         self.connection_established_event = None
+        # called with no arguments when the websocket comes up, and when one that was up goes down
+        self.on_connected = None
+        self.on_disconnected = None
         self.frame = None # last frame of video seen
         self.last_frame_cap_time = None
         # This camera's own capture-to-here latency, per frame. The shared StatCounter
@@ -516,13 +519,17 @@ class ComponentClient:
         self.failed_to_connect = False # indicating we failed to ever make a connection
         ws_uri = f"ws://{self.address}:{self.port}"
         # print(f"Connecting to {ws_uri}...")
+        was_connected = False
         try:
             async with websockets.connect(ws_uri, max_size=None, open_timeout=10) as websocket:
                 self.connected = True
+                was_connected = True
                 logger.info(f"Connected to {ws_uri}.")
                 # Set an event that the observer is waiting on.
                 if self.connection_established_event is not None:
                     self.connection_established_event.set()
+                if self.on_connected is not None:
+                    self.on_connected()
                 await self.receive_loop(websocket)
         except (asyncio.exceptions.CancelledError, websockets.exceptions.ConnectionClosedOK):
             pass # normal close
@@ -538,6 +545,8 @@ class ComponentClient:
             self.failed_to_connect = True
         finally:
             self.connected = False
+            if was_connected and self.on_disconnected is not None:
+                self.on_disconnected()
         self.conn_status.websocket_status = telemetry.ConnStatus.NOT_DETECTED
         self.conn_status.video_status = telemetry.ConnStatus.NOT_DETECTED
         self.send_conn_status()

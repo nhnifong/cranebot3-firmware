@@ -50,9 +50,7 @@ from nf_robot.common.util import *
 from nf_robot.generated.nf import telemetry, control, common
 import nf_robot.generated.nf.config as nf_config
 from nf_robot.host.data_store import DataStore
-from nf_robot.host.fake_progress import FakeProgress
 from nf_robot.host.stats import StatCounter
-from nf_robot.host.target_queue import TargetQueue
 from nf_robot.host.eyelet_calibration import (optimize_arp_anchors, analyze_diamond_data,
                                              refinement_is_plausible, estimate_cam_tilts,
                                              DIAMOND_SIZE)
@@ -66,7 +64,8 @@ from nf_robot.host.arp_anchor_client import ArpeggioAnchorClient
 from nf_robot.host.position_estimator import Positioner2
 from nf_robot.host.telemetry_manager import TelemetryManager, LOCAL, normalize_control_plane_host
 from nf_robot.host.webui_server import WebUiServer
-from nf_robot.host.maneuver import SafetyPolicy, OverTension, RESERVED_KEY_PREFIXES
+from nf_robot.host.maneuver import (SafetyPolicy, OverTension, RESERVED_KEY_PREFIXES, ItemImage,
+                                    DROP_POSITION_NAME, PREDICTED_DROP_NAME, ROUTE_POINT_TAG_NAMES)
 from nf_robot.host.maneuvers import BUILTIN_MANEUVERS
 
 logger = logging.getLogger(__name__)
@@ -108,29 +107,22 @@ DEFAULT_STARTUP_SEQUENCE = ('unpark', 'pick_and_place', 'park')
 # claiming one would never be reached, so add_maneuver refuses it.
 BUILTIN_COMMANDS = frozenset({
     control.Command.STOP_ALL, control.Command.TIGHTEN_LINES, control.Command.HALF_CAL,
-    control.Command.FULL_CAL, control.Command.PICK_AND_DROP, control.Command.HORIZONTAL_CHECK,
-    control.Command.SHUTDOWN, control.Command.RECORD_DROP, control.Command.GRASP,
-    control.Command.SUBMIT_TARGETS_TO_DATASET, control.Command.UPDATE_FIRMWARE,
+    control.Command.FULL_CAL, control.Command.SHUTDOWN, control.Command.RECORD_DROP,
+    control.Command.GRASP, control.Command.UPDATE_FIRMWARE,
     control.Command.DISABLE_TORQUE, control.Command.ENABLE_TORQUE,
     control.Command.DEBUG_LOG_OVER_T, control.Command.ENABLE_TENSION_REG,
     control.Command.DISABLE_TENSION_REG, control.Command.SAFE_COMPONENT_SHUTDOWN,
 })
 BUILTIN_CONTROL_FIELDS = frozenset({
-    'command', 'move', 'gantry_goal_pos', 'jog_spool', 'episode_control', 'add_cam_target',
-    'add_room_target', 'delete_target', 'debug', 'set_swing_cancellation',
-    'single_component_action', 'manage_lerobot_session', 'move_gripper_to', 'set_point',
-    'set_target_model', 'popup_ack', 'add_relay_creds',
+    'command', 'move', 'gantry_goal_pos', 'jog_spool', 'debug', 'set_swing_cancellation',
+    'single_component_action', 'set_point', 'popup_ack', 'add_relay_creds',
 })
 BUILTIN_VERBS = frozenset({
-    'spincal', 'fingercal', 'eyelets', 'gripcards', 'floorplates', 'objectplates',
-    'fingerplates', 'stow', 'upright', 'swinglatency', 'swinglatencycal', 'polecal',
-    'reset_wrist', 'spind', 'ferry', 'linear', 'goalseek', 'sync_timezone', 'pull_logs',
-    'untwist', 'setvar', 'holdtension', 'tensionreg', 'droppoint', 'findorigin',
-    'centerorigin', 'servograsp', 'servowatch', 'servocenter', 'servoloop',
+    'spincal', 'fingercal', 'eyelets', 'gripcards', 'stow', 'upright', 'swinglatency',
+    'swinglatencycal', 'polecal', 'reset_wrist', 'spind', 'sync_timezone', 'pull_logs',
+    'untwist', 'setvar', 'holdtension', 'tensionreg', 'findorigin', 'centerorigin',
+    'servograsp', 'servowatch', 'servocenter', 'servoloop',
 })
-# (seconds) quiet time after the last manual target add, move or delete before the targets
-# are submitted to the ortho target dataset on their own
-AUTO_SUBMIT_TARGETS_S = 5.0
 # (seconds) how far a wrist record may be from a frame's capture time and still describe
 # where the wrist was when that frame was taken. Grip sensors arrive with the gripper's
 # heartbeat, so in normal running the nearest record is milliseconds away; this only fires
@@ -147,44 +139,6 @@ VIDEO_LATENCY_S = 0.25
 VISIBILITY_POLL_S = 1.0
 UNSEEN_LIMIT_S = 40.0
 
-# Capture runs for the synthetic visual servoing dataset; see ml/visual_servoing/readme.md.
-PLATE_OUTPUT_DIR = 'plates'
-# Finger sweep bounds. The server clamps finger angle to -90 (open) .. 90 (closed), and a
-# plate is wanted at every aperture the fingers are actually driven to during a grasp.
-FINGERPLATE_ANGLE_MIN = -76
-FINGERPLATE_ANGLE_MAX = 90
-FINGERPLATE_ANGLE_STEP = 2
-# Frames per wrist turn. The matte keys each one and takes the median, so it wants enough
-# of them that anything which rotated past is outvoted - and they are cheap next to the
-# finger moves between turns.
-FINGERPLATE_WRIST_STEPS = 18
-# (seconds) extra wait after the wrist reports arrival, due to the higher video latency from this format
-FINGERPLATE_SETTLE_S = 0.3
-# How long to wait for the camera to come back at the capture resolution. rpicam-vid is
-# killed and relaunched to change resolution, and the client retries the connection a few
-# times before giving up, so this has to cover all of that.
-CAPTURE_STREAM_TIMEOUT_S = 30.0
-# Consecutive missing frames that mean the stream has gone rather than lagged.
-FINGERPLATE_MAX_MISSES = 5
-# (metres) rangefinder readings to capture floor and object plates at. Spans the heights
-# a gripper actually approaches from, and is what calibrates a plate's apparent scale
-# against the range it was taken at, so the compositor can rescale it to any simulated
-# height. Trimmed to by measurement, not by commanded altitude.
-PLATE_RANGES_M = (0.12, 0.28, 0.44, 0.60, 0.74)
-# (degrees/second, degrees) the continuous wrist sweep floor and object plates are
-# captured during. Slow enough that the pole does not swing and frames stay sharp.
-PLATE_WRIST_SPEED_DPS = 30.0
-PLATE_SWEEP_DEGREES = 360.0
-# (seconds) how often a wrist speed command is repeated to keep the sweep going.
-WRIST_SPEED_REFRESH_S = 0.1
-# (seconds) how often the robot's state is sampled beside a recorded video sweep.
-TELEMETRY_SAMPLE_S = 0.05
-# (seconds) grace for the demux loop to notice a recording has been asked to stop.
-RECORDING_CLOSE_S = 1.0
-# (degrees) fingers parked out of frame while capturing floor and object plates. -90 is
-# fully open; anything the camera can see would be composited into every synthetic frame
-# built from these plates.
-PLATE_FINGERS_RETRACTED = -90.0
 USER_TARGETS_DIR = "user_targets_data"
 METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
 
@@ -192,44 +146,16 @@ METADATA_PATH = os.path.join(USER_TARGETS_DIR, "metadata.jsonl")
 TENSION_THRESH = 1.38
 
 
-# What visual_servo_grasp is allowed to do. Only GRASP descends, closes the fingers or
-# reports success; the other two run until cancelled and exist for judging a checkpoint on
-# a live robot, which is the only place this model can really be judged.
-SERVO_MODE_GRASP = 'grasp'
-SERVO_MODE_OBSERVE = 'observe'
-SERVO_MODE_CENTER = 'center'
-SERVO_MODES = (SERVO_MODE_GRASP, SERVO_MODE_OBSERVE, SERVO_MODE_CENTER)
-
 # distance from the tip of the pole (self.pole[2] below the gantry) down to the bottom of
 # the arp gripper fingers when they hang straight. gantry -> fingertip is self.pole[2] + this.
 GRIPPER_FINGER_LEN_M = 0.18
-GRIPPER_HEIGHT_OVER_TARGET = np.array([0,0,0.3])
 
-# mapping from enums to MARKER_NAMES in cv_common
-# The name the drop position is saved under. Not a tag: nothing ever sees it, it is only ever
-# what was recorded there, where the others are re-observed whenever a camera catches the tag.
-DROP_POSITION_NAME = "drop_position"
-
-# The drop point model (ml/placer/model.md) predicts where the item now being picked up
-# belongs, and its answer is saved under this name like any other place to fly to.
-PREDICTED_DROP_NAME = "predicted_drop"
-DROP_POINT_INTERVAL_S = 0.25
-# Laser range to the item over which the model was trained to answer (placer
-# mine_teleop.SNAPSHOT_RANGE_M): near enough that the item fills the frame, far enough that
-# the fingers are not across it. Outside it the prediction is not worth running.
-PREDICTED_DROP_RANGE_M = (0.12, 0.25)
-# The prediction is a point on the floor, so a drop aims this far above it. A tall hamper
-# needs the clearance, and the model does not predict a height yet.
-PREDICTED_DROP_HEIGHT_M = 0.0
-
-ROUTE_POINT_TAG_NAMES = {
-    common.RoutePoint.HAMPER: "hamper",
-    common.RoutePoint.TOYBOX: "toys",
-    common.RoutePoint.TRASH: "trash",
-    common.RoutePoint.GAMEPAD: "gamepad",
-    common.RoutePoint.DROP_POSITION: DROP_POSITION_NAME,
-    common.RoutePoint.PREDICTED_DROP: PREDICTED_DROP_NAME,
-}
+# Laser range to an item under the gripper at which last_clear_item_image keeps a frame of it:
+# near enough that the item fills the frame, far enough that the fingers are not across it.
+# The drop point model was trained on frames from this band (placer
+# mine_teleop.SNAPSHOT_RANGE_M).
+CLEAR_ITEM_RANGE_M = (0.12, 0.25)
+CLEAR_ITEM_INTERVAL_S = 0.25
 
 # feature key -> minimum nf_robot version every connected component must run to use it
 VERSION_GATES = {
@@ -418,6 +344,10 @@ class AsyncObserver:
         self.locate_anchor_task = None
         # only one motion task can be active at a time
         self.motion_task = None
+        # where seek_goal is steering, and the flight doing it. Shared by every caller of
+        # seek_goal, so a second call re-aims the flight instead of starting another.
+        self._goal_pos = None
+        self._seek_task = None
         # the maneuver the running motion task belongs to (None for the observer's own), and
         # the policy the safety monitors apply to it
         self._motion_owner = None
@@ -455,17 +385,12 @@ class AsyncObserver:
         self.last_user_move_time = time.time()
         # last known positions of named tags/objects live in self.config.named_positions
         # (the single source of truth). It's written to disk on shutdown, in async_close.
-        self.target_model = None
         # Grasps with the visual servoing model, which is how grasping works unless
         # --lerobot_grasp hands it to a policy instead. Holds the checkpoint, loaded on
         # first use.
         self.servo = VisualServo(self)
-        self.use_lerobot_grasp = lerobot_grasp
         self.perception_task = None
         self.webui_server = None
-        # targets
-        self.target_queue = TargetQueue()
-        self.last_snapshot_hash = None # to spare the UI from too many updates
         # owns every telemetry destination: the local websocket server and the cloud relay
         # link. Constructed here rather than in main() so send_ui works before the sockets
         # are up. Both transports also carry inbound control, hence the callbacks.
@@ -501,20 +426,11 @@ class AsyncObserver:
         self.ortho_event = threading.Event()
         # rgb24, the order the anchor clients decode to; only converted to BGR for the streamer
         self.last_ortho_rgb = None
-        # pending auto-submit of manually edited targets; see _schedule_target_submit
-        self._target_submit_task = None
-        # the drop point model and the task that runs it, both lazy
-        self.drop_point_model = None
-        self._drop_point_task = None
+        # see last_clear_item_image
+        self._clear_item_image = None
+        self._clear_item_task = None
         # list of (NfVideoStreamer, feed_number) for ortho feeds, so send_setup_telemetry can replay them
         self.ortho_streamers: list = []
-        self.lerobot_process_watcher = None
-        self.last_ep_ctrl_status = common.LerobotStatus.NA
-        self.lerobot_process_pid = None
-        # fires whenever any lerobot session (our own subprocess or one connected remotely
-        # through the telemetry relay) reports a status. Used to detect whether a session is
-        # actually listening after we broadcast an eval-start.
-        self.lerobot_session_status_event = asyncio.Event()
         # futures awaiting a PopupAck, keyed by the Popup.id they were sent with
         self.pending_popup_acks: dict[int, asyncio.Future] = {}
         self._next_popup_id = 1
@@ -529,12 +445,11 @@ class AsyncObserver:
         self._maneuver_commands = {}    # control.Command -> (handler, motion, safety, owner)
         self._maneuver_controls = {}    # ControlItem field name -> handler
         self._maneuver_verbs = {}       # first word of a Debug action -> (handler, motion, safety, owner)
-        # step name -> (coroutine function, safety, owner). Steps that are not maneuvers yet
-        # are the observer's own.
-        self._startup_steps = {'pick_and_place': (self._startup_pick_and_place, None, None)}
+        self._startup_steps = {}        # step name -> (coroutine function, safety, owner)
         self.startup_sequence_names = list(DEFAULT_STARTUP_SEQUENCE)
+        builtin_options = {'lerobot': {'use_for_grasp': lerobot_grasp}}
         for maneuver_class in BUILTIN_MANEUVERS:
-            self.add_maneuver(maneuver_class)
+            self.add_maneuver(maneuver_class, **builtin_options.get(maneuver_class.name, {}))
 
     def add_maneuver(self, maneuver_class, **options):
         """Construct a maneuver, route everything it declared to it, and return it.
@@ -711,27 +626,12 @@ class AsyncObserver:
                     stream_path=vs.stream_path,
                     feed_number=feed_number,
                 ))
-        if self.lerobot_process_watcher is None or self.lerobot_process_watcher.done():
-            self.last_ep_ctrl_status = common.LerobotStatus.NA
-        if isinstance(self.last_ep_ctrl_status, common.LerobotSessionStatus):
-            ep_status = self.last_ep_ctrl_status
-        else:
-            ep_status = common.LerobotSessionStatus(
-                status=self.last_ep_ctrl_status,
-                policy_repo_id=self.config.last_lerobot_policy,
-                dataset_repo_id=self.config.last_lerobot_dataset_repo_id,
-            )
-        self.send_ui(episode_control=common.EpisodeControl(
-            status=ep_status,
-            prompt=self.config.last_lerobot_prompt,
-        ))
         self.send_ui(task_status=telemetry.TaskStatus(
             route_source=self.pnp_src, route_destination=self.pnp_dst,
         ))
         self.send_ui(swing_cancellation_state=telemetry.SwingCancellationState(enabled=(SWING_VELOCITY_KEY in self.active_set), present='.'))
         self.send_ui(tension_regulation_state=telemetry.TensionRegulationState(enabled=self.tension_reg_enabled, present=True))
         self.send_ui(torque_state=telemetry.TorqueState(enabled=self.torque_enabled, present=True))
-        self.send_ui(auto_targeting_state=telemetry.AutoTargetingState(enabled=self.target_model is not None, present=True))
         r = await self.flush_tele_buffer()
 
     async def _on_telemetry_peer_connected(self, peer):
@@ -797,19 +697,6 @@ class AsyncObserver:
         elif item.jog_spool is not None:
             r = await self._handle_jog_spool(item.jog_spool)
 
-        # Lerobot Episode Control (Start/Stop Recording)
-        elif item.episode_control is not None:
-            self._handle_add_episode_control_events(item.episode_control)
-
-        elif item.add_cam_target is not None:
-            self._handle_add_cam_target(item.add_cam_target)
-
-        elif item.add_room_target is not None:
-            self._handle_add_room_target(item.add_room_target)
-
-        elif item.delete_target is not None:
-            r = await self._handle_delete_target(item.delete_target)
-
         elif item.debug is not None:
             r = await self._handle_debug_command(item.debug)
 
@@ -819,17 +706,8 @@ class AsyncObserver:
         elif item.single_component_action is not None:
             r = await self._handle_single_component_action(item.single_component_action)
 
-        elif item.manage_lerobot_session is not None:
-            self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(item.manage_lerobot_session))
-
-        elif item.move_gripper_to is not None:
-            r = await self._handle_move_gripper_to(item.move_gripper_to)
-
         elif item.set_point is not None:
             asyncio.create_task(self._handle_set_point(item.set_point))
-
-        elif item.set_target_model is not None:
-            asyncio.create_task(self._handle_set_target_model(item.set_target_model))
 
         elif item.popup_ack is not None:
             self._handle_popup_ack(item.popup_ack)
@@ -847,36 +725,50 @@ class AsyncObserver:
     async def _handle_set_point(self, item: control.SetPoint):
         """Set either the route source or destination (the To: and From: fields in the UI)"""
         logger.debug(f'_handle_set_point {item}')
-        if item.route_source:
-            self.pnp_src = item.route_source
-            self.config.last_route_source = item.route_source
-        if item.route_destination:
-            self.pnp_dst = item.route_destination
-            self.config.last_route_destination = item.route_destination
-        self.send_ui(task_status=telemetry.TaskStatus(
-            route_source=self.pnp_src, route_destination=self.pnp_dst, 
-        ))
+        self.set_route(source=item.route_source or None, destination=item.route_destination or None)
         r = await self.flush_tele_buffer()
 
-    async def _handle_move_gripper_to(self, item: control.MoveGripperTo):
-        """Handle the Go Here command"""
-        goal_pos = None
-        if item.target_id is not None:
-            # derive target position from target
-            target = self.target_queue.get_target_info(item.target_id)
-            if target is not None:
-                goal_pos = tonp(target.position) + GRIPPER_HEIGHT_OVER_TARGET + self.pole
-        elif item.pos is not None:
-            goal_pos = tonp(item.pos) + GRIPPER_HEIGHT_OVER_TARGET + self.pole
+    def route(self):
+        """The (source, destination) RoutePoints things are carried between."""
+        return self.pnp_src, self.pnp_dst
 
-        if goal_pos is None:
-            return
-        r = await self.invoke_motion_task(self.seek_goal_where_asked(goal_pos))
+    def set_route(self, source=None, destination=None):
+        """Change either end of the route, save it, and show it in the UI's To: and From:."""
+        if source is not None:
+            self.pnp_src = source
+            self.config.last_route_source = source
+        if destination is not None:
+            self.pnp_dst = destination
+            self.config.last_route_destination = destination
+        save_config(self.config, self.config_path)
+        self.send_ui(task_status=telemetry.TaskStatus(
+            route_source=self.pnp_src, route_destination=self.pnp_dst,
+        ))
 
-    @with_swing_cancellation_preferred
-    async def seek_goal_where_asked(self, goal_pos):
-        """seek_goal but only when someone calls it with go here"""
-        return await self.seek_goal(goal_pos)
+    def route_point_position(self, route_point):
+        """Floor position of a route point, or None if it has none.
+
+        Quiet about failures: this is consulted every targeting round, and NA (drop where
+        each target says) genuinely has no single position.
+        """
+        if route_point == common.RoutePoint.ORIGIN:
+            return np.zeros(3)
+        name = ROUTE_POINT_TAG_NAMES.get(route_point)
+        return self.named_position(name) if name is not None else None
+
+    def named_position(self, name):
+        """Last known room position of a named place, or None if it has never been seen."""
+        if name not in self.config.named_positions:
+            return None
+        return tonp(self.config.named_positions[name])
+
+    def set_named_position(self, name, position, save=True):
+        """Remember a named place, show it in the UI, and write it out unless save is False."""
+        self.config.named_positions[name] = fromnp(np.asarray(position, dtype=float))
+        if save:
+            save_config(self.config, self.config_path)
+        self.send_ui(named_position=telemetry.NamedObjectPosition(
+            position=fromnp(np.asarray(position, dtype=float)), name=name))
 
     async def _handle_single_component_action(self, item: control.SingleComponentAction):
         """Issue a special command to a single component"""
@@ -1429,7 +1321,8 @@ class AsyncObserver:
         if words and words[0] in self._maneuver_verbs:
             return await self._run_maneuver_handler(*self._maneuver_verbs[words[0]], *words[1:])
         if item.action == "spincal":
-            r = await self.calibrate_spin()
+            # as a motion task, so the stop button reaches it
+            r = await self.invoke_motion_task(self.calibrate_spin())
         if item.action == 'fingercal':
             asyncio.create_task(self.calibrate_finger_servo())
         if item.action == 'eyelets':
@@ -1447,15 +1340,6 @@ class AsyncObserver:
                     pickle.dump(gripper_obs, f)
                 logger.info(f'Saved gripper card survey to gripper_card_obs.pkl: {list(gripper_obs.keys())}')
             r = await self.invoke_motion_task(survey_and_save())
-        if item.action == 'floorplates':
-            # Park the gripper over clean, clear floor first; this moves only height and wrist.
-            r = await self.invoke_motion_task(self.collect_floorplates())
-        if item.action == 'objectplates':
-            r = await self.invoke_motion_task(self.collect_objectplates())
-        if item.action == 'fingerplates':
-            # Park the gripper over clear textured floor before running this; see the
-            # docstring for what an unlucky spot does to the matte.
-            r = await self.invoke_motion_task(self.collect_fingerplates())
         if item.action == 'stow':
             r = await self.stow_lines()
         if item.action == 'upright':
@@ -1478,12 +1362,6 @@ class AsyncObserver:
              r = await self.gripper_client.send_commands({'reset_wrist': None})
         if item.action == 'spind':
             print(self.gripper_client.get_spin(True))
-        if item.action == 'ferry':
-            r = await self.invoke_motion_task(self.ferry('hamper', 'trash'))
-        if item.action == 'linear':
-            r = await self.invoke_motion_task(self.linear_height_check_task())
-        if item.action == 'goalseek':
-            r = await self.invoke_motion_task(self.goalseek_diagnostic_task())
         if item.action == 'sync_timezone':
             await self.sync_timezone_to_bots()
         if item.action == 'pull_logs':
@@ -1529,8 +1407,6 @@ class AsyncObserver:
                     r = await self.set_tension_reg(True)
                 else:
                     r = await self.set_tension_reg(False)
-        if item.action == 'droppoint':
-            r = await self.toggle_drop_point_preview()
         if item.action == 'findorigin':
             # The calibration step on its own, so the search can be tuned in the room that breaks
             # it - low ceiling, origin card up on a bed - without running a whole calibration.
@@ -1689,224 +1565,10 @@ class AsyncObserver:
             logger.exception("Failed to determine local timezone name")
             return None
 
-    async def chase_tag(self, name):
-        """Keep the gripper at the named location"""
-        try:
-            chase_task = None
-            while self.run_command_loop:
-                await asyncio.sleep(0.1)
-                if not name in self.config.named_positions:
-                    continue
-                goal = tonp(self.config.named_positions[name]) + self.pole
-                if chase_task is None or chase_task.done():
-                    chase_task = asyncio.create_task(self.seek_goal(goal))
-                else:
-                    self.goal_pos = goal # retarget the seek already in flight
-        except asyncio.CancelledError:
-            if chase_task is not None:
-                chase_task.cancel()
-            raise
-
-    @with_swing_cancellation_preferred
-    async def ferry(self, source, dest):
-        """Carry objectes between one named tag and another.
-        Moves to source, attempt auto grasp, move to test, drop, repeat"""
-        try:
-            while self.run_command_loop:
-                await asyncio.sleep(0.1)
-
-                # wait for source position to be seen
-                while not source in self.config.named_positions:
-                    await asyncio.sleep(0.5)
-                # go to position
-                goal = tonp(self.config.named_positions[source]) + self.pole + GRIPPER_HEIGHT_OVER_TARGET
-                await self.seek_goal(goal)
-
-                # auto grasp
-                # await self.gripper_client.send_commands({'set_finger_angle': 30})
-                # await asyncio.sleep(1)
-                await self.execute_grasp()
-
-                # wait for destination position to be seen
-                while not dest in self.config.named_positions:
-                    await asyncio.sleep(0.5)
-                # go to position
-                goal = tonp(self.config.named_positions[dest]) + self.pole + GRIPPER_HEIGHT_OVER_TARGET
-                await self.seek_goal(goal)
-
-                # drop
-                await self.gripper_client.send_commands({'set_finger_angle': -30})
-                await asyncio.sleep(1)
-
-        except asyncio.CancelledError:
-            raise
-
-    async def lerobot_process(self, item: control.ManageLerobotSession):
-        if self.lerobot_process_pid is not None:
-            logger.warning(f"Cannot start lerobot session, one is already active.")
-            return
-
-        repo_id = item.repo_id
-        action = item.action
-        # Sanitize and validate repo_id to prevent code injection.
-        # Enforces the Hugging Face Hub format: 'namespace/dataset_name'
-        if not re.match(r"^[a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+$", str(repo_id)):
-            logger.warning(f"Invalid repo_id format '{repo_id}'. Expected 'namespace/dataset_name'. Aborting.")
-            return
-
-        # Run the python function as a command-line script to hook into its stdout and stderr streams asynchronously and use the same virtualenv
-        if action == control.LerobotSessionAction.START_RECORD:
-            func_name = 'record_until_disconnected'
-            self.config.last_lerobot_dataset_repo_id = repo_id
-        elif action == control.LerobotSessionAction.START_EVAL:
-            func_name = 'eval_until_disconnected'
-            self.config.last_lerobot_policy = repo_id
-
-        up = ''
-        if item.suppress_upload:
-            up = ' upload=False'
-
-        # A lerobot session running on the local machine must connect to the telemetry socket of the robot.
-        # When telemetry_env is not None, there are two options. connect to the remote stream - this introduces needless latency and requires a token
-        # Or spin up the local telemetry socket and the MJepeg streamers while the lerobot process is active.
-        tele_addr = 'ws://localhost:4245'
-
-        command = [
-            sys.executable,
-            '-u', '-c',
-            f"from nf_robot.ml.lerobot.stringman import {func_name}; "
-            f"{func_name}('{tele_addr}', '{repo_id}', '{self.telemetry.cloud_robot_id}'{up})"
-        ]
-
-        process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        logger.info(f"Lerobot process started with PID: {process.pid}")
-        self.lerobot_process_pid = process.pid
-
-        async def log_stream(stream, stream_name):
-            while True:
-                line = await stream.readline()
-                if not line:
-                    break
-                sline = line.decode('utf-8').rstrip()
-                if not sline.startswith('[swscaler'):
-                    logger.info(f"[{stream_name}] {sline}")
-
-        # Create concurrent background tasks to monitor stdout and stderr
-        stdout_task = asyncio.create_task(log_stream(process.stdout, "LEROBOT STDOUT"))
-        stderr_task = asyncio.create_task(log_stream(process.stderr, "LEROBOT STDERR"))
-
-        try:
-            return_code = await process.wait()
-            logger.info(f"Lerobot process exited with code: {return_code}")
-            
-        except asyncio.CancelledError:
-            logger.info("Cancellation requested. Terminating Lerobot process...")
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass # Process already died
-            await process.wait()
-            logger.info("Lerobot process terminated.")
-            
-        finally:
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-            self.lerobot_process_pid = None
-
     async def calibrate_finger_servo(self):
         self.gripper_client.finger_contact_calibration_complete.clear()
         await asyncio.create_task(self.gripper_client.send_commands({'measure_finger_contact': None}))
         await asyncio.wait_for(self.gripper_client.finger_contact_calibration_complete.wait(), 20)
-
-    async def _handle_delete_target(self, item: control.DeleteTarget):
-        if item.clear_all:
-            self.target_queue.remove_all_targets()
-            self._schedule_target_submit()
-        elif item.target_id is not None:
-            self.target_queue.remove_target(item.target_id);
-            self._schedule_target_submit()
-        self.send_tq_to_ui()
-        await self.flush_tele_buffer()
-
-    def _handle_add_cam_target(self, item: control.AddTargetFromAnchorCam):
-        # Add the target
-        targets2d = [[item.img_norm_x, item.img_norm_y]]
-        if item.anchor_num not in self.anchors:
-            return
-        floor_points = project_pixels_to_floor(targets2d, self.anchors[item.anchor_num].camera_pose, self.config.camera_cal)
-        logger.info(f'Adding target at floor point ({floor_points}) from image point ({targets2d[0]}) in anchor cam {item.anchor_num}')
-        if (len(floor_points) == 1):
-            if item.target_id is not None:
-                self.target_queue.set_target_position(item.target_id, floor_points[0])
-            else:   
-                new_id = self.target_queue.add_user_target(floor_points[0], dropoff='hamper')
-            self._schedule_target_submit()
-        self.send_tq_to_ui()
-
-    def _handle_add_room_target(self, item: control.AddTargetInRoom):
-        # Used when the position arrives already in room coordinates.
-        logger.info(f'Adding target at floor point ({item.x}, {item.y}) from the 3d view')
-        self.target_queue.add_user_target((item.x, item.y), dropoff='hamper')
-        self._schedule_target_submit()
-        self.send_tq_to_ui()
-
-    def _schedule_target_submit(self):
-        """Submit the targets to the dataset once manual edits stop for AUTO_SUBMIT_TARGETS_S.
-
-        Each add, move or delete restarts the wait, so a burst of edits becomes one row
-        carrying the finished set rather than one per click.
-        """
-        if self._target_submit_task is not None:
-            self._target_submit_task.cancel()
-
-        async def submit_when_quiet():
-            await asyncio.sleep(AUTO_SUBMIT_TARGETS_S)
-            # past the wait, so a later edit schedules a new submit instead of cancelling this one
-            self._target_submit_task = None
-            await self._handle_submit_targets_to_dataset()
-
-        self._target_submit_task = asyncio.create_task(submit_when_quiet())
-
-    async def _handle_submit_targets_to_dataset(self):
-        """Save the ortho floor view and every user-placed target as ortho_target rows.
-
-        The ortho target model's labels normally come from teleop: wherever an operator's
-        grasp landed is by construction a place worth reaching for. A target placed by hand
-        in the UI says the same thing about the same projection without anyone having to
-        drive there, so it goes to the same row format - into ortho_target.USER_LABEL_ROOT,
-        which nothing trains on until someone decides these labels are worth merging.
-
-        One row per user target, all carrying the frame they were placed on; AI targets are
-        the model's own output and would only teach it what it already believes.
-        """
-        frame = self.last_ortho_rgb
-        if frame is None:
-            logger.warning('No orthographic floor view to label yet'
-                           + ('; --no_ortho disables it' if not self.run_ortho else ''))
-            return
-        # the ortho worker replaces this on every anchor frame, so take the pixels now
-        frame = frame.copy()
-
-        targets = [t.position for t in self.target_queue.get_user_targets()]
-        if not targets:
-            logger.warning('No user-placed targets to save; click the floor to add one first')
-            return
-
-        def save():
-            # imported in the thread: it pulls torch, and this is the only thing on the
-            # host that wants it before a target model is loaded
-            from nf_robot.ml.ortho_target.dataset import write_user_labels
-            return write_user_labels(frame, targets)
-
-        try:
-            path, written = await asyncio.to_thread(save)
-        except Exception:
-            logger.exception('Could not save targets to the ortho target dataset')
-            return
-
-        if written:
-            logger.info(f'Saved {written} target label(s) on the ortho frame to {path}')
-        else:
-            logger.warning(f'None of the {len(targets)} targets are inside the ortho map; nothing saved')
 
     async def _handle_common_command(self, cmd: control.Command):
         # betterproto Enums are IntEnums, comparable directly
@@ -1922,18 +1584,12 @@ class AsyncObserver:
                 # fault would be fitted rather than merely degrade it
                 r = await self.invoke_motion_task(self.full_auto_calibration(),
                                                   safety=SafetyPolicy(needs_gantry_marker=True))
-            case control.Command.PICK_AND_DROP:
-                r = await self.invoke_motion_task(self.pick_and_place_loop())
-            case control.Command.HORIZONTAL_CHECK:
-                r = await self.invoke_motion_task(self.linear_height_check_task())
             case control.Command.SHUTDOWN:
                 self.run_command_loop = False
             case control.Command.RECORD_DROP:
                 self.record_drop_position()
             case control.Command.GRASP:
-                r = await self.invoke_motion_task(self.execute_grasp())
-            case control.Command.SUBMIT_TARGETS_TO_DATASET:
-                await self._handle_submit_targets_to_dataset()
+                r = await self.invoke_motion_task(self.grasp())
             case control.Command.UPDATE_FIRMWARE:
                 r = await self._handle_update_firmware()
             case control.Command.DISABLE_TORQUE:
@@ -2353,6 +2009,8 @@ class AsyncObserver:
                 result = await self.motion_task
             except asyncio.CancelledError:
                 pass # Expected behavior
+        # a seek outlives a caller that stopped waiting on it, so it is ended here as well
+        await self._end_seek()
 
         self._motion_owner = owner
         self._motion_safety = safety or SafetyPolicy()
@@ -2430,9 +2088,6 @@ class AsyncObserver:
         # zero input velocities from all sources
         self.zero_input_velocities()
 
-        # If lerobot scripts are connected this must also stop them
-        self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.ABANDON))
-
         for maneuver in self.maneuvers.values():
             try:
                 maneuver.on_stop_all()
@@ -2462,6 +2117,7 @@ class AsyncObserver:
                 # If any other exception occurred, log it with traceback so it reaches every handler, not just stdout.
                 logger.exception(f"An unhandled exception occurred in motion task '{task_to_stop.get_name()}'")
 
+        await self._end_seek()
         self.slow_stop_all_spools()
 
     def slow_stop_all_spools(self):
@@ -2843,7 +2499,7 @@ class AsyncObserver:
 
             logger.info('Return result')
             for a in self.anchors.values():
-                a.save_raw = True
+                a.save_raw = False
 
             analyze_diamond_data(results, anchor_poses, tilts, gantry_marker_inv=self.gantry_april_inv)
 
@@ -2909,13 +2565,14 @@ class AsyncObserver:
             logger.warning('collect_gripper_card_observations requires a connected gripper')
             return {}
 
-        # keep the gripper vertical and the lines taut throughout the survey
-        self.set_swing_cancellation(True)
-
         card_positions = self.card_room_positions()
         if not card_positions:
             logger.warning('No calibration cards visible to the anchor cameras; cannot run gripper card survey')
             return {}
+
+        # keep the gripper vertical and the lines taut throughout the survey. Put back as it
+        # was when the survey finishes; a stop turns it off, as a stop always does.
+        was_running = self.set_swing_cancellation(True)
 
         # don't fly higher than just under the top of the work area
         upper_z = np.mean(self.pe.anchor_points[:, 2]) - TOP_MARGIN
@@ -3058,6 +2715,7 @@ class AsyncObserver:
             raise
         finally:
             self.slow_stop_all_spools()
+        self.set_swing_cancellation(was_running)
 
         total = sum(len(s) for s in gripper_obs.values())
         logger.info(f'Gripper card survey collected {total} hover samples across {len(gripper_obs)} cards: '
@@ -3188,6 +2846,142 @@ class AsyncObserver:
     def save_config(self):
         """Write the robot config out. A maneuver writes only its own field before calling it."""
         save_config(self.config, self.config_path)
+
+    def pole_offset(self):
+        """The (3,) offset from the gantry down to where the gripper hangs on its pole. Add
+        it to a gripper goal to get the gantry goal seek_goal wants."""
+        return np.array(self.pole, dtype=float)
+
+    def gripper_position(self):
+        """Where the position estimate puts the gripper, as a room-frame (3,) array."""
+        return np.array(self.pe.grip_pose[1], dtype=float)
+
+    def is_holding(self):
+        """Whether the fingers are closed on something, as the estimator judges it."""
+        return bool(self.pe.holding)
+
+    def inside_work_area_2d(self, point):
+        return self.pe.point_inside_work_area_2d(np.asarray(point, dtype=float)[:2])
+
+    def finger_angle(self):
+        """The finger angle the gripper last reported, in degrees (-90 open to 90 closed)."""
+        return float(self.datastore.finger.getLast()[1])
+
+    def finger_pad_voltage(self):
+        """The finger pressure pad reading the gripper last reported."""
+        return float(self.datastore.finger.getLast()[2])
+
+    def reset_finger_pressure_rising(self):
+        """Forget any finger pressure rise seen so far, so finger_pressure_rose asks afresh."""
+        self.pe.finger_pressure_rising.clear()
+
+    def finger_pressure_rose(self):
+        """Whether the finger pressure has risen since reset_finger_pressure_rising."""
+        return self.pe.finger_pressure_rising.is_set()
+
+    def robot_id(self):
+        """This robot's id with the control plane it is running against, or None."""
+        return self.telemetry.cloud_robot_id
+
+    def ortho_enabled(self):
+        return self.run_ortho
+
+    def latest_ortho(self):
+        """The newest orthographic floor view as RGB, or None. Replaced, never written into,
+        so holding it is safe; copy it before keeping it past the next frame."""
+        return self.last_ortho_rgb
+
+    def anchor_pixel_to_floor(self, anchor_num, norm_xy):
+        """Where a point in an anchor camera's image (normalized 0-1 coordinates) lands on the
+        floor, or None if that anchor is not connected or the ray misses."""
+        if anchor_num not in self.anchors:
+            return None
+        points = project_pixels_to_floor([list(norm_xy)], self.anchors[anchor_num].camera_pose,
+                                         self.config.camera_cal)
+        return points[0] if len(points) == 1 else None
+
+    def route_tag_samples(self, name, since):
+        """The gripper camera's (timestamp, pose) sightings of a route tag since a time."""
+        if self.gripper_client is None:
+            return []
+        return self.gripper_client.get_route_tag_samples(name, since=since)
+
+    def gantry_minus_card(self, pose, timestamp):
+        """Room-frame gantry position relative to a card, from one gripper camera sighting."""
+        return self.gripper_client.measure_gantry_minus_card(pose, timestamp=timestamp)
+
+    async def gripper_capture(self, after=None, timeout=3.0, expect_size=None):
+        """(timestamp, RGB frame) from the gripper camera captured after `after` (now, by
+        default), or (None, None) if none arrives within timeout. expect_size holds out for
+        frames of that (width, height)."""
+        if self.gripper_client is None:
+            return None, None
+        return await self.gripper_client.capture_raw_frame(
+            time.time() if after is None else after, timeout=timeout, expect_size=expect_size)
+
+    async def use_gripper_capture_stream(self):
+        """Switch the gripper camera to its full capture resolution. It stays there for the
+        rest of the session: switching back costs a stream restart."""
+        await self.gripper_client.use_capture_stream()
+
+    def start_gripper_recording(self, path):
+        """Record the gripper camera's compressed stream to path, as it arrives."""
+        self.gripper_client.recording_path = path
+
+    def gripper_recorded_packets(self):
+        return self.gripper_client.recorded_packets
+
+    def stop_gripper_recording(self):
+        """Stop recording and return (packets recorded, stream start timestamp). The file is
+        closed when the next packet arrives."""
+        client = self.gripper_client
+        packets, stream_start_ts = client.recorded_packets, client.recording_stream_start_ts
+        client.recording_path = None
+        return packets, stream_start_ts
+
+    async def set_wrist_speed(self, dps):
+        """Turn the wrist at dps degrees per second. The gripper zeroes it after a short
+        timeout, so it has to be repeated to keep turning."""
+        if self.gripper_client is not None:
+            await self.gripper_client.send_commands({'set_wrist_speed': float(dps)})
+
+    def torch_device(self):
+        """The torch device every model on this host shares. The first call imports torch,
+        so make it from a worker thread."""
+        if self._device is None:
+            import torch
+            self._device = ("cuda" if torch.cuda.is_available()
+                            else "mps" if torch.backends.mps.is_available() else "cpu")
+        return self._device
+
+    def last_clear_item_image(self):
+        """The newest ItemImage: a gripper frame taken while the rangefinder read the distance
+        at which an item under the gripper fills the view before the fingers close over it.
+        None until there has been one."""
+        return self._clear_item_image
+
+    async def _watch_for_clear_item(self, interval_s=CLEAR_ITEM_INTERVAL_S):
+        """Keep the newest gripper frame taken with the laser in CLEAR_ITEM_RANGE_M."""
+        low, high = CLEAR_ITEM_RANGE_M
+        while self.run_command_loop:
+            await asyncio.sleep(interval_s)
+            client = self.gripper_client
+            if client is None or client.last_output_frame is None:
+                continue
+            laser = self.laser_range()
+            if laser is None or not (low <= laser <= high):
+                continue
+            taken = client.last_frame_cap_time
+            last = self._clear_item_image
+            if last is not None and taken is not None and taken <= last.timestamp:
+                continue
+            # decoded frames arrive BGR; the getters all hand out RGB
+            self._clear_item_image = ItemImage(
+                image_rgb=cv2.cvtColor(client.last_output_frame, cv2.COLOR_BGR2RGB),
+                timestamp=taken or time.time(),
+                laser_range=laser,
+                gantry_position=self.gantry_position(),
+            )
 
     async def trim_altitude_to_range(self, target_range_m, tol_m=0.02, max_steps=4,
                                       ceiling_z=None, max_travel_m=None):
@@ -3427,263 +3221,6 @@ class AsyncObserver:
                 return actual
         logger.warning(f'Fingers did not reach {target:.1f} within {timeout}s (at {actual})')
         return actual
-
-    async def collect_fingerplates(self, finger_angles=None, wrist_steps=FINGERPLATE_WRIST_STEPS,
-                                   output_dir=PLATE_OUTPUT_DIR, settle_s=FINGERPLATE_SETTLE_S):
-        """Capture the frames a finger matte is extracted from, one wrist turn per finger angle.
-
-        Park the gripper over the green backdrop first: the matte is a chroma key, so
-        anything ungreen under the fingers comes out as hardware.
-
-        The wrist turn is what makes that robust. The camera is in the palm and turns with
-        the wrist, so the fingers stay on the same pixels while the world rotates behind
-        them; keying every frame and taking the median leaves anything that passed
-        underneath outvoted.
-
-        Only the raw frames are written. Deciding what is finger is an offline judgement
-        with thresholds nobody has tuned, and it should be revisable without asking the
-        robot to do this again.
-        """
-        from nf_robot.ml.visual_servoing.plates import PlateWriter, provenance
-
-        if self.gripper_client is None:
-            logger.error('No gripper connected; cannot collect fingerplates')
-            return None
-        if finger_angles is None:
-            finger_angles = list(range(FINGERPLATE_ANGLE_MIN, FINGERPLATE_ANGLE_MAX + 1,
-                                       FINGERPLATE_ANGLE_STEP))
-
-        start_wrist = self.datastore.winch_line_record.getLast()[1]
-        # A full turn has to fit inside the wrist's 0-1080 range without winding the cable
-        # up against its limit, so start low enough that base + 360 still fits.
-        base_wrist = float(min(max(start_wrist, 0.0), 1080.0 - 360.0))
-        wrist_angles = [base_wrist + 360.0 * i / wrist_steps for i in range(wrist_steps)]
-
-        writer = PlateWriter(output_dir, 'fingerplates',
-                             notes='wrist turn per finger angle; matte offline by chroma key')
-        logger.info(f'Fingerplates: {len(finger_angles)} finger angles x {wrist_steps} wrist '
-                    f'steps = {len(finger_angles) * wrist_steps} frames, wrist {base_wrist:.0f}'
-                    f'-{base_wrist + 360:.0f}, writing to {output_dir}')
-
-        expect = CAPTURE_RESOLUTION_SIZE
-        await self.gripper_client.use_capture_stream()
-        try:
-            # Hold out for a frame at the capture resolution, not merely a recent one: the
-            # old stream keeps delivering for seconds after the new settings are sent, and
-            # accepting those would run the whole sweep at 684x384 while reporting success.
-            _, probe = await self.gripper_client.capture_raw_frame(
-                time.time(), timeout=CAPTURE_STREAM_TIMEOUT_S, expect_size=expect)
-            if probe is None:
-                logger.error(
-                    f'Fingerplates: no {expect[0]}x{expect[1]} frames within '
-                    f'{CAPTURE_STREAM_TIMEOUT_S}s of switching to the capture stream. '
-                    f'Check the gripper log for rpicam-vid "ERROR: ***" lines - it may not '
-                    f'be able to start at this resolution.')
-                return None
-            logger.info(f'Fingerplates: capture stream up at {probe.shape[1]}x{probe.shape[0]}')
-
-            missed = 0
-            for wrist_angle in wrist_angles:
-                actual_wrist = await self.settle_wrist(wrist_angle)
-                # Telemetry reports the motor arrived before the video shows it: the
-                # capture stream's settings put the frames further behind than that.
-                await asyncio.sleep(settle_s)
-                # Always the same direction, never serpentine. There is enough slop in
-                # the finger gearing that the same commanded angle approached from above
-                # and from below puts the hardware in visibly different places, which
-                # comes out of the matte as doubled fingers.
-                for finger_angle in finger_angles:
-                    actual_finger = await self.settle_fingers(finger_angle)
-                    # await asyncio.sleep(settle_s)
-                    after = time.time()
-                    timestamp, frame = await self.gripper_client.capture_raw_frame(
-                        after, expect_size=expect)
-                    if frame is None:
-                        missed += 1
-                        logger.warning(f'Fingerplates: no frame at finger {finger_angle} '
-                                       f'wrist {wrist_angle:.0f} ({missed} in a row)')
-                        if missed >= FINGERPLATE_MAX_MISSES:
-                            # The stream is gone, not merely late. Continuing means half an
-                            # hour of moving the wrist around for nothing.
-                            logger.error(f'Fingerplates: {missed} consecutive frames missing; '
-                                         f'abandoning the run with {len(writer)} captured')
-                            return None
-                        continue
-                    missed = 0
-                    range_ts, laser = self.datastore.range_record.getLast()
-                    writer.add(
-                        frame, captured_at=timestamp,
-                        finger_angle=actual_finger, wrist_angle=actual_wrist,
-                        laser_rangefinder=laser if time.time() - range_ts < RANGE_MAX_AGE_S else None,
-                        finger_pressure=self.datastore.finger.getLast()[2],
-                        commanded_finger_angle=finger_angle, commanded_wrist_angle=wrist_angle,
-                    )
-                logger.info(f'Fingerplates: wrist {wrist_angle:.0f} done ({len(writer)} frames)')
-        finally:
-            # the capture stream stays selected for the rest of the session; switching
-            # back costs a stream restart and the next plate command would undo it
-            await self.settle_wrist(start_wrist)
-
-        return writer.close(
-            finger_angles=list(finger_angles), wrist_steps=wrist_steps,
-            base_wrist_angle=base_wrist, **provenance(self.telemetry.cloud_robot_id),
-        )
-
-    async def _sweep_wrist_sampling(self, kind, writer, degrees, speed_dps, extra,
-                                    timeout_margin=1.5):
-        """Turn the wrist steadily through `degrees`, sampling telemetry as it goes.
-
-        The frames themselves are being recorded as video by the client; what this adds
-        is the state track they get matched against. The speed command is repeated
-        because the gripper zeroes it after ACTION_TIMEOUT, which is also what stops the
-        wrist if this is cancelled.
-        """
-        client = self.gripper_client
-        start = self.datastore.winch_line_record.getLast()[1]
-        direction = 1.0 if degrees >= 0 else -1.0
-        deadline = time.time() + abs(degrees) / speed_dps + timeout_margin
-        next_command = 0.0
-        samples = 0
-
-        try:
-            while time.time() < deadline:
-                now = time.time()
-                if now >= next_command:
-                    await client.send_commands({'set_wrist_speed': direction * speed_dps})
-                    next_command = now + WRIST_SPEED_REFRESH_S
-
-                range_ts, laser = self.datastore.range_record.getLast()
-                fresh = time.time() - range_ts < RANGE_MAX_AGE_S
-                writer.add_telemetry(
-                    captured_at=time.time(),
-                    wrist_angle=self.datastore.winch_line_record.getLast()[1],
-                    finger_angle=self.datastore.finger.getLast()[1],
-                    finger_pressure=self.datastore.finger.getLast()[2],
-                    laser_rangefinder=laser if fresh else None,
-                    **extra,
-                )
-                samples += 1
-
-                travelled = (self.datastore.winch_line_record.getLast()[1] - start) * direction
-                if travelled >= abs(degrees):
-                    break
-                await asyncio.sleep(TELEMETRY_SAMPLE_S)
-        finally:
-            await client.send_commands({'set_wrist_speed': 0.0})
-
-        actual = self.datastore.winch_line_record.getLast()[1]
-        logger.info(f'{kind}: swept wrist {start:.0f} -> {actual:.0f} '
-                    f'({samples} telemetry samples at {speed_dps:.0f} deg/s)')
-        return samples
-
-    async def _height_wrist_sweep(self, kind, ranges, output_dir, settle_s,
-                                  notes='', run_attrs=None, frame_attrs=None,
-                                  speed_dps=PLATE_WRIST_SPEED_DPS,
-                                  degrees=PLATE_SWEEP_DEGREES):
-        """Frames at each of several heights, sweeping the wrist through a circle at each.
-
-        The shape floorplates and objectplates share. Heights are reached by trimming to
-        a measured rangefinder reading, so what each plate records is how far away its
-        subject actually was. The fingers are parked out of frame first, since hardware
-        in the corner of a plate would be composited into every frame built from it.
-        """
-        from nf_robot.ml.visual_servoing.plates import VideoRunWriter, provenance
-
-        if self.gripper_client is None:
-            logger.error(f'No gripper connected; cannot collect {kind}')
-            return None
-
-        start_wrist = self.datastore.winch_line_record.getLast()[1]
-        # start low enough in the wrist's 0-1080 range that a full sweep fits
-        base_wrist = float(min(max(start_wrist, 0.0), 1080.0 - abs(degrees)))
-
-        writer = VideoRunWriter(output_dir, kind, notes=notes)
-        seconds = len(ranges) * abs(degrees) / speed_dps
-        logger.info(f'{kind}: {len(ranges)} heights, {degrees:.0f} deg at {speed_dps:.0f} '
-                    f'deg/s each, about {seconds / 60:.0f} min of sweeping, '
-                    f'writing to {output_dir}')
-
-        expect = CAPTURE_RESOLUTION_SIZE
-        client = self.gripper_client
-        await client.use_capture_stream()
-        try:
-            _, probe = await client.capture_raw_frame(
-                time.time(), timeout=CAPTURE_STREAM_TIMEOUT_S, expect_size=expect)
-            if probe is None:
-                logger.error(f'{kind}: no {expect[0]}x{expect[1]} frames within '
-                             f'{CAPTURE_STREAM_TIMEOUT_S}s of switching to the capture '
-                             f'stream. Check the gripper log for rpicam-vid errors.')
-                return None
-            logger.info(f'{kind}: capture stream up at {probe.shape[1]}x{probe.shape[0]}')
-
-            await self.settle_fingers(PLATE_FINGERS_RETRACTED)
-            await self.settle_wrist(base_wrist)
-
-            client.recording_path = writer.video_path
-            heading = 1.0
-            for target_range in ranges:
-                reached = await self.trim_altitude_to_range(target_range)
-                if reached is None:
-                    logger.warning(f'{kind}: no rangefinder reading at target '
-                                   f'{target_range:.2f}m; skipping this height')
-                    continue
-                await asyncio.sleep(settle_s)
-                await self._sweep_wrist_sampling(
-                    kind, writer, heading * degrees, speed_dps,
-                    extra={'target_range_m': target_range,
-                           'start_wrist_angle': start_wrist,
-                           **(frame_attrs or {})})
-                heading = -heading
-                logger.info(f'{kind}: range {target_range:.2f}m done '
-                            f'({client.recorded_packets} packets recorded)')
-        finally:
-            packets, stream_start_ts = client.recorded_packets, client.recording_stream_start_ts
-            client.recording_path = None
-            # the demux loop closes the file when it next sees a packet
-            await asyncio.sleep(RECORDING_CLOSE_S)
-            # the capture stream stays selected for the rest of the session; see
-            # collect_fingerplates
-            await self.settle_wrist(start_wrist)
-
-        return writer.close(stream_start_ts or 0.0, packets=packets,
-                            target_ranges=list(ranges), sweep_degrees=degrees,
-                            sweep_speed_dps=speed_dps, start_wrist_angle=start_wrist,
-                            **provenance(self.telemetry.cloud_robot_id), **(run_attrs or {}))
-
-    async def collect_floorplates(self, ranges=None, output_dir=PLATE_OUTPUT_DIR,
-                                  settle_s=FINGERPLATE_SETTLE_S):
-        """Capture bare floor at a range of heights, for synthetic backgrounds.
-
-        The operator flies the gripper somewhere clean and clear and only then triggers
-        this; it moves nothing but height and wrist. An autonomous room sweep would come
-        back with a library of beds, furniture and feet, none of which is a floor plate.
-        """
-        return await self._height_wrist_sweep(
-            'floorplates', ranges or PLATE_RANGES_M, output_dir, settle_s,
-            notes='bare floor at several heights; fingers retracted')
-
-    async def collect_objectplates(self, ranges=None,
-                                   output_dir=PLATE_OUTPUT_DIR,
-                                   settle_s=FINGERPLATE_SETTLE_S):
-        """Capture one object on the green board, for compositing onto floor plates.
-
-        Two things the operator sets before triggering this, and both are labels rather
-        than settings: the object's intended grasp point goes under the camera, which
-        makes the grasp point the principal point by construction, and the wrist is
-        turned to the ideal grasping angle, which makes the grasp axis zero at the start
-        and a known offset at every later frame. Neither needs marks on the board.
-        """
-        label = f'object-{time.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:4]}'
-        start_wrist = self.datastore.winch_line_record.getLast()[1]
-        logger.info(f'objectplates: labelling this object {label}')
-        return await self._height_wrist_sweep(
-            'objectplates', ranges or PLATE_RANGES_M, output_dir, settle_s,
-            notes=f'object on green board: {label}',
-            run_attrs={'label': label, 'grasp_axis_wrist_angle': start_wrist},
-            frame_attrs={'label': label})
-        self.send_ui(pop_message=telemetry.Popup(
-            message='Objectplate capture complete.'
-        ))
 
     async def half_auto_calibration(self):
         """
@@ -4285,19 +3822,19 @@ class AsyncObserver:
         """Calibration of the relationship between the wrist and the room frame of reference.
         Must be done over the origin card.
         """
-        if self.gripper_client.last_output_frame is None:
+        client = self.gripper_client
+        if client is None or client.last_output_frame is None:
             logger.warning('Cannot calibrate the relationship between gripper zero angle and camera if gripper camera is offline!')
             return None
 
         # record the z rotation of the gantry card from the perspective of the gripper camera,
         # with no existing z rotation term applied
-        self.gripper_client.calibrating_room_spin = True
-
-        if self.gripper_client is not None:
+        client.calibrating_room_spin = True
+        try:
             # measurement must be taken at the wrist's zero point
             center_angle = 540
             if reset_wrist_first:
-                asyncio.create_task(self.gripper_client.send_commands({'reset_wrist': None}))
+                asyncio.create_task(client.send_commands({'reset_wrist': None}))
                 await asyncio.sleep(10)
             # wait till within 1 degree of target
             actual_wrist = 100
@@ -4308,339 +3845,38 @@ class AsyncObserver:
                 actual_wrist = self.datastore.winch_line_record.getLast()[1]
             logger.info(f'Actual wrist position = {actual_wrist}')
 
-        # detect origin card
-        try:
-            await asyncio.sleep(0.1)
-            origin_card_pose = [None]
-            def special_handle_det(timestamp, detections):
-                for d in detections:
-                    if d['n'] == 'origin':
-                        # a pose of the origin card in the frame of reference of the gripper cam.
-                        origin_card_pose[0] = d['p']
-            end_time = time.time() + 10
-            logger.info('Collecting observations of origin card from gripper cam')
-            while origin_card_pose[0] is None and time.time() < end_time:
-                async_result = self.pool.apply_async(
-                    locate_markers,
-                    (self.gripper_client.last_output_frame, self.config.camera_cal_wide),
-                    callback=partial(special_handle_det, time.time()))
-                detections = async_result.get(timeout=5)
-        except Exception as e:
-            logger.exception(e)
-            raise
-        if origin_card_pose[0] is None:
-            raise RuntimeError("Gripper camera was unable to make any observations of the origin card.")
-        
-        euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
-        logger.info(f'Euler rotation of origin card relative to gripper camera {euler_rot}')
-        roomspin = euler_rot[0]
-        self.config.gripper.frame_room_spin = roomspin
-        self.config.calibrated_status = common.CalibratedStatus.FULLY_CALIBRATED
-        save_config(self.config, self.config_path)
-        self.gripper_client.calibrating_room_spin = False
-
-    @with_swing_cancellation_preferred
-    async def linear_height_check_task(self):
-        """
-        Measure the average deviation from an ideal constant height, as reported by the
-        laser rangefinder, while traversing the floor along the currently selected route.
-        Triggered by the debug command "linear". This is a motion task.
-
-        Every room is different and only the operator can pick a path across the floor with
-        no obstructions, so the traverse runs between the route source and destination
-        (self.pnp_src -> self.pnp_dst), both at 1.5m altitude. The gantry flies directly to
-        the source, pauses for 2 seconds, then traverses to the
-        destination. Through an ideal move the laser should read (1.5 - self.pole - laser_offset)
-        the whole way. Aborts if the laser altitude drops below 0.2m or if the gantry comes
-        within 0.4m of the ceiling (the z position of anchor 0).
-        """
-        TEST_ALTITUDE_M = 1.5
-        MIN_LASER_ALTITUDE_M = 0.2
-        CEILING_MARGIN_M = 0.4
-        SAMPLE_INTERVAL_S = 0.02
-        ideal_laser_range = TEST_ALTITUDE_M - self.pole[2] - model_constants.laser_offset
-
-        # ceiling height for the proximity abort
-        ceiling_z = self.pe.anchor_points[0][2]
-
-        # Resolve the route endpoints to floor positions chosen by the operator.
-        def route_point_floor_pos(route_point, label):
-            if route_point in ROUTE_POINT_TAG_NAMES:
-                name = ROUTE_POINT_TAG_NAMES[route_point]
-                if name not in self.config.named_positions:
-                    logger.warning(f'Linear height check: no saved position for {label} tag "{name}"')
-                    return None
-                return tonp(self.config.named_positions[name])
-            if route_point == common.RoutePoint.ORIGIN:
-                return np.zeros(3)
-            logger.warning(f'Linear height check needs the {label} to be a tag or the origin, not {route_point}')
-            return None
-
-        src_pos = route_point_floor_pos(self.pnp_src, 'route source')
-        dst_pos = route_point_floor_pos(self.pnp_dst, 'route destination')
-        if src_pos is None or dst_pos is None:
-            return
-        point_a = np.array([src_pos[0], src_pos[1], TEST_ALTITUDE_M])
-        point_b = np.array([dst_pos[0], dst_pos[1], TEST_ALTITUDE_M])
-
-        # Fly directly to the route source with auto altitude, then pause before the test.
-        await self.seek_goal(point_a, auto_altitude=True)
-        await asyncio.sleep(2.0)
-
-        # Traverse to the route destination, sampling the laser the whole way.
-        # disable altitude cruise during test
-        deviations = []
-        aborted = None
-        move_task = asyncio.create_task(self.seek_goal(point_b, auto_altitude=False))
-        try:
-            while not move_task.done():
-                await asyncio.sleep(SAMPLE_INTERVAL_S)
-                laser_range = self.datastore.range_record.getLast()[1]
-                gant_z = self.pe.gant_pos[2]
-                if laser_range < MIN_LASER_ALTITUDE_M:
-                    aborted = f'laser altitude {laser_range:.3f}m dropped below {MIN_LASER_ALTITUDE_M}m'
-                    break
-                if ceiling_z - gant_z < CEILING_MARGIN_M:
-                    aborted = (f'gantry came within {CEILING_MARGIN_M}m of the ceiling '
-                               f'(gantry z={gant_z:.3f}m, ceiling z={ceiling_z:.3f}m)')
-                    break
-                deviations.append(laser_range - ideal_laser_range)
-        finally:
-            move_task.cancel()
+            # detect origin card
             try:
-                await move_task
-            except asyncio.CancelledError:
-                pass
-            self.slow_stop_all_spools()
-
-        if aborted is not None:
-            logger.warning(f'Linear height check aborted: {aborted}')
-            return
-
-        if not deviations:
-            logger.warning('Linear height check collected no laser samples')
-            return
-
-        deviations_cm = np.array(deviations) * 100
-        result_message = (
-            f'Linear height check complete over {len(deviations_cm)} samples. '
-            f'Ideal laser range {ideal_laser_range * 100:.1f}cm. '
-            f'Mean deviation {deviations_cm.mean():+.2f}cm, '
-            f'mean abs deviation {np.abs(deviations_cm).mean():.2f}cm, '
-            f'RMS {np.sqrt((deviations_cm ** 2).mean()):.2f}cm, '
-            f'min {deviations_cm.min():+.2f}cm, max {deviations_cm.max():+.2f}cm')
-        logger.info(result_message)
-        self.send_ui(pop_message=telemetry.Popup(message=f'RMS {np.sqrt((deviations_cm ** 2).mean()):.2f}cm'))
-
-    @with_swing_cancellation_preferred
-    async def goalseek_diagnostic_task(self):
-        """
-        Measure how accurately seek_goal parks the gripper over a route-point tag.
-        Triggered by the debug command "goalseek". This is a motion task.
-
-        Cycles through the four floor tags ("gamepad", "trash", "hamper", "toys"),
-        goal-seeking to each one's saved position in turn until every tag has been visited
-        VISITS_PER_TAG times.
-
-        Once parked over a tag, read where it appears in the gripper camera and work out
-        where the gantry actually is relative to the tag, in room axes. Comparing that
-        against the commanded offset gives the deviation; the RMS across all trials is
-        reported in cm.
-        """
-        TAG_CYCLE = ['gamepad', 'trash', 'hamper', 'toys']
-        VISITS_PER_TAG = 3
-        SETTLE_S = 2.0           # let the gripper swing settle before measuring
-        MEASURE_WINDOW_S = 2.0   # average tag readings over this much of a window
-        MEASURE_TIMEOUT_S = 5.0  # give up on a trial if the tag isn't seen in this long
-
-        # where the gantry (the point the support lines meet) is asked to sit above the tag.
-        # The gripper hangs self.pole below that on its pole, so the camera is closer.
-        GANTRY_HEIGHT_OVER_TARGET = 0.9
-        IDEAL_GANTRY_OVER_TAG = np.array([0.0, 0.0, GANTRY_HEIGHT_OVER_TARGET])
-
-        async def measure_gantry_over_tag(tag_name):
-            """Average room-frame (gantry position - tag position) over a short window, or
-            None if the tag is never seen.
-
-            Raw sightings are in the camera's own tilted optical frame, which is no use for
-            an altitude comparison: the camera sits below the gantry by the pole, is offset
-            toward the nose, and looks 9.06 degrees back from straight down, on top of
-            whatever heading and swing the gripper has at that instant.
-            measure_gantry_minus_card unwinds all of that, using the gripper's orientation
-            at each sample's capture time, so these averages are in room axes.
-            """
-            start = time.time()
-            deadline = start + MEASURE_TIMEOUT_S
-            while time.time() < deadline:
-                samples = self.gripper_client.get_route_tag_samples(tag_name, since=start)
-                if samples and samples[-1][0] - samples[0][0] >= MEASURE_WINDOW_S:
-                    break
                 await asyncio.sleep(0.1)
+                origin_card_pose = [None]
+                def special_handle_det(timestamp, detections):
+                    for d in detections:
+                        if d['n'] == 'origin':
+                            # a pose of the origin card in the frame of reference of the gripper cam.
+                            origin_card_pose[0] = d['p']
+                end_time = time.time() + 10
+                logger.info('Collecting observations of origin card from gripper cam')
+                while origin_card_pose[0] is None and time.time() < end_time:
+                    async_result = self.pool.apply_async(
+                        locate_markers,
+                        (client.last_output_frame, self.config.camera_cal_wide),
+                        callback=partial(special_handle_det, time.time()))
+                    detections = async_result.get(timeout=5)
+            except Exception as e:
+                logger.exception(e)
+                raise
+            if origin_card_pose[0] is None:
+                raise RuntimeError("Gripper camera was unable to make any observations of the origin card.")
 
-            samples = self.gripper_client.get_route_tag_samples(tag_name, since=start)
-            if not samples:
-                return None
-            return np.mean([self.gripper_client.measure_gantry_minus_card(pose, timestamp=ts)
-                            for ts, pose in samples], axis=0)
-
-        # the order of visits: each tag VISITS_PER_TAG times, cycling through the list
-        visit_order = TAG_CYCLE * VISITS_PER_TAG
-        num_trials = len(visit_order)
-
-        deviations = []
-        for trial, tag_name in enumerate(visit_order):
-            if tag_name not in self.config.named_positions:
-                logger.warning(f'Goalseek trial {trial + 1}: no saved position for tag "{tag_name}", skipping')
-                continue
-
-            logger.info(f'Goalseek trial {trial + 1}/{num_trials}: seeking to tag "{tag_name}"')
-
-            # goal-seek to the tag's saved position
-            goal_pos = tonp(self.config.named_positions[tag_name]) + IDEAL_GANTRY_OVER_TAG
-            await self.seek_goal(goal_pos, auto_altitude=True)
-            await asyncio.sleep(SETTLE_S)
-
-            observed = await measure_gantry_over_tag(tag_name)
-            if observed is None:
-                logger.warning(f'Goalseek trial {trial + 1}: tag "{tag_name}" not seen in gripper camera, skipping')
-                continue
-            deviation = observed - IDEAL_GANTRY_OVER_TAG
-            logger.info(f'Goalseek trial {trial + 1}: "{tag_name}" deviation {np.round(deviation * 100, 1)}cm '
-                        f'(magnitude {np.linalg.norm(deviation) * 100:.2f}cm)\n'
-                        f'gantry measured {np.round(observed, 3)}m from the tag')
-            deviations.append(deviation)
-
-        if not deviations:
-            logger.warning('Goalseek diagnostic collected no measurements')
-            return
-
-        deviations = np.array(deviations)
-        magnitudes_cm = np.linalg.norm(deviations, axis=1) * 100
-        rms_cm = np.sqrt((magnitudes_cm ** 2).mean())
-        per_axis_rms_cm = np.sqrt((deviations ** 2).mean(axis=0)) * 100
-        logger.info(
-            f'Goalseek diagnostic complete over {len(deviations)} trials. '
-            f'RMS deviation {rms_cm:.2f}cm '
-            f'(per-axis x={per_axis_rms_cm[0]:.2f}cm y={per_axis_rms_cm[1]:.2f}cm z={per_axis_rms_cm[2]:.2f}cm)')
-
-    async def ensure_drop_point_model(self):
-        """Load the drop point model if it is not loaded. True if there is one to run.
-
-        Everything slow happens in a worker thread - the torch import and, on the hub path,
-        a download - because on the event loop either one stalls telemetry and every motion
-        task for as long as it takes. Nothing raises: a model that will not load is a
-        prediction the robot goes without, not a traceback out of a pick and place.
-        """
-        if self.drop_point_model is not None:
-            return True
-
-        def load_sync():
-            import torch
-
-            from nf_robot.ml.placer.model import DROP_POINT_MODEL_REPOID, load_model
-
-            # Resolved here rather than read off self._device, which is only set once some
-            # model has loaded: a pick and place loads this one first, and .to(None) would
-            # leave it on the CPU while later frames arrived on the GPU.
-            device = self._device or ("cuda" if torch.cuda.is_available()
-                                      else "mps" if torch.backends.mps.is_available() else "cpu")
-            # The trunk is the shared frozen one (ml/dino_trunk.py), so this adds a head
-            # rather than a second backbone: about 0.5GB of VRAM and 30ms a frame, or the
-            # head alone when another model is already loaded. It has to be the observer's
-            # own device for that reason - loading this one somewhere else would drag the
-            # trunk the other models are using along with it.
-            model, checkpoint = load_model(device, local_models=self.local_models,
-                                           revision=pinned_revision(DROP_POINT_MODEL_REPOID))
-            return model, checkpoint, device
-
-        try:
-            model, checkpoint, device = await asyncio.to_thread(load_sync)
-        except Exception as e:
-            logger.error(f'Could not load the drop point model: {e!r}')
-            self.send_ui(pop_message=telemetry.Popup(
-                message=f'Could not load the drop point model, so nothing will predict where '
-                        f'items go: {e}'))
-            return False
-        self._device = device
-        self.drop_point_model = model
-        logger.info(f'Drop point model ready on {device}: epoch {checkpoint.get("epoch")}, '
-                    f'metrics {checkpoint.get("metrics")}')
-        return True
-
-    async def toggle_drop_point_preview(self):
-        """Debug: run the drop point model on its own, without a pick and place.
-
-        The same loop pick and place runs, so what it writes is what a pick would fly to.
-        Send the command again to stop.
-        """
-        if self._drop_point_task is not None and not self._drop_point_task.done():
-            self.stop_drop_point_watch()
-            self.send_ui(pop_message=telemetry.Popup(message='Drop point prediction stopped'))
-            return False
-        if not await self.ensure_drop_point_model():
-            return False
-        self.start_drop_point_watch()
-        return True
-
-    def start_drop_point_watch(self):
-        """Run the drop point model in the background, if it is loaded and not already running."""
-        if self.drop_point_model is None:
-            return
-        if self._drop_point_task is None or self._drop_point_task.done():
-            self._drop_point_task = asyncio.create_task(self._drop_point_watch())
-
-    def stop_drop_point_watch(self):
-        if self._drop_point_task is not None:
-            self._drop_point_task.cancel()
-            self._drop_point_task = None
-
-    def _predict_drop_point(self, gripper_bgr, ortho_rgb):
-        """The model's drop point for one pair of frames, as normalized overhead (u, v)."""
-        from nf_robot.ml.image_input import input_batch
-        from nf_robot.ml.placer.model import predict
-
-        model = self.drop_point_model
-        # The model's own device, so the frames cannot arrive somewhere its weights are not.
-        device = next(model.parameters()).device
-        item = input_batch(cv2.cvtColor(gripper_bgr, cv2.COLOR_BGR2RGB), model.item_size, device)
-        overhead = input_batch(ortho_rgb, model.overhead_size, device)
-        uv = predict(model, item, overhead)["uv"][0, 0]
-        return float(uv[0]), float(uv[1])
-
-    async def _drop_point_watch(self, interval_s=DROP_POINT_INTERVAL_S):
-        """Predict where the item in front of the gripper goes, while it is in range.
-
-        Only while the laser says the item is the distance away the model was trained at:
-        further out it is looking at the floor, closer the fingers are across it, and in
-        both cases the answer is not worth the frame. The prediction is published as the
-        PREDICTED_DROP_NAME position, which is what the UI draws and what a route flies to.
-        """
-        from nf_robot.ml.ortho_target.model import ortho_px_to_room
-
-        low, high = PREDICTED_DROP_RANGE_M
-        try:
-            while self.run_command_loop:
-                await asyncio.sleep(interval_s)
-                laser = self.datastore.range_record.getLast()[1]
-                if laser is None or not (low <= laser <= high):
-                    continue
-                gripper_bgr = self.gripper_client.last_output_frame if self.gripper_client else None
-                ortho_rgb = self.last_ortho_rgb
-                if gripper_bgr is None or ortho_rgb is None:
-                    continue
-                u, v = await asyncio.to_thread(self._predict_drop_point, gripper_bgr, ortho_rgb)
-                x, y = ortho_px_to_room(u, v, 1.0, 1.0)
-                position = np.array([x, y, 0.0], dtype=float)
-                self.config.named_positions[PREDICTED_DROP_NAME] = fromnp(position)
-                self.send_ui(named_position=telemetry.NamedObjectPosition(
-                    position=fromnp(position), name=PREDICTED_DROP_NAME))
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.exception('drop point prediction failed')
-            self.send_ui(pop_message=telemetry.Popup(message=f'Drop point prediction failed: {e}'))
+            euler_rot = Rotation.from_rotvec(origin_card_pose[0][0]).as_euler('zyx')
+            logger.info(f'Euler rotation of origin card relative to gripper camera {euler_rot}')
+            roomspin = euler_rot[0]
+            self.config.gripper.frame_room_spin = roomspin
+            self.config.calibrated_status = common.CalibratedStatus.FULLY_CALIBRATED
+            save_config(self.config, self.config_path)
         finally:
-            logger.debug('drop point prediction ended')
+            # left set, the client would go on leaving the room spin out of every heading
+            client.calibrating_room_spin = False
 
     def record_drop_position(self):
         """Save where the gantry is standing now as the place to drop things, and route there.
@@ -4659,20 +3895,13 @@ class AsyncObserver:
         how you say that is where things should go.
         """
         hover = tonp(self.config.pick_and_place.gantry_height_over_dropoff)
-        gantry = np.array(self.pe.gant_pos, dtype=float)
-        self.config.named_positions[DROP_POSITION_NAME] = fromnp(gantry - hover)
-        self.pnp_dst = common.RoutePoint.DROP_POSITION
-        self.config.last_route_destination = self.pnp_dst
-        save_config(self.config, self.config_path)
+        gantry = self.gantry_position()
+        self.set_named_position(DROP_POSITION_NAME, gantry - hover, save=False)
         logger.info(f'Drop position saved: gantry returns to {np.round(gantry, 3)}, '
                     f'stored as {np.round(gantry - hover, 3)} under it')
-        self.send_ui(named_position=telemetry.NamedObjectPosition(
-            position=fromnp(gantry - hover), name=DROP_POSITION_NAME))
         # The To: field flipping to the drop position is the confirmation; no popup for a
-        # button that did exactly what it says.
-        self.send_ui(task_status=telemetry.TaskStatus(
-            route_source=self.pnp_src, route_destination=self.pnp_dst,
-        ))
+        # button that did exactly what it says. set_route saves both.
+        self.set_route(destination=common.RoutePoint.DROP_POSITION)
 
     async def settle_wrist_to_heading(self, angle_deg, tol=2.0, peak_dps=WRIST_EASE_DPS):
         """Settle the wrist on whichever of its equivalent angles faces the same way as
@@ -4882,13 +4111,6 @@ class AsyncObserver:
         finally:
             self.slow_stop_all_spools()
 
-    async def _startup_pick_and_place(self):
-        """The pick_and_place startup step. It returns once no targets have appeared for a
-        while."""
-        # enable auto target selection
-        await self._load_target_model()
-        await self.pick_and_place_loop()
-
     async def keep_robot_connected(self):
         """
         Keep a connection open to every robot component known in the config
@@ -4959,6 +4181,9 @@ class AsyncObserver:
             logger.warning(f"Don't know how to connect to {name_component}")
 
         if client:
+            kind = 'gripper' if is_arp_gripper else 'anchor'
+            client.on_connected = partial(self._announce_component, kind, client.anchor_num, True)
+            client.on_disconnected = partial(self._announce_component, kind, client.anchor_num, False)
             self.bot_clients[service_name] = client
             # this function runs as long as the client is connected and returns true if the client was forced to disconnect abnormally
             abnormal_close = await client.startup()
@@ -4979,6 +4204,18 @@ class AsyncObserver:
                 # don't alarm on a momentary drop (e.g. a firmware restart); only alert and
                 # stop if the component is still gone after a brief grace period.
                 asyncio.create_task(self._alert_if_not_reconnected(service_name, display_name, address))
+
+    def _announce_component(self, kind, anchor_num, connected):
+        """Tell every maneuver a component's websocket came up or went down."""
+        for maneuver in self.maneuvers.values():
+            try:
+                if connected:
+                    maneuver.on_component_connected(kind, anchor_num)
+                else:
+                    maneuver.on_component_disconnected(kind, anchor_num)
+            except Exception:
+                logger.exception(f'Maneuver {maneuver.name} failed to handle a component '
+                                 f'{"connecting" if connected else "disconnecting"}')
 
     async def _alert_if_not_reconnected(self, service_name, display_name, address):
         """After a component disconnects abnormally, wait a couple seconds and only alert
@@ -5091,11 +4328,6 @@ class AsyncObserver:
 
         Thread safe. Nothing leaves the process until flush_tele_buffer.
         """
-        # remember the latest lerobot status here; send_setup_telemetry replays it to peers
-        # that connect later, and the manager only handles transport.
-        status = getattr(kwargs.get('episode_control'), 'status', None)
-        if status is not None:
-            self.last_ep_ctrl_status = status
         # remember which calibration step is on screen, so an abort can record the step it
         # stopped on. An empty action carries no step and would only erase the last real one.
         progress = kwargs.get('operation_progress')
@@ -5124,6 +4356,7 @@ class AsyncObserver:
 
         self.passive_safety_task = asyncio.create_task(self.passive_safety())
         self.gantry_visibility_task = asyncio.create_task(self.monitor_gantry_visibility())
+        self._clear_item_task = asyncio.create_task(self._watch_for_clear_item())
 
         self.telemetry.start_cloud_link()
 
@@ -5275,9 +4508,9 @@ class AsyncObserver:
         if self.swing_cancellation_task is not None:
             self.swing_cancellation_task.cancel()
             tasks.append(self.swing_cancellation_task)
-        if self.lerobot_process_watcher is not None:
-            self.lerobot_process_watcher.cancel()
-            tasks.append(self.lerobot_process_watcher)
+        if self._clear_item_task is not None:
+            self._clear_item_task.cancel()
+            tasks.append(self._clear_item_task)
         if self.perception_task is not None:
             self.perception_task.cancel()
             tasks.append(self.perception_task)
@@ -5411,23 +4644,57 @@ class AsyncObserver:
         return line_speed, finger_angle, wrist_angle
 
     async def clear_goal(self):
-        self.goal_pos = None
+        """End the seek in flight, if any, wherever it has got to."""
+        self._goal_pos = None
         self.send_ui(named_position=telemetry.NamedObjectPosition(name='gantry_goal_marker')) # not setting position causes it to be hidden
 
-    async def seek_goal(self, goal_pos, head_turn=False, auto_altitude=True):
+    async def seek_goal(self, goal_pos, head_turn=False, auto_altitude=True, timeout=None):
         """
         Fly the gantry to goal_pos, using the constantly updating gantry position provided
-        by the position estimator.
+        by the position estimator. True once it arrives.
 
         goal_pos is where the GANTRY goes, not the gripper. The gripper hangs self.pole
         below it, so a caller aiming the gripper at something must add self.pole to the goal.
 
-        The goal is also published as self.goal_pos so it can be steered while in flight:
-        assigning self.goal_pos retargets a running seek, and clear_goal() ends it.
+        A seek already in flight is re-aimed at goal_pos rather than started over, so calling
+        this again with a better goal steers the same flight with no stop between. With a
+        timeout, returns False after that many seconds and leaves the flight going, for a
+        caller that wants to look again while it travels; clear_goal() ends it, as does
+        cancelling any caller that is waiting on it.
+        head_turn and auto_altitude are fixed when a flight starts.
         This is a motion task.
         when head_turn, turn gripper to face direction of motion.
         when auto_altitude, room traversal is performed at an ideal altitude
         """
+        if goal_pos is None:
+            return False
+        self._goal_pos = np.asarray(goal_pos, dtype=float)
+        self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self._goal_pos), name='gantry_goal_marker'))
+        if self._seek_task is None or self._seek_task.done():
+            self._seek_task = asyncio.create_task(self._fly_to_goal(head_turn, auto_altitude))
+        flight = self._seek_task
+        try:
+            done, _ = await asyncio.wait([flight], timeout=timeout)
+        except asyncio.CancelledError:
+            # waited out here, so the flight's own cleanup cannot land on a seek started
+            # right after this one
+            flight.cancel()
+            await asyncio.gather(flight, return_exceptions=True)
+            raise
+        if flight not in done:
+            return False
+        return flight.result()
+
+    async def _end_seek(self):
+        """Cancel the seek in flight and wait for it to have stopped the spools."""
+        flight = self._seek_task
+        if flight is not None and not flight.done():
+            flight.cancel()
+            await asyncio.gather(flight, return_exceptions=True)
+
+    async def _fly_to_goal(self, head_turn, auto_altitude):
+        """The flight seek_goal starts: steers onto self._goal_pos, which may change under it,
+        until it arrives (True) or the goal is cleared (False)."""
         GOAL_PROXIMITY_M = 0.08
         MAX_SPEED = 0.4 # GANTRY_SPEED_MPS
         ACCEL = 0.15     # m/s^2
@@ -5437,21 +4704,19 @@ class AsyncObserver:
         CLIMB_RATE = 0.15 # m/s, constant rate of altitude change for auto_altitude
         ALTITUDE_DEADBAND_M = 0.05 # meters, tolerance to avoid hunting around target altitude
 
-        if goal_pos is None:
-            return
-        self.goal_pos = np.asarray(goal_pos, dtype=float)
-
         current_speed = 0.0
         final_approach = False # latches once True so the altitude target doesn't flip back to cruise
-        
+        arrived = False
+
         try:
-            self.send_ui(named_position=telemetry.NamedObjectPosition(position=fromnp(self.goal_pos), name='gantry_goal_marker'))
             dist_to_goal = 10
-            while self.goal_pos is not None:
-                vector = self.goal_pos - self.pe.gant_pos
+            while self._goal_pos is not None:
+                vector = self._goal_pos - self.pe.gant_pos
                 dist_to_goal = np.linalg.norm(vector)
 
                 if dist_to_goal < GOAL_PROXIMITY_M:
+                    arrived = True
+                    logger.info(f'Goal reached {tuple(self._goal_pos)}')
                     break
 
                 # Ramp down as the goal approaches: v = sqrt(2 * a * d). The d that matters
@@ -5488,7 +4753,7 @@ class AsyncObserver:
                     # at CLIMB_RATE, so short traversals may never reach cruise altitude.
                     horizontal_dist = np.linalg.norm(vector[:2])
                     current_altitude = self.pe.gant_pos[2]
-                    goal_altitude = self.goal_pos[2]
+                    goal_altitude = self._goal_pos[2]
                     altitude_error = goal_altitude - current_altitude
                     time_to_arrive = horizontal_dist / MAX_SPEED
                     time_to_descend = abs(altitude_error) / CLIMB_RATE
@@ -5509,8 +4774,7 @@ class AsyncObserver:
                     # Normalize vector and command movement
                     await self.move_direction_speed(vector / dist_to_goal, current_speed, self.pe.gant_pos)
                 await asyncio.sleep(LOOP_SLEEP_S)
-
-            logger.info(f'Goal reached {tuple(self.goal_pos)}')
+            return arrived
         except asyncio.CancelledError:
             logger.debug('Goal move cancelled')
             raise
@@ -5635,24 +4899,6 @@ class AsyncObserver:
             return image
         return bytes()
 
-    def _handle_add_episode_control_events(self, data: common.EpisodeControl):
-        if data.prompt:
-            self.config.last_lerobot_prompt = data.prompt
-        # A status here means some lerobot session is alive and answering, wherever it's connected.
-        if data.status is not None:
-            self.lerobot_session_status_event.set()
-        # forward episode control events back to all telemetry listeners
-        self.send_ui(episode_control=data)
-        asyncio.create_task(self.flush_tele_buffer())
-
-    def send_tq_to_ui(self):
-        snapshot = self.target_queue.get_queue_snapshot()
-        # Create a deterministic hash
-        current_hash = hash(bytes(snapshot))
-        if current_hash != self.last_snapshot_hash:
-            self.send_ui(target_list=snapshot)
-            self.last_snapshot_hash = current_hash
-
     def _ortho_worker(self, ortho_floor_vs):
         """
         Sync thread driven by self.ortho_event, which anchor stream_video_loops set on every
@@ -5687,13 +4933,10 @@ class AsyncObserver:
 
     async def run_perception(self):
         """
-        Orthographic floor projection and target inference.
-        The target model is loaded at runtime via SetTargetModel control messages, and reads
-        the floor projection the ortho worker renders, so run_ortho must be on for it to see
-        anything.
+        Orthographic floor projection, published as latest_ortho() and as video feed 3.
+        Target inference on it belongs to the pick_and_place maneuver.
         """
         LOOP_DELAY = 0.1
-        FIND_TARGETS_EVERY = 5
 
         # wait until at least one preferred camera is producing frames
         logging.info('waiting for camera frames')
@@ -5744,272 +4987,21 @@ class AsyncObserver:
         )
         ortho_thread.start()
 
-        counter = 0
         while self.run_command_loop:
             await asyncio.sleep(LOOP_DELAY)
-            if self.target_model is None:
-                continue
-            counter += 1
-            if counter < FIND_TARGETS_EVERY:
-                continue
-            counter = 0
-
-            floor_targets = await self._find_targets_ortho()
-
-            # None means "no opinion this round" (no input frame yet), which must not be
-            # confused with the empty list, which retires every AI target in the queue.
-            if floor_targets is None:
-                continue
-            floor_targets = self._reject_targets_at_dropoff(floor_targets)
-            self.target_queue.add_ai_targets(floor_targets)
-            self.send_tq_to_ui()
 
         if self.run_ortho:
             ortho_floor_vs.stop()
 
-    def _route_dst_floor_pos(self):
-        """Floor position of the current route destination, or None if it has none.
-
-        Quiet about failures: this is consulted every targeting round, and NA (drop where
-        each target says) genuinely has no single destination.
-        """
-        if self.pnp_dst == common.RoutePoint.ORIGIN:
-            return np.zeros(3)
-        name = ROUTE_POINT_TAG_NAMES.get(self.pnp_dst)
-        if name is None or name not in self.config.named_positions:
-            return None
-        return tonp(self.config.named_positions[name])
-
-    def _reject_targets_at_dropoff(self, targets):
-        """Drop targets sitting on the route destination, whatever model proposed them.
-
-        This is to prevent the robot from repeatedly picking and dropping the same thing forver.
-        """
-        DROPOFF_EXCLUSION_M = 0.10
-
-        dst = self._route_dst_floor_pos()
-        if dst is None:
-            return targets
-        kept = []
-        for t in targets:
-            # Horizontal distance only
-            if np.linalg.norm(np.asarray(t['position'])[:2] - dst[:2]) < DROPOFF_EXCLUSION_M:
-                logger.debug(f'discarding target at {t["position"]}, inside the dropoff exclusion')
-                continue
-            kept.append(t)
-        return kept
-
-    def _floor_target(self, x, y):
-        """A target dict for the queue, or None if it lies outside the work area."""
-        position = np.array([x, y, 0])
-        if not self.pe.point_inside_work_area_2d(position[:2]):
-            return None
-        return {'position': position, 'dropoff': 'hamper'}
-
-    async def _find_targets_ortho(self):
-        """Every confident target in the ortho floor view, per the ortho_target model.
-
-        The model reads the same projection the ortho worker already renders, so nothing
-        per-camera is inferred and no warping is needed.
-        """
-        from nf_robot.ml.ortho_target import model as ortho_target
-
-        # Each cell carries its own objectness, decided without reference to the rest of
-        # the map, so one absolute bar holds on a bare floor and a crowded one alike and a
-        # second object does not dilute the first. The bar comes from the checkpoint, which
-        # records the operating point its training run scored best at: what counts as
-        # confident depends on the pos_weight it trained under, so a constant here would be
-        # right for one model and wrong for the next. The fallback is for checkpoints from
-        # before the threshold was swept.
-        ORTHO_MIN_PROBABILITY = getattr(self.target_model, 'threshold', 0.5)
-        ORTHO_MAX_CANDIDATES = 16  # NMS peaks to consider before thresholding
-
-        ortho_frame = self.last_ortho_rgb
-        if ortho_frame is None:
-            if not self.run_ortho:
-                logger.warning('ortho target model needs the floor projection, which run_ortho disables')
-            return None
-
-        predictions = await asyncio.to_thread(
-            partial(ortho_target.predict_room_targets, self.target_model, ortho_frame, self._device,
-                    top_k=ORTHO_MAX_CANDIDATES, min_probability=ORTHO_MIN_PROBABILITY),
-        )
-        targets = [self._floor_target(x, y) for x, y, _ in predictions]
-        return [t for t in targets if t is not None]
-
-    @with_swing_cancellation_preferred
-    async def pick_and_place_loop(self):
-        """
-        Long running motion task that repeatedly identifies targets picks them up and drops them over the hamper
-        """
-        ppc = self.config.pick_and_place
-        GANTRY_HEIGHT_OVER_TARGET = tonp(ppc.gantry_height_over_target)
-        GANTRY_HEIGHT_OVER_DROPOFF = tonp(ppc.gantry_height_over_dropoff)
-        RELAXED_OPEN = ppc.relaxed_open # Open enough to drop and that fingers cannot be seen in frame
-        DELAY_AFTER_DROP = ppc.delay_after_drop # long enough that the payload is not visible anymore in the hand
-        LOOP_DELAY = ppc.loop_delay
-        END_LOOP_TIMEOUT = ppc.end_loop_timeout
-
-        # Where each item goes is predicted while it is being picked up, so the model is
-        # loaded here rather than at startup, and the prediction runs for as long as this
-        # loop does. A destination of PREDICTED_DROP is what acts on it; every other
-        # destination just gets the marker to look at.
-        if await self.ensure_drop_point_model():
-            self.start_drop_point_watch()
-
-        # Only --lerobot_grasp needs a session; the default servoing grasp does not, and
-        # execute_grasp falls back to it anyway, so there is nothing to prompt about.
-        if self.use_lerobot_grasp and not await self.check_lerobot_session_connected():
-            answer = await self.send_popup_and_await_answer(
-                "--lerobot_grasp is set but no session is connected. Start a subprocess of "
-                "stringman-headless to run the grasping model? Answering No grasps with the "
-                "visual servoing model instead.",
-                buttons=["Yes", "No"],
-            )
-            if answer == 0:
-                self.lerobot_process_watcher = asyncio.create_task(self.lerobot_process(
-                    control.ManageLerobotSession(
-                        action=control.LerobotSessionAction.START_EVAL,
-                        repo_id="naavox/dit-grasp-3",
-                    )
-                ))
-
-        drop_point = np.zeros(3)
-        target_seen_t = time.time()
-        try:
-            gtask = None
-            while self.run_command_loop:
-
-                if self.pnp_src in (common.RoutePoint.ALL_TARGETS, common.RoutePoint.USER_TARGETS):
-                    next_target = self.target_queue.get_best_target()
-                    if next_target is None:
-                        if gtask is not None:
-                            gtask.cancel()
-                        self.goal_pos = None
-                        if time.time() > target_seen_t + END_LOOP_TIMEOUT:
-                            logger.info('Looks clean enough to me!')
-                            return
-                        await asyncio.sleep(LOOP_DELAY)
-                        continue
-                    target_seen_t = time.time()
-
-                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SELECTED)
-                    self.send_tq_to_ui()
-
-                    # pick Z position for gantry
-                    # if we are too close to the drop point right now, the z position has to be our current z so we don't get hung up on the basket by going down too soon.
-                    # otherwise use the normal value
-                    if np.linalg.norm(self.pe.gant_pos - (drop_point + GANTRY_HEIGHT_OVER_DROPOFF[2])) < 0.5:
-                        z_pos = self.pe.gant_pos[2]
-                    else:
-                        z_pos = GANTRY_HEIGHT_OVER_TARGET[2]
-                    goal_pos = next_target.position + np.array([0, 0, z_pos])
-
-                elif self.pnp_src in ROUTE_POINT_TAG_NAMES:
-                    next_target = None
-                    goal_pos = tonp(self.config.named_positions[ROUTE_POINT_TAG_NAMES[self.pnp_src]]) + GANTRY_HEIGHT_OVER_TARGET
-                elif self.pnp_src == common.RoutePoint.ORIGIN:
-                    next_target = None
-                    goal_pos = GANTRY_HEIGHT_OVER_TARGET # over origin
-
-                if gtask is None or gtask.done():
-                    gtask = asyncio.create_task(self.seek_goal(goal_pos))
-                else:
-                    self.goal_pos = goal_pos # retarget the seek already in flight onto the newly chosen target
-                done, pending = await asyncio.wait([gtask], timeout=1)
-                
-                if gtask in pending:
-                    # if doesn't arrive in one second, run target selection again since a better one might have appeared or the user might have put one in their queue
-                    if next_target is not None:
-                        self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
-                    continue
-
-                if self.gripper_client is None:
-                    logger.warning('Pick and place aborted because we lost the gripper connection')
-                    break
-
-                # when we reach this point we arrived over the item. commit to it unless it proves impossible to pick up.
-                logger.info('Attempt grasp')
-                start = time.time()
-                success = await self.execute_grasp()
-                logger.info(f'Grasp succeeded={success} took {time.time() - start:.2f}s')
-                if not success:
-                    if next_target is not None:
-                        # just pick another target, but consider downranking this object or something.
-                        self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.SEEN)
-                        self.send_tq_to_ui()
-                    await asyncio.sleep(LOOP_DELAY)
-                    continue
-                else:
-                    if next_target is not None:
-                        self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.PICKED_UP)
-                        self.send_tq_to_ui()
-                    logger.info('Object picked up')
-
-                # tension now just in case.
-                # await self.tension_and_wait()
-
-                # Choose drop point. default to origin
-                drop_point = np.zeros(3)
-
-                if self.pnp_dst == common.RoutePoint.NA and next_target is not None:
-                    # read drop point from target
-                    # TODO currently these are not populated with useful data.
-                    if not isinstance(next_target.dropoff, str):
-                        drop_point = next_target.dropoff
-                    # otherwise go to the named drop point
-                    if next_target.dropoff in self.config.named_positions:
-                        drop_point = tonp(self.config.named_positions[next_target.dropoff])
-
-                elif self.pnp_dst in ROUTE_POINT_TAG_NAMES:
-                    # Typical path. A destination whose tag has never been seen, or a drop
-                    # position never recorded, has nothing saved to fly to; say so rather than
-                    # raising out of the middle of a pick.
-                    saved = self.config.named_positions.get(ROUTE_POINT_TAG_NAMES[self.pnp_dst])
-                    if saved is None:
-                        logger.warning(f'No saved position for the route destination '
-                                       f'{ROUTE_POINT_TAG_NAMES[self.pnp_dst]}; dropping at the origin')
-                    else:
-                        drop_point = tonp(saved)
-                        if self.pnp_dst == common.RoutePoint.PREDICTED_DROP:
-                            # A prediction is a point on the floor; let go above it.
-                            drop_point = drop_point + np.array([0, 0, PREDICTED_DROP_HEIGHT_M])
-                elif self.pnp_dst == common.RoutePoint.ORIGIN:
-                    drop_point = np.zeros(3)
-
-                # fly to to drop point
-                logger.info(f'Flying to drop point {drop_point}')
-                await self.seek_goal(drop_point + GANTRY_HEIGHT_OVER_DROPOFF)
-                # open gripper
-                current_finger_angle = self.datastore.finger.getLast()[1]
-                open_target = max(-90, min(RELAXED_OPEN, current_finger_angle - 10))
-                asyncio.create_task(self.gripper_client.send_commands({'set_finger_angle': open_target}))
-                if next_target is not None:
-                    # don't immediately select a new target, because there's a chance it'll be the sock you're holding.
-                    await asyncio.sleep(DELAY_AFTER_DROP)
-                    self.target_queue.set_target_status(next_target.id, telemetry.TargetStatus.DROPPED)
-                    self.send_tq_to_ui()
-                # keep score
-
-
-        except asyncio.CancelledError:
-            raise
-        finally:
-            if gtask is not None:
-                logger.info('Pick and place cancelled')
-                gtask.cancel()
-            self.stop_drop_point_watch()
-            self.slow_stop_all_spools()
-            await self.clear_goal()
-
-    async def execute_grasp(self):
-        """Try to grasp whatever is directly below the gripper"""
-        if self.use_lerobot_grasp:
+    async def grasp(self):
+        """Try to grasp whatever is directly below the gripper. True if it is now held."""
+        lerobot = self.maneuvers.get('lerobot')
+        if lerobot is not None and lerobot.use_for_grasp:
             # A lerobot session may be driving from our own subprocess or connected
             # remotely through the prod telemetry relay, so we can't tell locally if one
-            # is present. lerobot_grasp broadcasts the eval-start and returns None if no
+            # is present. Its grasp broadcasts the eval-start and returns None if no
             # session answers, which is recoverable: servoing needs nothing but the robot.
-            result = await self.lerobot_grasp()
+            result = await lerobot.grasp()
             if result is not None:
                 return result
             logger.warning('--lerobot_grasp is set but no session answered; servoing instead')
@@ -6020,122 +5012,6 @@ class AsyncObserver:
         # it between the frame it decided on and the descent it decided to make
         async with self.prefer_swing_cancellation():
             return await self.servo.run(mode=SERVO_MODE_GRASP)
-
-    def _set_target_model(self, model):
-        """Set self.target_model, notifying the UI via auto_targeting_state whenever
-        whether a model is loaded (not the model itself) changes."""
-        was_loaded = self.target_model is not None
-        self.target_model = model
-        if (model is not None) != was_loaded:
-            self.send_ui(auto_targeting_state=telemetry.AutoTargetingState(enabled=model is not None, present=True))
-
-    async def _load_target_model(self):
-        """Load the ortho target model and make it the active one."""
-        import torch
-        from huggingface_hub import hf_hub_download
-        DEVICE = self._device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-        self._device = DEVICE
-
-        if DEVICE == "cpu":
-            logger.warning("Refusing to load targeting model on CPU; hardware acceleration required.")
-            self._set_target_model(None)
-            self.send_ui(pop_message=telemetry.Popup(
-                message="Automatic target identification (targeting model) cannot be used without "
-                        "some kind of hardware acceleration. Loading was aborted because the torch "
-                        "device is CPU."
-            ))
-            return
-
-        def load_sync():
-            from nf_robot.ml.ortho_target import model as ortho_target
-            filename = ortho_target.TARGETING_MODEL_FILENAME
-            repo_id = ortho_target.TARGETING_MODEL_REPOID
-            path = (f"models/{filename}" if self.local_models
-                    else hf_hub_download(repo_id=repo_id, filename=filename,
-                                         revision=pinned_revision(repo_id)))
-            logger.info(f"Loading ortho target model from {path}...")
-            model, _ = ortho_target.load_checkpoint(path, DEVICE)
-            return model
-
-        # The checkpoint fetch and torch import inside load_sync report nothing, so the
-        # bar is on a 5s timer; it holds at 99% for as long as the load actually takes.
-        async with FakeProgress(
-            self.send_ui,
-            name="Target Model",
-            current_action="Loading target model...",
-            done_action="Target model ready",
-            failed_action="Could not load the target model",
-            expected_s=5.0,
-            interval_s=0.2,
-            suppress_completion_popup=True,
-        ):
-            model = await asyncio.to_thread(load_sync)
-        self._set_target_model(model)
-
-    async def _handle_set_target_model(self, item: control.SetTargetModel):
-        # ortho_target is the only target model; every enable action loads it. The enum
-        # still carries the retired per-model choices, which are all treated as the default.
-        if item.action == control.TargetModelAction.TARGET_MODEL_DISABLE:
-            self._set_target_model(None)
-            logger.info('Target model disabled')
-        elif item.action != control.TargetModelAction.TARGET_MODEL_ACTION_UNUSED:
-            logger.info('Loading target model...')
-            await self._load_target_model()
-            logger.info('Target model ready')
-
-    async def check_lerobot_session_connected(self, timeout=2) -> bool:
-        """
-        Broadcast a ping and see whether any lerobot session (local subprocess or one
-        connected remotely through the relay) answers with a status within `timeout` seconds.
-        """
-        self.lerobot_session_status_event.clear()
-        self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.PING))
-        try:
-            await asyncio.wait_for(self.lerobot_session_status_event.wait(), timeout=timeout)
-            return True
-        except asyncio.TimeoutError:
-            logger.debug(f'No lerobot session answered the ping within {timeout}s; no session active.')
-            return False
-
-    async def lerobot_grasp(self):
-        """
-        Execute a grasp on an arp gripper using a lerobot ACT policy.
-        End the episode either when a timeout is reached, when motion ceases for some time, or when a grasp condition is reached.
-        A grasp condition is a certain amount of force being exerted by the fingers while being at a certain altitude off the floor.
-
-        Returns True/False for grasp success once a session takes over, or None if no session
-        answered the ping (so the caller can fall back to the visual servoing model).
-
-        A seperate process must be connected to the telemetry stream to manage the act policy at this time. It can be started with
-
-        python -m nf_robot.ml.lerobot.stringman eval   --robot_id=lan   --server_address=ws://localhost:4245   --policy_id=outputs/train/grasp_remote_act_eggs_2/checkpoints/last/pretrained_model/   --dataset_id=naavox/grasping_dataset_eggs_fix
-        """
-        self.pe.finger_pressure_rising.clear()
-        try:
-            if not await self.check_lerobot_session_connected():
-                return None
-
-            # A session is listening; tell it to start controlling.
-            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_START))
-
-            timeout = time.time() + 30
-            lifted = False
-            applying_force = False
-            while not (lifted and applying_force) and time.time() < timeout:
-                await asyncio.sleep(0.2)
-                applying_force = self.pe.finger_pressure_rising.is_set()
-                gripper_height = self.pe.grip_pose[1][2]
-                lifted = gripper_height > 0.4
-            logger.debug(f'Ended grasp lifted={lifted} applying_force={applying_force} time_rem={timeout - time.time():.1f}s')
-            # return value indicates whether grasp was successful
-            # todo future models will predict grasp success on their own
-            return lifted # and applying_force
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self.send_ui(episode_control=common.EpisodeControl(command=common.EpCommand.EVAL_STOP))
-            await asyncio.sleep(0.01)
-            self.slow_stop_all_spools()
 
 def main():
     """

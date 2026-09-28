@@ -388,14 +388,14 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
             )
 
         # The target queue should have populated with our mocked floor location [1.5, 2.5]
-        snapshot = self.ob.target_queue.get_queue_snapshot()
+        snapshot = self.ob.maneuver("pick_and_place").target_queue.get_queue_snapshot()
         self.assertGreater(len(snapshot.targets), 0)
         target_id = snapshot.targets[0].id
 
         # Test Deleting the target
         await self._send_control(delete_target=control.DeleteTarget(target_id=target_id))
         
-        snapshot_after = self.ob.target_queue.get_queue_snapshot()
+        snapshot_after = self.ob.maneuver("pick_and_place").target_queue.get_queue_snapshot()
         self.assertEqual(len(snapshot_after.targets), 0)
 
     async def test_single_component(self):

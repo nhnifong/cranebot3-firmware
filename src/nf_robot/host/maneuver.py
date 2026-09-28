@@ -21,15 +21,36 @@ This module never imports the observer, so a maneuver module can import it freel
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
+from functools import wraps
 from pathlib import Path
+from typing import NamedTuple
 
-from nf_robot.generated.nf import telemetry
+import numpy as np
+
+from nf_robot.generated.nf import common, telemetry
 
 logger = logging.getLogger(__name__)
+
+# The name the drop position is saved under. Not a tag: nothing ever sees it, it is only ever
+# what was recorded there, where the others are re-observed whenever a camera catches the tag.
+DROP_POSITION_NAME = "drop_position"
+# The drop point model (ml/placer/model.md) predicts where the item now being picked up
+# belongs, and its answer is saved under this name like any other place to fly to.
+PREDICTED_DROP_NAME = "predicted_drop"
+# The named position each route point flies to; see AsyncObserver.route_point_position.
+ROUTE_POINT_TAG_NAMES = {
+    common.RoutePoint.HAMPER: "hamper",
+    common.RoutePoint.TOYBOX: "toys",
+    common.RoutePoint.TRASH: "trash",
+    common.RoutePoint.GAMEPAD: "gamepad",
+    common.RoutePoint.DROP_POSITION: DROP_POSITION_NAME,
+    common.RoutePoint.PREDICTED_DROP: PREDICTED_DROP_NAME,
+}
 
 # Velocity source keys a maneuver commands moves under. Inbound moves carry a free-form
 # source_key (relay users send the integer id of their account), so these prefixes are
@@ -49,12 +70,31 @@ class OverTension(Enum):
     IGNORE = 'ignore'   # leave it running
 
 
+class ItemImage(NamedTuple):
+    """A gripper camera frame of whatever was under it at grasping distance."""
+    image_rgb: np.ndarray
+    timestamp: float            # capture time
+    laser_range: float          # metres from the camera to the item
+    gantry_position: np.ndarray
+
+
 @dataclass(frozen=True)
 class SafetyPolicy:
     on_over_tension: OverTension = OverTension.ABORT
     # A task that turns sightings of the gantry marker into stored results is aborted on a
     # marker fault rather than left to fit them.
     needs_gantry_marker: bool = False
+
+
+def prefer_swing_cancellation(func):
+    """Run a maneuver's coroutine method under the observer's prefer_swing_cancellation, for
+    the long tasks that want it from their first move to their last. Keeps __name__, which
+    the motion task is named by."""
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        async with self.ob.prefer_swing_cancellation():
+            return await func(self, *args, **kwargs)
+    return wrapper
 
 
 def _entry(kind, key, motion=False, safety=None):
@@ -112,6 +152,12 @@ class Maneuver:
     async def stop(self):
         """Called during shutdown, after stop_all. Spawned tasks are already cancelled."""
 
+    def on_component_connected(self, kind, anchor_num=None):
+        """A component's websocket came up. kind is 'gripper' or 'anchor'."""
+
+    def on_component_disconnected(self, kind, anchor_num=None):
+        """A component's websocket that was up went down."""
+
     def send_setup_telemetry(self):
         """Replay this maneuver's state to a UI that just connected."""
 
@@ -134,6 +180,24 @@ class Maneuver:
 
     def save_data(self):
         self.ob.save_config()
+
+    @property
+    def settings(self):
+        """What this maneuver last stored with save_settings, or '' if nothing. For maneuvers
+        from outside nf_robot, which have no typed config field of their own."""
+        return self.ob.config.maneuver_settings.get(self.name, '')
+
+    def save_settings(self, value):
+        self.ob.config.maneuver_settings[self.name] = value
+        self.ob.save_config()
+
+    @property
+    def settings_json(self):
+        """settings decoded as JSON, or None if nothing has been stored."""
+        return json.loads(self.settings) if self.settings else None
+
+    def save_settings_json(self, value):
+        self.save_settings(json.dumps(value))
 
     def override_safety(self, **changes):
         """A context manager changing the running motion task's SafetyPolicy for one phase:

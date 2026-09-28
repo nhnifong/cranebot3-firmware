@@ -379,12 +379,9 @@ class VisualServo:
         of whatever motion task happened to ask for it first.
         """
         def load_sync():
-            import torch
-
             from nf_robot.ml.visual_servoing import servo
 
-            device = self.ob._device or ("cuda" if torch.cuda.is_available()
-                                         else "mps" if torch.backends.mps.is_available() else "cpu")
+            device = self.ob.torch_device()
             if device == "cpu":
                 return None, device, (
                     "The visual servoing grasp cannot be used without some kind of hardware "
@@ -422,7 +419,6 @@ class VisualServo:
                 progress.fail()
                 return
 
-            self.ob._device = device
             if refusal:
                 logger.warning(refusal)
                 self.ob.send_ui(pop_message=telemetry.Popup(message=refusal))
@@ -490,7 +486,7 @@ class VisualServo:
             'target_force': gripper.last_target_force,
         }
         prediction = await asyncio.to_thread(
-            servo.predict_frame, self.model, frame, state, self.ob._device,
+            servo.predict_frame, self.model, frame, state, self.ob.torch_device(),
             gripper.get_spin(), self.ob.pe.grip_pose[1])
         prediction['captured_at'] = captured_at
         self.ob.send_ui(grip_cam_preditions=telemetry.GripCamPredictions(

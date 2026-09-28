@@ -55,7 +55,7 @@ class TestDropPosition(unittest.TestCase):
         ob = self._observer()
         ob.record_drop_position()
 
-        found = ob._route_dst_floor_pos()
+        found = ob.route_point_position(ob.route()[1])
 
         np.testing.assert_allclose(found, tonp(ob.config.named_positions[DROP_POSITION_NAME]))
 
@@ -65,7 +65,7 @@ class TestDropPosition(unittest.TestCase):
         ob = self._observer()
         ob.pnp_dst = common.RoutePoint.DROP_POSITION
 
-        self.assertIsNone(ob._route_dst_floor_pos())
+        self.assertIsNone(ob.route_point_position(ob.route()[1]))
 
     def test_it_survives_a_restart(self):
         ob = self._observer()

@@ -278,6 +278,205 @@ class TestManeuverHelpers(ManeuverTestCase):
         self.assertTrue(ob.config.park_data.parked)
 
 
+class TestBuiltins(ManeuverTestCase):
+    async def test_each_behavior_answers_where_it_did_before(self):
+        ob = self.make_observer()
+        owner = lambda cmd: ob._maneuver_commands[cmd][3].name
+        self.assertEqual(owner(control.Command.PICK_AND_DROP), 'pick_and_place')
+        self.assertEqual(owner(control.Command.SUBMIT_TARGETS_TO_DATASET), 'pick_and_place')
+        self.assertEqual(owner(control.Command.HORIZONTAL_CHECK), 'diagnostics')
+        verbs = {word: entry[3].name for word, entry in ob._maneuver_verbs.items()}
+        self.assertEqual(verbs, {
+            'droppoint': 'drop_point', 'fingerplates': 'plates', 'floorplates': 'plates',
+            'objectplates': 'plates', 'linear': 'diagnostics', 'goalseek': 'diagnostics',
+            'ferry': 'ferry',
+        })
+        controls = {field: handler.__self__.name for field, handler in ob._maneuver_controls.items()}
+        self.assertEqual(controls, {
+            'episode_control': 'lerobot', 'manage_lerobot_session': 'lerobot',
+            'add_cam_target': 'pick_and_place', 'add_room_target': 'pick_and_place',
+            'delete_target': 'pick_and_place', 'move_gripper_to': 'pick_and_place',
+            'set_target_model': 'pick_and_place',
+        })
+
+    async def test_lerobot_grasp_is_an_option_of_the_lerobot_maneuver(self):
+        ob = AsyncObserver(terminate_with_ui=False, config_path=None, port=0, lerobot_grasp=True)
+        lerobot = ob.maneuver('lerobot')
+        self.assertTrue(lerobot.use_for_grasp)
+        lerobot.grasp = AsyncMock(return_value=True)
+        self.assertTrue(await ob.grasp())
+
+    async def test_stop_all_abandons_lerobot_episodes(self):
+        ob = self.make_observer()
+        await ob.stop_all()
+        commands = [kw['episode_control'].command for kw in self.ui if 'episode_control' in kw]
+        self.assertEqual(commands, [common.EpCommand.ABANDON])
+
+    async def test_an_inbound_lerobot_status_is_remembered_for_later_peers(self):
+        ob = self.make_observer()
+        lerobot = ob.maneuver('lerobot')
+        lerobot.process_task = asyncio.create_task(asyncio.sleep(10))
+        status = common.LerobotSessionStatus(status=common.LerobotStatus.RECORDING)
+        with patch.object(ob, 'flush_tele_buffer', new=AsyncMock()):
+            await ob._dispatch_update(control.ControlItem(
+                episode_control=common.EpisodeControl(status=status)))
+        self.assertTrue(lerobot.session_status_event.is_set())
+        self.ui.clear()
+        lerobot.send_setup_telemetry()
+        self.assertEqual(self.ui[0]['episode_control'].status, status)
+        lerobot.process_task.cancel()
+
+    async def test_the_target_list_is_replayed_to_a_new_ui(self):
+        ob = self.make_observer()
+        pnp = ob.maneuver('pick_and_place')
+        pnp.target_queue.add_user_target((1.0, 1.0), dropoff='hamper')
+        pnp.send_tq_to_ui()
+        self.ui.clear()
+        pnp.send_setup_telemetry()
+        self.assertTrue(any('target_list' in kw for kw in self.ui))
+        self.assertTrue(any('auto_targeting_state' in kw for kw in self.ui))
+
+    async def test_targets_on_the_route_destination_are_left_alone(self):
+        ob = self.make_observer()
+        ob.set_named_position('hamper', np.array([1.0, 1.0, 0.0]))
+        ob.set_route(destination=common.RoutePoint.HAMPER)
+        pnp = ob.maneuver('pick_and_place')
+        kept = pnp._reject_targets_at_dropoff([
+            {'position': np.array([1.02, 1.0, 0.0])},
+            {'position': np.array([2.0, 1.0, 0.0])},
+        ])
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]['position'][0], 2.0)
+
+
+class TestRoute(ManeuverTestCase):
+    async def test_set_route_saves_and_shows_it(self):
+        ob = self.make_observer()
+        with patch('nf_robot.host.observer.save_config') as save:
+            ob.set_route(source=common.RoutePoint.ALL_TARGETS, destination=common.RoutePoint.TRASH)
+        save.assert_called_once()
+        self.assertEqual(ob.route(), (common.RoutePoint.ALL_TARGETS, common.RoutePoint.TRASH))
+        self.assertEqual(ob.config.last_route_destination, common.RoutePoint.TRASH)
+        status = [kw['task_status'] for kw in self.ui if 'task_status' in kw][-1]
+        self.assertEqual(status.route_destination, common.RoutePoint.TRASH)
+
+    async def test_the_ui_setting_the_route_saves_it(self):
+        ob = self.make_observer()
+        ob.flush_tele_buffer = AsyncMock()
+        with patch('nf_robot.host.observer.save_config') as save:
+            await ob._handle_set_point(control.SetPoint(route_destination=common.RoutePoint.TOYBOX))
+        save.assert_called_once()
+        self.assertEqual(ob.config.last_route_destination, common.RoutePoint.TOYBOX)
+
+    async def test_the_origin_has_a_position_and_an_unseen_tag_does_not(self):
+        ob = self.make_observer()
+        np.testing.assert_array_equal(ob.route_point_position(common.RoutePoint.ORIGIN), np.zeros(3))
+        self.assertIsNone(ob.route_point_position(common.RoutePoint.GAMEPAD))
+
+
+class TestSeekGoal(ManeuverTestCase):
+    def flying(self):
+        ob = self.make_observer()
+        ob.move_direction_speed = AsyncMock()
+        ob.pe.gant_pos = np.array([0.0, 0.0, 1.0])
+        return ob
+
+    async def test_a_second_goal_steers_the_same_flight(self):
+        ob = self.flying()
+        self.assertFalse(await ob.seek_goal(np.array([2.0, 0.0, 1.0]), timeout=0.15))
+        flight = ob._seek_task
+        self.assertFalse(flight.done())
+        self.assertFalse(await ob.seek_goal(np.array([0.0, 2.0, 1.0]), timeout=0.15))
+        self.assertIs(ob._seek_task, flight)
+        np.testing.assert_array_equal(ob._goal_pos, [0.0, 2.0, 1.0])
+        ob.pe.gant_pos = np.array([0.0, 2.0, 1.0])
+        self.assertTrue(await ob.seek_goal(np.array([0.0, 2.0, 1.0])))
+        self.assertTrue(flight.done())
+
+    async def test_clearing_the_goal_ends_the_flight_without_arriving(self):
+        ob = self.flying()
+        self.assertFalse(await ob.seek_goal(np.array([2.0, 0.0, 1.0]), timeout=0.05))
+        await ob.clear_goal()
+        self.assertFalse(await ob._seek_task)
+
+    async def test_cancelling_the_caller_lands_the_flight(self):
+        ob = self.flying()
+        caller = asyncio.create_task(ob.seek_goal(np.array([2.0, 0.0, 1.0])))
+        await asyncio.sleep(0.15)
+        flight = ob._seek_task
+        caller.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await caller
+        self.assertTrue(flight.done())
+
+    async def test_a_new_motion_task_ends_a_flight_nobody_is_waiting_on(self):
+        ob = self.flying()
+        await ob.seek_goal(np.array([2.0, 0.0, 1.0]), timeout=0.05)
+        flight = ob._seek_task
+        await ob.invoke_motion_task(asyncio.sleep(0))
+        self.assertTrue(flight.done())
+        await ob.motion_task
+
+
+class TestSettingsAndHooks(ManeuverTestCase):
+    async def test_settings_survive_a_restart(self):
+        import tempfile
+        from pathlib import Path
+        from nf_robot.common.config_loader import load_config
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / 'configuration.json'
+            ob = AsyncObserver(terminate_with_ui=False, config_path=path, port=0)
+            rec = ob.add_maneuver(Recorder)
+            rec.save_settings_json({'pots': 3})
+            reloaded = load_config(path)
+        self.assertEqual(reloaded.maneuver_settings['recorder'], '{"pots": 3}')
+        # and a maneuver that never stored anything reads None
+        self.assertIsNone(self.make_observer().add_maneuver(Recorder).settings_json)
+
+    async def test_component_connections_reach_every_maneuver(self):
+        ob = self.make_observer()
+        seen = []
+
+        class Listener(Maneuver):
+            name = 'listener'
+
+            def on_component_connected(self, kind, anchor_num=None):
+                seen.append(('up', kind, anchor_num))
+
+            def on_component_disconnected(self, kind, anchor_num=None):
+                seen.append(('down', kind, anchor_num))
+
+        ob.add_maneuver(Listener)
+        ob._announce_component('anchor', 1, True)
+        ob._announce_component('gripper', None, False)
+        self.assertEqual(seen, [('up', 'anchor', 1), ('down', 'gripper', None)])
+
+    async def test_a_clear_item_image_is_kept_only_in_range(self):
+        ob = self.make_observer()
+        gripper = type('Gripper', (), {})()
+        gripper.last_output_frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        gripper.last_output_frame[..., 0] = 255      # blue, in BGR
+        gripper.last_frame_cap_time = 123.0
+        ob.gripper_client = gripper
+        ob.pe.gant_pos = np.array([1.0, 2.0, 0.5])
+        ranges = iter([1.0, 0.2])
+        ob.laser_range = lambda: next(ranges, 0.2)
+        sleeps = 0
+
+        async def fake_sleep(_):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps > 2:
+                ob.run_command_loop = False
+
+        with patch('asyncio.sleep', new=fake_sleep):
+            await ob._watch_for_clear_item()
+        seen = ob.last_clear_item_image()
+        self.assertEqual(seen.laser_range, 0.2)
+        self.assertEqual(seen.timestamp, 123.0)
+        self.assertEqual(seen.image_rgb[0, 0, 2], 255)   # blue, in RGB
+
+
 class FakeTilt:
     def __init__(self):
         self.tilt = None
@@ -289,10 +488,12 @@ class FakeTilt:
 class TestTiltWatch(unittest.TestCase):
     def test_a_lean_trips_only_once_confirmed(self):
         ob = FakeTilt()
-        watch = TiltWatch(ob, tilt_deg=8.0, confirm_s=0.0)
+        watch = TiltWatch(ob, tilt_deg=8.0, confirm_s=0.3)
         self.assertIsNone(watch.check())
         ob.tilt = 12.0
         self.assertIsNone(watch.check())     # starts the confirmation window
+        self.assertIsNone(watch.check())     # still inside it
+        watch.leaning_since -= 1.0           # as though the lean had held for a second
         self.assertIn('12', watch.check())
         self.assertEqual(watch.worst_tilt, 12.0)
 
