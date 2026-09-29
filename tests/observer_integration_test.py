@@ -112,6 +112,7 @@ class TestSystemIntegration(unittest.IsolatedAsyncioTestCase):
             spool = Mock()
             spool.trackingLoop = mock_tracking_loop
             spool.popMeasurements.return_value = []
+            spool.popDiagnostics.return_value = []
             spool.last_tension = 0.0
             return spool
 

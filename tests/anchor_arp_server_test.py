@@ -78,6 +78,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
         for spool in self.mock_spools:
             spool.trackingLoop = mock_tracking_loop
             spool.popMeasurements.return_value = []
+            spool.popDiagnostics.return_value = []
             spool.last_tension = 0.0
 
         self.server = AnchorArpServer(power=False)
@@ -206,6 +207,7 @@ class TestAnchorArpServer(unittest.IsolatedAsyncioTestCase):
         for s in spools2:
             s.trackingLoop = tracking_loop2
             s.popMeasurements.return_value = []
+            s.popDiagnostics.return_value = []
 
         self.mock_spool_class.reset_mock()
         self.mock_spool_class.side_effect = spools2
